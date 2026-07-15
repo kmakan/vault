@@ -2,6 +2,9 @@ pub mod encryptor;
 
 pub use encryptor::{Encryptor, DecryptedContent, is_whisper_encrypted};
 
+/// Decryptor is an alias for Encryptor (it has both encrypt and decrypt methods)
+pub type Decryptor = Encryptor;
+
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chacha20poly1305::{

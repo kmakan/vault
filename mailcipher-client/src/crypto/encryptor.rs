@@ -66,13 +66,13 @@ impl Encryptor {
             .first_or_octet_stream()
             .to_string();
 
-        Ok(self.encrypt_inner(
+        self.encrypt_inner(
             &data,
             DataType::File {
                 filename,
                 content_type,
             },
-        ))
+        )
     }
 
     /// Encrypt bytes with a given data type
@@ -167,7 +167,7 @@ impl Encryptor {
         let cipher = XChaCha20Poly1305::new((&enc_key).into());
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
-            .context("Decryption failed — corrupted data")?;
+            .map_err(|e| anyhow::anyhow!("Decryption failed — corrupted data: {}", e))?;
 
         match parsed.data_type {
             DataType::Text => {
@@ -347,21 +347,16 @@ mod tests {
         let encrypted = enc.encrypt_text("secret message");
 
         // Tamper with the payload (flip a character in the middle)
-        let mut chars: Vec<char> = encrypted.chars().collect();
-        // Find the payload line (after the --- separator)
         let lines: Vec<&str> = encrypted.lines().collect();
         for (i, line) in lines.iter().enumerate() {
             if line.len() > 100 && !line.starts_with("---") {
                 // This is likely the payload line
-                let mut new_lines = lines.clone();
                 let mut payload_chars: Vec<char> = line.chars().collect();
                 if payload_chars.len() > 50 {
-                    payload_chars[50] = if payload_chars[50] == 'A' {
-                        'B'
-                    } else {
-                        'A'
-                    };
-                    new_lines[i] = &String::from_iter(payload_chars);
+                    payload_chars[50] = if payload_chars[50] == 'A' { 'B' } else { 'A' };
+                    let tampered_line: String = payload_chars.into_iter().collect();
+                    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+                    new_lines[i] = tampered_line;
                     let tampered = new_lines.join("\n");
                     let result = enc.decrypt(&tampered);
                     assert!(result.is_err(), "Should reject tampered payload");
