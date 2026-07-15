@@ -1,0 +1,467 @@
+<template>
+  <div class="key-manager-overlay" @click.self="$emit('close')">
+    <div class="key-manager-panel">
+      <div class="panel-header">
+        <h3>Key Management</h3>
+        <button class="close-btn" @click="$emit('close')">&times;</button>
+      </div>
+
+      <div class="panel-body">
+        <div class="section">
+          <h4>My Keys</h4>
+          <div class="key-status">
+            <span :class="hasKeys ? 'status-active' : 'status-none'">
+              {{ hasKeys ? 'Keypair loaded' : 'No keypair found' }}
+            </span>
+          </div>
+
+          <div v-if="hasKeys" class="key-info">
+            <label>Fingerprint</label>
+            <code class="fingerprint-display">{{ fingerprint }}</code>
+
+            <label>Public Key</label>
+            <div class="key-display">
+              <textarea readonly :value="publicKey" rows="2"></textarea>
+              <button class="copy-btn" @click="copyToClipboard(publicKey)" title="Copy public key">
+                {{ copiedField === 'public' ? '✓' : '📋' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="key-actions">
+            <button v-if="!hasKeys" @click="generateKeys" :disabled="generating" class="btn-primary">
+              {{ generating ? 'Generating...' : 'Generate Keypair' }}
+            </button>
+            <button v-if="hasKeys" @click="exportAllKeys" class="btn-secondary">
+              Export Keys
+            </button>
+            <button v-if="hasKeys" @click="confirmDelete" class="btn-danger">
+              Delete All Keys
+            </button>
+          </div>
+        </div>
+
+        <div class="section">
+          <h4>Import Keys</h4>
+          <div class="import-area">
+            <textarea
+              v-model="importData"
+              placeholder="Paste exported JSON here..."
+              rows="4"
+            ></textarea>
+            <button @click="importKeys" :disabled="!importData.trim()" class="btn-primary">
+              Import
+            </button>
+          </div>
+          <div v-if="importResult" :class="['import-result', importResult.success ? 'success' : 'error']">
+            {{ importResult.message }}
+          </div>
+        </div>
+
+        <div class="section">
+          <h4>Peer Keys ({{ peerKeys.length }})</h4>
+          <div v-if="peerKeys.length === 0" class="empty-state">
+            No peer keys stored yet.
+          </div>
+          <div v-else class="peer-keys-list">
+            <div v-for="pk in peerKeys" :key="pk.email" class="peer-key-item">
+              <div class="peer-key-info">
+                <div class="peer-email">{{ pk.email }}</div>
+                <div class="peer-key-hex">{{ pk.public_key.substring(0, 24) }}...</div>
+                <div class="peer-meta" v-if="pk.label">Label: {{ pk.label }}</div>
+              </div>
+              <div class="peer-key-actions">
+                <button @click="copyToClipboard(pk.public_key)" class="icon-btn" title="Copy key">
+                  {{ copiedField === pk.email ? '✓' : '📋' }}
+                </button>
+                <button @click="removePeerKey(pk.email)" class="icon-btn danger" title="Remove">
+                  🗑
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import crypto from '../crypto.js';
+
+export default {
+  name: 'KeyManager',
+  emits: ['close', 'keys-changed'],
+  data() {
+    return {
+      hasKeys: false,
+      publicKey: '',
+      fingerprint: '',
+      peerKeys: [],
+      generating: false,
+      importData: '',
+      importResult: null,
+      copiedField: null,
+    };
+  },
+  async mounted() {
+    await this.loadState();
+  },
+  methods: {
+    async loadState() {
+      const result = await crypto.initFromStorage();
+      this.hasKeys = result.loaded;
+      if (result.loaded) {
+        this.publicKey = result.keypair.public_key;
+        this.fingerprint = await crypto.fingerprint();
+      }
+      this.peerKeys = await crypto.loadPeerKeys();
+    },
+    async generateKeys() {
+      this.generating = true;
+      try {
+        await crypto.generateKeypair();
+        await crypto.saveToStorage();
+        this.publicKey = crypto.publicKey;
+        this.fingerprint = await crypto.fingerprint();
+        this.hasKeys = true;
+        this.$emit('keys-changed');
+      } catch (error) {
+        alert('Failed to generate keys: ' + error.message);
+      } finally {
+        this.generating = false;
+      }
+    },
+    async exportAllKeys() {
+      try {
+        const data = await crypto.exportKeys();
+        await this.copyToClipboard(data);
+        alert('Keys exported to clipboard. Save as JSON file.');
+      } catch (error) {
+        alert('Export failed: ' + error.message);
+      }
+    },
+    async importKeys() {
+      this.importResult = null;
+      try {
+        const meta = await crypto.importKeys(this.importData);
+        this.importResult = {
+          success: true,
+          message: `Imported ${meta.key_count} keys successfully.`,
+        };
+        this.importData = '';
+        await this.loadState();
+        this.$emit('keys-changed');
+      } catch (error) {
+        this.importResult = {
+          success: false,
+          message: 'Import failed: ' + error.message,
+        };
+      }
+    },
+    async removePeerKey(email) {
+      if (!confirm(`Remove peer key for ${email}?`)) return;
+      try {
+        await crypto.removePeerKey(email);
+        this.peerKeys = await crypto.loadPeerKeys();
+        this.$emit('keys-changed');
+      } catch (error) {
+        alert('Failed to remove key: ' + error.message);
+      }
+    },
+    async confirmDelete() {
+      if (!confirm('Delete ALL keys? This cannot be undone.')) return;
+      if (!confirm('Are you really sure? All encryption keys will be lost.')) return;
+      try {
+        await crypto.deleteAllKeys();
+        await this.loadState();
+        this.$emit('keys-changed');
+      } catch (error) {
+        alert('Failed to delete keys: ' + error.message);
+      }
+    },
+    async copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.copiedField = text === this.publicKey ? 'public' : 'other';
+        setTimeout(() => { this.copiedField = null; }, 2000);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+    },
+  },
+};
+</script>
+
+<style scoped>
+.key-manager-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.key-manager-panel {
+  background: #1a1a2e;
+  border-radius: 12px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid #16213e;
+  color: white;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #16213e;
+}
+
+.panel-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.panel-body {
+  padding: 20px;
+}
+
+.section {
+  margin-bottom: 24px;
+}
+
+.section h4 {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+}
+
+.key-status {
+  margin-bottom: 12px;
+}
+
+.status-active {
+  color: #4ade80;
+  font-size: 13px;
+}
+
+.status-none {
+  color: #fbbf24;
+  font-size: 13px;
+}
+
+.key-info label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+.fingerprint-display {
+  display: block;
+  padding: 8px 12px;
+  background: #0f0f23;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 14px;
+  color: #4ade80;
+}
+
+.key-display {
+  display: flex;
+  gap: 8px;
+}
+
+.key-display textarea {
+  flex: 1;
+  padding: 8px;
+  background: #0f0f23;
+  border: 1px solid #16213e;
+  border-radius: 6px;
+  color: white;
+  font-family: monospace;
+  font-size: 11px;
+  resize: none;
+}
+
+.copy-btn {
+  padding: 8px 12px;
+  background: #16213e;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.key-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: #0f3460;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-primary:hover {
+  background: #1a5276;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  background: #16213e;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-danger {
+  padding: 8px 16px;
+  background: #7f1d1d;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-danger:hover {
+  background: #991b1b;
+}
+
+.import-area textarea {
+  width: 100%;
+  padding: 8px;
+  background: #0f0f23;
+  border: 1px solid #16213e;
+  border-radius: 6px;
+  color: white;
+  font-family: monospace;
+  font-size: 11px;
+  resize: vertical;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.import-result {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.import-result.success {
+  background: #064e3b;
+  color: #4ade80;
+}
+
+.import-result.error {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+
+.empty-state {
+  color: #666;
+  font-size: 13px;
+  padding: 12px;
+  background: #0f0f23;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.peer-keys-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.peer-key-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: #0f0f23;
+  border-radius: 6px;
+  border: 1px solid #16213e;
+}
+
+.peer-key-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.peer-email {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.peer-key-hex {
+  font-family: monospace;
+  font-size: 11px;
+  color: #888;
+}
+
+.peer-meta {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.peer-key-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 14px;
+  border-radius: 4px;
+}
+
+.icon-btn:hover {
+  background: #16213e;
+}
+
+.icon-btn.danger:hover {
+  background: #7f1d1d;
+}
+</style>
