@@ -43,6 +43,7 @@ fn derive_key(public_key: &PublicKey) -> [u8; 32] {
     key
 }
 
+#[allow(dead_code)]
 fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u8; 32]> {
     let priv_bytes = hex::decode(private_hex)
         .map_err(|e| anyhow::anyhow!("Invalid private key hex: {}", e))?;
