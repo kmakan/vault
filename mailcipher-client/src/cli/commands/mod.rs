@@ -524,4 +524,295 @@ mod tests {
             _ => panic!("Expected GroupInvite"),
         }
     }
+
+    // ── CLI Demo: comprehensive slash-command parsing tests ──
+
+    #[test]
+    fn test_help_all_aliases() {
+        assert!(matches!(Command::parse("/help"), Command::Help(None)));
+        assert!(matches!(Command::parse("/h"), Command::Help(None)));
+        // Note: "?" is inside slash-prefix block, so /? works but bare ? is Unknown
+        assert!(matches!(Command::parse("/?"), Command::Help(None)));
+        assert!(matches!(Command::parse("/help keys"), Command::Help(Some(_))));
+        assert!(matches!(Command::parse("/help encrypt"), Command::Help(Some(_))));
+        assert!(matches!(Command::parse("/help connect"), Command::Help(Some(_))));
+        assert!(matches!(Command::parse("/help chat"), Command::Help(Some(_))));
+        assert!(matches!(Command::parse("/help files"), Command::Help(Some(_))));
+    }
+
+    #[test]
+    fn test_clear_all_aliases() {
+        assert!(matches!(Command::parse("/clear"), Command::Clear));
+        assert!(matches!(Command::parse("/cls"), Command::Clear));
+    }
+
+    #[test]
+    fn test_connect_auto_detect_servers() {
+        let cmd = Command::parse("/connect u@outlook.com p");
+        match cmd {
+            Command::Connect { server, .. } => assert_eq!(server, "outlook.office365.com"),
+            _ => panic!("Expected Connect"),
+        }
+        let cmd = Command::parse("/connect u@yandex.ru p");
+        match cmd {
+            Command::Connect { server, .. } => assert_eq!(server, "imap.yandex.com"),
+            _ => panic!("Expected Connect"),
+        }
+        let cmd = Command::parse("/connect u@mail.ru p");
+        match cmd {
+            Command::Connect { server, .. } => assert_eq!(server, "imap.mail.ru"),
+            _ => panic!("Expected Connect"),
+        }
+        let cmd = Command::parse("/connect u@other.com p");
+        match cmd {
+            Command::Connect { server, .. } => assert_eq!(server, "imap.gmail.com"),
+            _ => panic!("Expected Connect"),
+        }
+    }
+
+    #[test]
+    fn test_connect_missing_args() {
+        assert!(matches!(Command::parse("/connect"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/connect user@gmail.com"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn test_status_aliases() {
+        assert!(matches!(Command::parse("/status"), Command::Status));
+        assert!(matches!(Command::parse("/st"), Command::Status));
+    }
+
+    #[test]
+    fn test_chat_requires_arg() {
+        assert!(matches!(Command::parse("/chat"), Command::Unknown(_)));
+        let cmd = Command::parse("/chat bob@test.com");
+        match cmd {
+            Command::Chat { contact } => assert_eq!(contact, "bob@test.com"),
+            _ => panic!("Expected Chat"),
+        }
+    }
+
+    #[test]
+    fn test_send_requires_arg() {
+        assert!(matches!(Command::parse("/send"), Command::Unknown(_)));
+        let cmd = Command::parse("/send hello world");
+        match cmd {
+            Command::Send { message } => assert_eq!(message, "hello world"),
+            _ => panic!("Expected Send"),
+        }
+    }
+
+    #[test]
+    fn test_inbox_aliases() {
+        assert!(matches!(Command::parse("/inbox"), Command::Inbox));
+        assert!(matches!(Command::parse("/in"), Command::Inbox));
+        assert!(matches!(Command::parse("/ls"), Command::Inbox));
+    }
+
+    #[test]
+    fn test_read_requires_arg() {
+        assert!(matches!(Command::parse("/read"), Command::Unknown(_)));
+        let cmd = Command::parse("/read msg123");
+        match cmd {
+            Command::Read { id } => assert_eq!(id, "msg123"),
+            _ => panic!("Expected Read"),
+        }
+    }
+
+    #[test]
+    fn test_reply_parsing() {
+        assert!(matches!(Command::parse("/reply"), Command::Unknown(_)));
+        let cmd = Command::parse("/reply msg1 hello back");
+        match cmd {
+            Command::Reply { id, message } => {
+                assert_eq!(id, "msg1");
+                assert_eq!(message, "hello back");
+            }
+            _ => panic!("Expected Reply"),
+        }
+    }
+
+    #[test]
+    fn test_thread_requires_arg() {
+        assert!(matches!(Command::parse("/thread"), Command::Unknown(_)));
+        let cmd = Command::parse("/thread subject line");
+        match cmd {
+            Command::Thread { subject } => assert_eq!(subject, "subject line"),
+            _ => panic!("Expected Thread"),
+        }
+    }
+
+    #[test]
+    fn test_forward_parsing() {
+        assert!(matches!(Command::parse("/forward"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/forward msg1"), Command::Unknown(_)));
+        let cmd = Command::parse("/forward msg1 alice@test.com");
+        match cmd {
+            Command::Forward { id, to } => {
+                assert_eq!(id, "msg1");
+                assert_eq!(to, "alice@test.com");
+            }
+            _ => panic!("Expected Forward"),
+        }
+    }
+
+    #[test]
+    fn test_pin_unpin() {
+        let cmd = Command::parse("/pin msg1");
+        match cmd { Command::Pin { id } => assert_eq!(id, "msg1"), _ => panic!("Expected Pin") }
+        assert!(matches!(Command::parse("/pin"), Command::Unknown(_)));
+        let cmd = Command::parse("/unpin msg1");
+        match cmd { Command::Unpin { id } => assert_eq!(id, "msg1"), _ => panic!("Expected Unpin") }
+        assert!(matches!(Command::parse("/unpin"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn test_mute_unmute() {
+        let cmd = Command::parse("/mute alice@test.com");
+        match cmd { Command::Mute { chat } => assert_eq!(chat, "alice@test.com"), _ => panic!() }
+        assert!(matches!(Command::parse("/mute"), Command::Unknown(_)));
+        let cmd = Command::parse("/unmute alice@test.com");
+        match cmd { Command::Unmute { chat } => assert_eq!(chat, "alice@test.com"), _ => panic!() }
+        assert!(matches!(Command::parse("/unmute"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn test_search_requires_arg() {
+        assert!(matches!(Command::parse("/search"), Command::Unknown(_)));
+        let cmd = Command::parse("/search query");
+        match cmd { Command::Search { query } => assert_eq!(query, "query"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_typing_aliases() {
+        assert!(matches!(Command::parse("/typing"), Command::Typing));
+        assert!(matches!(Command::parse("/ty"), Command::Typing));
+    }
+
+    #[test]
+    fn test_contacts_aliases() {
+        assert!(matches!(Command::parse("/contacts"), Command::Contacts));
+        assert!(matches!(Command::parse("/who"), Command::Contacts));
+    }
+
+    #[test]
+    fn test_add_remove() {
+        let cmd = Command::parse("/add alice@test.com Alice");
+        match cmd {
+            Command::Add { email, name } => {
+                assert_eq!(email, "alice@test.com");
+                assert_eq!(name, Some("Alice".to_string()));
+            }
+            _ => panic!(),
+        }
+        let cmd = Command::parse("/add bob@test.com");
+        match cmd {
+            Command::Add { email, name } => {
+                assert_eq!(email, "bob@test.com");
+                assert!(name.is_none());
+            }
+            _ => panic!(),
+        }
+        assert!(matches!(Command::parse("/add"), Command::Unknown(_)));
+        let cmd = Command::parse("/rm alice@test.com");
+        match cmd { Command::Remove { email } => assert_eq!(email, "alice@test.com"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_whois_requires_arg() {
+        assert!(matches!(Command::parse("/whois"), Command::Unknown(_)));
+        let cmd = Command::parse("/whois alice@test.com");
+        match cmd { Command::Whois { email } => assert_eq!(email, "alice@test.com"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_invite_accept_confirm() {
+        let cmd = Command::parse("/invite alice@test.com");
+        match cmd { Command::Invite { email } => assert_eq!(email, "alice@test.com"), _ => panic!() }
+        assert!(matches!(Command::parse("/invite"), Command::Unknown(_)));
+        let cmd = Command::parse("/accept inv_abc123");
+        match cmd { Command::Accept { invite } => assert_eq!(invite, "inv_abc123"), _ => panic!() }
+        assert!(matches!(Command::parse("/accept"), Command::Unknown(_)));
+        let cmd = Command::parse("/confirm alice@test.com");
+        match cmd { Command::Confirm { email } => assert_eq!(email, "alice@test.com"), _ => panic!() }
+        assert!(matches!(Command::parse("/confirm"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn test_keygen_keys_aliases() {
+        assert!(matches!(Command::parse("/keygen"), Command::Keygen));
+        assert!(matches!(Command::parse("/kg"), Command::Keygen));
+        assert!(matches!(Command::parse("/keys"), Command::Keys));
+        assert!(matches!(Command::parse("/k"), Command::Keys));
+    }
+
+    #[test]
+    fn test_keyshare_requires_arg() {
+        assert!(matches!(Command::parse("/keyshare"), Command::Unknown(_)));
+        let cmd = Command::parse("/keyshare alice@test.com");
+        match cmd { Command::KeyShare { contact } => assert_eq!(contact, "alice@test.com"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_aliases() {
+        let cmd = Command::parse("/encrypt Hello World");
+        match cmd { Command::Encrypt { text } => assert_eq!(text, "Hello World"), _ => panic!() }
+        let cmd = Command::parse("/enc secret");
+        match cmd { Command::Encrypt { text } => assert_eq!(text, "secret"), _ => panic!() }
+        assert!(matches!(Command::parse("/encrypt"), Command::Unknown(_)));
+        let cmd = Command::parse("/decrypt data");
+        match cmd { Command::Decrypt { text } => assert_eq!(text, "data"), _ => panic!() }
+        let cmd = Command::parse("/dec data2");
+        match cmd { Command::Decrypt { text } => assert_eq!(text, "data2"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_attach_sendfile() {
+        let cmd = Command::parse("/attach /tmp/file.pdf");
+        match cmd { Command::Attach { path } => assert_eq!(path, "/tmp/file.pdf"), _ => panic!() }
+        assert!(matches!(Command::parse("/attach"), Command::Unknown(_)));
+        let cmd = Command::parse("/sendfile /tmp/doc.txt");
+        match cmd { Command::SendFile { path } => assert_eq!(path, "/tmp/doc.txt"), _ => panic!() }
+        let cmd = Command::parse("/sf /tmp/doc.txt");
+        match cmd { Command::SendFile { path } => assert_eq!(path, "/tmp/doc.txt"), _ => panic!() }
+    }
+
+    #[test]
+    fn test_group_commands_full() {
+        let cmd = Command::parse("/cg TestGroup");
+        match cmd { Command::CreateGroup { name } => assert_eq!(name, "TestGroup"), _ => panic!() }
+        let cmd = Command::parse("/joingroup grp123");
+        match cmd { Command::JoinGroup { group_id } => assert_eq!(group_id, "grp123"), _ => panic!() }
+        let cmd = Command::parse("/leavegroup grp123");
+        match cmd { Command::LeaveGroup { group_id } => assert_eq!(group_id, "grp123"), _ => panic!() }
+        let cmd = Command::parse("/gm grp123");
+        match cmd { Command::GroupMembers { group_id } => assert_eq!(group_id, "grp123"), _ => panic!() }
+        let cmd = Command::parse("/gi grp123 bob@test.com");
+        match cmd {
+            Command::GroupInvite { group_id, email } => { assert_eq!(group_id, "grp123"); assert_eq!(email, "bob@test.com"); }
+            _ => panic!(),
+        }
+        let cmd = Command::parse("/gr grp123 bob@test.com");
+        match cmd {
+            Command::GroupRemove { group_id, email } => { assert_eq!(group_id, "grp123"); assert_eq!(email, "bob@test.com"); }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_settings_set() {
+        assert!(matches!(Command::parse("/settings"), Command::Settings));
+        assert!(matches!(Command::parse("/cfg"), Command::Settings));
+        let cmd = Command::parse("/set email test@test.com");
+        match cmd { Command::Set { key, value } => { assert_eq!(key, "email"); assert_eq!(value, "test@test.com"); } _ => panic!() }
+        assert!(matches!(Command::parse("/set"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn test_unknown_and_empty() {
+        assert!(matches!(Command::parse("/foobar"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("random text"), Command::Unknown(_)));
+        assert!(matches!(Command::parse(""), Command::Unknown(_)));
+        assert!(matches!(Command::parse("   "), Command::Unknown(_)));
+    }
 }

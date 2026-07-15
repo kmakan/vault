@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  /* Telegram-inspired dark theme */
+  --bg-primary: #17212b;
+  --bg-secondary: #242f3d;
+  --bg-tertiary: #1e2c3a;
+  --bg-chat: #0e1621;
+  --bg-message-out: #2b5278;
+  --bg-message-in: #182533;
+  --bg-sidebar: #17212b;
+  --bg-hover: #202b36;
+  --bg-active: #2b5278;
+  --bg-input: #242f3d;
+
+  --text-primary: #f5f5f5;
+  --text-secondary: #8b9bab;
+  --text-muted: #6c7883;
+  --text-accent: #6ab2f2;
+  --text-link: #6ab2f2;
+
+  --border-color: #101921;
+  --border-light: #2b3945;
+  --divider: #101921;
+
+  --accent: #6ab2f2;
+  --accent-hover: #5aa0e0;
+  --accent-green: #4fae4e;
+  --accent-red: #e05454;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  font-family: var(--font-sans);
+  background: var(--bg-chat);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Selection */
+::selection {
+  background: rgba(106, 178, 242, 0.3);
+}
