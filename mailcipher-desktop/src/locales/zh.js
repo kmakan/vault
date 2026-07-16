@@ -96,6 +96,9 @@ export default {
   group_invite: '邀请成员',
   group_invite_placeholder: '输入邮箱邀请...',
 
+  // Theme
+  theme: '主题',
+
   // Font
   font: '字体',
 

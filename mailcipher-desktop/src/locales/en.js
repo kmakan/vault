@@ -96,6 +96,9 @@ export default {
   group_invite: 'Invite member',
   group_invite_placeholder: 'Email to invite...',
 
+  // Theme
+  theme: 'Theme',
+
   // Font
   font: 'Font',
 

@@ -96,6 +96,9 @@ export default {
   group_invite: 'Пригласить участника',
   group_invite_placeholder: 'Email для приглашения...',
 
+  // Theme
+  theme: 'Тема',
+
   // Font
   font: 'Шрифт',
 
