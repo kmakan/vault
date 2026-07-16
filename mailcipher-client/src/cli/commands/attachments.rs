@@ -4,7 +4,7 @@
 //! MIME multipart construction, and encryption via the Encryptor module.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Maximum attachment sizes per email provider (in bytes)
 pub struct ProviderLimits;

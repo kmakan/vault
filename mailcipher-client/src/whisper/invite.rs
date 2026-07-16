@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::contacts::ContactBook;
 
 /// Whisper ID format: whisper:<email>
 #[derive(Debug, Clone, Serialize, Deserialize)]

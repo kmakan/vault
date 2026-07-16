@@ -6,7 +6,7 @@ use reedline::{DefaultPrompt, FileBackedHistory, Reedline, Signal};
 use crate::api::client::Config;
 use crate::api::email::{EmailClient, EmailConfig};
 use crate::cli::commands::Command;
-use crate::cli::output::{format_size, Output};
+use crate::cli::output::Output;
 use crate::crypto::CryptoClient;
 use crate::whisper::Reaction;
 
