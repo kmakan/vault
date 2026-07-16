@@ -90,6 +90,7 @@ cargo build --release
 | Документ | Описание |
 |----------|----------|
 | [../docs/research/mls-treekem-research.md](../../../docs/research/mls-treekem-research.md) | MLS (TreeKEM) для группового шифрования |
+| [../docs/research/whatsapp-telegram-integration.md](../../../docs/research/whatsapp-telegram-integration.md) | Интеграция с WhatsApp/Telegram |
 | [../docs/promotion/monetization-plan.md](../../../docs/promotion/monetization-plan.md) | План продвижения и монетизации |
 
 ## Контрибьюция

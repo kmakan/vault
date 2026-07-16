@@ -25,3 +25,6 @@ Thumbs.db
 # Temporary
 /tmp/
 graphify-out/
+
+# Android builds
+mailcipher-android/
