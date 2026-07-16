@@ -3,6 +3,10 @@ name = "mailcipher-desktop"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "mailcipher_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
