@@ -57,6 +57,8 @@ const categories = [
   { id: 'symbols', icon: '❤️', name: 'Symbols' },
   { id: 'flags', icon: '🏁', name: 'Flags' },
   { id: 'whisper', icon: '🔐', name: 'Whisper' },
+  { id: 'crypto', icon: '₿', name: 'Crypto' },
+  { id: 'comms', icon: '📡', name: 'Communication' },
 ]
 
 // Curated emoji set (most used)
@@ -219,6 +221,37 @@ const allEmojis = [
   { id: 'incognito', native: '🥷', category: 'whisper', name: 'Incognito' },
   { id: 'hacker', native: '🕵️', category: 'whisper', name: 'Hacker' },
   { id: 'fingerprint', native: '🖐️', category: 'whisper', name: 'Fingerprint' },
+  { id: 'vault', native: '🏦', category: 'whisper', name: 'Vault' },
+  { id: 'detective', native: '🕵️', category: 'whisper', name: 'Detective' },
+  { id: 'ninja', native: '🥷', category: 'whisper', name: 'Ninja' },
+  { id: 'ghost_whisper', native: '👻', category: 'whisper', name: 'Ghost' },
+  { id: 'mask', native: '🎭', category: 'whisper', name: 'Mask' },
+  { id: 'lock_with_pen', native: '🔏', category: 'whisper', name: 'Lock & Pen' },
+  { id: 'key2', native: '🔑', category: 'whisper', name: 'Key' },
+  { id: 'ring', native: '💍', category: 'whisper', name: 'Ring' },
+  { id: 'gem', native: '💎', category: 'whisper', name: 'Gem' },
+  // Crypto
+  { id: 'bitcoin', native: '₿', category: 'crypto', name: 'Bitcoin' },
+  { id: 'ethereum', native: 'Ξ', category: 'crypto', name: 'Ethereum' },
+  { id: 'crypto_coin', native: '🪙', category: 'crypto', name: 'Coin' },
+  { id: 'money_bag', native: '💰', category: 'crypto', name: 'Money Bag' },
+  { id: 'credit_card', native: '💳', category: 'crypto', name: 'Credit Card' },
+  { id: 'chart_up', native: '📈', category: 'crypto', name: 'Chart Up' },
+  { id: 'chart_down', native: '📉', category: 'crypto', name: 'Chart Down' },
+  { id: 'diamond', native: '💎', category: 'crypto', name: 'Diamond' },
+  { id: 'gem2', native: '◇', category: 'crypto', name: 'Gem' },
+  { id: 'crown', native: '👑', category: 'crypto', name: 'Crown' },
+  // Communication
+  { id: 'satellite', native: '📡', category: 'comms', name: 'Satellite' },
+  { id: 'radio', native: '📻', category: 'comms', name: 'Radio' },
+  { id: 'phone2', native: '📞', category: 'comms', name: 'Phone' },
+  { id: 'bell', native: '🔔', category: 'comms', name: 'Bell' },
+  { id: 'megaphone', native: '📢', category: 'comms', name: 'Megaphone' },
+  { id: 'loudspeaker', native: '🔊', category: 'comms', name: 'Speaker' },
+  { id: 'pager', native: '📟', category: 'comms', name: 'Pager' },
+  { id: 'fax', native: '📠', category: 'comms', name: 'Fax' },
+  { id: 'antenna', native: '📺', category: 'comms', name: 'TV' },
+  { id: 'wifi', native: '📶', category: 'comms', name: 'WiFi' },
 ]
 
 const filteredEmojis = computed(() => {
