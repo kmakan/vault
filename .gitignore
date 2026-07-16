@@ -28,3 +28,8 @@ graphify-out/
 
 # Android builds
 mailcipher-android/
+
+# Keystore
+*.jks
+*.keystore
+release-key.jks

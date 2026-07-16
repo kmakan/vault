@@ -38,6 +38,11 @@
         <div class="search-box">
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
+        <div class="group-create-row">
+          <button class="group-create-btn" @click="showCreateGroup = true">
+            <span>➕</span> {{ t('group_create') || 'New Group' }}
+          </button>
+        </div>
         <div 
           v-for="contact in filteredContacts" 
           :key="contact.email"
@@ -93,8 +98,22 @@
           </div>
           <div class="chat-actions">
             <button @click="showGroupSettings = !showGroupSettings" title="Members">👥</button>
-            <button @click="searchMessages" title="Search">🔍</button>
+            <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
           </div>
+        </div>
+
+        <!-- Chat search bar -->
+        <div v-if="showChatSearch" class="chat-search-bar">
+          <input
+            v-model="chatSearchQuery"
+            :placeholder="(t('general_search') || 'Search') + '...'"
+            class="chat-search-input"
+            ref="chatSearchInput"
+          />
+          <span v-if="chatSearchQuery" class="chat-search-count">
+            {{ filteredMessages.length }}/{{ messages.length }}
+          </span>
+          <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false">✕</button>
         </div>
 
         <!-- Group Settings Panel -->
@@ -112,26 +131,53 @@
         />
         
         <div class="messages" ref="messagesContainer">
-          <div 
-            v-for="msg in messages" 
+          <div
+            v-for="msg in filteredMessages"
             :key="msg.id"
             :class="['message', { own: msg.from === 'me' }]"
+            @click.stop="toggleReactionPicker(msg.id)"
           >
             <div class="message-content">
               {{ msg.content }}
               <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
             </div>
+            <!-- Reactions -->
+            <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
+              <span
+                v-for="(r, ri) in msg.reactions"
+                :key="ri"
+                class="reaction-badge"
+                @click.stop="toggleReaction(msg.id, r)"
+              >{{ r }}</span>
+            </div>
             <div class="message-time">{{ msg.time }}</div>
+            <!-- Reaction picker popup -->
+            <div
+              v-if="reactionPickerMsgId === msg.id"
+              class="reaction-picker"
+              @click.stop
+            >
+              <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
+            </div>
           </div>
         </div>
         
         <div class="message-input" v-if="activeChat">
+        <div class="input-wrapper">
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji">😊</button>
+          <EmojiPicker
+            :show="showEmojiPicker"
+            @select="insertEmoji"
+            @close="showEmojiPicker = false"
+          />
+          <input
+            v-model="newMessage"
+            @keyup.enter="sendMessage"
+            :placeholder="t('email_compose') + '...'"
+            class="message-field"
+          />
+        </div>
         <button class="attach-btn" title="Attach file">📎</button>
-        <input 
-          v-model="newMessage" 
-          @keyup.enter="sendMessage"
-          :placeholder="t('email_compose') + '...'"
-        />
           <button class="send-btn" @click="sendMessage">
             <span class="send-icon">➤</span>
           </button>
@@ -158,6 +204,35 @@
         </div>
       </div>
     </div>
+
+    <!-- Create Group Modal -->
+    <div v-if="showCreateGroup" class="modal-overlay" @click.self="showCreateGroup = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('group_create_title') || 'New Group' }}</h3>
+          <button class="modal-close" @click="showCreateGroup = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('group_name') || 'Group Name' }}</label>
+          <input
+            v-model="newGroupName"
+            :placeholder="(t('group_name') || 'Group Name') + '...'"
+            class="modal-input"
+            @keyup.enter="createGroupAndClose"
+          />
+          <label>Icon</label>
+          <div class="icon-picker">
+            <button v-for="ic in groupIcons" :key="ic" :class="['icon-btn', { active: newGroupIcon === ic }]" @click="newGroupIcon = ic">{{ ic }}</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showCreateGroup = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="createGroupAndClose" :disabled="!newGroupName.trim()">
+            {{ t('group_create') || 'Create' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -171,6 +246,7 @@ import KeyManager from './components/KeyManager.vue';
 import LanguageSelector from './components/LanguageSelector.vue';
 import UserAvatar from './components/UserAvatar.vue';
 import GroupSettings from './components/GroupSettings.vue';
+import EmojiPicker from './components/EmojiPicker.vue';
 
 export default {
   name: 'ChatApp',
@@ -180,7 +256,8 @@ export default {
     KeyManager,
     LanguageSelector,
     UserAvatar,
-    GroupSettings
+    GroupSettings,
+    EmojiPicker
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -216,15 +293,33 @@ export default {
       showGroupSettings: false,
       newGroupName: '',
       newGroupIcon: '📁',
+      // Emoji
+      showEmojiPicker: false,
+      // Reactions
+      reactionPickerMsgId: null,
+      quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
+      // Search in chat
+      chatSearchQuery: '',
+      showChatSearch: false,
+      // Create group modal
+      showCreateGroup: false,
+      inviteEmail: '',
+      groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '💼', '🚀', '⭐', '🎯', '💡'],
     }
   },
   computed: {
     filteredContacts() {
       if (!this.searchQuery) return this.contacts;
       const q = this.searchQuery.toLowerCase();
-      return this.contacts.filter(c => 
-        c.name.toLowerCase().includes(q) || 
-        c.email.toLowerCase().includes(q)
+      return this.contacts.filter(c =>
+        c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)
+      );
+    },
+    filteredMessages() {
+      if (!this.chatSearchQuery) return this.messages;
+      const q = this.chatSearchQuery.toLowerCase();
+      return this.messages.filter(m =>
+        m.content && m.content.toLowerCase().includes(q)
       );
     }
   },
@@ -395,6 +490,32 @@ export default {
     openEmail(email) {
       this.selectedEmail = email;
     },
+    // Emoji
+    insertEmoji(emoji) {
+      this.newMessage += emoji
+      this.showEmojiPicker = false
+    },
+    // Reactions
+    toggleReactionPicker(msgId) {
+      this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
+    },
+    addReaction(msgId, emoji) {
+      const msg = this.messages.find(m => m.id === msgId)
+      if (!msg) return
+      if (!msg.reactions) msg.reactions = []
+      if (!msg.reactions.includes(emoji)) {
+        msg.reactions.push(emoji)
+      }
+      this.reactionPickerMsgId = null
+    },
+    toggleReaction(msgId, emoji) {
+      const msg = this.messages.find(m => m.id === msgId)
+      if (!msg || !msg.reactions) return
+      const idx = msg.reactions.indexOf(emoji)
+      if (idx >= 0) {
+        msg.reactions.splice(idx, 1)
+      }
+    },
     // Group management
     createGroup() {
       if (!this.newGroupName.trim()) return;
@@ -418,6 +539,10 @@ export default {
       this.currentGroup = group;
       this.activeChat = null;
       this.showGroupSettings = true;
+    },
+    createGroupAndClose() {
+      this.createGroup();
+      this.showCreateGroup = false;
     },
     promoteMember(email) {
       if (!this.currentGroup) return;
@@ -879,6 +1004,302 @@ body {
   text-align: right;
 }
 
+/* Reactions */
+.message-reactions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.reaction-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--bg-hover, rgba(99, 102, 241, 0.15));
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition-fast, 150ms ease);
+}
+
+.reaction-badge:hover {
+  background: var(--accent-glow, rgba(99, 102, 241, 0.3));
+  transform: scale(1.1);
+}
+
+.reaction-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 20px;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
+  z-index: 50;
+  animation: fadeInUp 0.15s ease;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reaction-emoji {
+  background: none;
+  border: none;
+  font-size: 20px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.reaction-emoji:hover {
+  background: var(--bg-hover, #1e1e4a);
+  transform: scale(1.2);
+}
+
+.message {
+  position: relative;
+}
+
+/* Chat search bar */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  background: var(--bg-secondary, #12122a);
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+}
+
+.chat-search-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 13px;
+  outline: none;
+}
+
+.chat-search-input:focus {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  white-space: nowrap;
+}
+
+.chat-search-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chat-search-close:hover {
+  color: var(--text-primary, #f1f5f9);
+}
+
+/* Group create button */
+.group-create-row {
+  padding: 8px 16px;
+}
+
+.group-create-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all var(--transition-fast, 150ms ease);
+}
+
+.group-create-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--accent-glow, rgba(99, 102, 241, 0.3));
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-card {
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 16px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px 0;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-primary, #f1f5f9);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 20px;
+  padding: 4px;
+}
+
+.modal-close:hover {
+  color: var(--text-primary, #f1f5f9);
+}
+
+.modal-body {
+  padding: 20px 24px;
+}
+
+.modal-body label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 14px;
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
+}
+
+.modal-input:focus {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+
+.icon-btn.active {
+  border-color: var(--accent-primary, #6366f1);
+  background: var(--accent-glow, rgba(99, 102, 241, 0.15));
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 24px 20px;
+}
+
+.btn-cancel {
+  padding: 8px 16px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-cancel:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--accent-glow, rgba(99, 102, 241, 0.3));
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Message Input
    ═══════════════════════════════════════════════════════════════ */
@@ -890,6 +1311,49 @@ body {
   align-items: center;
   gap: 12px;
   background: var(--bg-secondary);
+}
+
+.input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  position: relative;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.emoji-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px 4px 8px 12px;
+  transition: transform 0.15s;
+}
+
+.emoji-btn:hover {
+  transform: scale(1.15);
+}
+
+.message-field {
+  flex: 1;
+  padding: 12px 12px 12px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+}
+
+.message-field::placeholder {
+  color: var(--text-muted);
 }
 
 .attach-btn {
@@ -904,27 +1368,6 @@ body {
 
 .attach-btn:hover {
   background: var(--bg-hover);
-}
-
-.message-input input {
-  flex: 1;
-  padding: 12px 18px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-full);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: all var(--transition-fast);
-}
-
-.message-input input::placeholder {
-  color: var(--text-muted);
-}
-
-.message-input input:focus {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .send-btn {
