@@ -3,6 +3,10 @@ name = "mailcipher-client"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "vault"
+path = "src/main.rs"
+
 [dependencies]
 # Terminal UI (legacy TUI mode)
 ratatui = "0.29"

@@ -1541,6 +1541,24 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   Settings Panel
+   ═══════════════════════════════════════════════════════════════ */
+
+.settings-panel {
+  padding: 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.settings-panel h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    Email View
    ═══════════════════════════════════════════════════════════════ */
 
