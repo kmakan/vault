@@ -14,7 +14,10 @@ const FORMAT_VERSION: &str = "1";
 #[derive(Debug, Clone)]
 pub enum DataType {
     Text,
-    File { filename: String, content_type: String },
+    File {
+        filename: String,
+        content_type: String,
+    },
 }
 
 /// Standalone Encryptor/Decryptor for Whisper Vault
@@ -171,8 +174,8 @@ impl Encryptor {
 
         match parsed.data_type {
             DataType::Text => {
-                let text = String::from_utf8(plaintext)
-                    .context("Decrypted data is not valid UTF-8")?;
+                let text =
+                    String::from_utf8(plaintext).context("Decrypted data is not valid UTF-8")?;
                 Ok(DecryptedContent::Text(text))
             }
             DataType::File {
@@ -214,9 +217,7 @@ fn parse_encrypted_block(input: &str) -> Result<ParsedBlock> {
     let begin_marker = "---BEGIN WHISPER ENCRYPTED---";
     let end_marker = "---END WHISPER ENCRYPTED---";
 
-    let start = input
-        .find(begin_marker)
-        .context("Missing BEGIN marker")?;
+    let start = input.find(begin_marker).context("Missing BEGIN marker")?;
     let end = input.find(end_marker).context("Missing END marker")?;
 
     let block = &input[start + begin_marker.len()..end];
@@ -275,8 +276,7 @@ fn parse_encrypted_block(input: &str) -> Result<ParsedBlock> {
 
 /// Quick check if a string looks like a Whisper encrypted block
 pub fn is_whisper_encrypted(input: &str) -> bool {
-    input.contains("---BEGIN WHISPER ENCRYPTED---")
-        && input.contains("---END WHISPER ENCRYPTED---")
+    input.contains("---BEGIN WHISPER ENCRYPTED---") && input.contains("---END WHISPER ENCRYPTED---")
 }
 
 #[cfg(test)]

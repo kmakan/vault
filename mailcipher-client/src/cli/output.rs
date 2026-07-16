@@ -20,10 +20,7 @@ impl Output {
   ⣿                                                            ⣿
   ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"#;
 
-        println!(
-            "{}",
-            Style::new().cyan().bold().apply_to(banner)
-        );
+        println!("{}", Style::new().cyan().bold().apply_to(banner));
         println!(
             "  {} {}\n",
             Style::new().dim().apply_to("v0.1.0"),
@@ -95,16 +92,14 @@ impl Output {
         let styled: Vec<String> = cols
             .iter()
             .zip(widths.iter())
-            .map(|(c, w)| {
-                format!(
-                    "{:<width$}",
-                    Style::new().bold().apply_to(c),
-                    width = w
-                )
-            })
+            .map(|(c, w)| format!("{:<width$}", Style::new().bold().apply_to(c), width = w))
             .collect();
         println!("  {}", styled.join("  "));
-        let sep: String = widths.iter().map(|w| "─".repeat(*w)).collect::<Vec<_>>().join("──");
+        let sep: String = widths
+            .iter()
+            .map(|w| "─".repeat(*w))
+            .collect::<Vec<_>>()
+            .join("──");
         println!("  {}", Style::new().dim().apply_to(sep));
     }
 
@@ -144,18 +139,12 @@ impl Output {
 
     // ── Section divider ───────────────────────────────────────────
     pub fn divider() {
-        println!(
-            "  {}",
-            Style::new().dim().apply_to("─".repeat(50))
-        );
+        println!("  {}", Style::new().dim().apply_to("─".repeat(50)));
     }
 
     // ── Multi-line block ──────────────────────────────────────────
     pub fn block(title: &str, lines: &[&str]) {
-        println!(
-            "\n  {}",
-            Style::new().bold().apply_to(title)
-        );
+        println!("\n  {}", Style::new().bold().apply_to(title));
         Self::divider();
         for line in lines {
             println!("  {}", line);

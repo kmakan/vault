@@ -66,9 +66,17 @@ impl Compose {
 
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let block = Block::default()
-            .title(if self.active { "Compose (Enter to send, Esc to cancel)" } else { "Compose (c to start)" })
+            .title(if self.active {
+                "Compose (Enter to send, Esc to cancel)"
+            } else {
+                "Compose (c to start)"
+            })
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if self.active { Color::Green } else { Color::Cyan }));
+            .border_style(Style::default().fg(if self.active {
+                Color::Green
+            } else {
+                Color::Cyan
+            }));
 
         let display = if self.input.is_empty() && !self.active {
             Line::from(Span::styled(

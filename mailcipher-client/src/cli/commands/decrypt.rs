@@ -2,10 +2,15 @@ use anyhow::Result;
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::crypto::{Decryptor, DecryptedContent};
 use crate::cli::output::Output;
+use crate::crypto::{DecryptedContent, Decryptor};
 
-pub fn run(decryptor: &Decryptor, file: Option<PathBuf>, stdin_mode: bool, output: Option<PathBuf>) -> Result<()> {
+pub fn run(
+    decryptor: &Decryptor,
+    file: Option<PathBuf>,
+    stdin_mode: bool,
+    output: Option<PathBuf>,
+) -> Result<()> {
     let input = if let Some(path) = file {
         std::fs::read_to_string(&path)?
     } else if stdin_mode {

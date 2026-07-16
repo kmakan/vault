@@ -59,9 +59,7 @@ impl Inbox {
     }
 
     pub fn selected_message(&self) -> Option<&EmailMessage> {
-        self.state
-            .selected()
-            .and_then(|i| self.messages.get(i))
+        self.state.selected().and_then(|i| self.messages.get(i))
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
@@ -84,15 +82,9 @@ impl Inbox {
 
                 let line = Line::from(vec![
                     Span::styled(format!("{} ", prefix), style),
-                    Span::styled(
-                        truncate(&msg.from, 20),
-                        style,
-                    ),
+                    Span::styled(truncate(&msg.from, 20), style),
                     Span::styled(" ", Style::default()),
-                    Span::styled(
-                        truncate(&msg.subject, 30),
-                        style,
-                    ),
+                    Span::styled(truncate(&msg.subject, 30), style),
                     Span::styled(
                         format!(" ({})", &msg.date[..10.min(msg.date.len())]),
                         Style::default().fg(Color::DarkGray),

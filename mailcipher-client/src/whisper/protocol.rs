@@ -120,8 +120,8 @@ impl WhisperMessage {
 
     /// Serialize to Whisper email format
     pub fn to_email_body(&self) -> String {
-        let envelope_json = serde_json::to_string(&self.envelope)
-            .expect("Failed to serialize envelope");
+        let envelope_json =
+            serde_json::to_string(&self.envelope).expect("Failed to serialize envelope");
         format!(
             "X-Whisper-Encrypted: 1\nX-Whisper-Type: {}\nX-Whisper-ID: {}\nX-Whisper-From: {}\nX-Whisper-Reply-To: {}\n\n{}\n{}",
             self.envelope.msg_type.as_str(),
@@ -167,7 +167,11 @@ mod tests {
     #[test]
     fn test_whisper_message_reply() {
         let msg = WhisperMessage::reply(
-            "bob@test.com", "alice@test.com", "msg-2", "msg-1", "encrypted"
+            "bob@test.com",
+            "alice@test.com",
+            "msg-2",
+            "msg-1",
+            "encrypted",
         );
         assert_eq!(msg.envelope.in_reply_to, Some("msg-1".to_string()));
     }
@@ -175,7 +179,10 @@ mod tests {
     #[test]
     fn test_whisper_receipt() {
         let msg = WhisperMessage::receipt(
-            "bob@test.com", "alice@test.com", "msg-1", MessageStatus::Delivered
+            "bob@test.com",
+            "alice@test.com",
+            "msg-1",
+            MessageStatus::Delivered,
         );
         assert_eq!(msg.envelope.msg_type, WhisperMsgType::Receipt);
     }

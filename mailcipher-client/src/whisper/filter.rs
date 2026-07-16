@@ -13,7 +13,9 @@ impl WhisperFilter {
     /// Check if an email is a Whisper message (not a receipt)
     pub fn is_whisper_message(msg: &EmailMessage) -> bool {
         let subject_has_marker = msg.subject.starts_with(WHISPER_SUBJECT_PREFIX);
-        let body_has_marker = msg.body.contains(&format!("{}: {}", WHISPER_HEADER, WHISPER_VERSION));
+        let body_has_marker = msg
+            .body
+            .contains(&format!("{}: {}", WHISPER_HEADER, WHISPER_VERSION));
         subject_has_marker || body_has_marker
     }
 
@@ -70,12 +72,18 @@ impl WhisperFilter {
 
     /// Filter a list of messages, returning only Whisper messages
     pub fn filter_whisper_messages(messages: &[EmailMessage]) -> Vec<&EmailMessage> {
-        messages.iter().filter(|m| Self::is_whisper_message(m)).collect()
+        messages
+            .iter()
+            .filter(|m| Self::is_whisper_message(m))
+            .collect()
     }
 
     /// Filter out regular (non-Whisper) messages
     pub fn exclude_whisper(messages: &[EmailMessage]) -> Vec<&EmailMessage> {
-        messages.iter().filter(|m| !Self::is_whisper_any(m)).collect()
+        messages
+            .iter()
+            .filter(|m| !Self::is_whisper_any(m))
+            .collect()
     }
 }
 
@@ -124,7 +132,10 @@ mod tests {
     #[test]
     fn test_clean_subject() {
         assert_eq!(WhisperFilter::clean_subject("[WHISPER] Hello"), "Hello");
-        assert_eq!(WhisperFilter::clean_subject("[WHISPER-RECEIPT] msg-1"), "msg-1");
+        assert_eq!(
+            WhisperFilter::clean_subject("[WHISPER-RECEIPT] msg-1"),
+            "msg-1"
+        );
         assert_eq!(WhisperFilter::clean_subject("Regular"), "Regular");
     }
 
@@ -144,7 +155,10 @@ mod tests {
     #[test]
     fn test_extract_message_id() {
         let body = "X-Whisper-Encrypted: 1\nMessage-ID: abc-123\n\nencrypted";
-        assert_eq!(WhisperFilter::extract_message_id(body), Some("abc-123".to_string()));
+        assert_eq!(
+            WhisperFilter::extract_message_id(body),
+            Some("abc-123".to_string())
+        );
     }
 
     #[test]

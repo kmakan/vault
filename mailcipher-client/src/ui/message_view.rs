@@ -63,14 +63,8 @@ impl MessageView {
                 let content = msg.subject.as_deref().unwrap_or("(no subject)");
 
                 Line::from(vec![
-                    Span::styled(
-                        format!("[{}] ", time),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(
-                        content,
-                        Style::default().fg(Color::White),
-                    ),
+                    Span::styled(format!("[{}] ", time), Style::default().fg(Color::DarkGray)),
+                    Span::styled(content, Style::default().fg(Color::White)),
                 ])
             })
             .collect();

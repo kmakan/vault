@@ -82,7 +82,9 @@ pub struct ThreadManager {
 
 impl ThreadManager {
     pub fn new() -> Self {
-        Self { threads: Vec::new() }
+        Self {
+            threads: Vec::new(),
+        }
     }
 
     /// Find or create a thread by subject

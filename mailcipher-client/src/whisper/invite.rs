@@ -24,8 +24,7 @@ impl WhisperId {
     }
 
     pub fn from_string(s: &str) -> Option<Self> {
-        s.strip_prefix("whisper:")
-            .map(|email| Self::new(email))
+        s.strip_prefix("whisper:").map(|email| Self::new(email))
     }
 
     pub fn is_valid(&self) -> bool {
@@ -121,9 +120,7 @@ impl Invite {
             .unwrap()
             .as_secs();
 
-        self.status == InviteStatus::Pending
-            && !self.used
-            && now < self.expires_at
+        self.status == InviteStatus::Pending && !self.used && now < self.expires_at
     }
 
     /// Get time until expiration (in seconds)
@@ -142,10 +139,7 @@ impl Invite {
 
     /// Generate invite link
     pub fn to_link(&self) -> String {
-        format!(
-            "https://whisper.chat/invite/{}",
-            base64url_encode(&self.id)
-        )
+        format!("https://whisper.chat/invite/{}", base64url_encode(&self.id))
     }
 
     /// Parse invite from link
@@ -197,8 +191,7 @@ impl InviteManager {
 
     /// Load from file
     pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read_to_string(path)
-            .context("Failed to read invite file")?;
+        let data = std::fs::read_to_string(path).context("Failed to read invite file")?;
         let invites: HashMap<String, Invite> =
             serde_json::from_str(&data).context("Failed to parse invite file")?;
 
@@ -211,8 +204,8 @@ impl InviteManager {
     /// Save to file
     pub fn save(&self) -> Result<()> {
         if let Some(ref path) = self.storage_path {
-            let data =
-                serde_json::to_string_pretty(&self.invites).context("Failed to serialize invites")?;
+            let data = serde_json::to_string_pretty(&self.invites)
+                .context("Failed to serialize invites")?;
             std::fs::write(path, data).context("Failed to write invite file")?;
         }
         Ok(())
@@ -228,8 +221,7 @@ impl InviteManager {
     ) -> Result<Invite> {
         let invite = Invite::new(sender, recipient, sender_public_key, duration_hours);
 
-        self.invites
-            .insert(invite.id.clone(), invite.clone());
+        self.invites.insert(invite.id.clone(), invite.clone());
         self.save()?;
 
         Ok(invite)
@@ -242,16 +234,11 @@ impl InviteManager {
 
     /// Get invite by link
     pub fn get_invite_by_link(&self, link: &str) -> Option<&Invite> {
-        Invite::from_link(link)
-            .and_then(|id| self.invites.get(&id))
+        Invite::from_link(link).and_then(|id| self.invites.get(&id))
     }
 
     /// Accept an invite (recipient side)
-    pub fn accept_invite(
-        &mut self,
-        invite_id: &str,
-        recipient_public_key: &str,
-    ) -> Result<Invite> {
+    pub fn accept_invite(&mut self, invite_id: &str, recipient_public_key: &str) -> Result<Invite> {
         let invite = self
             .invites
             .get_mut(invite_id)
@@ -374,12 +361,7 @@ mod tests {
 
     #[test]
     fn test_invite_creation() {
-        let invite = Invite::new(
-            "alice@example.com",
-            "bob@example.com",
-            "04a1b2c3d4",
-            24,
-        );
+        let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
 
         assert!(invite.is_valid());
         assert_eq!(invite.status, InviteStatus::Pending);
@@ -389,12 +371,7 @@ mod tests {
 
     #[test]
     fn test_invite_link() {
-        let invite = Invite::new(
-            "alice@example.com",
-            "bob@example.com",
-            "04a1b2c3d4",
-            24,
-        );
+        let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
 
         let link = invite.to_link();
         assert!(link.starts_with("https://whisper.chat/invite/"));
@@ -409,12 +386,7 @@ mod tests {
         let mut manager = InviteManager::new();
 
         let invite = manager
-            .create_invite(
-                "alice@example.com",
-                "bob@example.com",
-                "04a1b2c3d4",
-                24,
-            )
+            .create_invite("alice@example.com", "bob@example.com", "04a1b2c3d4", 24)
             .unwrap();
 
         assert!(invite.is_valid());
@@ -428,12 +400,7 @@ mod tests {
         let mut manager = InviteManager::new();
 
         let invite = manager
-            .create_invite(
-                "alice@example.com",
-                "bob@example.com",
-                "04a1b2c3d4",
-                24,
-            )
+            .create_invite("alice@example.com", "bob@example.com", "04a1b2c3d4", 24)
             .unwrap();
 
         let accepted = manager.accept_invite(&invite.id, "04e5f6g7h8");
@@ -445,12 +412,7 @@ mod tests {
         let mut manager = InviteManager::new();
 
         let invite = manager
-            .create_invite(
-                "alice@example.com",
-                "bob@example.com",
-                "04a1b2c3d4",
-                24,
-            )
+            .create_invite("alice@example.com", "bob@example.com", "04a1b2c3d4", 24)
             .unwrap();
 
         manager.accept_invite(&invite.id, "04e5f6g7h8").unwrap();
@@ -463,12 +425,7 @@ mod tests {
         let mut manager = InviteManager::new();
 
         let invite = manager
-            .create_invite(
-                "alice@example.com",
-                "bob@example.com",
-                "04a1b2c3d4",
-                24,
-            )
+            .create_invite("alice@example.com", "bob@example.com", "04a1b2c3d4", 24)
             .unwrap();
 
         manager.revoke_invite(&invite.id).unwrap();

@@ -32,7 +32,11 @@ impl ChatList {
         if self.chats.is_empty() {
             return;
         }
-        let i = self.state.selected().map(|i| (i + 1) % self.chats.len()).unwrap_or(0);
+        let i = self
+            .state
+            .selected()
+            .map(|i| (i + 1) % self.chats.len())
+            .unwrap_or(0);
         self.state.select(Some(i));
     }
 
@@ -40,13 +44,11 @@ impl ChatList {
         if self.chats.is_empty() {
             return;
         }
-        let i = self.state.selected().map(|i| {
-            if i == 0 {
-                self.chats.len() - 1
-            } else {
-                i - 1
-            }
-        }).unwrap_or(0);
+        let i = self
+            .state
+            .selected()
+            .map(|i| if i == 0 { self.chats.len() - 1 } else { i - 1 })
+            .unwrap_or(0);
         self.state.select(Some(i));
     }
 
@@ -69,10 +71,7 @@ impl ChatList {
                 };
 
                 let line = Line::from(vec![
-                    Span::styled(
-                        format!("Chat {}", &chat.id.to_string()[..8]),
-                        style,
-                    ),
+                    Span::styled(format!("Chat {}", &chat.id.to_string()[..8]), style),
                     Span::styled(
                         format!(" ({})", &chat.updated_at[..19]),
                         Style::default().fg(Color::DarkGray),

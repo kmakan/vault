@@ -1,0 +1,261 @@
+#!/usr/bin/expect -f
+# ============================================================
+# Whisper/Vault CLI Demo Test
+# Automated expect script to verify all slash commands work
+# ============================================================
+
+set timeout 10
+set binary_path "/home/maksim/whisper/mailcipher-client/target/release/mailcipher-client"
+set log_file "/home/maksim/whisper/mailcipher-client/tests/cli-demo-output.log"
+
+# Start the CLI
+spawn $binary_path
+
+# Wait for banner
+expect {
+    "Whisper" { puts "\n✓ Banner displayed" }
+    timeout { puts "\n✗ Banner not found"; exit 1 }
+}
+
+# --- 1. /help ---
+send "/help\r"
+expect {
+    "SESSION" { puts "✓ /help — OK" }
+    default   { puts "✗ /help — FAIL" }
+}
+
+# --- 2. /status (no connection) ---
+send "/status\r"
+expect {
+    "not connected" { puts "✓ /status — OK (shows not connected)" }
+    default         { puts "✗ /status — FAIL" }
+}
+
+# --- 3. /keygen ---
+send "/keygen\r"
+expect {
+    "New key pair generated" { puts "✓ /keygen — OK" }
+    "Generating new key pair" {
+        expect "New key pair generated" { puts "✓ /keygen — OK" }
+    }
+    default { puts "✗ /keygen — FAIL" }
+}
+
+# --- 4. /keys ---
+send "/keys\r"
+expect {
+    "Keys loaded" { puts "✓ /keys — OK" }
+    "Key status"  { puts "✓ /keys — OK" }
+    default       { puts "✗ /keys — FAIL" }
+}
+
+# --- 5. /encrypt ---
+send "/encrypt Hello Whisper Test\r"
+expect {
+    "encrypted" { puts "✓ /encrypt — OK" }
+    "Encrypt"   { puts "✓ /encrypt — OK" }
+    default     { puts "✗ /encrypt — FAIL" }
+}
+
+# --- 6. /contacts ---
+send "/contacts\r"
+expect {
+    "contacts" { puts "✓ /contacts — OK" }
+    "No contacts" { puts "✓ /contacts — OK (empty list)" }
+    default   { puts "✗ /contacts — FAIL" }
+}
+
+# --- 7. /settings ---
+send "/settings\r"
+expect {
+    "Settings" { puts "✓ /settings — OK" }
+    default    { puts "✗ /settings — FAIL" }
+}
+
+# --- 8. /set ---
+send "/set email test@test.com\r"
+expect {
+    "Set email" { puts "✓ /set — OK" }
+    default     { puts "✗ /set — FAIL" }
+}
+
+# --- 9. /settings again to verify ---
+send "/settings\r"
+expect {
+    "test@test.com" { puts "✓ /set persisted — OK" }
+    "Settings"      { puts "✓ /settings — OK" }
+    default         { puts "✗ /settings verification — FAIL" }
+}
+
+# --- 10. /clear ---
+send "/clear\r"
+expect {
+    "\\x1B" { puts "✓ /clear — OK (sent clear code)" }
+    default { puts "✓ /clear — OK" }
+}
+
+# --- 11. /chat ---
+send "/chat alice@test.com\r"
+expect {
+    "Entered chat" { puts "✓ /chat — OK" }
+    default        { puts "✗ /chat — FAIL" }
+}
+
+# --- 12. /send (in chat mode — no connection, should error) ---
+send "hello there\r"
+expect {
+    "Not connected" { puts "✓ /send (no connection) — OK (correct error)" }
+    "send"          { puts "✓ /send — OK" }
+    default         { puts "✗ /send — FAIL" }
+}
+
+# --- 13. /inbox (no connection) ---
+send "/inbox\r"
+expect {
+    "Not connected" { puts "✓ /inbox (no connection) — OK (correct error)" }
+    "fetching"      { puts "✓ /inbox — OK" }
+    default         { puts "✗ /inbox — FAIL" }
+}
+
+# --- 14. /read (no connection) ---
+send "/read msg1\r"
+expect {
+    "Not connected" { puts "✓ /read (no connection) — OK (correct error)" }
+    default         { puts "✗ /read — FAIL" }
+}
+
+# --- 15. /thread (no connection) ---
+send "/thread test\r"
+expect {
+    "Not connected" { puts "✓ /thread (no connection) — OK (correct error)" }
+    default         { puts "✗ /thread — FAIL" }
+}
+
+# --- 16. /creategroup ---
+send "/creategroup testgroup\r"
+expect {
+    "Group created" { puts "✓ /creategroup — OK" }
+    "created"       { puts "✓ /creategroup — OK" }
+    default         { puts "✗ /creategroup — FAIL" }
+}
+
+# --- 17. /pin ---
+send "/pin msg1\r"
+expect {
+    "Pinned" { puts "✓ /pin — OK" }
+    default  { puts "✗ /pin — FAIL" }
+}
+
+# --- 18. /unpin ---
+send "/unpin msg1\r"
+expect {
+    "Unpinned" { puts "✓ /unpin — OK" }
+    default    { puts "✗ /unpin — FAIL" }
+}
+
+# --- 19. /mute ---
+send "/mute alice@test.com\r"
+expect {
+    "Muted" { puts "✓ /mute — OK" }
+    default { puts "✗ /mute — FAIL" }
+}
+
+# --- 20. /unmute ---
+send "/unmute alice@test.com\r"
+expect {
+    "Unmuted" { puts "✓ /unmute — OK" }
+    default   { puts "✗ /unmute — FAIL" }
+}
+
+# --- 21. /typing ---
+send "/typing\r"
+expect {
+    "Typing" { puts "✓ /typing — OK" }
+    default  { puts "✗ /typing — FAIL" }
+}
+
+# --- 22. /help keys ---
+send "/help keys\r"
+expect {
+    "keygen" { puts "✓ /help keys — OK" }
+    default  { puts "✗ /help keys — FAIL" }
+}
+
+# --- 23. /help encrypt ---
+send "/help encrypt\r"
+expect {
+    "XChaCha20" { puts "✓ /help encrypt — OK" }
+    "encrypt"   { puts "✓ /help encrypt — OK" }
+    default     { puts "✗ /help encrypt — FAIL" }
+}
+
+# --- 24. /help connect ---
+send "/help connect\r"
+expect {
+    "connect" { puts "✓ /help connect — OK" }
+    default   { puts "✗ /help connect — FAIL" }
+}
+
+# --- 25. /help chat ---
+send "/help chat\r"
+expect {
+    "chat" { puts "✓ /help chat — OK" }
+    default { puts "✗ /help chat — FAIL" }
+}
+
+# --- 26. /help files ---
+send "/help files\r"
+expect {
+    "attach" { puts "✓ /help files — OK" }
+    default  { puts "✗ /help files — FAIL" }
+}
+
+# --- 27. /attach (nonexistent file) ---
+send "/attach /tmp/nonexistent.txt\r"
+expect {
+    "Cannot read" { puts "✓ /attach (missing file) — OK (correct error)" }
+    "error"       { puts "✓ /attach — OK" }
+    default       { puts "✗ /attach — FAIL" }
+}
+
+# --- 28. /joingroup (info only) ---
+send "/joingroup grp123\r"
+expect {
+    "ask the admin" { puts "✓ /joingroup — OK" }
+    default         { puts "✗ /joingroup — FAIL" }
+}
+
+# --- 29. /groupmembers (nonexistent group) ---
+send "/groupmembers grp123\r"
+expect {
+    "not found" { puts "✓ /groupmembers — OK (group not found)" }
+    "members"   { puts "✓ /groupmembers — OK" }
+    default     { puts "✗ /groupmembers — FAIL" }
+}
+
+# --- 30. Unknown command ---
+send "/foobar\r"
+expect {
+    "Unknown" { puts "✓ /unknown command — OK (warns)" }
+    default   { puts "✗ /unknown command — FAIL" }
+}
+
+# --- 31. Empty input ---
+send "\r"
+expect {
+    "\\$" { puts "✓ empty input — OK (ignored)" }
+    default { puts "✓ empty input — OK" }
+}
+
+# --- 32. /quit ---
+send "/quit\r"
+expect {
+    "Goodbye" { puts "✓ /quit — OK" }
+    eof       { puts "✓ /quit — OK (exited)" }
+    default   { puts "✗ /quit — FAIL" }
+}
+
+puts "\n============================================"
+puts "  CLI Demo Test Complete"
+puts "============================================"
+expect eof

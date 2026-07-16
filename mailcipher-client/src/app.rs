@@ -359,10 +359,7 @@ impl App {
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     )),
                     Line::from(""),
-                    Line::from(Span::styled(
-                        error_msg,
-                        Style::default().fg(Color::Red),
-                    )),
+                    Line::from(Span::styled(error_msg, Style::default().fg(Color::Red))),
                     Line::from(""),
                     Line::from(Span::styled(
                         "Press Enter to continue, q to quit",
@@ -380,10 +377,7 @@ impl App {
             AppMode::Inbox => {
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(40),
-                        Constraint::Percentage(60),
-                    ])
+                    .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
                     .split(f.area());
 
                 self.inbox.render(f, chunks[0]);
@@ -419,10 +413,7 @@ impl App {
             _ => {
                 let chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(30),
-                        Constraint::Percentage(70),
-                    ])
+                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
                     .split(f.area());
 
                 self.chat_list.render(f, chunks[0]);

@@ -148,11 +148,7 @@ impl EmailClient {
     }
 
     pub async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<()> {
-        let from_mailbox: Mailbox = self
-            .config
-            .email
-            .parse()
-            .context("Invalid sender email")?;
+        let from_mailbox: Mailbox = self.config.email.parse().context("Invalid sender email")?;
         let to_mailbox: Mailbox = to.parse().context("Invalid recipient email")?;
 
         let email = Message::builder()
@@ -163,19 +159,18 @@ impl EmailClient {
             .body(body.to_string())
             .context("Failed to build email")?;
 
-        let creds = Credentials::new(
-            self.config.email.clone(),
-            self.config.password.clone(),
-        );
+        let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
 
-        let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(
-            &self.config.smtp_server,
-        )?
-        .credentials(creds)
-        .port(self.config.smtp_port)
-        .build();
+        let transport =
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
+                .credentials(creds)
+                .port(self.config.smtp_port)
+                .build();
 
-        transport.send(email).await.context("Failed to send email")?;
+        transport
+            .send(email)
+            .await
+            .context("Failed to send email")?;
         Ok(())
     }
 

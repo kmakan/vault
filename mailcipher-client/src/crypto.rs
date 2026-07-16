@@ -1,6 +1,6 @@
 pub mod encryptor;
 
-pub use encryptor::{Encryptor, DecryptedContent, is_whisper_encrypted};
+pub use encryptor::{is_whisper_encrypted, DecryptedContent, Encryptor};
 
 /// Decryptor is an alias for Encryptor (it has both encrypt and decrypt methods)
 pub type Decryptor = Encryptor;
@@ -11,8 +11,8 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
-use x25519_dalek::{StaticSecret, PublicKey, SharedSecret};
 use rand::rngs::OsRng;
+use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
 const NONCE_LEN: usize = 24;
 
@@ -48,7 +48,9 @@ impl CryptoClient {
     /// Import a private key from hex
     pub fn import_private_key(&mut self, priv_hex: &str) -> Result<()> {
         let bytes = hex::decode(priv_hex).context("Invalid private key hex")?;
-        let arr: [u8; 32] = bytes.try_into().map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
         let private = StaticSecret::from(arr);
         let public = PublicKey::from(&private);
 
@@ -59,11 +61,12 @@ impl CryptoClient {
 
     /// Set a remote peer's public key to derive shared secret
     pub fn set_peer_key(&mut self, peer_pub_hex: &str) -> Result<()> {
-        let priv_key = self.private_key.as_ref()
+        let priv_key = self
+            .private_key
+            .as_ref()
             .context("Generate keys first with /keygen")?;
 
-        let peer_bytes = hex::decode(peer_pub_hex)
-            .context("Invalid public key hex")?;
+        let peer_bytes = hex::decode(peer_pub_hex).context("Invalid public key hex")?;
         let peer_pub = PublicKey::from(
             <[u8; 32]>::try_from(peer_bytes.as_slice())
                 .map_err(|_| anyhow::anyhow!("Public key must be 32 bytes"))?,
@@ -97,7 +100,9 @@ impl CryptoClient {
 
     /// Get the public key as hex
     pub fn public_key_hex(&self) -> Option<String> {
-        self.public_key.as_ref().map(|pk| hex::encode(pk.as_bytes()))
+        self.public_key
+            .as_ref()
+            .map(|pk| hex::encode(pk.as_bytes()))
     }
 
     /// Get the encryption key

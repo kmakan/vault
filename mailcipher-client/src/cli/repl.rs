@@ -1,12 +1,14 @@
 use anyhow::Result;
+use chrono::Utc;
 use console::Style;
-use reedline::{Reedline, Signal, FileBackedHistory, DefaultPrompt};
+use reedline::{DefaultPrompt, FileBackedHistory, Reedline, Signal};
 
 use crate::api::client::Config;
 use crate::api::email::{EmailClient, EmailConfig};
 use crate::cli::commands::Command;
-use crate::cli::output::{Output, format_size};
+use crate::cli::output::{format_size, Output};
 use crate::crypto::CryptoClient;
+use crate::whisper::Reaction;
 
 const HISTORY_FILE: &str = ".whisper_history";
 
@@ -40,7 +42,9 @@ pub async fn run_cli(config: Config) -> Result<()> {
                 let cmd = Command::parse(&line);
 
                 // In chat mode, bare text → send
-                let cmd = if ctx.active_chat.is_some() && matches!(&cmd, Command::Unknown(s) if !s.is_empty()) {
+                let cmd = if ctx.active_chat.is_some()
+                    && matches!(&cmd, Command::Unknown(s) if !s.is_empty())
+                {
                     Command::Send { message: line }
                 } else {
                     cmd
@@ -74,10 +78,19 @@ struct CliContext {
     attachments: Vec<String>,
     invite_manager: crate::whisper::InviteManager,
     contact_book: crate::whisper::ContactBook,
+    receipt_store: crate::whisper::ReadReceiptStore,
+    reaction_store: crate::whisper::ReactionStore,
+    message_index: crate::whisper::MessageIndex,
+    edit_manager: crate::whisper::EditManager,
 }
 
 impl CliContext {
     fn new(config: Config) -> Self {
+        let contact_book = crate::whisper::ContactBook::load_default()
+            .unwrap_or_else(|e| {
+                eprintln!("Warning: could not load contacts: {}", e);
+                crate::whisper::ContactBook::new()
+            });
         Self {
             config,
             email_client: None,
@@ -85,7 +98,18 @@ impl CliContext {
             active_chat: None,
             attachments: Vec::new(),
             invite_manager: crate::whisper::InviteManager::new(),
-            contact_book: crate::whisper::ContactBook::new(),
+            contact_book,
+            receipt_store: crate::whisper::ReadReceiptStore::new(),
+            reaction_store: crate::whisper::ReactionStore::new(),
+            message_index: crate::whisper::MessageIndex::new(),
+            edit_manager: crate::whisper::EditManager::new(),
+        }
+    }
+
+    /// Persist contacts to disk.
+    fn save_contacts(&self) {
+        if let Err(e) = self.contact_book.save_default() {
+            eprintln!("Warning: could not save contacts: {}", e);
         }
     }
 }
@@ -127,7 +151,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
 
         // ── Connection ───────────────────────────────────────
-        Command::Connect { email, password, server } => {
+        Command::Connect {
+            email,
+            password,
+            server,
+        } => {
             Output::info(&format!("Connecting to {}...", server));
             let imap_config = EmailConfig {
                 imap_server: server.clone(),
@@ -185,29 +213,32 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                     // Check for queued attachments
                     if !ctx.attachments.is_empty() {
-                        // Send each attachment as base64-encoded encrypted file
+                        // Send each attachment using Encryptor (XChaCha20-Poly1305)
+                        let encryptor = crate::crypto::encryptor::Encryptor::new();
                         for att_path in ctx.attachments.drain(..) {
-                            if let Ok(data) = std::fs::read(&att_path) {
-                                let encrypted_file = ctx.crypto.encrypt_binary(&data);
-                                let filename = std::path::Path::new(&att_path)
-                                    .file_name()
-                                    .map(|f| f.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "file".into());
-
-                                use base64::Engine;
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted_file);
-                                let file_body = format!(
-                                    "[WHISPER FILE]\nName: {}\nSize: {}\nData: {}",
-                                    filename,
-                                    format_size(data.len()),
-                                    b64
-                                );
-
-                                let file_subject = format!("Whisper: file {}", filename);
-                                match client.send_email(chat, &file_subject, &file_body).await {
-                                    Ok(()) => Output::success(&format!("File sent: {}", filename)),
-                                    Err(e) => Output::error(&format!("File send failed: {}", e)),
+                            match crate::cli::commands::attachments::FileInfo::from_path(&att_path) {
+                                Ok(info) => {
+                                    match encryptor.encrypt_file(&info.path) {
+                                        Ok(encrypted_envelope) => {
+                                            let mime_body = crate::cli::commands::attachments::build_mime_multipart(
+                                                &encrypted_envelope,
+                                                &info.filename,
+                                                &info.mime_type,
+                                            );
+                                            let file_subject = format!("Whisper: file {}", info.filename);
+                                            match client.send_email(chat, &file_subject, &mime_body).await {
+                                                Ok(()) => Output::success(&format!(
+                                                    "Encrypted file sent: {} ({})",
+                                                    info.filename,
+                                                    crate::cli::commands::attachments::human_size(info.size as usize)
+                                                )),
+                                                Err(e) => Output::error(&format!("File send failed: {}", e)),
+                                            }
+                                        }
+                                        Err(e) => Output::error(&format!("Encryption failed for {}: {}", info.filename, e)),
+                                    }
                                 }
+                                Err(e) => Output::error(&format!("Cannot read attachment: {}", e)),
                             }
                         }
                     }
@@ -237,34 +268,74 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 Output::info("Fetching inbox (contacts-only)...");
                 match client.fetch_messages().await {
                     Ok(messages) => {
-                        // Filter: only Whisper messages from contacts
+                        // Process incoming read receipts first
                         use crate::whisper::WhisperFilter;
+                        let receipts: Vec<_> = messages
+                            .iter()
+                            .filter(|m| WhisperFilter::is_whisper_receipt(m))
+                            .collect();
+                        for receipt_msg in &receipts {
+                            // Try to extract message ID from subject [WHISPER-RECEIPT] <msg_id>
+                            if let Some(msg_id) = receipt_msg
+                                .subject
+                                .strip_prefix("[WHISPER-RECEIPT]")
+                                .map(|s| s.trim())
+                            {
+                                let reader = &receipt_msg.from;
+                                let sender = ctx.config.email.as_deref().unwrap_or("");
+                                // Record as delivered (receipt arrived, not necessarily read yet)
+                                let _ = ctx.receipt_store.record_delivered(msg_id, reader, sender);
+                                tracing::info!("Processed incoming receipt for {} from {}", msg_id, reader);
+                            }
+                        }
+
+                        // Filter: only Whisper messages from contacts
                         let whisper_msgs = WhisperFilter::filter_whisper_messages(&messages);
-                        
                         // Further filter: only from contacts
                         let contact_msgs: Vec<_> = whisper_msgs
                             .iter()
-                            .filter(|msg| {
-                                ctx.contact_book.get(&msg.from).is_some()
-                            })
+                            .filter(|msg| ctx.contact_book.get(&msg.from).is_some())
                             .collect();
-                        
+
+                        // Индексация сообщений для поиска
+                        for msg in &contact_msgs {
+                            let entry = crate::whisper::IndexEntry {
+                                message_id: msg.id.clone(),
+                                from: msg.from.clone(),
+                                to: ctx.config.email.clone().unwrap_or_default(),
+                                subject: WhisperFilter::clean_subject(&msg.subject),
+                                body_preview: msg.body.chars().take(500).collect(),
+                                timestamp: Utc::now(),
+                                folder_id: None,
+                                has_attachments: false,
+                                is_encrypted: ctx.crypto.is_encrypted(&msg.body),
+                            };
+                            let _ = ctx.message_index.index_message(entry);
+                        }
+
                         if contact_msgs.is_empty() {
                             Output::info("No messages from contacts.");
                             Output::info("(Use /accept to add new contacts)");
                         } else {
                             Output::table_header(
-                                &["#", "From", "Subject", "Date"],
-                                &[4, 30, 40, 12],
+                                &["#", "From", "Subject", "Date", ""],
+                                &[4, 30, 40, 12, 4],
                             );
                             for (i, msg) in contact_msgs.iter().enumerate() {
                                 let date: String = msg.date.chars().take(12).collect();
                                 let from: String = msg.from.chars().take(28).collect();
                                 let subject: String = WhisperFilter::clean_subject(&msg.subject);
                                 let subject: String = subject.chars().take(38).collect();
+
+                                // Check read receipt status for outgoing messages
+                                let is_outgoing = ctx.config.email.as_ref()
+                                    .map(|e| msg.from == *e)
+                                    .unwrap_or(false);
+                                let receipt_icon = ctx.receipt_store.status_icon(&msg.id, is_outgoing);
+
                                 Output::table_row(
-                                    &[&format!("{}", i + 1), &from, &subject, &date],
-                                    &[4, 30, 40, 12],
+                                    &[&format!("{}", i + 1), &from, &subject, &date, &receipt_icon],
+                                    &[4, 30, 40, 12, 4],
                                 );
                             }
                         }
@@ -283,12 +354,19 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     Ok(body) => {
                         let is_enc = ctx.crypto.is_encrypted(&body);
                         Output::divider();
+
+                        // Show reactions for this message
+                        let reaction_display = ctx.reaction_store.format_reactions(&id);
+                        if !reaction_display.is_empty() {
+                            println!("  Reactions: {}", reaction_display);
+                        }
+
                         if is_enc {
                             match ctx.crypto.decrypt(&body) {
                                 Ok(plain) => {
                                     Output::info("Decrypted message:");
                                     println!("  {}", plain);
-                                    
+
                                     // Send read receipt
                                     if let Some(ref sender) = extract_sender_from_body(&body) {
                                         let receipt = crate::whisper::WhisperMessage::receipt(
@@ -298,12 +376,20 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                             crate::whisper::MessageStatus::Read,
                                         );
                                         let receipt_body = receipt.to_email_body();
-                                        let _ = client.send_email(
-                                            sender,
-                                            &format!("[WHISPER-RECEIPT] {}", id),
-                                            &receipt_body,
-                                        ).await;
+                                        let _ = client
+                                            .send_email(
+                                                sender,
+                                                &format!("[WHISPER-RECEIPT] {}", id),
+                                                &receipt_body,
+                                            )
+                                            .await;
                                         Output::info("✓ Read receipt sent");
+
+                                        // Record read receipt locally
+                                        let reader = ctx.config.email.as_deref().unwrap_or("");
+                                        if let Err(e) = ctx.receipt_store.record_read(&id, reader, sender) {
+                                            tracing::warn!("Failed to save receipt locally: {}", e);
+                                        }
                                     }
                                 }
                                 Err(_) => {
@@ -327,7 +413,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Reply { id, message } => {
             if let Some(ref client) = ctx.email_client {
                 let encrypted = ctx.crypto.encrypt(&message);
-                match client.send_email("", &format!("Re: {}", id), &encrypted).await {
+                match client
+                    .send_email("", &format!("Re: {}", id), &encrypted)
+                    .await
+                {
                     Ok(_) => Output::success("Reply sent"),
                     Err(e) => Output::error(&format!("Reply failed: {}", e)),
                 }
@@ -350,7 +439,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 s.contains(&subject.to_lowercase())
                             })
                             .collect();
-                        
+
                         if thread_msgs.is_empty() {
                             Output::info("No messages in this thread.");
                         } else {
@@ -359,15 +448,17 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             for msg in &thread_msgs {
                                 let from: String = msg.from.chars().take(25).collect();
                                 let date: String = msg.date.chars().take(16).collect();
-                                let subject_clean = crate::whisper::WhisperFilter::clean_subject(&msg.subject);
-                                
+                                let subject_clean =
+                                    crate::whisper::WhisperFilter::clean_subject(&msg.subject);
+
                                 // Try to decrypt and show preview
                                 let preview = if ctx.crypto.is_encrypted(&msg.body) {
                                     match ctx.crypto.decrypt(&msg.body) {
                                         Ok(plain) => {
                                             let lines: Vec<&str> = plain.lines().collect();
                                             let first_line = lines.first().unwrap_or(&"");
-                                            let short: String = first_line.chars().take(40).collect();
+                                            let short: String =
+                                                first_line.chars().take(40).collect();
                                             format!("[encrypted] {}...", short)
                                         }
                                         Err(_) => "[encrypted] (cannot decrypt)".to_string(),
@@ -376,7 +467,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     let short: String = msg.body.chars().take(40).collect();
                                     short
                                 };
-                                
+
                                 println!("  ├─ {} ({}) <{}>", subject_clean, date, from);
                                 println!("  │  {}", preview);
                             }
@@ -398,29 +489,116 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Contacts => {
             let book = &ctx.contact_book;
             if book.count() == 0 {
-                Output::info("No contacts yet. Use /invite <email> to add someone.");
+                Output::info("No contacts yet. Use /add <email> [name] or /invite <email>.");
             } else {
                 Output::divider();
                 println!("📋 Contacts ({}):\n", book.count());
-                for contact in book.all() {
-                    let status = contact.status_icon();
-                    let verified = if contact.is_verified { " ✓" } else { "" };
-                    println!("  {} {} ({}){}", status, contact.name, contact.email, verified);
+                for contact in book.all_sorted() {
+                    println!("  {}", contact.summary_line());
                 }
                 println!();
-                Output::info("🟢 = online, ⚪ = offline");
+                Output::info("🟢 = online, ⚪ = offline, ✓ = verified, ? = unverified");
+                let verified = book.verified().len();
+                let unverified = book.unverified().len();
+                println!("  Verified: {}, Unverified: {}", verified, unverified);
+                let groups = book.groups();
+                if !groups.is_empty() {
+                    println!("  Groups: {}", groups.join(", "));
+                }
             }
         }
         Command::Add { email, name } => {
-            let label = name.unwrap_or_else(|| email.clone());
-            Output::success(&format!("Contact added: {} ({})", label, email));
+            let display_name = name.clone().unwrap_or_else(|| {
+                email.split('@').next().unwrap_or(&email).to_string()
+            });
+            if ctx.contact_book.contains(&email) {
+                Output::warn(&format!("Contact {} already exists. Use /remove first to replace.", email));
+            } else {
+                // Try to use the contact's public key from crypto if sharing
+                let pub_key = ctx.crypto.public_key_hex().unwrap_or_default();
+                let contact = crate::whisper::contacts::Contact::new(
+                    &email, &display_name, &pub_key,
+                );
+                ctx.contact_book.add(contact);
+                ctx.save_contacts();
+                Output::success(&format!("Contact added: {} ({})", display_name, email));
+                if !pub_key.is_empty() {
+                    Output::info("Your public key has been associated with this contact.");
+                }
+                Output::info(&format!("Fingerprint: {}", ctx.contact_book.get(&email).unwrap().fingerprint));
+            }
         }
         Command::Remove { email } => {
-            Output::success(&format!("Contact removed: {}", email));
+            if let Some(removed) = ctx.contact_book.remove(&email) {
+                ctx.save_contacts();
+                Output::success(&format!("Contact removed: {} ({})", removed.name, removed.email));
+            } else {
+                Output::warn(&format!("Contact not found: {}", email));
+            }
         }
         Command::Whois { email } => {
-            Output::info(&format!("Looking up contact: {}", email));
-            Output::info("Contact lookup requires email connection.");
+            if let Some(contact) = ctx.contact_book.get(&email) {
+                Output::divider();
+                Output::info(&format!("Contact info for {}:", email));
+                for line in contact.detail_block() {
+                    println!("  {}", line);
+                }
+                Output::divider();
+            } else {
+                Output::warn(&format!("Contact not found: {}", email));
+                Output::info("Use /add <email> [name] to add a contact.");
+            }
+        }
+        Command::Verify { email } => {
+            if ctx.contact_book.verify(&email) {
+                ctx.save_contacts();
+                let fp = ctx.contact_book.get(&email).unwrap().fingerprint.clone();
+                Output::success(&format!("Contact verified: {}", email));
+                Output::info(&format!("Fingerprint: {}", fp));
+                Output::info("Compare this fingerprint with the contact's claimed fingerprint.");
+            } else {
+                Output::warn(&format!("Contact not found: {}", email));
+            }
+        }
+        Command::Unverify { email } => {
+            if ctx.contact_book.unverify(&email) {
+                ctx.save_contacts();
+                Output::success(&format!("Contact un-verified: {}", email));
+            } else {
+                Output::warn(&format!("Contact not found: {}", email));
+            }
+        }
+        Command::Export { email } => {
+            match ctx.contact_book.export_as_portable(&email) {
+                Some(json) => {
+                    Output::divider();
+                    Output::info(&format!("Portable contact data for {}:", email));
+                    println!("{}", json);
+                    Output::divider();
+                    Output::info("Share this JSON with someone to add you as a contact.");
+                }
+                None => {
+                    Output::warn(&format!("Contact not found: {}", email));
+                }
+            }
+        }
+        Command::Import { json } => {
+            match crate::whisper::contacts::ContactBook::import_from_portable(&json) {
+                Ok(contact) => {
+                    let email = contact.email.clone();
+                    let name = contact.name.clone();
+                    let fp = contact.fingerprint.clone();
+                    ctx.contact_book.add(contact);
+                    ctx.save_contacts();
+                    Output::success(&format!("Contact imported: {} ({})", name, email));
+                    if !fp.is_empty() {
+                        Output::info(&format!("Fingerprint: {}", fp));
+                    }
+                }
+                Err(e) => {
+                    Output::error(&format!("Failed to import contact: {}", e));
+                }
+            }
         }
         Command::Invite { email } => {
             if ctx.crypto.has_keys() {
@@ -508,69 +686,121 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             println!("  {}", Style::new().dim().apply_to(&encrypted));
             Output::divider();
         }
-        Command::Decrypt { text } => {
-            match ctx.crypto.decrypt(&text) {
-                Ok(plain) => {
-                    Output::info("Decrypted:");
-                    println!("  {}", plain);
-                }
-                Err(_) => {
-                    Output::error("Decryption failed. Wrong key or corrupted data.");
-                }
+        Command::Decrypt { text } => match ctx.crypto.decrypt(&text) {
+            Ok(plain) => {
+                Output::info("Decrypted:");
+                println!("  {}", plain);
             }
-        }
-
+            Err(_) => {
+                Output::error("Decryption failed. Wrong key or corrupted data.");
+            }
+        },
         // ── Files ────────────────────────────────────────────
         Command::Attach { path } => {
-            match std::fs::metadata(&path) {
-                Ok(meta) => {
-                    ctx.attachments.push(path.clone());
-                    Output::success(&format!(
-                        "Attached: {} ({})",
-                        path,
-                        format_size(meta.len() as usize)
-                    ));
+            match crate::cli::commands::attachments::FileInfo::from_path(&path) {
+                Ok(info) => {
+                    // Check size limit against provider
+                    let server = ctx.config.server.as_deref().unwrap_or("gmail.com");
+                    let max_size =
+                        crate::cli::commands::attachments::ProviderLimits::for_server(server);
+                    let limit_label =
+                        crate::cli::commands::attachments::ProviderLimits::label_for_server(server);
+
+                    if let Err(e) = info.check_size_limit(max_size) {
+                        Output::error(&format!(
+                            "{} (limit: {})",
+                            e, limit_label
+                        ));
+                    } else {
+                        ctx.attachments.push(path.clone());
+                        Output::success(&format!(
+                            "Attached: {} ({}, {})",
+                            info.filename,
+                            crate::cli::commands::attachments::human_size(info.size as usize),
+                            info.mime_type
+                        ));
+                    }
                 }
                 Err(e) => {
-                    Output::error(&format!("Cannot read file: {}", e));
+                    Output::error(&format!("{}", e));
                 }
             }
         }
         Command::SendFile { path } => {
             if let Some(ref mut client) = ctx.email_client {
-                match std::fs::read(&path) {
-                    Ok(data) => {
-                        let encrypted = ctx.crypto.encrypt_binary(&data);
-                        let filename = std::path::Path::new(&path)
-                            .file_name()
-                            .map(|f| f.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "file".into());
+                match crate::cli::commands::attachments::FileInfo::from_path(&path) {
+                    Ok(info) => {
+                        // Check size limit
+                        let server = ctx.config.server.as_deref().unwrap_or("gmail.com");
+                        let max_size =
+                            crate::cli::commands::attachments::ProviderLimits::for_server(
+                                server,
+                            );
+                        if let Err(e) = info.check_size_limit(max_size) {
+                            let limit_label =
+                                crate::cli::commands::attachments::ProviderLimits::label_for_server(server);
+                            Output::error(&format!("{} (limit: {})", e, limit_label));
+                        } else {
+                            match info.read_contents() {
+                                Ok(data) => {
+                                    // Encrypt the file using the standalone Encryptor
+                                    let encryptor =
+                                        crate::crypto::encryptor::Encryptor::new();
+                                    match encryptor.encrypt_file(&info.path) {
+                                        Ok(encrypted_envelope) => {
+                                            // Build MIME multipart body
+                                            let mime_body =
+                                                crate::cli::commands::attachments::build_mime_multipart(
+                                                    &encrypted_envelope,
+                                                    &info.filename,
+                                                    &info.mime_type,
+                                                );
 
-                        // Encode as base64 for email transport
-                        use base64::Engine;
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&encrypted);
-                        let body = format!(
-                            "[WHISPER FILE]\nName: {}\nSize: {}\nData: {}",
-                            filename,
-                            format_size(data.len()),
-                            b64
-                        );
+                                            let to = ctx
+                                                .active_chat
+                                                .as_deref()
+                                                .unwrap_or("");
+                                            let subject = format!(
+                                                "Whisper: file {}",
+                                                info.filename
+                                            );
 
-                        let to = ctx.active_chat.as_deref().unwrap_or("");
-                        let subject = format!("Whisper: file {}", filename);
-
-                        match client.send_email(to, &subject, &body).await {
-                            Ok(()) => {
-                                Output::success(&format!(
-                                    "File sent: {} ({})",
-                                    filename,
-                                    format_size(data.len())
-                                ));
+                                            match client
+                                                .send_email(to, &subject, &mime_body)
+                                                .await
+                                            {
+                                                Ok(()) => {
+                                                    Output::success(&format!(
+                                                        "Encrypted file sent: {} ({})",
+                                                        info.filename,
+                                                        crate::cli::commands::attachments::human_size(
+                                                            info.size as usize,
+                                                        )
+                                                    ));
+                                                }
+                                                Err(e) => Output::error(&format!(
+                                                    "Failed to send file: {}",
+                                                    e
+                                                )),
+                                            }
+                                        }
+                                        Err(e) => {
+                                            Output::error(&format!(
+                                                "Encryption failed: {}",
+                                                e
+                                            ));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    Output::error(&format!("Cannot read file: {}", e));
+                                }
                             }
-                            Err(e) => Output::error(&format!("Failed to send file: {}", e)),
                         }
                     }
-                    Err(e) => Output::error(&format!("Cannot read file: {}", e)),
+                    Err(e) => {
+                        Output::error(&format!("{}", e));
+                    }
                 }
             } else {
                 Output::error("Not connected. Use /connect first");
@@ -590,7 +820,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::JoinGroup { group_id } => {
-            Output::info(&format!("To join group {}, ask the admin to add you with /groupinvite", group_id));
+            Output::info(&format!(
+                "To join group {}, ask the admin to add you with /groupinvite",
+                group_id
+            ));
         }
         Command::LeaveGroup { group_id } => {
             let mut group_mgr = crate::whisper::GroupManager::new();
@@ -635,12 +868,261 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
 
+        // ── Папки (folders) ────────────────────────────────────
+        Command::FolderCreate { name, icon } => {
+            let mut store = crate::whisper::FolderStore::new();
+            match store.create_folder(&name, &icon) {
+                Ok(true) => Output::success(&format!("Folder '{}' created ({})", name, icon)),
+                Ok(false) => Output::error(&format!("Folder '{}' already exists", name)),
+                Err(e) => Output::error(&format!("Failed to create folder: {}", e)),
+            }
+        }
+        Command::FolderDelete { name } => {
+            let mut store = crate::whisper::FolderStore::new();
+            match store.get_folder_by_name(&name) {
+                Some(folder) => {
+                    let id = folder.id.clone();
+                    match store.delete_folder(&id) {
+                        Ok(true) => Output::success(&format!("Folder '{}' deleted", name)),
+                        Ok(false) => Output::error("Folder not found"),
+                        Err(e) => Output::error(&format!("Failed to delete folder: {}", e)),
+                    }
+                }
+                None => Output::error(&format!("Folder '{}' not found", name)),
+            }
+        }
+        Command::FolderRename { old_name, new_name } => {
+            let mut store = crate::whisper::FolderStore::new();
+            match store.get_folder_by_name(&old_name) {
+                Some(folder) => {
+                    let id = folder.id.clone();
+                    match store.rename_folder(&id, &new_name) {
+                        Ok(true) => Output::success(&format!(
+                            "Folder '{}' renamed to '{}'",
+                            old_name, new_name
+                        )),
+                        Ok(false) => Output::error(&format!(
+                            "Folder '{}' already exists",
+                            new_name
+                        )),
+                        Err(e) => Output::error(&format!("Failed to rename: {}", e)),
+                    }
+                }
+                None => Output::error(&format!("Folder '{}' not found", old_name)),
+            }
+        }
+        Command::FolderAdd { folder_name, chat_id } => {
+            let mut store = crate::whisper::FolderStore::new();
+            match store.get_folder_by_name(&folder_name) {
+                Some(folder) => {
+                    let id = folder.id.clone();
+                    match store.add_chat(&id, &chat_id) {
+                        Ok(true) => Output::success(&format!(
+                            "Added '{}' to folder '{}'",
+                            chat_id, folder_name
+                        )),
+                        Ok(false) => Output::info(&format!(
+                            "'{}' is already in folder '{}'",
+                            chat_id, folder_name
+                        )),
+                        Err(e) => Output::error(&format!("Failed to add: {}", e)),
+                    }
+                }
+                None => Output::error(&format!("Folder '{}' not found", folder_name)),
+            }
+        }
+        Command::FolderRemove { folder_name, chat_id } => {
+            let mut store = crate::whisper::FolderStore::new();
+            match store.get_folder_by_name(&folder_name) {
+                Some(folder) => {
+                    let id = folder.id.clone();
+                    match store.remove_chat(&id, &chat_id) {
+                        Ok(true) => Output::success(&format!(
+                            "Removed '{}' from folder '{}'",
+                            chat_id, folder_name
+                        )),
+                        Ok(false) => Output::info(&format!(
+                            "'{}' was not in folder '{}'",
+                            chat_id, folder_name
+                        )),
+                        Err(e) => Output::error(&format!("Failed to remove: {}", e)),
+                    }
+                }
+                None => Output::error(&format!("Folder '{}' not found", folder_name)),
+            }
+        }
+        Command::FolderList => {
+            let store = crate::whisper::FolderStore::new();
+            let folders = store.list_folders();
+            if folders.is_empty() {
+                Output::info("No folders. Create one with /foldercreate <name> [icon]");
+            } else {
+                Output::divider();
+                Output::info(&format!("Folders ({}):", folders.len()));
+                for folder in &folders {
+                    println!(
+                        "  {} {} — {} chat(s)",
+                        folder.icon,
+                        folder.name,
+                        folder.chats.len()
+                    );
+                }
+                println!();
+                Output::divider();
+            }
+        }
+        Command::FolderChats { name } => {
+            let store = crate::whisper::FolderStore::new();
+            match store.get_folder_by_name(&name) {
+                Some(folder) => {
+                    if folder.chats.is_empty() {
+                        Output::info(&format!("Folder '{}' is empty", name));
+                    } else {
+                        Output::divider();
+                        Output::info(&format!(
+                            "{} {} — {} chat(s):",
+                            folder.icon,
+                            folder.name,
+                            folder.chats.len()
+                        ));
+                        for chat in &folder.chats {
+                            println!("  • {}", chat);
+                        }
+                        println!();
+                        Output::divider();
+                    }
+                }
+                None => Output::error(&format!("Folder '{}' not found", name)),
+            }
+        }
+
+        // ── Редактирование сообщений ──────────────────────────
+        Command::EditMessage {
+            message_id,
+            new_content,
+        } => {
+            let email = ctx.config.email.clone().unwrap_or_default();
+            match ctx
+                .edit_manager
+                .edit_message(&message_id, &email, &new_content)
+            {
+                Ok(result) => {
+                    if result.success {
+                        Output::success(&format!(
+                            "Message edited (edit #{})",
+                            result.edit_count
+                        ));
+                    } else if let Some(warning) = result.warning {
+                        Output::error(&warning);
+                    }
+                }
+                Err(e) => Output::error(&format!("Edit failed: {}", e)),
+            }
+        }
+        Command::EditInfo { message_id } => {
+            if let Some(record) = ctx.edit_manager.get_latest(&message_id) {
+                Output::divider();
+                println!("  Message: {}", record.message_id);
+                println!("  Editor:  {}", record.editor_email);
+                println!("  Edits:   {}", record.edit_count);
+                println!(
+                    "  Last:    {}",
+                    record.edited_at.format("%Y-%m-%d %H:%M:%S")
+                );
+                let preview: String = record.new_content.chars().take(100).collect();
+                println!("  Content: {}", preview);
+            } else {
+                Output::info("Message has not been edited.");
+            }
+        }
+        Command::EditUndo { message_id } => {
+            match ctx.edit_manager.undo_last_edit(&message_id) {
+                Ok(true) => {
+                    let count = ctx.edit_manager.edit_count(&message_id);
+                    Output::success(&format!(
+                        "Edit undone. {} edit(s) remaining.",
+                        count
+                    ));
+                }
+                Ok(false) => Output::error("No edits found for this message."),
+                Err(e) => Output::error(&format!("Undo failed: {}", e)),
+            }
+        }
+
+        // ── Медиа-превью ──────────────────────────────────────
+        Command::Thumb { file_path, size } => {
+            let path = std::path::Path::new(&file_path);
+            if !path.exists() {
+                Output::error(&format!("File not found: {}", file_path));
+            } else {
+                let thumb_size = match size.as_str() {
+                    "s" | "small" => crate::whisper::ThumbnailSize::Small,
+                    "l" | "large" => crate::whisper::ThumbnailSize::Large,
+                    _ => crate::whisper::ThumbnailSize::Medium,
+                };
+                match crate::whisper::MediaInfo::from_file(path) {
+                    Ok(info) => {
+                        let thumb_dir = dirs::data_local_dir()
+                            .unwrap_or_else(|| std::path::PathBuf::from("."))
+                            .join("whisper")
+                            .join("thumbnails");
+                        let mut mgr = crate::whisper::ThumbnailManager::with_dir(thumb_dir);
+                        match mgr.generate_thumbnail(&info, thumb_size) {
+                            Ok(thumb) => {
+                                Output::success(&format!(
+                                    "Thumbnail created: {} ({}x{}, {} bytes)",
+                                    thumb.thumb_path.display(),
+                                    thumb.thumb_width,
+                                    thumb.thumb_height,
+                                    thumb.thumb_size
+                                ));
+                            }
+                            Err(e) => Output::error(&format!("Thumbnail failed: {}", e)),
+                        }
+                    }
+                    Err(e) => Output::error(&format!("Media info failed: {}", e)),
+                }
+            }
+        }
+        Command::ThumbInfo { file_path } => {
+            let path = std::path::Path::new(&file_path);
+            if !path.exists() {
+                Output::error(&format!("File not found: {}", file_path));
+            } else {
+                match crate::whisper::MediaInfo::from_file(path) {
+                    Ok(info) => {
+                        Output::divider();
+                        println!("  File:     {}", file_path);
+                        println!("  MIME:     {}", info.mime_type);
+                        println!("  Size:     {} bytes", info.size);
+                        println!(
+                            "  Dims:     {}x{}",
+                            info.width.unwrap_or(0),
+                            info.height.unwrap_or(0)
+                        );
+                        println!(
+                            "  Thumbnailable: {}",
+                            if info.is_thumbnailable { "yes" } else { "no" }
+                        );
+                        Output::divider();
+                    }
+                    Err(e) => Output::error(&format!("Media info failed: {}", e)),
+                }
+            }
+        }
+
         // ── Settings ─────────────────────────────────────────
         Command::Settings => {
             Output::divider();
             Output::info("Settings:");
-            println!("  Email:   {}", ctx.config.email.as_deref().unwrap_or("not set"));
-            println!("  Server:  {}", ctx.config.server.as_deref().unwrap_or("default"));
+            println!(
+                "  Email:   {}",
+                ctx.config.email.as_deref().unwrap_or("not set")
+            );
+            println!(
+                "  Server:  {}",
+                ctx.config.server.as_deref().unwrap_or("default")
+            );
             Output::divider();
         }
         Command::Set { key, value } => {
@@ -657,14 +1139,50 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
         // ── Telegram-like features ──────────────────────────
         Command::React { id, emoji } => {
-            if let Some(ref mut client) = ctx.email_client {
-                let reaction = format!("{} {}", emoji, id);
-                match client.send_email("", &format!("[WHISPER-REACT] {}", id), &reaction).await {
-                    Ok(_) => Output::success(&format!("Reacted {} to message {}", emoji, id)),
+            let user = ctx.config.email.as_deref().unwrap_or("local");
+            if !Reaction::is_valid_emoji(&emoji) {
+                Output::error(&format!(
+                    "Invalid emoji '{}'. Use one of: 👍 ❤️ 😂 😮 😢 🔥",
+                    emoji
+                ));
+            } else {
+                // Encrypt reaction data and store locally
+                let reaction_json = serde_json::to_string(&crate::whisper::Reaction::new(
+                    &id, &emoji, user,
+                ))
+                .unwrap_or_default();
+                let encrypted = ctx.crypto.encrypt(&reaction_json);
+                match ctx.reaction_store.add_reaction(&id, &emoji, user) {
+                    Ok(true) => {
+                        Output::success(&format!("Reacted {} to message {}", emoji, id));
+                        // Also send reaction email notification if connected
+                        if let Some(ref mut client) = ctx.email_client {
+                            let _ = client
+                                .send_email(
+                                    "",
+                                    &format!("[WHISPER-REACT] {} {}", id, emoji),
+                                    &encrypted,
+                                )
+                                .await;
+                        }
+                    }
+                    Ok(false) => {
+                        Output::error(&format!("Invalid emoji: {}", emoji));
+                    }
                     Err(e) => Output::error(&format!("Failed to react: {}", e)),
                 }
-            } else {
-                Output::error("Not connected. Use /connect first.");
+            }
+        }
+        Command::Unreact { id, emoji } => {
+            let user = ctx.config.email.as_deref().unwrap_or("local");
+            match ctx.reaction_store.remove_reaction(&id, &emoji, user) {
+                Ok(true) => {
+                    Output::success(&format!("Removed {} reaction from message {}", emoji, id));
+                }
+                Ok(false) => {
+                    Output::info(&format!("No {} reaction found on message {}", emoji, id));
+                }
+                Err(e) => Output::error(&format!("Failed to remove reaction: {}", e)),
             }
         }
         Command::Forward { id, to } => {
@@ -672,8 +1190,13 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 match client.fetch_message_body(&id).await {
                     Ok(body) => {
                         let forwarded = format!("[Forwarded from {}]\n{}", id, body);
-                        match client.send_email(&to, &format!("Fwd: {}", id), &forwarded).await {
-                            Ok(_) => Output::success(&format!("Forwarded message {} to {}", id, to)),
+                        match client
+                            .send_email(&to, &format!("Fwd: {}", id), &forwarded)
+                            .await
+                        {
+                            Ok(_) => {
+                                Output::success(&format!("Forwarded message {} to {}", id, to))
+                            }
                             Err(e) => Output::error(&format!("Forward failed: {}", e)),
                         }
                     }
@@ -697,8 +1220,37 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             Output::success(&format!("Unmuted chat: {}", chat));
         }
         Command::Search { query } => {
+            // Сначала ищем в локальном индексе
+            let local_results = ctx.message_index.search(&query);
+            if !local_results.is_empty() {
+                Output::divider();
+                Output::info(&format!(
+                    "Index results for \"{}\" ({} hits):",
+                    query,
+                    local_results.len()
+                ));
+                for result in local_results.iter().take(15) {
+                    let fields = result.matched_fields.join(", ");
+                    let ts = result
+                        .entry
+                        .timestamp
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string();
+                    println!(
+                        "  [{}] {} — <{}> {} ({})",
+                        ts,
+                        result.entry.message_id,
+                        result.entry.from,
+                        result.entry.subject,
+                        fields,
+                    );
+                }
+                println!();
+            }
+
+            // Также ищем через IMAP если подключены
             if let Some(ref mut client) = ctx.email_client {
-                Output::info(&format!("Searching for: {}", query));
+                Output::info(&format!("Searching IMAP for: {}", query));
                 match client.fetch_messages().await {
                     Ok(messages) => {
                         let q = query.to_lowercase();
@@ -709,10 +1261,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     || m.body.to_lowercase().contains(&q)
                             })
                             .collect();
-                        if results.is_empty() {
+                        if results.is_empty() && local_results.is_empty() {
                             Output::info("No results found.");
-                        } else {
-                            Output::info(&format!("Found {} messages:", results.len()));
+                        } else if !results.is_empty() {
+                            Output::info(&format!("IMAP results ({} hits):", results.len()));
                             for msg in results.iter().take(10) {
                                 let from: String = msg.from.chars().take(20).collect();
                                 let subject: String = msg.subject.chars().take(30).collect();
@@ -720,14 +1272,35 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             }
                         }
                     }
-                    Err(e) => Output::error(&format!("Search failed: {}", e)),
+                    Err(e) => {
+                        if local_results.is_empty() {
+                            Output::error(&format!("Search failed: {}", e));
+                        }
+                    }
                 }
-            } else {
+            } else if local_results.is_empty() {
                 Output::error("Not connected. Use /connect first.");
             }
         }
         Command::Typing => {
             Output::info("⌨️  Typing indicator sent (no-op for email transport)");
+        }
+        Command::Unreact { id, emoji } => {
+            Output::info(&format!("Removed reaction {} from message {}", emoji, id));
+        }
+        Command::Verify { email } => {
+            Output::success(&format!("Contact verified: {}", email));
+        }
+        Command::Unverify { email } => {
+            Output::info(&format!("Verification removed for: {}", email));
+        }
+        Command::Export { email } => {
+            Output::info(&format!("Exporting keys for: {}", email));
+            Output::info("(Export not yet implemented)");
+        }
+        Command::Import { json } => {
+            Output::info(&format!("Importing keys from JSON: {}", &json[..json.len().min(20)]));
+            Output::info("(Import not yet implemented)");
         }
 
         // ── Unknown ──────────────────────────────────────────
@@ -744,84 +1317,155 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 fn print_help(topic: Option<&str>) {
     match topic {
         Some("connect") => {
-            Output::block("/connect — Connect to email server", &[
-                "Usage: /connect <email> <app-password> [server]",
-                "",
-                "Examples:",
-                "  /connect user@gmail.com abcd-efgh-ijkl-mnop",
-                "  /connect user@outlook.com pass123 outlook.office365.com",
-                "",
-                "Servers auto-detected for: Gmail, Outlook, Yandex, Mail.ru",
-            ]);
+            Output::block(
+                "/connect — Connect to email server",
+                &[
+                    "Usage: /connect <email> <app-password> [server]",
+                    "",
+                    "Examples:",
+                    "  /connect user@gmail.com abcd-efgh-ijkl-mnop",
+                    "  /connect user@outlook.com pass123 outlook.office365.com",
+                    "",
+                    "Servers auto-detected for: Gmail, Outlook, Yandex, Mail.ru",
+                ],
+            );
         }
         Some("chat") => {
-            Output::block("/chat — Enter chat mode", &[
-                "Usage: /chat <email>",
-                "",
-                "Enters chat mode where typed messages are sent directly.",
-                "Use /leave to exit chat mode.",
-            ]);
+            Output::block(
+                "/chat — Enter chat mode",
+                &[
+                    "Usage: /chat <email>",
+                    "",
+                    "Enters chat mode where typed messages are sent directly.",
+                    "Use /leave to exit chat mode.",
+                ],
+            );
         }
         Some("encrypt") | Some("decrypt") => {
-            Output::block("/encrypt — Encrypt text", &[
-                "Usage: /encrypt <plaintext>",
-                "       /decrypt <ciphertext>",
-                "",
-                "Encrypts/decrypts text using XChaCha20-Poly1305.",
-                "For files, use /attach or /sendfile.",
-            ]);
+            Output::block(
+                "/encrypt — Encrypt text",
+                &[
+                    "Usage: /encrypt <plaintext>",
+                    "       /decrypt <ciphertext>",
+                    "",
+                    "Encrypts/decrypts text using XChaCha20-Poly1305.",
+                    "For files, use /attach or /sendfile.",
+                ],
+            );
         }
         Some("keys") => {
-            Output::block("/keys — Key management", &[
-                "  /keygen       Generate new X25519 key pair",
-                "  /keys         Show key status and fingerprint",
-                "  /keyshare     Share public key with a contact",
-            ]);
+            Output::block(
+                "/keys — Key management",
+                &[
+                    "  /keygen       Generate new X25519 key pair",
+                    "  /keys         Show key status and fingerprint",
+                    "  /keyshare     Share public key with a contact",
+                ],
+            );
         }
         Some("files") => {
-            Output::block("/attach — File encryption", &[
+            Output::block("/attach /sendfile — File encryption", &[
                 "  /attach <path>     Queue a file for sending",
-                "  /sendfile <path>   Encrypt a file",
+                "  /sendfile <path>   Encrypt and send a file immediately",
+                "  /sf <path>         Shortcut for /sendfile",
                 "",
-                "Files are encrypted with XChaCha20-Poly1305.",
+                "Files are encrypted with XChaCha20-Poly1305 via the Encryptor.",
+                "Encrypted files use the ---BEGIN WHISPER ENCRYPTED--- format.",
+                "Size limits: Gmail 25MB, Outlook 20MB, Yandex 30MB.",
+                "",
+                "Workflow:",
+                "  1. /attach report.pdf    — queue the file",
+                "  2. /send hello world      — sends text + all queued attachments",
+                "  3. /sf secret.zip        — encrypt & send file immediately",
+            ]);
+        }
+        Some("folders") => {
+            Output::block("/folder* — Chat folders (Telegram-style)", &[
+                "  /foldercreate <name> [icon]   Create a folder (default icon: 📁)",
+                "  /folderdelete <name>          Delete a folder",
+                "  /folderrename <old> <new>     Rename a folder",
+                "  /folderadd <folder> <chat>    Add a chat to a folder",
+                "  /folderremove <folder> <chat> Remove a chat from a folder",
+                "  /folderlist                   List all folders",
+                "  /folderchats <name>           Show chats in a folder",
+                "",
+                "Shortcuts: /fc, /fd, /fr, /fa, /frem, /fl, /fch",
+                "",
+                "Examples:",
+                "  /fc Work 💼                   Create 'Work' folder with briefcase icon",
+                "  /fa Work alice@test.com       Add alice to Work folder",
+                "  /fl                           List all folders",
+                "  /fch Work                     Show chats in Work folder",
+            ]);
+        }
+        Some("media") | Some("thumbs") => {
+            Output::block("/thumb* — Media thumbnails", &[
+                "  /thumb <file> [s|m|l]    Generate thumbnail (default: m=256px)",
+                "  /thumbinfo <file>        Show media file info",
+                "",
+                "Sizes:",
+                "  s / small  — 128x128",
+                "  m / medium — 256x256 (default)",
+                "  l / large  — 512x512",
+                "",
+                "Supported: JPEG, PNG, GIF",
+                "",
+                "Shortcuts: /th, /ti",
+                "",
+                "Examples:",
+                "  /thumb photo.jpg s       — small thumbnail",
+                "  /thumbinfo video.mp4     — show file info",
             ]);
         }
         _ => {
-            Output::block("Whisper CLI — Commands", &[
-                "",
-                "  SESSION",
-                "    /help [topic]     Show help (topics: connect, chat, encrypt, keys, files)",
-                "    /status           Show connection and key status",
-                "    /clear            Clear screen",
-                "    /quit             Exit Whisper",
-                "",
-                "  CONNECTION",
-                "    /connect <email> <pass> [server]   Connect to IMAP server",
-                "",
-                "  MESSAGING",
-                "    /chat <email>      Enter chat mode with contact",
-                "    /send <message>    Send an encrypted message",
-                "    /inbox             List recent messages",
-                "    /read <id>         Read and decrypt a message",
-                "",
-                "  KEYS",
-                "    /keygen            Generate new X25519 key pair",
-                "    /keys              Show key status",
-                "    /keyshare <email>  Share public key with contact",
-                "",
-                "  ENCRYPTION",
-                "    /encrypt <text>    Encrypt text",
-                "    /decrypt <text>    Decrypt ciphertext",
-                "",
-                "  FILES",
-                "    /attach <path>     Queue file for sending",
-                "    /sendfile <path>   Encrypt file",
-                "",
-                "  SETTINGS",
-                "    /settings          Show settings",
-                "    /set <key> <val>   Change setting",
-                "",
-            ]);
+            Output::block(
+                "Whisper CLI — Commands",
+                &[
+                    "",
+                    "  SESSION",
+                    "    /help [topic]     Show help (topics: connect, chat, encrypt, keys, files, folders, media)",
+                    "    /status           Show connection and key status",
+                    "    /clear            Clear screen",
+                    "    /quit             Exit Whisper",
+                    "",
+                    "  CONNECTION",
+                    "    /connect <email> <pass> [server]   Connect to IMAP server",
+                    "",
+                    "  MESSAGING",
+                    "    /chat <email>      Enter chat mode with contact",
+                    "    /send <message>    Send an encrypted message",
+                    "    /inbox             List recent messages",
+                    "    /read <id>         Read and decrypt a message",
+                    "",
+                    "  KEYS",
+                    "    /keygen            Generate new X25519 key pair",
+                    "    /keys              Show key status",
+                    "    /keyshare <email>  Share public key with contact",
+                    "",
+                    "  ENCRYPTION",
+                    "    /encrypt <text>    Encrypt text",
+                    "    /decrypt <text>    Decrypt ciphertext",
+                    "",
+                    "  FILES",
+                    "    /attach <path>     Queue file for sending",
+                    "    /sendfile <path>   Encrypt file",
+                    "",
+                    "  FOLDERS",
+                    "    /fc <name> [icon]  Create folder",
+                    "    /fl                List folders",
+                    "    /fa <folder> <chat> Add chat to folder",
+                    "    /fch <name>        Show chats in folder",
+                    "",
+                    "  MEDIA",
+                    "    /thumb <file> [s|m|l] Generate thumbnail",
+                    "    /thumbinfo <file>  Show media file info",
+                    "",
+                    "  SETTINGS",
+                    "    /settings          Show settings",
+                    "    /set <key> <val>   Change setting",
+                    "",
+                ],
+            );
         }
     }
 }

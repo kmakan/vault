@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::io::Read;
 use std::path::PathBuf;
 
-use crate::crypto::Encryptor;
 use crate::cli::output::Output;
+use crate::crypto::Encryptor;
 
 pub fn run(encryptor: &Encryptor, file: Option<PathBuf>, stdin_mode: bool) -> Result<()> {
     let encrypted = if let Some(path) = file {

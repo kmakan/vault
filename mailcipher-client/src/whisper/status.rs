@@ -111,7 +111,10 @@ mod tests {
     #[test]
     fn test_status_from_str() {
         assert_eq!(MessageStatus::from_str("sent"), Some(MessageStatus::Sent));
-        assert_eq!(MessageStatus::from_str("DELIVERED"), Some(MessageStatus::Delivered));
+        assert_eq!(
+            MessageStatus::from_str("DELIVERED"),
+            Some(MessageStatus::Delivered)
+        );
         assert_eq!(MessageStatus::from_str("read"), Some(MessageStatus::Read));
         assert_eq!(MessageStatus::from_str("unknown"), None);
     }

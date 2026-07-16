@@ -155,7 +155,10 @@ impl ApiClient {
             anyhow::bail!("Register failed ({}): {}", status, text);
         }
 
-        let data: AuthResponse = resp.json().await.context("Failed to parse register response")?;
+        let data: AuthResponse = resp
+            .json()
+            .await
+            .context("Failed to parse register response")?;
         self.config.access_token = Some(data.tokens.access_token);
         self.config.refresh_token = Some(data.tokens.refresh_token);
         Ok(())
@@ -181,7 +184,10 @@ impl ApiClient {
             anyhow::bail!("Login failed ({}): {}", status, text);
         }
 
-        let data: AuthResponse = resp.json().await.context("Failed to parse login response")?;
+        let data: AuthResponse = resp
+            .json()
+            .await
+            .context("Failed to parse login response")?;
         self.config.access_token = Some(data.tokens.access_token);
         self.config.refresh_token = Some(data.tokens.refresh_token);
         Ok(())
@@ -256,10 +262,7 @@ impl ApiClient {
         content: &str,
         subject: Option<&str>,
     ) -> Result<Message> {
-        let url = format!(
-            "{}/api/chats/{}/messages",
-            self.config.base_url, chat_id
-        );
+        let url = format!("{}/api/chats/{}/messages", self.config.base_url, chat_id);
         let body = CreateMessageRequest {
             content: content.to_string(),
             subject: subject.map(|s| s.to_string()),
