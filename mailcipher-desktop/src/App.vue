@@ -92,10 +92,24 @@
             </div>
           </div>
           <div class="chat-actions">
-            <button @click="showMembers = !showMembers" title="Members">👥</button>
+            <button @click="showGroupSettings = !showGroupSettings" title="Members">👥</button>
             <button @click="searchMessages" title="Search">🔍</button>
           </div>
         </div>
+
+        <!-- Group Settings Panel -->
+        <GroupSettings
+          v-if="showGroupSettings && currentGroup"
+          :group="currentGroup"
+          :currentUser="email"
+          @close="showGroupSettings = false"
+          @promote="promoteMember"
+          @demote="demoteMember"
+          @remove="removeMember"
+          @unblock="unblockUser"
+          @leave="leaveGroup"
+          @delete="deleteGroup"
+        />
         
         <div class="messages" ref="messagesContainer">
           <div 
@@ -195,7 +209,13 @@ export default {
       showKeyManager: false,
       showQRCode: false,
       peerKeysLoaded: {},
-      searchQuery: ''
+      searchQuery: '',
+      // Groups
+      groups: [],
+      currentGroup: null,
+      showGroupSettings: false,
+      newGroupName: '',
+      newGroupIcon: '📁',
     }
   },
   computed: {
@@ -374,6 +394,68 @@ export default {
     },
     openEmail(email) {
       this.selectedEmail = email;
+    },
+    // Group management
+    createGroup() {
+      if (!this.newGroupName.trim()) return;
+      const group = {
+        id: Date.now().toString(36),
+        name: this.newGroupName.trim(),
+        created_by: this.email,
+        created_at: new Date().toISOString(),
+        icon: this.newGroupIcon,
+        members: [
+          { email: this.email, role: 'Admin', joined_at: new Date().toISOString() }
+        ],
+        blocked: []
+      };
+      this.groups.push(group);
+      this.currentGroup = group;
+      this.showGroupSettings = true;
+      this.newGroupName = '';
+    },
+    selectGroup(group) {
+      this.currentGroup = group;
+      this.activeChat = null;
+      this.showGroupSettings = true;
+    },
+    promoteMember(email) {
+      if (!this.currentGroup) return;
+      const member = this.currentGroup.members.find(m => m.email === email);
+      if (member) member.role = 'Admin';
+    },
+    demoteMember(email) {
+      if (!this.currentGroup) return;
+      const member = this.currentGroup.members.find(m => m.email === email);
+      if (member && email !== this.currentGroup.created_by) {
+        member.role = 'Member';
+      }
+    },
+    removeMember(email) {
+      if (!this.currentGroup) return;
+      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== email);
+    },
+    blockUser(email) {
+      if (!this.currentGroup) return;
+      if (!this.currentGroup.blocked.includes(email)) {
+        this.currentGroup.blocked.push(email);
+      }
+    },
+    unblockUser(email) {
+      if (!this.currentGroup) return;
+      this.currentGroup.blocked = this.currentGroup.blocked.filter(e => e !== email);
+    },
+    leaveGroup() {
+      if (!this.currentGroup) return;
+      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== this.email);
+      this.showGroupSettings = false;
+      this.currentGroup = null;
+    },
+    deleteGroup() {
+      if (!this.currentGroup) return;
+      this.groups = this.groups.filter(g => g.id !== this.currentGroup.id);
+      this.showGroupSettings = false;
+      this.currentGroup = null;
     }
   }
 }
