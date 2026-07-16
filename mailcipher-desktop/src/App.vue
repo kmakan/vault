@@ -2,7 +2,10 @@
   <div class="app-container">
     <div class="sidebar">
       <div class="sidebar-header">
-        <h2>Whisper</h2>
+        <div class="logo">
+          <span class="logo-icon">🔒</span>
+          <span class="logo-text">Whisper</span>
+        </div>
         <div class="header-actions">
           <button @click="showKeyManager = !showKeyManager" :title="cryptoReady ? 'Keys ready' : 'Generating keys...'">
             {{ cryptoReady ? '🔑' : '⏳' }}
@@ -19,27 +22,37 @@
           :class="['nav-tab', { active: currentView === 'chats' }]"
           @click="currentView = 'chats'"
         >
+          <span class="nav-icon">💬</span>
           Chats
         </button>
         <button 
           :class="['nav-tab', { active: currentView === 'email' }]"
           @click="currentView = 'email'"
         >
+          <span class="nav-icon">📧</span>
           Email
         </button>
       </div>
 
       <div v-if="currentView === 'chats'" class="contacts-list">
+        <div class="search-box">
+          <input type="text" placeholder="Search contacts..." v-model="searchQuery" />
+        </div>
         <div 
-          v-for="contact in contacts" 
+          v-for="contact in filteredContacts" 
           :key="contact.email"
           :class="['contact-item', { active: activeChat === contact.email }]"
           @click="selectChat(contact.email)"
         >
-          <span class="status-icon">{{ contact.online ? '🟢' : '⚪' }}</span>
+          <div class="contact-avatar">
+            <span class="avatar-initial">{{ contact.name.charAt(0).toUpperCase() }}</span>
+          </div>
           <div class="contact-info">
             <div class="contact-name">{{ contact.name }}</div>
             <div class="contact-email">{{ contact.email }}</div>
+          </div>
+          <div class="contact-status">
+            <span class="status-dot" :class="{ online: contact.online }"></span>
           </div>
         </div>
       </div>
@@ -56,26 +69,34 @@
     <div class="main-area">
       <div v-if="showKeyManager" class="key-manager">
         <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" />
-        </div>
+      </div>
     
-        <div v-if="showQRCode" class="qr-code-overlay">
+      <div v-if="showQRCode" class="qr-code-overlay">
         <QRCodePanel 
           :publicKey="publicKey" 
           @close="showQRCode = false"
           @key-scanned="addPeerKey"
         />
-        </div>
+      </div>
 
       <div v-if="showSettings" class="settings-panel">
         <EmailSettings />
       </div>
-
+      
       <div v-else-if="currentView === 'chats'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
-          <h3>{{ activeChat }}</h3>
+          <div class="chat-header-info">
+            <div class="chat-avatar">
+              <span class="avatar-initial">{{ activeChat.charAt(0).toUpperCase() }}</span>
+            </div>
+            <div>
+              <h3>{{ activeChat }}</h3>
+              <div class="chat-status">{{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}</div>
+            </div>
+          </div>
           <div class="chat-actions">
-            <button @click="showMembers = !showMembers">👥</button>
-            <button @click="searchMessages">🔍</button>
+            <button @click="showMembers = !showMembers" title="Members">👥</button>
+            <button @click="searchMessages" title="Search">🔍</button>
           </div>
         </div>
         
@@ -94,12 +115,15 @@
         </div>
         
         <div class="message-input" v-if="activeChat">
+          <button class="attach-btn" title="Attach file">📎</button>
           <input 
             v-model="newMessage" 
             @keyup.enter="sendMessage"
             placeholder="Type a message..."
           />
-          <button @click="sendMessage">Send</button>
+          <button class="send-btn" @click="sendMessage">
+            <span class="send-icon">➤</span>
+          </button>
         </div>
       </div>
 
@@ -117,8 +141,9 @@
             {{ selectedEmail.body || 'Loading...' }}
           </div>
         </div>
-        <div v-else class="empty-email">
-          Select an email to view
+        <div v-else class="empty-state">
+          <div class="empty-icon">📬</div>
+          <div class="empty-text">Select an email to view</div>
         </div>
       </div>
     </div>
@@ -161,7 +186,18 @@ export default {
       peerKeyInput: '',
       showKeyManager: false,
       showQRCode: false,
-      peerKeysLoaded: {}
+      peerKeysLoaded: {},
+      searchQuery: ''
+    }
+  },
+  computed: {
+    filteredContacts() {
+      if (!this.searchQuery) return this.contacts;
+      const q = this.searchQuery.toLowerCase();
+      return this.contacts.filter(c => 
+        c.name.toLowerCase().includes(q) || 
+        c.email.toLowerCase().includes(q)
+      );
     }
   },
   async mounted() {
@@ -296,22 +332,17 @@ export default {
     },
     async addPeerKey(publicKeyHex) {
       try {
-        // Validate the key
         if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) {
           alert('Invalid public key format');
           return;
         }
         
-        // Add to peer keys
         this.peerKeys[publicKeyHex] = {
           added: new Date().toISOString(),
           source: 'qr-code'
         };
         
-        // Save to storage
         await crypto.savePeerKeys(this.peerKeys);
-        
-        // Show success
         alert('Public key added successfully!');
         this.showQRCode = false;
         
@@ -325,8 +356,7 @@ export default {
         const accounts = await api.getEmailAccounts();
         this.emails = [];
         for (const account of accounts) {
-          // In a real implementation, this would call an endpoint to fetch emails
-          // For now, we'll use mock data or a future endpoint
+          // Future: fetch emails per account
         }
       } catch (error) {
         console.error('Failed to load emails:', error);
@@ -342,110 +372,389 @@ export default {
 </script>
 
 <style>
-.chat-container {
-  display: flex;
-  height: 100vh;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+/* ═══════════════════════════════════════════════════════════════
+   Whisper — Professional Design System
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Primary palette */
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #12122a;
+  --bg-tertiary: #1a1a3e;
+  --bg-hover: #1e1e4a;
+  --bg-active: #252560;
+  
+  /* Accent colors */
+  --accent-primary: #6366f1;
+  --accent-secondary: #818cf8;
+  --accent-glow: rgba(99, 102, 241, 0.3);
+  
+  /* Text colors */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  /* Status colors */
+  --status-online: #22c55e;
+  --status-encrypted: #6366f1;
+  --status-warning: #f59e0b;
+  
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.1);
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  /* Spacing */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
 }
 
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Sidebar
+   ═══════════════════════════════════════════════════════════════ */
+
 .sidebar {
-  width: 300px;
-  background: #1a1a2e;
-  color: white;
-  border-right: 1px solid #16213e;
+  width: 320px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-header {
-  padding: 20px;
+  padding: 20px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #16213e;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon {
+  font-size: 24px;
+}
+
+.logo-text {
+  font-size: 20px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .header-actions {
   display: flex;
-  gap: 8px;
+  gap: 4px;
 }
 
 .header-actions button {
-  background: none;
+  background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 18px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
 }
 
+.header-actions button:hover {
+  background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Navigation Tabs
+   ═══════════════════════════════════════════════════════════════ */
+
+.nav-tabs {
+  display: flex;
+  padding: 8px;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.nav-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nav-tab.active {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.nav-icon {
+  font-size: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Search Box
+   ═══════════════════════════════════════════════════════════════ */
+
+.search-box {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.search-box input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.search-box input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-box input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Contacts List
+   ═══════════════════════════════════════════════════════════════ */
+
 .contacts-list {
+  flex: 1;
   overflow-y: auto;
 }
 
 .contact-item {
   display: flex;
   align-items: center;
-  padding: 15px 20px;
+  padding: 14px 20px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all var(--transition-fast);
+  border-left: 3px solid transparent;
 }
 
 .contact-item:hover {
-  background: #16213e;
+  background: var(--bg-hover);
 }
 
 .contact-item.active {
-  background: #0f3460;
+  background: var(--bg-active);
+  border-left-color: var(--accent-primary);
 }
 
-.status-icon {
-  margin-right: 12px;
-  font-size: 12px;
+.contact-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 14px;
+  flex-shrink: 0;
+}
+
+.avatar-initial {
+  font-size: 18px;
+  font-weight: 600;
+  color: white;
 }
 
 .contact-info {
   flex: 1;
+  min-width: 0;
 }
 
 .contact-name {
-  font-weight: 500;
-  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .contact-email {
   font-size: 12px;
-  color: #888;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contact-status {
+  margin-left: 12px;
+}
+
+.status-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+}
+
+.status-dot.online {
+  background: var(--status-online);
+  box-shadow: 0 0 8px var(--status-online);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Main Chat Area
+   ═══════════════════════════════════════════════════════════════ */
+
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
 }
 
 .chat-area {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #0f0f23;
 }
 
 .chat-header {
-  padding: 20px;
-  border-bottom: 1px solid #16213e;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  background: var(--bg-secondary);
+}
+
+.chat-header-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.chat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-header-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.chat-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chat-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .chat-actions button {
-  background: none;
+  background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 16px;
-  margin-left: 10px;
+  font-size: 18px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
 }
+
+.chat-actions button:hover {
+  background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Messages
+   ═══════════════════════════════════════════════════════════════ */
 
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .message {
-  margin-bottom: 16px;
   max-width: 70%;
+  animation: messageIn 0.2s ease;
+}
+
+@keyframes messageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message.own {
@@ -453,163 +762,235 @@ export default {
 }
 
 .message-content {
-  background: #16213e;
+  background: var(--bg-tertiary);
   padding: 12px 16px;
-  border-radius: 18px;
-  color: white;
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: 4px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  box-shadow: var(--shadow-sm);
 }
 
 .message.own .message-content {
-  background: #0f3460;
+  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: 4px;
+}
+
+.encrypted-badge {
+  margin-left: 6px;
+  font-size: 12px;
 }
 
 .message-time {
   font-size: 11px;
-  color: #888;
-  margin-top: 4px;
+  color: var(--text-muted);
+  margin-top: 6px;
   text-align: right;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Message Input
+   ═══════════════════════════════════════════════════════════════ */
+
 .message-input {
-  padding: 20px;
-  border-top: 1px solid #16213e;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
+  align-items: center;
   gap: 12px;
+  background: var(--bg-secondary);
+}
+
+.attach-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.attach-btn:hover {
+  background: var(--bg-hover);
 }
 
 .message-input input {
   flex: 1;
-  padding: 12px 16px;
-  border-radius: 24px;
-  border: none;
-  background: #16213e;
-  color: white;
+  padding: 12px 18px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
   font-size: 14px;
+  outline: none;
+  transition: all var(--transition-fast);
 }
 
-.message-input button {
-  padding: 12px 24px;
-  border-radius: 24px;
+.message-input input::placeholder {
+  color: var(--text-muted);
+}
+
+.message-input input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
   border: none;
-  background: #0f3460;
-  color: white;
   cursor: pointer;
-  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-md);
 }
 
-.message-input button:hover {
-  background: #1a5276;
+.send-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px var(--accent-glow);
 }
 
-.key-manager {
-  padding: 20px;
-  background: #1a1a2e;
-  border-bottom: 1px solid #16213e;
+.send-icon {
+  font-size: 18px;
   color: white;
 }
 
-.key-manager h3 {
-  margin: 0 0 16px 0;
+/* ═══════════════════════════════════════════════════════════════
+   Empty State
+   ═══════════════════════════════════════════════════════════════ */
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.empty-text {
   font-size: 16px;
 }
 
-.key-status {
-  margin-bottom: 16px;
+/* ═══════════════════════════════════════════════════════════════
+   Key Manager
+   ═══════════════════════════════════════════════════════════════ */
+
+.key-manager {
+  padding: 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.status-ok {
-  color: #4ade80;
+.key-manager h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
 }
 
-.status-waiting {
-  color: #fbbf24;
+/* ═══════════════════════════════════════════════════════════════
+   Email View
+   ═══════════════════════════════════════════════════════════════ */
+
+.email-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
-.key-info {
-  margin-bottom: 16px;
+.email-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
 }
 
-.key-info label {
-  display: block;
-  font-size: 12px;
-  color: #888;
-  margin-bottom: 4px;
+.email-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
-.key-info .fingerprint {
-  display: block;
-  padding: 8px;
-  background: #0f0f23;
-  border-radius: 4px;
-  font-family: monospace;
+.back-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.back-btn:hover {
+  background: var(--bg-hover);
+}
+
+.email-detail-header h3 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.email-detail-meta {
+  display: flex;
+  gap: 24px;
+  color: var(--text-secondary);
   font-size: 14px;
-  margin-bottom: 12px;
-  word-break: break-all;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.key-info textarea {
-  width: 100%;
-  padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
-  border-radius: 4px;
-  color: white;
-  font-family: monospace;
-  font-size: 12px;
-  resize: none;
-  box-sizing: border-box;
+.email-detail-body {
+  flex: 1;
+  line-height: 1.7;
+  color: var(--text-primary);
 }
 
-.peer-key-section {
-  margin-bottom: 16px;
+/* ═══════════════════════════════════════════════════════════════
+   Scrollbar Styling
+   ═══════════════════════════════════════════════════════════════ */
+
+::-webkit-scrollbar {
+  width: 6px;
 }
 
-.peer-key-section label {
-  display: block;
-  font-size: 12px;
-  color: #888;
-  margin-bottom: 4px;
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.peer-key-section input {
-  width: 100%;
-  padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
-  border-radius: 4px;
-  color: white;
-  font-family: monospace;
-  font-size: 12px;
-  margin-bottom: 8px;
-  box-sizing: border-box;
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
 }
 
-.peer-key-section button {
-  padding: 8px 16px;
-  background: #0f3460;
-  border: none;
-  border-radius: 4px;
-  color: white;
-  cursor: pointer;
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
-.peer-key-section button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* ═══════════════════════════════════════════════════════════════
+   Responsive (for future use)
+   ═══════════════════════════════════════════════════════════════ */
 
-.key-manager button:last-child {
-  padding: 8px 16px;
-  background: #16213e;
-  border: none;
-  border-radius: 4px;
-  color: white;
-  cursor: pointer;
-}
-
-.encrypted-badge {
-  font-size: 10px;
-  margin-left: 4px;
-  opacity: 0.7;
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+  }
+  
+  .main-area {
+    display: none;
+  }
 }
 </style>
