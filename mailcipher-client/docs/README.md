@@ -85,6 +85,13 @@ cargo build --release
 | XChaCha20-Poly1305 | Шифрование |
 | Poly1305 | Аутентификация |
 
+## Исследования
+
+| Документ | Описание |
+|----------|----------|
+| [../docs/research/mls-treekem-research.md](../../../docs/research/mls-treekem-research.md) | MLS (TreeKEM) для группового шифрования |
+| [../docs/promotion/monetization-plan.md](../../../docs/promotion/monetization-plan.md) | План продвижения и монетизации |
+
 ## Контрибьюция
 
 1. Fork репозиторий
