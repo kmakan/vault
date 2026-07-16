@@ -4,6 +4,7 @@ pub mod filter;
 pub mod folders;
 pub mod groups;
 pub mod invite;
+pub mod kitty;
 pub mod media;
 pub mod protocol;
 pub mod reactions;
