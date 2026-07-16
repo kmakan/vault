@@ -1,4 +1,4 @@
-# CLI Demo Test Results — Whisper/Vault Client
+# CLI Demo Test Results — Vault/Vault Client
 
 **Date:** $(date '+%Y-%m-%d %H:%M:%S')
 **Platform:** $(uname -sr)

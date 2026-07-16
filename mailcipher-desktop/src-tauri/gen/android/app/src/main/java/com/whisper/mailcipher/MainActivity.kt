@@ -1,4 +1,4 @@
-package com.whisper.mailcipher
+package com.vault.mailcipher
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

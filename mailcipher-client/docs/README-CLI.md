@@ -1,4 +1,4 @@
-# Whisper CLI — Руководство пользователя
+# Vault CLI — Руководство пользователя
 
 E2E зашифрованный мессенджер на базе email.
 
@@ -19,8 +19,8 @@ cargo build --release
 
 ```bash
 # Клонируем репозиторий
-git clone https://github.com/user/whisper.git
-cd whisper/mailcipher-client
+git clone https://github.com/user/vault.git
+cd vault/mailcipher-client
 
 # Сборка (требуется Rust 1.70+)
 cargo build --release
@@ -42,7 +42,7 @@ cargo build --release
 1. Перейдите в [Настройки Google](https://myaccount.google.com/security)
 2. Включите **Двухфакторную аутентификацию**
 3. Перейдите в **Пароли приложений**
-4. Создайте пароль для "Whisper"
+4. Создайте пароль для "Vault"
 5. Скопируйте 16-значный пароль
 
 ### Outlook / Hotmail
@@ -54,7 +54,7 @@ cargo build --release
 ### Yandex
 
 1. Перейдите в [Настройки](https://passport.yandex.ru/profile/security/app-passwords)
-2. Создайте пароль для "Whisper"
+2. Создайте пароль для "Vault"
 3. Скопируйте пароль
 
 ### Mail.ru
@@ -117,7 +117,7 @@ cargo build --release
 /invite alice@example.com
 
 # Вывод:
-# Invite link: https://whisper.chat/invite/abc123...
+# Invite link: https://vault.chat/invite/abc123...
 # QR-код: (отображается в терминале)
 # Срок действия: 24 часа
 ```
@@ -126,9 +126,9 @@ cargo build --release
 
 ```bash
 # Принять приглашение по ссылке
-/accept https://whisper.chat/invite/abc123...
+/accept https://vault.chat/invite/abc123...
 
-# Или по Whisper ID
+# Или по Vault ID
 /accept alice@example.com
 ```
 
@@ -188,7 +188,7 @@ cargo build --release
 ## Просмотр входящих
 
 ```bash
-# Показать только Whisper-сообщения
+# Показать только Vault-сообщения
 /inbox
 
 # Вывод:

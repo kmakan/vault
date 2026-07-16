@@ -77,7 +77,7 @@ mod tests {
     fn encrypt_decrypt_roundtrip() {
         let key = generate_key();
         let nonce = generate_nonce();
-        let plaintext = b"Hello, Whisper!";
+        let plaintext = b"Hello, Vault!";
         let ciphertext = encrypt(plaintext, &key, &nonce).unwrap();
         assert_ne!(ciphertext, plaintext);
         let decrypted = decrypt(&ciphertext, &key, &nonce).unwrap();

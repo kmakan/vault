@@ -6,11 +6,11 @@ use std::path::PathBuf;
 
 use super::status::MessageStatus;
 
-/// Storage file path: ~/.whisper/read_receipts.json
+/// Storage file path: ~/.vault/read_receipts.json
 fn receipts_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".whisper")
+        .join(".vault")
         .join("read_receipts.json")
 }
 
@@ -29,7 +29,7 @@ pub struct ReadReceiptRecord {
     pub sender: String,
 }
 
-/// Persistent store for read receipts, backed by ~/.whisper/read_receipts.json
+/// Persistent store for read receipts, backed by ~/.vault/read_receipts.json
 pub struct ReadReceiptStore {
     /// message_id → list of receipts (a message can be read by multiple people in groups)
     receipts: HashMap<String, Vec<ReadReceiptRecord>>,
@@ -61,7 +61,7 @@ impl ReadReceiptStore {
     pub fn save(&self) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).context("Failed to create .whisper directory")?;
+            fs::create_dir_all(parent).context("Failed to create .vault directory")?;
         }
 
         let json =
@@ -194,7 +194,7 @@ mod tests {
     use std::fs;
 
     fn temp_path() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("whisper_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("vault_test_{}", uuid::Uuid::new_v4()));
         dir.join("read_receipts.json")
     }
 
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_empty_path_no_panic() {
         // Non-existent path should just return empty store
-        let path = PathBuf::from("/tmp/nonexistent_whisper_test_dir/read_receipts.json");
+        let path = PathBuf::from("/tmp/nonexistent_vault_test_dir/read_receipts.json");
         let store = ReadReceiptStore::with_path(path);
         assert_eq!(store.count(), 0);
     }

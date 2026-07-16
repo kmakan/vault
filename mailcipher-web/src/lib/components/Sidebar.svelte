@@ -21,7 +21,7 @@
 		<div class="logo">
 			<span class="logo-icon">🔐</span>
 			{#if !collapsed}
-				<span class="logo-text">Whisper</span>
+				<span class="logo-text">Vault</span>
 			{/if}
 		</div>
 		<button class="toggle-btn" onclick={onToggle} title={collapsed ? 'Expand' : 'Collapse'}>

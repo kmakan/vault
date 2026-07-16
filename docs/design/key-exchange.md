@@ -1,8 +1,8 @@
-# Key Exchange Design — Whisper
+# Key Exchange Design — Vault
 
 ## Концепция
 
-Whisper не имеет сервера. Пользователи общаются через email (IMAP/SMTP).
+Vault не имеет сервера. Пользователи общаются через email (IMAP/SMTP).
 Для установки E2E шифрования нужно безопасно обменяться ключами.
 
 ## Методы обмена ключами
@@ -19,7 +19,7 @@ Whisper не имеет сервера. Пользователи общаютс�
 ### 2. Signal
 ```
 Пользователь A → Signal → Пользователь B
-  └─ whisper:alice@example.com
+  └─ vault:alice@example.com
   └─ pubkey: 04a1b2c3d4...
   └─ fingerprint: ABCD-1234-EF56
 ```
@@ -39,7 +39,7 @@ Whisper не имеет сервера. Пользователи общаютс�
 ### 3. SimpleX Chat
 ```
 Пользователь A → SimpleX → Пользователь B
-  └─ whisper:alice@example.com
+  └─ vault:alice@example.com
   └─ pubkey: 04a1b2c3d4...
 ```
 - **Безопасность**: Высокая (нет номера телефона, E2E)
@@ -53,7 +53,7 @@ Whisper не имеет сервера. Пользователи общаютс�
 ### 4. PGP Email
 ```
 Пользователь A → Зашифрованное PGP письмо → Пользователь B
-  └─ Whisper Key Exchange
+  └─ Vault Key Exchange
   └─ pubkey: 04a1b2c3d4...
   └─ fingerprint: ABCD-1234-EF56
 ```
@@ -68,7 +68,7 @@ Whisper не имеет сервера. Пользователи общаютс�
 ### 5. Briar (Android P2P)
 ```
 Пользователь A ↔ Briar ↔ Пользователь B
-  └─ Whisper Key Exchange
+  └─ Vault Key Exchange
   └─ pubkey: 04a1b2c3d4...
 ```
 - **Безопасность**: Очень высокая (P2P, без сервера, через Tor)
@@ -94,7 +94,7 @@ Whisper не имеет сервера. Пользователи общаютс�
 ## Формат ключа для обмена
 
 ```
-Whisper Key Exchange
+Vault Key Exchange
 ─────────────────────
 Email: alice@example.com
 Public Key: 04a1b2c3d4e5f6...
@@ -106,7 +106,7 @@ Fingerprint: ABCD-1234-EF56-7890
 
 ```bash
 # Показать свой ключ для обмена
-/whisperid
+/vaultid
 /sharekey signal      # Показать ключ для Signal
 /sharekey simplex     # Показать ключ для SimpleX  
 /sharekey pgp         # Показать ключ для PGP
@@ -114,20 +114,20 @@ Fingerprint: ABCD-1234-EF56-7890
 /sharekey copy        # Показать ключ для ручного копирования
 
 # Импортировать ключ собеседника
-/importkey <whisper-id> <pubkey> <fingerprint>
+/importkey <vault-id> <pubkey> <fingerprint>
 ```
 
 ## Desktop UI
 
 ```
 ┌─────────────────────────────────────────┐
-│  Share Your Whisper Key                  │
+│  Share Your Vault Key                  │
 ├─────────────────────────────────────────┤
 │  [QR Code]  [Signal]  [SimpleX]         │
 │  [PGP]      [Briar]   [Copy]            │
 ├─────────────────────────────────────────┤
 │  ┌─────────────────────────────────┐    │
-│  │  Whisper Key Exchange           │    │
+│  │  Vault Key Exchange           │    │
 │  │  ─────────────────────────────  │    │
 │  │  Email: alice@example.com       │    │
 │  │  Public Key: 04a1b2c3d4...      │    │
@@ -187,7 +187,7 @@ impl ShareKeyInfo {
     
     pub fn to_text(&self) -> String {
         format!(
-            "Whisper Key Exchange\n\
+            "Vault Key Exchange\n\
              ─────────────────────\n\
              Email: {}\n\
              Public Key: {}\n\

@@ -1,4 +1,4 @@
--- Whisper (MailCipher) - Initial Schema
+-- Vault (MailCipher) - Initial Schema
 -- PostgreSQL 17
 
 -- Enable UUID extension

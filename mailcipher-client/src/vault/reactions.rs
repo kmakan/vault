@@ -48,11 +48,11 @@ pub struct ReactionStore {
 }
 
 impl ReactionStore {
-    /// Create a new store using the default path (~/.whisper/reactions.json)
+    /// Create a new store using the default path (~/.vault/reactions.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("reactions.json");
         Self::with_path(path)
     }
@@ -77,7 +77,7 @@ impl ReactionStore {
     /// Save reactions to disk
     fn save_to_file(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).context("Failed to create .whisper directory")?;
+            fs::create_dir_all(parent).context("Failed to create .vault directory")?;
         }
         let data = serde_json::to_string_pretty(&self.reactions)
             .context("Failed to serialize reactions")?;
@@ -222,7 +222,7 @@ mod tests {
     use std::env::temp_dir;
 
     fn test_store() -> ReactionStore {
-        let dir = temp_dir().join(format!("whisper_test_{}", uuid::Uuid::new_v4()));
+        let dir = temp_dir().join(format!("vault_test_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         ReactionStore::with_path(dir.join("reactions.json"))
     }
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_persistence() {
-        let dir = temp_dir().join(format!("whisper_test_{}", uuid::Uuid::new_v4()));
+        let dir = temp_dir().join(format!("vault_test_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("reactions.json");
 

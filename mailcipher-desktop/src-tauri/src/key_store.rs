@@ -30,7 +30,7 @@ pub struct KeyStoreMetadata {
 
 fn get_keys_dir() -> anyhow::Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".whisper").join(KEYS_DIR))
+    Ok(home.join(".vault").join(KEYS_DIR))
 }
 
 fn ensure_keys_dir() -> anyhow::Result<PathBuf> {

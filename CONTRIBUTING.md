@@ -1,4 +1,4 @@
-# Contributing to Whisper
+# Contributing to Vault
 
 Thank you for your interest in contributing! Here's how to get started.
 

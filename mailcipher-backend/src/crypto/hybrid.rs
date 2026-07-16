@@ -112,7 +112,7 @@ pub fn hybrid_encapsulate(
 
     let hk = Hkdf::<Sha256>::new(None, &ikm);
     let mut hybrid_secret = [0u8; HYBRID_SHARED_SECRET_SIZE];
-    hk.expand(b"whisper-hybrid-x25519-kyber1024", &mut hybrid_secret)
+    hk.expand(b"vault-hybrid-x25519-kyber1024", &mut hybrid_secret)
         .map_err(|e| CryptoError::from(format!("HKDF ошибка: {}", e)))?;
 
     Ok(HybridEncapsulation {
@@ -185,7 +185,7 @@ pub fn hybrid_decapsulate(
 
     let hk = Hkdf::<Sha256>::new(None, &ikm);
     let mut hybrid_secret = [0u8; HYBRID_SHARED_SECRET_SIZE];
-    hk.expand(b"whisper-hybrid-x25519-kyber1024", &mut hybrid_secret)
+    hk.expand(b"vault-hybrid-x25519-kyber1024", &mut hybrid_secret)
         .map_err(|e| CryptoError::from(format!("HKDF ошибка: {}", e)))?;
 
     Ok(hybrid_secret.to_vec())

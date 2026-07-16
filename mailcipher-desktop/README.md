@@ -1,13 +1,13 @@
-# Whisper Desktop — Tauri 2.0 E2E Encrypted Messenger
+# Vault Desktop — Tauri 2.0 E2E Encrypted Messenger
 
-Desktop client for the Whisper (MailCipher) encrypted messaging platform. Built with **Tauri 2.0** (Rust backend + Vue 3 frontend).
+Desktop client for the Vault (MailCipher) encrypted messaging platform. Built with **Tauri 2.0** (Rust backend + Vue 3 frontend).
 
 ## Features
 
 - **E2E Encryption** — XChaCha20-Poly1305 + X25519 Diffie-Hellman key exchange
 - **Key Management** — Generate, store, import/export keypairs and peer keys
 - **QR Code Sharing** — Exchange public keys via QR codes
-- **Secure Storage** — Keys stored in `~/.whisper/keys/`
+- **Secure Storage** — Keys stored in `~/.vault/keys/`
 - **Chat UI** — Real-time encrypted messaging with contact management
 - **Email Integration** — IMAP/SMTP email support via backend API
 
@@ -110,7 +110,7 @@ mailcipher-desktop/
 │  Rust Backend                   │
 │  ┌──────────┐  ┌─────────────┐ │
 │  │ crypto.rs│  │key_store.rs │ │
-│  │ XChaCha20│  │~/.whisper/  │ │
+│  │ XChaCha20│  │~/.vault/  │ │
 │  │ X25519   │  │  keys/      │ │
 │  └──────────┘  └─────────────┘ │
 └─────────────────────────────────┘
@@ -127,4 +127,4 @@ cargo test
 
 ## License
 
-Part of the Whisper/MailCipher project.
+Part of the Vault/MailCipher project.

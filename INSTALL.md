@@ -7,10 +7,10 @@
 Download from GitHub Releases:
 ```bash
 # Ubuntu/Debian
-sudo dpkg -i whisper_0.1.0_amd64.deb
+sudo dpkg -i vault_0.1.0_amd64.deb
 
 # Fedora/RHEL
-sudo rpm -i whisper-0.1.0-1.x86_64.rpm
+sudo rpm -i vault-0.1.0-1.x86_64.rpm
 ```
 
 ### Option 2: Build from Source
@@ -95,7 +95,7 @@ mailcipher-client
 
 ### App Passwords
 
-Whisper uses app passwords (not your main password):
+Vault uses app passwords (not your main password):
 
 | Provider | How to Generate |
 |----------|-----------------|
@@ -107,7 +107,7 @@ Whisper uses app passwords (not your main password):
 ### Data Location
 
 ```
-~/.whisper/
+~/.vault/
 ├── keys/           # Your key pairs
 ├── contacts/       # Contact book
 ├── groups.json     # Group definitions
@@ -139,11 +139,11 @@ Whisper uses app passwords (not your main password):
 
 ```bash
 # DEB
-sudo dpkg -r whisper
+sudo dpkg -r vault
 
 # RPM
-sudo rpm -e whisper
+sudo rpm -e vault
 
 # Remove data
-rm -rf ~/.whisper/
+rm -rf ~/.vault/
 ```

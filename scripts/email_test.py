@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Whisper/MailCipher — Email Integration Test
+Vault/MailCipher — Email Integration Test
 Тест IMAP/SMTP на реальных Gmail аккаунтах.
 
 Тесты:
@@ -333,7 +333,7 @@ def main():
     bob_smtp = None
 
     print("=" * 60)
-    print("Whisper/MailCipher — Email Integration Test")
+    print("Vault/MailCipher — Email Integration Test")
     print("=" * 60)
 
     # ── Тест 1: IMAP подключение ──────────────────────────────────
@@ -388,8 +388,8 @@ def main():
         results.fail("Bob SMTP подключение", str(e))
 
     # ── Тест 4: Отправка A→B ─────────────────────────────────────
-    test_subject = f"[Whisper Test] {timestamp}"
-    test_body = f"Это тестовое письмо от Whisper/MailCipher.\nTimestamp: {timestamp}\nПришло время: {time.strftime('%H:%M:%S')}"
+    test_subject = f"[Vault Test] {timestamp}"
+    test_body = f"Это тестовое письмо от Vault/MailCipher.\nTimestamp: {timestamp}\nПришло время: {time.strftime('%H:%M:%S')}"
 
     print(f"\n📨 Тест 4: Отправка Alice → Bob")
     print(f"  Тема: {test_subject}")
@@ -424,7 +424,7 @@ def main():
     print(f"\n🔐 Тест 6: Шифрование (Alpha + Columnar)")
     alpha_key = "MAGIC"
     column_key = "3124"
-    original_text = "Привет, Боб! Это зашифрованное сообщение через Whisper. Timestamp: " + str(timestamp)
+    original_text = "Привет, Боб! Это зашифрованное сообщение через Vault. Timestamp: " + str(timestamp)
 
     try:
         encrypted = combined_encrypt(original_text, alpha_key, column_key)
@@ -443,7 +443,7 @@ def main():
         results.fail("Шифрование/расшифрование", str(e))
 
     # ── Тест 7: Зашифрованное письмо A→B ─────────────────────────
-    enc_subject = f"[Whisper Encrypted] {timestamp}"
+    enc_subject = f"[Vault Encrypted] {timestamp}"
     enc_body = f"-----BEGIN ENCRYPTED MESSAGE-----\n{encrypted}\n-----END ENCRYPTED MESSAGE-----"
 
     print(f"\n🔒 Тест 7: Зашифрованное письмо Alice → Bob")
@@ -503,7 +503,7 @@ def main():
         results.fail("Расшифрование на Bob", str(e))
 
     # ── Тест 9: Ответ B→A ────────────────────────────────────────
-    reply_subject = f"[Whisper Reply] {timestamp}"
+    reply_subject = f"[Vault Reply] {timestamp}"
     reply_body = f"Ответ от Bob! Timestamp: {timestamp}"
 
     print(f"\n📨 Тест 9: Ответ Bob → Alice")

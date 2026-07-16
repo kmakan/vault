@@ -1,11 +1,11 @@
 #!/bin/bash
-# CLI Demo Test for Whisper/Vault
+# CLI Demo Test for Vault/Vault
 # Тестирование slash-команд без подключения к почтовому серверу
 
 set -e
 
-CLIENT_DIR="/home/maksim/whisper/mailcipher-client"
-RESULTS_FILE="/home/maksim/whisper/docs/testing/cli-demo-results.md"
+CLIENT_DIR="/home/maksim/vault/mailcipher-client"
+RESULTS_FILE="/home/maksim/vault/docs/testing/cli-demo-results.md"
 
 echo "# CLI Demo Test Results" > "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"

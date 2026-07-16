@@ -1,7 +1,7 @@
 use keyring::Entry;
 use zeroize::Zeroize;
 
-const SERVICE_NAME: &str = "whisper-mailcipher";
+const SERVICE_NAME: &str = "vault-mailcipher";
 const MASTER_KEY_ACCOUNT: &str = "master-key";
 const SALT_ACCOUNT: &str = "master-key-salt";
 const VERIFY_ACCOUNT: &str = "master-key-verify";

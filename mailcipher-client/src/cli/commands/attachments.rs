@@ -1,4 +1,4 @@
-//! File attachment handling for Whisper CLI.
+//! File attachment handling for Vault CLI.
 //!
 //! Provides file info display, size limit validation per email provider,
 //! MIME multipart construction, and encryption via the Encryptor module.
@@ -122,11 +122,11 @@ pub fn human_size(bytes: usize) -> String {
     }
 }
 
-/// Encrypted file envelope — the format used for Whisper file attachments.
+/// Encrypted file envelope — the format used for Vault file attachments.
 ///
 /// Format:
 /// ```text
-/// ---BEGIN WHISPER ENCRYPTED---
+/// ---BEGIN VAULT ENCRYPTED---
 /// Version: 1
 /// Type: file
 /// Filename: document.pdf
@@ -134,17 +134,17 @@ pub fn human_size(bytes: usize) -> String {
 /// ---
 /// <base64-encoded payload>
 /// <base64-encoded signature>
-/// ---END WHISPER ENCRYPTED---
+/// ---END VAULT ENCRYPTED---
 /// ```
 ///
 /// The payload is: nonce (24 bytes) || ciphertext || enc_key (32 bytes)
 pub struct EncryptedEnvelope;
 
 impl EncryptedEnvelope {
-    const BEGIN_MARKER: &'static str = "---BEGIN WHISPER ENCRYPTED---";
-    const END_MARKER: &'static str = "---END WHISPER ENCRYPTED---";
+    const BEGIN_MARKER: &'static str = "---BEGIN VAULT ENCRYPTED---";
+    const END_MARKER: &'static str = "---END VAULT ENCRYPTED---";
 
-    /// Build a Whisper encrypted envelope from raw file data
+    /// Build a Vault encrypted envelope from raw file data
     pub fn build(
         filename: &str,
         content_type: &str,
@@ -219,7 +219,7 @@ impl EncryptedEnvelope {
         })
     }
 
-    /// Check if a string looks like a Whisper encrypted file envelope
+    /// Check if a string looks like a Vault encrypted file envelope
     pub fn is_file_envelope(input: &str) -> bool {
         input.contains(Self::BEGIN_MARKER)
             && input.contains(Self::END_MARKER)
@@ -245,7 +245,7 @@ pub fn build_mime_multipart(
     filename: &str,
     content_type: &str,
 ) -> String {
-    let boundary = format!("----WhisperAttachment_{}", uuid::Uuid::new_v4());
+    let boundary = format!("----VaultAttachment_{}", uuid::Uuid::new_v4());
 
     format!(
         "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\
@@ -254,12 +254,12 @@ pub fn build_mime_multipart(
          Content-Type: text/plain; charset=\"utf-8\"\r\n\
          Content-Transfer-Encoding: 7bit\r\n\
          \r\n\
-         This is a Whisper Vault encrypted file attachment.\r\n\
-         Decrypt with /decrypt or a Whisper client.\r\n\
+         This is a Vault encrypted file attachment.\r\n\
+         Decrypt with /decrypt or a Vault client.\r\n\
          \r\n\
          --{boundary}\r\n\
          Content-Type: application/octet-stream\r\n\
-         Content-Disposition: attachment; filename=\"{filename}.whisper\"\r\n\
+         Content-Disposition: attachment; filename=\"{filename}.vault\"\r\n\
          Content-Transfer-Encoding: base64\r\n\
          \r\n\
          {envelope_b64}\r\n\
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_file_info_from_path() {
-        let temp_dir = std::env::temp_dir().join("whisper_attachment_test");
+        let temp_dir = std::env::temp_dir().join("vault_attachment_test");
         std::fs::create_dir_all(&temp_dir).unwrap();
         let file_path = temp_dir.join("test_doc.pdf");
         std::fs::write(&file_path, b"test content for pdf").unwrap();
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_file_info_directory_rejected() {
-        let temp_dir = std::env::temp_dir().join("whisper_attachment_dir_test");
+        let temp_dir = std::env::temp_dir().join("vault_attachment_dir_test");
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let result = FileInfo::from_path(temp_dir.to_str().unwrap());
@@ -406,11 +406,11 @@ mod tests {
             "dGVzdHNpZ25hdHVyZQ==", // base64("testsignature")
         );
 
-        assert!(envelope.contains("---BEGIN WHISPER ENCRYPTED---"));
+        assert!(envelope.contains("---BEGIN VAULT ENCRYPTED---"));
         assert!(envelope.contains("Type: file"));
         assert!(envelope.contains("Filename: secret.pdf"));
         assert!(envelope.contains("Content-Type: application/pdf"));
-        assert!(envelope.contains("---END WHISPER ENCRYPTED---"));
+        assert!(envelope.contains("---END VAULT ENCRYPTED---"));
 
         let parsed = EncryptedEnvelope::parse(&envelope).unwrap();
         assert_eq!(parsed.filename, "secret.pdf");
@@ -437,13 +437,13 @@ mod tests {
         let multipart =
             build_mime_multipart("encrypted envelope data", "report.pdf", "application/pdf");
         assert!(multipart.contains("Content-Type: multipart/mixed"));
-        assert!(multipart.contains("report.pdf.whisper"));
-        assert!(multipart.contains("Whisper Vault encrypted file attachment"));
+        assert!(multipart.contains("report.pdf.vault"));
+        assert!(multipart.contains("Vault encrypted file attachment"));
     }
 
     #[test]
     fn test_file_info_read_contents() {
-        let temp_dir = std::env::temp_dir().join("whisper_read_test");
+        let temp_dir = std::env::temp_dir().join("vault_read_test");
         std::fs::create_dir_all(&temp_dir).unwrap();
         let file_path = temp_dir.join("data.bin");
         let data = vec![0u8, 1, 2, 3, 255, 254];

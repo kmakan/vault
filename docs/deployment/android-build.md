@@ -1,4 +1,4 @@
-# Сборка Whisper для Android
+# Сборка Vault для Android
 
 ## Предварительные требования
 
@@ -31,7 +31,7 @@ sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
 ### 3. Tauri Android Plugin
 ```bash
-cd ~/whisper/mailcipher-desktop
+cd ~/vault/mailcipher-desktop
 npm install @tauri-apps/cli
 npx tauri android init
 ```
@@ -40,15 +40,15 @@ npx tauri android init
 
 ### Debug APK
 ```bash
-cd ~/whisper/mailcipher-desktop
+cd ~/vault/mailcipher-desktop
 npx tauri android build
 ```
 
 ### Release APK (подписанный)
 ```bash
 # Создать keystore (один раз)
-keytool -genkey -v -keystore ~/whisper-release.keystore \
-  -alias whisper -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkey -v -keystore ~/vault-release.keystore \
+  -alias vault -keyalg RSA -keysize 2048 -validity 10000
 
 # Собрать release
 npx tauri android build --release
@@ -59,12 +59,12 @@ APK будет в: `src-tauri/target/release/bundle/apk/`
 ## Установка на устройство
 
 ```bash
-adb install src-tauri/target/release/bundle/apk/Whisper.apk
+adb install src-tauri/target/release/bundle/apk/Vault.apk
 ```
 
 ## Текущий статус
 
-- ✅ Desktop (Linux): Собран `Whisper_0.1.0_amd64.deb` (3.9 MB)
+- ✅ Desktop (Linux): Собран `Vault_0.1.0_amd64.deb` (3.9 MB)
 - ⏳ Android: Требуется установка Java + Android SDK
 
 ## Структура проекта

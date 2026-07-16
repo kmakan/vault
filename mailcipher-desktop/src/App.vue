@@ -4,7 +4,7 @@
       <div class="sidebar-header">
         <div class="logo">
           <span class="logo-icon">🔒</span>
-          <span class="logo-text">Whisper</span>
+          <span class="logo-text">Vault</span>
         </div>
         <div class="header-actions">
           <button @click="showKeyManager = !showKeyManager" :title="cryptoReady ? 'Keys ready' : 'Generating keys...'">
@@ -565,12 +565,12 @@ export default {
     // Export
     exportAsJSON() {
       const json = exportChatJSON(this.messages, this.activeChat)
-      downloadFile(json, `whisper-${this.activeChat}-${Date.now()}.json`, 'application/json')
+      downloadFile(json, `vault-${this.activeChat}-${Date.now()}.json`, 'application/json')
       this.showExportMenu = false
     },
     exportAsTXT() {
       const txt = exportChatTXT(this.messages, this.activeChat)
-      downloadFile(txt, `whisper-${this.activeChat}-${Date.now()}.txt`, 'text/plain')
+      downloadFile(txt, `vault-${this.activeChat}-${Date.now()}.txt`, 'text/plain')
       this.showExportMenu = false
     },
     // Group management
@@ -645,7 +645,7 @@ export default {
 
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   Whisper — Professional Design System
+   Vault — Professional Design System
    ═══════════════════════════════════════════════════════════════ */
 
 :root {

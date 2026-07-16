@@ -1,4 +1,4 @@
-# 🔐 Whisper (MailCipher)
+# 🔐 Vault (MailCipher)
 
 > **Secure messenger over email. No servers. No phone numbers. Just email.**
 >
@@ -6,9 +6,9 @@
 
 ---
 
-## What is Whisper?
+## What is Vault?
 
-Whisper is a privacy-first messenger that works over email (IMAP/SMTP). It uses **end-to-end encryption** (X25519 + XChaCha20-Poly1305) so that no one — not even email providers — can read your messages.
+Vault is a privacy-first messenger that works over email (IMAP/SMTP). It uses **end-to-end encryption** (X25519 + XChaCha20-Poly1305) so that no one — not even email providers — can read your messages.
 
 **Key principles:**
 - 🚫 **No servers** — your email is the transport
@@ -98,7 +98,7 @@ npx tauri android build
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                  Whisper Client                  │
+│                  Vault Client                  │
 │                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
 │  │ Crypto   │  │ Groups   │  │ Email (IMAP) │  │
@@ -182,7 +182,7 @@ npx tauri android build
 
 ## Key Exchange
 
-Since Whisper has no server, you need to exchange keys securely with your contacts.
+Since Vault has no server, you need to exchange keys securely with your contacts.
 
 | Method | Security | VPN Needed | Notes |
 |--------|----------|------------|-------|
@@ -196,26 +196,26 @@ Since Whisper has no server, you need to exchange keys securely with your contac
 
 ## Groups (Telegram-like)
 
-Whisper groups work like Telegram — **without a server**:
+Vault groups work like Telegram — **without a server**:
 
 - **Creator** = Admin by default
 - **Admins** can invite/remove members
 - **Blocking** is local (you don't see blocked users' messages)
 - **Roles** are advisory (no server to enforce)
 
-All group state is stored in `~/.whisper/groups.json`.
+All group state is stored in `~/.vault/groups.json`.
 
 ---
 
 ## Project Structure
 
 ```
-whisper/
+vault/
 ├── mailcipher-client/     # Rust CLI + core logic
 │   ├── src/
 │   │   ├── cli/           # CLI commands, REPL
 │   │   ├── crypto/        # X25519, XChaCha20
-│   │   ├── whisper/       # Groups, contacts, invites, etc.
+│   │   ├── vault/       # Groups, contacts, invites, etc.
 │   │   └── main.rs
 │   └── Cargo.toml
 ├── mailcipher-desktop/    # Vue.js + Tauri 2

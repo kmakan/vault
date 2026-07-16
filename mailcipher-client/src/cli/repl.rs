@@ -8,9 +8,9 @@ use crate::api::email::{EmailClient, EmailConfig};
 use crate::cli::commands::Command;
 use crate::cli::output::Output;
 use crate::crypto::CryptoClient;
-use crate::whisper::Reaction;
+use crate::vault::Reaction;
 
-const HISTORY_FILE: &str = ".whisper_history";
+const HISTORY_FILE: &str = ".vault_history";
 
 /// Main CLI REPL entry point
 pub async fn run_cli(config: Config) -> Result<()> {
@@ -76,19 +76,19 @@ struct CliContext {
     crypto: CryptoClient,
     active_chat: Option<String>,
     attachments: Vec<String>,
-    invite_manager: crate::whisper::InviteManager,
-    contact_book: crate::whisper::ContactBook,
-    receipt_store: crate::whisper::ReadReceiptStore,
-    reaction_store: crate::whisper::ReactionStore,
-    message_index: crate::whisper::MessageIndex,
-    edit_manager: crate::whisper::EditManager,
+    invite_manager: crate::vault::InviteManager,
+    contact_book: crate::vault::ContactBook,
+    receipt_store: crate::vault::ReadReceiptStore,
+    reaction_store: crate::vault::ReactionStore,
+    message_index: crate::vault::MessageIndex,
+    edit_manager: crate::vault::EditManager,
 }
 
 impl CliContext {
     fn new(config: Config) -> Self {
-        let contact_book = crate::whisper::ContactBook::load_default().unwrap_or_else(|e| {
+        let contact_book = crate::vault::ContactBook::load_default().unwrap_or_else(|e| {
             eprintln!("Warning: could not load contacts: {}", e);
-            crate::whisper::ContactBook::new()
+            crate::vault::ContactBook::new()
         });
         Self {
             config,
@@ -96,12 +96,12 @@ impl CliContext {
             crypto: CryptoClient::new(),
             active_chat: None,
             attachments: Vec::new(),
-            invite_manager: crate::whisper::InviteManager::new(),
+            invite_manager: crate::vault::InviteManager::new(),
             contact_book,
-            receipt_store: crate::whisper::ReadReceiptStore::new(),
-            reaction_store: crate::whisper::ReactionStore::new(),
-            message_index: crate::whisper::MessageIndex::new(),
-            edit_manager: crate::whisper::EditManager::new(),
+            receipt_store: crate::vault::ReadReceiptStore::new(),
+            reaction_store: crate::vault::ReactionStore::new(),
+            message_index: crate::vault::MessageIndex::new(),
+            edit_manager: crate::vault::EditManager::new(),
         }
     }
 
@@ -124,11 +124,11 @@ fn print_welcome(ctx: &CliContext) {
     println!();
 }
 
-/// Extract sender email from Whisper message body
+/// Extract sender email from Vault message body
 fn extract_sender_from_body(body: &str) -> Option<String> {
     for line in body.lines() {
-        if line.starts_with("X-Whisper-From: ") {
-            return Some(line.strip_prefix("X-Whisper-From: ")?.to_string());
+        if line.starts_with("X-Vault-From: ") {
+            return Some(line.strip_prefix("X-Vault-From: ")?.to_string());
         }
     }
     None
@@ -208,7 +208,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             if let Some(ref chat) = ctx.active_chat {
                 if let Some(ref client) = ctx.email_client {
                     let encrypted = ctx.crypto.encrypt(&message);
-                    let subject = format!("Whisper: {}", chat);
+                    let subject = format!("Vault: {}", chat);
 
                     // Check for queued attachments
                     if !ctx.attachments.is_empty() {
@@ -226,7 +226,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                 &info.mime_type,
                                             );
                                         let file_subject =
-                                            format!("Whisper: file {}", info.filename);
+                                            format!("Vault: file {}", info.filename);
                                         match client
                                             .send_email(chat, &file_subject, &mime_body)
                                             .await
@@ -279,16 +279,16 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 match client.fetch_messages().await {
                     Ok(messages) => {
                         // Process incoming read receipts first
-                        use crate::whisper::WhisperFilter;
+                        use crate::vault::VaultFilter;
                         let receipts: Vec<_> = messages
                             .iter()
-                            .filter(|m| WhisperFilter::is_whisper_receipt(m))
+                            .filter(|m| VaultFilter::is_vault_receipt(m))
                             .collect();
                         for receipt_msg in &receipts {
-                            // Try to extract message ID from subject [WHISPER-RECEIPT] <msg_id>
+                            // Try to extract message ID from subject [VAULT-RECEIPT] <msg_id>
                             if let Some(msg_id) = receipt_msg
                                 .subject
-                                .strip_prefix("[WHISPER-RECEIPT]")
+                                .strip_prefix("[VAULT-RECEIPT]")
                                 .map(|s| s.trim())
                             {
                                 let reader = &receipt_msg.from;
@@ -303,21 +303,21 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             }
                         }
 
-                        // Filter: only Whisper messages from contacts
-                        let whisper_msgs = WhisperFilter::filter_whisper_messages(&messages);
+                        // Filter: only Vault messages from contacts
+                        let vault_msgs = VaultFilter::filter_vault_messages(&messages);
                         // Further filter: only from contacts
-                        let contact_msgs: Vec<_> = whisper_msgs
+                        let contact_msgs: Vec<_> = vault_msgs
                             .iter()
                             .filter(|msg| ctx.contact_book.get(&msg.from).is_some())
                             .collect();
 
                         // Индексация сообщений для поиска
                         for msg in &contact_msgs {
-                            let entry = crate::whisper::IndexEntry {
+                            let entry = crate::vault::IndexEntry {
                                 message_id: msg.id.clone(),
                                 from: msg.from.clone(),
                                 to: ctx.config.email.clone().unwrap_or_default(),
-                                subject: WhisperFilter::clean_subject(&msg.subject),
+                                subject: VaultFilter::clean_subject(&msg.subject),
                                 body_preview: msg.body.chars().take(500).collect(),
                                 timestamp: Utc::now(),
                                 folder_id: None,
@@ -338,7 +338,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             for (i, msg) in contact_msgs.iter().enumerate() {
                                 let date: String = msg.date.chars().take(12).collect();
                                 let from: String = msg.from.chars().take(28).collect();
-                                let subject: String = WhisperFilter::clean_subject(&msg.subject);
+                                let subject: String = VaultFilter::clean_subject(&msg.subject);
                                 let subject: String = subject.chars().take(38).collect();
 
                                 // Check read receipt status for outgoing messages
@@ -387,17 +387,17 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                                     // Send read receipt
                                     if let Some(ref sender) = extract_sender_from_body(&body) {
-                                        let receipt = crate::whisper::WhisperMessage::receipt(
+                                        let receipt = crate::vault::VaultMessage::receipt(
                                             ctx.config.email.as_deref().unwrap_or(""),
                                             sender,
                                             &id,
-                                            crate::whisper::MessageStatus::Read,
+                                            crate::vault::MessageStatus::Read,
                                         );
                                         let receipt_body = receipt.to_email_body();
                                         let _ = client
                                             .send_email(
                                                 sender,
-                                                &format!("[WHISPER-RECEIPT] {}", id),
+                                                &format!("[VAULT-RECEIPT] {}", id),
                                                 &receipt_body,
                                             )
                                             .await;
@@ -469,7 +469,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 let from: String = msg.from.chars().take(25).collect();
                                 let date: String = msg.date.chars().take(16).collect();
                                 let subject_clean =
-                                    crate::whisper::WhisperFilter::clean_subject(&msg.subject);
+                                    crate::vault::VaultFilter::clean_subject(&msg.subject);
 
                                 // Try to decrypt and show preview
                                 let preview = if ctx.crypto.is_encrypted(&msg.body) {
@@ -540,7 +540,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 // Try to use the contact's public key from crypto if sharing
                 let pub_key = ctx.crypto.public_key_hex().unwrap_or_default();
                 let contact =
-                    crate::whisper::contacts::Contact::new(&email, &display_name, &pub_key);
+                    crate::vault::contacts::Contact::new(&email, &display_name, &pub_key);
                 ctx.contact_book.add(contact);
                 ctx.save_contacts();
                 Output::success(&format!("Contact added: {} ({})", display_name, email));
@@ -609,7 +609,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         },
         Command::Import { json } => {
-            match crate::whisper::contacts::ContactBook::import_from_portable(&json) {
+            match crate::vault::contacts::ContactBook::import_from_portable(&json) {
                 Ok(contact) => {
                     let email = contact.email.clone();
                     let name = contact.name.clone();
@@ -655,7 +655,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             let invite_id = if invite.starts_with("inv_") {
                 invite.clone()
             } else {
-                match crate::whisper::invite::Invite::from_link(&invite) {
+                match crate::vault::invite::Invite::from_link(&invite) {
                     Some(id) => id,
                     None => {
                         // Try as base64url encoded
@@ -740,7 +740,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         println!("  2. Send the encrypted key via email");
                         println!("  3. Ask them to decrypt and save it");
                         println!();
-                        println!("  Subject: [Whisper] Public Key Exchange");
+                        println!("  Subject: [Vault] Public Key Exchange");
                         println!("  Body: <your encrypted public key>");
                     }
                     Some("briar") => {
@@ -856,7 +856,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                                             let to = ctx.active_chat.as_deref().unwrap_or("");
                                             let subject =
-                                                format!("Whisper: file {}", info.filename);
+                                                format!("Vault: file {}", info.filename);
 
                                             match client.send_email(to, &subject, &mime_body).await
                                             {
@@ -897,7 +897,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
         // ── Groups ────────────────────────────────────────────
         Command::CreateGroup { name } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             let email = ctx.config.email.clone().unwrap_or_default();
             match group_mgr.create_group(&name, &email) {
                 Ok(group) => {
@@ -914,7 +914,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             ));
         }
         Command::LeaveGroup { group_id } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             let email = ctx.config.email.clone().unwrap_or_default();
             match group_mgr.remove_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("Left group {}", group_id)),
@@ -922,7 +922,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::GroupMembers { group_id } => {
-            let group_mgr = crate::whisper::GroupManager::new();
+            let group_mgr = crate::vault::GroupManager::new();
             match group_mgr.get_group(&group_id) {
                 Some(group) => {
                     Output::divider();
@@ -931,8 +931,8 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     Output::info("Members:");
                     for m in &group.members {
                         let role = match m.role {
-                            crate::whisper::groups::GroupRole::Admin => "admin",
-                            crate::whisper::groups::GroupRole::Member => "member",
+                            crate::vault::groups::GroupRole::Admin => "admin",
+                            crate::vault::groups::GroupRole::Member => "member",
                         };
                         println!("  • {} ({})", m.email, role);
                     }
@@ -942,42 +942,42 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::GroupInvite { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.add_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("Invited {} to group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to invite: {}", e)),
             }
         }
         Command::GroupRemove { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.remove_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("Removed {} from group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to remove: {}", e)),
             }
         }
         Command::Promote { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.promote_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("{} promoted to admin in group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to promote: {}", e)),
             }
         }
         Command::Demote { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.demote_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("{} demoted to member in group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to demote: {}", e)),
             }
         }
         Command::Block { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.block_user(&group_id, &email) {
                 Ok(()) => Output::success(&format!("{} blocked in group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to block: {}", e)),
             }
         }
         Command::Unblock { group_id, email } => {
-            let mut group_mgr = crate::whisper::GroupManager::new();
+            let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.unblock_user(&group_id, &email) {
                 Ok(()) => Output::success(&format!("{} unblocked in group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to unblock: {}", e)),
@@ -986,7 +986,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
         // ── Папки (folders) ────────────────────────────────────
         Command::FolderCreate { name, icon } => {
-            let mut store = crate::whisper::FolderStore::new();
+            let mut store = crate::vault::FolderStore::new();
             match store.create_folder(&name, &icon) {
                 Ok(true) => Output::success(&format!("Folder '{}' created ({})", name, icon)),
                 Ok(false) => Output::error(&format!("Folder '{}' already exists", name)),
@@ -994,7 +994,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::FolderDelete { name } => {
-            let mut store = crate::whisper::FolderStore::new();
+            let mut store = crate::vault::FolderStore::new();
             match store.get_folder_by_name(&name) {
                 Some(folder) => {
                     let id = folder.id.clone();
@@ -1008,7 +1008,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::FolderRename { old_name, new_name } => {
-            let mut store = crate::whisper::FolderStore::new();
+            let mut store = crate::vault::FolderStore::new();
             match store.get_folder_by_name(&old_name) {
                 Some(folder) => {
                     let id = folder.id.clone();
@@ -1030,7 +1030,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             folder_name,
             chat_id,
         } => {
-            let mut store = crate::whisper::FolderStore::new();
+            let mut store = crate::vault::FolderStore::new();
             match store.get_folder_by_name(&folder_name) {
                 Some(folder) => {
                     let id = folder.id.clone();
@@ -1053,7 +1053,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             folder_name,
             chat_id,
         } => {
-            let mut store = crate::whisper::FolderStore::new();
+            let mut store = crate::vault::FolderStore::new();
             match store.get_folder_by_name(&folder_name) {
                 Some(folder) => {
                     let id = folder.id.clone();
@@ -1073,7 +1073,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::FolderList => {
-            let store = crate::whisper::FolderStore::new();
+            let store = crate::vault::FolderStore::new();
             let folders = store.list_folders();
             if folders.is_empty() {
                 Output::info("No folders. Create one with /foldercreate <name> [icon]");
@@ -1093,7 +1093,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::FolderChats { name } => {
-            let store = crate::whisper::FolderStore::new();
+            let store = crate::vault::FolderStore::new();
             match store.get_folder_by_name(&name) {
                 Some(folder) => {
                     if folder.chats.is_empty() {
@@ -1169,17 +1169,17 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 Output::error(&format!("File not found: {}", file_path));
             } else {
                 let thumb_size = match size.as_str() {
-                    "s" | "small" => crate::whisper::ThumbnailSize::Small,
-                    "l" | "large" => crate::whisper::ThumbnailSize::Large,
-                    _ => crate::whisper::ThumbnailSize::Medium,
+                    "s" | "small" => crate::vault::ThumbnailSize::Small,
+                    "l" | "large" => crate::vault::ThumbnailSize::Large,
+                    _ => crate::vault::ThumbnailSize::Medium,
                 };
-                match crate::whisper::MediaInfo::from_file(path) {
+                match crate::vault::MediaInfo::from_file(path) {
                     Ok(info) => {
                         let thumb_dir = dirs::data_local_dir()
                             .unwrap_or_else(|| std::path::PathBuf::from("."))
-                            .join("whisper")
+                            .join("vault")
                             .join("thumbnails");
-                        let mut mgr = crate::whisper::ThumbnailManager::with_dir(thumb_dir);
+                        let mut mgr = crate::vault::ThumbnailManager::with_dir(thumb_dir);
                         match mgr.generate_thumbnail(&info, thumb_size) {
                             Ok(thumb) => {
                                 Output::success(&format!(
@@ -1202,7 +1202,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             if !path.exists() {
                 Output::error(&format!("File not found: {}", file_path));
             } else {
-                match crate::whisper::MediaInfo::from_file(path) {
+                match crate::vault::MediaInfo::from_file(path) {
                     Ok(info) => {
                         Output::divider();
                         println!("  File:     {}", file_path);
@@ -1261,7 +1261,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             } else {
                 // Encrypt reaction data and store locally
                 let reaction_json =
-                    serde_json::to_string(&crate::whisper::Reaction::new(&id, &emoji, user))
+                    serde_json::to_string(&crate::vault::Reaction::new(&id, &emoji, user))
                         .unwrap_or_default();
                 let encrypted = ctx.crypto.encrypt(&reaction_json);
                 match ctx.reaction_store.add_reaction(&id, &emoji, user) {
@@ -1272,7 +1272,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             let _ = client
                                 .send_email(
                                     "",
-                                    &format!("[WHISPER-REACT] {} {}", id, emoji),
+                                    &format!("[VAULT-REACT] {} {}", id, emoji),
                                     &encrypted,
                                 )
                                 .await;
@@ -1480,7 +1480,7 @@ fn print_help(topic: Option<&str>) {
                     "Examples:",
                     "  /encrypt Hello World",
                     "  /enc secret message",
-                    "  /decrypt ---BEGIN WHISPER ENCRYPTED---",
+                    "  /decrypt ---BEGIN VAULT ENCRYPTED---",
                     "  /dec <paste ciphertext>",
                 ],
             );
@@ -1518,7 +1518,7 @@ fn print_help(topic: Option<&str>) {
                     "  /sf <path>         Shortcut for /sendfile",
                     "",
                     "Files are encrypted with XChaCha20-Poly1305.",
-                    "Encrypted files use the ---BEGIN WHISPER ENCRYPTED--- format.",
+                    "Encrypted files use the ---BEGIN VAULT ENCRYPTED--- format.",
                     "Size limits: Gmail 25MB, Outlook 20MB, Yandex 30MB.",
                     "",
                     "Workflow:",
@@ -1594,7 +1594,7 @@ fn print_help(topic: Option<&str>) {
                     "  • Admins can invite/remove members",
                     "  • Blocking is LOCAL (you won't see blocked users' messages)",
                     "  • Roles are advisory — no server to enforce them",
-                    "  • Group data stored in ~/.whisper/groups.json",
+                    "  • Group data stored in ~/.vault/groups.json",
                     "",
                     "Examples:",
                     "  /cg DevTeam               — create group 'DevTeam'",
@@ -1776,13 +1776,13 @@ fn print_help(topic: Option<&str>) {
         }
         _ => {
             Output::block(
-                "Whisper CLI — Commands",
+                "Vault CLI — Commands",
                 &[
                     "",
                     "  /help [topic]     Show detailed help for a topic",
                     "  /status           Show connection and key status",
                     "  /clear            Clear screen",
-                    "  /quit             Exit Whisper",
+                    "  /quit             Exit Vault",
                     "",
                     "  SESSION",
                     "    /connect <email> <pass> [server]   Connect to IMAP",

@@ -18,7 +18,7 @@
 </script>
 
 <svelte:head>
-	<title>Whisper/Vault — Secure Messenger</title>
+	<title>Vault/Vault — Secure Messenger</title>
 	<meta name="description" content="E2E encrypted messenger powered by post-quantum cryptography" />
 </svelte:head>
 

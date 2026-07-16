@@ -73,9 +73,9 @@ export function applyFont(fontId) {
   const root = document.documentElement
   root.style.setProperty('--font-sans', font.family)
   root.style.setProperty('--font-mono', font.mono)
-  localStorage.setItem('whisper-font', fontId)
+  localStorage.setItem('vault-font', fontId)
 }
 
 export function loadSavedFont() {
-  return localStorage.getItem('whisper-font') || 'system'
+  return localStorage.getItem('vault-font') || 'system'
 }

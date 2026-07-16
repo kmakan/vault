@@ -3,7 +3,7 @@ import type { Chat, Message, Contact, User } from './types';
 export const currentUser: User = {
 	id: 'user-1',
 	name: 'Alex',
-	email: 'alex@whisper.vault',
+	email: 'alex@vault.vault',
 	avatar: undefined,
 	publicKey: 'x25519-pub...'
 };

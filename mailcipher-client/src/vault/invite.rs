@@ -5,13 +5,13 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 
-/// Whisper ID format: whisper:<email>
+/// Vault ID format: vault:email>
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperId {
+pub struct VaultId {
     pub email: String,
 }
 
-impl WhisperId {
+impl VaultId {
     pub fn new(email: &str) -> Self {
         Self {
             email: email.to_lowercase(),
@@ -19,11 +19,11 @@ impl WhisperId {
     }
 
     pub fn to_string(&self) -> String {
-        format!("whisper:{}", self.email)
+        format!("vault:{}", self.email)
     }
 
     pub fn from_string(s: &str) -> Option<Self> {
-        s.strip_prefix("whisper:").map(|email| Self::new(email))
+        s.strip_prefix("vault:").map(|email| Self::new(email))
     }
 
     pub fn is_valid(&self) -> bool {
@@ -58,7 +58,7 @@ impl std::fmt::Display for InviteStatus {
     }
 }
 
-/// A Whisper invite
+/// A Vault invite
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invite {
     /// Unique invite ID
@@ -138,12 +138,12 @@ impl Invite {
 
     /// Generate invite link
     pub fn to_link(&self) -> String {
-        format!("https://whisper.chat/invite/{}", base64url_encode(&self.id))
+        format!("https://vault.chat/invite/{}", base64url_encode(&self.id))
     }
 
     /// Parse invite from link
     pub fn from_link(link: &str) -> Option<String> {
-        link.strip_prefix("https://whisper.chat/invite/")
+        link.strip_prefix("https://vault.chat/invite/")
             .map(|id| base64url_decode(id))
             .flatten()
     }
@@ -348,12 +348,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_whisper_id() {
-        let id = WhisperId::new("alice@example.com");
-        assert_eq!(id.to_string(), "whisper:alice@example.com");
+    fn test_vault_id() {
+        let id = VaultId::new("alice@example.com");
+        assert_eq!(id.to_string(), "vault:alice@example.com");
         assert!(id.is_valid());
 
-        let parsed = WhisperId::from_string("whisper:bob@test.com");
+        let parsed = VaultId::from_string("vault:bob@test.com");
         assert!(parsed.is_some());
         assert_eq!(parsed.unwrap().email, "bob@test.com");
     }
@@ -373,7 +373,7 @@ mod tests {
         let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
 
         let link = invite.to_link();
-        assert!(link.starts_with("https://whisper.chat/invite/"));
+        assert!(link.starts_with("https://vault.chat/invite/"));
 
         let parsed_id = Invite::from_link(&link);
         assert!(parsed_id.is_some());

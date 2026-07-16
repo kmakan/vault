@@ -2,7 +2,7 @@
 
 export function exportChatJSON(messages, contact) {
   const data = {
-    app: 'Whisper (MailCipher)',
+    app: 'Vault (MailCipher)',
     version: '0.1.0',
     exportDate: new Date().toISOString(),
     contact: contact,
@@ -20,7 +20,7 @@ export function exportChatJSON(messages, contact) {
 }
 
 export function exportChatTXT(messages, contact) {
-  let txt = `Whisper Chat Export\n`
+  let txt = `Vault Chat Export\n`
   txt += `Contact: ${contact}\n`
   txt += `Exported: ${new Date().toLocaleString()}\n`
   txt += `Messages: ${messages.length}\n`

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-desktop.sh — Build Whisper Desktop (Tauri 2.0)
+# build-desktop.sh — Build Vault Desktop (Tauri 2.0)
 # Usage: ./scripts/build-desktop.sh [--dev|--release]
 #
 set -euo pipefail
@@ -11,7 +11,7 @@ DESKTOP_DIR="$PROJECT_DIR/mailcipher-desktop"
 MODE="${1:---release}"
 
 echo "╔══════════════════════════════════════════╗"
-echo "║  Whisper Desktop Build                  ║"
+echo "║  Vault Desktop Build                  ║"
 echo "╚══════════════════════════════════════════╝"
 
 # Check prerequisites

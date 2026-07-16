@@ -66,7 +66,7 @@ export default {
       try {
         // Create a compact QR code data
         const qrData = {
-          type: 'whisper-key',
+          type: 'vault-key',
           version: 1,
           publicKey: this.publicKey,
           timestamp: Date.now()
@@ -94,7 +94,7 @@ export default {
         // Check if it's a JSON QR code
         if (this.scanInput.startsWith('{')) {
           const qrData = JSON.parse(this.scanInput);
-          if (qrData.type === 'whisper-key' && qrData.publicKey) {
+          if (qrData.type === 'vault-key' && qrData.publicKey) {
             publicKey = qrData.publicKey;
           }
         }

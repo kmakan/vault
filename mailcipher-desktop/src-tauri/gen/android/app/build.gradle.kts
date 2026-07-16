@@ -16,10 +16,10 @@ val tauriProperties = Properties().apply {
 android {
     compileSdk = 35
     buildToolsVersion = "34.0.0"
-    namespace = "com.whisper.mailcipher"
+    namespace = "com.vault.mailcipher"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "com.whisper.mailcipher"
+        applicationId = "com.vault.mailcipher"
         minSdk = 24
         targetSdk = 35
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

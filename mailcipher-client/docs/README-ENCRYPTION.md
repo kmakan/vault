@@ -1,4 +1,4 @@
-# Whisper — Шифрование
+# Vault — Шифрование
 
 E2E шифрование для защищенной переписки.
 
@@ -31,7 +31,7 @@ E2E шифрование для защищенной переписки.
 │                                                          │
 │  ┌─────────────────────────────────────────────────────┐ │
 │  │  Email Transport (IMAP/SMTP)                       │ │
-│  │  X-Whisper-Encrypted: 1                            │ │
+│  │  X-Vault-Encrypted: 1                            │ │
 │  │  Subject: [WHISPER] ...                             │ │
 │  └─────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
@@ -64,7 +64,7 @@ E2E шифрование для защищенной переписки.
 message_key = HKDF(
     ikm = shared_secret,
     salt = random_salt,
-    info = "whisper-message",
+    info = "vault-message",
     length = 32
 )
 ```
@@ -113,7 +113,7 @@ let shared_secret = x25519_diffie_hellman(my_private_key, recipient_pubkey);
 let message_key = hkdf(
     ikm: shared_secret,
     salt: random_bytes(32),
-    info: "whisper-message",
+    info: "vault-message",
     length: 32
 );
 ```
@@ -138,9 +138,9 @@ let (ciphertext, tag) = xchacha20_poly1305_encrypt(
 ```rust
 // Формируем email
 let email = format!(
-    "X-Whisper-Encrypted: 1\r\n\
-     X-Whisper-Type: message\r\n\
-     X-Whisper-ID: {msg_id}\r\n\
+    "X-Vault-Encrypted: 1\r\n\
+     X-Vault-Type: message\r\n\
+     X-Vault-ID: {msg_id}\r\n\
      Subject: [WHISPER] {subject}\r\n\
      \r\n\
      {nonce_hex}:{ciphertext_hex}:{tag_hex}"
@@ -159,13 +159,13 @@ let email = fetch_message("msg-123");
 ### Шаг 2: Проверка
 
 ```rust
-// Проверяем маркер Whisper
-if !email.headers.contains("X-Whisper-Encrypted: 1") {
-    return Err("Not a Whisper message");
+// Проверяем маркер Vault
+if !email.headers.contains("X-Vault-Encrypted: 1") {
+    return Err("Not a Vault message");
 }
 
 // Проверяем отправителя в контактах
-if !contacts.is_whisper_contact(&email.from) {
+if !contacts.is_vault_contact(&email.from) {
     return Err("Sender not in contact list");
 }
 ```
@@ -183,7 +183,7 @@ let shared_secret = x25519_diffie_hellman(
 let message_key = hkdf(
     ikm: shared_secret,
     salt: nonce[0..32], // nonce содержит salt
-    info: "whisper-message",
+    info: "vault-message",
     length: 32
 );
 ```
@@ -208,10 +208,10 @@ let message = String::from_utf8(plaintext)?;
 ### Email заголовки
 
 ```
-X-Whisper-Encrypted: 1
-X-Whisper-Type: message
-X-Whisper-ID: msg-abc123
-X-Whisper-Reply-To: msg-xyz789
+X-Vault-Encrypted: 1
+X-Vault-Type: message
+X-Vault-ID: msg-abc123
+X-Vault-Reply-To: msg-xyz789
 Subject: [WHISPER] Re: Meeting notes
 Content-Type: text/plain; charset=utf-8
 ```
@@ -267,9 +267,9 @@ MessageStatus::Read
 ### Receipt формат
 
 ```
-X-Whisper-Encrypted: 1
-X-Whisper-Type: receipt
-X-Whisper-Reply-To: msg-abc123
+X-Vault-Encrypted: 1
+X-Vault-Type: receipt
+X-Vault-Reply-To: msg-abc123
 Subject: [WHISPER-RECEIPT] Read
 
 {encrypted_receipt}
@@ -327,7 +327,7 @@ Subject: [WHISPER-RECEIPT] Read
 ### Локальное хранилище
 
 ```
-~/.whisper/
+~/.vault/
 ├── keys/
 │   ├── private.key    # Приватный ключ (зашифрован)
 │   ├── public.key     # Публичный ключ
@@ -368,7 +368,7 @@ let encrypted_private_key = aes256_gcm_encrypt(
    let new_key = hkdf(
        ikm: current_key,
        salt: random_bytes(32),
-       info: "whisper-rotate",
+       info: "vault-rotate",
        length: 32
    );
    ```

@@ -1,22 +1,22 @@
-# Интеграция шифрования Whisper с WhatsApp/Telegram
+# Интеграция шифрования Vault с WhatsApp/Telegram
 
 ## 1. Обзор подходов
 
 ### 1.1 Цель
-Распространить E2E шифрование Whisper на существующие мессенджеры
+Распространить E2E шифрование Vault на существующие мессенджеры
 без необходимости замены их клиентов.
 
 ### 1.2 Варианты интеграции
 
 | Подход | Описание | Сложность |
 |--------|----------|-----------|
-| **Прокси-клиент** | Whisper работает как прокси между пользователями и платформой | Средняя |
+| **Прокси-клиент** | Vault работает как прокси между пользователями и платформой | Средняя |
 | **Userbot** | Бот в аккаунте пользователя перехватывает сообщения | Низкая |
 | **Плагин/Расширение** | Встраивание в клиент платформы | Высокая |
 | **Собственный клиент** | Полная замена клиента | Очень высокая |
 
 ### 1.3 Рекомендованный подход
-**Прокси-клиент** — Whisper работает на устройстве пользователя,
+**Прокси-клиент** — Vault работает на устройстве пользователя,
 шифрует сообщения перед отправкой в Telegram/WhatsApp, и расшифровывает
 при получении. Платформа видит только зашифрованный текст.
 
@@ -32,15 +32,15 @@ use grammers_client::{Client, InputMessage};
 
 pub struct TelegramBridge {
     client: Client,
-    whisper: WhisperSession,
+    vault: VaultSession,
 }
 
 impl TelegramBridge {
-    /// Принять сообщение из Telegram, расшифровать Whisper
+    /// Принять сообщение из Telegram, расшифровать Vault
     pub async fn on_message(&self, msg: Message) -> Result<String> {
         if msg.text().starts_with("[WHISPER]") {
             let encrypted = &msg.text()[10..];
-            let decrypted = self.whisper.decrypt(encrypted)?;
+            let decrypted = self.vault.decrypt(encrypted)?;
             return Ok(decrypted);
         }
         Ok(msg.text().to_string())
@@ -52,7 +52,7 @@ impl TelegramBridge {
         chat_id: i32,
         plaintext: &str,
     ) -> Result<()> {
-        let encrypted = self.whisper.encrypt(plaintext)?;
+        let encrypted = self.vault.encrypt(plaintext)?;
         self.client.send_message(
             chat_id,
             InputMessage::text(format!("[WHISPER]{}", encrypted))
@@ -92,14 +92,14 @@ tokio = { version = "1", features = ["full"] }
 pub struct WhatsAppBridge {
     // Baileys работает через Node.js, нужен FFI мост
     api_url: String,
-    whisper: WhisperSession,
+    vault: VaultSession,
 }
 
 impl WhatsAppBridge {
     pub async fn on_message(&self, msg: WhatsAppMessage) -> Result<String> {
         if msg.body.starts_with("[WHISPER]") {
             let encrypted = &msg.body[10..];
-            let decrypted = self.whisper.decrypt(encrypted)?;
+            let decrypted = self.vault.decrypt(encrypted)?;
             return Ok(decrypted);
         }
         Ok(msg.body.clone())
@@ -123,7 +123,7 @@ impl WhatsAppBridge {
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Whisper    │────▶│   Bridge    │────▶│  Telegram/  │
+│  Vault    │────▶│   Bridge    │────▶│  Telegram/  │
 │  Crypto     │◀────│   Layer     │◀────│  WhatsApp   │
 └─────────────┘     └─────────────┘     └─────────────┘
      │                    │                    │
@@ -134,7 +134,7 @@ impl WhatsAppBridge {
 ### 4.1 Компоненты
 
 ```rust
-/// Мост между Whisper и мессенджером
+/// Мост между Vault и мессенджером
 pub trait MessageBridge: Send + Sync {
     /// Принять сообщение из платформы
     async fn receive(&self) -> Result<BridgeMessage>;
@@ -159,7 +159,7 @@ pub struct BridgeMessage {
 pub enum Platform {
     Telegram,
     WhatsApp,
-    Email, // Текущий Whisper
+    Email, // Текущий Vault
 }
 ```
 
@@ -168,7 +168,7 @@ pub enum Platform {
 ```rust
 pub struct MultiPlatformCrypto {
     bridges: HashMap<Platform, Box<dyn MessageBridge>>,
-    whisper: WhisperSession,
+    vault: VaultSession,
 }
 
 impl MultiPlatformCrypto {
@@ -182,8 +182,8 @@ impl MultiPlatformCrypto {
         let bridge = self.bridges.get(&platform)
             .context("Platform not configured")?;
 
-        // Шифруем через Whisper
-        let encrypted = self.whisper.encrypt(plaintext)?;
+        // Шифруем через Vault
+        let encrypted = self.vault.encrypt(plaintext)?;
 
         // Отправляем через мост
         bridge.send(BridgeMessage {
@@ -207,7 +207,7 @@ impl MultiPlatformCrypto {
         let msg = bridge.receive().await?;
 
         // Расшифровываем
-        let decrypted = self.whisper.decrypt(&msg.content)?;
+        let decrypted = self.vault.decrypt(&msg.content)?;
         Ok(decrypted)
     }
 }
@@ -215,7 +215,7 @@ impl MultiPlatformCrypto {
 
 ---
 
-## 5. Реализация для Whisper
+## 5. Реализация для Vault
 
 ### 5.1 Этапы
 
@@ -230,7 +230,7 @@ impl MultiPlatformCrypto {
 ### 5.2 Структура кода
 
 ```
-src/whisper/
+src/vault/
 ├── bridge/
 │   ├── mod.rs           // Точка входа
 │   ├── telegram.rs      // MTProto userbot
@@ -302,7 +302,7 @@ pub fn steganograph(encrypted: &str) -> String {
 #[tokio::test]
 async fn test_telegram_bridge_encrypt_decrypt() {
     let bridge = TelegramBridge::new(mock_client());
-    let msg = "Hello, Whisper!";
+    let msg = "Hello, Vault!";
 
     // Шифруем
     let encrypted = bridge.encrypt_for_telegram(msg).unwrap();
@@ -320,7 +320,7 @@ async fn test_telegram_bridge_encrypt_decrypt() {
 ```rust
 #[tokio::test]
 async fn test_cross_platform_message() {
-    let whisper = WhisperSession::new();
+    let vault = VaultSession::new();
     let telegram = TelegramBridge::new(test_client());
     let email = EmailBridge::new(test_imap());
 
@@ -355,4 +355,4 @@ async fn test_cross_platform_message() {
 ---
 
 *Последнее обновление: Июль 2026*
-*Автор: Whisper Research*
+*Автор: Vault Research*

@@ -2,13 +2,13 @@ use serde::{Deserialize, Serialize};
 
 use super::status::MessageStatus;
 
-/// Whisper message envelope (outer layer)
+/// Vault message envelope (outer layer)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperEnvelope {
+pub struct VaultEnvelope {
     /// Protocol version
     pub version: String,
     /// Message type
-    pub msg_type: WhisperMsgType,
+    pub msg_type: VaultMsgType,
     /// Sender email
     pub from: String,
     /// Recipient email
@@ -23,7 +23,7 @@ pub struct WhisperEnvelope {
 
 /// Message type
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WhisperMsgType {
+pub enum VaultMsgType {
     /// Regular encrypted message
     Message,
     /// Status receipt (sent/delivered/read)
@@ -34,43 +34,43 @@ pub enum WhisperMsgType {
     KeyVerify,
 }
 
-impl WhisperMsgType {
+impl VaultMsgType {
     pub fn as_str(&self) -> &str {
         match self {
-            WhisperMsgType::Message => "message",
-            WhisperMsgType::Receipt => "receipt",
-            WhisperMsgType::KeyExchange => "key_exchange",
-            WhisperMsgType::KeyVerify => "key_verify",
+            VaultMsgType::Message => "message",
+            VaultMsgType::Receipt => "receipt",
+            VaultMsgType::KeyExchange => "key_exchange",
+            VaultMsgType::KeyVerify => "key_verify",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "message" => Some(WhisperMsgType::Message),
-            "receipt" => Some(WhisperMsgType::Receipt),
-            "key_exchange" => Some(WhisperMsgType::KeyExchange),
-            "key_verify" => Some(WhisperMsgType::KeyVerify),
+            "message" => Some(VaultMsgType::Message),
+            "receipt" => Some(VaultMsgType::Receipt),
+            "key_exchange" => Some(VaultMsgType::KeyExchange),
+            "key_verify" => Some(VaultMsgType::KeyVerify),
             _ => None,
         }
     }
 }
 
-/// Encrypted Whisper message content
+/// Encrypted Vault message content
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperMessage {
+pub struct VaultMessage {
     /// Envelope (unencrypted metadata)
-    pub envelope: WhisperEnvelope,
+    pub envelope: VaultEnvelope,
     /// Encrypted payload (Base64)
     pub encrypted_payload: String,
 }
 
-impl WhisperMessage {
+impl VaultMessage {
     /// Create a new message
     pub fn new(from: &str, to: &str, message_id: &str, encrypted: &str) -> Self {
         Self {
-            envelope: WhisperEnvelope {
+            envelope: VaultEnvelope {
                 version: "1".to_string(),
-                msg_type: WhisperMsgType::Message,
+                msg_type: VaultMsgType::Message,
                 from: from.to_string(),
                 to: to.to_string(),
                 message_id: message_id.to_string(),
@@ -84,9 +84,9 @@ impl WhisperMessage {
     /// Create a reply to another message
     pub fn reply(from: &str, to: &str, message_id: &str, reply_to: &str, encrypted: &str) -> Self {
         Self {
-            envelope: WhisperEnvelope {
+            envelope: VaultEnvelope {
                 version: "1".to_string(),
-                msg_type: WhisperMsgType::Message,
+                msg_type: VaultMsgType::Message,
                 from: from.to_string(),
                 to: to.to_string(),
                 message_id: message_id.to_string(),
@@ -105,9 +105,9 @@ impl WhisperMessage {
         });
 
         Self {
-            envelope: WhisperEnvelope {
+            envelope: VaultEnvelope {
                 version: "1".to_string(),
-                msg_type: WhisperMsgType::Receipt,
+                msg_type: VaultMsgType::Receipt,
                 from: from.to_string(),
                 to: to.to_string(),
                 message_id: message_id.to_string(),
@@ -118,12 +118,12 @@ impl WhisperMessage {
         }
     }
 
-    /// Serialize to Whisper email format
+    /// Serialize to Vault email format
     pub fn to_email_body(&self) -> String {
         let envelope_json =
             serde_json::to_string(&self.envelope).expect("Failed to serialize envelope");
         format!(
-            "X-Whisper-Encrypted: 1\nX-Whisper-Type: {}\nX-Whisper-ID: {}\nX-Whisper-From: {}\nX-Whisper-Reply-To: {}\n\n{}\n{}",
+            "X-Vault-Encrypted: 1\nX-Vault-Type: {}\nX-Vault-ID: {}\nX-Vault-From: {}\nX-Vault-Reply-To: {}\n\n{}\n{}",
             self.envelope.msg_type.as_str(),
             self.envelope.message_id,
             self.envelope.from,
@@ -140,7 +140,7 @@ impl WhisperMessage {
             return None;
         }
 
-        let envelope: WhisperEnvelope = serde_json::from_str(parts[1]).ok()?;
+        let envelope: VaultEnvelope = serde_json::from_str(parts[1]).ok()?;
         let encrypted_payload = parts[0].to_string();
 
         Some(Self {
@@ -155,18 +155,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_whisper_message_new() {
-        let msg = WhisperMessage::new("alice@test.com", "bob@test.com", "msg-1", "encrypted");
+    fn test_vault_message_new() {
+        let msg = VaultMessage::new("alice@test.com", "bob@test.com", "msg-1", "encrypted");
         assert_eq!(msg.envelope.version, "1");
-        assert_eq!(msg.envelope.msg_type, WhisperMsgType::Message);
+        assert_eq!(msg.envelope.msg_type, VaultMsgType::Message);
         assert_eq!(msg.envelope.from, "alice@test.com");
         assert_eq!(msg.envelope.to, "bob@test.com");
         assert!(msg.envelope.in_reply_to.is_none());
     }
 
     #[test]
-    fn test_whisper_message_reply() {
-        let msg = WhisperMessage::reply(
+    fn test_vault_message_reply() {
+        let msg = VaultMessage::reply(
             "bob@test.com",
             "alice@test.com",
             "msg-2",
@@ -177,36 +177,36 @@ mod tests {
     }
 
     #[test]
-    fn test_whisper_receipt() {
-        let msg = WhisperMessage::receipt(
+    fn test_vault_receipt() {
+        let msg = VaultMessage::receipt(
             "bob@test.com",
             "alice@test.com",
             "msg-1",
             MessageStatus::Delivered,
         );
-        assert_eq!(msg.envelope.msg_type, WhisperMsgType::Receipt);
+        assert_eq!(msg.envelope.msg_type, VaultMsgType::Receipt);
     }
 
     #[test]
     fn test_msg_type_roundtrip() {
         let types = vec![
-            WhisperMsgType::Message,
-            WhisperMsgType::Receipt,
-            WhisperMsgType::KeyExchange,
-            WhisperMsgType::KeyVerify,
+            VaultMsgType::Message,
+            VaultMsgType::Receipt,
+            VaultMsgType::KeyExchange,
+            VaultMsgType::KeyVerify,
         ];
         for t in types {
             let s = t.as_str();
-            assert_eq!(WhisperMsgType::from_str(s), Some(t));
+            assert_eq!(VaultMsgType::from_str(s), Some(t));
         }
     }
 
     #[test]
     fn test_email_body_format() {
-        let msg = WhisperMessage::new("a@test.com", "b@test.com", "m1", "payload");
+        let msg = VaultMessage::new("a@test.com", "b@test.com", "m1", "payload");
         let body = msg.to_email_body();
-        assert!(body.contains("X-Whisper-Encrypted: 1"));
-        assert!(body.contains("X-Whisper-Type: message"));
-        assert!(body.contains("X-Whisper-ID: m1"));
+        assert!(body.contains("X-Vault-Encrypted: 1"));
+        assert!(body.contains("X-Vault-Type: message"));
+        assert!(body.contains("X-Vault-ID: m1"));
     }
 }

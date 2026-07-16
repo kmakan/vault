@@ -20,11 +20,11 @@ pub enum DataType {
     },
 }
 
-/// Standalone Encryptor/Decryptor for Whisper Vault
+/// Standalone Encryptor/Decryptor for Vault
 ///
 /// Produces transport-agnostic encrypted output that can be shared via
 /// any channel (WhatsApp, Telegram, email, etc.) and decrypted by any
-/// Whisper client that has the matching key.
+/// Vault client that has the matching key.
 pub struct Encryptor {
     signing_key: SigningKey,
 }
@@ -120,14 +120,14 @@ impl Encryptor {
         let signature_b64 = BASE64.encode(signature.to_bytes());
 
         let mut output = String::new();
-        output.push_str("---BEGIN WHISPER ENCRYPTED---\n");
+        output.push_str("---BEGIN VAULT ENCRYPTED---\n");
         output.push_str(&header);
         output.push_str("---\n");
         output.push_str(&payload_b64);
         output.push('\n');
         output.push_str(&signature_b64);
         output.push('\n');
-        output.push_str("---END WHISPER ENCRYPTED---\n");
+        output.push_str("---END VAULT ENCRYPTED---\n");
 
         Ok(output)
     }
@@ -214,8 +214,8 @@ struct ParsedBlock {
 fn parse_encrypted_block(input: &str) -> Result<ParsedBlock> {
     let input = input.trim();
 
-    let begin_marker = "---BEGIN WHISPER ENCRYPTED---";
-    let end_marker = "---END WHISPER ENCRYPTED---";
+    let begin_marker = "---BEGIN VAULT ENCRYPTED---";
+    let end_marker = "---END VAULT ENCRYPTED---";
 
     let start = input.find(begin_marker).context("Missing BEGIN marker")?;
     let end = input.find(end_marker).context("Missing END marker")?;
@@ -274,9 +274,9 @@ fn parse_encrypted_block(input: &str) -> Result<ParsedBlock> {
     })
 }
 
-/// Quick check if a string looks like a Whisper encrypted block
-pub fn is_whisper_encrypted(input: &str) -> bool {
-    input.contains("---BEGIN WHISPER ENCRYPTED---") && input.contains("---END WHISPER ENCRYPTED---")
+/// Quick check if a string looks like a Vault encrypted block
+pub fn is_vault_encrypted(input: &str) -> bool {
+    input.contains("---BEGIN VAULT ENCRYPTED---") && input.contains("---END VAULT ENCRYPTED---")
 }
 
 #[cfg(test)]
@@ -286,12 +286,12 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_text_roundtrip() {
         let enc = Encryptor::new();
-        let plaintext = "Hello, Whisper Vault! Привет, мир!";
+        let plaintext = "Hello, Vault! Привет, мир!";
         let encrypted = enc.encrypt_text(plaintext);
 
-        assert!(encrypted.contains("---BEGIN WHISPER ENCRYPTED---"));
+        assert!(encrypted.contains("---BEGIN VAULT ENCRYPTED---"));
         assert!(encrypted.contains("Type: text"));
-        assert!(encrypted.contains("---END WHISPER ENCRYPTED---"));
+        assert!(encrypted.contains("---END VAULT ENCRYPTED---"));
         assert_ne!(encrypted, plaintext);
 
         let decrypted = enc.decrypt(&encrypted).unwrap();
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_file_roundtrip() {
         let enc = Encryptor::new();
-        let temp_dir = std::env::temp_dir().join("whisper_encryptor_test");
+        let temp_dir = std::env::temp_dir().join("vault_encryptor_test");
         std::fs::create_dir_all(&temp_dir).unwrap();
         let file_path = temp_dir.join("test_secret.txt");
         let content = b"Binary content: \x00\x01\x02\x03\xff\xfe";
@@ -373,22 +373,22 @@ mod tests {
         let encrypted = enc.encrypt_text("test");
 
         let lines: Vec<&str> = encrypted.lines().collect();
-        assert_eq!(lines[0], "---BEGIN WHISPER ENCRYPTED---");
+        assert_eq!(lines[0], "---BEGIN VAULT ENCRYPTED---");
         assert!(lines[1].starts_with("Version: "));
         assert!(lines[2].starts_with("Type: "));
         assert_eq!(lines[3], "---");
         assert!(!lines[4].is_empty()); // payload
         assert!(!lines[5].is_empty()); // signature
-        assert_eq!(lines[6], "---END WHISPER ENCRYPTED---");
+        assert_eq!(lines[6], "---END VAULT ENCRYPTED---");
     }
 
     #[test]
-    fn test_is_whisper_encrypted() {
-        assert!(is_whisper_encrypted(
-            "---BEGIN WHISPER ENCRYPTED---\n---END WHISPER ENCRYPTED---"
+    fn test_is_vault_encrypted() {
+        assert!(is_vault_encrypted(
+            "---BEGIN VAULT ENCRYPTED---\n---END VAULT ENCRYPTED---"
         ));
-        assert!(!is_whisper_encrypted("just plain text"));
-        assert!(!is_whisper_encrypted("some base64 data"));
+        assert!(!is_vault_encrypted("just plain text"));
+        assert!(!is_vault_encrypted("some base64 data"));
     }
 
     #[test]

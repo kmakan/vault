@@ -15,12 +15,12 @@ pub mod thread;
 
 pub use contacts::ContactBook;
 pub use edit::{EditManager, EditRecord, EditResult};
-pub use filter::WhisperFilter;
+pub use filter::VaultFilter;
 pub use folders::{Folder, FolderStore};
 pub use groups::GroupManager;
 pub use invite::{Invite, InviteManager, InviteStatus};
 pub use media::{ImageFormat, MediaInfo, ThumbnailManager, ThumbnailSize};
-pub use protocol::{WhisperEnvelope, WhisperMessage};
+pub use protocol::{VaultEnvelope, VaultMessage};
 pub use reactions::{Reaction, ReactionStore};
 pub use read_receipts::{ReadReceiptRecord, ReadReceiptStore};
 pub use search::{IndexEntry, MessageIndex, SearchResult};

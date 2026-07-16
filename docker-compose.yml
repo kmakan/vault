@@ -3,23 +3,23 @@ version: '3.8'
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: whisper-db
+    container_name: vault-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-whisper}
-      POSTGRES_USER: ${POSTGRES_USER:-whisper}
+      POSTGRES_DB: ${POSTGRES_DB:-vault}
+      POSTGRES_USER: ${POSTGRES_USER:-vault}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whisper} -d ${POSTGRES_DB:-whisper}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vault} -d ${POSTGRES_DB:-vault}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - whisper-net
+      - vault-net
     logging:
       driver: json-file
       options:
@@ -30,7 +30,7 @@ services:
     build:
       context: ./mailcipher-backend
       dockerfile: Dockerfile
-    container_name: whisper-backend
+    container_name: vault-backend
     restart: unless-stopped
     depends_on:
       postgres:
@@ -38,7 +38,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
-      DATABASE_URL: postgresql://${POSTGRES_USER:-whisper}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-whisper}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vault}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-vault}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       RUST_LOG: ${RUST_LOG:-info,mailcipher_backend=info,tower_http=info}
     healthcheck:
@@ -48,7 +48,7 @@ services:
       start_period: 15s
       retries: 3
     networks:
-      - whisper-net
+      - vault-net
     logging:
       driver: json-file
       options:
@@ -57,7 +57,7 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    container_name: whisper-nginx
+    container_name: vault-nginx
     restart: unless-stopped
     depends_on:
       backend:
@@ -69,7 +69,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx_data:/var/cache/nginx
     networks:
-      - whisper-net
+      - vault-net
     logging:
       driver: json-file
       options:
@@ -83,5 +83,5 @@ volumes:
     driver: local
 
 networks:
-  whisper-net:
+  vault-net:
     driver: bridge

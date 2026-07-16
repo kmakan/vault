@@ -39,7 +39,7 @@ impl GroupManager {
     pub fn new() -> Self {
         let storage_path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("groups.json");
 
         let groups = if storage_path.exists() {

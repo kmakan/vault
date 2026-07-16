@@ -120,7 +120,7 @@ export default {
           : this.form.body;
 
         const subject = this.form.encrypt
-          ? `[Whisper] ${this.form.subject}`
+          ? `[Vault] ${this.form.subject}`
           : this.form.subject;
 
         await api.sendEmail(this.accountId, {
@@ -144,8 +144,8 @@ export default {
       // In production, this would use the user's key to encrypt
       // before sending via SMTP. The backend also encrypts with
       // server-side keys, so this is defense-in-depth.
-      const marker = '---BEGIN WHISPER---\n';
-      const endMarker = '\n---END WHISPER---';
+      const marker = '---BEGIN VAULT---\n';
+      const endMarker = '\n---END VAULT---';
       return `${marker}${text}${endMarker}`;
     },
   },

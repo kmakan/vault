@@ -1,6 +1,6 @@
-# MailCipher Web — Whisper/Vault UI
+# MailCipher Web — Vault/Vault UI
 
-Web interface for Whisper/Vault E2E encrypted messenger.
+Web interface for Vault/Vault E2E encrypted messenger.
 
 ## Tech Stack
 

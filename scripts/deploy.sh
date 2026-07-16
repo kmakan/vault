@@ -86,7 +86,7 @@ cmd_status() {
 cmd_migrate() {
     require_env
     log "Running database migrations..."
-    docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U whisper -d whisper -f /docker-entrypoint-initdb.d/01-init.sql 2>/dev/null || \
+    docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U vault -d vault -f /docker-entrypoint-initdb.d/01-init.sql 2>/dev/null || \
         warn "Migrations may have already been applied."
     log "Migrations complete."
 }
@@ -96,7 +96,7 @@ cmd_health() {
     local all_ok=true
 
     # Check PostgreSQL
-    if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U whisper -d whisper >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U vault -d vault >/dev/null 2>&1; then
         log "  PostgreSQL: healthy"
     else
         warn "  PostgreSQL: unhealthy"
@@ -119,12 +119,12 @@ cmd_backup() {
     local backup_dir="${PROJECT_ROOT}/backups"
     local timestamp
     timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_file="${backup_dir}/whisper_${timestamp}.sql.gz"
+    local backup_file="${backup_dir}/vault_${timestamp}.sql.gz"
 
     mkdir -p "$backup_dir"
 
     log "Backing up PostgreSQL database..."
-    docker compose -f "$COMPOSE_FILE" exec -T postgres pg_dump -U whisper -d whisper | gzip > "$backup_file"
+    docker compose -f "$COMPOSE_FILE" exec -T postgres pg_dump -U vault -d vault | gzip > "$backup_file"
     log "Backup saved to: $backup_file"
     log "Backup size: $(du -h "$backup_file" | cut -f1)"
 }

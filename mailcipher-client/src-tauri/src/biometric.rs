@@ -10,7 +10,7 @@ use crate::secure_store::{SecureStore, SecureStoreError};
 
 const MASTER_KEY_LEN: usize = 32;
 const SALT_LEN: usize = 16;
-const VERIFY_PLAINTEXT: &[u8] = b"whisper-master-key-verify-v1";
+const VERIFY_PLAINTEXT: &[u8] = b"vault-master-key-verify-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMethod {
@@ -71,8 +71,8 @@ impl Default for BiometricConfig {
     fn default() -> Self {
         Self {
             biometric_enabled: false,
-            service_name: "whisper-mailcipher".to_string(),
-            biometric_reason: "Unlock Whisper encryption keys".to_string(),
+            service_name: "vault-mailcipher".to_string(),
+            biometric_reason: "Unlock Vault encryption keys".to_string(),
         }
     }
 }
@@ -343,7 +343,7 @@ impl MasterKeyManager {
 
         let bio_key = {
             let mut hasher = Sha256::new();
-            hasher.update(b"whisper-biometric-key-v1");
+            hasher.update(b"vault-biometric-key-v1");
             hasher.update(password.as_bytes());
             let result = hasher.finalize();
             let mut key = [0u8; MASTER_KEY_LEN];

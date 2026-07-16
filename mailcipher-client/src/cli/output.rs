@@ -1,7 +1,7 @@
 use console::Style;
 use std::fmt;
 
-/// Rich terminal output formatter for Whisper CLI
+/// Rich terminal output formatter for Vault CLI
 pub struct Output;
 
 impl Output {
@@ -133,7 +133,7 @@ impl Output {
     pub fn prompt(chat: Option<&str>) -> String {
         match chat {
             Some(name) => format!("{} {} ", name, Style::new().dim().apply_to("›")),
-            None => format!("{} ", Style::new().cyan().bold().apply_to("whisper ❯")),
+            None => format!("{} ", Style::new().cyan().bold().apply_to("vault ❯")),
         }
     }
 
@@ -172,6 +172,6 @@ pub fn format_size(bytes: usize) -> String {
 
 impl fmt::Display for Output {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Whisper CLI")
+        write!(f, "Vault CLI")
     }
 }

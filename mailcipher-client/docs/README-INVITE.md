@@ -1,4 +1,4 @@
-# Whisper — Система приглашений
+# Vault — Система приглашений
 
 Архитектура добавления контактов по модели Signal.
 
@@ -43,7 +43,7 @@
 ```
 Invite generated for alice@example.com
 
-Link: https://whisper.chat/invite/Xk9f2mN...
+Link: https://vault.chat/invite/Xk9f2mN...
 Expires: 2024-01-16 15:30:00 UTC
 One-time: yes
 
@@ -63,7 +63,7 @@ QR code:
 ██▄▄▄▄▄▄▄█▄▄█▄▄██▄▄▄█▄▄▄▄▄██
 ████████████████████████████████
 
-Scan with Whisper mobile app or visit the link.
+Scan with Vault mobile app or visit the link.
 ```
 
 ## Принятие приглашения
@@ -71,16 +71,16 @@ Scan with Whisper mobile app or visit the link.
 ### Команда
 
 ```bash
-/accept <ссылка_или_Whisper_ID>
+/accept <ссылка_или_Vault_ID>
 ```
 
 ### Примеры
 
 ```bash
 # По ссылке
-/accept https://whisper.chat/invite/Xk9f2mN...
+/accept https://vault.chat/invite/Xk9f2mN...
 
-# По Whisper ID (email)
+# По Vault ID (email)
 /accept alice@example.com
 ```
 
@@ -123,45 +123,45 @@ Do you want to add this contact? [y/N]:
 | `verified` | Контакт добавлен, ключи обменяны |
 | `blocked` | Контакт заблокирован |
 
-## Whisper ID
+## Vault ID
 
 ### Что это
 
-Уникальный идентификатор пользователя в системе Whisper.
+Уникальный идентификатор пользователя в системе Vault.
 
 ### Формат
 
 ```
-whisper:<email>
+vault:<email>
 ```
 
-Пример: `whisper:alice@example.com`
+Пример: `vault:alice@example.com`
 
 ### Генерация
 
 ```bash
-# Просмотр своего Whisper ID
-/whisper-id
+# Просмотр своего Vault ID
+/vault-id
 
 # Вывод:
-# Your Whisper ID: whisper:user@gmail.com
+# Your Vault ID: vault:user@gmail.com
 ```
 
 ### Использование
 
 1. **Приглашение по ID:**
    ```bash
-   /invite whisper:alice@example.com
+   /invite vault:alice@example.com
    ```
 
 2. **Принятие по ID:**
    ```bash
-   /accept whisper:bob@outlook.com
+   /accept vault:bob@outlook.com
    ```
 
 3. **Публикация ID:**
    ```bash
-   # Можно поделиться Whisper ID с другом
+   # Можно поделиться Vault ID с другом
    # Он использует его для приглашения
    ```
 
@@ -325,7 +325,7 @@ whisper:<email>
 # (через SMS, мессенджер, лично)
 
 # Bob принимает
-/accept https://whisper.chat/invite/Xk9f2mN...
+/accept https://vault.chat/invite/Xk9f2mN...
 
 # Bob подтверждает
 /confirm alice@example.com
@@ -341,14 +341,14 @@ whisper:<email>
 ### Сценарий 2: Деловая встреча
 
 ```bash
-# На встрече обмениваются Whisper ID
+# На встрече обмениваются Vault ID
 
 # Alice показывает свой ID
-/whisper-id
-# whisper:alice@company.com
+/vault-id
+# vault:alice@company.com
 
 # Bob сканирует QR
-/accept whisper:alice@company.com
+/accept vault:alice@company.com
 
 # После встречи Alice подтверждает
 /confirm bob@partner.com

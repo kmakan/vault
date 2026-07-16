@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 /// Default path for the contacts file
 const CONTACTS_FILE: &str = "contacts.json";
-const CONTACTS_DIR: &str = ".whisper";
+const CONTACTS_DIR: &str = ".vault";
 
 // ─── Contact ────────────────────────────────────────────────────────────────
 
-/// A Whisper contact — stores identity, key material, and verification state.
+/// A Vault contact — stores identity, key material, and verification state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Contact {
     pub email: String,
@@ -229,7 +229,7 @@ impl ContactBook {
 
     // ── Persistence ──────────────────────────────────────────────────────
 
-    /// Return the default contacts file path: `~/.whisper/contacts.json`.
+    /// Return the default contacts file path: `~/.vault/contacts.json`.
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -249,7 +249,7 @@ impl ContactBook {
         Ok(book)
     }
 
-    /// Load from the default path (`~/.whisper/contacts.json`).
+    /// Load from the default path (`~/.vault/contacts.json`).
     pub fn load_default() -> Result<Self> {
         Self::load(&Self::default_path())
     }
@@ -432,7 +432,7 @@ impl ContactBook {
     pub fn export_as_portable(&self, email: &str) -> Option<String> {
         let contact = self.get(email)?;
         let portable = serde_json::json!({
-            "whisper_contact": true,
+            "vault_contact": true,
             "version": 1,
             "name": contact.name,
             "email": contact.email,
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_book_save_load_roundtrip() {
-        let tmp = std::env::temp_dir().join("whisper_contacts_test");
+        let tmp = std::env::temp_dir().join("vault_contacts_test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("contacts.json");
@@ -828,19 +828,19 @@ mod tests {
 
     #[test]
     fn test_book_load_nonexistent() {
-        let path = Path::new("/tmp/whisper_nonexistent_contacts.json");
+        let path = Path::new("/tmp/vault_nonexistent_contacts.json");
         let book = ContactBook::load(path).unwrap();
         assert_eq!(book.count(), 0);
     }
 
     #[test]
     fn test_book_save_creates_dirs() {
-        let tmp = std::env::temp_dir().join("whisper_nested_test/sub/dir");
+        let tmp = std::env::temp_dir().join("vault_nested_test/sub/dir");
         let path = tmp.join("contacts.json");
         let book = ContactBook::new();
         book.save(&path).unwrap();
         assert!(path.exists());
-        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("whisper_nested_test"));
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("vault_nested_test"));
     }
 
     // ── Import / Export ──────────────────────────────────────────────────

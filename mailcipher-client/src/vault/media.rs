@@ -159,11 +159,11 @@ pub struct ThumbnailManager {
 }
 
 impl ThumbnailManager {
-    /// Create a new manager with default storage (~/.whisper/thumbs/)
+    /// Create a new manager with default storage (~/.vault/thumbs/)
     pub fn new() -> Self {
         let storage_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("thumbs");
         Self::with_dir(storage_dir)
     }
@@ -271,7 +271,7 @@ impl ThumbnailManager {
     ) -> Result<Vec<u8>> {
         let mut data = Vec::new();
 
-        // Magic: "WMTH" (Whisper THumbnail)
+        // Magic: "WMTH" (Vault THumbnail)
         data.extend_from_slice(b"WMTH");
         // Format byte
         data.push(match format {
@@ -417,7 +417,7 @@ impl ThumbnailManager {
     }
 }
 
-/// Parsed header of a Whisper thumbnail
+/// Parsed header of a Vault thumbnail
 #[derive(Debug)]
 pub struct ThumbnailHeader {
     pub format: ImageFormat,

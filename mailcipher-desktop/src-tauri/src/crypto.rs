@@ -35,7 +35,7 @@ impl Default for CryptoState {
 fn derive_key(public_key: &PublicKey) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"whisper-self-encryption-v1");
+    hasher.update(b"vault-self-encryption-v1");
     hasher.update(public_key.as_bytes());
     let result = hasher.finalize();
     let mut key = [0u8; 32];
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_keygen_and_encrypt_decrypt() {
         let kp = generate_keypair_cmd();
-        let plaintext = "Hello, Whisper!";
+        let plaintext = "Hello, Vault!";
         let encrypted = encrypt_cmd(plaintext, &kp.private_key, None).unwrap();
         assert_ne!(encrypted, plaintext);
         let decrypted = decrypt_cmd(&encrypted, &kp.private_key, None).unwrap();

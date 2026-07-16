@@ -53,7 +53,7 @@ impl RatchetHeader {
 
 /// KDF output: chain key + message key
 fn kdf_ratchet(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let hk = Hkdf::<Sha256>::new(Some(chain_key), b"WhisperMessageKeys");
+    let hk = Hkdf::<Sha256>::new(Some(chain_key), b"VaultMessageKeys");
     let mut output = [0u8; 64];
     hk.expand(b"", &mut output).expect("HKDF expand failed");
     let mut new_chain_key = [0u8; 32];
@@ -72,7 +72,7 @@ fn kdf_dh(
     let shared = dh_secret.diffie_hellman(dh_public);
     let hk = Hkdf::<Sha256>::new(Some(salt), shared.as_bytes());
     let mut output = [0u8; 64];
-    hk.expand(b"WhisperRatchet", &mut output).expect("HKDF expand failed");
+    hk.expand(b"VaultRatchet", &mut output).expect("HKDF expand failed");
     let mut root_key = [0u8; 32];
     let mut chain_key = [0u8; 32];
     root_key.copy_from_slice(&output[..32]);

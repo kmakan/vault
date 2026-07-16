@@ -1,6 +1,6 @@
 pub mod encryptor;
 
-pub use encryptor::{is_whisper_encrypted, DecryptedContent, Encryptor};
+pub use encryptor::{is_vault_encrypted, DecryptedContent, Encryptor};
 
 /// Decryptor is an alias for Encryptor (it has both encrypt and decrypt methods)
 pub type Decryptor = Encryptor;
@@ -116,7 +116,7 @@ impl CryptoClient {
         if let Some(ref pub_key) = self.public_key {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
-            hasher.update(b"whisper-self-encryption-v1");
+            hasher.update(b"vault-self-encryption-v1");
             hasher.update(pub_key.as_bytes());
             let result = hasher.finalize();
             let mut key = [0u8; 32];
@@ -225,7 +225,7 @@ mod tests {
         let mut crypto = CryptoClient::new();
         crypto.generate_keypair();
 
-        let text = "Hello, Whisper! Привет, мир!";
+        let text = "Hello, Vault! Привет, мир!";
         let encrypted = crypto.encrypt(text);
         assert_ne!(encrypted, text);
 

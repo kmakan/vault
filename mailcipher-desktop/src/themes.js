@@ -131,9 +131,9 @@ export function applyTheme(themeId) {
   for (const [key, value] of Object.entries(theme.vars)) {
     root.style.setProperty(key, value)
   }
-  localStorage.setItem('whisper-theme', themeId)
+  localStorage.setItem('vault-theme', themeId)
 }
 
 export function loadSavedTheme() {
-  return localStorage.getItem('whisper-theme') || 'dark'
+  return localStorage.getItem('vault-theme') || 'dark'
 }

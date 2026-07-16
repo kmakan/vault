@@ -10,8 +10,8 @@
           {{ t('general_confirm') }}
         </button>
         <button 
-          :class="['filter-tab', { active: filter === 'whisper' }]"
-          @click="filter = 'whisper'"
+          :class="['filter-tab', { active: filter === 'vault' }]"
+          @click="filter = 'vault'"
         >
           {{ t('app_name') }}
         </button>
@@ -33,14 +33,14 @@
         <div 
           v-for="email in filteredEmails" 
           :key="email.uid"
-          :class="['email-item', { unread: !email.is_read, whisper: isWhisper(email) }]"
+          :class="['email-item', { unread: !email.is_read, vault: isVault(email) }]"
           @click="$emit('open-email', email)"
         >
           <div class="email-sender">{{ email.from }}</div>
           <div class="email-subject">{{ email.subject || t('email_empty') }}</div>
           <div class="email-meta">
             <span class="email-date">{{ email.date }}</span>
-            <span v-if="isWhisper(email)" class="whisper-badge">{{ t('app_name') }}</span>
+            <span v-if="isVault(email)" class="vault-badge">{{ t('app_name') }}</span>
           </div>
         </div>
       </div>
@@ -76,17 +76,17 @@ export default {
   computed: {
     filteredEmails() {
       if (this.filter === 'all') return this.emails;
-      if (this.filter === 'whisper') return this.emails.filter(e => this.isWhisper(e));
-      return this.emails.filter(e => !this.isWhisper(e));
+      if (this.filter === 'vault') return this.emails.filter(e => this.isVault(e));
+      return this.emails.filter(e => !this.isVault(e));
     }
   },
   methods: {
-    isWhisper(email) {
+    isVault(email) {
       const subject = email.subject || '';
       const body = email.body || '';
-      return subject.includes('[Whisper]') || 
-             body.includes('---BEGIN WHISPER---') ||
-             body.includes('X-MailCipher-Type: whisper');
+      return subject.includes('[Vault]') || 
+             body.includes('---BEGIN VAULT---') ||
+             body.includes('X-MailCipher-Type: vault');
     }
   }
 };
@@ -155,7 +155,7 @@ export default {
   background: #0a1628;
 }
 
-.email-item.whisper {
+.email-item.vault {
   border-left: 3px solid #0f3460;
 }
 
@@ -185,7 +185,7 @@ export default {
   color: #666;
 }
 
-.whisper-badge {
+.vault-badge {
   font-size: 11px;
   padding: 2px 8px;
   background: #0f3460;

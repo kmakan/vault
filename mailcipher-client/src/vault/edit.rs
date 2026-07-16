@@ -43,11 +43,11 @@ pub struct EditManager {
 }
 
 impl EditManager {
-    /// Создать менеджер с默认ным путём (~/.whisper/edits.json)
+    /// Создать менеджер с默认ным путём (~/.vault/edits.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("edits.json");
         Self::with_path(path)
     }

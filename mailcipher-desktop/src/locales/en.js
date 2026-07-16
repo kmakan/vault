@@ -1,6 +1,6 @@
 export default {
   // App
-  app_name: 'Whisper',
+  app_name: 'Vault',
   app_tagline: 'Secure Communication',
 
   // Navigation

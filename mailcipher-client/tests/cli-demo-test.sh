@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-# Whisper/Vault CLI Demo Test — Automated Slash Command Verification
+# Vault/Vault CLI Demo Test — Automated Slash Command Verification
 # ═══════════════════════════════════════════════════════════════════
 set -uo pipefail
 
@@ -27,7 +27,7 @@ PLATFORM=$(uname -sr)
 RUST_VER=$(rustc --version 2>/dev/null || echo "unknown")
 
 cat > "$RESULTS_FILE" << ENDRESULTS
-# CLI Demo Test Results — Whisper/Vault Client
+# CLI Demo Test Results — Vault/Vault Client
 
 **Date:** ${DATE_NOW}
 **Platform:** ${PLATFORM}
@@ -111,8 +111,8 @@ fi
 echo "| Crypto roundtrip | 1 | ✅ PASS |" >> "$RESULTS_FILE"
 
 # ── 6. Protocol tests ──
-suite "Whisper Protocol"
-PROTO_OUT=$(cargo test whisper::protocol 2>&1) || true
+suite "Vault Protocol"
+PROTO_OUT=$(cargo test vault::protocol 2>&1) || true
 PROTO_PASS=$(echo "$PROTO_OUT" | grep -c "\.\.\. ok" || echo 0)
 if [ "$PROTO_PASS" -gt 0 ]; then
     pass "$PROTO_PASS protocol tests passed"
@@ -124,7 +124,7 @@ cat >> "$RESULTS_FILE" << ENDSUMMARY
 
 ## Detailed Results
 
-- **Total test functions:** 89 (36 CLI + 53 crypto/whisper)
+- **Total test functions:** 89 (36 CLI + 53 crypto/vault)
 - **CLI command categories:** ${#CATS[@]}
 - **All commands verified:** parsing, aliases, argument validation
 

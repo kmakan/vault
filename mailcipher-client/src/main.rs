@@ -3,7 +3,7 @@ mod app;
 mod cli;
 mod crypto;
 mod ui;
-mod whisper;
+mod vault;
 
 use anyhow::Result;
 use clap::Parser;
@@ -13,8 +13,8 @@ use crate::api::client::Config;
 
 #[derive(Parser)]
 #[command(
-    name = "whisper",
-    about = "🔒 Whisper — E2E Encrypted Messenger",
+    name = "vault",
+    about = "🔒 Vault — E2E Encrypted Messenger",
     version
 )]
 struct Cli {

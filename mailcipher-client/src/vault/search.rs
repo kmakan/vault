@@ -45,11 +45,11 @@ pub struct MessageIndex {
 }
 
 impl MessageIndex {
-    /// Создать индекс с默认ным путём (~/.whisper/message_index.json)
+    /// Создать индекс с默认ным путём (~/.vault/message_index.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("message_index.json");
         Self::with_path(path)
     }
@@ -74,7 +74,7 @@ impl MessageIndex {
     /// Сохранить индекс на диск
     fn save_to_file(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).context("Failed to create .whisper directory")?;
+            fs::create_dir_all(parent).context("Failed to create .vault directory")?;
         }
         let data = serde_json::to_string_pretty(&self.entries)
             .context("Failed to serialize message index")?;

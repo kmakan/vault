@@ -41,7 +41,7 @@ impl Encryptor {
     pub fn from_password(password: &str, salt: &[u8]) -> Self {
         let hk = Hkdf::<Sha256>::new(Some(salt), password.as_bytes());
         let mut key = [0u8; 32];
-        hk.expand(b"whisper-encryptor-key", &mut key)
+        hk.expand(b"vault-encryptor-key", &mut key)
             .expect("HKDF expansion failed");
         Self { key }
     }
@@ -87,7 +87,7 @@ impl Encryptor {
 
         // Формируем вывод
         let mut output = String::new();
-        output.push_str("---BEGIN WHISPER ENCRYPTED---\n");
+        output.push_str("---BEGIN VAULT ENCRYPTED---\n");
         output.push_str("Version: 1\n");
         output.push_str(&format!("Type: {}\n", match content_type {
             ContentType::Text => "text",
@@ -103,7 +103,7 @@ impl Encryptor {
         output.push_str(&format!("Nonce: {}\n", BASE64.encode(&nonce)));
         output.push_str(&format!("Signature: {}\n", BASE64.encode(&signature.to_bytes())));
         output.push_str(&format!("Content: {}\n", BASE64.encode(&ciphertext)));
-        output.push_str("---END WHISPER ENCRYPTED---\n");
+        output.push_str("---END VAULT ENCRYPTED---\n");
 
         Ok(output)
     }
@@ -168,8 +168,8 @@ impl Encryptor {
         &self,
         encrypted: &str,
     ) -> Result<(HashMap<String, String>, String, String, String), CryptoError> {
-        if !encrypted.contains("---BEGIN WHISPER ENCRYPTED---") {
-            return Err(CryptoError::from("Not a Whisper encrypted message"));
+        if !encrypted.contains("---BEGIN VAULT ENCRYPTED---") {
+            return Err(CryptoError::from("Not a Vault encrypted message"));
         }
 
         let mut header = HashMap::new();
@@ -183,10 +183,10 @@ impl Encryptor {
         for line in encrypted.lines() {
             let line = line.trim();
 
-            if line == "---BEGIN WHISPER ENCRYPTED---" {
+            if line == "---BEGIN VAULT ENCRYPTED---" {
                 continue;
             }
-            if line == "---END WHISPER ENCRYPTED---" {
+            if line == "---END VAULT ENCRYPTED---" {
                 break;
             }
             if line == "---" {
@@ -233,9 +233,9 @@ impl Encryptor {
     }
 }
 
-/// Проверить, является ли строка зашифрованным сообщением Whisper
-pub fn is_whisper_encrypted(text: &str) -> bool {
-    text.contains("---BEGIN WHISPER ENCRYPTED---")
+/// Проверить, является ли строка зашифрованным сообщением Vault
+pub fn is_vault_encrypted(text: &str) -> bool {
+    text.contains("---BEGIN VAULT ENCRYPTED---")
 }
 
 use std::collections::HashMap;
@@ -254,7 +254,7 @@ mod tests {
         let plaintext = "Hello, World! Это тестовое сообщение.";
 
         let encrypted = encryptor.encrypt_text(plaintext).unwrap();
-        assert!(encrypted.contains("---BEGIN WHISPER ENCRYPTED---"));
+        assert!(encrypted.contains("---BEGIN VAULT ENCRYPTED---"));
         assert!(encrypted.contains("Type: text"));
 
         let decrypted = encryptor.decrypt(&encrypted).unwrap();
@@ -303,14 +303,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_whisper_encrypted() {
-        assert!(is_whisper_encrypted("---BEGIN WHISPER ENCRYPTED---"));
-        assert!(!is_whisper_encrypted("普通文本"));
-        assert!(!is_whisper_encrypted("-----BEGIN PGP MESSAGE-----"));
+    fn test_is_vault_encrypted() {
+        assert!(is_vault_encrypted("---BEGIN VAULT ENCRYPTED---"));
+        assert!(!is_vault_encrypted("普通文本"));
+        assert!(!is_vault_encrypted("-----BEGIN PGP MESSAGE-----"));
     }
 
     #[test]
-    fn test_not_whisper_encrypted() {
+    fn test_not_vault_encrypted() {
         let encryptor = Encryptor::new(&test_key());
         let result = encryptor.decrypt("普通文本");
         assert!(result.is_err());

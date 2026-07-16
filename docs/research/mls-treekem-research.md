@@ -1,4 +1,4 @@
-# MLS (Messaging Layer Security) — Исследование для Whisper
+# MLS (Messaging Layer Security) — Исследование для Vault
 
 ## 1. Что такое MLS
 
@@ -86,12 +86,12 @@ snowlight = "0.1"
 
 ---
 
-## 4. Интеграция с Whisper
+## 4. Интеграция с Vault
 
 ### 4.1 Текущая архитектура
 
 ```
-Whisper: X25519 + Kyber (post-quantum ECDH)
+Vault: X25519 + Kyber (post-quantum ECDH)
          ↓
     Session Keys
          ↓
@@ -107,7 +107,7 @@ MLS Layer (group management):
 ├── Membership changes
 └── Forward secrecy
          ↓
-Whisper Layer (message encryption):
+Vault Layer (message encryption):
 ├── Post-quantum keys (Kyber)
 ├── XChaCha20-Poly1305
 └── HMAC-SHA512
@@ -120,8 +120,8 @@ pub struct GroupManager {
     // MLS для управления группами
     mls_group: openmls::group::MlsGroup,
     
-    // Whisper для post-quantum шифрования
-    whisper_crypto: WhisperCrypto,
+    // Vault для post-quantum шифрования
+    vault_crypto: VaultCrypto,
     
     // Сессионные ключи
     session_keys: HashMap<MemberId, SessionKey>,
@@ -150,7 +150,7 @@ impl GroupManager {
 
 ---
 
-## 5. Реализация для Whisper
+## 5. Реализация для Vault
 
 ### 5.1 Этапы
 
@@ -164,7 +164,7 @@ impl GroupManager {
 ### 5.2 Структура кода
 
 ```
-src/whisper/
+src/vault/
 ├── mls/
 │   ├── mod.rs          // Точка входа
 │   ├── group.rs        // Управление группами
@@ -251,7 +251,7 @@ impl MlsGroupManager {
 
 ## 7. Рекомендации
 
-### Для Whisper — гибридный подход
+### Для Vault — гибридный подход
 
 1. **Сохранить текущую систему** для 1:1 чатов (простая и пост-квантовая)
 2. **Добавить MLS** только для групп >10 участников
@@ -279,4 +279,4 @@ impl MlsGroupManager {
 ---
 
 *Последнее обновление: Июль 2026*
-*Автор: Whisper Research*
+*Автор: Vault Research*

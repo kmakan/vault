@@ -6,7 +6,7 @@ import zh from './locales/zh.js'
 const locales = { en, ru, zh }
 
 const state = reactive({
-  locale: localStorage.getItem('whisper-locale') || 'en',
+  locale: localStorage.getItem('vault-locale') || 'en',
 })
 
 export function useI18n() {
@@ -17,7 +17,7 @@ export function useI18n() {
   const setLocale = (locale) => {
     if (locales[locale]) {
       state.locale = locale
-      localStorage.setItem('whisper-locale', locale)
+      localStorage.setItem('vault-locale', locale)
     }
   }
 

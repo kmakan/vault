@@ -1,6 +1,6 @@
 #!/usr/bin/expect -f
 # ============================================================
-# Whisper/Vault CLI Demo Test
+# Vault/Vault CLI Demo Test
 # Automated expect script to verify all slash commands work
 # ============================================================
 
@@ -13,7 +13,7 @@ spawn $binary_path
 
 # Wait for banner
 expect {
-    "Whisper" { puts "\n✓ Banner displayed" }
+    "Vault" { puts "\n✓ Banner displayed" }
     timeout { puts "\n✗ Banner not found"; exit 1 }
 }
 
@@ -50,7 +50,7 @@ expect {
 }
 
 # --- 5. /encrypt ---
-send "/encrypt Hello Whisper Test\r"
+send "/encrypt Hello Vault Test\r"
 expect {
     "encrypted" { puts "✓ /encrypt — OK" }
     "Encrypt"   { puts "✓ /encrypt — OK" }

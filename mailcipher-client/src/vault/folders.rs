@@ -44,11 +44,11 @@ pub struct FolderStore {
 }
 
 impl FolderStore {
-    /// Создать хранилище с默认ным путём (~/.whisper/folders.json)
+    /// Создать хранилище с默认ным путём (~/.vault/folders.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(".whisper")
+            .join(".vault")
             .join("folders.json");
         Self::with_path(path)
     }
@@ -73,7 +73,7 @@ impl FolderStore {
     /// Сохранить папки на диск
     fn save_to_file(&self) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).context("Failed to create .whisper directory")?;
+            fs::create_dir_all(parent).context("Failed to create .vault directory")?;
         }
         let data =
             serde_json::to_string_pretty(&self.folders).context("Failed to serialize folders")?;

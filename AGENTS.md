@@ -1,4 +1,4 @@
-# Whisper (MailCipher) — AGENTS.md
+# Vault (MailCipher) — AGENTS.md
 
 ## Роли агентов
 
@@ -10,7 +10,7 @@
 ### Editor (Агент-редактор кода)
 - **Ответственность**: Написание, рефакторинг, исправление кода
 - **Доступ**: Чтение/запись кода, выполнение команд
-- **Использование**: `cd ~/whisper && mimo run "задача" --agent editor`
+- **Использование**: `cd ~/vault && mimo run "задача" --agent editor`
 - **Особенности**: 
   - Используй graphify перед работой с кодом
   - Следуй стилю проекта
@@ -19,7 +19,7 @@
 ### DevOps (Агент инфраструктуры)
 - **Ответственность**: Деплой, серверы, CI/CD, nginx, PM2, SSL, мониторинг
 - **Доступ**: Чтение/запись кода, выполнение команд
-- **Использование**: `cd ~/whisper && mimo run "задача" --agent devops`
+- **Использование**: `cd ~/vault && mimo run "задача" --agent devops`
 - **Особенности**: 
   - Настройка systemd сервисов
   - Docker compose для dev/staging
@@ -29,7 +29,7 @@
 ### Security (Агент безопасности)
 - **Ответственность**: Аудит секретов, зависимости, кода, конфигураций
 - **Доступ**: Только чтение (read-only)
-- **Использование**: `cd ~/whisper && mimo run "аудит" --agent security`
+- **Использование**: `cd ~/vault && mimo run "аудит" --agent security`
 - **Особенности**: 
   - Сканирование git истории на секреты
   - Проверка зависимостей (cargo audit, npm audit)
@@ -59,25 +59,25 @@ hermes kanban --board mailcipher stats
 
 ### 2. Делегирование задач editor
 ```bash
-cd ~/whisper
+cd ~/vault
 mimo run "Описание задачи" --agent editor
 ```
 
 ### 3. Делегирование задач devops
 ```bash
-cd ~/whisper
+cd ~/vault
 mimo run "Описание задачи" --agent devops
 ```
 
 ### 4. Аудит безопасности
 ```bash
-cd ~/whisper
+cd ~/vault
 mimo run "Выполнить аудит безопасности по чек-листу из docs/agents/security-agent.md" --agent security
 ```
 
 ### 5. Обновление документации
 ```bash
-cd ~/whisper
+cd ~/vault
 mimo run "Обновить документацию для X" --agent build
 # с промптом "act as documentation writer"
 ```
@@ -134,7 +134,7 @@ hermes kanban --board mailcipher comment t_XXXXXXXX "текст"
 ## Директории проекта
 
 ```
-~/whisper/                          # Код проекта
+~/vault/                          # Код проекта
 ├── mailcipher-backend/             # Rust Axum + SQLx + PostgreSQL
 ├── docs/                           # Документация
 │   ├── agents/                     # Инструкции для агентов

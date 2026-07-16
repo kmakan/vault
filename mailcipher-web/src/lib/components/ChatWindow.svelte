@@ -137,7 +137,7 @@
 				<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
 			</svg>
 		</div>
-		<h3>Whisper/Vault</h3>
+		<h3>Vault/Vault</h3>
 		<p>Select a chat to start messaging</p>
 		<span class="encryption-note">🔒 All messages are end-to-end encrypted</span>
 	</div>

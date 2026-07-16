@@ -3,13 +3,13 @@
 ## Текущее состояние
 
 ### Backend (Rust)
-- Пути: /home/maksim/whisper/mailcipher-backend
+- Пути: /home/maksim/vault/mailcipher-backend
 - Файл: src/crypto/mod.rs (162 строки) — экспорт крипто-модулей
 - Файл: src/crypto/signing.rs (164 строки) — Ed25519 подпись
 - Зависимости: x25519-dalek 2.0, ed25519-dalek 2.1, chacha20poly1305 0.10
 
 ### Desktop (Vue/Tauri)
-- Пути: /home/maksim/whisper/mailcipher-desktop
+- Пути: /home/maksim/vault/mailcipher-desktop
 - Файл: package.json — Vue 3 + Tauri 2 (нет WASM крипто)
 - Зависимости: @tauri-apps/api, @tauri-apps/plugin-shell, qrcode, vue
 

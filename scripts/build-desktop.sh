@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-desktop.sh — Build Whisper Desktop (Tauri 2.0)
+# build-desktop.sh — Build Vault Desktop (Tauri 2.0)
 # Usage: ./scripts/build-desktop.sh [--dev|--release]
 set -euo pipefail
 
