@@ -1,25 +1,25 @@
 <template>
   <div class="email-compose">
     <div class="compose-header">
-      <h3>New Message</h3>
+      <h3>{{ t('email_compose') }}</h3>
       <button @click="$emit('close')" class="close-btn">&times;</button>
     </div>
 
     <div class="compose-form">
       <div class="form-group">
-        <label>To</label>
+        <label>{{ t('email_to') }}</label>
         <input v-model="form.to" type="email" placeholder="recipient@example.com" required />
       </div>
 
       <div class="form-group">
-        <label>Subject</label>
-        <input v-model="form.subject" placeholder="Subject" />
+        <label>{{ t('email_subject') }}</label>
+        <input v-model="form.subject" :placeholder="t('email_subject')" />
       </div>
 
       <div class="form-group encryption-toggle">
         <label class="checkbox-label">
           <input type="checkbox" v-model="form.encrypt" />
-          Encrypt with E2E (Whisper)
+          {{ t('app_tagline') }} ({{ t('app_name') }})
         </label>
         <select v-if="form.encrypt" v-model="form.keyType" class="key-select">
           <option value="combined">Combined (Alpha + Columnar)</option>
@@ -29,28 +29,28 @@
       </div>
 
       <div class="form-group reply-to-group" v-if="replyTo">
-        <label>Reply to</label>
+        <label>{{ t('email_reply_to') }}</label>
         <div class="reply-to-info">{{ replyTo }}</div>
       </div>
 
       <div class="form-group">
-        <label>Message</label>
+        <label>{{ t('email_body') }}</label>
         <textarea 
           v-model="form.body" 
           rows="12" 
-          placeholder="Write your message..."
+          :placeholder="t('email_body') + '...'"
           class="body-textarea"
         ></textarea>
       </div>
 
       <div class="form-actions">
-        <button @click="$emit('close')" class="cancel-btn">Cancel</button>
+        <button @click="$emit('close')" class="cancel-btn">{{ t('settings_cancel') }}</button>
         <button 
           @click="send" 
           :disabled="sending || !form.to || !form.body" 
           class="send-btn"
         >
-          {{ sending ? 'Sending...' : 'Send' }}
+          {{ sending ? t('email_sending') : t('email_send') }}
         </button>
       </div>
 
@@ -61,9 +61,14 @@
 
 <script>
 import api from '../api.js';
+import { useI18n } from '../i18n.js';
 
 export default {
   name: 'EmailCompose',
+  setup() {
+    const { t } = useI18n();
+    return { t };
+  },
   props: {
     accountId: {
       type: String,

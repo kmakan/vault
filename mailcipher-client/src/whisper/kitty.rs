@@ -158,7 +158,8 @@ impl KittyGraphics {
         let command = match &self.protocol {
             GraphicsProtocol::Kitty => {
                 // Kitty protocol: ESC_G ... ESC\
-                let mut cmd = format!("\x1b_Ga=T,f={},s={},v={},i={};{}\x1b\\",
+                let mut cmd = format!(
+                    "\x1b_Ga=T,f={},s={},v={},i={};{}\x1b\\",
                     format.kitty_code(),
                     data.len(),
                     1, // height placeholder
@@ -170,8 +171,8 @@ impl KittyGraphics {
                 if encoded.len() > 4096 {
                     let remaining = &encoded[4096..];
                     for chunk in remaining.as_bytes().chunks(4096) {
-                        let chunk_str = std::str::from_utf8(chunk)
-                            .context("Invalid UTF-8 in base64 chunk")?;
+                        let chunk_str =
+                            std::str::from_utf8(chunk).context("Invalid UTF-8 in base64 chunk")?;
                         cmd.push_str(&format!("\x1b_Gm=1;{}\x1b\\", chunk_str));
                     }
                     // Final chunk
@@ -182,10 +183,7 @@ impl KittyGraphics {
             GraphicsProtocol::ITerm2 => {
                 // iTerm2 protocol: ESC]1337;File=...:base64data BEL
                 let encoded_esc = BASE64.encode(data);
-                format!(
-                    "\x1b]1337;File=inline=1;width=40: {}\x07",
-                    encoded_esc
-                )
+                format!("\x1b]1337;File=inline=1;width=40: {}\x07", encoded_esc)
             }
             GraphicsProtocol::Sixel => {
                 // Sixel: generate sixel from raw image data

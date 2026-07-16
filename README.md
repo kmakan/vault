@@ -1,228 +1,273 @@
-# 📧 MailCipher — Мессенджер с шифрованием
+# 🔐 Whisper (MailCipher)
 
-> **Создан**: 27.06.2026
-> **Статус**: Планирование
-> **Автор**: Maksim + Hermes (Project Manager)
-
----
-
-## 🎯 Концепция
-
-Мессенджер, объединяющий несколько email-аккаунтов в одном интерфейсе с end-to-end шифрованием. Клиенты: Desktop, Android, Terminal Linux.
+> **Secure messenger over email. No servers. No phone numbers. Just email.**
+>
+> Version: 0.1.0 | License: MIT | Status: Beta
 
 ---
 
-## 🛠️ Технологический стек
+## What is Whisper?
 
-### Backend (API + шифрование)
-| Компонент | Технология | Обоснование |
-|-----------|------------|-------------|
-| **Язык** | Python 3.12+ | Быстрая разработка, rich экосистема |
-| **API** | FastAPI | async, авто-документация, производительность |
-| **БД** | PostgreSQL + SQLite | PostgreSQL для продакшена, SQLite для dev |
-| **ORM** | SQLAlchemy 2.0 | async поддержка, зрелость |
-| **Шифрование** | libsodium (nacl) | Современное, проверенное, простое API |
-| **Email** | imaplib/aioimaplib | IMAP/SMTP поддержка |
-| **Auth** | JWT + OAuth2 | Безопасная авторизация |
+Whisper is a privacy-first messenger that works over email (IMAP/SMTP). It uses **end-to-end encryption** (X25519 + XChaCha20-Poly1305) so that no one — not even email providers — can read your messages.
 
-### Desktop клиент
-| Компонент | Технология | Обоснование |
-|-----------|------------|-------------|
-| **Фреймворк** | Tauri 2.0 | Лёгкий (Rust backend + WebView), безопасный |
-| **Frontend** | Svelte/SvelteKit | Минималистичный, быстрый |
-| **Шифрование** | Rust (ring/rusty_vault) | Нативная производительность |
-
-### Android клиент
-| Компонент | Технология | Обоснование |
-|-----------|------------|-------------|
-| **Фреймворк** | Kotlin + Jetpack Compose | Modern Android, нативная производительность |
-| **Шифрование** | libsodium-android | Тот же API что и backend |
-| **API** | Retrofit + OkHttp | Стандарт для Android |
-
-### Terminal клиент (Linux)
-| Компонент | Технология | Обоснование |
-|-----------|------------|-------------|
-| **Язык** | Python 3.12+ | Единый стек с backend |
-| **TUI** | Textual (Rich) | Современный TUI, поддержка Kitty |
-| **Изображения** | Kitty graphics protocol | Нативная поддержка в Kitty |
-| **Шифрование** | libsodium (наследуется) | Тот же API |
+**Key principles:**
+- 🚫 **No servers** — your email is the transport
+- 🚫 **No phone numbers** — just email addresses
+- 🔒 **E2E encryption** — messages are encrypted on your device
+- 🌍 **Multi-language** — EN, RU, CN (more coming)
+- 💻 **Cross-platform** — Desktop (Linux), Android, Terminal
 
 ---
 
-## 🔐 Архитектура шифрования
+## Quick Start
 
-### Уровни шифрования
+### Install
 
-```
-┌─────────────────────────────────────────────┐
-│  Уровень 1: Транспортный (TLS 1.3)         │
-│  - Все соединения через HTTPS/WSS          │
-│  - Пинning сертификатов                     │
-└─────────────────────────────────────────────┘
-┌─────────────────────────────────────────────┐
-│  Уровень 2: End-to-End (E2E)               │
-│  - Signal Protocol (Double Ratchet)         │
-│  - X3DH для обмена ключами                 │
-│  - AES-256-GCM для шифрования сообщений    │
-└─────────────────────────────────────────────┘
-┌─────────────────────────────────────────────┐
-│  Уровень 3: Хранение (At-rest)             │
-│  - Шифрование БД на клиенте                │
-│  - Локальное хранилище ключей              │
-│  - Стиранние после прочтения (опционально)  │
-└─────────────────────────────────────────────┘
+```bash
+# Clone
+git clone https://github.com/nickswl/mailcipher.git
+cd mailcipher
+
+# Build client
+cd mailcipher-client
+cargo build --release
+
+# Run
+../target/release/mailcipher-client
 ```
 
-### Протокол шифрования
+### Desktop (Tauri)
 
-#### 1. Регистрация
-```
-Клиент → Сервер:
-  - Генерация ключевой пары (Ed25519)
-  - Публичный ключ → сервер
-  - Приватный ключ → локальное хранилище
-  - Сервер НЕ видит приватный ключ
+```bash
+cd mailcipher-desktop
+npm install
+npm run tauri build   # or: npm run tauri dev
 ```
 
-#### 2. Обмен сообщениями
-```
-Отправитель:
-  1. Получает публичный ключ получателя с сервера
-  2. Генерирует одноразовый ключ (X3DH)
-  3. Шифрует сообщение (AES-256-GCM)
-  4. Подписывает (Ed25519)
-  5. Отправляет на сервер
+### Android
 
-Получатель:
-  1. Получает зашифрованное сообщение
-  2. Использует свой приватный ключ для обмена
-  3. Получает одноразовый ключ
-  4. Расшифровывает сообщение
-  5. Проверяет подпись
-```
-
-#### 3. Хранение ключей
-```
-Локальное хранилище (зашифровано):
-├── keys/
-│   ├── identity.key      # Приватный ключ (Ed25519)
-│   ├── identity.pub      # Публичный ключ
-│   ├── signed_pre.key    # Подписанный ключ
-│   └── pre_keys/         # Одноразовые ключи
-│       ├── 1.key
-│       ├── 2.key
-│       └── ...
+```bash
+# Requires: JDK 17, Android SDK 35, NDK 27
+cd mailcipher-desktop
+npx tauri android build
+# Output: src-tauri/gen/android/app/build/outputs/apk/
 ```
 
 ---
 
-## 📋 План разработки
+## Features
 
-### Фаза 1: Backend (4 недели)
-- [ ] Настройка проекта FastAPI
-- [ ] Модели данных (User, Message, Email, Key)
-- [ ] API авторизации (JWT + OAuth2)
-- [ ] API управления email-аккаунтами
-- [ ] IMAP/SMTP интеграция
-- [ ] Система шифрования (libsodium)
-- [ ] Signal Protocol (X3DH + Double Ratchet)
-- [ ] API отправки/получения сообщений
-- [ ] WebSocket для real-time
-- [ ] Тестирование
+### Core
+- ✅ X25519 key exchange + XChaCha20-Poly1305 encryption
+- ✅ IMAP/SMTP email transport
+- ✅ Multi-account support
+- ✅ Message threads & replies
+- ✅ Reactions (emoji)
+- ✅ Read receipts & delivery status
+- ✅ Edit / delete messages
 
-### Фаза 2: Desktop клиент (3 недели)
-- [ ] Настройка Tauri проекта
-- [ ] UI/SvelteKit каркас
-- [ ] Интеграция с API
-- [ ] Шифрование на клиенте (Rust)
-- [ ] Локальное хранилище ключей
-- [ ] Управление email-аккаунтами
-- [ ] Отправка/получение сообщений
-- [ ] Тестирование
+### Media
+- ✅ File attachments (encrypted)
+- ✅ Image/video thumbnails (Kitty graphics protocol)
+- ✅ Drag & drop in Desktop
 
-### Фаза 3: Terminal клиент (2 недели)
-- [ ] TUI каркас (Textual)
-- [ ] Интеграция с API
-- [ ] Kitty graphics protocol
-- [ ] Шифрование (libsodium)
-- [ ] Управление аккаунтами
-- [ ] Отображение сообщений
+### Organization
+- ✅ Folders for chats
+- ✅ Search (FTS5 full-text)
+- ✅ Pin / mute chats
 
-### Фаза 4: Android клиент (3 недели)
-- [ ] Настройка Kotlin проекта
-- [ ] UI Jetpack Compose
-- [ ] Интеграция с API
-- [ ] Шифрование (libsodium-android)
-- [ ] Push уведомления
-- [ ] Биометрическая аутентификация
+### Groups
+- ✅ Create group, invite members
+- ✅ Promote / demote admins
+- ✅ Block / unblock users (local)
+- ✅ Leave group, delete group
 
-### Фаза 5: Тестирование и деплой (2 недели)
-- [ ] E2E тестирование
-- [ ] Security аудит
-- [ ] Нагрузочное тестирование
-- [ ] Деплой backend
-- [ ] Публикация клиентов
+### Key Exchange
+- ✅ QR code (in-person)
+- ✅ Copy & paste (Signal, Telegram, WhatsApp)
+- ✅ VPN warnings for blocked regions
+
+### Desktop UI
+- ✅ Professional design (CSS variables, dark theme)
+- ✅ i18n (English, Русский, 中文)
+- ✅ Language selector in settings
 
 ---
 
-## 🔒 Безопасность
-
-### Принципы
-1. **Zero-knowledge** — сервер не видит сообщения
-2. **Forward secrecy** — компрометация ключа не раскрывает прошлое
-3. **Future secrecy** — компрометация ключа не раскрывает будущее
-4. **Deniability** — нельзя доказать авторство сообщения
-
-### Меры защиты
-- TLS 1.3 для транспорта
-- E2E шифрование для сообщений
-- Шифрование локального хранилища
-- Биометрическая аутентификация
-- Автоматическое стирание
-- Защита от side-channel атак
-
----
-
-## 📁 Структура проекта
+## Architecture
 
 ```
-mailcipher/
-├── backend/              # FastAPI backend
-│   ├── app/
-│   │   ├── api/         # API endpoints
-│   │   ├── core/        # Ядро (конфиг, безопасность)
-│   │   ├── models/      # SQLAlchemy модели
-│   │   ├── services/    # Бизнес-логика
-│   │   └── crypto/      # Шифрование
-│   ├── tests/
-│   └── requirements.txt
-├── desktop/              # Tauri клиент
-│   ├── src-tauri/       # Rust backend
-│   ├── src/             # Svelte frontend
+┌─────────────────────────────────────────────────┐
+│                  Whisper Client                  │
+│                                                  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │ Crypto   │  │ Groups   │  │ Email (IMAP) │  │
+│  │ X25519   │  │ Local    │  │              │  │
+│  │ XChaCha  │  │ JSON     │  │              │  │
+│  └──────────┘  └──────────┘  └──────────────┘  │
+│         │              │              │          │
+│         └──────────────┼──────────────┘          │
+│                        │                         │
+│              ┌─────────┴─────────┐               │
+│              │   UI Layer        │               │
+│              │  CLI / Desktop    │               │
+│              │  / Android        │               │
+│              └───────────────────┘               │
+└─────────────────────────────────────────────────┘
+                      │
+                      │ email (IMAP/SMTP)
+                      ▼
+              ┌───────────────┐
+              │  Email Server  │
+              │  (any IMAP)    │
+              └───────────────┘
+```
+
+**No central server.** Users communicate directly via email. Groups are stored locally on each device. Key exchange happens out-of-band (QR, Signal, etc.).
+
+---
+
+## CLI Commands
+
+### Session
+| Command | Description |
+|---------|-------------|
+| `/connect <email> <pass> [server]` | Connect to IMAP |
+| `/status` | Show connection status |
+| `/help [topic]` | Show help |
+| `/quit` | Exit |
+
+### Messaging
+| Command | Description |
+|---------|-------------|
+| `/chat <email>` | Enter chat mode |
+| `/send <message>` | Send encrypted message |
+| `/inbox` | List recent messages |
+| `/read <id>` | Read a message |
+| `/reply <id> <msg>` | Reply to message |
+| `/thread <subject>` | Show thread |
+
+### Keys & Encryption
+| Command | Description |
+|---------|-------------|
+| `/keygen` | Generate key pair |
+| `/keys` | Show key status |
+| `/keyshare <email>` | Share public key (with VPN warning) |
+| `/encrypt <text>` | Encrypt text |
+| `/decrypt <text>` | Decrypt ciphertext |
+
+### Groups
+| Command | Description |
+|---------|-------------|
+| `/creategroup <name>` | Create new group |
+| `/groupmembers <id>` | List members |
+| `/groupinvite <id> <email>` | Add member |
+| `/groupremove <id> <email>` | Remove member |
+| `/promote <id> <email>` | Promote to admin |
+| `/demote <id> <email>` | Demote to member |
+| `/block <id> <email>` | Block user in group |
+| `/unblock <id> <email>` | Unblock user |
+| `/leavegroup <id>` | Leave group |
+
+### Organization
+| Command | Description |
+|---------|-------------|
+| `/fc <name> [icon]` | Create folder |
+| `/fl` | List folders |
+| `/fa <folder> <chat>` | Add chat to folder |
+| `/search <query>` | Search messages |
+| `/pin <id>` | Pin message |
+
+---
+
+## Key Exchange
+
+Since Whisper has no server, you need to exchange keys securely with your contacts.
+
+| Method | Security | VPN Needed | Notes |
+|--------|----------|------------|-------|
+| **QR Code** | Highest | ❌ | Best — scan in person |
+| **Copy & Send** | High | ⚠️ | Send via Signal/Telegram/WhatsApp |
+| **PGP Email** | High | ❌ | For PGP users |
+
+**⚠️ VPN Warning:** Signal may be blocked in Russia, China, Iran, and other regions. Use VPN if you cannot connect.
+
+---
+
+## Groups (Telegram-like)
+
+Whisper groups work like Telegram — **without a server**:
+
+- **Creator** = Admin by default
+- **Admins** can invite/remove members
+- **Blocking** is local (you don't see blocked users' messages)
+- **Roles** are advisory (no server to enforce)
+
+All group state is stored in `~/.whisper/groups.json`.
+
+---
+
+## Project Structure
+
+```
+whisper/
+├── mailcipher-client/     # Rust CLI + core logic
+│   ├── src/
+│   │   ├── cli/           # CLI commands, REPL
+│   │   ├── crypto/        # X25519, XChaCha20
+│   │   ├── whisper/       # Groups, contacts, invites, etc.
+│   │   └── main.rs
+│   └── Cargo.toml
+├── mailcipher-desktop/    # Vue.js + Tauri 2
+│   ├── src/
+│   │   ├── components/    # Vue components
+│   │   ├── locales/       # i18n (en, ru, zh)
+│   │   └── i18n.js
+│   ├── src-tauri/         # Rust backend (Tauri)
 │   └── package.json
-├── terminal/             # Python TUI клиент
-│   ├── mailcipher_tui/
-│   └── requirements.txt
-├── android/              # Kotlin клиент
-│   ├── app/
-│   └── build.gradle.kts
-└── docs/                 # Документация
+├── mailcipher-web/        # Web UI
+├── docs/                  # Documentation
+│   ├── design/            # Design docs
+│   ├── deployment/        # Build & deploy guides
+│   └── research/          # Research notes
+└── README.md
 ```
 
 ---
 
-## 📊 Сравнение с аналогами
+## Testing
 
-| Функция | MailCipher | Signal | Telegram | ProtonMail |
-|---------|------------|--------|----------|------------|
-| Email интеграция | ✅ | ❌ | ❌ | ✅ |
-| E2E шифрование | ✅ | ✅ | ✅ | ✅ |
-| Terminal клиент | ✅ | ❌ | ❌ | ❌ |
-| Desktop клиент | ✅ | ✅ | ✅ | ✅ |
-| Android клиент | ✅ | ✅ | ✅ | ✅ |
-| Open source | ✅ | ✅ | Частично | ❌ |
-| Self-hosted | ✅ | ❌ | ❌ | ❌ |
+```bash
+# Client tests
+cd mailcipher-client
+cargo test          # 228 tests
+
+# Desktop build check
+cd mailcipher-desktop
+npm run build
+```
 
 ---
 
-> **Следующий шаг**: Настроить kanban и начать фазу 1 (Backend)
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Areas for Contribution
+- 🌐 More languages (i18n)
+- 📱 Android UI polish
+- 🔐 Key exchange improvements
+- 📧 Email provider compatibility
+- 🧪 Test coverage
+
+---
+
+## License
+
+MIT — do whatever you want.
+
+---
+
+## Credits
+
+Built with Rust, Vue.js, Tauri, and a lot of ☕.

@@ -23,20 +23,20 @@
           @click="currentView = 'chats'"
         >
           <span class="nav-icon">💬</span>
-          Chats
+          {{ t('nav_inbox') }}
         </button>
         <button 
           :class="['nav-tab', { active: currentView === 'email' }]"
           @click="currentView = 'email'"
         >
           <span class="nav-icon">📧</span>
-          Email
+          {{ t('nav_compose') }}
         </button>
       </div>
 
       <div v-if="currentView === 'chats'" class="contacts-list">
         <div class="search-box">
-          <input type="text" placeholder="Search contacts..." v-model="searchQuery" />
+          <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
         <div 
           v-for="contact in filteredContacts" 
@@ -80,6 +80,7 @@
       </div>
 
       <div v-if="showSettings" class="settings-panel">
+        <LanguageSelector />
         <EmailSettings />
       </div>
       
@@ -115,12 +116,12 @@
         </div>
         
         <div class="message-input" v-if="activeChat">
-          <button class="attach-btn" title="Attach file">📎</button>
-          <input 
-            v-model="newMessage" 
-            @keyup.enter="sendMessage"
-            placeholder="Type a message..."
-          />
+        <button class="attach-btn" title="Attach file">📎</button>
+        <input 
+          v-model="newMessage" 
+          @keyup.enter="sendMessage"
+          :placeholder="t('email_compose') + '...'"
+        />
           <button class="send-btn" @click="sendMessage">
             <span class="send-icon">➤</span>
           </button>
@@ -130,20 +131,20 @@
       <div v-else class="email-view">
         <div v-if="selectedEmail" class="email-detail">
           <div class="email-detail-header">
-            <button @click="selectedEmail = null" class="back-btn">← Back</button>
-            <h3>{{ selectedEmail.subject || '(no subject)' }}</h3>
+            <button @click="selectedEmail = null" class="back-btn">← {{ t('general_close') }}</button>
+            <h3>{{ selectedEmail.subject || t('email_empty') }}</h3>
           </div>
           <div class="email-detail-meta">
-            <div>From: {{ selectedEmail.from }}</div>
-            <div>Date: {{ selectedEmail.date }}</div>
+            <div>{{ t('email_to') }}: {{ selectedEmail.from }}</div>
+            <div>{{ selectedEmail.date }}</div>
           </div>
           <div class="email-detail-body">
-            {{ selectedEmail.body || 'Loading...' }}
+            {{ selectedEmail.body || t('general_loading') }}
           </div>
         </div>
         <div v-else class="empty-state">
           <div class="empty-icon">📬</div>
-          <div class="empty-text">Select an email to view</div>
+          <div class="empty-text">{{ t('email_empty') }}</div>
         </div>
       </div>
     </div>
@@ -153,16 +154,23 @@
 <script>
 import api from './api.js';
 import crypto from './crypto.js';
+import { useI18n } from './i18n.js';
 import EmailSettings from './components/EmailSettings.vue';
 import EmailInbox from './components/EmailInbox.vue';
 import KeyManager from './components/KeyManager.vue';
+import LanguageSelector from './components/LanguageSelector.vue';
 
 export default {
   name: 'ChatApp',
   components: {
     EmailSettings,
     EmailInbox,
-    KeyManager
+    KeyManager,
+    LanguageSelector
+  },
+  setup() {
+    const { t, setLocale, availableLocales, currentLocale } = useI18n();
+    return { t, setLocale, availableLocales, currentLocale };
   },
   data() {
     return {

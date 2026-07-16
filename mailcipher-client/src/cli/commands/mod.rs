@@ -145,6 +145,22 @@ pub enum Command {
         group_id: String,
         email: String,
     },
+    Promote {
+        group_id: String,
+        email: String,
+    },
+    Demote {
+        group_id: String,
+        email: String,
+    },
+    Block {
+        group_id: String,
+        email: String,
+    },
+    Unblock {
+        group_id: String,
+        email: String,
+    },
 
     // ── Папки (folders) ─────────────────────────────────────
     FolderCreate {
@@ -502,6 +518,46 @@ impl Command {
                         _ => Command::Unknown("/groupremove requires <group_id> <email>".into()),
                     }
                 }
+                "promote" | "pm" => {
+                    let mut parts = args.splitn(2, ' ');
+                    match (parts.next(), parts.next()) {
+                        (Some(gid), Some(email)) => Command::Promote {
+                            group_id: gid.to_string(),
+                            email: email.to_string(),
+                        },
+                        _ => Command::Unknown("/promote requires <group_id> <email>".into()),
+                    }
+                }
+                "demote" | "dm" => {
+                    let mut parts = args.splitn(2, ' ');
+                    match (parts.next(), parts.next()) {
+                        (Some(gid), Some(email)) => Command::Demote {
+                            group_id: gid.to_string(),
+                            email: email.to_string(),
+                        },
+                        _ => Command::Unknown("/demote requires <group_id> <email>".into()),
+                    }
+                }
+                "block" | "bk" => {
+                    let mut parts = args.splitn(2, ' ');
+                    match (parts.next(), parts.next()) {
+                        (Some(gid), Some(email)) => Command::Block {
+                            group_id: gid.to_string(),
+                            email: email.to_string(),
+                        },
+                        _ => Command::Unknown("/block requires <group_id> <email>".into()),
+                    }
+                }
+                "unblock" | "ub" => {
+                    let mut parts = args.splitn(2, ' ');
+                    match (parts.next(), parts.next()) {
+                        (Some(gid), Some(email)) => Command::Unblock {
+                            group_id: gid.to_string(),
+                            email: email.to_string(),
+                        },
+                        _ => Command::Unknown("/unblock requires <group_id> <email>".into()),
+                    }
+                }
 
                 // Папки (folders)
                 "foldercreate" | "fc" => {
@@ -538,7 +594,9 @@ impl Command {
                             old_name: old.to_string(),
                             new_name: new.to_string(),
                         },
-                        _ => Command::Unknown("/folderrename requires <old_name> <new_name>".into()),
+                        _ => {
+                            Command::Unknown("/folderrename requires <old_name> <new_name>".into())
+                        }
                     }
                 }
                 "folderadd" | "fa" => {
@@ -558,7 +616,9 @@ impl Command {
                             folder_name: folder.to_string(),
                             chat_id: chat.to_string(),
                         },
-                        _ => Command::Unknown("/folderremove requires <folder_name> <chat_id>".into()),
+                        _ => Command::Unknown(
+                            "/folderremove requires <folder_name> <chat_id>".into(),
+                        ),
                     }
                 }
                 "folderlist" | "fl" => Command::FolderList,
@@ -566,7 +626,9 @@ impl Command {
                     if args.is_empty() {
                         Command::Unknown("/folderchats requires <name>".into())
                     } else {
-                        Command::FolderChats { name: args.to_string() }
+                        Command::FolderChats {
+                            name: args.to_string(),
+                        }
                     }
                 }
 
@@ -581,7 +643,9 @@ impl Command {
                                 message_id: id.to_string(),
                                 new_content: content.to_string(),
                             },
-                            _ => Command::Unknown("/edit requires <message_id> <new_content>".into()),
+                            _ => {
+                                Command::Unknown("/edit requires <message_id> <new_content>".into())
+                            }
                         }
                     }
                 }
@@ -589,14 +653,18 @@ impl Command {
                     if args.is_empty() {
                         Command::Unknown("/editinfo requires <message_id>".into())
                     } else {
-                        Command::EditInfo { message_id: args.to_string() }
+                        Command::EditInfo {
+                            message_id: args.to_string(),
+                        }
                     }
                 }
                 "editundo" | "edu" => {
                     if args.is_empty() {
                         Command::Unknown("/editundo requires <message_id>".into())
                     } else {
-                        Command::EditUndo { message_id: args.to_string() }
+                        Command::EditUndo {
+                            message_id: args.to_string(),
+                        }
                     }
                 }
 
@@ -606,15 +674,24 @@ impl Command {
                     if parts.is_empty() || parts[0].is_empty() {
                         Command::Unknown("/thumb requires <file_path> [size]".into())
                     } else {
-                        let size = if parts.len() > 1 { parts[1].to_string() } else { "m".into() };
-                        Command::Thumb { file_path: parts[0].to_string(), size }
+                        let size = if parts.len() > 1 {
+                            parts[1].to_string()
+                        } else {
+                            "m".into()
+                        };
+                        Command::Thumb {
+                            file_path: parts[0].to_string(),
+                            size,
+                        }
                     }
                 }
                 "thumbinfo" | "ti" => {
                     if args.is_empty() {
                         Command::Unknown("/thumbinfo requires <file_path>".into())
                     } else {
-                        Command::ThumbInfo { file_path: args.to_string() }
+                        Command::ThumbInfo {
+                            file_path: args.to_string(),
+                        }
                     }
                 }
 
@@ -785,15 +862,33 @@ impl fmt::Display for Command {
             Command::GroupRemove { group_id, email } => {
                 write!(f, "groupremove {} {}", group_id, email)
             }
+            Command::Promote { group_id, email } => {
+                write!(f, "promote {} {}", group_id, email)
+            }
+            Command::Demote { group_id, email } => {
+                write!(f, "demote {} {}", group_id, email)
+            }
+            Command::Block { group_id, email } => {
+                write!(f, "block {} {}", group_id, email)
+            }
+            Command::Unblock { group_id, email } => {
+                write!(f, "unblock {} {}", group_id, email)
+            }
             Command::FolderCreate { name, icon } => write!(f, "foldercreate {} {}", name, icon),
             Command::FolderDelete { name } => write!(f, "folderdelete {}", name),
             Command::FolderRename { old_name, new_name } => {
                 write!(f, "folderrename {} {}", old_name, new_name)
             }
-            Command::FolderAdd { folder_name, chat_id } => {
+            Command::FolderAdd {
+                folder_name,
+                chat_id,
+            } => {
                 write!(f, "folderadd {} {}", folder_name, chat_id)
             }
-            Command::FolderRemove { folder_name, chat_id } => {
+            Command::FolderRemove {
+                folder_name,
+                chat_id,
+            } => {
                 write!(f, "folderremove {} {}", folder_name, chat_id)
             }
             Command::FolderList => write!(f, "folderlist"),
@@ -1274,6 +1369,59 @@ mod tests {
     }
 
     #[test]
+    fn test_promote_demote_block_unblock() {
+        let cmd = Command::parse("/promote grp123 bob@test.com");
+        match cmd {
+            Command::Promote { group_id, email } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(email, "bob@test.com");
+            }
+            _ => panic!("Expected Promote"),
+        }
+        let cmd = Command::parse("/pm grp123 bob@test.com");
+        assert!(matches!(cmd, Command::Promote { .. }));
+
+        let cmd = Command::parse("/demote grp123 bob@test.com");
+        match cmd {
+            Command::Demote { group_id, email } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(email, "bob@test.com");
+            }
+            _ => panic!("Expected Demote"),
+        }
+        let cmd = Command::parse("/dm grp123 bob@test.com");
+        assert!(matches!(cmd, Command::Demote { .. }));
+
+        let cmd = Command::parse("/block grp123 bob@test.com");
+        match cmd {
+            Command::Block { group_id, email } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(email, "bob@test.com");
+            }
+            _ => panic!("Expected Block"),
+        }
+        let cmd = Command::parse("/bk grp123 bob@test.com");
+        assert!(matches!(cmd, Command::Block { .. }));
+
+        let cmd = Command::parse("/unblock grp123 bob@test.com");
+        match cmd {
+            Command::Unblock { group_id, email } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(email, "bob@test.com");
+            }
+            _ => panic!("Expected Unblock"),
+        }
+        let cmd = Command::parse("/ub grp123 bob@test.com");
+        assert!(matches!(cmd, Command::Unblock { .. }));
+
+        // require both args
+        assert!(matches!(Command::parse("/promote"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/demote"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/block"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/unblock"), Command::Unknown(_)));
+    }
+
+    #[test]
     fn test_settings_set() {
         assert!(matches!(Command::parse("/settings"), Command::Settings));
         assert!(matches!(Command::parse("/cfg"), Command::Settings));
@@ -1352,7 +1500,10 @@ mod tests {
     fn test_parse_folder_add_remove() {
         let cmd = Command::parse("/folderadd Work alice@test.com");
         match cmd {
-            Command::FolderAdd { folder_name, chat_id } => {
+            Command::FolderAdd {
+                folder_name,
+                chat_id,
+            } => {
                 assert_eq!(folder_name, "Work");
                 assert_eq!(chat_id, "alice@test.com");
             }
@@ -1360,7 +1511,10 @@ mod tests {
         }
         let cmd = Command::parse("/fa Work bob@test.com");
         match cmd {
-            Command::FolderAdd { folder_name, chat_id } => {
+            Command::FolderAdd {
+                folder_name,
+                chat_id,
+            } => {
                 assert_eq!(folder_name, "Work");
                 assert_eq!(chat_id, "bob@test.com");
             }
@@ -1368,7 +1522,10 @@ mod tests {
         }
         let cmd = Command::parse("/folderremove Work alice@test.com");
         match cmd {
-            Command::FolderRemove { folder_name, chat_id } => {
+            Command::FolderRemove {
+                folder_name,
+                chat_id,
+            } => {
                 assert_eq!(folder_name, "Work");
                 assert_eq!(chat_id, "alice@test.com");
             }

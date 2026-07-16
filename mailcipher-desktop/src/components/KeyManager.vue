@@ -2,27 +2,27 @@
   <div class="key-manager-overlay" @click.self="$emit('close')">
     <div class="key-manager-panel">
       <div class="panel-header">
-        <h3>Key Management</h3>
+        <h3>{{ t('keys_title') }}</h3>
         <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 
       <div class="panel-body">
         <div class="section">
-          <h4>My Keys</h4>
+          <h4>{{ t('keys_mine') }}</h4>
           <div class="key-status">
             <span :class="hasKeys ? 'status-active' : 'status-none'">
-              {{ hasKeys ? 'Keypair loaded' : 'No keypair found' }}
+              {{ hasKeys ? t('keys_loaded') : t('keys_none') }}
             </span>
           </div>
 
           <div v-if="hasKeys" class="key-info">
-            <label>Fingerprint</label>
+            <label>{{ t('keys_fingerprint') }}</label>
             <code class="fingerprint-display">{{ fingerprint }}</code>
 
-            <label>Public Key</label>
+            <label>{{ t('keys_public') }}</label>
             <div class="key-display">
               <textarea readonly :value="publicKey" rows="2"></textarea>
-              <button class="copy-btn" @click="copyToClipboard(publicKey)" title="Copy public key">
+              <button class="copy-btn" @click="copyToClipboard(publicKey)" :title="t('keys_copy')">
                 {{ copiedField === 'public' ? '✓' : '📋' }}
               </button>
             </div>
@@ -30,27 +30,27 @@
 
           <div class="key-actions">
             <button v-if="!hasKeys" @click="generateKeys" :disabled="generating" class="btn-primary">
-              {{ generating ? 'Generating...' : 'Generate Keypair' }}
+              {{ generating ? t('keys_generating') : t('keys_generate') }}
             </button>
             <button v-if="hasKeys" @click="exportAllKeys" class="btn-secondary">
-              Export Keys
+              {{ t('keys_export') }}
             </button>
             <button v-if="hasKeys" @click="confirmDelete" class="btn-danger">
-              Delete All Keys
+              {{ t('keys_delete_all') }}
             </button>
           </div>
         </div>
 
         <div class="section">
-          <h4>Import Keys</h4>
+          <h4>{{ t('keys_export') }}</h4>
           <div class="import-area">
             <textarea
               v-model="importData"
-              placeholder="Paste exported JSON here..."
+              :placeholder="t('keys_export') + '...'"
               rows="4"
             ></textarea>
             <button @click="importKeys" :disabled="!importData.trim()" class="btn-primary">
-              Import
+              {{ t('general_confirm') }}
             </button>
           </div>
           <div v-if="importResult" :class="['import-result', importResult.success ? 'success' : 'error']">
@@ -88,10 +88,15 @@
 
 <script>
 import crypto from '../crypto.js';
+import { useI18n } from '../i18n.js';
 
 export default {
   name: 'KeyManager',
   emits: ['close', 'keys-changed'],
+  setup() {
+    const { t } = useI18n();
+    return { t };
+  },
   data() {
     return {
       hasKeys: false,

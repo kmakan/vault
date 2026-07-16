@@ -120,10 +120,13 @@ impl EditManager {
             }
 
             // Проверяем временное окно с момента ПЕРВОГО редактирования
-            let time_since_original = now.signed_duration_since(existing.original_hash
-                .as_ref()
-                .and_then(|_| Some(existing.edited_at))
-                .unwrap_or(existing.edited_at));
+            let time_since_original = now.signed_duration_since(
+                existing
+                    .original_hash
+                    .as_ref()
+                    .and_then(|_| Some(existing.edited_at))
+                    .unwrap_or(existing.edited_at),
+            );
             if time_since_original.num_seconds() > self.edit_window_secs {
                 return Ok(EditResult {
                     success: false,
@@ -261,16 +264,11 @@ mod tests {
     #[test]
     fn test_multiple_edits() {
         let (mut mgr, _dir) = temp_manager();
-        mgr.edit_message("msg1", "alice@test.com", "v1")
-            .unwrap();
-        let r2 = mgr
-            .edit_message("msg1", "alice@test.com", "v2")
-            .unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        let r2 = mgr.edit_message("msg1", "alice@test.com", "v2").unwrap();
         assert_eq!(r2.edit_count, 2);
 
-        let r3 = mgr
-            .edit_message("msg1", "alice@test.com", "v3")
-            .unwrap();
+        let r3 = mgr.edit_message("msg1", "alice@test.com", "v3").unwrap();
         assert_eq!(r3.edit_count, 3);
 
         assert_eq!(mgr.edit_count("msg1"), 3);
@@ -280,13 +278,9 @@ mod tests {
     fn test_edit_limit() {
         let (mut mgr, _dir) = temp_manager();
         mgr.set_max_edits(2);
-        mgr.edit_message("msg1", "alice@test.com", "v1")
-            .unwrap();
-        mgr.edit_message("msg1", "alice@test.com", "v2")
-            .unwrap();
-        let r3 = mgr
-            .edit_message("msg1", "alice@test.com", "v3")
-            .unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v2").unwrap();
+        let r3 = mgr.edit_message("msg1", "alice@test.com", "v3").unwrap();
         assert!(!r3.success);
         assert!(r3.warning.unwrap().contains("Edit limit reached"));
     }
@@ -294,11 +288,8 @@ mod tests {
     #[test]
     fn test_different_editor_rejected() {
         let (mut mgr, _dir) = temp_manager();
-        mgr.edit_message("msg1", "alice@test.com", "v1")
-            .unwrap();
-        let r2 = mgr
-            .edit_message("msg1", "bob@test.com", "v2")
-            .unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        let r2 = mgr.edit_message("msg1", "bob@test.com", "v2").unwrap();
         assert!(!r2.success);
         assert!(r2.warning.unwrap().contains("Only the original editor"));
     }
@@ -306,10 +297,8 @@ mod tests {
     #[test]
     fn test_get_latest() {
         let (mut mgr, _dir) = temp_manager();
-        mgr.edit_message("msg1", "alice@test.com", "v1")
-            .unwrap();
-        mgr.edit_message("msg1", "alice@test.com", "v2")
-            .unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v2").unwrap();
 
         let latest = mgr.get_latest("msg1").unwrap();
         assert_eq!(latest.new_content, "v2");
@@ -335,10 +324,8 @@ mod tests {
     #[test]
     fn test_undo_and_delete() {
         let (mut mgr, _dir) = temp_manager();
-        mgr.edit_message("msg1", "alice@test.com", "v1")
-            .unwrap();
-        mgr.edit_message("msg1", "alice@test.com", "v2")
-            .unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        mgr.edit_message("msg1", "alice@test.com", "v2").unwrap();
         assert!(mgr.undo_last_edit("msg1").unwrap());
         assert_eq!(mgr.edit_count("msg1"), 1); // undo decrements
 

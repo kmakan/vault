@@ -1,14 +1,14 @@
 <template>
   <div class="email-settings">
     <div class="settings-header">
-      <h2>Email Accounts</h2>
-      <button @click="showAddForm = true" class="add-btn">+ Add Account</button>
+      <h2>{{ t('settings_email_accounts') }}</h2>
+      <button @click="showAddForm = true" class="add-btn">+ {{ t('settings_add_account') }}</button>
     </div>
 
     <div class="accounts-list">
-      <div v-if="loading" class="loading">Loading...</div>
+      <div v-if="loading" class="loading">{{ t('general_loading') }}</div>
       <div v-else-if="accounts.length === 0" class="empty-state">
-        No email accounts configured. Add one to start.
+        {{ t('settings_email_accounts') }}. {{ t('settings_add_account') }}.
       </div>
       <div v-else class="account-cards">
         <div v-for="account in accounts" :key="account.id" class="account-card">
@@ -17,7 +17,7 @@
             <div class="account-details">
               <span class="detail">IMAP: {{ account.imap_server }}:{{ account.imap_port }}</span>
               <span class="detail">SMTP: {{ account.smtp_server }}:{{ account.smtp_port }}</span>
-              <span v-if="account.is_default" class="default-badge">Default</span>
+              <span v-if="account.is_default" class="default-badge">{{ t('general_confirm') }}</span>
             </div>
           </div>
           <button @click="deleteAccount(account.id)" class="delete-btn">×</button>
@@ -27,60 +27,60 @@
 
     <div v-if="showAddForm" class="modal-overlay" @click.self="showAddForm = false">
       <div class="modal">
-        <h3>Add Email Account</h3>
+        <h3>{{ t('settings_add_account') }}</h3>
         <form @submit.prevent="addAccount">
           <div class="form-group">
-            <label>Email Address</label>
+            <label>{{ t('settings_email_address') }}</label>
             <input v-model="newAccount.email" type="email" required placeholder="user@example.com" />
           </div>
 
           <div class="form-group">
-            <label>IMAP Server</label>
+            <label>{{ t('settings_imap_server') }}</label>
             <input v-model="newAccount.imap_server" required placeholder="imap.example.com" />
           </div>
 
           <div class="form-row">
             <div class="form-group">
-              <label>IMAP Port</label>
+              <label>{{ t('settings_imap_port') }}</label>
               <input v-model.number="newAccount.imap_port" type="number" placeholder="993" />
             </div>
             <div class="form-group">
-              <label>SMTP Server</label>
+              <label>{{ t('settings_smtp_server') }}</label>
               <input v-model="newAccount.smtp_server" required placeholder="smtp.example.com" />
             </div>
           </div>
 
           <div class="form-row">
             <div class="form-group">
-              <label>SMTP Port</label>
+              <label>{{ t('settings_smtp_port') }}</label>
               <input v-model.number="newAccount.smtp_port" type="number" placeholder="587" />
             </div>
             <div class="form-group">
-              <label>Username</label>
-              <input v-model="newAccount.username" required placeholder="Username" />
+              <label>{{ t('settings_username') }}</label>
+              <input v-model="newAccount.username" required :placeholder="t('settings_username')" />
             </div>
           </div>
 
           <div class="form-group">
-            <label>Password</label>
-            <input v-model="newAccount.password_encrypted" type="password" required placeholder="Password" />
+            <label>{{ t('settings_password') }}</label>
+            <input v-model="newAccount.password_encrypted" type="password" required :placeholder="t('settings_password')" />
           </div>
 
           <div class="form-row">
             <label class="checkbox-label">
               <input type="checkbox" v-model="newAccount.use_tls" />
-              Use TLS
+              TLS
             </label>
             <label class="checkbox-label">
               <input type="checkbox" v-model="newAccount.is_default" />
-              Default Account
+              {{ t('general_confirm') }}
             </label>
           </div>
 
           <div class="form-actions">
-            <button type="button" @click="showAddForm = false" class="cancel-btn">Cancel</button>
+            <button type="button" @click="showAddForm = false" class="cancel-btn">{{ t('settings_cancel') }}</button>
             <button type="submit" :disabled="submitting" class="submit-btn">
-              {{ submitting ? 'Adding...' : 'Add Account' }}
+              {{ submitting ? t('general_loading') : t('settings_add_account') }}
             </button>
           </div>
         </form>
@@ -91,9 +91,14 @@
 
 <script>
 import api from '../api.js';
+import { useI18n } from '../i18n.js';
 
 export default {
   name: 'EmailSettings',
+  setup() {
+    const { t } = useI18n();
+    return { t };
+  },
   data() {
     return {
       accounts: [],

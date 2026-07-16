@@ -242,8 +242,13 @@ mod tests {
     #[test]
     fn test_search_by_subject() {
         let (mut idx, _dir) = temp_index();
-        idx.index_message(make_entry("m1", "a@t.com", "Meeting Tomorrow", "Let's meet"))
-            .unwrap();
+        idx.index_message(make_entry(
+            "m1",
+            "a@t.com",
+            "Meeting Tomorrow",
+            "Let's meet",
+        ))
+        .unwrap();
         idx.index_message(make_entry("m2", "b@t.com", "Lunch", "Pizza today"))
             .unwrap();
         idx.index_message(make_entry("m3", "c@t.com", "Re: Meeting", "Confirmed"))
@@ -279,10 +284,20 @@ mod tests {
     #[test]
     fn test_search_by_body() {
         let (mut idx, _dir) = temp_index();
-        idx.index_message(make_entry("m1", "a@t.com", "Subject", "The deadline is Friday"))
-            .unwrap();
-        idx.index_message(make_entry("m2", "b@t.com", "Subject", "No deadline mentioned"))
-            .unwrap();
+        idx.index_message(make_entry(
+            "m1",
+            "a@t.com",
+            "Subject",
+            "The deadline is Friday",
+        ))
+        .unwrap();
+        idx.index_message(make_entry(
+            "m2",
+            "b@t.com",
+            "Subject",
+            "No deadline mentioned",
+        ))
+        .unwrap();
 
         let results = idx.search("friday");
         assert_eq!(results.len(), 1);

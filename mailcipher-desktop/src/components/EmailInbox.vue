@@ -1,33 +1,33 @@
 <template>
   <div class="email-inbox">
     <div class="inbox-header">
-      <h3>Email</h3>
+      <h3>{{ t('email_inbox') }}</h3>
       <div class="filter-tabs">
         <button 
           :class="['filter-tab', { active: filter === 'all' }]"
           @click="filter = 'all'"
         >
-          All
+          {{ t('general_confirm') }}
         </button>
         <button 
           :class="['filter-tab', { active: filter === 'whisper' }]"
           @click="filter = 'whisper'"
         >
-          Whisper
+          {{ t('app_name') }}
         </button>
         <button 
           :class="['filter-tab', { active: filter === 'regular' }]"
           @click="filter = 'regular'"
         >
-          Regular
+          {{ t('email_body') }}
         </button>
       </div>
     </div>
 
     <div class="emails-list">
-      <div v-if="loading" class="loading">Loading emails...</div>
+      <div v-if="loading" class="loading">{{ t('email_loading') }}</div>
       <div v-else-if="filteredEmails.length === 0" class="empty-state">
-        No emails to display.
+        {{ t('email_empty') }}
       </div>
       <div v-else>
         <div 
@@ -37,10 +37,10 @@
           @click="$emit('open-email', email)"
         >
           <div class="email-sender">{{ email.from }}</div>
-          <div class="email-subject">{{ email.subject || '(no subject)' }}</div>
+          <div class="email-subject">{{ email.subject || t('email_empty') }}</div>
           <div class="email-meta">
             <span class="email-date">{{ email.date }}</span>
-            <span v-if="isWhisper(email)" class="whisper-badge">Whisper</span>
+            <span v-if="isWhisper(email)" class="whisper-badge">{{ t('app_name') }}</span>
           </div>
         </div>
       </div>
@@ -49,8 +49,14 @@
 </template>
 
 <script>
+import { useI18n } from '../i18n.js';
+
 export default {
   name: 'EmailInbox',
+  setup() {
+    const { t } = useI18n();
+    return { t };
+  },
   props: {
     emails: {
       type: Array,

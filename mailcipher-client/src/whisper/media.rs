@@ -122,8 +122,8 @@ pub struct MediaInfo {
 impl MediaInfo {
     /// Create a MediaInfo from a file path, detecting properties
     pub fn from_file(path: &std::path::Path) -> Result<Self> {
-        let metadata = fs::metadata(path)
-            .with_context(|| format!("Cannot read file: {}", path.display()))?;
+        let metadata =
+            fs::metadata(path).with_context(|| format!("Cannot read file: {}", path.display()))?;
 
         let format = ImageFormat::from_path(path);
         let mime_type = format.mime().to_string();
@@ -310,8 +310,8 @@ impl ThumbnailManager {
 
     /// Parse a thumbnail file to extract metadata
     pub fn parse_thumbnail_header(path: &std::path::Path) -> Result<ThumbnailHeader> {
-        let data = fs::read(path)
-            .with_context(|| format!("Cannot read thumbnail: {}", path.display()))?;
+        let data =
+            fs::read(path).with_context(|| format!("Cannot read thumbnail: {}", path.display()))?;
 
         if data.len() < 18 {
             anyhow::bail!("Thumbnail file too small");
@@ -348,11 +348,7 @@ impl ThumbnailManager {
     }
 
     /// Delete a thumbnail
-    pub fn delete_thumbnail(
-        &mut self,
-        source_id: &str,
-        size: ThumbnailSize,
-    ) -> Result<bool> {
+    pub fn delete_thumbnail(&mut self, source_id: &str, size: ThumbnailSize) -> Result<bool> {
         let key = Self::thumb_key(source_id, size);
         if let Some(thumb) = self.thumbnails.remove(&key) {
             if thumb.thumb_path.exists() {
@@ -604,7 +600,8 @@ mod tests {
         let info = MediaInfo::from_file(&img).unwrap();
 
         mgr.generate_thumbnail(&info, ThumbnailSize::Small).unwrap();
-        mgr.generate_thumbnail(&info, ThumbnailSize::Medium).unwrap();
+        mgr.generate_thumbnail(&info, ThumbnailSize::Medium)
+            .unwrap();
         mgr.generate_thumbnail(&info, ThumbnailSize::Large).unwrap();
 
         let list = mgr.list_for_source("photo");
@@ -638,7 +635,8 @@ mod tests {
         let info = MediaInfo::from_file(&img).unwrap();
 
         mgr.generate_thumbnail(&info, ThumbnailSize::Small).unwrap();
-        mgr.generate_thumbnail(&info, ThumbnailSize::Medium).unwrap();
+        mgr.generate_thumbnail(&info, ThumbnailSize::Medium)
+            .unwrap();
 
         let deleted = mgr.delete_all_for_source("photo").unwrap();
         assert_eq!(deleted, 2);
@@ -654,7 +652,9 @@ mod tests {
         let img_data = make_png_bytes();
         let img = write_test_image(&path, "photo.png", &img_data);
         let info = MediaInfo::with_dimensions(&img, 1920, 1080).unwrap();
-        let thumb = mgr.generate_thumbnail(&info, ThumbnailSize::Medium).unwrap();
+        let thumb = mgr
+            .generate_thumbnail(&info, ThumbnailSize::Medium)
+            .unwrap();
 
         let header = ThumbnailManager::parse_thumbnail_header(&thumb.thumb_path).unwrap();
         assert_eq!(header.format, ImageFormat::Png);
