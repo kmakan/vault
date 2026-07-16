@@ -78,4 +78,21 @@ export default {
   language_en: 'English',
   language_ru: 'Русский',
   language_zh: '中文',
+
+  // Groups
+  group_settings: '群组设置',
+  group_name: '群组名称',
+  group_create: '创建群组',
+  group_create_title: '新建群组',
+  members: '成员',
+  blocked: '已屏蔽',
+  blocked_users: '已屏蔽用户',
+  promote: '提升为管理员',
+  demote: '降级为成员',
+  remove_member: '从群组中移除',
+  leave_group: '离开群组',
+  delete_group: '删除群组',
+  group_empty: '暂无群组',
+  group_invite: '邀请成员',
+  group_invite_placeholder: '输入邮箱邀请...',
 }

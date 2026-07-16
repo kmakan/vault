@@ -108,6 +108,7 @@ pub enum Command {
     Keys,
     KeyShare {
         contact: String,
+        method: Option<String>,
     },
     Encrypt {
         text: String,
@@ -702,9 +703,12 @@ impl Command {
                     if args.is_empty() {
                         Command::Unknown("/keyshare requires a contact name or email".into())
                     } else {
-                        Command::KeyShare {
-                            contact: args.to_string(),
-                        }
+                        // Parse: /keyshare <contact> [method]
+                        // Methods: copy, signal, simplex, pgp, briar
+                        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                        let contact = parts[0].to_string();
+                        let method = parts.get(1).map(|s| s.to_lowercase());
+                        Command::KeyShare { contact, method }
                     }
                 }
                 "encrypt" | "enc" => {
@@ -847,7 +851,13 @@ impl fmt::Display for Command {
             Command::Confirm { email } => write!(f, "confirm {}", email),
             Command::Keygen => write!(f, "keygen"),
             Command::Keys => write!(f, "keys"),
-            Command::KeyShare { contact } => write!(f, "keyshare {}", contact),
+            Command::KeyShare { contact, method } => {
+                if let Some(m) = method {
+                    write!(f, "keyshare {} {}", contact, m)
+                } else {
+                    write!(f, "keyshare {}", contact)
+                }
+            }
             Command::Encrypt { .. } => write!(f, "encrypt ..."),
             Command::Decrypt { .. } => write!(f, "decrypt ..."),
             Command::Attach { path } => write!(f, "attach {}", path),
@@ -1278,7 +1288,19 @@ mod tests {
         assert!(matches!(Command::parse("/keyshare"), Command::Unknown(_)));
         let cmd = Command::parse("/keyshare alice@test.com");
         match cmd {
-            Command::KeyShare { contact } => assert_eq!(contact, "alice@test.com"),
+            Command::KeyShare { contact, method } => {
+                assert_eq!(contact, "alice@test.com");
+                assert!(method.is_none());
+            }
+            _ => panic!(),
+        }
+        // Test with method
+        let cmd = Command::parse("/keyshare alice@test.com signal");
+        match cmd {
+            Command::KeyShare { contact, method } => {
+                assert_eq!(contact, "alice@test.com");
+                assert_eq!(method, Some("signal".into()));
+            }
             _ => panic!(),
         }
     }

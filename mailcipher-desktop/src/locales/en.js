@@ -78,4 +78,21 @@ export default {
   language_en: 'English',
   language_ru: 'Русский',
   language_zh: '中文',
+
+  // Groups
+  group_settings: 'Group Settings',
+  group_name: 'Group Name',
+  group_create: 'Create Group',
+  group_create_title: 'New Group',
+  members: 'members',
+  blocked: 'blocked',
+  blocked_users: 'Blocked Users',
+  promote: 'Promote to admin',
+  demote: 'Demote to member',
+  remove_member: 'Remove from group',
+  leave_group: 'Leave Group',
+  delete_group: 'Delete Group',
+  group_empty: 'No groups yet',
+  group_invite: 'Invite member',
+  group_invite_placeholder: 'Email to invite...',
 }

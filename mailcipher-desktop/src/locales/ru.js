@@ -78,4 +78,21 @@ export default {
   language_en: 'English',
   language_ru: 'Русский',
   language_zh: '中文',
+
+  // Groups
+  group_settings: 'Настройки группы',
+  group_name: 'Название группы',
+  group_create: 'Создать группу',
+  group_create_title: 'Новая группа',
+  members: 'участников',
+  blocked: 'заблокировано',
+  blocked_users: 'Заблокированные',
+  promote: 'Назначить администратором',
+  demote: 'Понизить до участника',
+  remove_member: 'Удалить из группы',
+  leave_group: 'Покинуть группу',
+  delete_group: 'Удалить группу',
+  group_empty: 'Групп пока нет',
+  group_invite: 'Пригласить участника',
+  group_invite_placeholder: 'Email для приглашения...',
 }

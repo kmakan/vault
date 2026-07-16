@@ -44,9 +44,7 @@
           :class="['contact-item', { active: activeChat === contact.email }]"
           @click="selectChat(contact.email)"
         >
-          <div class="contact-avatar">
-            <span class="avatar-initial">{{ contact.name.charAt(0).toUpperCase() }}</span>
-          </div>
+          <UserAvatar :email="contact.email" :size="36" />
           <div class="contact-info">
             <div class="contact-name">{{ contact.name }}</div>
             <div class="contact-email">{{ contact.email }}</div>
@@ -87,9 +85,7 @@
       <div v-else-if="currentView === 'chats'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
           <div class="chat-header-info">
-            <div class="chat-avatar">
-              <span class="avatar-initial">{{ activeChat.charAt(0).toUpperCase() }}</span>
-            </div>
+            <UserAvatar :email="activeChat" :size="40" />
             <div>
               <h3>{{ activeChat }}</h3>
               <div class="chat-status">{{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}</div>
@@ -159,6 +155,8 @@ import EmailSettings from './components/EmailSettings.vue';
 import EmailInbox from './components/EmailInbox.vue';
 import KeyManager from './components/KeyManager.vue';
 import LanguageSelector from './components/LanguageSelector.vue';
+import UserAvatar from './components/UserAvatar.vue';
+import GroupSettings from './components/GroupSettings.vue';
 
 export default {
   name: 'ChatApp',
@@ -166,7 +164,9 @@ export default {
     EmailSettings,
     EmailInbox,
     KeyManager,
-    LanguageSelector
+    LanguageSelector,
+    UserAvatar,
+    GroupSettings
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();

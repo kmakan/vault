@@ -695,24 +695,90 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
             Output::divider();
         }
-        Command::KeyShare { contact } => {
+        Command::KeyShare { contact, method } => {
             if !ctx.crypto.has_keys() {
                 let _ = ctx.crypto.generate_keypair();
             }
-            Output::info(&format!("Sharing public key with {}...", contact));
             if let Some(pub_hex) = ctx.crypto.public_key_hex() {
-                Output::fingerprint(&pub_hex);
-                println!();
-                Output::info("Key exchange methods:");
-                println!("  1. QR Code    — scan in person (most secure)");
-                println!("  2. Copy below — send via Signal/Telegram/WhatsApp");
-                println!("  3. Email PGP  — send via encrypted email");
-                println!();
-                Output::warn("Copy this key and send via a secure channel:");
-                println!("  {}", pub_hex);
-                println!();
-                Output::warn("⚠  Signal may be blocked in your region (RU, CN, IR).");
-                Output::warn("   Use VPN if you cannot connect to Signal.");
+                match method.as_deref() {
+                    Some("signal") => {
+                        Output::info(&format!("Key for {} — Send via Signal", contact));
+                        println!();
+                        println!("  Your public key ({}):", contact);
+                        println!("  {}", pub_hex);
+                        println!();
+                        Output::warn("Instructions:");
+                        println!("  1. Open Signal → {}'s chat", contact);
+                        println!("  2. Paste the key above");
+                        println!("  3. Ask them to save it and reply with theirs");
+                        println!();
+                        Output::warn("⚠  Signal may be blocked in your region (RU, CN, IR).");
+                        Output::warn("   Use a VPN to connect if needed.");
+                    }
+                    Some("simplex") => {
+                        Output::info(&format!("Key for {} — Send via SimpleX", contact));
+                        println!();
+                        println!("  Your public key ({}):", contact);
+                        println!("  {}", pub_hex);
+                        println!();
+                        Output::warn("Instructions:");
+                        println!("  1. Open SimpleX → {}'s chat", contact);
+                        println!("  2. Paste the key above");
+                        println!("  3. Ask them to save it and reply with theirs");
+                        println!();
+                        Output::warn("⚠  SimpleX may require VPN in some regions.");
+                        Output::warn("   Download: https://simplex.chat");
+                    }
+                    Some("pgp") => {
+                        Output::info(&format!("Key for {} — Send via PGP email", contact));
+                        println!();
+                        println!("  Your public key:");
+                        println!("  {}", pub_hex);
+                        println!();
+                        Output::warn("Instructions:");
+                        println!("  1. Encrypt the key with their PGP public key");
+                        println!("  2. Send the encrypted key via email");
+                        println!("  3. Ask them to decrypt and save it");
+                        println!();
+                        println!("  Subject: [Whisper] Public Key Exchange");
+                        println!("  Body: <your encrypted public key>");
+                    }
+                    Some("briar") => {
+                        Output::info(&format!("Key for {} — Send via Briar", contact));
+                        println!();
+                        println!("  Your public key ({}):", contact);
+                        println!("  {}", pub_hex);
+                        println!();
+                        Output::warn("Instructions:");
+                        println!("  1. Open Briar → {}'s chat", contact);
+                        println!("  2. Paste the key above");
+                        println!("  3. Ask them to save it and reply with theirs");
+                        println!();
+                        Output::info("Briar uses Tor — no VPN needed.");
+                        Output::info("Download: https://briarproject.org");
+                    }
+                    Some("copy") | None => {
+                        Output::info(&format!("Sharing public key with {}...", contact));
+                        Output::fingerprint(&pub_hex);
+                        println!();
+                        Output::info("Key exchange methods:");
+                        println!("  1. QR Code    — scan in person (most secure)");
+                        println!("  2. Copy below — send via Signal/Telegram/WhatsApp");
+                        println!("  3. Email PGP  — send via encrypted email");
+                        println!();
+                        Output::warn("Copy this key and send via a secure channel:");
+                        println!("  {}", pub_hex);
+                        println!();
+                        Output::warn("⚠  Signal may be blocked in your region (RU, CN, IR).");
+                        Output::warn("   Use VPN if you cannot connect to Signal.");
+                    }
+                    Some(unknown) => {
+                        Output::error(&format!(
+                            "Unknown method '{}'. Available: copy, signal, simplex, pgp, briar",
+                            unknown
+                        ));
+                    }
+                }
             }
         }
         Command::Encrypt { text } => {
@@ -1425,17 +1491,21 @@ fn print_help(topic: Option<&str>) {
                 &[
                     "  /keygen            Generate new X25519 key pair",
                     "  /keys              Show key status and fingerprint",
-                    "  /keyshare <email>  Share public key with a contact",
+                    "  /keyshare <email> [method]  Share public key with a contact",
                     "",
-                    "Shortcuts: /kg, /k",
+                    "Shortcuts: /kg, /k, /ks",
                     "",
-                    "Key exchange methods (via /keyshare):",
-                    "  1. QR Code    — scan in person (most secure)",
-                    "  2. Copy key   — send via Signal/Telegram/WhatsApp",
-                    "  3. Email PGP  — send via encrypted email",
+                    "Key exchange methods:",
+                    "  /ks <email>            — show all methods (default: copy)",
+                    "  /ks <email> signal     — copy key + Signal instructions",
+                    "  /ks <email> simplex    — copy key + SimpleX instructions",
+                    "  /ks <email> pgp        — copy key + PGP email template",
+                    "  /ks <email> briar      — copy key + Briar instructions",
+                    "  /ks <email> copy       — just show the key to copy",
                     "",
                     "⚠  Signal may be blocked in some regions (RU, CN, IR).",
                     "   Use VPN if you cannot connect to Signal.",
+                    "   SimpleX also may need VPN. Briar uses Tor (no VPN).",
                 ],
             );
         }
@@ -1730,7 +1800,7 @@ fn print_help(topic: Option<&str>) {
                     "  KEYS & ENCRYPTION",
                     "    /keygen            Generate key pair",
                     "    /keys              Show key status",
-                    "    /keyshare <email>  Share public key",
+                    "    /ks <email> [m]  Share public key (copy|signal|pgp|briar)",
                     "    /encrypt <text>    Encrypt text",
                     "    /decrypt <text>    Decrypt text",
                     "",
