@@ -95,4 +95,11 @@ export default {
   group_empty: '暂无群组',
   group_invite: '邀请成员',
   group_invite_placeholder: '输入邮箱邀请...',
+
+  // Audio
+  audio_record: '语音消息',
+  audio_start: '开始录音',
+  audio_stop: '停止',
+  audio_discard: '删除',
+  audio_send: '发送语音',
 }

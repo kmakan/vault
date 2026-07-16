@@ -95,4 +95,11 @@ export default {
   group_empty: 'Групп пока нет',
   group_invite: 'Пригласить участника',
   group_invite_placeholder: 'Email для приглашения...',
+
+  // Audio
+  audio_record: 'Голосовое сообщение',
+  audio_start: 'Начать запись',
+  audio_stop: 'Стоп',
+  audio_discard: 'Удалить',
+  audio_send: 'Отправить голос',
 }

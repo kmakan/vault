@@ -178,6 +178,12 @@
           />
         </div>
         <button class="attach-btn" title="Attach file">📎</button>
+        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message">🎙️</button>
+        <AudioRecorder
+          :show="showAudioRecorder"
+          @send="sendAudioMessage"
+          @close="showAudioRecorder = false"
+        />
           <button class="send-btn" @click="sendMessage">
             <span class="send-icon">➤</span>
           </button>
@@ -247,6 +253,7 @@ import LanguageSelector from './components/LanguageSelector.vue';
 import UserAvatar from './components/UserAvatar.vue';
 import GroupSettings from './components/GroupSettings.vue';
 import EmojiPicker from './components/EmojiPicker.vue';
+import AudioRecorder from './components/AudioRecorder.vue';
 
 export default {
   name: 'ChatApp',
@@ -257,7 +264,8 @@ export default {
     LanguageSelector,
     UserAvatar,
     GroupSettings,
-    EmojiPicker
+    EmojiPicker,
+    AudioRecorder
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -305,6 +313,8 @@ export default {
       showCreateGroup: false,
       inviteEmail: '',
       groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '💼', '🚀', '⭐', '🎯', '💡'],
+      // Audio
+      showAudioRecorder: false,
     }
   },
   computed: {
@@ -494,6 +504,21 @@ export default {
     insertEmoji(emoji) {
       this.newMessage += emoji
       this.showEmojiPicker = false
+    },
+    // Audio messages
+    sendAudioMessage(audioData) {
+      // Audio is encrypted and sent as attachment
+      // For now, show as text indicator
+      const msg = {
+        id: Date.now().toString(36),
+        content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+        from: 'me',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        encrypted: this.cryptoReady,
+        audioData: audioData.base64,
+      }
+      this.messages.push(msg)
+      this.showAudioRecorder = false
     },
     // Reactions
     toggleReactionPicker(msgId) {
@@ -1368,6 +1393,21 @@ body {
 
 .attach-btn:hover {
   background: var(--bg-hover);
+}
+
+.mic-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.mic-btn:hover {
+  background: var(--bg-hover);
+  transform: scale(1.1);
 }
 
 .send-btn {

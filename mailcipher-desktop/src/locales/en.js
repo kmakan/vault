@@ -95,4 +95,11 @@ export default {
   group_empty: 'No groups yet',
   group_invite: 'Invite member',
   group_invite_placeholder: 'Email to invite...',
+
+  // Audio
+  audio_record: 'Voice Message',
+  audio_start: 'Start Recording',
+  audio_stop: 'Stop',
+  audio_discard: 'Discard',
+  audio_send: 'Send Voice',
 }
