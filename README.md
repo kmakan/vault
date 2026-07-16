@@ -1,4 +1,4 @@
-# 🔐 Vault (MailCipher)
+# 🔐 Vault (Vault)
 
 > **Secure messenger over email. No servers. No phone numbers. Just email.**
 >
@@ -25,21 +25,21 @@ Vault is a privacy-first messenger that works over email (IMAP/SMTP). It uses **
 
 ```bash
 # Clone
-git clone https://github.com/nickswl/mailcipher.git
-cd mailcipher
+git clone https://github.com/nickswl/vault.git
+cd vault
 
 # Build client
-cd mailcipher-client
+cd vault-client
 cargo build --release
 
 # Run
-../target/release/mailcipher-client
+../target/release/vault-client
 ```
 
 ### Desktop (Tauri)
 
 ```bash
-cd mailcipher-desktop
+cd vault-desktop
 npm install
 npm run tauri build   # or: npm run tauri dev
 ```
@@ -48,7 +48,7 @@ npm run tauri build   # or: npm run tauri dev
 
 ```bash
 # Requires: JDK 17, Android SDK 35, NDK 27
-cd mailcipher-desktop
+cd vault-desktop
 npx tauri android build
 # Output: src-tauri/gen/android/app/build/outputs/apk/
 ```
@@ -211,21 +211,21 @@ All group state is stored in `~/.vault/groups.json`.
 
 ```
 vault/
-├── mailcipher-client/     # Rust CLI + core logic
+├── vault-client/     # Rust CLI + core logic
 │   ├── src/
 │   │   ├── cli/           # CLI commands, REPL
 │   │   ├── crypto/        # X25519, XChaCha20
 │   │   ├── vault/       # Groups, contacts, invites, etc.
 │   │   └── main.rs
 │   └── Cargo.toml
-├── mailcipher-desktop/    # Vue.js + Tauri 2
+├── vault-desktop/    # Vue.js + Tauri 2
 │   ├── src/
 │   │   ├── components/    # Vue components
 │   │   ├── locales/       # i18n (en, ru, zh)
 │   │   └── i18n.js
 │   ├── src-tauri/         # Rust backend (Tauri)
 │   └── package.json
-├── mailcipher-web/        # Web UI
+├── vault-web/        # Web UI
 ├── docs/                  # Documentation
 │   ├── design/            # Design docs
 │   ├── deployment/        # Build & deploy guides
@@ -239,11 +239,11 @@ vault/
 
 ```bash
 # Client tests
-cd mailcipher-client
+cd vault-client
 cargo test          # 228 tests
 
 # Desktop build check
-cd mailcipher-desktop
+cd vault-desktop
 npm run build
 ```
 

@@ -20,12 +20,12 @@ sudo rpm -i vault-0.1.0-1.x86_64.rpm
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://github.com/nickswl/mailcipher.git
-cd mailcipher/mailcipher-desktop
+git clone https://github.com/nickswl/vault.git
+cd vault/vault-desktop
 npm install
 npm run tauri build
 
-# Binary: src-tauri/target/release/mailcipher-desktop
+# Binary: src-tauri/target/release/vault-desktop
 ```
 
 ---
@@ -40,7 +40,7 @@ npm run tauri build
 ### Build APK
 
 ```bash
-cd mailcipher-desktop
+cd vault-desktop
 npm install
 npx tauri android build
 
@@ -64,16 +64,16 @@ adb install app-universal-release-unsigned.apk
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://github.com/nickswl/mailcipher.git
-cd mailcipher/mailcipher-client
+git clone https://github.com/nickswl/vault.git
+cd vault/vault-client
 cargo build --release
 
 # Run
-../target/release/mailcipher-client
+../target/release/vault-client
 
 # Or install globally
 cargo install --path .
-mailcipher-client
+vault-client
 ```
 
 ---

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="env-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <!-- Envelope body -->
+  <rect x="14" y="36" width="100" height="72" rx="8" fill="url(#env-grad)"/>
+  <!-- Envelope flap -->
+  <path d="M14 40 L64 78 L114 40" fill="none" stroke="#c7d2fe" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Lock on envelope -->
+  <rect x="50" y="66" width="28" height="20" rx="3" fill="#c7d2fe"/>
+  <path d="M54 66 V58 C54 52 57 48 64 48 C71 48 74 52 74 58 V66"
+        fill="none" stroke="#c7d2fe" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="64" cy="74" r="3" fill="#1e1b4b"/>
+  <rect x="62.5" y="75" width="3" height="6" rx="1" fill="#1e1b4b"/>
+</svg>

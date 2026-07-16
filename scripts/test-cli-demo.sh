@@ -4,7 +4,7 @@
 
 set -e
 
-CLIENT_DIR="/home/maksim/vault/mailcipher-client"
+CLIENT_DIR="/home/maksim/vault/vault-client"
 RESULTS_FILE="/home/maksim/vault/docs/testing/cli-demo-results.md"
 
 echo "# CLI Demo Test Results" > "$RESULTS_FILE"
@@ -23,7 +23,7 @@ test_command() {
     echo "" >> "$RESULTS_FILE"
     
     # Запуск команды
-    output=$(cd "$CLIENT_DIR" && echo "$cmd" | cargo run --bin mailcipher-client 2>&1 | head -20)
+    output=$(cd "$CLIENT_DIR" && echo "$cmd" | cargo run --bin vault-client 2>&1 | head -20)
     
     echo "Вывод:" >> "$RESULTS_FILE"
     echo '```' >> "$RESULTS_FILE"

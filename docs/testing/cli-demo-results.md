@@ -3,7 +3,7 @@
 Дата: 2026-07-15
 
 ## Тест 1: Запуск клиента
-Команда: `cargo run --bin mailcipher-client`
+Команда: `cargo run --bin vault-client`
 
 Вывод:
 ```
@@ -41,7 +41,7 @@
 ---
 
 ## Тест 3: Сборка клиента
-Команда: `cargo build --bin mailcipher-client`
+Команда: `cargo build --bin vault-client`
 
 ✅ PASS — Сборка проходит без ошибок
 

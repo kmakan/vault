@@ -1,7 +1,7 @@
 # 📋 Vault/Vault — Заметки проекта
 
 ## Название
-- **Рабочее**: MailCipher (внутреннее)
+- **Рабочее**: Vault (внутреннее)
 - **Продвижение**: **Vault** (основное)
 - **Запасное**: Vault
 
@@ -65,6 +65,6 @@ a28840c09 feat: добавить standalone Encryptor/Decryptor и обнови�
 - **Лимит** — зависит от провайдера (Gmail 25MB, Outlook 20MB)
 
 ## Ссылки
-- Kanban: `hermes kanban --board mailcipher list`
-- Тесты backend: `cd mailcipher-backend && cargo test`
-- Тесты клиент: `cd mailcipher-client && cargo test`
+- Kanban: `hermes kanban --board vault list`
+- Тесты backend: `cd vault-backend && cargo test`
+- Тесты клиент: `cd vault-client && cargo test`

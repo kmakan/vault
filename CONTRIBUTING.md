@@ -12,15 +12,15 @@ Thank you for your interest in contributing! Here's how to get started.
 ### Clone & Build
 
 ```bash
-git clone https://github.com/nickswl/mailcipher.git
-cd mailcipher
+git clone https://github.com/nickswl/vault.git
+cd vault
 
 # Client (CLI)
-cd mailcipher-client
+cd vault-client
 cargo build
 
 # Desktop
-cd ../mailcipher-desktop
+cd ../vault-desktop
 npm install
 npm run tauri dev
 ```
@@ -28,7 +28,7 @@ npm run tauri dev
 ### Run Tests
 
 ```bash
-cd mailcipher-client
+cd vault-client
 cargo test  # 228 tests
 ```
 

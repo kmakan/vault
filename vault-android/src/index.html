@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Whisper</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .container { max-width: 400px; margin: 0 auto; padding: 16px; }
+    .header {
+      background: #16213e;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    .header h1 { color: #e94560; font-size: 24px; }
+    .header p { color: #888; font-size: 12px; margin-top: 4px; }
+    .card {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card h2 { color: #e94560; font-size: 16px; margin-bottom: 12px; }
+    input, textarea {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #0f3460;
+      color: #e0e0e0;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    textarea { min-height: 80px; resize: vertical; font-family: monospace; }
+    button {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      background: #e94560;
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+    button:hover { background: #c73650; }
+    button.secondary { background: #0f3460; }
+    .result {
+      background: #0a0a1a;
+      padding: 10px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      min-height: 40px;
+      color: #4ecca3;
+    }
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: transparent;
+      color: #888;
+      cursor: pointer;
+      text-align: center;
+    }
+    .tab.active { background: #e94560; color: white; border-color: #e94560; }
+    .hidden { display: none; }
+    .chat-item {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+    .chat-item:hover { background: #1a4a7a; }
+    .chat-item .chat-name { color: #e94560; font-weight: 600; }
+    .chat-item .chat-preview { color: #888; font-size: 12px; margin-top: 4px; }
+    .message {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .message.sent { background: #1a4a7a; margin-left: 20px; }
+    .message.received { margin-right: 20px; }
+    .message .msg-sender { color: #4ecca3; font-size: 11px; }
+    .message .msg-content { color: #e0e0e0; margin-top: 4px; }
+    .message .msg-time { color: #666; font-size: 10px; margin-top: 4px; }
+    .user-info {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+    }
+    .user-info .user-email { color: #4ecca3; }
+    .user-info .user-name { color: #e94560; font-weight: 600; }
+    .error { color: #e94560; font-size: 12px; margin-top: 4px; }
+    .success { color: #4ecca3; font-size: 12px; margin-top: 4px; }
+    .nav-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .nav-btn {
+      flex: 1;
+      min-width: 80px;
+      padding: 8px;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: transparent;
+      color: #888;
+      cursor: pointer;
+      text-align: center;
+      font-size: 12px;
+    }
+    .nav-btn.active { background: #e94560; color: white; border-color: #e94560; }
+    .chat-input {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .chat-input input { flex: 1; margin-bottom: 0; }
+    .chat-input button { width: auto; margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Whisper</h1>
+      <p>E2E Encrypted Messenger</p>
+    </div>
+
+    <div id="auth-section">
+      <div class="card">
+        <h2>Login</h2>
+        <input id="login-email" type="email" placeholder="Email" />
+        <input id="login-password" type="password" placeholder="Password" />
+        <button onclick="handleLogin()">Login</button>
+        <div id="login-error" class="error"></div>
+      </div>
+
+      <div class="card">
+        <h2>Register</h2>
+        <input id="reg-email" type="email" placeholder="Email" />
+        <input id="reg-username" placeholder="Username" />
+        <input id="reg-password" type="password" placeholder="Password" />
+        <button onclick="handleRegister()">Register</button>
+        <div id="reg-error" class="error"></div>
+      </div>
+    </div>
+
+    <div id="main-section" class="hidden">
+      <div class="nav-bar">
+        <div class="nav-btn active" onclick="showSection('chats')">Chats</div>
+        <div class="nav-btn" onclick="showSection('contacts')">Contacts</div>
+        <div class="nav-btn" onclick="showSection('keys')">Keys</div>
+        <div class="nav-btn" onclick="showSection('email')">Email</div>
+        <div class="nav-btn" onclick="handleLogout()">Logout</div>
+      </div>
+
+      <div id="user-info" class="user-info">
+        <span class="user-name" id="display-username"></span>
+        <span class="user-email" id="display-email"></span>
+      </div>
+
+      <div id="section-chats">
+        <div class="card">
+          <h2>Chats</h2>
+          <div id="chat-list"></div>
+          <button class="secondary" onclick="showNewChatForm()">New Chat</button>
+          <div id="new-chat-form" class="hidden">
+            <input id="new-chat-user" placeholder="User ID" />
+            <button onclick="createNewChat()">Create Chat</button>
+          </div>
+        </div>
+
+        <div id="chat-view" class="hidden">
+          <div class="card">
+            <h2 id="chat-view-name">Chat</h2>
+            <div id="message-list"></div>
+            <div class="chat-input">
+              <input id="message-input" placeholder="Type a message..." />
+              <button onclick="sendNewMessage()">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="section-contacts" class="hidden">
+        <div class="card">
+          <h2>Contacts</h2>
+          <div id="contact-list"></div>
+          <input id="add-contact-email" placeholder="Email to add" />
+          <button onclick="addNewContact()">Add Contact</button>
+        </div>
+      </div>
+
+      <div id="section-keys" class="hidden">
+        <div class="card">
+          <h2>Encryption Keys</h2>
+          <div id="key-list"></div>
+          <button onclick="showNewKeyForm()">Generate Key</button>
+          <div id="new-key-form" class="hidden">
+            <select id="key-type">
+              <option value="alpha">Alpha Cipher</option>
+              <option value="columnar">Columnar Cipher</option>
+              <option value="combined">Combined</option>
+            </select>
+            <input id="key-name" placeholder="Key name" />
+            <button onclick="createNewKey()">Create Key</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Crypto Tools</h2>
+          <textarea id="crypto-plaintext" placeholder="Text to encrypt/decrypt"></textarea>
+          <input id="crypto-key" placeholder="Key (hex)" />
+          <button onclick="encryptText()">Encrypt</button>
+          <button class="secondary" onclick="decryptText()">Decrypt</button>
+          <div id="crypto-result" class="result"></div>
+        </div>
+      </div>
+
+      <div id="section-email" class="hidden">
+        <div class="card">
+          <h2>Email Accounts</h2>
+          <div id="email-account-list"></div>
+          <button onclick="showNewEmailForm()">Add Account</button>
+          <div id="new-email-form" class="hidden">
+            <input id="email-imap" placeholder="IMAP Host" />
+            <input id="email-smtp" placeholder="SMTP Host" />
+            <input id="email-user" placeholder="Email" />
+            <input id="email-pass" type="password" placeholder="Password" />
+            <button onclick="createEmailAccount()">Add Account</button>
+          </div>
+        </div>
+
+        <div id="email-view" class="hidden">
+          <div class="card">
+            <h2>Inbox</h2>
+            <div id="email-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import api from './api.js';
+
+    let currentChatId = null;
+
+    window.showSection = function(name) {
+      document.querySelectorAll('[id^="section-"]').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById('section-' + name).classList.remove('hidden');
+      event.target.classList.add('active');
+
+      if (name === 'chats') loadChats();
+      if (name === 'contacts') loadContacts();
+      if (name === 'keys') loadKeys();
+      if (name === 'email') loadEmailAccounts();
+    };
+
+    window.handleLogin = async function() {
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+      const errorEl = document.getElementById('login-error');
+      errorEl.textContent = '';
+
+      try {
+        await api.login(email, password);
+        showMainSection();
+      } catch (e) {
+        errorEl.textContent = e.message;
+      }
+    };
+
+    window.handleRegister = async function() {
+      const email = document.getElementById('reg-email').value;
+      const username = document.getElementById('reg-username').value;
+      const password = document.getElementById('reg-password').value;
+      const errorEl = document.getElementById('reg-error');
+      errorEl.textContent = '';
+
+      try {
+        await api.register(email, username, password);
+        showMainSection();
+      } catch (e) {
+        errorEl.textContent = e.message;
+      }
+    };
+
+    window.handleLogout = function() {
+      api.logout();
+      document.getElementById('auth-section').classList.remove('hidden');
+      document.getElementById('main-section').classList.add('hidden');
+    };
+
+    function showMainSection() {
+      document.getElementById('auth-section').classList.add('hidden');
+      document.getElementById('main-section').classList.remove('hidden');
+      document.getElementById('display-username').textContent = api.username;
+      document.getElementById('display-email').textContent = api.email;
+      loadChats();
+    }
+
+    async function loadChats() {
+      try {
+        const chats = await api.getChats();
+        const list = document.getElementById('chat-list');
+        list.innerHTML = chats.map(chat => `
+          <div class="chat-item" onclick="openChat('${chat.id}')">
+            <div class="chat-name">Chat ${chat.id.slice(0, 8)}</div>
+            <div class="chat-preview">Updated: ${new Date(chat.updated_at).toLocaleString()}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('chat-list').innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    window.showNewChatForm = function() {
+      document.getElementById('new-chat-form').classList.toggle('hidden');
+    };
+
+    window.createNewChat = async function() {
+      const userId = document.getElementById('new-chat-user').value;
+      try {
+        await api.createChat(userId);
+        document.getElementById('new-chat-form').classList.add('hidden');
+        loadChats();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    window.openChat = async function(chatId) {
+      currentChatId = chatId;
+      document.getElementById('chat-view').classList.remove('hidden');
+      document.getElementById('chat-view-name').textContent = `Chat ${chatId.slice(0, 8)}`;
+      await loadMessages(chatId);
+    };
+
+    async function loadMessages(chatId) {
+      try {
+        const messages = await api.getMessages(chatId);
+        const list = document.getElementById('message-list');
+        list.innerHTML = messages.map(msg => `
+          <div class="message ${msg.sender_id === api.userId ? 'sent' : 'received'}">
+            <div class="msg-sender">${msg.sender_id === api.userId ? 'You' : msg.sender_id.slice(0, 8)}</div>
+            <div class="msg-content">${msg.encrypted_content || msg.content || ''}</div>
+            <div class="msg-time">${new Date(msg.created_at).toLocaleString()}</div>
+          </div>
+        `).join('');
+        list.scrollTop = list.scrollHeight;
+      } catch (e) {
+        document.getElementById('message-list').innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    window.sendNewMessage = async function() {
+      const content = document.getElementById('message-input').value;
+      if (!content || !currentChatId) return;
+
+      try {
+        await api.sendMessage(currentChatId, content);
+        document.getElementById('message-input').value = '';
+        await loadMessages(currentChatId);
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    async function loadContacts() {
+      try {
+        const contacts = await api.getContacts();
+        const list = document.getElementById('contact-list');
+        list.innerHTML = contacts.map(c => `
+          <div class="user-info">
+            <div class="user-name">${c.username || 'Unknown'}</div>
+            <div class="user-email">${c.email}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('contact-list').innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    window.addNewContact = async function() {
+      const email = document.getElementById('add-contact-email').value;
+      try {
+        await api.addContact(email);
+        document.getElementById('add-contact-email').value = '';
+        loadContacts();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    async function loadKeys() {
+      try {
+        const keys = await api.getKeys();
+        const list = document.getElementById('key-list');
+        list.innerHTML = keys.map(k => `
+          <div class="user-info">
+            <div class="user-name">${k.name || k.key_type}</div>
+            <div class="user-email">${k.key_type} - ${k.is_active ? 'Active' : 'Inactive'}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('key-list').innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    window.showNewKeyForm = function() {
+      document.getElementById('new-key-form').classList.toggle('hidden');
+    };
+
+    window.createNewKey = async function() {
+      const keyType = document.getElementById('key-type').value;
+      const name = document.getElementById('key-name').value;
+      try {
+        await api.createKey({ key_type: keyType, name });
+        document.getElementById('new-key-form').classList.add('hidden');
+        loadKeys();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    window.encryptText = async function() {
+      const plaintext = document.getElementById('crypto-plaintext').value;
+      const key = document.getElementById('crypto-key').value;
+      try {
+        const result = await window.__TAURI__?.core.invoke('encrypt_message', {
+          plaintext, privateKey: key, peerPublicKey: null
+        });
+        document.getElementById('crypto-result').textContent = result || 'Encryption not available';
+      } catch (e) {
+        document.getElementById('crypto-result').textContent = 'Error: ' + e;
+      }
+    };
+
+    window.decryptText = async function() {
+      const ciphertext = document.getElementById('crypto-plaintext').value;
+      const key = document.getElementById('crypto-key').value;
+      try {
+        const result = await window.__TAURI__?.core.invoke('decrypt_message', {
+          ciphertext, privateKey: key, peerPublicKey: null
+        });
+        document.getElementById('crypto-result').textContent = result || 'Decryption not available';
+      } catch (e) {
+        document.getElementById('crypto-result').textContent = 'Error: ' + e;
+      }
+    };
+
+    async function loadEmailAccounts() {
+      try {
+        const accounts = await api.getEmailAccounts();
+        const list = document.getElementById('email-account-list');
+        list.innerHTML = accounts.map(a => `
+          <div class="user-info">
+            <div class="user-name">${a.email}</div>
+            <div class="user-email">${a.imap_host}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('email-account-list').innerHTML = `<div class="error">${e.message}</div>`;
+      }
+    }
+
+    window.showNewEmailForm = function() {
+      document.getElementById('new-email-form').classList.toggle('hidden');
+    };
+
+    window.createEmailAccount = async function() {
+      const data = {
+        imap_host: document.getElementById('email-imap').value,
+        smtp_host: document.getElementById('email-smtp').value,
+        email: document.getElementById('email-user').value,
+        password: document.getElementById('email-pass').value,
+      };
+      try {
+        await api.createEmailAccount(data);
+        document.getElementById('new-email-form').classList.add('hidden');
+        loadEmailAccounts();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
+
+    if (api.loadSession()) {
+      showMainSection();
+    }
+  </script>
+</body>
+</html>

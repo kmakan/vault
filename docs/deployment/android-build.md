@@ -31,7 +31,7 @@ sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
 
 ### 3. Tauri Android Plugin
 ```bash
-cd ~/vault/mailcipher-desktop
+cd ~/vault/vault-desktop
 npm install @tauri-apps/cli
 npx tauri android init
 ```
@@ -40,7 +40,7 @@ npx tauri android init
 
 ### Debug APK
 ```bash
-cd ~/vault/mailcipher-desktop
+cd ~/vault/vault-desktop
 npx tauri android build
 ```
 
@@ -70,7 +70,7 @@ adb install src-tauri/target/release/bundle/apk/Vault.apk
 ## Структура проекта
 
 ```
-mailcipher-desktop/
+vault-desktop/
 ├── src/                  # Vue frontend
 ├── src-tauri/           # Tauri backend (Rust)
 │   ├── icons/           # Иконки приложения

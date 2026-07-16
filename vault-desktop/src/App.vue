@@ -1,0 +1,1664 @@
+<template>
+  <div class="app-container">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">🔒</span>
+          <span class="logo-text">Vault</span>
+        </div>
+        <div class="header-actions">
+          <button @click="showKeyManager = !showKeyManager" :title="cryptoReady ? 'Keys ready' : 'Generating keys...'">
+            {{ cryptoReady ? '🔑' : '⏳' }}
+          </button>
+          <button @click="showQRCode = !showQRCode" title="QR Code">
+            📱
+          </button>
+          <button @click="showSettings = !showSettings">⚙️</button>
+        </div>
+      </div>
+      
+      <div class="nav-tabs">
+        <button 
+          :class="['nav-tab', { active: currentView === 'chats' }]"
+          @click="currentView = 'chats'"
+        >
+          <span class="nav-icon">💬</span>
+          {{ t('nav_inbox') }}
+        </button>
+        <button 
+          :class="['nav-tab', { active: currentView === 'email' }]"
+          @click="currentView = 'email'"
+        >
+          <span class="nav-icon">📧</span>
+          {{ t('nav_compose') }}
+        </button>
+      </div>
+
+      <div v-if="currentView === 'chats'" class="contacts-list">
+        <div class="search-box">
+          <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
+        </div>
+        <div class="group-create-row">
+          <button class="group-create-btn" @click="showCreateGroup = true">
+            <span>➕</span> {{ t('group_create') || 'New Group' }}
+          </button>
+        </div>
+        <div 
+          v-for="contact in filteredContacts" 
+          :key="contact.email"
+          :class="['contact-item', { active: activeChat === contact.email }]"
+          @click="selectChat(contact.email)"
+        >
+          <UserAvatar :email="contact.email" :size="36" />
+          <div class="contact-info">
+            <div class="contact-name">{{ contact.name }}</div>
+            <div class="contact-email">{{ contact.email }}</div>
+          </div>
+          <div class="contact-status">
+            <span class="status-dot" :class="{ online: contact.online }"></span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="email-list">
+        <EmailInbox 
+          :emails="emails" 
+          :loading="emailsLoading"
+          @open-email="openEmail"
+        />
+      </div>
+    </div>
+    
+    <div class="main-area">
+      <div v-if="showKeyManager" class="key-manager">
+        <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" />
+      </div>
+    
+      <div v-if="showQRCode" class="qr-code-overlay">
+        <QRCodePanel 
+          :publicKey="publicKey" 
+          @close="showQRCode = false"
+          @key-scanned="addPeerKey"
+        />
+      </div>
+
+      <div v-if="showSettings" class="settings-panel">
+        <ThemeSelector />
+        <IconPicker />
+        <FontSelector />
+        <AppBehavior />
+        <LanguageSelector />
+        <EmailSettings />
+      </div>
+      
+      <div v-else-if="currentView === 'chats'" class="chat-area">
+        <div class="chat-header" v-if="activeChat">
+          <div class="chat-header-info">
+            <UserAvatar :email="activeChat" :size="40" />
+            <div>
+              <h3>{{ activeChat }}</h3>
+              <div class="chat-status">{{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}</div>
+            </div>
+          </div>
+          <div class="chat-actions">
+            <button @click="showGroupSettings = !showGroupSettings" title="Members">👥</button>
+            <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
+            <div class="export-dropdown" v-if="activeChat">
+              <button @click="showExportMenu = !showExportMenu" title="Export">📥</button>
+              <div v-if="showExportMenu" class="export-menu">
+                <button @click="exportAsJSON">📄 JSON</button>
+                <button @click="exportAsTXT">📝 TXT</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat search bar -->
+        <div v-if="showChatSearch" class="chat-search-bar">
+          <input
+            v-model="chatSearchQuery"
+            :placeholder="(t('general_search') || 'Search') + '...'"
+            class="chat-search-input"
+            ref="chatSearchInput"
+          />
+          <span v-if="chatSearchQuery" class="chat-search-count">
+            {{ filteredMessages.length }}/{{ messages.length }}
+          </span>
+          <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false">✕</button>
+        </div>
+
+        <!-- Group Settings Panel -->
+        <GroupSettings
+          v-if="showGroupSettings && currentGroup"
+          :group="currentGroup"
+          :currentUser="email"
+          @close="showGroupSettings = false"
+          @promote="promoteMember"
+          @demote="demoteMember"
+          @remove="removeMember"
+          @unblock="unblockUser"
+          @leave="leaveGroup"
+          @delete="deleteGroup"
+        />
+        
+        <div class="messages" ref="messagesContainer">
+          <div
+            v-for="msg in filteredMessages"
+            :key="msg.id"
+            :class="['message', { own: msg.from === 'me' }]"
+            @click.stop="toggleReactionPicker(msg.id)"
+          >
+            <div class="message-content">
+              {{ msg.content }}
+              <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
+            </div>
+            <!-- Reactions -->
+            <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
+              <span
+                v-for="(r, ri) in msg.reactions"
+                :key="ri"
+                class="reaction-badge"
+                @click.stop="toggleReaction(msg.id, r)"
+              >{{ r }}</span>
+            </div>
+            <div class="message-time">{{ msg.time }}</div>
+            <!-- Reaction picker popup -->
+            <div
+              v-if="reactionPickerMsgId === msg.id"
+              class="reaction-picker"
+              @click.stop
+            >
+              <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="message-input" v-if="activeChat">
+        <div class="input-wrapper">
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji">😊</button>
+          <EmojiPicker
+            :show="showEmojiPicker"
+            @select="insertEmoji"
+            @close="showEmojiPicker = false"
+          />
+          <input
+            v-model="newMessage"
+            @keyup.enter="sendMessage"
+            :placeholder="t('email_compose') + '...'"
+            class="message-field"
+          />
+        </div>
+        <button class="attach-btn" title="Attach file">📎</button>
+        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message">🎙️</button>
+        <AudioRecorder
+          :show="showAudioRecorder"
+          @send="sendAudioMessage"
+          @close="showAudioRecorder = false"
+        />
+          <button class="send-btn" @click="sendMessage">
+            <span class="send-icon">➤</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="email-view">
+        <div v-if="selectedEmail" class="email-detail">
+          <div class="email-detail-header">
+            <button @click="selectedEmail = null" class="back-btn">← {{ t('general_close') }}</button>
+            <h3>{{ selectedEmail.subject || t('email_empty') }}</h3>
+          </div>
+          <div class="email-detail-meta">
+            <div>{{ t('email_to') }}: {{ selectedEmail.from }}</div>
+            <div>{{ selectedEmail.date }}</div>
+          </div>
+          <div class="email-detail-body">
+            {{ selectedEmail.body || t('general_loading') }}
+          </div>
+        </div>
+        <div v-else class="empty-state">
+          <div class="empty-icon">📬</div>
+          <div class="empty-text">{{ t('email_empty') }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Group Modal -->
+    <div v-if="showCreateGroup" class="modal-overlay" @click.self="showCreateGroup = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('group_create_title') || 'New Group' }}</h3>
+          <button class="modal-close" @click="showCreateGroup = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('group_name') || 'Group Name' }}</label>
+          <input
+            v-model="newGroupName"
+            :placeholder="(t('group_name') || 'Group Name') + '...'"
+            class="modal-input"
+            @keyup.enter="createGroupAndClose"
+          />
+          <label>Icon</label>
+          <div class="icon-picker">
+            <button v-for="ic in groupIcons" :key="ic" :class="['icon-btn', { active: newGroupIcon === ic }]" @click="newGroupIcon = ic">{{ ic }}</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showCreateGroup = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="createGroupAndClose" :disabled="!newGroupName.trim()">
+            {{ t('group_create') || 'Create' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import api from './api.js';
+import crypto from './crypto.js';
+import { useI18n } from './i18n.js';
+import EmailSettings from './components/EmailSettings.vue';
+import EmailInbox from './components/EmailInbox.vue';
+import KeyManager from './components/KeyManager.vue';
+import LanguageSelector from './components/LanguageSelector.vue';
+import UserAvatar from './components/UserAvatar.vue';
+import GroupSettings from './components/GroupSettings.vue';
+import EmojiPicker from './components/EmojiPicker.vue';
+import AudioRecorder from './components/AudioRecorder.vue';
+import ThemeSelector from './components/ThemeSelector.vue';
+import FontSelector from './components/FontSelector.vue';
+import IconPicker from './components/IconPicker.vue';
+import AppBehavior from './components/AppBehavior.vue';
+import { applyTheme, loadSavedTheme } from './themes.js';
+import { applyFont, loadSavedFont } from './fonts.js';
+import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
+import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
+
+export default {
+  name: 'ChatApp',
+  components: {
+    EmailSettings,
+    EmailInbox,
+    KeyManager,
+    LanguageSelector,
+    UserAvatar,
+    GroupSettings,
+    EmojiPicker,
+    AudioRecorder,
+    ThemeSelector,
+    FontSelector,
+    IconPicker,
+    AppBehavior
+  },
+  setup() {
+    const { t, setLocale, availableLocales, currentLocale } = useI18n();
+    return { t, setLocale, availableLocales, currentLocale };
+  },
+  data() {
+    return {
+      currentView: 'chats',
+      contacts: [],
+      activeChat: null,
+      messages: [],
+      newMessage: '',
+      showSettings: false,
+      showMembers: false,
+      isLoggedIn: false,
+      email: '',
+      password: '',
+      emails: [],
+      emailsLoading: false,
+      selectedEmail: null,
+      cryptoReady: false,
+      publicKey: null,
+      fingerprint: null,
+      peerKeys: {},
+      peerKeyInput: '',
+      showKeyManager: false,
+      showQRCode: false,
+      peerKeysLoaded: {},
+      searchQuery: '',
+      // Groups
+      groups: [],
+      currentGroup: null,
+      showGroupSettings: false,
+      newGroupName: '',
+      newGroupIcon: '📁',
+      // Emoji
+      showEmojiPicker: false,
+      // Reactions
+      reactionPickerMsgId: null,
+      quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
+      // Search in chat
+      chatSearchQuery: '',
+      showChatSearch: false,
+      // Create group modal
+      showCreateGroup: false,
+      inviteEmail: '',
+      groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '💼', '🚀', '⭐', '🎯', '💡'],
+      // Audio
+      showAudioRecorder: false,
+      // Export
+      showExportMenu: false,
+    }
+  },
+  computed: {
+    filteredContacts() {
+      if (!this.searchQuery) return this.contacts;
+      const q = this.searchQuery.toLowerCase();
+      return this.contacts.filter(c =>
+        c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)
+      );
+    },
+    filteredMessages() {
+      if (!this.chatSearchQuery) return this.messages;
+      const q = this.chatSearchQuery.toLowerCase();
+      return this.messages.filter(m =>
+        m.content && m.content.toLowerCase().includes(q)
+      );
+    }
+  },
+  async mounted() {
+    applyTheme(loadSavedTheme())
+    applyFont(loadSavedFont())
+    // Apply saved icon
+    const savedIcon = localStorage.getItem('vault-icon') || 'letter'
+    const link = document.querySelector("link[rel='icon']")
+    if (link) link.href = `/icons/vault-${savedIcon}.svg`
+    await this.initCrypto()
+  },
+  methods: {
+    async initCrypto() {
+      try {
+        const result = await crypto.initFromStorage();
+        if (result.loaded) {
+          this.publicKey = result.keypair.public_key;
+        } else {
+          const keypair = await crypto.generateKeypair();
+          this.publicKey = keypair.public_key;
+          await crypto.saveToStorage();
+        }
+        this.fingerprint = await crypto.fingerprint();
+        this.cryptoReady = true;
+        await this.loadStoredPeerKeys();
+      } catch (error) {
+        console.error('Crypto init failed:', error);
+      }
+    },
+    async loadStoredPeerKeys() {
+      try {
+        const stored = await crypto.loadPeerKeys();
+        for (const pk of stored) {
+          this.peerKeys[pk.email] = pk.public_key;
+          this.peerKeysLoaded[pk.email] = true;
+        }
+      } catch (error) {
+        console.error('Failed to load peer keys:', error);
+      }
+    },
+    async login() {
+      try {
+        await api.login(this.email, this.password);
+        this.isLoggedIn = true;
+        await this.loadContacts();
+        await this.loadEmails();
+      } catch (error) {
+        alert('Login failed: ' + error.message);
+      }
+    },
+    async loadContacts() {
+      try {
+        this.contacts = await api.getContacts();
+      } catch (error) {
+        console.error('Failed to load contacts:', error);
+      }
+    },
+    setPeerKey(email, key) {
+      this.peerKeys[email] = key;
+      crypto.setPeerPublicKey(key);
+      crypto.savePeerKey(email, key, null).catch(err => {
+        console.error('Failed to save peer key:', err);
+      });
+    },
+    setPeerKeyFromInput() {
+      if (!this.peerKeyInput || !this.activeChat) return;
+      this.setPeerKey(this.activeChat, this.peerKeyInput);
+      this.peerKeyInput = '';
+    },
+    async selectChat(email) {
+      this.activeChat = email;
+      if (this.peerKeys[email]) {
+        crypto.setPeerPublicKey(this.peerKeys[email]);
+      }
+      await this.loadMessages(email);
+    },
+    async loadMessages(email) {
+      try {
+        const raw = await api.getMessages(email);
+        if (this.cryptoReady && this.peerKeys[email]) {
+          crypto.setPeerPublicKey(this.peerKeys[email]);
+          this.messages = await Promise.all(
+            raw.map(async (msg) => {
+              if (crypto.isEncrypted(msg.content)) {
+                try {
+                  const decrypted = await crypto.decrypt(msg.content);
+                  return { ...msg, content: decrypted, encrypted: true };
+                } catch {
+                  return { ...msg, encrypted: false };
+                }
+              }
+              return { ...msg, encrypted: false };
+            })
+          );
+        } else {
+          this.messages = raw;
+        }
+      } catch (error) {
+        console.error('Failed to load messages:', error);
+        this.messages = [];
+      }
+    },
+    async sendMessage() {
+      if (!this.newMessage.trim()) return;
+      
+      try {
+        let content = this.newMessage;
+        if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+          crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+          content = await crypto.encrypt(this.newMessage);
+        }
+
+        await api.sendMessage(this.activeChat, content);
+        this.messages.push({
+          id: Date.now(),
+          from: 'me',
+          content: this.newMessage,
+          time: new Date().toLocaleTimeString(),
+          encrypted: this.cryptoReady && !!this.peerKeys[this.activeChat]
+        });
+        
+        this.newMessage = '';
+        this.$nextTick(() => {
+          this.$refs.messagesContainer.scrollTop = this.$refs.messagesContainer.scrollHeight;
+        });
+      } catch (error) {
+        alert('Failed to send message: ' + error.message);
+      }
+    },
+    searchMessages() {
+      alert('Search coming soon!');
+    },
+    async onKeysChanged() {
+      if (this.cryptoReady) {
+        this.fingerprint = await crypto.fingerprint();
+      }
+      await this.loadStoredPeerKeys();
+    },
+    async addPeerKey(publicKeyHex) {
+      try {
+        if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) {
+          alert('Invalid public key format');
+          return;
+        }
+        
+        this.peerKeys[publicKeyHex] = {
+          added: new Date().toISOString(),
+          source: 'qr-code'
+        };
+        
+        await crypto.savePeerKeys(this.peerKeys);
+        alert('Public key added successfully!');
+        this.showQRCode = false;
+        
+      } catch (error) {
+        alert('Failed to add peer key: ' + error.message);
+      }
+    },
+    async loadEmails() {
+      this.emailsLoading = true;
+      try {
+        const accounts = await api.getEmailAccounts();
+        this.emails = [];
+        for (const account of accounts) {
+          // Future: fetch emails per account
+        }
+      } catch (error) {
+        console.error('Failed to load emails:', error);
+      } finally {
+        this.emailsLoading = false;
+      }
+    },
+    openEmail(email) {
+      this.selectedEmail = email;
+    },
+    // Emoji
+    insertEmoji(emoji) {
+      this.newMessage += emoji
+      this.showEmojiPicker = false
+    },
+    // Audio messages
+    sendAudioMessage(audioData) {
+      // Audio is encrypted and sent as attachment
+      // For now, show as text indicator
+      const msg = {
+        id: Date.now().toString(36),
+        content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+        from: 'me',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        encrypted: this.cryptoReady,
+        audioData: audioData.base64,
+      }
+      this.messages.push(msg)
+      this.showAudioRecorder = false
+    },
+    // Reactions
+    toggleReactionPicker(msgId) {
+      this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
+    },
+    addReaction(msgId, emoji) {
+      const msg = this.messages.find(m => m.id === msgId)
+      if (!msg) return
+      if (!msg.reactions) msg.reactions = []
+      if (!msg.reactions.includes(emoji)) {
+        msg.reactions.push(emoji)
+      }
+      this.reactionPickerMsgId = null
+    },
+    toggleReaction(msgId, emoji) {
+      const msg = this.messages.find(m => m.id === msgId)
+      if (!msg || !msg.reactions) return
+      const idx = msg.reactions.indexOf(emoji)
+      if (idx >= 0) {
+        msg.reactions.splice(idx, 1)
+      }
+    },
+    // Export
+    exportAsJSON() {
+      const json = exportChatJSON(this.messages, this.activeChat)
+      downloadFile(json, `vault-${this.activeChat}-${Date.now()}.json`, 'application/json')
+      this.showExportMenu = false
+    },
+    exportAsTXT() {
+      const txt = exportChatTXT(this.messages, this.activeChat)
+      downloadFile(txt, `vault-${this.activeChat}-${Date.now()}.txt`, 'text/plain')
+      this.showExportMenu = false
+    },
+    // Group management
+    createGroup() {
+      if (!this.newGroupName.trim()) return;
+      const group = {
+        id: Date.now().toString(36),
+        name: this.newGroupName.trim(),
+        created_by: this.email,
+        created_at: new Date().toISOString(),
+        icon: this.newGroupIcon,
+        members: [
+          { email: this.email, role: 'Admin', joined_at: new Date().toISOString() }
+        ],
+        blocked: []
+      };
+      this.groups.push(group);
+      this.currentGroup = group;
+      this.showGroupSettings = true;
+      this.newGroupName = '';
+    },
+    selectGroup(group) {
+      this.currentGroup = group;
+      this.activeChat = null;
+      this.showGroupSettings = true;
+    },
+    createGroupAndClose() {
+      this.createGroup();
+      this.showCreateGroup = false;
+    },
+    promoteMember(email) {
+      if (!this.currentGroup) return;
+      const member = this.currentGroup.members.find(m => m.email === email);
+      if (member) member.role = 'Admin';
+    },
+    demoteMember(email) {
+      if (!this.currentGroup) return;
+      const member = this.currentGroup.members.find(m => m.email === email);
+      if (member && email !== this.currentGroup.created_by) {
+        member.role = 'Member';
+      }
+    },
+    removeMember(email) {
+      if (!this.currentGroup) return;
+      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== email);
+    },
+    blockUser(email) {
+      if (!this.currentGroup) return;
+      if (!this.currentGroup.blocked.includes(email)) {
+        this.currentGroup.blocked.push(email);
+      }
+    },
+    unblockUser(email) {
+      if (!this.currentGroup) return;
+      this.currentGroup.blocked = this.currentGroup.blocked.filter(e => e !== email);
+    },
+    leaveGroup() {
+      if (!this.currentGroup) return;
+      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== this.email);
+      this.showGroupSettings = false;
+      this.currentGroup = null;
+    },
+    deleteGroup() {
+      if (!this.currentGroup) return;
+      this.groups = this.groups.filter(g => g.id !== this.currentGroup.id);
+      this.showGroupSettings = false;
+      this.currentGroup = null;
+    }
+  }
+}
+</script>
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   Vault — Professional Design System
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Primary palette */
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #12122a;
+  --bg-tertiary: #1a1a3e;
+  --bg-hover: #1e1e4a;
+  --bg-active: #252560;
+  
+  /* Accent colors */
+  --accent-primary: #6366f1;
+  --accent-secondary: #818cf8;
+  --accent-glow: rgba(99, 102, 241, 0.3);
+  
+  /* Text colors */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  /* Status colors */
+  --status-online: #22c55e;
+  --status-encrypted: #6366f1;
+  --status-warning: #f59e0b;
+  
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.1);
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  /* Spacing */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Sidebar
+   ═══════════════════════════════════════════════════════════════ */
+
+.sidebar {
+  width: 320px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 20px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon {
+  font-size: 24px;
+}
+
+.logo-text {
+  font-size: 20px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.header-actions button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.header-actions button:hover {
+  background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Navigation Tabs
+   ═══════════════════════════════════════════════════════════════ */
+
+.nav-tabs {
+  display: flex;
+  padding: 8px;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.nav-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nav-tab.active {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.nav-icon {
+  font-size: 14px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Search Box
+   ═══════════════════════════════════════════════════════════════ */
+
+.search-box {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.search-box input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.search-box input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-box input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Contacts List
+   ═══════════════════════════════════════════════════════════════ */
+
+.contacts-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  padding: 14px 20px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border-left: 3px solid transparent;
+}
+
+.contact-item:hover {
+  background: var(--bg-hover);
+}
+
+.contact-item.active {
+  background: var(--bg-active);
+  border-left-color: var(--accent-primary);
+}
+
+.contact-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 14px;
+  flex-shrink: 0;
+}
+
+.avatar-initial {
+  font-size: 18px;
+  font-weight: 600;
+  color: white;
+}
+
+.contact-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contact-email {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contact-status {
+  margin-left: 12px;
+}
+
+.status-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--text-muted);
+}
+
+.status-dot.online {
+  background: var(--status-online);
+  box-shadow: 0 0 8px var(--status-online);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Main Chat Area
+   ═══════════════════════════════════════════════════════════════ */
+
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-secondary);
+}
+
+.chat-header-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.chat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-header-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.chat-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chat-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.chat-actions button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.chat-actions button:hover {
+  background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Messages
+   ═══════════════════════════════════════════════════════════════ */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  max-width: 70%;
+  animation: messageIn 0.2s ease;
+}
+
+@keyframes messageIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message.own {
+  margin-left: auto;
+}
+
+.message-content {
+  background: var(--bg-tertiary);
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: 4px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  box-shadow: var(--shadow-sm);
+}
+
+.message.own .message-content {
+  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: 4px;
+}
+
+.encrypted-badge {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.message-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  text-align: right;
+}
+
+/* Reactions */
+.message-reactions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.reaction-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--bg-hover, rgba(99, 102, 241, 0.15));
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition-fast, 150ms ease);
+}
+
+.reaction-badge:hover {
+  background: var(--accent-glow, rgba(99, 102, 241, 0.3));
+  transform: scale(1.1);
+}
+
+.reaction-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 20px;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
+  z-index: 50;
+  animation: fadeInUp 0.15s ease;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reaction-emoji {
+  background: none;
+  border: none;
+  font-size: 20px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.reaction-emoji:hover {
+  background: var(--bg-hover, #1e1e4a);
+  transform: scale(1.2);
+}
+
+.message {
+  position: relative;
+}
+
+/* Chat search bar */
+.chat-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  background: var(--bg-secondary, #12122a);
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+}
+
+.chat-search-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 13px;
+  outline: none;
+}
+
+.chat-search-input:focus {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.chat-search-count {
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  white-space: nowrap;
+}
+
+.chat-search-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chat-search-close:hover {
+  color: var(--text-primary, #f1f5f9);
+}
+
+/* Group create button */
+.group-create-row {
+  padding: 8px 16px;
+}
+
+.group-create-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all var(--transition-fast, 150ms ease);
+}
+
+.group-create-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--accent-glow, rgba(99, 102, 241, 0.3));
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-card {
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 16px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px 0;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-primary, #f1f5f9);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 20px;
+  padding: 4px;
+}
+
+.modal-close:hover {
+  color: var(--text-primary, #f1f5f9);
+}
+
+.modal-body {
+  padding: 20px 24px;
+}
+
+.modal-body label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 14px;
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
+}
+
+.modal-input:focus {
+  border-color: var(--accent-primary, #6366f1);
+}
+
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.icon-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+
+.icon-btn.active {
+  border-color: var(--accent-primary, #6366f1);
+  background: var(--accent-glow, rgba(99, 102, 241, 0.15));
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 24px 20px;
+}
+
+.btn-cancel {
+  padding: 8px 16px;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-cancel:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+
+.btn-primary {
+  padding: 8px 16px;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--accent-glow, rgba(99, 102, 241, 0.3));
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Export dropdown */
+.export-dropdown {
+  position: relative;
+}
+
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
+  overflow: hidden;
+  z-index: 50;
+  min-width: 120px;
+}
+
+.export-menu button {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.export-menu button:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Message Input
+   ═══════════════════════════════════════════════════════════════ */
+
+.message-input {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-secondary);
+}
+
+.input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  position: relative;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+
+.input-wrapper:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.emoji-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px 4px 8px 12px;
+  transition: transform 0.15s;
+}
+
+.emoji-btn:hover {
+  transform: scale(1.15);
+}
+
+.message-field {
+  flex: 1;
+  padding: 12px 12px 12px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+}
+
+.message-field::placeholder {
+  color: var(--text-muted);
+}
+
+.attach-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.attach-btn:hover {
+  background: var(--bg-hover);
+}
+
+.mic-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.mic-btn:hover {
+  background: var(--bg-hover);
+  transform: scale(1.1);
+}
+
+.send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-md);
+}
+
+.send-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.send-icon {
+  font-size: 18px;
+  color: white;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Empty State
+   ═══════════════════════════════════════════════════════════════ */
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.empty-text {
+  font-size: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Key Manager
+   ═══════════════════════════════════════════════════════════════ */
+
+.key-manager {
+  padding: 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.key-manager h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Settings Panel
+   ═══════════════════════════════════════════════════════════════ */
+
+.settings-panel {
+  padding: 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.settings-panel h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Email View
+   ═══════════════════════════════════════════════════════════════ */
+
+.email-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.email-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.email-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.back-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.back-btn:hover {
+  background: var(--bg-hover);
+}
+
+.email-detail-header h3 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.email-detail-meta {
+  display: flex;
+  gap: 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.email-detail-body {
+  flex: 1;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Scrollbar Styling
+   ═══════════════════════════════════════════════════════════════ */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Responsive (for future use)
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+  }
+  
+  .main-area {
+    display: none;
+  }
+}
+</style>

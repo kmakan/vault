@@ -4,6 +4,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DESKTOP_DIR="$SCRIPT_DIR/../mailcipher-desktop"
+DESKTOP_DIR="$SCRIPT_DIR/../vault-desktop"
 
-exec "$SCRIPT_DIR/../mailcipher-desktop/scripts/build-desktop.sh" "$@"
+exec "$SCRIPT_DIR/../vault-desktop/scripts/build-desktop.sh" "$@"

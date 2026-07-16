@@ -1,0 +1,23 @@
+# Android
+.gradle/
+/local.properties
+*.apk
+*.aab
+*.iml
+.idea/
+build/
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+
+# Rust
+src-tauri/target/
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,4 +1,4 @@
-# 🔐 MailCipher — Архитектура шифрования
+# 🔐 Vault — Архитектура шифрования
 
 > **Последнее обновление**: 27.06.2026
 > **Ключевая идея**: Email как транспорт, классические шифры как защита
@@ -9,7 +9,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    MailCipher Архитектура                   │
+│                    Vault Архитектура                   │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  Пользователь A                    Пользователь B           │
@@ -45,7 +45,7 @@
 2. Алиса генерирует ключ шифрования
 3. Ключ передаётся Бобу (лично, по телефону, на бумаге)
 4. Боб вводит ключ в приложение
-5. Теперь они могут переписываться через MailCipher
+5. Теперь они могут переписываться через Vault
 ```
 
 ### Автоматический обмен (дополнительно)
@@ -341,7 +341,7 @@ CREATE TABLE messages (
 
 ### Python (backend)
 ```python
-from mailcipher.crypto import AlphaCipher, ColumnarCipher
+from vault.crypto import AlphaCipher, ColumnarCipher
 
 # Шифрование
 alpha = AlphaCipher(key="MAGIC")
@@ -358,7 +358,7 @@ decrypted = alpha.decrypt(columnar.decrypt(encrypted))
 
 ### JavaScript (desktop/terminal)
 ```javascript
-import { AlphaCipher, ColumnarCipher } from 'mailcipher-crypto';
+import { AlphaCipher, ColumnarCipher } from 'vault-crypto';
 
 const alpha = new AlphaCipher({ key: 'MAGIC' });
 const columnar = new ColumnarCipher({ key: '3124' });

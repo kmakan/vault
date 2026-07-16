@@ -67,7 +67,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: mailcipher-client -> target
+          workspaces: vault-client -> target
 
       - name: Install cross-compilation tools (aarch64 Linux)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -81,22 +81,22 @@ jobs:
           EOF
 
       - name: Build release binary
-        working-directory: mailcipher-client
+        working-directory: vault-client
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
-          cd mailcipher-client/target/${{ matrix.target }}/release
-          tar czf ../../../mailcipher-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.tar.gz mailcipher-client
+          cd vault-client/target/${{ matrix.target }}/release
+          tar czf ../../../vault-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.tar.gz vault-client
           cd ../../..
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: bash
         run: |
-          cd mailcipher-client/target/${{ matrix.target }}/release
-          7z a ../../../mailcipher-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.zip mailcipher-client.exe
+          cd vault-client/target/${{ matrix.target }}/release
+          7z a ../../../vault-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.zip vault-client.exe
           cd ../../..
 
       - name: Upload release asset
@@ -104,7 +104,7 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            mailcipher-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+            vault-${{ github.event.inputs.tag || github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
           draft: true
 
   publish-release:

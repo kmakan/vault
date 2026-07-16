@@ -1,4 +1,4 @@
-# Vault (MailCipher) — AGENTS.md
+# Vault (Vault) — AGENTS.md
 
 ## Роли агентов
 
@@ -51,10 +51,10 @@
 ### 1. Начало сессии
 ```bash
 # Проверка статуса
-hermes kanban --board mailcipher list
+hermes kanban --board vault list
 
 # Просмотр текущих задач
-hermes kanban --board mailcipher stats
+hermes kanban --board vault stats
 ```
 
 ### 2. Делегирование задач editor
@@ -108,7 +108,7 @@ mimo run "Обновить документацию для X" --agent build
 
 ## Канбан
 
-Доска: `mailcipher` (56 ready + 2 todo задач)
+Доска: `vault` (56 ready + 2 todo задач)
 
 ### Приоритеты
 1. **Backend (Rust)** — базовая структура
@@ -119,23 +119,23 @@ mimo run "Обновить документацию для X" --agent build
 ### Команды канбана
 ```bash
 # Просмотр задач
-hermes kanban --board mailcipher list
+hermes kanban --board vault list
 
 # Взять задачу
-hermes kanban --board mailcipher claim t_XXXXXXXX
+hermes kanban --board vault claim t_XXXXXXXX
 
 # Отметить выполнение
-hermes kanban --board mailcipher complete t_XXXXXXXX
+hermes kanban --board vault complete t_XXXXXXXX
 
 # Добавить комментарий
-hermes kanban --board mailcipher comment t_XXXXXXXX "текст"
+hermes kanban --board vault comment t_XXXXXXXX "текст"
 ```
 
 ## Директории проекта
 
 ```
 ~/vault/                          # Код проекта
-├── mailcipher-backend/             # Rust Axum + SQLx + PostgreSQL
+├── vault-backend/             # Rust Axum + SQLx + PostgreSQL
 ├── docs/                           # Документация
 │   ├── agents/                     # Инструкции для агентов
 │   ├── architecture/               # ADR, схема БД
@@ -145,7 +145,7 @@ hermes kanban --board mailcipher comment t_XXXXXXXX "текст"
 │   ├── security/                   # Threat model, аудит
 │   └── operations/                 # Мониторинг, бэкапы
 
-/home/maksim/Notes/Projects/mailcipher/  # Исходная документация
+/home/maksim/Notes/Projects/vault/  # Исходная документация
 ├── ARCHITECTURE.md
 ├── ENCRYPTION.md
 ├── KEY_EXCHANGE.md

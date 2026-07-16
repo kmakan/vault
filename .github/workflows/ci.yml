@@ -18,12 +18,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: mailcipher-backend -> target
+          workspaces: vault-backend -> target
       - name: Check
-        working-directory: mailcipher-backend
+        working-directory: vault-backend
         run: cargo check
       - name: Test
-        working-directory: mailcipher-backend
+        working-directory: vault-backend
         run: cargo test
 
   check-client:
@@ -34,12 +34,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: mailcipher-client -> target
+          workspaces: vault-client -> target
       - name: Check
-        working-directory: mailcipher-client
+        working-directory: vault-client
         run: cargo check
       - name: Test
-        working-directory: mailcipher-client
+        working-directory: vault-client
         run: cargo test
 
   check-desktop:
@@ -51,22 +51,22 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: mailcipher-desktop/package-lock.json
+          cache-dependency-path: vault-desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: mailcipher-desktop/src-tauri -> target
+          workspaces: vault-desktop/src-tauri -> target
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libgtk-3-dev libayatana-appindicator3-dev
       - name: Install npm dependencies
-        working-directory: mailcipher-desktop
+        working-directory: vault-desktop
         run: npm ci
       - name: Check frontend
-        working-directory: mailcipher-desktop
+        working-directory: vault-desktop
         run: npm run build
       - name: Check Tauri
-        working-directory: mailcipher-desktop
+        working-directory: vault-desktop
         run: npx tauri build

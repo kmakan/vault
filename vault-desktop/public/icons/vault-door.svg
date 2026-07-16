@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="vault-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <!-- Outer circle -->
+  <circle cx="64" cy="64" r="56" fill="url(#vault-grad)"/>
+  <!-- Inner circle -->
+  <circle cx="64" cy="64" r="46" fill="#1e1b4b"/>
+  <!-- Vault door ring -->
+  <circle cx="64" cy="64" r="38" fill="none" stroke="#a78bfa" stroke-width="3" stroke-dasharray="8 4"/>
+  <!-- Handle bar -->
+  <line x1="36" y1="64" x2="92" y2="64" stroke="#c7d2fe" stroke-width="4" stroke-linecap="round"/>
+  <!-- Handle knobs -->
+  <circle cx="36" cy="64" r="6" fill="#c7d2fe"/>
+  <circle cx="92" cy="64" r="6" fill="#c7d2fe"/>
+  <!-- Center bolt -->
+  <circle cx="64" cy="64" r="8" fill="#7c3aed" stroke="#c7d2fe" stroke-width="2"/>
+  <circle cx="64" cy="64" r="3" fill="#c7d2fe"/>
+  <!-- Spokes -->
+  <line x1="64" y1="26" x2="64" y2="38" stroke="#a78bfa" stroke-width="2" stroke-linecap="round"/>
+  <line x1="64" y1="90" x2="64" y2="102" stroke="#a78bfa" stroke-width="2" stroke-linecap="round"/>
+  <line x1="26" y1="64" x2="38" y2="64" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" opacity="0"/>
+  <line x1="90" y1="64" x2="102" y2="64" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" opacity="0"/>
+</svg>

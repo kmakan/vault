@@ -51,7 +51,7 @@ sudo rpm -i vault_0.1.0_amd64.rpm
 
 ### CLI
 ```bash
-cargo install --path mailcipher-client
+cargo install --path vault-client
 ```
 
 ### Android
