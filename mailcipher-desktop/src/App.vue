@@ -83,6 +83,7 @@
       </div>
 
       <div v-if="showSettings" class="settings-panel">
+        <ThemeSelector />
         <LanguageSelector />
         <EmailSettings />
       </div>
@@ -254,6 +255,8 @@ import UserAvatar from './components/UserAvatar.vue';
 import GroupSettings from './components/GroupSettings.vue';
 import EmojiPicker from './components/EmojiPicker.vue';
 import AudioRecorder from './components/AudioRecorder.vue';
+import ThemeSelector from './components/ThemeSelector.vue';
+import { applyTheme, loadSavedTheme } from './themes.js';
 
 export default {
   name: 'ChatApp',
@@ -265,7 +268,8 @@ export default {
     UserAvatar,
     GroupSettings,
     EmojiPicker,
-    AudioRecorder
+    AudioRecorder,
+    ThemeSelector
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -334,7 +338,8 @@ export default {
     }
   },
   async mounted() {
-    await this.initCrypto();
+    applyTheme(loadSavedTheme())
+    await this.initCrypto()
   },
   methods: {
     async initCrypto() {
