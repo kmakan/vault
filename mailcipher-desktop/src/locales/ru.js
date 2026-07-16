@@ -96,6 +96,9 @@ export default {
   group_invite: 'Пригласить участника',
   group_invite_placeholder: 'Email для приглашения...',
 
+  // Font
+  font: 'Шрифт',
+
   // Audio
   audio_record: 'Голосовое сообщение',
   audio_start: 'Начать запись',

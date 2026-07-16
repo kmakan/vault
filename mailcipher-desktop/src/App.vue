@@ -84,6 +84,7 @@
 
       <div v-if="showSettings" class="settings-panel">
         <ThemeSelector />
+        <FontSelector />
         <LanguageSelector />
         <EmailSettings />
       </div>
@@ -100,6 +101,13 @@
           <div class="chat-actions">
             <button @click="showGroupSettings = !showGroupSettings" title="Members">👥</button>
             <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
+            <div class="export-dropdown" v-if="activeChat">
+              <button @click="showExportMenu = !showExportMenu" title="Export">📥</button>
+              <div v-if="showExportMenu" class="export-menu">
+                <button @click="exportAsJSON">📄 JSON</button>
+                <button @click="exportAsTXT">📝 TXT</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -256,7 +264,11 @@ import GroupSettings from './components/GroupSettings.vue';
 import EmojiPicker from './components/EmojiPicker.vue';
 import AudioRecorder from './components/AudioRecorder.vue';
 import ThemeSelector from './components/ThemeSelector.vue';
+import FontSelector from './components/FontSelector.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
+import { applyFont, loadSavedFont } from './fonts.js';
+import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
+import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 
 export default {
   name: 'ChatApp',
@@ -269,7 +281,8 @@ export default {
     GroupSettings,
     EmojiPicker,
     AudioRecorder,
-    ThemeSelector
+    ThemeSelector,
+    FontSelector
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -319,6 +332,8 @@ export default {
       groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '💼', '🚀', '⭐', '🎯', '💡'],
       // Audio
       showAudioRecorder: false,
+      // Export
+      showExportMenu: false,
     }
   },
   computed: {
@@ -339,6 +354,7 @@ export default {
   },
   async mounted() {
     applyTheme(loadSavedTheme())
+    applyFont(loadSavedFont())
     await this.initCrypto()
   },
   methods: {
@@ -545,6 +561,17 @@ export default {
       if (idx >= 0) {
         msg.reactions.splice(idx, 1)
       }
+    },
+    // Export
+    exportAsJSON() {
+      const json = exportChatJSON(this.messages, this.activeChat)
+      downloadFile(json, `whisper-${this.activeChat}-${Date.now()}.json`, 'application/json')
+      this.showExportMenu = false
+    },
+    exportAsTXT() {
+      const txt = exportChatTXT(this.messages, this.activeChat)
+      downloadFile(txt, `whisper-${this.activeChat}-${Date.now()}.txt`, 'text/plain')
+      this.showExportMenu = false
     },
     // Group management
     createGroup() {
@@ -1328,6 +1355,41 @@ body {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+/* Export dropdown */
+.export-dropdown {
+  position: relative;
+}
+
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
+  overflow: hidden;
+  z-index: 50;
+  min-width: 120px;
+}
+
+.export-menu button {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary, #f1f5f9);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.export-menu button:hover {
+  background: var(--bg-hover, #1e1e4a);
 }
 
 /* ═══════════════════════════════════════════════════════════════

@@ -96,6 +96,9 @@ export default {
   group_invite: '邀请成员',
   group_invite_placeholder: '输入邮箱邀请...',
 
+  // Font
+  font: '字体',
+
   // Audio
   audio_record: '语音消息',
   audio_start: '开始录音',

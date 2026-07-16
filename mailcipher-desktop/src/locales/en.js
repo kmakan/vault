@@ -96,6 +96,9 @@ export default {
   group_invite: 'Invite member',
   group_invite_placeholder: 'Email to invite...',
 
+  // Font
+  font: 'Font',
+
   // Audio
   audio_record: 'Voice Message',
   audio_start: 'Start Recording',
