@@ -128,10 +128,28 @@ pub fn run() {
             get_close_to_tray,
         ])
         .setup(|app| {
+            // Try to get the default window icon from bundled resources
+            let icon = if let Some(default_icon) = app.default_window_icon() {
+                default_icon.clone()
+            } else {
+                // Fallback: embed icon directly
+                let icon_bytes = include_bytes!("../icons/128x128.png");
+                tauri::image::Image::from_bytes(icon_bytes)
+                    .expect("Failed to parse bundled icon")
+            };
+
+            // Set window icon on Linux
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.set_icon(icon.clone()).ok();
+                }
+            }
+
             // Set up system tray
-            let tray_icon = tauri::tray::TrayIconBuilder::new()
+            let _tray_icon = tauri::tray::TrayIconBuilder::new()
                 .tooltip("Vault - E2E Encrypted Messenger")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .build(app)?;
             Ok(())
         })

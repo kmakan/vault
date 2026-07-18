@@ -83,6 +83,7 @@
       </div>
 
       <div v-if="showSettings" class="settings-panel">
+        <AvatarUpload :email="email" :avatarUrl="userAvatarUrl" @update="onAvatarUpdate" />
         <ThemeSelector />
         <IconPicker />
         <FontSelector />
@@ -269,6 +270,7 @@ import ThemeSelector from './components/ThemeSelector.vue';
 import FontSelector from './components/FontSelector.vue';
 import IconPicker from './components/IconPicker.vue';
 import AppBehavior from './components/AppBehavior.vue';
+import AvatarUpload from './components/AvatarUpload.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
@@ -288,7 +290,8 @@ export default {
     ThemeSelector,
     FontSelector,
     IconPicker,
-    AppBehavior
+    AppBehavior,
+    AvatarUpload
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -340,6 +343,8 @@ export default {
       showAudioRecorder: false,
       // Export
       showExportMenu: false,
+      // Avatar
+      userAvatarUrl: '',
     }
   },
   computed: {
@@ -365,6 +370,10 @@ export default {
     const savedIcon = localStorage.getItem('vault-icon') || 'letter'
     const link = document.querySelector("link[rel='icon']")
     if (link) link.href = `/icons/vault-${savedIcon}.svg`
+    // Load avatar from localStorage
+    if (this.email) {
+      this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || ''
+    }
     await this.initCrypto()
   },
   methods: {
@@ -457,6 +466,9 @@ export default {
         console.error('Failed to load messages:', error);
         this.messages = [];
       }
+    },
+    onAvatarUpdate(dataUrl) {
+      this.userAvatarUrl = dataUrl
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;

@@ -114,4 +114,10 @@ export default {
   audio_stop: '停止',
   audio_discard: '删除',
   audio_send: '发送语音',
+
+  // Avatar
+  avatar_title: '个人头像',
+  avatar_remove: '移除',
+  avatar_too_large: '图片大小不能超过500KB',
+  avatar_upload: '上传头像',
 }

@@ -5,6 +5,7 @@ use tracing_subscriber::EnvFilter;
 use ws::WsState;
 
 mod auth;
+mod avatar;
 mod chats;
 mod config;
 mod crypto;
@@ -65,6 +66,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/push/vapid-key", get(push::handlers::get_vapid_key))
         .route("/api/push/token", delete(push::handlers::delete_token))
         .route("/api/push/tokens", get(push::handlers::list_tokens))
+        .route("/api/avatar", post(avatar::handlers::upload_avatar))
+        .route("/api/avatar/:email", get(avatar::handlers::get_avatar).delete(avatar::handlers::delete_avatar))
+        .route("/api/groups/:group_id/avatar", post(avatar::group_handlers::upload_group_avatar).delete(avatar::group_handlers::delete_group_avatar))
         .layer(cors)
         .layer(Extension(ws_state))
         .with_state(pool);

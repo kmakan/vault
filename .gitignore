@@ -26,6 +26,9 @@ Thumbs.db
 /tmp/
 graphify-out/
 
+# AI tools
+.grok/
+
 # Android builds
 mailcipher-android/
 

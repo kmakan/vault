@@ -5,15 +5,35 @@
       <button class="btn-icon" @click="$emit('close')">✕</button>
     </div>
 
-    <!-- Group Info -->
+    <!-- Group Avatar + Info -->
     <div class="group-settings__info">
-      <div class="group-settings__name">
-        <span class="group-name">{{ group.name }}</span>
-        <span class="group-id">ID: {{ group.id }}</span>
-      </div>
-      <div class="group-settings__meta">
-        {{ group.members.length }} {{ t('members') || 'members' }}
-        <span v-if="group.blocked?.length"> · {{ group.blocked.length }} {{ t('blocked') || 'blocked' }}</span>
+      <div class="group-settings__avatar-row">
+        <div class="group-avatar-preview" @click="triggerGroupAvatar">
+          <UserAvatar
+            :email="group.id || group.name"
+            :avatarUrl="groupAvatarUrl"
+            :size="64"
+            :showPattern="true"
+          />
+          <div class="group-avatar-overlay">
+            <span>📷</span>
+          </div>
+        </div>
+        <input
+          ref="groupAvatarInput"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          class="group-avatar-input"
+          @change="onGroupAvatarSelected"
+        />
+        <div class="group-settings__name">
+          <span class="group-name">{{ group.name }}</span>
+          <span class="group-id">ID: {{ group.id }}</span>
+          <div class="group-settings__meta">
+            {{ group.members.length }} {{ t('members') || 'members' }}
+            <span v-if="group.blocked?.length"> · {{ group.blocked.length }} {{ t('blocked') || 'blocked' }}</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -95,9 +115,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useI18n } from '../i18n.js'
 import UserAvatar from './UserAvatar.vue'
+import api from '../api.js'
 
 const { t } = useI18n()
 
@@ -106,7 +127,7 @@ const props = defineProps({
   currentUser: { type: String, required: true },
 })
 
-defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete'])
+const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update'])
 
 const isAdmin = computed(() => {
   const member = props.group.members?.find(m => m.email === props.currentUser)
@@ -114,6 +135,54 @@ const isAdmin = computed(() => {
 })
 
 const isCreator = computed(() => props.group.created_by === props.currentUser)
+
+// Group avatar
+const groupAvatarInput = ref(null)
+const groupAvatarUrl = ref('')
+
+onMounted(() => {
+  const stored = localStorage.getItem(`vault-group-avatar-${props.group.id}`)
+  if (stored) groupAvatarUrl.value = stored
+})
+
+function triggerGroupAvatar() {
+  groupAvatarInput.value?.click()
+}
+
+async function onGroupAvatarSelected(e) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  if (file.size > 500 * 1024) {
+    alert(t('avatar_too_large') || 'Image must be under 500KB')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    const img = new Image()
+    img.onload = async () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 256
+      canvas.height = 256
+      const ctx = canvas.getContext('2d')
+      const size = Math.min(img.width, img.height)
+      const sx = (img.width - size) / 2
+      const sy = (img.height - size) / 2
+      ctx.drawImage(img, sx, sy, size, size, 0, 0, 256, 256)
+      const dataUrl = canvas.toDataURL('image/png')
+      localStorage.setItem(`vault-group-avatar-${props.group.id}`, dataUrl)
+      groupAvatarUrl.value = dataUrl
+      // Sync to backend
+      try {
+        await api.uploadGroupAvatar(props.group.id, dataUrl)
+      } catch (err) {
+        console.warn('Group avatar sync to server failed:', err)
+      }
+      emit('avatar-update', { groupId: props.group.id, avatar: dataUrl })
+    }
+    img.src = reader.result
+  }
+  reader.readAsDataURL(file)
+}
 </script>
 
 <style scoped>
@@ -283,5 +352,41 @@ const isCreator = computed(() => props.group.created_by === props.currentUser)
 
 .btn-icon:hover {
   color: var(--text-primary, #fff);
+}
+
+/* Group avatar */
+.group-settings__avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.group-avatar-preview {
+  position: relative;
+  cursor: pointer;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.group-avatar-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-size: 20px;
+}
+
+.group-avatar-preview:hover .group-avatar-overlay {
+  opacity: 1;
+}
+
+.group-avatar-input {
+  display: none;
 }
 </style>

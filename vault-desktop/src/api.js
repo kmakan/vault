@@ -167,6 +167,63 @@ export class ApiClient {
     if (!response.ok) throw new Error('Failed to create key');
     return await response.json();
   }
+
+  // --- Avatar ---
+  async uploadAvatar(email, dataUrl) {
+    const response = await fetch(`${API_BASE}/avatar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ email, avatar: dataUrl })
+    });
+    if (!response.ok) throw new Error('Failed to upload avatar');
+    return await response.json();
+  }
+
+  async getAvatar(email) {
+    try {
+      const response = await fetch(`${API_BASE}/avatar/${encodeURIComponent(email)}`, {
+        headers: { 'Authorization': `Bearer ${this.token}` }
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data.avatar_url || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteAvatar(email) {
+    const response = await fetch(`${API_BASE}/avatar/${encodeURIComponent(email)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    return response.ok;
+  }
+
+  // --- Group Avatar ---
+  async uploadGroupAvatar(groupId, dataUrl) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/avatar`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ avatar: dataUrl })
+    });
+    if (!response.ok) throw new Error('Failed to upload group avatar');
+    return await response.json();
+  }
+
+  async deleteGroupAvatar(groupId) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/avatar`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    return response.ok;
+  }
 }
 
 export default new ApiClient();

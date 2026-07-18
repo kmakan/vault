@@ -114,4 +114,10 @@ export default {
   audio_stop: 'Стоп',
   audio_discard: 'Удалить',
   audio_send: 'Отправить голос',
+
+  // Avatar
+  avatar_title: 'Фото профиля',
+  avatar_remove: 'Удалить',
+  avatar_too_large: 'Изображение должно быть менее 500KB',
+  avatar_upload: 'Загрузить фото',
 }

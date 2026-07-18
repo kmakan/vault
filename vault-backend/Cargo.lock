@@ -1937,51 +1937,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "mailcipher-backend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-imap",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bytes",
- "chacha20poly1305",
- "chrono",
- "config",
- "dotenvy",
- "ed25519-dalek",
- "futures",
- "hkdf",
- "http 1.4.2",
- "jsonwebtoken",
- "lettre",
- "once_cell",
- "pqc_kyber",
- "rand 0.8.7",
- "rand_core 0.6.4",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tokio-native-tls",
- "tokio-util",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "web-push",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4031,6 +3986,51 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vault-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-imap",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chacha20poly1305",
+ "chrono",
+ "config",
+ "dotenvy",
+ "ed25519-dalek",
+ "futures",
+ "hkdf",
+ "http 1.4.2",
+ "jsonwebtoken",
+ "lettre",
+ "once_cell",
+ "pqc_kyber",
+ "rand 0.8.7",
+ "rand_core 0.6.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-util",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "web-push",
+ "x25519-dalek",
+ "zeroize",
+]
 
 [[package]]
 name = "vcpkg"

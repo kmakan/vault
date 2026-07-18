@@ -4,40 +4,83 @@
     :style="{
       width: size + 'px',
       height: size + 'px',
-      backgroundColor: bgColor,
       fontSize: (size * 0.4) + 'px',
     }"
     :title="email"
   >
-    <span class="user-avatar__initials">{{ initials }}</span>
-    <svg
-      v-if="pattern"
-      class="user-avatar__pattern"
-      :width="size"
-      :height="size"
-      viewBox="0 0 100 100"
-    >
-      <rect
-        v-for="(cell, i) in pattern"
-        :key="i"
-        :x="cell.x"
-        :y="cell.y"
-        :width="cell.w"
-        :height="cell.h"
-        :fill="cell.fill"
-      />
-    </svg>
+    <!-- Uploaded image -->
+    <img
+      v-if="resolvedAvatar"
+      :src="resolvedAvatar"
+      class="user-avatar__image"
+      :alt="email"
+    />
+    <!-- Fallback: initials + color -->
+    <template v-else>
+      <div class="user-avatar__bg" :style="{ backgroundColor: bgColor }"></div>
+      <span class="user-avatar__initials">{{ initials }}</span>
+      <svg
+        v-if="pattern"
+        class="user-avatar__pattern"
+        :width="size"
+        :height="size"
+        viewBox="0 0 100 100"
+      >
+        <rect
+          v-for="(cell, i) in pattern"
+          :key="i"
+          :x="cell.x"
+          :y="cell.y"
+          :width="cell.w"
+          :height="cell.h"
+          :fill="cell.fill"
+        />
+      </svg>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
+import api from '../api.js'
 
 const props = defineProps({
   email: { type: String, required: true },
+  avatarUrl: { type: String, default: '' },
   size: { type: Number, default: 40 },
   showPattern: { type: Boolean, default: false },
 })
+
+// Resolve avatar: prop > localStorage > API
+const resolvedAvatar = ref('')
+
+async function loadAvatar() {
+  if (props.avatarUrl) {
+    resolvedAvatar.value = props.avatarUrl
+    return
+  }
+  // Fast local cache
+  const stored = localStorage.getItem(`vault-avatar-${props.email}`)
+  if (stored) {
+    resolvedAvatar.value = stored
+    return
+  }
+  // Fetch from server
+  try {
+    const url = await api.getAvatar(props.email)
+    if (url) {
+      resolvedAvatar.value = url
+      // Cache locally
+      localStorage.setItem(`vault-avatar-${props.email}`, url)
+    }
+  } catch {
+    // Ignore — will show initials fallback
+  }
+}
+
+onMounted(loadAvatar)
+watch(() => props.avatarUrl, loadAvatar)
+watch(() => props.email, loadAvatar)
 
 // Deterministic hash from email
 function hashString(str) {
@@ -45,12 +88,11 @@ function hashString(str) {
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i)
     hash = ((hash << 5) - hash) + char
-    hash = hash & hash // Convert to 32-bit integer
+    hash = hash & hash
   }
   return Math.abs(hash)
 }
 
-// Color palette (vibrant, accessible on dark/light)
 const colors = [
   '#E91E63', '#9C27B0', '#673AB7', '#3F51B5',
   '#2196F3', '#00BCD4', '#009688', '#4CAF50',
@@ -71,7 +113,6 @@ const initials = computed(() => {
   return parts[0].toUpperCase()
 })
 
-// Generate 5x5 identicon pattern (mirror left half)
 const pattern = computed(() => {
   if (!props.showPattern) return null
   const hash = hashString(props.email)
@@ -89,7 +130,6 @@ const pattern = computed(() => {
           h: cellSize,
           fill: 'rgba(255,255,255,0.3)',
         })
-        // Mirror to right side
         if (col < 2) {
           cells.push({
             x: (4 - col) * cellSize,
@@ -119,6 +159,19 @@ const pattern = computed(() => {
   overflow: hidden;
   flex-shrink: 0;
   user-select: none;
+}
+
+.user-avatar__bg {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.user-avatar__image {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .user-avatar__initials {

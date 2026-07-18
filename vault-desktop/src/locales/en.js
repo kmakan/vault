@@ -114,4 +114,10 @@ export default {
   audio_stop: 'Stop',
   audio_discard: 'Discard',
   audio_send: 'Send Voice',
+
+  // Avatar
+  avatar_title: 'Profile Photo',
+  avatar_remove: 'Remove',
+  avatar_too_large: 'Image must be under 500KB',
+  avatar_upload: 'Upload Photo',
 }
