@@ -1,40 +1,44 @@
 <template>
   <div class="app-container">
-    <div class="sidebar">
+    <!-- LOGIN SCREEN -->
+    <div v-if="!isLoggedIn" class="login-screen">
+      <div class="login-box">
+        <h1>🔒 Vault</h1>
+        <p>E2E Encrypted Messenger</p>
+        <form @submit.prevent="login">
+          <input v-model="email" type="email" placeholder="Email" required />
+          <input v-model="password" type="password" placeholder="Password" required />
+          <button type="submit" :disabled="loginLoading">
+            {{ loginLoading ? '...' : t('login') || 'Login' }}
+          </button>
+          <p v-if="loginError" class="login-error">{{ loginError }}</p>
+        </form>
+        <hr>
+        <p class="login-hint">Don't have an account? Register:</p>
+        <form @submit.prevent="register">
+          <input v-model="regUsername" type="text" placeholder="Username" required />
+          <input v-model="regEmail" type="email" placeholder="Email" required />
+          <input v-model="regPassword" type="password" placeholder="Password" required />
+          <button type="submit" :disabled="regLoading">
+            {{ regLoading ? '...' : t('register') || 'Register' }}
+          </button>
+          <p v-if="regError" class="login-error">{{ regError }}</p>
+        </form>
+      </div>
+    </div>
+    <!-- MAIN APP -->
+    <div v-else class="sidebar">
       <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-icon">🔒</span>
-          <span class="logo-text">Vault</span>
+        <div class="avatar-circle" @click="showAvatarUpload = true" :title="email">
+          <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-img" />
+          <span v-else class="avatar-initials">{{ emailInitials }}</span>
         </div>
         <div class="header-actions">
-          <button @click="showKeyManager = !showKeyManager" :title="cryptoReady ? 'Keys ready' : 'Generating keys...'">
-            {{ cryptoReady ? '🔑' : '⏳' }}
-          </button>
-          <button @click="showQRCode = !showQRCode" title="QR Code">
-            📱
-          </button>
-          <button @click="showSettings = !showSettings">⚙️</button>
+          <button @click="showSettings = true" title="Settings">⚙️</button>
         </div>
       </div>
       
-      <div class="nav-tabs">
-        <button 
-          :class="['nav-tab', { active: currentView === 'chats' }]"
-          @click="currentView = 'chats'"
-        >
-          <span class="nav-icon">💬</span>
-          {{ t('nav_inbox') }}
-        </button>
-        <button 
-          :class="['nav-tab', { active: currentView === 'email' }]"
-          @click="currentView = 'email'"
-        >
-          <span class="nav-icon">📧</span>
-          {{ t('nav_compose') }}
-        </button>
-      </div>
-
-      <div v-if="currentView === 'chats'" class="contacts-list">
+      <div class="contacts-list">
         <div class="search-box">
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
@@ -58,14 +62,27 @@
             <span class="status-dot" :class="{ online: contact.online }"></span>
           </div>
         </div>
-      </div>
-
-      <div v-else class="email-list">
-        <EmailInbox 
-          :emails="emails" 
-          :loading="emailsLoading"
-          @open-email="openEmail"
-        />
+        
+        <!-- Groups Section -->
+        <div v-if="groups.length > 0" class="groups-section">
+          <div class="groups-header">
+            <span>👥 {{ t('groups') || 'Groups' }}</span>
+          </div>
+          <div 
+            v-for="group in groups" 
+            :key="group.id"
+            :class="['contact-item', { active: activeChat === `group:${group.id}` }]"
+            @click="selectGroup(group)"
+          >
+            <div class="group-avatar">
+              {{ group.name.charAt(0).toUpperCase() }}
+            </div>
+            <div class="contact-info">
+              <div class="contact-name">{{ group.name }}</div>
+              <div class="contact-email">{{ group.member_count || 0 }} members</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     
@@ -82,23 +99,52 @@
         />
       </div>
 
-      <div v-if="showSettings" class="settings-panel">
-        <AvatarUpload :email="email" :avatarUrl="userAvatarUrl" @update="onAvatarUpdate" />
-        <ThemeSelector />
-        <IconPicker />
-        <FontSelector />
-        <AppBehavior />
-        <LanguageSelector />
-        <EmailSettings />
+      <!-- SETTINGS MODAL -->
+      <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
+        <div class="modal-settings">
+          <button class="modal-close" @click="showSettings = false">✕</button>
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" />
+        </div>
+      </div>
+
+      <!-- AVATAR UPLOAD MODAL -->
+      <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
+        <div class="modal-avatar">
+          <button class="modal-close" @click="showAvatarUpload = false">✕</button>
+          <h3>Фото профиля</h3>
+          <div class="avatar-preview-circle">
+            <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
+            <span v-else class="avatar-initials avatar-preview-initials">{{ emailInitials }}</span>
+          </div>
+          <p class="avatar-hint">Формат: PNG, JPG, SVG. Рекомендуется 100×100 px.</p>
+          <label class="avatar-upload-btn">
+            📷 Выбрать файл
+            <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="onAvatarFileSelect" hidden />
+          </label>
+        </div>
       </div>
       
-      <div v-else-if="currentView === 'chats'" class="chat-area">
+      <div class="chat-area">
         <div class="chat-header" v-if="activeChat">
           <div class="chat-header-info">
-            <UserAvatar :email="activeChat" :size="40" />
+            <template v-if="activeChatType === 'group'">
+              <div class="group-avatar">
+                {{ currentGroup?.name?.charAt(0).toUpperCase() || '?' }}
+              </div>
+            </template>
+            <template v-else>
+              <UserAvatar :email="activeChat" :size="40" />
+            </template>
             <div>
-              <h3>{{ activeChat }}</h3>
-              <div class="chat-status">{{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}</div>
+              <h3>{{ activeChatType === 'group' ? currentGroup?.name : activeChat }}</h3>
+              <div class="chat-status">
+                <template v-if="activeChatType === 'group'">
+                  👥 {{ currentGroup?.member_count || 0 }} members
+                </template>
+                <template v-else>
+                  {{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}
+                </template>
+              </div>
             </div>
           </div>
           <div class="chat-actions">
@@ -151,6 +197,17 @@
           >
             <div class="message-content">
               {{ msg.content }}
+              <!-- Attachment preview -->
+              <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
+                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data" 
+                     :alt="msg.attachment.name" 
+                     class="attachment-image" />
+              </div>
+              <div v-else-if="msg.attachment" class="attachment-preview">
+                <div class="attachment-file">
+                  📄 {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
+                </div>
+              </div>
               <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
             </div>
             <!-- Reactions -->
@@ -203,7 +260,8 @@
             class="message-field"
           />
         </div>
-        <button class="attach-btn" title="Attach file">📎</button>
+        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()">➕</button>
+        <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message">🎙️</button>
         <AudioRecorder
           :show="showAudioRecorder"
@@ -211,28 +269,8 @@
           @close="showAudioRecorder = false"
         />
           <button class="send-btn" @click="sendMessage">
-            <span class="send-icon">➤</span>
+            <span class="send-icon">✈️</span>
           </button>
-        </div>
-      </div>
-
-      <div v-else class="email-view">
-        <div v-if="selectedEmail" class="email-detail">
-          <div class="email-detail-header">
-            <button @click="selectedEmail = null" class="back-btn">← {{ t('general_close') }}</button>
-            <h3>{{ selectedEmail.subject || t('email_empty') }}</h3>
-          </div>
-          <div class="email-detail-meta">
-            <div>{{ t('email_to') }}: {{ selectedEmail.from }}</div>
-            <div>{{ selectedEmail.date }}</div>
-          </div>
-          <div class="email-detail-body">
-            {{ selectedEmail.body || t('general_loading') }}
-          </div>
-        </div>
-        <div v-else class="empty-state">
-          <div class="empty-icon">📬</div>
-          <div class="empty-text">{{ t('email_empty') }}</div>
         </div>
       </div>
     </div>
@@ -273,6 +311,7 @@ import api from './api.js';
 import crypto from './crypto.js';
 import ws from './ws.js';
 import { useI18n } from './i18n.js';
+import SettingsPage from './components/SettingsPage.vue';
 import EmailSettings from './components/EmailSettings.vue';
 import EmailInbox from './components/EmailInbox.vue';
 import KeyManager from './components/KeyManager.vue';
@@ -294,6 +333,7 @@ import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js'
 export default {
   name: 'ChatApp',
   components: {
+    SettingsPage,
     EmailSettings,
     EmailInbox,
     KeyManager,
@@ -324,6 +364,13 @@ export default {
       isLoggedIn: false,
       email: '',
       password: '',
+      loginLoading: false,
+      loginError: '',
+      regUsername: '',
+      regEmail: '',
+      regPassword: '',
+      regLoading: false,
+      regError: '',
       emails: [],
       emailsLoading: false,
       selectedEmail: null,
@@ -338,8 +385,9 @@ export default {
       searchQuery: '',
       // Groups
       groups: [],
+      groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       currentGroup: null,
-      showGroupSettings: false,
+      activeChatType: 'chat', // 'chat' or 'group'
       newGroupName: '',
       newGroupIcon: '📁',
       // Emoji
@@ -358,8 +406,10 @@ export default {
       showAudioRecorder: false,
       // Export
       showExportMenu: false,
+      showAvatarUpload: false,
       // Avatar
       userAvatarUrl: '',
+      displayName: '',
       // User identity
       userId: null,
       // Typing indicators
@@ -368,6 +418,10 @@ export default {
     }
   },
   computed: {
+    emailInitials() {
+      if (!this.email) return '?';
+      return this.email.split('@')[0].substring(0, 2).toUpperCase();
+    },
     filteredContacts() {
       if (!this.searchQuery) return this.contacts;
       const q = this.searchQuery.toLowerCase();
@@ -393,6 +447,21 @@ export default {
     // Load avatar from localStorage
     if (this.email) {
       this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || ''
+    }
+    // Validate saved token
+    if (api.token) {
+      try {
+        await api.getChats();
+        this.isLoggedIn = true;
+        ws.connect(api.token);
+        ws.on('typing', (msg) => this.onTypingEvent(msg));
+        await this.loadContacts();
+        await this.loadGroups();
+        await this.loadEmails();
+      } catch (e) {
+        api.token = null;
+        localStorage.removeItem('vault-token');
+      }
     }
     await this.initCrypto()
   },
@@ -426,24 +495,55 @@ export default {
       }
     },
     async login() {
+      this.loginLoading = true;
+      this.loginError = '';
       try {
         const data = await api.login(this.email, this.password);
         this.userId = data.user_id;
         this.isLoggedIn = true;
-        // Connect WebSocket
         ws.connect(api.token);
         ws.on('typing', (msg) => this.onTypingEvent(msg));
         await this.loadContacts();
+        await this.loadGroups();
         await this.loadEmails();
       } catch (error) {
-        alert('Login failed: ' + error.message);
+        this.loginError = error.message;
+      } finally {
+        this.loginLoading = false;
+      }
+    },
+    async register() {
+      this.regLoading = true;
+      this.regError = '';
+      try {
+        const data = await api.register(this.regUsername, this.regEmail, this.regPassword);
+        this.userId = data.user_id;
+        this.isLoggedIn = true;
+        this.email = this.regEmail;
+        ws.connect(api.token);
+        ws.on('typing', (msg) => this.onTypingEvent(msg));
+        await this.loadContacts();
+        await this.loadGroups();
+        await this.loadEmails();
+      } catch (error) {
+        this.regError = error.message;
+      } finally {
+        this.regLoading = false;
       }
     },
     async loadContacts() {
       try {
         this.contacts = await api.getContacts();
       } catch (error) {
-        console.error('Failed to load contacts:', error);
+        // /api/contacts may not exist yet
+        this.contacts = [];
+      }
+    },
+    async loadGroups() {
+      try {
+        this.groups = await api.getGroups();
+      } catch (error) {
+        console.error('Failed to load groups:', error);
       }
     },
     setPeerKey(email, key) {
@@ -464,12 +564,49 @@ export default {
         ws.unsubscribe(this.activeChat);
       }
       this.activeChat = email;
+      this.activeChatType = 'chat';
       // Subscribe to new chat channel
       ws.subscribe(email);
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
       }
       await this.loadMessages(email);
+    },
+    async selectGroup(group) {
+      // Unsubscribe from previous chat
+      if (this.activeChat) {
+        ws.unsubscribe(this.activeChat);
+      }
+      this.activeChat = `group:${group.id}`;
+      this.activeChatType = 'group';
+      this.currentGroup = group;
+      // Subscribe to group channel
+      ws.subscribe(`group:${group.id}`);
+
+      // Load group key if not already in memory
+      if (!this.groupKeys[group.id] && this.cryptoReady) {
+        try {
+          const keyData = await api.getMyGroupKey(group.id);
+          if (keyData && keyData.encrypted_key) {
+            // Decrypt the group key with our private key
+            // The encrypted_key was encrypted with our public key by the group creator
+            // We need the group creator's public key to decrypt
+            // For now, try to decrypt using the stored peer keys
+            const creatorEmail = group.created_by;
+            if (this.peerKeys[creatorEmail]) {
+              const groupKeyHex = await crypto.decryptGroupKey(
+                keyData.encrypted_key,
+                this.peerKeys[creatorEmail]
+              );
+              this.groupKeys[group.id] = groupKeyHex;
+            }
+          }
+        } catch (e) {
+          console.warn('Could not load group key:', e);
+        }
+      }
+
+      await this.loadGroupMessages(group.id);
     },
     async loadMessages(email) {
       try {
@@ -509,8 +646,64 @@ export default {
         this.messages = [];
       }
     },
+    async loadGroupMessages(groupId) {
+      try {
+        const raw = await api.getGroupMessages(groupId);
+        const groupKey = this.groupKeys[groupId];
+
+        if (groupKey) {
+          // Decrypt messages with group key
+          this.messages = await Promise.all(
+            raw.map(async (msg) => {
+              const base = {
+                ...msg,
+                from: msg.sender_id === this.userId ? 'me' : 'them',
+                time: new Date(msg.created_at).toLocaleTimeString(),
+                status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+              };
+              if (crypto.isEncrypted(msg.content)) {
+                try {
+                  const decrypted = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                  return { ...base, content: decrypted, encrypted: true };
+                } catch {
+                  return { ...base, encrypted: false };
+                }
+              }
+              return { ...base, encrypted: false };
+            })
+          );
+        } else {
+          // No group key — show as-is (unencrypted)
+          this.messages = raw.map(msg => ({
+            ...msg,
+            from: msg.sender_id === this.userId ? 'me' : 'them',
+            time: new Date(msg.created_at).toLocaleTimeString(),
+            status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+            encrypted: false,
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to load group messages:', error);
+        this.messages = [];
+      }
+    },
     onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
+    },
+    onAvatarFileSelect(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Файл слишком большой (макс 2MB)');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        this.userAvatarUrl = ev.target.result;
+        localStorage.setItem(`vault-avatar-${this.email}`, ev.target.result);
+        this.showAvatarUpload = false;
+      };
+      reader.readAsDataURL(file);
     },
     onTypingEvent(msg) {
       if (msg.user_id === this.userId) return;
@@ -535,18 +728,32 @@ export default {
       
       try {
         let content = this.newMessage;
-        if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-          crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
-          content = await crypto.encrypt(this.newMessage);
+        let isEncrypted = false;
+        
+        if (this.activeChatType === 'group') {
+          // Group message — encrypt with group key
+          const groupKey = this.groupKeys[this.currentGroup.id];
+          if (groupKey) {
+            content = await crypto.encryptWithGroupKey(this.newMessage, groupKey);
+            isEncrypted = true;
+          }
+          await api.sendGroupMessage(this.currentGroup.id, content);
+        } else {
+          // Regular chat message
+          if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            content = await crypto.encrypt(this.newMessage);
+            isEncrypted = true;
+          }
+          await api.sendMessage(this.activeChat, content);
         }
-
-        await api.sendMessage(this.activeChat, content);
+        
         this.messages.push({
           id: Date.now(),
           from: 'me',
           content: this.newMessage,
           time: new Date().toLocaleTimeString(),
-          encrypted: this.cryptoReady && !!this.peerKeys[this.activeChat],
+          encrypted: isEncrypted,
           status: 'sent'
         });
         
@@ -624,6 +831,55 @@ export default {
       this.messages.push(msg)
       this.showAudioRecorder = false
     },
+    // File attachments
+    async handleFileSelect(event) {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+
+      for (const file of files) {
+        try {
+          const reader = new FileReader();
+          reader.onload = async (e) => {
+            const base64 = e.target.result.split(',')[1];
+            const isImage = file.type.startsWith('image/');
+
+            // Create preview message
+            const msg = {
+              id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+              content: isImage
+                ? `📎 ${file.name}`
+                : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`,
+              from: 'me',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              encrypted: this.cryptoReady,
+              attachment: {
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                data: base64,
+                isImage: isImage,
+              },
+            };
+            this.messages.push(msg);
+
+            // Send to API
+            if (this.activeChat) {
+              try {
+                await api.sendMessage(this.activeChat, msg.content, file.type);
+              } catch (err) {
+                console.error('Failed to send attachment:', err);
+              }
+            }
+          };
+          reader.readAsDataURL(file);
+        } catch (err) {
+          console.error('File read error:', err);
+        }
+      }
+
+      // Reset input
+      event.target.value = '';
+    },
     // Reactions
     toggleReactionPicker(msgId) {
       this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
@@ -657,23 +913,28 @@ export default {
       this.showExportMenu = false
     },
     // Group management
-    createGroup() {
+    async createGroup() {
       if (!this.newGroupName.trim()) return;
-      const group = {
-        id: Date.now().toString(36),
-        name: this.newGroupName.trim(),
-        created_by: this.email,
-        created_at: new Date().toISOString(),
-        icon: this.newGroupIcon,
-        members: [
-          { email: this.email, role: 'Admin', joined_at: new Date().toISOString() }
-        ],
-        blocked: []
-      };
-      this.groups.push(group);
-      this.currentGroup = group;
-      this.showGroupSettings = true;
-      this.newGroupName = '';
+      try {
+        const group = await api.createGroup(this.newGroupName.trim(), '');
+        group.members = group.members || [];
+        group.blocked = group.blocked || [];
+        this.groups.push(group);
+        this.currentGroup = group;
+
+        // Generate and store a group encryption key
+        if (this.cryptoReady) {
+          const groupKey = await crypto.generateGroupKey();
+          this.groupKeys[group.id] = groupKey;
+          console.log('Generated group key for', group.id);
+        }
+
+        this.showGroupSettings = true;
+        this.newGroupName = '';
+      } catch (error) {
+        console.error('Failed to create group:', error);
+        alert('Failed to create group: ' + error.message);
+      }
     },
     selectGroup(group) {
       this.currentGroup = group;
@@ -727,6 +988,31 @@ export default {
 </script>
 
 <style>
+.login-screen {
+  display: flex; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh;
+  background: var(--bg-primary, #0d1117); color: var(--text-primary, #e6edf3);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.login-box {
+  background: var(--bg-secondary, #161b22); border: 1px solid var(--border, #30363d);
+  border-radius: 12px; padding: 40px; width: 360px; text-align: center;
+}
+.login-box h1 { margin: 0 0 8px; font-size: 28px; }
+.login-box p { margin: 0 0 20px; color: var(--text-secondary, #8b949e); }
+.login-box input {
+  width: 100%; padding: 10px 14px; margin-bottom: 12px; border-radius: 8px;
+  border: 1px solid var(--border, #30363d); background: var(--bg-primary, #0d1117);
+  color: var(--text-primary, #e6edf3); font-size: 14px; box-sizing: border-box;
+}
+.login-box button {
+  width: 100%; padding: 10px; border-radius: 8px; border: none; cursor: pointer;
+  background: #238636; color: white; font-size: 14px; font-weight: 600;
+}
+.login-box button:disabled { opacity: 0.5; cursor: not-allowed; }
+.login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
+.login-hint { font-size: 13px; margin: 16px 0 8px !important; }
+.login-box hr { border: none; border-top: 1px solid var(--border, #30363d); margin: 20px 0; }
 /* ═══════════════════════════════════════════════════════════════
    Vault — Professional Design System
    ═══════════════════════════════════════════════════════════════ */
@@ -853,6 +1139,134 @@ body {
 
 .header-actions button:hover {
   background: var(--bg-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Avatar Circle (sidebar header)
+   ═══════════════════════════════════════════════════════════════ */
+
+.avatar-circle {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 2px solid var(--border-subtle, rgba(255,255,255,0.06));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.15s;
+  flex-shrink: 0;
+}
+
+.avatar-circle:hover {
+  border-color: var(--accent-primary, #6366f1);
+  transform: scale(1.05);
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.avatar-initials {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #f1f5f9);
+  user-select: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Settings Modal
+   ═══════════════════════════════════════════════════════════════ */
+
+.modal-settings {
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 16px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
+  animation: slideUp 0.2s ease;
+  position: relative;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Avatar Upload Modal
+   ═══════════════════════════════════════════════════════════════ */
+
+.modal-avatar {
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: 16px;
+  width: 380px;
+  max-width: 90vw;
+  padding: 32px;
+  text-align: center;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
+  animation: slideUp 0.2s ease;
+  position: relative;
+}
+
+.modal-avatar h3 {
+  margin: 0 0 24px 0;
+  font-size: 18px;
+  color: var(--text-primary, #f1f5f9);
+}
+
+.avatar-preview-circle {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 3px solid var(--border-subtle, rgba(255,255,255,0.06));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  overflow: hidden;
+}
+
+.avatar-preview-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.avatar-preview-initials {
+  font-size: 36px;
+}
+
+.avatar-hint {
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+  margin: 0 0 20px 0;
+}
+
+.avatar-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--accent-primary, #6366f1);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.avatar-upload-btn:hover {
+  background: var(--accent-hover, #5558e6);
+  transform: translateY(-1px);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1011,6 +1425,35 @@ body {
   box-shadow: 0 0 8px var(--status-online);
 }
 
+/* Groups */
+.groups-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.groups-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.group-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Main Chat Area
    ═══════════════════════════════════════════════════════════════ */
@@ -1135,6 +1578,30 @@ body {
 .encrypted-badge {
   margin-left: 6px;
   font-size: 12px;
+}
+
+/* Attachment previews */
+.attachment-preview {
+  margin-top: 8px;
+}
+
+.attachment-image {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.attachment-image:hover {
+  transform: scale(1.02);
+}
+
+.attachment-file {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
 }
 
 .message-time {
@@ -1682,6 +2149,14 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   overflow-y: auto;
   flex: 1;
+}
+
+.settings-fullscreen {
+  padding: 0;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 100;
+  background: #0d1117;
 }
 
 .settings-panel h3 {
