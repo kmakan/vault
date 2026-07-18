@@ -184,6 +184,16 @@ async fn handle_client_message(text: &str, user_id: Uuid, ws_state: &WsState) ->
             });
             ws_state.broadcast_to_user(user_id, &response.to_string()).await;
         }
+        Some("typing") => {
+            if let Some(chat) = msg["chat"].as_str() {
+                let typing_msg = serde_json::json!({
+                    "type": "typing",
+                    "chat": chat,
+                    "user_id": user_id,
+                });
+                ws_state.broadcast_to_channel(chat, &typing_msg.to_string()).await;
+            }
+        }
         _ => {}
     }
 

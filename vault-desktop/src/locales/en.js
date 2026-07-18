@@ -120,4 +120,5 @@ export default {
   avatar_remove: 'Remove',
   avatar_too_large: 'Image must be under 500KB',
   avatar_upload: 'Upload Photo',
+  typing: 'typing...',
 }

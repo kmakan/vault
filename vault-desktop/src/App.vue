@@ -162,7 +162,12 @@
                 @click.stop="toggleReaction(msg.id, r)"
               >{{ r }}</span>
             </div>
-            <div class="message-time">{{ msg.time }}</div>
+            <div class="message-footer">
+              <div class="message-time">{{ msg.time }}</div>
+              <span v-if="msg.from === 'me'" class="message-status" :title="msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent'">
+                {{ msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : '✓' }}
+              </span>
+            </div>
             <!-- Reaction picker popup -->
             <div
               v-if="reactionPickerMsgId === msg.id"
@@ -174,6 +179,14 @@
           </div>
         </div>
         
+        <!-- Typing indicator -->
+        <div v-if="Object.keys(typingUsers).length > 0" class="typing-indicator">
+          <span class="typing-dots">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="typing-text">{{ t('typing') || 'typing...' }}</span>
+        </div>
+
         <div class="message-input" v-if="activeChat">
         <div class="input-wrapper">
           <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji">😊</button>
@@ -185,6 +198,7 @@
           <input
             v-model="newMessage"
             @keyup.enter="sendMessage"
+            @input="onTypingInput"
             :placeholder="t('email_compose') + '...'"
             class="message-field"
           />
@@ -257,6 +271,7 @@
 <script>
 import api from './api.js';
 import crypto from './crypto.js';
+import ws from './ws.js';
 import { useI18n } from './i18n.js';
 import EmailSettings from './components/EmailSettings.vue';
 import EmailInbox from './components/EmailInbox.vue';
@@ -345,6 +360,11 @@ export default {
       showExportMenu: false,
       // Avatar
       userAvatarUrl: '',
+      // User identity
+      userId: null,
+      // Typing indicators
+      typingUsers: {},
+      typingTimeout: null,
     }
   },
   computed: {
@@ -407,8 +427,12 @@ export default {
     },
     async login() {
       try {
-        await api.login(this.email, this.password);
+        const data = await api.login(this.email, this.password);
+        this.userId = data.user_id;
         this.isLoggedIn = true;
+        // Connect WebSocket
+        ws.connect(api.token);
+        ws.on('typing', (msg) => this.onTypingEvent(msg));
         await this.loadContacts();
         await this.loadEmails();
       } catch (error) {
@@ -435,7 +459,13 @@ export default {
       this.peerKeyInput = '';
     },
     async selectChat(email) {
+      // Unsubscribe from previous chat
+      if (this.activeChat) {
+        ws.unsubscribe(this.activeChat);
+      }
       this.activeChat = email;
+      // Subscribe to new chat channel
+      ws.subscribe(email);
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
       }
@@ -448,19 +478,31 @@ export default {
           crypto.setPeerPublicKey(this.peerKeys[email]);
           this.messages = await Promise.all(
             raw.map(async (msg) => {
+              const base = {
+                ...msg,
+                from: msg.sender_id === this.userId ? 'me' : 'them',
+                time: new Date(msg.created_at).toLocaleTimeString(),
+                status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+              };
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const decrypted = await crypto.decrypt(msg.content);
-                  return { ...msg, content: decrypted, encrypted: true };
+                  return { ...base, content: decrypted, encrypted: true };
                 } catch {
-                  return { ...msg, encrypted: false };
+                  return { ...base, encrypted: false };
                 }
               }
-              return { ...msg, encrypted: false };
+              return { ...base, encrypted: false };
             })
           );
         } else {
-          this.messages = raw;
+          this.messages = raw.map(msg => ({
+            ...msg,
+            from: msg.sender_id === this.userId ? 'me' : 'them',
+            time: new Date(msg.created_at).toLocaleTimeString(),
+            status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+            encrypted: false,
+          }));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
@@ -469,6 +511,24 @@ export default {
     },
     onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
+    },
+    onTypingEvent(msg) {
+      if (msg.user_id === this.userId) return;
+      if (msg.chat === this.activeChat) {
+        this.typingUsers[msg.user_id] = Date.now();
+        this.typingUsers = { ...this.typingUsers };
+        // Clear after 3 seconds
+        setTimeout(() => {
+          if (this.typingUsers[msg.user_id] && Date.now() - this.typingUsers[msg.user_id] >= 2900) {
+            delete this.typingUsers[msg.user_id];
+            this.typingUsers = { ...this.typingUsers };
+          }
+        }, 3100);
+      }
+    },
+    onTypingInput() {
+      if (!this.activeChat) return;
+      ws.sendTyping(this.activeChat);
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
@@ -486,7 +546,8 @@ export default {
           from: 'me',
           content: this.newMessage,
           time: new Date().toLocaleTimeString(),
-          encrypted: this.cryptoReady && !!this.peerKeys[this.activeChat]
+          encrypted: this.cryptoReady && !!this.peerKeys[this.activeChat],
+          status: 'sent'
         });
         
         this.newMessage = '';
@@ -1079,8 +1140,57 @@ body {
 .message-time {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.message-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
   margin-top: 6px;
-  text-align: right;
+}
+
+.message-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.message-status.read {
+  color: #6366f1;
+  opacity: 1;
+}
+
+/* Typing indicator */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.typing-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-dots span:nth-child(1) { animation-delay: 0s; }
+.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
 }
 
 /* Reactions */

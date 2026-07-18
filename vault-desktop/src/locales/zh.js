@@ -120,4 +120,5 @@ export default {
   avatar_remove: '移除',
   avatar_too_large: '图片大小不能超过500KB',
   avatar_upload: '上传头像',
+  typing: '正在输入...',
 }
