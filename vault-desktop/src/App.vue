@@ -102,7 +102,7 @@
       <!-- SETTINGS MODAL -->
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
-          <button class="modal-close" @click="showSettings = false">✕</button>
+          <button class="modal-close" @click="showSettings = false">←</button>
           <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" />
         </div>
       </div>
@@ -110,7 +110,7 @@
       <!-- AVATAR UPLOAD MODAL -->
       <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
         <div class="modal-avatar">
-          <button class="modal-close" @click="showAvatarUpload = false">✕</button>
+          <button class="modal-close" @click="showAvatarUpload = false">←</button>
           <h3>Фото профиля</h3>
           <div class="avatar-preview-circle">
             <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
@@ -260,7 +260,7 @@
             class="message-field"
           />
         </div>
-        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()">➕</button>
+        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()">📎</button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message">🎙️</button>
         <AudioRecorder
@@ -269,7 +269,7 @@
           @close="showAudioRecorder = false"
         />
           <button class="send-btn" @click="sendMessage">
-            <span class="send-icon">✈️</span>
+            <span class="send-icon">➤</span>
           </button>
         </div>
       </div>
@@ -280,7 +280,7 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3>{{ t('group_create_title') || 'New Group' }}</h3>
-          <button class="modal-close" @click="showCreateGroup = false">✕</button>
+          <button class="modal-close" @click="showCreateGroup = false">←</button>
         </div>
         <div class="modal-body">
           <label>{{ t('group_name') || 'Group Name' }}</label>
@@ -1187,13 +1187,13 @@ body {
   background: var(--bg-secondary, #12122a);
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
   border-radius: 16px;
-  width: 520px;
-  max-width: 90vw;
-  max-height: 85vh;
-  overflow-y: auto;
+  width: calc(100% - 40px);
+  max-width: 720px;
+  max-height: calc(100% - 40px);
   box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
   animation: slideUp 0.2s ease;
   position: relative;
+  overflow-y: auto;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1847,8 +1847,11 @@ body {
   border: none;
   color: var(--text-muted, #64748b);
   cursor: pointer;
-  font-size: 20px;
-  padding: 4px;
+  font-size: 22px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s;
+  line-height: 1;
 }
 
 .modal-close:hover {
