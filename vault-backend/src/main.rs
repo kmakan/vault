@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Infrastructure code (crypto, push, sender_keys) — used in later phases
 use axum::{routing::{delete, get, post}, Extension, Router};
 use tower_http::cors::{AllowHeaders, AllowMethods, CorsLayer};
 use tracing_subscriber::EnvFilter;

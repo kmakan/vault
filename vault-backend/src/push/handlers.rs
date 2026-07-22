@@ -6,7 +6,7 @@ use axum::{
 use sqlx::PgPool;
 
 use crate::auth::middleware::AuthExtractor;
-use super::models::{Platform, PushTokenResponse, RegisterTokenRequest, UnregisterTokenRequest, VapidKeyResponse};
+use super::models::{PushTokenResponse, RegisterTokenRequest, UnregisterTokenRequest, VapidKeyResponse};
 use super::PushService;
 
 pub async fn register_token(

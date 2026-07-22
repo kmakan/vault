@@ -243,7 +243,7 @@ pub struct EncryptedEnvelopeData {
 pub fn build_mime_multipart(
     encrypted_envelope: &str,
     filename: &str,
-    content_type: &str,
+    _content_type: &str,
 ) -> String {
     let boundary = format!("----VaultAttachment_{}", uuid::Uuid::new_v4());
 

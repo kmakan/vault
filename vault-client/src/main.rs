@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Infrastructure code — used in later phases
 mod api;
 mod app;
 mod cli;

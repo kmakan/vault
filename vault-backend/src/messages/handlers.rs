@@ -7,7 +7,6 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthExtractor;
-use crate::crypto::{AlphaCipher, ColumnarCipher, CombinedEncryptor, CombinedDecryptor, add_noise, remove_noise, Ed25519Signer, verify_signature};
 use super::models::{CreateMessageRequest, Message, MessageResponse};
 
 pub async fn list_messages(
@@ -56,7 +55,7 @@ pub async fn create_message(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let chat = chat.ok_or_else(|| (StatusCode::NOT_FOUND, "Chat not found".to_string()))?;
+    let _chat = chat.ok_or_else(|| (StatusCode::NOT_FOUND, "Chat not found".to_string()))?;
 
     let content_type = req.content_type.unwrap_or_else(|| "text/plain".to_string());
 

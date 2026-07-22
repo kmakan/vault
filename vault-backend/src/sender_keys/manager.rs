@@ -7,7 +7,7 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 use sqlx::PgPool;
 use uuid::Uuid;
-use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
+use x25519_dalek::{PublicKey, StaticSecret};
 use rand::RngCore;
 
 use super::models::SenderKey;

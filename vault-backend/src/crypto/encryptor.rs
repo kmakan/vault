@@ -1,12 +1,11 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, Verifier};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroize;
 
 use super::CryptoError;
 
@@ -177,7 +176,7 @@ impl Encryptor {
         let mut nonce = String::new();
         let mut signature = String::new();
 
-        let mut in_content = false;
+        let _in_content = false;
         let mut past_header = false;
 
         for line in encrypted.lines() {

@@ -422,7 +422,7 @@ impl ContactBook {
     // ── Import / Export ──────────────────────────────────────────────────
 
     /// Export a single contact as a shareable JSON string.
-    pub fn export_contact(email: &str) -> Option<String> {
+    pub fn export_contact(_email: &str) -> Option<String> {
         // We need the contact from somewhere — caller should pass it in.
         // This is a static helper for formatting.
         None // placeholder — use ContactBook instance method below

@@ -1,6 +1,6 @@
 pub mod encryptor;
 
-pub use encryptor::{is_vault_encrypted, DecryptedContent, Encryptor};
+pub use encryptor::{DecryptedContent, Encryptor};
 
 /// Decryptor is an alias for Encryptor (it has both encrypt and decrypt methods)
 pub type Decryptor = Encryptor;

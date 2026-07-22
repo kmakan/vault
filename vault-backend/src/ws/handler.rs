@@ -76,8 +76,8 @@ async fn handle_socket(socket: WebSocket, query: WsQuery, pool: sqlx::PgPool, ws
         let _ = tx_for_recv.send("".to_string());
     });
 
-    let mut heartbeat_ws = ws_state.clone();
-    let mut heartbeat_tx = tx.clone();
+    let heartbeat_ws = ws_state.clone();
+    let heartbeat_tx = tx.clone();
     let heartbeat_user_id = user_id;
     let mut heartbeat_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));

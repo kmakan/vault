@@ -841,7 +841,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             Output::error(&format!("{} (limit: {})", e, limit_label));
                         } else {
                             match info.read_contents() {
-                                Ok(data) => {
+                                Ok(_data) => {
                                     // Encrypt the file using the standalone Encryptor
                                     let encryptor = crate::crypto::encryptor::Encryptor::new();
                                     match encryptor.encrypt_file(&info.path) {

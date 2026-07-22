@@ -237,7 +237,7 @@ impl InviteManager {
     }
 
     /// Accept an invite (recipient side)
-    pub fn accept_invite(&mut self, invite_id: &str, recipient_public_key: &str) -> Result<Invite> {
+    pub fn accept_invite(&mut self, invite_id: &str, _recipient_public_key: &str) -> Result<Invite> {
         let invite = self
             .invites
             .get_mut(invite_id)

@@ -14,38 +14,13 @@ pub mod x3dh;
 pub mod xchacha;
 
 pub use alpha::AlphaCipher;
-pub use pake::{
-    register, initiate, respond, verify_server,
-    PakeState, PakeMessage, PakeResponse,
-};
-pub use argon2::{
-    derive_key_from_password, derive_key_interactive, derive_key_sensitive,
-    derive_and_encrypt, derive_and_decrypt,
-    generate_salt, generate_salt_string, DeriveParams,
-};
 pub use binary::{
-    decrypt_bytes, decrypt_from_base64, decrypt_to_file, encrypt_bytes, encrypt_file,
-    encrypt_to_base64, derive_file_key, encrypted_size,
+    decrypt_bytes, encrypt_bytes,
 };
 pub use columnar::ColumnarCipher;
-pub use combined::{CombinedEncryptor, CombinedDecryptor};
-pub use hybrid::{
-    HybridKeyExchange, HybridEncapsulation,
-    generate_hybrid_keypair, hybrid_encapsulate, hybrid_decapsulate,
-    x25519_public_key_to_base64, x25519_public_key_from_base64,
-    x25519_secret_key_to_base64, x25519_secret_key_from_base64,
-    hybrid_ciphertext_to_base64, hybrid_ciphertext_from_base64,
-    X25519_PUBLIC_KEY_SIZE, X25519_SECRET_KEY_SIZE, X25519_CIPHERTEXT_SIZE, HYBRID_SHARED_SECRET_SIZE,
-};
-pub use post_quantum::{
-    KyberKeyPair, generate_kyber_keypair, kyber_encapsulate, kyber_decapsulate,
-    kyber_public_key_to_base64, kyber_public_key_from_base64,
-    kyber_secret_key_to_base64, kyber_secret_key_from_base64,
-    kyber_ciphertext_to_base64, kyber_ciphertext_from_base64,
-    KYBER_SECRET_KEY_SIZE, KYBER_PUBLIC_KEY_SIZE, KYBER_CIPHERTEXT_SIZE, KYBER_SHARED_SECRET_SIZE,
-};
-pub use sealed::{seal, unseal};
-pub use signing::{Ed25519Signer, Ed25519KeyPair, verify_signature, verify_signature_bytes};
+pub use combined::CombinedEncryptor;
+pub use sealed::seal;
+pub use signing::Ed25519Signer;
 
 use rand::Rng;
 

@@ -10,8 +10,7 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use sha2::Sha256;
-use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
-use rand_core::RngCore;
+use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 use super::CryptoError;

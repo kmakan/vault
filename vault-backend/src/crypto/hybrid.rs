@@ -5,7 +5,6 @@
 
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 use rand::rngs::OsRng;
-use rand_core::SeedableRng;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
