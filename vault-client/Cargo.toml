@@ -52,6 +52,9 @@ zeroize = { version = "1.8", features = ["derive"] }
 # Secure storage (OS keychain)
 keyring = "3"
 
+# Local database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }

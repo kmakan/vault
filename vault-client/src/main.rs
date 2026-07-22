@@ -2,6 +2,7 @@ mod api;
 mod app;
 mod cli;
 mod crypto;
+mod storage;
 mod ui;
 mod vault;
 

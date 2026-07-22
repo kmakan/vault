@@ -17,7 +17,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            base_url: "http://localhost:8081".to_string(),
+            base_url: "http://localhost:9443".to_string(),
             access_token: None,
             refresh_token: None,
             email: None,
