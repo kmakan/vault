@@ -23,9 +23,9 @@ COPY --from=builder /app/target/release/mailcipher-backend /usr/local/bin/mailci
 
 USER mailcipher
 
-EXPOSE 8080
+EXPOSE 9443
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:9443/health || exit 1
 
 ENTRYPOINT ["mailcipher-backend"]

@@ -37,12 +37,12 @@ services:
         condition: service_healthy
     environment:
       HOST: 0.0.0.0
-      PORT: 8080
+      PORT: 9443
       DATABASE_URL: postgresql://${POSTGRES_USER:-vault}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-vault}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       RUST_LOG: ${RUST_LOG:-info,vault_backend=info,tower_http=info}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9443/health || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 15s

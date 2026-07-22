@@ -27,7 +27,7 @@ impl Config {
             .context("JWT_SECRET must be set")?;
 
         let allowed_origins = std::env::var("ALLOWED_ORIGINS")
-            .unwrap_or_else(|_| "http://localhost:3000,http://localhost:8080".to_string())
+            .unwrap_or_else(|_| "http://localhost:3000,http://localhost:9443".to_string())
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -36,7 +36,7 @@ impl Config {
         Ok(Config {
             host: std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("PORT")
-                .unwrap_or_else(|_| "8081".to_string())
+                .unwrap_or_else(|_| "9443".to_string())
                 .parse()?,
             database_url,
             jwt_secret,

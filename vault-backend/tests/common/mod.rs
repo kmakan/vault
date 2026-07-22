@@ -3,7 +3,7 @@ use reqwest::Client;
 use std::env;
 
 static BASE_URL: Lazy<String> = Lazy::new(|| {
-    env::var("TEST_API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+    env::var("TEST_API_URL").unwrap_or_else(|_| "http://localhost:9443".to_string())
 });
 
 pub struct TestContext {

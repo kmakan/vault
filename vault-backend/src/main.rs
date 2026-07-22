@@ -13,6 +13,7 @@ mod email;
 mod email_accounts;
 mod error;
 mod groups;
+mod group_keys;
 mod keys;
 mod messages;
 mod models;
@@ -53,6 +54,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/groups", get(groups::handlers::list_groups).post(groups::handlers::create_group))
         .route("/api/groups/:group_id", get(groups::handlers::get_group))
         .route("/api/groups/:group_id/members", post(groups::handlers::add_member))
+        // Group key distribution — E2E shared key for group encryption
+        .route("/api/groups/:group_id/keys", get(group_keys::handlers::get_group_keys).post(group_keys::handlers::distribute_key))
+        .route("/api/groups/:group_id/keys/me", get(group_keys::handlers::get_my_group_key))
         .route("/api/groups/:group_id/messages", get(messages::handlers::list_group_messages).post(messages::handlers::create_group_message))
         .route("/api/email-accounts", get(email_accounts::handlers::list_email_accounts).post(email_accounts::handlers::create_email_account))
         .route("/api/email-accounts/:account_id", delete(email_accounts::handlers::delete_email_account))

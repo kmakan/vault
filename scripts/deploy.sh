@@ -104,7 +104,7 @@ cmd_health() {
     fi
 
     # Check backend
-    if curl -sf http://localhost:8080/health >/dev/null 2>&1; then
+    if curl -sf http://localhost:9443/health >/dev/null 2>&1; then
         log "  Backend:    healthy"
     else
         warn "  Backend:    unhealthy (may still be starting)"

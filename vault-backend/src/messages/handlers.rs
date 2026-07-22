@@ -28,79 +28,17 @@ pub async fn list_messages(
         return Err((StatusCode::NOT_FOUND, "Chat not found".to_string()));
     }
 
+    // Messages are E2E encrypted by the frontend — backend stores and returns as-is
     let messages = sqlx::query_as::<_, Message>(
-        "SELECT * FROM messages WHERE chat_id = $1 ORDER BY created_at ASC"
+        "SELECT * FROM messages WHERE chat_id = $1 ORDER BY created_at ASC, id ASC"
     )
     .bind(chat_id)
     .fetch_all(&pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Decrypt messages
-    let mut decrypted_messages = Vec::new();
-    for msg in messages {
-        let msg_response = MessageResponse::from(msg.clone());
-        
-        // Try to decrypt if encrypted_content exists
-        if let Some(encrypted_content) = &msg.encrypted_content {
-            // Remove noise from encrypted content
-            let cleaned_content = match remove_noise(encrypted_content) {
-                Ok(content) => content,
-                Err(_) => encrypted_content.clone(),
-            };
-
-            // Get sender's encryption key
-            let key = sqlx::query_as::<_, crate::keys::models::EncryptionKey>(
-                "SELECT * FROM encryption_keys WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at DESC LIMIT 1"
-            )
-            .bind(msg.sender_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-            if let Some(key) = key {
-                let _decrypted = match key.key_type.as_str() {
-                    "alpha" => {
-                        if let Some(alpha_key) = &key.alpha_key_encrypted {
-                            let cipher = AlphaCipher::new(alpha_key)
-                                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                            Some(cipher.decrypt(&cleaned_content))
-                        } else {
-                            None
-                        }
-                    }
-                    "columnar" => {
-                        if let Some(columnar_key) = &key.columnar_key_encrypted {
-                            let cipher = ColumnarCipher::new(columnar_key)
-                                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                            Some(cipher.decrypt(&cleaned_content))
-                        } else {
-                            None
-                        }
-                    }
-                    "combined" => {
-                        if let (Some(alpha_key), Some(columnar_key)) = 
-                            (&key.alpha_key_encrypted, &key.columnar_key_encrypted) {
-                            let decryptor = CombinedDecryptor::new(alpha_key, columnar_key)
-                                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                            Some(decryptor.decrypt(&cleaned_content))
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                
-                // For now, we'll just return the encrypted content
-                // In a real implementation, we'd need to store the decrypted content
-                // or return it separately
-            }
-        }
-        
-        decrypted_messages.push(msg_response);
-    }
-
-    Ok(Json(decrypted_messages))
+    let message_responses: Vec<MessageResponse> = messages.into_iter().map(MessageResponse::from).collect();
+    Ok(Json(message_responses))
 }
 
 pub async fn create_message(
@@ -122,64 +60,17 @@ pub async fn create_message(
 
     let content_type = req.content_type.unwrap_or_else(|| "text/plain".to_string());
 
-    // Get sender's active encryption key
-    let key = sqlx::query_as::<_, crate::keys::models::EncryptionKey>(
-        "SELECT * FROM encryption_keys WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at DESC LIMIT 1"
-    )
-    .bind(auth.user_id)
-    .fetch_optional(&pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Encrypt content if key is available
-    let encrypted_content = if let Some(key) = key {
-        let content = &req.content;
-        let encrypted = match key.key_type.as_str() {
-            "alpha" => {
-                if let Some(alpha_key) = &key.alpha_key_encrypted {
-                    let cipher = AlphaCipher::new(alpha_key)
-                        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                    Some(cipher.encrypt(content))
-                } else {
-                    None
-                }
-            }
-            "columnar" => {
-                if let Some(columnar_key) = &key.columnar_key_encrypted {
-                    let cipher = ColumnarCipher::new(columnar_key)
-                        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                    Some(cipher.encrypt(content))
-                } else {
-                    None
-                }
-            }
-            "combined" => {
-                if let (Some(alpha_key), Some(columnar_key)) = 
-                    (&key.alpha_key_encrypted, &key.columnar_key_encrypted) {
-                    let encryptor = CombinedEncryptor::new(alpha_key, columnar_key)
-                        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-                    Some(encryptor.encrypt(content))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        // Add noise to encrypted content before storage
-        encrypted.map(|enc| add_noise(&enc, 0.3))
-    } else {
-        None
-    };
-
+    // Store the content as-is — frontend handles E2E encryption (X25519 + XChaCha20)
+    // Backend does NOT re-encrypt to avoid double-encryption issues
     let message = sqlx::query_as::<_, Message>(
-        "INSERT INTO messages (sender_id, chat_id, subject, content_type, encrypted_content) 
-         VALUES ($1, $2, $3, $4, $5) RETURNING *"
+        "INSERT INTO messages (sender_id, chat_id, subject, content_type, encrypted_content, is_sent, sent_at)
+         VALUES ($1, $2, $3, $4, $5, TRUE, NOW()) RETURNING *"
     )
     .bind(auth.user_id)
     .bind(chat_id)
     .bind(&req.subject)
     .bind(&content_type)
-    .bind(&encrypted_content)
+    .bind(&req.content)
     .fetch_one(&pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -189,12 +80,6 @@ pub async fn create_message(
         .execute(&pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let other_user_id = if auth.user_id == chat.user1_id {
-        chat.user2_id
-    } else {
-        chat.user1_id
-    };
 
     Ok((StatusCode::CREATED, Json(MessageResponse::from(message))))
 }
@@ -221,7 +106,7 @@ pub async fn list_group_messages(
     }
 
     let messages = sqlx::query_as::<_, Message>(
-        "SELECT * FROM messages WHERE group_id = $1 ORDER BY created_at ASC"
+        "SELECT * FROM messages WHERE group_id = $1 ORDER BY created_at ASC, id ASC"
     )
     .bind(group_id)
     .fetch_all(&pool)
