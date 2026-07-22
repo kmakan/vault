@@ -1,10 +1,11 @@
 mod crypto;
+mod storage;
 
 use crypto::KeyPair;
 
 #[tauri::command]
 fn generate_keypair() -> KeyPair {
-    crypto::generate_keypair()
+    crypto::generate_keypair_cmd()
 }
 
 #[tauri::command]
@@ -13,7 +14,7 @@ fn encrypt_message(
     private_key: String,
     peer_public_key: Option<String>,
 ) -> Result<String, String> {
-    crypto::encrypt(&plaintext, &private_key, peer_public_key.as_deref())
+    crypto::encrypt_cmd(&plaintext, &private_key, peer_public_key.as_deref())
         .map_err(|e| e.to_string())
 }
 
@@ -23,13 +24,25 @@ fn decrypt_message(
     private_key: String,
     peer_public_key: Option<String>,
 ) -> Result<String, String> {
-    crypto::decrypt(&ciphertext, &private_key, peer_public_key.as_deref())
+    crypto::decrypt_cmd(&ciphertext, &private_key, peer_public_key.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn encrypt_symmetric(plaintext: String, key: String) -> Result<String, String> {
+    crypto::encrypt_symmetric_cmd(&plaintext, &key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> {
+    crypto::decrypt_symmetric_cmd(&ciphertext, &key)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_fingerprint(public_key: String) -> Result<String, String> {
-    crypto::fingerprint(&public_key).map_err(|e| e.to_string())
+    crypto::fingerprint_cmd(&public_key).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,6 +53,8 @@ pub fn run() {
             generate_keypair,
             encrypt_message,
             decrypt_message,
+            encrypt_symmetric,
+            decrypt_symmetric,
             get_fingerprint,
         ])
         .run(tauri::generate_context!())
