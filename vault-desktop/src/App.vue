@@ -608,6 +608,21 @@ export default {
 
       await this.loadGroupMessages(group.id);
     },
+    // Parse message content — detect vault_attachment JSON and extract preview
+    parseMessageContent(content) {
+      if (!content || typeof content !== 'string') return { text: content, attachment: null };
+      try {
+        const parsed = JSON.parse(content);
+        if (parsed && parsed.vault_attachment) {
+          const isImage = parsed.type && parsed.type.startsWith('image/');
+          return {
+            text: isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`,
+            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage },
+          };
+        }
+      } catch { /* not JSON — plain text message */ }
+      return { text: content, attachment: null };
+    },
     async loadMessages(email) {
       try {
         const raw = await api.getMessages(email);
@@ -615,16 +630,20 @@ export default {
           crypto.setPeerPublicKey(this.peerKeys[email]);
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
+              const { text, attachment } = this.parseMessageContent(msg.content);
               const base = {
                 ...msg,
+                content: text,
                 from: msg.sender_id === this.userId ? 'me' : 'them',
                 time: new Date(msg.created_at).toLocaleTimeString(),
                 status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+                attachment,
               };
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const plaintext = await crypto.decrypt(msg.content);
-                  return { ...base, content: plaintext, encrypted: true };
+                  const parsed = this.parseMessageContent(plaintext);
+                  return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
                 }
@@ -634,13 +653,18 @@ export default {
           );
           this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         } else {
-          this.messages = raw.map(msg => ({
-            ...msg,
-            from: msg.sender_id === this.userId ? 'me' : 'them',
-            time: new Date(msg.created_at).toLocaleTimeString(),
-            status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
-            encrypted: false,
-          })).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          this.messages = raw.map(msg => {
+            const { text, attachment } = this.parseMessageContent(msg.content);
+            return {
+              ...msg,
+              content: text,
+              from: msg.sender_id === this.userId ? 'me' : 'them',
+              time: new Date(msg.created_at).toLocaleTimeString(),
+              status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+              encrypted: false,
+              attachment,
+            };
+          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
@@ -656,16 +680,20 @@ export default {
           // Decrypt messages with group key
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
+              const { text, attachment } = this.parseMessageContent(msg.content);
               const base = {
                 ...msg,
+                content: text,
                 from: msg.sender_id === this.userId ? 'me' : 'them',
                 time: new Date(msg.created_at).toLocaleTimeString(),
                 status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+                attachment,
               };
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                  return { ...base, content: plaintext, encrypted: true };
+                  const parsed = this.parseMessageContent(plaintext);
+                  return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
                 }
@@ -676,13 +704,18 @@ export default {
           this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         } else {
           // No group key — show as-is (unencrypted)
-          this.messages = raw.map(msg => ({
-            ...msg,
-            from: msg.sender_id === this.userId ? 'me' : 'them',
-            time: new Date(msg.created_at).toLocaleTimeString(),
-            status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
-            encrypted: false,
-          })).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          this.messages = raw.map(msg => {
+            const { text, attachment } = this.parseMessageContent(msg.content);
+            return {
+              ...msg,
+              content: text,
+              from: msg.sender_id === this.userId ? 'me' : 'them',
+              time: new Date(msg.created_at).toLocaleTimeString(),
+              status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+              encrypted: false,
+              attachment,
+            };
+          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);
@@ -837,12 +870,23 @@ export default {
             const base64 = e.target.result.split(',')[1];
             const isImage = file.type.startsWith('image/');
 
+            // Encode attachment as structured JSON for server storage
+            const attachmentPayload = JSON.stringify({
+              vault_attachment: true,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              data: base64,
+            });
+
+            const displayContent = isImage
+              ? `📎 ${file.name}`
+              : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
+
             // Create preview message
             const msg = {
               id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
-              content: isImage
-                ? `📎 ${file.name}`
-                : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`,
+              content: displayContent,
               from: 'me',
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               encrypted: this.cryptoReady,
@@ -856,10 +900,10 @@ export default {
             };
             this.messages.push(msg);
 
-            // Send to API
+            // Send to API — content is the JSON payload, server stores it as-is
             if (this.activeChat) {
               try {
-                await api.sendMessage(this.activeChat, msg.content, file.type);
+                await api.sendMessage(this.activeChat, attachmentPayload, file.type);
               } catch (err) {
                 console.error('Failed to send attachment:', err);
               }

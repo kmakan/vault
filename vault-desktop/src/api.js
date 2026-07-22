@@ -63,14 +63,16 @@ export class ApiClient {
     return await response.json();
   }
 
-  async sendMessage(chatId, content) {
+  async sendMessage(chatId, content, contentType) {
+    const body = { content };
+    if (contentType) body.content_type = contentType;
     const response = await fetch(`${API_BASE}/chats/${chatId}/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.token}`
       },
-      body: JSON.stringify({ content })
+      body: JSON.stringify(body)
     });
     
     if (!response.ok) throw new Error('Failed to send message');
