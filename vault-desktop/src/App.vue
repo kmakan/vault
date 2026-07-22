@@ -613,7 +613,7 @@ export default {
         const raw = await api.getMessages(email);
         if (this.cryptoReady && this.peerKeys[email]) {
           crypto.setPeerPublicKey(this.peerKeys[email]);
-          this.messages = await Promise.all(
+          const decrypted = await Promise.all(
             raw.map(async (msg) => {
               const base = {
                 ...msg,
@@ -623,8 +623,8 @@ export default {
               };
               if (crypto.isEncrypted(msg.content)) {
                 try {
-                  const decrypted = await crypto.decrypt(msg.content);
-                  return { ...base, content: decrypted, encrypted: true };
+                  const plaintext = await crypto.decrypt(msg.content);
+                  return { ...base, content: plaintext, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
                 }
@@ -632,6 +632,7 @@ export default {
               return { ...base, encrypted: false };
             })
           );
+          this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         } else {
           this.messages = raw.map(msg => ({
             ...msg,
@@ -639,7 +640,7 @@ export default {
             time: new Date(msg.created_at).toLocaleTimeString(),
             status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
             encrypted: false,
-          }));
+          })).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
@@ -653,7 +654,7 @@ export default {
 
         if (groupKey) {
           // Decrypt messages with group key
-          this.messages = await Promise.all(
+          const decrypted = await Promise.all(
             raw.map(async (msg) => {
               const base = {
                 ...msg,
@@ -663,8 +664,8 @@ export default {
               };
               if (crypto.isEncrypted(msg.content)) {
                 try {
-                  const decrypted = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                  return { ...base, content: decrypted, encrypted: true };
+                  const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                  return { ...base, content: plaintext, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
                 }
@@ -672,6 +673,7 @@ export default {
               return { ...base, encrypted: false };
             })
           );
+          this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         } else {
           // No group key — show as-is (unencrypted)
           this.messages = raw.map(msg => ({
@@ -680,7 +682,7 @@ export default {
             time: new Date(msg.created_at).toLocaleTimeString(),
             status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
             encrypted: false,
-          }));
+          })).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);
@@ -728,34 +730,26 @@ export default {
       
       try {
         let content = this.newMessage;
-        let isEncrypted = false;
         
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key
           const groupKey = this.groupKeys[this.currentGroup.id];
           if (groupKey) {
             content = await crypto.encryptWithGroupKey(this.newMessage, groupKey);
-            isEncrypted = true;
           }
           await api.sendGroupMessage(this.currentGroup.id, content);
+          // Reload from server to get proper server timestamp and UUID
+          await this.loadGroupMessages(this.currentGroup.id);
         } else {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
             crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
             content = await crypto.encrypt(this.newMessage);
-            isEncrypted = true;
           }
           await api.sendMessage(this.activeChat, content);
+          // Reload from server to get proper server timestamp and UUID
+          await this.loadMessages(this.activeChat);
         }
-        
-        this.messages.push({
-          id: Date.now(),
-          from: 'me',
-          content: this.newMessage,
-          time: new Date().toLocaleTimeString(),
-          encrypted: isEncrypted,
-          status: 'sent'
-        });
         
         this.newMessage = '';
         this.$nextTick(() => {
