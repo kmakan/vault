@@ -1,10 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 
-const API_BASE = 'http://localhost:8081/api';
+const API_BASE = 'http://localhost:9443/api';
 
 export class ApiClient {
   constructor() {
-    this.token = null;
+    const saved = localStorage.getItem('vault-token');
+    this.token = saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
   }
 
   async login(email, password) {
@@ -16,8 +17,32 @@ export class ApiClient {
     
     if (!response.ok) throw new Error('Login failed');
     const data = await response.json();
-    this.token = data.token;
+    this.token = data.tokens?.access_token || data.token;
+    console.log('[API] login token:', this.token ? `len=${this.token.length} start=${this.token.substring(0,20)}...` : 'NULL');
+    if (this.token) localStorage.setItem('vault-token', this.token);
     return data;
+  }
+
+  async register(username, email, password) {
+    const response = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, email, password })
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Registration failed');
+    }
+    const data = await response.json();
+    this.token = data.tokens?.access_token || data.token;
+    console.log('[API] register token:', this.token ? `len=${this.token.length}` : 'NULL');
+    if (this.token) localStorage.setItem('vault-token', this.token);
+    return data;
+  }
+
+  logout() {
+    this.token = null;
+    localStorage.removeItem('vault-token');
   }
 
   async getChats() {
@@ -49,6 +74,29 @@ export class ApiClient {
     });
     
     if (!response.ok) throw new Error('Failed to send message');
+    return await response.json();
+  }
+
+  async getGroupMessages(groupId) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/messages`, {
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    
+    if (!response.ok) throw new Error('Failed to get group messages');
+    return await response.json();
+  }
+
+  async sendGroupMessage(groupId, content) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ content })
+    });
+    
+    if (!response.ok) throw new Error('Failed to send group message');
     return await response.json();
   }
 
@@ -85,6 +133,7 @@ export class ApiClient {
   }
 
   async createEmailAccount(accountData) {
+    console.log('[API] createEmailAccount token:', this.token ? `len=${this.token.length} start=${this.token.substring(0,20)}...` : 'NULL');
     const response = await fetch(`${API_BASE}/email-accounts`, {
       method: 'POST',
       headers: {
@@ -94,7 +143,12 @@ export class ApiClient {
       body: JSON.stringify(accountData)
     });
     
-    if (!response.ok) throw new Error('Failed to create email account');
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      console.error('[API] createEmailAccount FAILED:', response.status, errorText);
+      if (response.status === 409) throw new Error('Email account already exists');
+      throw new Error(errorText || 'Failed to create email account');
+    }
     return await response.json();
   }
 
@@ -223,6 +277,83 @@ export class ApiClient {
       headers: { 'Authorization': `Bearer ${this.token}` }
     });
     return response.ok;
+  }
+
+  // --- Groups ---
+  async getGroups() {
+    const response = await fetch(`${API_BASE}/groups`, {
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    if (!response.ok) throw new Error('Failed to get groups');
+    return await response.json();
+  }
+
+  async createGroup(name, description) {
+    const response = await fetch(`${API_BASE}/groups`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ name, description })
+    });
+    if (!response.ok) throw new Error('Failed to create group');
+    return await response.json();
+  }
+
+  async getGroupMembers(groupId) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/members`, {
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    if (!response.ok) throw new Error('Failed to get group members');
+    return await response.json();
+  }
+
+  async addGroupMember(groupId, userId, role) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/members`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ user_id: userId, role })
+    });
+    if (!response.ok) throw new Error('Failed to add group member');
+    return await response.json();
+  }
+
+  // --- Group E2E Key Distribution ---
+  async distributeGroupKey(groupId, userId, encryptedKey) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/keys`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ user_id: userId, encrypted_key: encryptedKey })
+    });
+    if (!response.ok) throw new Error('Failed to distribute group key');
+    return await response.json();
+  }
+
+  async getMyGroupKey(groupId) {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/keys/me`, {
+        headers: { 'Authorization': `Bearer ${this.token}` }
+      });
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async getGroupKeys(groupId) {
+    const response = await fetch(`${API_BASE}/groups/${groupId}/keys`, {
+      headers: { 'Authorization': `Bearer ${this.token}` }
+    });
+    if (!response.ok) throw new Error('Failed to get group keys');
+    return await response.json();
   }
 }
 

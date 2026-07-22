@@ -34,13 +34,21 @@
     "longDescription": "Vault (Vault) is an end-to-end encrypted messenger with support for individual and group chats, file sharing, and email integration.",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-dev"]
+        "depends": [
+          "libwebkit2gtk-4.1-dev"
+        ]
       }
     },
     "macOS": {
       "dmg": {
-        "appPosition": { "x": 180, "y": 170 },
-        "applicationFolderPosition": { "x": 480, "y": 170 }
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
       }
     },
     "windows": {

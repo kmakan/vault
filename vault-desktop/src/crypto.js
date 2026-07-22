@@ -104,6 +104,48 @@ export class CryptoClient {
       return false;
     }
   }
+
+  // --- Group E2E encryption ---
+  // Generate a random symmetric key for group encryption
+  async generateGroupKey() {
+    const keyBytes = new Uint8Array(32);
+    crypto.getRandomValues(keyBytes);
+    return Array.from(keyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Encrypt group key with a member's public key (for distribution)
+  async encryptGroupKeyForUser(groupKeyHex, userPublicKeyHex) {
+    return await invoke('encrypt_message', {
+      plaintext: groupKeyHex,
+      privateKey: this.privateKey,
+      peerPublicKey: userPublicKeyHex,
+    });
+  }
+
+  // Decrypt group key received from group creator
+  async decryptGroupKey(encryptedGroupKey, senderPublicKey) {
+    return await invoke('decrypt_message', {
+      ciphertext: encryptedGroupKey,
+      privateKey: this.privateKey,
+      peerPublicKey: senderPublicKey,
+    });
+  }
+
+  // Encrypt a message with a group key (symmetric XChaCha20)
+  async encryptWithGroupKey(plaintext, groupKeyHex) {
+    return await invoke('encrypt_symmetric', {
+      plaintext,
+      key: groupKeyHex,
+    });
+  }
+
+  // Decrypt a message with a group key (symmetric XChaCha20)
+  async decryptWithGroupKey(ciphertext, groupKeyHex) {
+    return await invoke('decrypt_symmetric', {
+      ciphertext,
+      key: groupKeyHex,
+    });
+  }
 }
 
 export default new CryptoClient();

@@ -1,6 +1,7 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
 mod crypto;
 mod key_store;
+mod storage;
 
 use crypto::{CryptoState, KeyPair};
 use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
@@ -105,6 +106,16 @@ fn get_close_to_tray() -> bool {
     CLOSE_TO_TRAY.load(Ordering::Relaxed)
 }
 
+#[tauri::command]
+fn encrypt_symmetric(plaintext: String, key: String) -> Result<String, String> {
+    crypto::encrypt_symmetric_cmd(&plaintext, &key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> {
+    crypto::decrypt_symmetric_cmd(&ciphertext, &key).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -126,6 +137,8 @@ pub fn run() {
             delete_all_keys,
             set_close_to_tray,
             get_close_to_tray,
+            encrypt_symmetric,
+            decrypt_symmetric,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources

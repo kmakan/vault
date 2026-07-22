@@ -26,6 +26,9 @@ export default {
   settings_cancel: '取消',
   settings_delete: '删除',
   settings_delete_account_confirm: '删除此邮箱账户？',
+  settings_email_provider: '邮箱服务商',
+  settings_email_provider_select: '选择服务商...',
+  settings_email_provider_custom: '其他服务商',
 
   // Email
   email_to: '收件人',

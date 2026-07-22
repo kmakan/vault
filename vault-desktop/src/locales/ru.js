@@ -26,6 +26,9 @@ export default {
   settings_cancel: 'Отмена',
   settings_delete: 'Удалить',
   settings_delete_account_confirm: 'Удалить этот почтовый аккаунт?',
+  settings_email_provider: 'Почтовый провайдер',
+  settings_email_provider_select: 'Выберите провайдер...',
+  settings_email_provider_custom: 'Другой провайдер',
 
   // Email
   email_to: 'Кому',

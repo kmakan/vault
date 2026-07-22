@@ -1,4 +1,4 @@
-const WS_BASE = 'ws://localhost:8081/ws';
+const WS_BASE = 'ws://localhost:9443/ws';
 
 class WsClient {
   constructor() {

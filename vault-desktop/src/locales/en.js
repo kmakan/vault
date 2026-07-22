@@ -26,6 +26,9 @@ export default {
   settings_cancel: 'Cancel',
   settings_delete: 'Delete',
   settings_delete_account_confirm: 'Delete this email account?',
+  settings_email_provider: 'Email Provider',
+  settings_email_provider_select: 'Select a provider...',
+  settings_email_provider_custom: 'Custom provider',
 
   // Email
   email_to: 'To',

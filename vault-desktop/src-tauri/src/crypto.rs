@@ -163,7 +163,7 @@ pub fn decrypt_cmd(
 
 pub fn fingerprint_cmd(public_key_hex: &str) -> anyhow::Result<String> {
     let bytes = hex::decode(public_key_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid public key: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid public key hex: {}", e))?;
     if bytes.len() != 32 {
         anyhow::bail!("Public key must be 32 bytes");
     }
@@ -173,6 +173,60 @@ pub fn fingerprint_cmd(public_key_hex: &str) -> anyhow::Result<String> {
         .collect::<Vec<_>>()
         .join(":");
     Ok(format!("{}:****", fp))
+}
+
+/// Symmetric encrypt with a raw 32-byte hex key (for group shared keys)
+pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<String> {
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
+    if key_bytes.len() != 32 {
+        anyhow::bail!("Group key must be 32 bytes");
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+
+    let cipher = XChaCha20Poly1305::new((&key_arr).into());
+    let nonce_bytes: [u8; NONCE_LEN] = rand::random();
+    let nonce = XNonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
+
+    let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&ciphertext);
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&output))
+}
+
+/// Symmetric decrypt with a raw 32-byte hex key (for group shared keys)
+pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(ciphertext)
+        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
+
+    if decoded.len() < NONCE_LEN {
+        anyhow::bail!("Ciphertext too short");
+    }
+
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
+    if key_bytes.len() != 32 {
+        anyhow::bail!("Group key must be 32 bytes");
+    }
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+
+    let (nonce_bytes, ciphertext_bytes) = decoded.split_at(NONCE_LEN);
+    let cipher = XChaCha20Poly1305::new((&key_arr).into());
+    let nonce = XNonce::from_slice(nonce_bytes);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext_bytes)
+        .map_err(|_| anyhow::anyhow!("Decryption failed (wrong key or corrupted data)"))?;
+
+    String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
 }
 
 #[cfg(test)]
@@ -216,5 +270,24 @@ mod tests {
         let fp = fingerprint_cmd(&kp.public_key).unwrap();
         assert!(fp.contains(':'));
         assert!(fp.contains("****"));
+    }
+
+    #[test]
+    fn test_symmetric_encrypt_decrypt() {
+        let key = hex::encode([42u8; 32]);
+        let plaintext = "group secret message";
+        let encrypted = encrypt_symmetric_cmd(plaintext, &key).unwrap();
+        assert_ne!(encrypted, plaintext);
+        let decrypted = decrypt_symmetric_cmd(&encrypted, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_symmetric_wrong_key_fails() {
+        let key1 = hex::encode([1u8; 32]);
+        let key2 = hex::encode([2u8; 32]);
+        let encrypted = encrypt_symmetric_cmd("secret", &key1).unwrap();
+        let result = decrypt_symmetric_cmd(&encrypted, &key2);
+        assert!(result.is_err());
     }
 }
