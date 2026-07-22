@@ -33,3 +33,10 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"    # optimize for size
+panic = "abort"
