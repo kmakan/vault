@@ -1,362 +1,211 @@
 import { invoke } from '@tauri-apps/api/core';
 
-const API_BASE = 'http://localhost:9443/api';
+// ═════════════════════════════════════════════════════════════════════════
+// Vault Desktop — serverless email transport (phase 2)
+//
+// The desktop no longer talks to the backend at localhost:9443. Instead it
+// talks to the user's mailbox DIRECTLY over IMAP/SMTP via the Tauri Rust
+// commands from phase 1 (email_connect / email_fetch_messages / email_fetch_body
+// / email_send / email_disconnect). Crypto keys live in the Tauri key_store
+// (used from crypto.js); this file only keeps transport + compatibility.
+// ═════════════════════════════════════════════════════════════════════════
+
+const GMAIL_CONFIG = {
+  imap_server: 'imap.gmail.com',
+  imap_port: 993,
+  smtp_server: 'smtp.gmail.com',
+  smtp_port: 587,
+};
 
 export class ApiClient {
   constructor() {
     const saved = localStorage.getItem('vault-token');
     this.token = saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
+    this.email = null;
+    this.password = null; // in-memory ONLY — never persisted to localStorage
+    this.connected = false;
+    this.emailConfig = null;
+    // Local contact stubs added via addContact (serverless: no backend /contacts)
+    this.contacts = [];
   }
 
+  // --- internal: connect the mailbox over IMAP/SMTP ---
+  async emailConnect({ email, password, imap_server, imap_port, smtp_server, smtp_port }) {
+    const config = {
+      email,
+      password,
+      imap_server: imap_server || GMAIL_CONFIG.imap_server,
+      imap_port: imap_port || GMAIL_CONFIG.imap_port,
+      smtp_server: smtp_server || GMAIL_CONFIG.smtp_server,
+      smtp_port: smtp_port || GMAIL_CONFIG.smtp_port,
+    };
+    try {
+      const ok = await invoke('email_connect', { config });
+      if (!ok) throw new Error('Failed to connect to email');
+      this.emailConfig = config;
+      return true;
+    } catch (e) {
+      throw new Error((e && e.message) || 'Failed to connect to email');
+    }
+  }
+
+  // --- Auth (serverless): login === connect the mailbox ---
   async login(email, password) {
-    const response = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-    
-    if (!response.ok) throw new Error('Login failed');
-    const data = await response.json();
-    this.token = data.tokens?.access_token || data.token;
-    console.log('[API] login token:', this.token ? `len=${this.token.length} start=${this.token.substring(0,20)}...` : 'NULL');
-    if (this.token) localStorage.setItem('vault-token', this.token);
-    return data;
+    await this.emailConnect({ email, password });
+    this.email = email;
+    this.password = password; // memory only
+    this.connected = true;
+    this.token = `serverless-${email}`;
+    localStorage.setItem('vault-token', this.token);
+    return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
   async register(username, email, password) {
-    const response = await fetch(`${API_BASE}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password })
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || 'Registration failed');
-    }
-    const data = await response.json();
-    this.token = data.tokens?.access_token || data.token;
-    console.log('[API] register token:', this.token ? `len=${this.token.length}` : 'NULL');
-    if (this.token) localStorage.setItem('vault-token', this.token);
-    return data;
+    // Serverless: no backend registration — the mailbox IS the identity.
+    await this.emailConnect({ email, password });
+    this.email = email;
+    this.password = password;
+    this.connected = true;
+    this.token = `serverless-${email}`;
+    localStorage.setItem('vault-token', this.token);
+    return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
-  logout() {
+  async logout() {
+    try { await invoke('email_disconnect'); } catch (e) { /* ignore disconnect errors */ }
+    this.email = null;
+    this.password = null;
+    this.connected = false;
+    this.emailConfig = null;
     this.token = null;
     localStorage.removeItem('vault-token');
   }
 
-  async getChats() {
-    const response = await fetch(`${API_BASE}/chats`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get chats');
-    return await response.json();
-  }
+  // --- Chats (TODO: serverless-chats via email) ---
+  async getChats() { return []; } // TODO serverless-chats via email
+  async getMessages(chatId) { return []; } // TODO serverless-chats via email
+  async sendMessage(chatId, content, contentType) { return { ok: true }; } // TODO serverless-chats via email
+  async getGroupMessages(groupId) { return []; } // TODO serverless-chats via email
+  async sendGroupMessage(groupId, content) { return { ok: true }; } // TODO serverless-chats via email
 
-  async getMessages(chatId) {
-    const response = await fetch(`${API_BASE}/chats/${chatId}/messages`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get messages');
-    return await response.json();
-  }
-
-  async sendMessage(chatId, content, contentType) {
-    const body = { content };
-    if (contentType) body.content_type = contentType;
-    const response = await fetch(`${API_BASE}/chats/${chatId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify(body)
-    });
-    
-    if (!response.ok) throw new Error('Failed to send message');
-    return await response.json();
-  }
-
-  async getGroupMessages(groupId) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/messages`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get group messages');
-    return await response.json();
-  }
-
-  async sendGroupMessage(groupId, content) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ content })
-    });
-    
-    if (!response.ok) throw new Error('Failed to send group message');
-    return await response.json();
-  }
-
+  // --- Contacts (local: key_store peer keys + in-memory stubs) ---
   async getContacts() {
-    const response = await fetch(`${API_BASE}/contacts`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get contacts');
-    return await response.json();
+    const byEmail = new Map();
+    for (const c of this.contacts) byEmail.set(c.email, c);
+    try {
+      const peers = await invoke('load_peer_keys');
+      for (const pk of peers || []) {
+        if (!byEmail.has(pk.email)) {
+          byEmail.set(pk.email, {
+            id: pk.email,
+            email: pk.email,
+            name: pk.label || pk.email,
+            online: false,
+            public_key: pk.public_key,
+            added_at: pk.added_at,
+          });
+        }
+      }
+    } catch (e) { /* ignore — fall back to in-memory list */ }
+    return Array.from(byEmail.values());
   }
 
   async addContact(email) {
-    const response = await fetch(`${API_BASE}/contacts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ email })
-    });
-    
-    if (!response.ok) throw new Error('Failed to add contact');
-    return await response.json();
+    if (this.contacts.some(c => c.email === email)) return { ok: true };
+    this.contacts.push({ id: email, email, name: email, online: false });
+    return { ok: true, id: email, email };
   }
 
+  // --- Email accounts (single local mailbox kept in memory) ---
   async getEmailAccounts() {
-    const response = await fetch(`${API_BASE}/email-accounts`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get email accounts');
-    return await response.json();
+    if (!this.connected || !this.email) return [];
+    const c = this.emailConfig || GMAIL_CONFIG;
+    return [{
+      id: 'local',
+      email: this.email,
+      username: this.email.split('@')[0],
+      imap_server: c.imap_server,
+      imap_port: c.imap_port,
+      smtp_server: c.smtp_server,
+      smtp_port: c.smtp_port,
+      is_default: true,
+      use_tls: true,
+    }];
   }
 
   async createEmailAccount(accountData) {
-    console.log('[API] createEmailAccount token:', this.token ? `len=${this.token.length} start=${this.token.substring(0,20)}...` : 'NULL');
-    const response = await fetch(`${API_BASE}/email-accounts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify(accountData)
+    const data = accountData || {};
+    const password = data.password || data.password_encrypted || this.password || '';
+    await this.emailConnect({
+      email: data.email || this.email,
+      password,
+      imap_server: data.imap_server,
+      imap_port: data.imap_port,
+      smtp_server: data.smtp_server,
+      smtp_port: data.smtp_port,
     });
-    
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      console.error('[API] createEmailAccount FAILED:', response.status, errorText);
-      if (response.status === 409) throw new Error('Email account already exists');
-      throw new Error(errorText || 'Failed to create email account');
-    }
-    return await response.json();
+    if (data.email) this.email = data.email;
+    if (password) this.password = password;
+    this.connected = true;
+    return { id: 'local', email: this.email };
   }
 
   async deleteEmailAccount(accountId) {
-    const response = await fetch(`${API_BASE}/email-accounts/${accountId}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to delete email account');
-    return response.ok;
+    try { await invoke('email_disconnect'); } catch (e) { /* ignore */ }
+    this.email = null;
+    this.password = null;
+    this.connected = false;
+    this.emailConfig = null;
+    return true;
   }
 
+  // --- Email fetch / send ---
   async fetchEmails(accountId, params = {}) {
-    const response = await fetch(`${API_BASE}/email-accounts/${accountId}/emails`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ limit: params.limit || 50, folder: params.folder || 'INBOX' })
-    });
-    
-    if (!response.ok) throw new Error('Failed to fetch emails');
-    return await response.json();
+    const msgs = await invoke('email_fetch_messages');
+    return (msgs || []).map(m => ({
+      uid: m.id,
+      id: m.id,
+      from: m.from,
+      to: m.to,
+      subject: m.subject,
+      date: m.date,
+      is_read: m.is_read,
+    }));
   }
 
   async fetchEmailBody(accountId, uid) {
-    const response = await fetch(`${API_BASE}/email-accounts/${accountId}/emails/${uid}`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
+    return await invoke('email_fetch_body', { uid: String(uid) });
+  }
+
+  async sendEmail(accountId, emailData = {}) {
+    const data = emailData || {};
+    const ok = await invoke('email_send', {
+      to: data.to,
+      subject: data.subject || '',
+      body: data.body || '',
     });
-    
-    if (!response.ok) throw new Error('Failed to fetch email body');
-    return await response.json();
+    return { ok };
   }
 
-  async sendEmail(accountId, emailData) {
-    const response = await fetch(`${API_BASE}/email-accounts/${accountId}/emails/send`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify(emailData)
-    });
-    
-    if (!response.ok) throw new Error('Failed to send email');
-    return await response.json();
-  }
+  // --- Keys (real key material lives in the Tauri key_store — see crypto.js) ---
+  async getKeys() { return []; } // TODO: surface crypto.js / key_store state
+  async createKey(keyData) { return null; } // TODO: use generate_keypair / save_my_keypair
 
-  async getKeys() {
-    const response = await fetch(`${API_BASE}/keys`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    
-    if (!response.ok) throw new Error('Failed to get keys');
-    return await response.json();
-  }
+  // --- Avatars (TODO: local file storage) ---
+  async uploadAvatar(email, dataUrl) { return null; }
+  async getAvatar(email) { return null; }
+  async deleteAvatar(email) { return true; }
+  async uploadGroupAvatar(groupId, dataUrl) { return null; }
+  async deleteGroupAvatar(groupId) { return true; }
 
-  async createKey(keyData) {
-    const response = await fetch(`${API_BASE}/keys`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify(keyData)
-    });
-    
-    if (!response.ok) throw new Error('Failed to create key');
-    return await response.json();
-  }
-
-  // --- Avatar ---
-  async uploadAvatar(email, dataUrl) {
-    const response = await fetch(`${API_BASE}/avatar`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ email, avatar: dataUrl })
-    });
-    if (!response.ok) throw new Error('Failed to upload avatar');
-    return await response.json();
-  }
-
-  async getAvatar(email) {
-    try {
-      const response = await fetch(`${API_BASE}/avatar/${encodeURIComponent(email)}`, {
-        headers: { 'Authorization': `Bearer ${this.token}` }
-      });
-      if (!response.ok) return null;
-      const data = await response.json();
-      return data.avatar_url || null;
-    } catch {
-      return null;
-    }
-  }
-
-  async deleteAvatar(email) {
-    const response = await fetch(`${API_BASE}/avatar/${encodeURIComponent(email)}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    return response.ok;
-  }
-
-  // --- Group Avatar ---
-  async uploadGroupAvatar(groupId, dataUrl) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/avatar`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ avatar: dataUrl })
-    });
-    if (!response.ok) throw new Error('Failed to upload group avatar');
-    return await response.json();
-  }
-
-  async deleteGroupAvatar(groupId) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/avatar`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    return response.ok;
-  }
-
-  // --- Groups ---
-  async getGroups() {
-    const response = await fetch(`${API_BASE}/groups`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    if (!response.ok) throw new Error('Failed to get groups');
-    return await response.json();
-  }
-
-  async createGroup(name, description) {
-    const response = await fetch(`${API_BASE}/groups`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ name, description })
-    });
-    if (!response.ok) throw new Error('Failed to create group');
-    return await response.json();
-  }
-
-  async getGroupMembers(groupId) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/members`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    if (!response.ok) throw new Error('Failed to get group members');
-    return await response.json();
-  }
-
-  async addGroupMember(groupId, userId, role) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/members`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ user_id: userId, role })
-    });
-    if (!response.ok) throw new Error('Failed to add group member');
-    return await response.json();
-  }
-
-  // --- Group E2E Key Distribution ---
-  async distributeGroupKey(groupId, userId, encryptedKey) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/keys`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      },
-      body: JSON.stringify({ user_id: userId, encrypted_key: encryptedKey })
-    });
-    if (!response.ok) throw new Error('Failed to distribute group key');
-    return await response.json();
-  }
-
-  async getMyGroupKey(groupId) {
-    try {
-      const response = await fetch(`${API_BASE}/groups/${groupId}/keys/me`, {
-        headers: { 'Authorization': `Bearer ${this.token}` }
-      });
-      if (!response.ok) return null;
-      return await response.json();
-    } catch {
-      return null;
-    }
-  }
-
-  async getGroupKeys(groupId) {
-    const response = await fetch(`${API_BASE}/groups/${groupId}/keys`, {
-      headers: { 'Authorization': `Bearer ${this.token}` }
-    });
-    if (!response.ok) throw new Error('Failed to get group keys');
-    return await response.json();
-  }
+  // --- Groups (TODO: serverless-chats via email) ---
+  async getGroups() { return []; }
+  async createGroup(name, description) { return null; }
+  async getGroupMembers(groupId) { return []; }
+  async addGroupMember(groupId, userId, role) { return { ok: true }; }
+  async distributeGroupKey(groupId, userId, encryptedKey) { return { ok: true }; }
+  async getMyGroupKey(groupId) { return null; }
+  async getGroupKeys(groupId) { return []; }
 }
 
 export default new ApiClient();
