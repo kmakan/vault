@@ -45,6 +45,8 @@ export default {
   email_locked: '加密的Vault消息',
   email_locked_note: '此消息受端到端加密保护。打开与此联系人的聊天以解密该消息。',
   message_placeholder: '输入消息',
+  chat_empty: '暂无消息 — 发送第一条 🔒',
+  chat_reply_to: '回复',
 
   // Contacts
   contacts_title: '联系人',

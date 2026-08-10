@@ -45,6 +45,8 @@ export default {
   email_locked: 'Encrypted Vault message',
   email_locked_note: 'This message is protected with end-to-end encryption. Open the chat with this contact to decrypt it.',
   message_placeholder: 'Type a message',
+  chat_empty: 'No messages yet — send the first one 🔒',
+  chat_reply_to: 'Reply to',
 
   // Contacts
   contacts_title: 'Contacts',

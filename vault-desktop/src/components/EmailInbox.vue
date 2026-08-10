@@ -1,37 +1,17 @@
 <template>
   <div class="email-inbox">
     <div class="inbox-header">
-      <h3>{{ t('email_inbox') }}</h3>
-      <div class="filter-tabs">
-        <button 
-          :class="['filter-tab', { active: filter === 'all' }]"
-          @click="filter = 'all'"
-        >
-          {{ t('general_confirm') }}
-        </button>
-        <button 
-          :class="['filter-tab', { active: filter === 'vault' }]"
-          @click="filter = 'vault'"
-        >
-          {{ t('app_name') }}
-        </button>
-        <button 
-          :class="['filter-tab', { active: filter === 'regular' }]"
-          @click="filter = 'regular'"
-        >
-          {{ t('email_body') }}
-        </button>
-      </div>
+      <h3>{{ t('nav_mail') || 'Почта' }}</h3>
     </div>
 
     <div class="emails-list">
       <div v-if="loading" class="loading">{{ t('email_loading') }}</div>
-      <div v-else-if="filteredEmails.length === 0" class="empty-state">
+      <div v-else-if="emails.length === 0" class="empty-state">
         {{ t('email_empty') }}
       </div>
       <div v-else>
         <div 
-          v-for="email in filteredEmails" 
+          v-for="email in emails" 
           :key="email.uid"
           :class="['email-item', { unread: !email.is_read, vault: isVault(email) }]"
           @click="$emit('open-email', email)"
@@ -68,18 +48,6 @@ export default {
     }
   },
   emits: ['open-email'],
-  data() {
-    return {
-      filter: 'all'
-    };
-  },
-  computed: {
-    filteredEmails() {
-      if (this.filter === 'all') return this.emails;
-      if (this.filter === 'vault') return this.emails.filter(e => this.isVault(e));
-      return this.emails.filter(e => !this.isVault(e));
-    }
-  },
   methods: {
     isVault(email) {
       const subject = String(email.subject || '').trim();
@@ -106,27 +74,7 @@ export default {
 }
 
 .inbox-header h3 {
-  margin: 0 0 12px;
-  color: white;
-}
-
-.filter-tabs {
-  display: flex;
-  gap: 8px;
-}
-
-.filter-tab {
-  padding: 6px 12px;
-  background: #16213e;
-  color: #888;
-  border: none;
-  border-radius: 16px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.filter-tab.active {
-  background: #0f3460;
+  margin: 0;
   color: white;
 }
 

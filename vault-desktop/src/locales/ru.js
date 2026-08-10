@@ -45,6 +45,8 @@ export default {
   email_locked: 'Зашифрованное сообщение Vault',
   email_locked_note: 'Сообщение защищено сквозным шифрованием. Откройте чат с этим контактом, чтобы расшифровать его.',
   message_placeholder: 'Сообщение',
+  chat_empty: 'Нет сообщений — отправьте первое 🔒',
+  chat_reply_to: 'Ответ на',
 
   // Contacts
   contacts_title: 'Контакты',

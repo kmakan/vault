@@ -225,6 +225,10 @@
         />
         
         <div class="messages" ref="messagesContainer">
+          <div v-if="activeChat && messages.length === 0" class="messages-empty">
+            <div class="empty-icon">🔒</div>
+            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое 🔒' }}</div>
+          </div>
           <div
             v-for="msg in filteredMessages"
             :key="msg.id"
@@ -232,8 +236,8 @@
             @click.stop="toggleReactionPicker(msg.id)"
           >
             <div class="message-content">
-              {{ msg.content }}
-              <!-- Attachment preview -->
+              <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
+              <span>{{ replyBody(msg.content) }}</span>
               <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
                 <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data" 
                      :alt="msg.attachment.name" 
@@ -246,6 +250,8 @@
               </div>
               <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
             </div>
+            <!-- Reply button (visible on hover) -->
+            <button class="reply-btn" title="Reply" @click.stop="setReply(msg)">↩</button>
             <!-- Reactions -->
             <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
               <span
@@ -278,6 +284,13 @@
             <span></span><span></span><span></span>
           </span>
           <span class="typing-text">{{ t('typing') || 'typing...' }}</span>
+        </div>
+
+        <!-- Reply quote bar (shown while replying to a message) -->
+        <div v-if="replyTo" class="reply-bar">
+          <span class="reply-bar-label">↩ {{ t('chat_reply_to') || 'Ответ на' }}</span>
+          <span class="reply-bar-text">{{ replyPreview(replyTo) }}</span>
+          <button class="reply-bar-close" @click="cancelReply" title="Cancel reply">✕</button>
         </div>
 
         <div class="message-input" v-if="activeChat">
@@ -401,6 +414,7 @@ export default {
       activeChat: null,
       messages: [],
       newMessage: '',
+      replyTo: null,
       showSettings: false,
       showMembers: false,
       isLoggedIn: false,
@@ -638,6 +652,10 @@ export default {
       this.peerKeyInput = '';
     },
     async selectChat(email) {
+      // Vault chat requires a peer key — without it there is nothing (and nothing
+      // encrypted) to show. Contacts without keys are already hidden from the list;
+      // this is a hard guard on top.
+      if (!this.peerKeys[email]) return;
       // Unsubscribe from previous chat
       if (this.activeChat) {
         ws.unsubscribe(this.activeChat);
@@ -703,6 +721,46 @@ export default {
       } catch { /* not JSON — plain text message */ }
       return { text: content, attachment: null };
     },
+    // Split a message into its reply-quote portion (leading "> " lines) and body.
+    splitReply(content) {
+      if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
+        return { quote: '', body: content || '' };
+      }
+      const lines = content.split('\n');
+      const quoteLines = [];
+      let i = 0;
+      for (; i < lines.length; i++) {
+        if (lines[i].indexOf('>') === 0) quoteLines.push(lines[i].slice(1).trim());
+        else break;
+      }
+      // Skip blank separator lines between the quote and the new body.
+      while (i < lines.length && !lines[i].trim()) i++;
+      return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
+    },
+    hasReplyQuote(content) {
+      return this.splitReply(content).quote !== '';
+    },
+    replyQuote(content) {
+      return this.splitReply(content).quote;
+    },
+    replyBody(content) {
+      return this.splitReply(content).body;
+    },
+    // Short excerpt used for the reply bar and for the "> " quote prefix.
+    replyPreview(msg) {
+      if (!msg) return '';
+      let text = this.splitReply(msg.content || msg.text || '').body;
+      if (!text) text = msg.content || '';
+      text = String(text).replace(/\s+/g, ' ').trim();
+      if (text.length > 60) text = text.slice(0, 60).trim() + '…';
+      return text;
+    },
+    setReply(msg) {
+      this.replyTo = msg;
+    },
+    cancelReply() {
+      this.replyTo = null;
+    },
     async loadMessages(email) {
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
@@ -720,7 +778,6 @@ export default {
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
-          let encrypted = false;
           try {
             const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id);
             const parsed = this.parseMessageContent(body);
@@ -740,7 +797,6 @@ export default {
                 }
                 const pp = this.parseMessageContent(text);
                 content = pp.text || content;
-                encrypted = true;
               } catch (de) {
                 // Cannot decrypt/verify the marker — not ours to show in the chat.
                 return null;
@@ -754,7 +810,8 @@ export default {
               content,
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-              encrypted,
+              encrypted: true,
+              vault: true,
               email: m,
             };
           } catch (e) {
@@ -768,7 +825,7 @@ export default {
             };
           }
         }));
-        this.messages = rendered.filter(r => r && r.encrypted).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        this.messages = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
         return;
       }
 
@@ -911,15 +968,23 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
-      
+
       try {
-        let content = this.newMessage;
-        
+        // If replying, prefix the message with a "> quote" block (kept in plaintext —
+        // the whole thing is still encrypted with VAULT_MAGIC as usual below).
+        let payload = this.newMessage;
+        if (this.replyTo) {
+          const quote = this.replyPreview(this.replyTo);
+          if (quote) payload = `> ${quote}\n\n${this.newMessage}`;
+        }
+
+        let content = payload;
+
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key
           const groupKey = this.groupKeys[this.currentGroup.id];
           if (groupKey) {
-            content = await crypto.encryptWithGroupKey(this.newMessage, groupKey);
+            content = await crypto.encryptWithGroupKey(payload, groupKey);
           }
           await api.sendGroupMessage(this.currentGroup.id, content);
           // Reload from server to get proper server timestamp and UUID
@@ -930,14 +995,15 @@ export default {
             crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
             // Prepend the stealth marker to the plaintext BEFORE encrypting so
             // the peer can recognize this as a vault message.
-            content = await crypto.encrypt(VAULT_MAGIC + this.newMessage);
+            content = await crypto.encrypt(VAULT_MAGIC + payload);
           }
           await api.sendMessage(this.activeChat, content);
           // Reload from server to get proper server timestamp and UUID
           await this.loadMessages(this.activeChat);
         }
-        
+
         this.newMessage = '';
+        this.cancelReply();
         this.$nextTick(() => {
           this.$refs.messagesContainer.scrollTop = this.$refs.messagesContainer.scrollHeight;
         });
@@ -2012,6 +2078,96 @@ body {
 .encrypted-badge {
   margin-left: 6px;
   font-size: 12px;
+}
+
+/* Reply (quote a message, like other messengers) */
+.reply-quote {
+  color: var(--text-secondary, #94a3b8);
+  border-left: 3px solid var(--accent-primary, #6366f1);
+  padding-left: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.reply-btn {
+  position: absolute;
+  top: 12px;
+  right: 8px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 150ms ease);
+  z-index: 10;
+}
+
+.message:hover .reply-btn {
+  opacity: 1;
+}
+
+.reply-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+/* Reply quote bar above the message input */
+.reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 24px;
+  background: var(--bg-tertiary, #1e1e3a);
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  font-size: 13px;
+}
+
+.reply-bar-label {
+  color: var(--accent-primary, #6366f1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.reply-bar-text {
+  flex: 1;
+  color: var(--text-secondary, #94a3b8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-bar-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.reply-bar-close:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+.messages-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  gap: 12px;
 }
 
 /* Attachment previews */
