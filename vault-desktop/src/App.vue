@@ -87,12 +87,18 @@
           </div>
         </div>
       </div>
-<!-- Mail section -->
-        <button class="mail-nav-btn" @click="openEmailView">
-          <span class="mail-nav-ico">📧</span>
-          <span class="mail-nav-label">{{ t('nav_mail') || 'Почта' }}</span>
-          <span v-if="emails.length" class="mail-nav-count">{{ emails.length }}</span>
-        </button>
+<!-- Bottom nav switch: Chat / Mail -->
+        <div class="nav-switch">
+          <button class="nav-chats-btn" :class="{ active: currentView !== 'email' }" @click="currentView = 'chats'">
+            <span class="mail-nav-ico">💬</span>
+            <span class="mail-nav-label">{{ t('nav_chats') || 'Чаты' }}</span>
+          </button>
+          <button class="mail-nav-btn" :class="{ active: currentView === 'email' }" @click="openEmailView">
+            <span class="mail-nav-ico">📧</span>
+            <span class="mail-nav-label">{{ t('nav_mail') || 'Почта' }}</span>
+            <span v-if="emails.length" class="mail-nav-count">{{ emails.length }}</span>
+          </button>
+        </div>
     </div>
     
     <div class="main-area">
@@ -1416,16 +1422,24 @@ body {
   color: var(--text-primary);
 }
 
-/* Mail nav (Почта) entry under the contacts list */
+/* Bottom nav switch (Чаты / Почта) — two side-by-side toggle buttons */
+.nav-switch {
+  display: flex;
+  flex-direction: row;
+  margin-top: auto;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.nav-chats-btn,
 .mail-nav-btn {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 14px 24px;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 12px;
   background: transparent;
   border: none;
-  border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   font-size: 14px;
   font-weight: 500;
@@ -1433,9 +1447,21 @@ body {
   transition: all var(--transition-fast);
 }
 
+.nav-chats-btn + .mail-nav-btn {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.nav-chats-btn:hover,
 .mail-nav-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.nav-chats-btn.active,
+.mail-nav-btn.active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent-primary);
 }
 
 .mail-nav-ico {

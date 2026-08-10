@@ -6,6 +6,8 @@ export default {
   // Navigation
   nav_inbox: '收件箱',
   nav_mail: '邮件',
+  nav_chats: '聊天',
+  mail_all: '全部',
   nav_compose: '写邮件',
   nav_contacts: '联系人',
   nav_groups: '群组',

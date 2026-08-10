@@ -22,6 +22,9 @@
 
 ## Криптография ✅ (с тестами)
 - X25519 (обмен ключами), XChaCha20-Poly1305 (шифр), Ed25519 (подписи), Argon2
+- Stealth-метка: AAD="VAULT" (Associated Data) — метка vault-писем живёт ТОЛЬКО в
+  MAC-аутентификации Poly1305, в потоке (ciphertext/base64) её НЕТ; получатель
+  определяет своё по успешной расшифровке; письма без метки = обычная почта
 - X3DH, Double Ratchet, PAKE, Kyber, Hybrid, Sealed — готовы в backend-модулях
 - Обмен ключами: /keygen, /invite (самодостаточная ссылка base64url JSON {id,sender,key}),
   /accept (добавляет контакт с ключом), /confirm, /keyshare, /add <email> [name] [pubkey], QR (desktop)
@@ -37,7 +40,7 @@
   - тест ищет письма и в Junk (флаг \Junk, локализованное имя) — спам уводит b→a
 
 ## Тесты (10.08.2026)
-- Backend: 111 unit ✅; Client: 231+ ✅; e2e email + key-exchange: PASS на реальных Gmail
+- Backend: 111 unit ✅; Client: 235 ✅; e2e email + key-exchange: PASS на реальных Gmail
 - Desktop: vite build ✅ + Tauri cargo check/build ✅; Android: crypto 3/3 ✅
 
 ## Текущий статус этапа 1 (до демо 20.08)
@@ -49,8 +52,11 @@
 - Git: чистый, 8 коммитов 10.08, remote НЕ создан (по решению пользователя)
 
 ### ⏸️ До демо (приоритет)
-- Визуальный тест Desktop на реальных email (E)
+- Визуальный тест Desktop на реальных email (E) — в работе
 - Группы через email — реальные аккаунты (D, канбан t_ec173a7d)
+- Vault как шифровальщик/дешифровальщик для любого канала (канбан t_56e1be5a):
+  «Зашифровать» (контакт+текст→шифротекст в буфер) / «Расшифровать»
+  (вставка+контакт→текст) — любой транспорт, не зависеть от скорости почты
 - Полировка CLI: user-friendly ошибки SMTP, демо-скрипт
 
 ### 📋 После демо (этап 2)

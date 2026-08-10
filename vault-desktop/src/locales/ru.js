@@ -6,6 +6,8 @@ export default {
   // Navigation
   nav_inbox: 'Входящие',
   nav_mail: 'Почта',
+  nav_chats: 'Чаты',
+  mail_all: 'Все',
   nav_compose: 'Написать',
   nav_contacts: 'Контакты',
   nav_groups: 'Группы',

@@ -2,16 +2,28 @@
   <div class="email-inbox">
     <div class="inbox-header">
       <h3>{{ t('nav_mail') || 'Почта' }}</h3>
+      <div class="inbox-filters">
+        <button
+          class="inbox-filter-btn"
+          :class="{ active: filter === 'all' }"
+          @click="filter = 'all'"
+        >{{ t('mail_all') || 'Все' }}</button>
+        <button
+          class="inbox-filter-btn"
+          :class="{ active: filter === 'vault' }"
+          @click="filter = 'vault'"
+        >{{ t('app_name') || 'Vault' }}</button>
+      </div>
     </div>
 
     <div class="emails-list">
       <div v-if="loading" class="loading">{{ t('email_loading') }}</div>
-      <div v-else-if="emails.length === 0" class="empty-state">
+      <div v-else-if="filteredEmails.length === 0" class="empty-state">
         {{ t('email_empty') }}
       </div>
       <div v-else>
         <div 
-          v-for="email in emails" 
+          v-for="email in filteredEmails" 
           :key="email.uid"
           :class="['email-item', { unread: !email.is_read, vault: isVault(email) }]"
           @click="$emit('open-email', email)"
@@ -48,6 +60,20 @@ export default {
     }
   },
   emits: ['open-email'],
+  data() {
+    return {
+      // 'all' — show every incoming email; 'vault' — only flagged vault emails
+      filter: 'all'
+    };
+  },
+  computed: {
+    filteredEmails() {
+      if (this.filter === 'vault') {
+        return this.emails.filter(e => this.isVault(e));
+      }
+      return this.emails;
+    }
+  },
   methods: {
     isVault(email) {
       const subject = String(email.subject || '').trim();
@@ -76,6 +102,34 @@ export default {
 .inbox-header h3 {
   margin: 0;
   color: white;
+}
+
+.inbox-filters {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.inbox-filter-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+  border-radius: 12px;
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.inbox-filter-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+.inbox-filter-btn.active {
+  background: var(--accent-primary, #6366f1);
+  border-color: var(--accent-primary, #6366f1);
+  color: #fff;
 }
 
 .emails-list {

@@ -6,6 +6,8 @@ export default {
   // Navigation
   nav_inbox: 'Inbox',
   nav_mail: 'Mail',
+  nav_chats: 'Chats',
+  mail_all: 'All',
   nav_compose: 'Compose',
   nav_contacts: 'Contacts',
   nav_groups: 'Groups',

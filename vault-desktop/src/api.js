@@ -90,7 +90,17 @@ export class ApiClient {
   // --- Chats (TODO: serverless-chats via email) ---
   async getChats() { return []; } // TODO serverless-chats via email
   async getMessages(chatId) { return []; } // TODO serverless-chats via email
-  async sendMessage(chatId, content, contentType) { return { ok: true }; } // TODO serverless-chats via email
+  async sendMessage(chatId, content, contentType) {
+    // Serverless: a chat message IS an encrypted vault email to the peer — the
+    // chat id is the peer's email address. The "Vault:" subject marker is the
+    // single transport-level signal that both the CLI and EmailInbox.isVault
+    // rely on to flag the incoming message as a vault message.
+    const to = chatId;
+    const subject = `Vault: ${to}`;
+    const res = await this.sendEmail('local', { to, subject, body: content });
+    if (!res || !res.ok) throw new Error('Failed to send vault email');
+    return { ok: true };
+  }
   async getGroupMessages(groupId) { return []; } // TODO serverless-chats via email
   async sendGroupMessage(groupId, content) { return { ok: true }; } // TODO serverless-chats via email
 
