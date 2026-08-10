@@ -19,6 +19,7 @@ Thumbs.db
 .env
 .env.local
 .email_test_env.py
+.email_test_env
 
 # Logs
 *.log

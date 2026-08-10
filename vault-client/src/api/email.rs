@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use imap::Session;
-use lettre::message::{header::ContentType, Mailbox, Message};
+use lettre::message::header::ContentType;
+use lettre::message::Mailbox;
+use lettre::message::Message;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
@@ -84,7 +86,12 @@ impl EmailClient {
         let message_ids = session.uid_search("ALL")?;
         let mut messages = Vec::new();
 
-        for uid in message_ids.iter().take(50) {
+        // Take the most RECENT 50 messages (uid_search returns an unordered set —
+        // sort descending by UID to iterate newest first, then cap).
+        let mut uids: Vec<u32> = message_ids.iter().copied().collect();
+        uids.sort_by(|a, b| b.cmp(a));
+
+        for uid in uids.iter().take(50) {
             if let Ok(data) = session.uid_fetch(uid.to_string(), "(UID FLAGS RFC822.HEADER)") {
                 for fetch in data.iter() {
                     let uid = fetch.uid.unwrap_or_default().to_string();
@@ -129,7 +136,7 @@ impl EmailClient {
         if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
             for fetch in data.iter() {
                 if let Some(body) = fetch.text() {
-                    return Ok(String::from_utf8_lossy(body).to_string());
+                    return Ok(decode_quoted_printable(&String::from_utf8_lossy(body)));
                 }
             }
         }
@@ -179,6 +186,55 @@ impl EmailClient {
             let _ = session.logout();
         }
     }
+}
+
+/// Decode quoted-printable MIME body — transport-encoded `=XX` and soft line
+/// breaks (`=\r\n`). Needed because SMTP relays (Gmail included) may re-encode
+/// the Vault encrypted block (base64) as quoted-printable on delivery.
+fn decode_quoted_printable(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'=' => {
+                // Soft line break: "=\r\n" or "=\n" → skip entirely
+                if i + 1 < bytes.len() && (bytes[i + 1] == b'\r' || bytes[i + 1] == b'\n') {
+                    i += if i + 2 < bytes.len() && bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
+                        3
+                    } else {
+                        2
+                    };
+                    continue;
+                }
+                // Hex escape: =XX
+                if i + 2 < bytes.len() {
+                    let hi = (bytes[i + 1] as char).to_digit(16);
+                    let lo = (bytes[i + 2] as char).to_digit(16);
+                    if let (Some(h), Some(l)) = (hi, lo) {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                        continue;
+                    }
+                }
+                // Literal '=' (shouldn't happen, but keep)
+                out.push(b'=');
+                i += 1;
+            }
+            b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
+                // Normalize CRLF → LF
+                out.push(b'\n');
+                i += 2;
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn extract_header(header: &str, name: &str) -> Option<String> {
