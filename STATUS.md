@@ -1,113 +1,84 @@
-# 📋 Vault — Статус проекта
+# 📋 Vault — Статус проекта (обновлено 10.08.2026)
 
 ## Название
 - **Рабочее**: Vault
-- **Продвижение**: **Vault**
 - **Домены**: vault-msg.ru, vault-msg.tech
+- **Структура**: один проект = три приложения (решение 10.08):
+  1. **Мессенджер** — репозиторий открытый (когда будет рабочий вариант)
+  2. **Сайт** (лендинг, монетизация) — репозиторий закрытый
+  3. **Соцсеть** (без сервера, данные на устройстве) — планирование архитектуры
+
+## Архитектура (решение 10.08.2026): SERVERLESS
+Клиент ходит в почту напрямую (IMAP/SMTP), шифрует сам (XChaCha20-Poly1305 + X25519),
+сервер не нужен. Backend/Axum/PostgreSQL/Docker — вне критического пути (оставлен как
+резерв/эталон). Почтовый сервер видит «мусор», клиент — чат. Zero-knowledge.
 
 ## Стек технологий
-- **Backend**: Rust (Axum) + SQLx + PostgreSQL 17
-- **Desktop**: Tauri 2.0 (Rust + Vue 3)
-- **Terminal**: Rust (ratatui)
-- **Android**: Tauri 2.0 (Rust + WebView)
-- **БД**: PostgreSQL 17 (Docker) / SQLite (клиент)
+- **CLI (terminal)**: Rust (REPL `vault --cli`; ratatui опционально)
+- **Desktop**: Tauri 2.0 (Rust + Vue 3 + Vite) — serverless, email через Tauri-команды
+- **Android**: Tauri 2.0 (Rust + WebView), не тестирован на устройстве
+- **Backend (резерв)**: Rust Axum + SQLx + PostgreSQL 17 (компилируется, 111 тестов)
+- **БД в клиенте**: SQLite / JSON-файлы (контакты, ключи)
 
-## Криптография ✅
-- **X25519** — обмен ключами ✅
-- **XChaCha20-Poly1305** — симметричное шифрование ✅
-- **Ed25519** — цифровые подписи ✅
-- **Argon2** — хеширование паролей ✅
-- **Group E2E** — групповое шифрование (общий ключ) ✅
+## Криптография ✅ (с тестами)
+- X25519 (обмен ключами), XChaCha20-Poly1305 (шифр), Ed25519 (подписи), Argon2
+- X3DH, Double Ratchet, PAKE, Kyber, Hybrid, Sealed — готовы в backend-модулях
+- Обмен ключами: /keygen, /invite (самодостаточная ссылка base64url JSON {id,sender,key}),
+  /accept (добавляет контакт с ключом), /confirm, /keyshare, /add <email> [name] [pubkey], QR (desktop)
 
-## Тесты
-- **Backend**: компилируется ✅ (0 warnings)
-- **Client**: компилируется ✅ (0 warnings)
-- **Desktop**: vite build ✅ + Tauri cargo check ✅
-- **Android**: crypto 3/3 ✅
+## Email-транспорт ✅ (проверен E2E на реальных Gmail)
+- Rust e2e-тесты: `vault-client/tests/email_e2e.rs` (шифр→SMTP→IMAP→расшифр) и
+  `key_exchange_e2e.rs` (двухсторонний обмен ключами по email) — PASS 10.08
+- Запуск: `./scripts/run-email-e2e.sh` (пароли Gmail в gitignored scripts/.email_test_env)
+- Критические фиксы (обязательны при любом новом email-коде):
+  - fold строк ≤76 колонок при отправке (RFC 5322) — иначе Gmail спам-фильтр
+  - decode_quoted_printable при чтении тела (провайдеры перекодируют base64)
+  - fetch последние 50 UID (desc), decrypt терпит whitespace
+  - тест ищет письма и в Junk (флаг \Junk, локализованное имя) — спам уводит b→a
 
-## Текущий статус (2026-07-22)
+## Тесты (10.08.2026)
+- Backend: 111 unit ✅; Client: 231+ ✅; e2e email + key-exchange: PASS на реальных Gmail
+- Desktop: vite build ✅ + Tauri cargo check/build ✅; Android: crypto 3/3 ✅
 
-### ✅ Завершено
-- Backend API (Axum + PostgreSQL) — порт 9443
-- JWT авторизация (register/login)
-- E2E шифрование (X25519 + XChaCha20)
-- Группы (создание, участники, ключи, сообщения)
-- Desktop UI (Vue 3 + Tauri 2.0)
-  - Sidebar: аватар-круг, контакты, группы
-  - Настройки в модальном окне
-  - Emoji picker, голосовые сообщения
-  - QR-код для обмена ключами
-  - Превью вложений (изображения, документы)
-  - Порядок сообщений (timestamp sync)
-- Terminal клиент (ratatui)
-- Android проект (Tauri 2.0 + WebView)
-- CI/CD (GitHub Actions: ci.yml, release-desktop.yml, release-cli.yml)
-- Docker Compose (PostgreSQL + Backend + Nginx)
-- MIT Лицензия
+## Текущий статус этапа 1 (до демо 20.08)
+### ✅ Готово
+- A. Rust e2e email-транспорт (вместо Python-скрипта) — PASS
+- B. Desktop serverless: Tauri email-команды + api.js на invoke — build OK
+  (осталось: визуальный тест на реальных Gmail)
+- C. Обмен ключами: код (самодостаточные инвайты, /accept, /add с ключом) + E2E PASS
+- Git: чистый, 8 коммитов 10.08, remote НЕ создан (по решению пользователя)
 
-### 🔧 Исправлено (22 июля 2026)
-- Порядок сообщений — сортировка после дешифровки, перезагрузка с сервера
-- Превью вложений — base64 хранится на сервере, парсится при загрузке
-- Очистка warnings — 0 предупреждений в backend + client
-- Коммиты — 57 файлов разбиты на 5 логических коммитов
+### ⏸️ До демо (приоритет)
+- Визуальный тест Desktop на реальных email (E)
+- Группы через email — реальные аккаунты (D, канбан t_ec173a7d)
+- Полировка CLI: user-friendly ошибки SMTP, демо-скрипт
 
-### ⏸️ Требует тестирования
-- Визуальное тестирование Desktop (запуск с реальными email)
-- Тестирование шифрования сообщений
-- Тестирование групп с реальными email
-- Сборка Desktop пакетов (.deb/.rpm/.AppImage)
+### 📋 После демо (этап 2)
+- Voice Calls (16 задач в канбане, только между пользователями с ключами друг друга)
+- GitHub (открытый), сайт vault-msg (закрытый), Play Store
+- Общее тестирование
 
-### 📋 До релиза
-- DNS настройка vault-msg.ru + vault-msg.tech
-- Landing page (RU + EN)
-- Pro version page + оплата
-- Google Play Store setup (Android)
-
-### 📋 После релиза
-- Voice Calls (13 задач в канбане)
-- Phone Number (3 задачи)
-- Push уведомления
-
-## Git коммиты (последние)
-```
-eca9b7f  chore: add MIT LICENSE file
-fe23062  chore(desktop): improve build script, add release profile
-f62404c  fix(desktop): attachment preview — store base64 on server
-b3467fc  fix(desktop): message ordering — sort after decrypt, reload after send
-9afc2fc  docs: update ROADMAP with current phase status
-ea55029  feat(client+desktop): add local SQLite storage module
-427099e  feat(android): crypto improvements, lib commands, build config
-72f32c9  feat(desktop): API improvements, group E2E crypto, locales
-5eabb2c  feat(backend): port 9443, group_keys module, E2E message handler
-```
+### 📋 Этап 3
+- Монетизация (идей пока нет), Соцсеть (планирование)
 
 ## Канбан
-- Доска: `vault` (32 ready + 4 done)
-- Последние completed: t_6855a381, t_878f4cb2, t_e5e7870e, t_c88288dd, t_99b3da89
+- Доска: `vault` — этап 1 = ready, этап 2/3 = scheduled, phone = archived
+- Команда: `hermes kanban --board vault list`
 
 ## Директории проекта
 ```
 ~/whisper/
-├── vault-backend/          # Rust Axum + SQLx + PostgreSQL
-├── vault-desktop/          # Tauri 2.0 (Rust + Vue 3)
-├── vault-client/           # Rust CLI (ratatui)
+├── vault-backend/          # Rust Axum + SQLx + PostgreSQL (резерв)
+├── vault-desktop/          # Tauri 2.0 (Rust + Vue 3) — serverless
+├── vault-client/           # Rust CLI (REPL) + тесты e2e
 ├── vault-android/          # Tauri 2.0 Android
-├── vault-web/              # Web UI (Vue 3 + TypeScript)
-├── docs/                   # Документация
-├── scripts/                # Скрипты сборки и деплоя
-├── .github/workflows/      # CI/CD (GitHub Actions)
-├── docker-compose.yml      # Docker (PG + Backend + Nginx)
-└── nginx.conf              # Nginx конфигурация
+├── vault-web/              # Web UI (не в критическом пути)
+├── docs/                   # PLAN-2026-08-10.md (актуален), ROADMAP/TIMELINE (устарели)
+├── scripts/                # run-email-e2e.sh, .email_test_env (gitignored)
+└── .github/workflows/      # CI/CD
 ```
-
-## Монетизация
-- Клиент ВСЕГДА БЕСПЛАТНЫЙ
-- Группы 10+ участников: ₽99/мес
-- Pro (расширенные функции): ₽99/мес
-- Emoji-паки: ₽49-149
-- Без рекламы: ₽99/мес
 
 ## Ссылки
 - Kanban: `hermes kanban --board vault list`
-- Тесты backend: `cd vault-backend && cargo test`
-- Сборка Desktop: `cd vault-desktop && ./scripts/build-desktop.sh --release`
+- План: `docs/PLAN-2026-08-10.md`; заметки: `~/Notes/Projects/mailcipher/`
+- e2e: `cd vault-client && ../scripts/run-email-e2e.sh`
