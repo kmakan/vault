@@ -30,6 +30,7 @@ const icons = [
   { id: 'keyhole', name: 'Keyhole', src: '/icons/vault-keyhole.svg' },
   { id: 'letter', name: 'Letter V', src: '/icons/vault-letter.svg' },
   { id: 'envelope', name: 'Envelope', src: '/icons/vault-envelope.svg' },
+  { id: 'vendetta', name: 'Vendetta', src: '/icons/vault-vendetta.svg' },
 ]
 
 onMounted(() => {

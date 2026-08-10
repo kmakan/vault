@@ -452,15 +452,19 @@ export default {
     if (api.token) {
       try {
         await api.getChats();
+        await this.loadContacts();
+        await this.loadGroups();
+        // This throws "Not connected" if the IMAP session died on restart —
+        // then we must ask for the password again.
+        await this.loadEmails();
         this.isLoggedIn = true;
         ws.connect(api.token);
         ws.on('typing', (msg) => this.onTypingEvent(msg));
-        await this.loadContacts();
-        await this.loadGroups();
-        await this.loadEmails();
       } catch (e) {
+        // Session died on restart (parole не храним) — просим ввести пароль снова
         api.token = null;
         localStorage.removeItem('vault-token');
+        this.email = api.email || this.email; // pre-fill login form
       }
     }
     await this.initCrypto()
@@ -537,6 +541,19 @@ export default {
       } catch (error) {
         // /api/contacts may not exist yet
         this.contacts = [];
+      }
+      // Serverless: contacts also come from email senders (Telegram-style list)
+      this.mergeEmailContacts();
+    },
+    // Add unique mail senders not yet in the contact list
+    mergeEmailContacts() {
+      const seen = new Set(this.contacts.map(c => c.email));
+      for (const m of this.emails) {
+        const from = parseEmailAddr(m.from || '');
+        if (from && from !== this.email && !seen.has(from)) {
+          seen.add(from);
+          this.contacts.push({ id: from, email: from, name: from, online: false, fromMail: true });
+        }
       }
     },
     async loadGroups() {
@@ -624,6 +641,47 @@ export default {
       return { text: content, attachment: null };
     },
     async loadMessages(email) {
+      // Serverless: a "chat" = the email thread with this contact
+      const related = this.emails.filter(m => {
+        const f = (m.from || '').toLowerCase();
+        const t = (m.to || '').toLowerCase();
+        return f.includes(email.toLowerCase()) || t.includes(email.toLowerCase());
+      });
+      if (related.length > 0) {
+        const rendered = await Promise.all(related.map(async (m) => {
+          const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
+          let content = m.subject || '(no subject)';
+          try {
+            const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id);
+            const parsed = this.parseMessageContent(body);
+            content = parsed.text || content;
+            if (parsed.attachment) {
+              content = `${content}\n📎 ${parsed.attachment.name}`;
+            }
+            return {
+              id: m.uid || m.id,
+              content,
+              from: isOut ? 'them' : 'me',
+              time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+              encrypted: false,
+              email: m,
+            };
+          } catch (e) {
+            return {
+              id: m.uid || m.id,
+              content,
+              from: isOut ? 'them' : 'me',
+              time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+              encrypted: false,
+              email: m,
+            };
+          }
+        }));
+        this.messages = rendered.sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        return;
+      }
+
+      // Fallback: legacy backend path (groups, peer-key chats)
       try {
         const raw = await api.getMessages(email);
         if (this.cryptoReady && this.peerKeys[email]) {
@@ -827,9 +885,24 @@ export default {
         const accounts = await api.getEmailAccounts();
         this.emails = [];
         for (const account of accounts) {
-          // Future: fetch emails per account
+          try {
+            const msgs = await api.fetchEmails(account.id, { limit: 50 });
+            this.emails = this.emails.concat(msgs || []);
+          } catch (e) {
+            console.error('Failed to fetch emails for account:', e);
+            // Re-throw "Not connected" so mounted() can ask for the password again
+            if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+              throw e;
+            }
+          }
         }
+        this.mergeEmailContacts();
+        console.log(`[Emails] loaded ${this.emails.length} messages`);
       } catch (error) {
+        // let "Not connected" propagate to the caller (app restart re-login)
+        if (String(error && error.message || error).toLowerCase().includes('not connected')) {
+          throw error;
+        }
         console.error('Failed to load emails:', error);
       } finally {
         this.emailsLoading = false;

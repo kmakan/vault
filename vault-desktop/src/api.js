@@ -21,9 +21,12 @@ export class ApiClient {
   constructor() {
     const saved = localStorage.getItem('vault-token');
     this.token = saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
-    this.email = null;
+    const savedEmail = localStorage.getItem('vault-email');
+    this.email = savedEmail || null;
     this.password = null; // in-memory ONLY — never persisted to localStorage
-    this.connected = false;
+    // On page reload the Tauri Rust email session (EmailState) survives, so a
+    // saved email means we can keep fetching without re-login.
+    this.connected = !!savedEmail;
     this.emailConfig = null;
     // Local contact stubs added via addContact (serverless: no backend /contacts)
     this.contacts = [];
@@ -57,6 +60,7 @@ export class ApiClient {
     this.connected = true;
     this.token = `serverless-${email}`;
     localStorage.setItem('vault-token', this.token);
+    localStorage.setItem('vault-email', email);
     return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
@@ -68,6 +72,7 @@ export class ApiClient {
     this.connected = true;
     this.token = `serverless-${email}`;
     localStorage.setItem('vault-token', this.token);
+    localStorage.setItem('vault-email', email);
     return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
@@ -79,6 +84,7 @@ export class ApiClient {
     this.emailConfig = null;
     this.token = null;
     localStorage.removeItem('vault-token');
+    localStorage.removeItem('vault-email');
   }
 
   // --- Chats (TODO: serverless-chats via email) ---

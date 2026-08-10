@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <filter id="v-red-glow">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Black background (anarchist flag) -->
+  <rect x="0" y="0" width="128" height="128" fill="#000000"/>
+  <!-- Stylized V — like "V for Vendetta" -->
+  <path d="M30 24 L54 104 L64 104 L74 104 L98 24 L80 24 L68 76 L56 24 Z"
+        fill="#d21f2b" filter="url(#v-red-glow)"/>
+</svg>
