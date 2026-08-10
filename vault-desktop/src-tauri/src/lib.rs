@@ -1,12 +1,15 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
 mod crypto;
+mod email;
 mod key_store;
 mod storage;
 
 use crypto::{CryptoState, KeyPair};
+use email::{EmailClient, EmailConfig, EmailMessage};
 use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::Manager;
+use tauri::{Manager, State};
+use tokio::sync::Mutex;
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 
@@ -116,11 +119,92 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
     crypto::decrypt_symmetric_cmd(&ciphertext, &key).map_err(|e| e.to_string())
 }
 
+/// Holds the live IMAP/SMTP session between Tauri command calls.
+pub struct EmailState(pub Mutex<Option<EmailClient>>);
+
+impl Default for EmailState {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+#[tauri::command]
+async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Result<bool, String> {
+    // Disconnect any previous session before opening a new one.
+    let mut guard = state.0.lock().await;
+    if let Some(mut client) = guard.take() {
+        client.disconnect();
+    }
+
+    let mut client = EmailClient::new(config);
+    client
+        .connect_imap()
+        .await
+        .map_err(|e| format!("Failed to connect: {e}"))?;
+
+    *guard = Some(client);
+    Ok(true)
+}
+
+#[tauri::command]
+async fn email_fetch_messages(
+    state: State<'_, EmailState>,
+) -> Result<Vec<EmailMessage>, String> {
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    client
+        .fetch_messages()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn email_fetch_body(uid: String, state: State<'_, EmailState>) -> Result<String, String> {
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    client
+        .fetch_message_body(&uid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn email_send(
+    to: String,
+    subject: String,
+    body: String,
+    state: State<'_, EmailState>,
+) -> Result<bool, String> {
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    client
+        .send_email(&to, &subject, &body)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn email_disconnect(state: State<'_, EmailState>) -> Result<(), String> {
+    let mut guard = state.0.lock().await;
+    if let Some(mut client) = guard.take() {
+        client.disconnect();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(CryptoState::default())
+        .manage(EmailState::default())
         .invoke_handler(tauri::generate_handler![
             generate_keypair,
             encrypt_message,
@@ -139,6 +223,11 @@ pub fn run() {
             get_close_to_tray,
             encrypt_symmetric,
             decrypt_symmetric,
+            email_connect,
+            email_fetch_messages,
+            email_fetch_body,
+            email_send,
+            email_disconnect,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources
