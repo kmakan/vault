@@ -41,6 +41,8 @@ export default {
   email_empty: 'Нет писем',
   email_compose: 'Написать',
   email_inbox: 'Входящие',
+  email_locked: 'Зашифрованное сообщение Vault',
+  email_locked_note: 'Сообщение защищено сквозным шифрованием. Откройте чат с этим контактом, чтобы расшифровать его.',
 
   // Contacts
   contacts_title: 'Контакты',

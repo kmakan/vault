@@ -29,9 +29,9 @@
     <!-- MAIN APP -->
     <div v-else class="sidebar">
       <div class="sidebar-header">
-        <div class="avatar-circle" @click="showAvatarUpload = true" :title="email">
-          <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-img" />
-          <span v-else class="avatar-initials">{{ emailInitials }}</span>
+        <div class="app-logo" :title="t('app_name') || 'Vault'">
+          <img :src="appIconUrl" alt="Vault" class="app-logo-img" />
+          <span class="app-logo-name">Vault</span>
         </div>
         <div class="header-actions">
           <button @click="showSettings = true" title="Settings">⚙️</button>
@@ -63,6 +63,9 @@
           </div>
         </div>
         
+        <!-- Email load error (debug aid) -->
+        <div v-if="emailError" class="email-error-hint">{{ emailError }}</div>
+
         <!-- Groups Section -->
         <div v-if="groups.length > 0" class="groups-section">
           <div class="groups-header">
@@ -84,6 +87,12 @@
           </div>
         </div>
       </div>
+<!-- Mail section -->
+        <button class="mail-nav-btn" @click="openEmailView">
+          <span class="mail-nav-ico">📧</span>
+          <span class="mail-nav-label">{{ t('email_inbox') || 'Почта' }}</span>
+          <span v-if="emails.length" class="mail-nav-count">{{ emails.length }}</span>
+        </button>
     </div>
     
     <div class="main-area">
@@ -103,7 +112,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close" @click="showSettings = false">←</button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" />
         </div>
       </div>
 
@@ -124,7 +133,34 @@
         </div>
       </div>
       
-      <div class="chat-area">
+<!-- EMAIL VIEW (mailbox) -->
+      <div v-if="currentView === 'email'" class="email-view">
+        <EmailInbox v-if="!selectedEmail" :emails="emails" :loading="emailsLoading" @open-email="openEmail" />
+        <div v-else class="email-detail">
+          <div class="email-detail-header">
+            <button class="email-back-btn" @click="closeEmailDetail">←</button>
+            <div class="email-detail-meta">
+              <div class="email-detail-from">{{ selectedEmail.from }}</div>
+              <div class="email-detail-subject">{{ selectedEmail.subject || '' }}</div>
+              <div class="email-detail-date">{{ selectedEmail.date }}</div>
+            </div>
+          </div>
+          <div class="email-detail-body">
+            <div v-if="isVaultEmail(selectedEmail)" class="email-detail-locked">
+              <div class="locked-icon">🔒</div>
+              <div class="locked-title">{{ t('email_locked') || 'Зашифрованное сообщение Vault' }}</div>
+              <div class="locked-note">{{ t('email_locked_note') || 'Сообщение защищено сквозным шифрованием. Откройте чат с этим контактом, чтобы расшифровать его.' }}</div>
+            </div>
+            <template v-else>
+              <div v-if="emailBodyLoading" class="email-body-loading">{{ t('email_loading') || 'Загрузка…' }}</div>
+              <pre v-else class="email-detail-text">{{ emailBody }}</pre>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHAT VIEW -->
+      <div v-if="currentView !== 'email'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
           <div class="chat-header-info">
             <template v-if="activeChatType === 'group'">
@@ -355,6 +391,7 @@ export default {
   data() {
     return {
       currentView: 'chats',
+      appIconId: 'letter',
       contacts: [],
       activeChat: null,
       messages: [],
@@ -373,7 +410,10 @@ export default {
       regError: '',
       emails: [],
       emailsLoading: false,
+      emailError: '',
       selectedEmail: null,
+      emailBody: '',
+      emailBodyLoading: false,
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
@@ -418,6 +458,9 @@ export default {
     }
   },
   computed: {
+    appIconUrl() {
+      return `/icons/vault-${this.appIconId}.svg`;
+    },
     emailInitials() {
       if (!this.email) return '?';
       return this.email.split('@')[0].substring(0, 2).toUpperCase();
@@ -442,6 +485,7 @@ export default {
     applyFont(loadSavedFont())
     // Apply saved icon
     const savedIcon = localStorage.getItem('vault-icon') || 'letter'
+    this.appIconId = savedIcon
     const link = document.querySelector("link[rel='icon']")
     if (link) link.href = `/icons/vault-${savedIcon}.svg`
     // Load avatar from localStorage
@@ -470,6 +514,9 @@ export default {
     await this.initCrypto()
   },
   methods: {
+    onAppIconChanged(id) {
+      this.appIconId = id;
+    },
     async initCrypto() {
       try {
         const result = await crypto.initFromStorage();
@@ -542,19 +589,6 @@ export default {
         // /api/contacts may not exist yet
         this.contacts = [];
       }
-      // Serverless: contacts also come from email senders (Telegram-style list)
-      this.mergeEmailContacts();
-    },
-    // Add unique mail senders not yet in the contact list
-    mergeEmailContacts() {
-      const seen = new Set(this.contacts.map(c => c.email));
-      for (const m of this.emails) {
-        const from = parseEmailAddr(m.from || '');
-        if (from && from !== this.email && !seen.has(from)) {
-          seen.add(from);
-          this.contacts.push({ id: from, email: from, name: from, online: false, fromMail: true });
-        }
-      }
     },
     async loadGroups() {
       try {
@@ -582,6 +616,7 @@ export default {
       }
       this.activeChat = email;
       this.activeChatType = 'chat';
+      this.currentView = 'chats';
       // Subscribe to new chat channel
       ws.subscribe(email);
       if (this.peerKeys[email]) {
@@ -641,16 +676,23 @@ export default {
       return { text: content, attachment: null };
     },
     async loadMessages(email) {
-      // Serverless: a "chat" = the email thread with this contact
+      // Vault chat: only show mail FOR this contact, and only decrypt if we
+      // hold their key (contact must be a Vault peer).
+      if (!this.peerKeys[email]) {
+        this.messages = [];
+        return;
+      }
       const related = this.emails.filter(m => {
         const f = (m.from || '').toLowerCase();
         const t = (m.to || '').toLowerCase();
         return f.includes(email.toLowerCase()) || t.includes(email.toLowerCase());
       });
       if (related.length > 0) {
+        crypto.setPeerPublicKey(this.peerKeys[email]);
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
+          let encrypted = false;
           try {
             const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id);
             const parsed = this.parseMessageContent(body);
@@ -658,12 +700,24 @@ export default {
             if (parsed.attachment) {
               content = `${content}\n📎 ${parsed.attachment.name}`;
             }
+            // Vault messages carry a raw base64 body — decrypt with peer key
+            if (this.cryptoReady && crypto.isEncrypted(body)) {
+              try {
+                const plain = await crypto.decrypt(body);
+                const pp = this.parseMessageContent(plain);
+                content = pp.text || content;
+                encrypted = true;
+              } catch (de) {
+                content = `🔒 ${content}`; // keep raw encrypted if key mismatch
+                encrypted = true;
+              }
+            }
             return {
               id: m.uid || m.id,
               content,
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-              encrypted: false,
+              encrypted,
               email: m,
             };
           } catch (e) {
@@ -677,7 +731,7 @@ export default {
             };
           }
         }));
-        this.messages = rendered.sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        this.messages = rendered.filter(r => r.encrypted).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
         return;
       }
 
@@ -881,6 +935,7 @@ export default {
     },
     async loadEmails() {
       this.emailsLoading = true;
+      this.emailError = '';
       try {
         const accounts = await api.getEmailAccounts();
         this.emails = [];
@@ -890,26 +945,61 @@ export default {
             this.emails = this.emails.concat(msgs || []);
           } catch (e) {
             console.error('Failed to fetch emails for account:', e);
+            this.emailError = 'fetch: ' + (e && e.message || e);
             // Re-throw "Not connected" so mounted() can ask for the password again
             if (String(e && e.message || e).toLowerCase().includes('not connected')) {
               throw e;
             }
           }
         }
-        this.mergeEmailContacts();
         console.log(`[Emails] loaded ${this.emails.length} messages`);
+        if (this.emails.length === 0 && !this.emailError) {
+          this.emailError = 'INBOX пуст или письма не найдены';
+        }
       } catch (error) {
         // let "Not connected" propagate to the caller (app restart re-login)
         if (String(error && error.message || error).toLowerCase().includes('not connected')) {
           throw error;
         }
         console.error('Failed to load emails:', error);
+        this.emailError = 'load: ' + (error && error.message || error);
       } finally {
         this.emailsLoading = false;
       }
     },
     openEmail(email) {
       this.selectedEmail = email;
+      this.loadEmailBody(email);
+    },
+    openEmailView() {
+      // Reset any open message detail — show the plain inbox listing
+      this.selectedEmail = null;
+      this.emailBody = '';
+      this.currentView = 'email';
+    },
+    closeEmailDetail() {
+      this.selectedEmail = null;
+      this.emailBody = '';
+    },
+    async loadEmailBody(email) {
+      this.emailBody = '';
+      this.emailBodyLoading = true;
+      try {
+        const body = await api.fetchEmailBody(email.accountId || 'local', email.uid || email.id);
+        this.emailBody = body || '';
+      } catch (e) {
+        this.emailBody = '';
+      } finally {
+        this.emailBodyLoading = false;
+      }
+    },
+    isVaultEmail(email) {
+      if (!email) return false;
+      const subject = String(email.subject || '').trim();
+      const body = email.body || this.emailBody || '';
+      const subjectFlag = /^\[Vault/i.test(subject) || /^Vault:/i.test(subject) || /^\[VAULT-/.test(subject);
+      const bodyFlag = body.includes('---BEGIN VAULT ENCRYPTED---');
+      return subjectFlag || bodyFlag;
     },
     // Emoji
     insertEmoji(emoji) {
@@ -1213,6 +1303,187 @@ body {
   align-items: center;
   border-bottom: 1px solid var(--border-subtle);
 }
+.app-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.app-logo-img {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+.app-logo-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Mail nav (Почта) entry under the contacts list */
+.mail-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 24px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mail-nav-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mail-nav-ico {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+}
+
+.mail-nav-label {
+  flex: 1;
+  text-align: left;
+}
+
+.mail-nav-count {
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Email view (mailbox) */
+.email-view {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  min-width: 0;
+}
+
+.email-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.email-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.email-back-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.email-back-btn:hover {
+  background: var(--bg-hover);
+}
+
+.email-detail-meta {
+  min-width: 0;
+}
+
+.email-detail-from {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.email-detail-subject {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+.email-detail-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.email-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.email-detail-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  min-height: 220px;
+  padding: 24px;
+  border: 1px dashed var(--status-encrypted, #6366f1);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+}
+
+.locked-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.locked-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.locked-note {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 420px;
+}
+
+.email-detail-text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.email-body-loading {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 40px;
+}
 
 .logo {
   display: flex;
@@ -1425,6 +1696,17 @@ body {
 /* ═══════════════════════════════════════════════════════════════
    Search Box
    ═══════════════════════════════════════════════════════════════ */
+
+.email-error-hint {
+  margin: 8px 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+  background: var(--bg-tertiary, #1a1a3e);
+  border: 1px solid var(--danger, #ef4444);
+  border-radius: 6px;
+  word-break: break-word;
+}
 
 .search-box {
   padding: 12px 16px;

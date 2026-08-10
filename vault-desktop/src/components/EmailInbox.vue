@@ -82,11 +82,12 @@ export default {
   },
   methods: {
     isVault(email) {
-      const subject = email.subject || '';
+      const subject = String(email.subject || '').trim();
       const body = email.body || '';
-      return subject.includes('[Vault]') || 
-             body.includes('---BEGIN VAULT---') ||
-             body.includes('X-MailCipher-Type: vault');
+      // Mail list has no body yet — flag by subject; if body present check the block marker.
+      const subjectFlag = /^\[Vault/i.test(subject) || /^Vault:/i.test(subject) || /^\[VAULT-/.test(subject);
+      const bodyFlag = body.includes('---BEGIN VAULT ENCRYPTED---');
+      return subjectFlag || bodyFlag;
     }
   }
 };

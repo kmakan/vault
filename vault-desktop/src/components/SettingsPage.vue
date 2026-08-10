@@ -33,7 +33,7 @@
       <div v-if="activeCategory === 'appearance'" class="settings-section">
         <h2>Внешний вид</h2>
         <ThemeSelector />
-        <IconPicker />
+        <IconPicker @icon-changed="onIconChanged" />
         <FontSelector />
       </div>
 
@@ -122,7 +122,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings },
   props: { email: String, userAvatarUrl: String, displayName: String },
-  emits: ['avatar-update', 'logout'],
+  emits: ['avatar-update', 'logout', 'icon-changed'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -148,6 +148,10 @@ export default {
   methods: {
     saveDisplayName() {
       localStorage.setItem('vault-display-name', this.localDisplayName);
+    },
+    onIconChanged(id) {
+      // Forward to the app root so the visible header logo swaps live
+      this.$emit('icon-changed', id);
     },
     clearLocalData() {
       if (!confirm('Вы уверены? Все данные будут удалены навсегда.')) return;

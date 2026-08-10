@@ -41,6 +41,8 @@ export default {
   email_empty: '暂无邮件',
   email_compose: '写邮件',
   email_inbox: '收件箱',
+  email_locked: '加密的Vault消息',
+  email_locked_note: '此消息受端到端加密保护。打开与此联系人的聊天以解密该消息。',
 
   // Contacts
   contacts_title: '联系人',

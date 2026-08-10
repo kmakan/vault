@@ -23,6 +23,7 @@ import { useI18n } from '../i18n.js'
 
 const { t } = useI18n()
 const currentIcon = ref('letter')
+const emit = defineEmits(['icon-changed'])
 
 const icons = [
   { id: 'shield', name: 'Shield', src: '/icons/vault-shield.svg' },
@@ -46,6 +47,8 @@ function selectIcon(id) {
     const icon = icons.find(i => i.id === id)
     if (icon) link.href = icon.src
   }
+  // Notify the app header to swap the visible logo
+  emit('icon-changed', id)
 }
 </script>
 

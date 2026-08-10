@@ -41,6 +41,8 @@ export default {
   email_empty: 'No emails yet',
   email_compose: 'Compose',
   email_inbox: 'Inbox',
+  email_locked: 'Encrypted Vault message',
+  email_locked_note: 'This message is protected with end-to-end encryption. Open the chat with this contact to decrypt it.',
 
   // Contacts
   contacts_title: 'Contacts',
