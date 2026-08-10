@@ -5,6 +5,7 @@ export default {
 
   // Navigation
   nav_inbox: 'Входящие',
+  nav_mail: 'Почта',
   nav_compose: 'Написать',
   nav_contacts: 'Контакты',
   nav_groups: 'Группы',
@@ -43,6 +44,7 @@ export default {
   email_inbox: 'Входящие',
   email_locked: 'Зашифрованное сообщение Vault',
   email_locked_note: 'Сообщение защищено сквозным шифрованием. Откройте чат с этим контактом, чтобы расшифровать его.',
+  message_placeholder: 'Сообщение',
 
   // Contacts
   contacts_title: 'Контакты',

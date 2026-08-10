@@ -12,6 +12,26 @@ use crate::vault::Reaction;
 
 const HISTORY_FILE: &str = ".vault_history";
 
+/// Stealth vault marker prepended to the PLAINTEXT before encryption.
+///
+/// It is invisible on the wire (inside the ciphertext / base64 body), but lets
+/// the vault client on the receiving side reliably tell "this is my message"
+/// from ordinary/foreign mail. Both the CLI and the Desktop app must use the
+/// exact same constant.
+pub const VAULT_MAGIC: &str = "VAULT1:";
+
+/// Prepend the vault marker to a plaintext message before encrypting it.
+pub fn vault_prefixed(message: &str) -> String {
+    format!("{}{}", VAULT_MAGIC, message)
+}
+
+/// If the decrypted text starts with the vault marker, strip it and return the
+/// real payload. Returns `None` when the message does NOT carry our marker —
+/// i.e. it is ordinary/foreign mail and must NOT be treated as a vault message.
+pub fn strip_vault_magic(plain: &str) -> Option<String> {
+    plain.strip_prefix(VAULT_MAGIC).map(|s| s.to_string())
+}
+
 /// Main CLI REPL entry point
 pub async fn run_cli(config: Config) -> Result<()> {
     let history_path = dirs::home_dir()
@@ -207,7 +227,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Send { message } => {
             if let Some(ref chat) = ctx.active_chat {
                 if let Some(ref client) = ctx.email_client {
-                    let encrypted = ctx.crypto.encrypt(&message);
+                    // Encrypt the vault-prefixed plaintext so the receiver can
+                    // recognize this as a vault message (MAGIC is inside the
+                    // ciphertext — invisible to third parties).
+                    let encrypted = ctx.crypto.encrypt(&vault_prefixed(&message));
                     let subject = format!("Vault: {}", chat);
 
                     // Check for queued attachments
@@ -382,33 +405,52 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         if is_enc {
                             match ctx.crypto.decrypt(&body) {
                                 Ok(plain) => {
-                                    Output::info("Decrypted message:");
-                                    println!("  {}", plain);
+                                    // Only a decrypted payload carrying our vault
+                                    // marker is shown as ours. Ordinary mail that
+                                    // merely decrypts (no marker) is NOT a vault
+                                    // message and is ignored.
+                                    match strip_vault_magic(&plain) {
+                                        Some(inner) => {
+                                            Output::info("Decrypted message:");
+                                            println!("  {}", inner);
 
-                                    // Send read receipt
-                                    if let Some(ref sender) = extract_sender_from_body(&body) {
-                                        let receipt = crate::vault::VaultMessage::receipt(
-                                            ctx.config.email.as_deref().unwrap_or(""),
-                                            sender,
-                                            &id,
-                                            crate::vault::MessageStatus::Read,
-                                        );
-                                        let receipt_body = receipt.to_email_body();
-                                        let _ = client
-                                            .send_email(
-                                                sender,
-                                                &format!("[VAULT-RECEIPT] {}", id),
-                                                &receipt_body,
-                                            )
-                                            .await;
-                                        Output::info("✓ Read receipt sent");
+                                            // Send read receipt
+                                            if let Some(ref sender) =
+                                                extract_sender_from_body(&body)
+                                            {
+                                                let receipt = crate::vault::VaultMessage::receipt(
+                                                    ctx.config.email.as_deref().unwrap_or(""),
+                                                    sender,
+                                                    &id,
+                                                    crate::vault::MessageStatus::Read,
+                                                );
+                                                let receipt_body = receipt.to_email_body();
+                                                let _ = client
+                                                    .send_email(
+                                                        sender,
+                                                        &format!("[VAULT-RECEIPT] {}", id),
+                                                        &receipt_body,
+                                                    )
+                                                    .await;
+                                                Output::info("✓ Read receipt sent");
 
-                                        // Record read receipt locally
-                                        let reader = ctx.config.email.as_deref().unwrap_or("");
-                                        if let Err(e) =
-                                            ctx.receipt_store.record_read(&id, reader, sender)
-                                        {
-                                            tracing::warn!("Failed to save receipt locally: {}", e);
+                                                // Record read receipt locally
+                                                let reader = ctx.config.email.as_deref().unwrap_or("");
+                                                if let Err(e) = ctx
+                                                    .receipt_store
+                                                    .record_read(&id, reader, sender)
+                                                {
+                                                    tracing::warn!(
+                                                        "Failed to save receipt locally: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            Output::warn(
+                                                "Not a Vault message (no marker) — ordinary mail, ignored.",
+                                            );
                                         }
                                     }
                                 }
@@ -432,7 +474,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
         Command::Reply { id, message } => {
             if let Some(ref client) = ctx.email_client {
-                let encrypted = ctx.crypto.encrypt(&message);
+                let encrypted = ctx.crypto.encrypt(&vault_prefixed(&message));
                 match client
                     .send_email("", &format!("Re: {}", id), &encrypted)
                     .await
@@ -1896,5 +1938,46 @@ fn print_help(topic: Option<&str>) {
                 ],
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vault_magic_prefix_and_strip_roundtrip() {
+        let message = "Hello, Vault! Привет, мир!";
+
+        // Encryption must be applied to the *prefixed* plaintext...
+        let prefixed = vault_prefixed(message);
+        assert_eq!(prefixed, format!("VAULT1:{}", message));
+
+        // ...and decryption must strip the marker and hand back the payload.
+        assert_eq!(strip_vault_magic(&prefixed), Some(message.to_string()));
+    }
+
+    #[test]
+    fn test_strip_vault_magic_rejects_plain_mail() {
+        // Ordinary mail that decrypts but carries no marker is NOT ours.
+        assert_eq!(strip_vault_magic("some random plaintext"), None);
+        assert_eq!(strip_vault_magic("VAULT1"), None);
+        assert_eq!(strip_vault_magic("VAULT1:hello"), Some("hello".to_string()));
+        // Case sensitive — partial/uppercase prefixes must not match.
+        assert_eq!(strip_vault_magic("vault1:hello"), None);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_cycle_with_magic_via_crypto() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+
+        // Send path: encrypt vault_prefixed(plaintext)
+        let cipher = crypto.encrypt(&vault_prefixed("hi there"));
+        assert_ne!(cipher, "hi there");
+
+        // Read path: decrypt, then verify+strip marker
+        let plain = crypto.decrypt(&cipher).unwrap();
+        assert_eq!(strip_vault_magic(&plain), Some("hi there".to_string()));
     }
 }

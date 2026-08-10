@@ -90,7 +90,7 @@
 <!-- Mail section -->
         <button class="mail-nav-btn" @click="openEmailView">
           <span class="mail-nav-ico">📧</span>
-          <span class="mail-nav-label">{{ t('email_inbox') || 'Почта' }}</span>
+          <span class="mail-nav-label">{{ t('nav_mail') || 'Почта' }}</span>
           <span v-if="emails.length" class="mail-nav-count">{{ emails.length }}</span>
         </button>
     </div>
@@ -172,7 +172,7 @@
               <UserAvatar :email="activeChat" :size="40" />
             </template>
             <div>
-              <h3>{{ activeChatType === 'group' ? currentGroup?.name : activeChat }}</h3>
+              <h3>{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
                   👥 {{ currentGroup?.member_count || 0 }} members
@@ -292,7 +292,7 @@
             v-model="newMessage"
             @keyup.enter="sendMessage"
             @input="onTypingInput"
-            :placeholder="t('email_compose') + '...'"
+            :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
         </div>
@@ -365,6 +365,11 @@ import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
+
+// Stealth vault marker, prepended to the PLAINTEXT before encryption (matches CLI).
+// Invisible on the wire (inside the ciphertext), but lets the receiving vault
+// client distinguish its own messages from ordinary/foreign mail.
+const VAULT_MAGIC = 'VAULT1:';
 
 export default {
   name: 'ChatApp',
@@ -478,6 +483,12 @@ export default {
       return this.messages.filter(m =>
         m.content && m.content.toLowerCase().includes(q)
       );
+    },
+    activeChatName() {
+      if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
+      if (!this.activeChat) return '';
+      const c = this.contacts.find(c => c.email === this.activeChat);
+      return c ? c.name : this.activeChat;
     }
   },
   async mounted() {
@@ -488,6 +499,11 @@ export default {
     this.appIconId = savedIcon
     const link = document.querySelector("link[rel='icon']")
     if (link) link.href = `/icons/vault-${savedIcon}.svg`
+    // React to icon changes even when the picker lives in a detached settings
+    // view — a simple window-level event bus keeps the sidebar icon in sync.
+    window.addEventListener('vault-icon-changed', (e) => {
+      if (e && e.detail) this.onAppIconChanged(e.detail)
+    })
     // Load avatar from localStorage
     if (this.email) {
       this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || ''
@@ -516,6 +532,18 @@ export default {
   methods: {
     onAppIconChanged(id) {
       this.appIconId = id;
+      // Persist so the chosen icon survives restarts and is reflected everywhere.
+      localStorage.setItem('vault-icon', id);
+      const favicon = document.querySelector("link[rel='icon']");
+      if (favicon) favicon.href = `/icons/vault-${id}.svg`;
+    },
+    // Check whether a decrypted payload carries the vault stealth marker.
+    // Returns { isVault, text } — if it's ours the marker is stripped off.
+    stripVaultMagic(text) {
+      if (typeof text === 'string' && text.indexOf(VAULT_MAGIC) === 0) {
+        return { isVault: true, text: text.slice(VAULT_MAGIC.length) };
+      }
+      return { isVault: false, text };
     },
     async initCrypto() {
       try {
@@ -700,17 +728,26 @@ export default {
             if (parsed.attachment) {
               content = `${content}\n📎 ${parsed.attachment.name}`;
             }
-            // Vault messages carry a raw base64 body — decrypt with peer key
+            // Vault messages carry a raw base64 body — decrypt with peer key and
+            // only treat as ours when the decrypted plaintext carries the marker.
             if (this.cryptoReady && crypto.isEncrypted(body)) {
               try {
                 const plain = await crypto.decrypt(body);
-                const pp = this.parseMessageContent(plain);
+                const { isVault, text } = this.stripVaultMagic(plain);
+                if (!isVault) {
+                  // Decrypted, but no vault marker — ordinary/foreign mail, skip.
+                  return null;
+                }
+                const pp = this.parseMessageContent(text);
                 content = pp.text || content;
                 encrypted = true;
               } catch (de) {
-                content = `🔒 ${content}`; // keep raw encrypted if key mismatch
-                encrypted = true;
+                // Cannot decrypt/verify the marker — not ours to show in the chat.
+                return null;
               }
+            } else {
+              // Not encrypted at all — plaintext mail, not a vault message.
+              return null;
             }
             return {
               id: m.uid || m.id,
@@ -731,7 +768,7 @@ export default {
             };
           }
         }));
-        this.messages = rendered.filter(r => r.encrypted).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        this.messages = rendered.filter(r => r && r.encrypted).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
         return;
       }
 
@@ -754,7 +791,9 @@ export default {
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const plaintext = await crypto.decrypt(msg.content);
-                  const parsed = this.parseMessageContent(plaintext);
+                  // Strip the vault marker if present (legacy/backend chat reuse).
+                  const { text } = this.stripVaultMagic(plaintext);
+                  const parsed = this.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
@@ -889,7 +928,9 @@ export default {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
             crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
-            content = await crypto.encrypt(this.newMessage);
+            // Prepend the stealth marker to the plaintext BEFORE encrypting so
+            // the peer can recognize this as a vault message.
+            content = await crypto.encrypt(VAULT_MAGIC + this.newMessage);
           }
           await api.sendMessage(this.activeChat, content);
           // Reload from server to get proper server timestamp and UUID

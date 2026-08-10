@@ -49,6 +49,9 @@ function selectIcon(id) {
   }
   // Notify the app header to swap the visible logo
   emit('icon-changed', id)
+  // Also broadcast on a window-level bus so even a detached settings view
+  // (or the sidebar header) can react to the change independently.
+  window.dispatchEvent(new CustomEvent('vault-icon-changed', { detail: id }))
 }
 </script>
 

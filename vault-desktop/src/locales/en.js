@@ -5,6 +5,7 @@ export default {
 
   // Navigation
   nav_inbox: 'Inbox',
+  nav_mail: 'Mail',
   nav_compose: 'Compose',
   nav_contacts: 'Contacts',
   nav_groups: 'Groups',
@@ -43,6 +44,7 @@ export default {
   email_inbox: 'Inbox',
   email_locked: 'Encrypted Vault message',
   email_locked_note: 'This message is protected with end-to-end encryption. Open the chat with this contact to decrypt it.',
+  message_placeholder: 'Type a message',
 
   // Contacts
   contacts_title: 'Contacts',

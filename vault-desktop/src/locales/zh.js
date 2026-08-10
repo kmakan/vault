@@ -5,6 +5,7 @@ export default {
 
   // Navigation
   nav_inbox: '收件箱',
+  nav_mail: '邮件',
   nav_compose: '写邮件',
   nav_contacts: '联系人',
   nav_groups: '群组',
@@ -43,6 +44,7 @@ export default {
   email_inbox: '收件箱',
   email_locked: '加密的Vault消息',
   email_locked_note: '此消息受端到端加密保护。打开与此联系人的聊天以解密该消息。',
+  message_placeholder: '输入消息',
 
   // Contacts
   contacts_title: '联系人',
