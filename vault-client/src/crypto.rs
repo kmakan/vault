@@ -133,16 +133,20 @@ impl CryptoClient {
             .unwrap_or_else(|_| BASE64.encode(plaintext.as_bytes()))
     }
 
-    /// Decrypt Base64 ciphertext → plaintext string
+    /// Decrypt Base64 ciphertext → plaintext string.
+    /// Whitespace (line breaks from email transport) is ignored — transport
+    /// relays may wrap the base64 line, e.g. `\r\n` inside the payload.
     pub fn decrypt(&self, ciphertext: &str) -> Result<String> {
-        let decoded = BASE64.decode(ciphertext).context("Invalid Base64")?;
+        let compact: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
+        let decoded = BASE64.decode(compact).context("Invalid Base64")?;
         let plaintext = self.do_decrypt(&decoded)?;
         String::from_utf8(plaintext).context("Invalid UTF-8 in decrypted text")
     }
 
     /// Check if text looks like encrypted data
     pub fn is_encrypted(&self, text: &str) -> bool {
-        if let Ok(decoded) = BASE64.decode(text) {
+        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        if let Ok(decoded) = BASE64.decode(compact) {
             decoded.len() >= NONCE_LEN + 17 && self.has_keys()
         } else {
             false

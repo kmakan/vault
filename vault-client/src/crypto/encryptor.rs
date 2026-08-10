@@ -261,16 +261,20 @@ fn parse_encrypted_block(input: &str) -> Result<ParsedBlock> {
         other => anyhow::bail!("Unknown data type: {}", other),
     };
 
-    // Parse body: payload_b64 \n signature_b64
-    let lines: Vec<&str> = body.lines().collect();
-    if lines.len() < 2 {
+    // Parse body: payload_b64 \n signature_b64. Transport relays may fold long
+    // base64 lines (RFC 5322, ~76 cols) — rebuild by stripping whitespace; the
+    // signature is always a fixed-length Ed25519 base64 block (64 bytes → 88 chars).
+    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.len() < 88 {
         anyhow::bail!("Expected payload and signature in body");
     }
+    let sig_len = 88; // Ed25519 signature: 64 bytes, base64 → 88 chars (ends with '=')
+    let (payload_b64, signature_b64) = compact.split_at(compact.len() - sig_len);
 
     Ok(ParsedBlock {
         data_type: dt,
-        payload_b64: lines[0].trim().to_string(),
-        signature_b64: lines[1].trim().to_string(),
+        payload_b64: payload_b64.trim().to_string(),
+        signature_b64: signature_b64.trim().to_string(),
     })
 }
 

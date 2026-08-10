@@ -76,12 +76,44 @@ impl EmailClient {
     }
 
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
+        self.fetch_messages_from("INBOX").await
+    }
+
+    /// Locate the junk/spam folder by the IMAP \Junk flag (localization-proof:
+    /// Russian Gmail names it "[Gmail]/&BCEEPwQwBDw-" instead of "[Gmail]/Spam").
+    /// Falls back to "[Gmail]/Spam" if no flagged folder is found.
+    pub async fn junk_folder(&mut self) -> String {
+        let session = match self.imap_session.as_mut() {
+            Some(s) => s,
+            None => return "[Gmail]/Spam".to_string(),
+        };
+        if let Ok(names) = session.list(None, Some("*")) {
+            for name in names.iter() {
+                let has_junk = name.attributes().iter().any(|a| {
+                    matches!(
+                        a,
+                        imap::types::NameAttribute::Custom(s)
+                            if s == "\\Junk" || s == "\\Spam"
+                    )
+                });
+                if has_junk {
+                    return name.name().to_string();
+                }
+            }
+        }
+        "[Gmail]/Spam".to_string()
+    }
+
+    /// Fetch recent messages from an arbitrary IMAP folder (e.g. "INBOX",
+    /// "[Gmail]/Spam" or the localized junk folder). Used by tests to find
+    /// messages that Gmail's spam filter routed away from INBOX.
+    pub async fn fetch_messages_from(&mut self, folder: &str) -> Result<Vec<EmailMessage>> {
         let session = self
             .imap_session
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        session.select("INBOX")?;
+        session.select(folder)?;
 
         let message_ids = session.uid_search("ALL")?;
         let mut messages = Vec::new();
@@ -163,7 +195,7 @@ impl EmailClient {
             .to(to_mailbox)
             .subject(subject)
             .header(ContentType::TEXT_PLAIN)
-            .body(body.to_string())
+            .body(fold_lines(body))
             .context("Failed to build email")?;
 
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
@@ -235,6 +267,28 @@ fn decode_quoted_printable(input: &str) -> String {
     }
 
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Fold long lines to ≤76 columns (RFC 5322 soft wrap) before sending.
+/// SMTP relays and spam filters treat unbroken >100-char base64 lines as suspicious,
+/// and some relays refuse long lines outright. The Vault encrypted block and
+/// raw-base64 bodies are rebuilt by receivers via whitespace-stripping, so folding
+/// is lossless for both codecs.
+fn fold_lines(body: &str) -> String {
+    const MAX: usize = 76;
+    body.lines()
+        .flat_map(|line| {
+            if line.len() <= MAX {
+                vec![line.to_string()]
+            } else {
+                line.as_bytes()
+                    .chunks(MAX)
+                    .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+                    .collect::<Vec<_>>()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn extract_header(header: &str, name: &str) -> Option<String> {

@@ -17,4 +17,4 @@ source "$ENV_FILE"
 set +a
 
 cd "$SCRIPT_DIR/../vault-client"
-exec cargo test --test email_e2e -- --ignored --nocapture
+exec cargo test --test email_e2e --test key_exchange_e2e -- --ignored --nocapture
