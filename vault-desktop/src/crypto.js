@@ -91,6 +91,26 @@ export class CryptoClient {
     });
   }
 
+  // Vault messages use AAD="VAULT" (serverless-mail vault chats).
+  // Same keys/arguments as encrypt/decrypt — only the AAD marker differs.
+  async encryptVault(plaintext) {
+    if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');
+    return await invoke('encrypt_vault_message', {
+      plaintext,
+      privateKey: this.privateKey,
+      peerPublicKey: this.peerPublicKey,
+    });
+  }
+
+  async decryptVault(ciphertext) {
+    if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');
+    return await invoke('decrypt_vault_message', {
+      ciphertext,
+      privateKey: this.privateKey,
+      peerPublicKey: this.peerPublicKey,
+    });
+  }
+
   async fingerprint() {
     if (!this.publicKey) throw new Error('No public key. Call generateKeypair first.');
     return await invoke('get_fingerprint', { publicKey: this.publicKey });

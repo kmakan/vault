@@ -161,6 +161,116 @@ pub fn decrypt_cmd(
     String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
 }
 
+/// Encrypt a vault message using AAD marker "VAULT" (no plaintext prefix).
+///
+/// Same key derivation as `encrypt_cmd` (DH with peer key, or self-derivation),
+/// but the message is authenticated by XChaCha20-Poly1305 with AAD="VAULT".
+/// On the wire the format is identical: base64(nonce ‖ ciphertext).
+pub fn encrypt_vault_cmd(
+    plaintext: &str,
+    private_key: &str,
+    peer_public_key: Option<&str>,
+) -> anyhow::Result<String> {
+    use chacha20poly1305::aead::Payload;
+
+    let priv_bytes = hex::decode(private_key)
+        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_arr: [u8; 32] = priv_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
+    let private = StaticSecret::from(priv_arr);
+    let public = PublicKey::from(&private);
+
+    let key = match peer_public_key {
+        Some(peer_hex) => {
+            let peer_bytes = hex::decode(peer_hex)
+                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_arr: [u8; 32] = peer_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
+            let peer = PublicKey::from(peer_arr);
+            let shared = private.diffie_hellman(&peer);
+            *shared.as_bytes()
+        }
+        None => derive_key(&public),
+    };
+
+    let cipher = XChaCha20Poly1305::new((&key).into());
+    let nonce_bytes: [u8; NONCE_LEN] = rand::random();
+    let nonce = XNonce::from_slice(&nonce_bytes);
+
+    let payload = Payload {
+        msg: plaintext.as_bytes(),
+        aad: b"VAULT",
+    };
+    let ciphertext = cipher
+        .encrypt(nonce, payload)
+        .map_err(|e| anyhow::anyhow!("Vault encryption failed: {}", e))?;
+
+    let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&ciphertext);
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&output))
+}
+
+/// Decrypt a vault message authenticated with AAD marker "VAULT".
+///
+/// Returns `Ok(plaintext)` only when Poly1305 authentication with AAD="VAULT"
+/// succeeds.  If the message was NOT encrypted with the vault AAD (or the key
+/// is wrong), returns `Err` — the caller should treat it as non-vault mail.
+pub fn decrypt_vault_cmd(
+    ciphertext: &str,
+    private_key: &str,
+    peer_public_key: Option<&str>,
+) -> anyhow::Result<String> {
+    use chacha20poly1305::aead::Payload;
+
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(ciphertext)
+        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
+
+    if decoded.len() < NONCE_LEN {
+        anyhow::bail!("Ciphertext too short");
+    }
+
+    let priv_bytes = hex::decode(private_key)
+        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_arr: [u8; 32] = priv_bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
+    let private = StaticSecret::from(priv_arr);
+    let public = PublicKey::from(&private);
+
+    let key = match peer_public_key {
+        Some(peer_hex) => {
+            let peer_bytes = hex::decode(peer_hex)
+                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_arr: [u8; 32] = peer_bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
+            let peer = PublicKey::from(peer_arr);
+            let shared = private.diffie_hellman(&peer);
+            *shared.as_bytes()
+        }
+        None => derive_key(&public),
+    };
+
+    let (nonce_bytes, ciphertext_bytes) = decoded.split_at(NONCE_LEN);
+    let cipher = XChaCha20Poly1305::new((&key).into());
+    let nonce = XNonce::from_slice(nonce_bytes);
+
+    let payload = Payload {
+        msg: ciphertext_bytes,
+        aad: b"VAULT",
+    };
+    let plaintext = cipher
+        .decrypt(nonce, payload)
+        .map_err(|_| anyhow::anyhow!("Not a vault message (AAD auth failed) or wrong key"))?;
+
+    String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
+}
+
 pub fn fingerprint_cmd(public_key_hex: &str) -> anyhow::Result<String> {
     let bytes = hex::decode(public_key_hex)
         .map_err(|e| anyhow::anyhow!("Invalid public key hex: {}", e))?;

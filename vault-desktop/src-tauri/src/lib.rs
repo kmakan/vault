@@ -39,6 +39,44 @@ fn decrypt_message(
 }
 
 #[tauri::command]
+fn encrypt_vault_message(
+    plaintext: String,
+    private_key: String,
+    peer_public_key: Option<String>,
+) -> Result<String, String> {
+    crypto::encrypt_vault_cmd(&plaintext, &private_key, peer_public_key.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn decrypt_vault_message(
+    ciphertext: String,
+    private_key: String,
+    peer_public_key: Option<String>,
+) -> Result<String, String> {
+    crypto::decrypt_vault_cmd(&ciphertext, &private_key, peer_public_key.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_app_icon(app: tauri::AppHandle, icon_id: String) -> Result<(), String> {
+    let png: &[u8] = match icon_id.as_str() {
+        "door" => include_bytes!("../icons/vault_icon_vault-door.png"),
+        "envelope" => include_bytes!("../icons/vault_icon_vault-envelope.png"),
+        "keyhole" => include_bytes!("../icons/vault_icon_vault-keyhole.png"),
+        "letter" => include_bytes!("../icons/vault_icon_vault-letter.png"),
+        "shield" => include_bytes!("../icons/vault_icon_vault-shield.png"),
+        "vendetta" => include_bytes!("../icons/vault_icon_vault-vendetta.png"),
+        _ => return Err("unknown icon".to_string()),
+    };
+
+    let image = tauri::image::Image::from_bytes(png).map_err(|e| e.to_string())?;
+    let win = app.get_webview_window("main").ok_or("no window")?;
+    win.set_icon(image).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_fingerprint(public_key: String) -> Result<String, String> {
     crypto::fingerprint_cmd(&public_key).map_err(|e| e.to_string())
 }
@@ -209,6 +247,9 @@ pub fn run() {
             generate_keypair,
             encrypt_message,
             decrypt_message,
+            encrypt_vault_message,
+            decrypt_vault_message,
+            set_app_icon,
             get_fingerprint,
             save_my_keypair,
             load_my_keypair,

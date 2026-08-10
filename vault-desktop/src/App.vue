@@ -379,11 +379,6 @@ import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 
-// Stealth vault marker, prepended to the PLAINTEXT before encryption (matches CLI).
-// Invisible on the wire (inside the ciphertext), but lets the receiving vault
-// client distinguish its own messages from ordinary/foreign mail.
-const VAULT_MAGIC = 'VAULT1:';
-
 export default {
   name: 'ChatApp',
   components: {
@@ -511,6 +506,9 @@ export default {
     // Apply saved icon
     const savedIcon = localStorage.getItem('vault-icon') || 'letter'
     this.appIconId = savedIcon
+    // Apply the saved native window icon (waybar/dock), ignoring failures so
+    // startup is never blocked.
+    api.setAppIcon(savedIcon).catch(() => { /* ignore window icon failures */ })
     const link = document.querySelector("link[rel='icon']")
     if (link) link.href = `/icons/vault-${savedIcon}.svg`
     // React to icon changes even when the picker lives in a detached settings
@@ -550,14 +548,8 @@ export default {
       localStorage.setItem('vault-icon', id);
       const favicon = document.querySelector("link[rel='icon']");
       if (favicon) favicon.href = `/icons/vault-${id}.svg`;
-    },
-    // Check whether a decrypted payload carries the vault stealth marker.
-    // Returns { isVault, text } — if it's ours the marker is stripped off.
-    stripVaultMagic(text) {
-      if (typeof text === 'string' && text.indexOf(VAULT_MAGIC) === 0) {
-        return { isVault: true, text: text.slice(VAULT_MAGIC.length) };
-      }
-      return { isVault: false, text };
+      // Update the native window icon (waybar/dock).
+      api.setAppIcon(id).catch(() => { /* ignore window icon failures */ });
     },
     async initCrypto() {
       try {
@@ -785,24 +777,20 @@ export default {
             if (parsed.attachment) {
               content = `${content}\n📎 ${parsed.attachment.name}`;
             }
-            // Vault messages carry a raw base64 body — decrypt with peer key and
-            // only treat as ours when the decrypted plaintext carries the marker.
-            if (this.cryptoReady && crypto.isEncrypted(body)) {
+            // Vault messages carry a raw base64 body — decrypt with AAD="VAULT".
+            // Only a message that authenticates as a vault message is shown in
+            // the chat; anything else is treated as ordinary/foreign mail.
+            if (this.cryptoReady) {
               try {
-                const plain = await crypto.decrypt(body);
-                const { isVault, text } = this.stripVaultMagic(plain);
-                if (!isVault) {
-                  // Decrypted, but no vault marker — ordinary/foreign mail, skip.
-                  return null;
-                }
+                const text = await crypto.decryptVault(body);
                 const pp = this.parseMessageContent(text);
                 content = pp.text || content;
               } catch (de) {
-                // Cannot decrypt/verify the marker — not ours to show in the chat.
+                // Cannot authenticate/decrypt as a vault message — not ours.
                 return null;
               }
             } else {
-              // Not encrypted at all — plaintext mail, not a vault message.
+              // No crypto — not a vault message.
               return null;
             }
             return {
@@ -847,9 +835,7 @@ export default {
               };
               if (crypto.isEncrypted(msg.content)) {
                 try {
-                  const plaintext = await crypto.decrypt(msg.content);
-                  // Strip the vault marker if present (legacy/backend chat reuse).
-                  const { text } = this.stripVaultMagic(plaintext);
+                  const text = await crypto.decryptVault(msg.content);
                   const parsed = this.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
@@ -971,7 +957,7 @@ export default {
 
       try {
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
-        // the whole thing is still encrypted with VAULT_MAGIC as usual below).
+        // the whole thing is still enclosed in the vault AAD-encrypted payload below).
         let payload = this.newMessage;
         if (this.replyTo) {
           const quote = this.replyPreview(this.replyTo);
@@ -993,9 +979,9 @@ export default {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
             crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
-            // Prepend the stealth marker to the plaintext BEFORE encrypting so
-            // the peer can recognize this as a vault message.
-            content = await crypto.encrypt(VAULT_MAGIC + payload);
+            // Encrypt as a vault message (AAD="VAULT") so the peer can recognize
+            // and authenticate it as ours.
+            content = await crypto.encryptVault(payload);
           }
           await api.sendMessage(this.activeChat, content);
           // Reload from server to get proper server timestamp and UUID

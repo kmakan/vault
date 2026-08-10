@@ -8,7 +8,7 @@ pub type Decryptor = Encryptor;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
 };
 use rand::rngs::OsRng;
@@ -141,6 +141,63 @@ impl CryptoClient {
         let decoded = BASE64.decode(compact).context("Invalid Base64")?;
         let plaintext = self.do_decrypt(&decoded)?;
         String::from_utf8(plaintext).context("Invalid UTF-8 in decrypted text")
+    }
+
+    /// Encrypt a vault message using AAD marker "VAULT" (no plaintext prefix).
+    ///
+    /// The marker is passed as Associated Data to XChaCha20-Poly1305 — it is
+    /// authenticated by Poly1305 but NOT present in the ciphertext.  On the
+    /// wire the format is identical to `encrypt()`: base64(nonce ‖ ciphertext).
+    pub fn encrypt_vault(&self, plaintext: &str) -> Result<String> {
+        let key = self.get_key()?;
+        let cipher = XChaCha20Poly1305::new((&key).into());
+        let nonce_bytes: [u8; NONCE_LEN] = rand::random();
+        let nonce = XNonce::from_slice(&nonce_bytes);
+
+        let payload = Payload {
+            msg: plaintext.as_bytes(),
+            aad: b"VAULT",
+        };
+        let ciphertext = cipher
+            .encrypt(nonce, payload)
+            .map_err(|e| anyhow::anyhow!("Vault encryption failed: {}", e))?;
+
+        let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+        output.extend_from_slice(&nonce_bytes);
+        output.extend_from_slice(&ciphertext);
+
+        Ok(BASE64.encode(&output))
+    }
+
+    /// Decrypt a vault message authenticated with AAD marker "VAULT".
+    ///
+    /// Returns `Ok(plaintext)` only when Poly1305 authentication with
+    /// AAD="VAULT" succeeds.  If the message was NOT encrypted with the vault
+    /// AAD (or the key is wrong), returns `Err` — the caller should treat it
+    /// as non-vault mail (or try the legacy fallback).
+    pub fn decrypt_vault(&self, ciphertext: &str) -> Result<String> {
+        let compact: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
+        let decoded = BASE64.decode(compact).context("Invalid Base64")?;
+
+        let key = self.get_key()?;
+
+        if decoded.len() < NONCE_LEN {
+            anyhow::bail!("Encrypted data too short");
+        }
+
+        let (nonce_bytes, ct_bytes) = decoded.split_at(NONCE_LEN);
+        let cipher = XChaCha20Poly1305::new((&key).into());
+        let nonce = XNonce::from_slice(nonce_bytes);
+
+        let payload = Payload {
+            msg: ct_bytes,
+            aad: b"VAULT",
+        };
+        let plaintext = cipher
+            .decrypt(nonce, payload)
+            .map_err(|_| anyhow::anyhow!("Not a vault message (AAD auth failed) or wrong key"))?;
+
+        String::from_utf8(plaintext).context("Invalid UTF-8 in decrypted vault text")
     }
 
     /// Check if text looks like encrypted data
@@ -280,5 +337,41 @@ mod tests {
         crypto2.import_private_key(&priv_hex).unwrap();
         assert!(crypto2.has_keys());
         assert_eq!(crypto1.fingerprint(), crypto2.fingerprint());
+    }
+
+    #[test]
+    fn test_vault_aad_encrypt_decrypt_roundtrip() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+
+        let text = "Hello, Vault! Привет, мир!";
+        let encrypted = crypto.encrypt_vault(text).unwrap();
+        assert_ne!(encrypted, text);
+
+        // decrypt_vault with the same key should succeed and return clean text
+        let decrypted = crypto.decrypt_vault(&encrypted).unwrap();
+        assert_eq!(decrypted, text);
+        // No VAULT1: prefix — the text is pure
+        assert!(!decrypted.starts_with("VAULT1:"));
+    }
+
+    #[test]
+    fn test_vault_aad_rejects_non_vault_data() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+
+        // Data encrypted WITHOUT AAD (old encrypt, no vault marker)
+        let non_vault = crypto.encrypt("hello");
+        // decrypt_vault must reject it
+        let result = crypto.decrypt_vault(&non_vault);
+        assert!(result.is_err(), "non-vault ciphertext must fail AAD auth");
+
+        // Data encrypted with AAD=Vault... but decrypted with WRONG key
+        let vault_enc = crypto.encrypt_vault("secret").unwrap();
+
+        let mut other = CryptoClient::new();
+        other.generate_keypair();
+        let result = other.decrypt_vault(&vault_enc);
+        assert!(result.is_err(), "wrong key must fail AAD auth");
     }
 }

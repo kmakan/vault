@@ -122,6 +122,11 @@ export class ApiClient {
     return { ok: true, id: email, email };
   }
 
+  // --- Window/app icon (set the native window icon shown in waybar/dock) ---
+  async setAppIcon(iconId) {
+    return invoke('set_app_icon', { iconId });
+  }
+
   // --- Email accounts (single local mailbox kept in memory) ---
   async getEmailAccounts() {
     if (!this.connected || !this.email) return [];
