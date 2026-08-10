@@ -74,6 +74,7 @@ pub enum Command {
     Add {
         email: String,
         name: Option<String>,
+        pub_key: Option<String>,
     },
     Remove {
         email: String,
@@ -374,10 +375,12 @@ impl Command {
                     if args.is_empty() {
                         Command::Unknown("/add requires an email".into())
                     } else {
-                        let mut parts = args.splitn(2, ' ');
+                        // /add <email> [name] [pubkey_hex]
+                        let mut parts = args.split_whitespace();
                         let email = parts.next().unwrap().to_string();
-                        let name = parts.next().map(|s| s.trim().to_string());
-                        Command::Add { email, name }
+                        let name = parts.next().map(|s| s.to_string());
+                        let pub_key = parts.next().map(|s| s.to_string());
+                        Command::Add { email, name, pub_key }
                     }
                 }
                 "remove" | "rm" => {
@@ -1221,7 +1224,7 @@ mod tests {
     fn test_add_remove() {
         let cmd = Command::parse("/add alice@test.com Alice");
         match cmd {
-            Command::Add { email, name } => {
+            Command::Add { email, name, .. } => {
                 assert_eq!(email, "alice@test.com");
                 assert_eq!(name, Some("Alice".to_string()));
             }
@@ -1229,7 +1232,7 @@ mod tests {
         }
         let cmd = Command::parse("/add bob@test.com");
         match cmd {
-            Command::Add { email, name } => {
+            Command::Add { email, name, .. } => {
                 assert_eq!(email, "bob@test.com");
                 assert!(name.is_none());
             }
@@ -1240,6 +1243,29 @@ mod tests {
         match cmd {
             Command::Remove { email } => assert_eq!(email, "alice@test.com"),
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_add_with_pubkey() {
+        // /add <email> [name] [pubkey_hex]
+        let cmd = Command::parse("/add a@b.ru");
+        match cmd {
+            Command::Add { email, name, pub_key } => {
+                assert_eq!(email, "a@b.ru");
+                assert!(name.is_none());
+                assert!(pub_key.is_none());
+            }
+            _ => panic!("Expected Add"),
+        }
+        let cmd = Command::parse("/add a@b.ru Name 00ff");
+        match cmd {
+            Command::Add { email, name, pub_key } => {
+                assert_eq!(email, "a@b.ru");
+                assert_eq!(name, Some("Name".to_string()));
+                assert_eq!(pub_key, Some("00ff".to_string()));
+            }
+            _ => panic!("Expected Add"),
         }
     }
 

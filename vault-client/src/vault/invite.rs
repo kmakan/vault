@@ -83,6 +83,19 @@ pub struct Invite {
     pub signature: String,
 }
 
+/// Self-contained invite payload embedded in an invite link.
+/// Encodes everything a recipient needs to add the sender as a contact,
+/// so an invite is usable across machines without a shared database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvitePayload {
+    /// Unique invite ID
+    pub id: String,
+    /// Sender email
+    pub sender: String,
+    /// Sender's public key (hex)
+    pub key: String,
+}
+
 impl Invite {
     /// Create a new invite
     pub fn new(
@@ -136,16 +149,33 @@ impl Invite {
         }
     }
 
-    /// Generate invite link
+    /// Generate invite link.
+    /// New format: base64url(JSON of `InvitePayload`) — fully self-contained,
+    /// so a recipient on another machine can accept it without a shared DB.
     pub fn to_link(&self) -> String {
-        format!("https://vault.chat/invite/{}", base64url_encode(&self.id))
+        let payload = InvitePayload {
+            id: self.id.clone(),
+            sender: self.sender.clone(),
+            key: self.sender_public_key.clone(),
+        };
+        let json = serde_json::to_string(&payload).unwrap_or_else(|_| self.id.clone());
+        format!("https://vault.chat/invite/{}", base64url_encode(&json))
     }
 
-    /// Parse invite from link
-    pub fn from_link(link: &str) -> Option<String> {
-        link.strip_prefix("https://vault.chat/invite/")
-            .map(|id| base64url_decode(id))
-            .flatten()
+    /// Parse invites from a link.
+    /// - New self-contained format -> `(id, sender, key)` with all fields set.
+    /// - Legacy format (base64url of just the id) -> `(id, "", "")`.
+    pub fn from_link(link: &str) -> Option<(String, String, String)> {
+        let payload_b64 = link.strip_prefix("https://vault.chat/invite/")?;
+        let decoded = base64url_decode(payload_b64)?;
+
+        // Try the self-contained JSON payload first.
+        if let Ok(payload) = serde_json::from_str::<InvitePayload>(&decoded) {
+            return Some((payload.id, payload.sender, payload.key));
+        }
+
+        // Legacy format: the code was base64url(id) — no contact data available.
+        Some((decoded, String::new(), String::new()))
     }
 
     /// Mark as used
@@ -233,7 +263,7 @@ impl InviteManager {
 
     /// Get invite by link
     pub fn get_invite_by_link(&self, link: &str) -> Option<&Invite> {
-        Invite::from_link(link).and_then(|id| self.invites.get(&id))
+        Invite::from_link(link).and_then(|(id, _, _)| self.invites.get(&id))
     }
 
     /// Accept an invite (recipient side)
@@ -369,15 +399,40 @@ mod tests {
     }
 
     #[test]
-    fn test_invite_link() {
-        let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
+    fn test_invite_link_roundtrip_self_contained() {
+        let invite =
+            Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
 
         let link = invite.to_link();
         assert!(link.starts_with("https://vault.chat/invite/"));
 
-        let parsed_id = Invite::from_link(&link);
-        assert!(parsed_id.is_some());
-        assert_eq!(parsed_id.unwrap(), invite.id);
+        // Self-contained format: sender + key are preserved in the link.
+        let parsed = Invite::from_link(&link);
+        assert!(parsed.is_some());
+        let (id, sender, key) = parsed.unwrap();
+        assert_eq!(id, invite.id);
+        assert_eq!(sender, invite.sender);
+        assert_eq!(key, invite.sender_public_key);
+    }
+
+    #[test]
+    fn test_invite_link_legacy_backward_compat() {
+        // Legacy format: base64url(id) with no contact data.
+        let id = "inv_legacy123";
+        let old_link =
+            format!("https://vault.chat/invite/{}", base64url_encode(id));
+
+        let parsed = Invite::from_link(&old_link);
+        assert!(parsed.is_some());
+        let (parsed_id, sender, key) = parsed.unwrap();
+        assert_eq!(parsed_id, id);
+        assert_eq!(sender, "");
+        assert_eq!(key, "");
+    }
+
+    #[test]
+    fn test_invite_link_invalid() {
+        assert!(Invite::from_link("not a link").is_none());
     }
 
     #[test]

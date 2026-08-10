@@ -527,7 +527,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 }
             }
         }
-        Command::Add { email, name } => {
+        Command::Add { email, name, pub_key } => {
             let display_name = name
                 .clone()
                 .unwrap_or_else(|| email.split('@').next().unwrap_or(&email).to_string());
@@ -537,20 +537,25 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     email
                 ));
             } else {
-                // Try to use the contact's public key from crypto if sharing
-                let pub_key = ctx.crypto.public_key_hex().unwrap_or_default();
-                let contact =
-                    crate::vault::contacts::Contact::new(&email, &display_name, &pub_key);
+                // Use the peer's public key when provided; otherwise store a keyless
+                // contact. Never substitute our own public key for the contact's.
+                let contact = match pub_key {
+                    Some(key) if !key.is_empty() => {
+                        crate::vault::contacts::Contact::new(&email, &display_name, &key)
+                    }
+                    _ => crate::vault::contacts::Contact::without_key(&email, &display_name),
+                };
                 ctx.contact_book.add(contact);
                 ctx.save_contacts();
                 Output::success(&format!("Contact added: {} ({})", display_name, email));
-                if !pub_key.is_empty() {
-                    Output::info("Your public key has been associated with this contact.");
+                if !ctx.contact_book.get(&email).unwrap().public_key.is_empty() {
+                    Output::info(&format!(
+                        "Fingerprint: {}",
+                        ctx.contact_book.get(&email).unwrap().fingerprint
+                    ));
+                } else {
+                    Output::info("No public key provided. Ask the contact to share it via /keyshare.");
                 }
-                Output::info(&format!(
-                    "Fingerprint: {}",
-                    ctx.contact_book.get(&email).unwrap().fingerprint
-                ));
             }
         }
         Command::Remove { email } => {
@@ -651,24 +656,74 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
         Command::Accept { invite } => {
-            // Try to parse as invite code or link
-            let invite_id = if invite.starts_with("inv_") {
-                invite.clone()
+            // Parse the code/link through Invite::from_link (handles both formats).
+            let parsed = if invite.starts_with("inv_") {
+                // Bare id code — no embedded contact data (legacy format).
+                Some((invite.clone(), String::new(), String::new()))
             } else {
-                match crate::vault::invite::Invite::from_link(&invite) {
-                    Some(id) => id,
-                    None => {
-                        // Try as base64url encoded
-                        invite.clone()
+                // Full link (old or new format); fall back to legacy id otherwise.
+                crate::vault::invite::Invite::from_link(&invite)
+                    .or_else(|| Some((invite.clone(), String::new(), String::new())))
+            };
+
+            match parsed {
+                Some((_id, sender, key)) if !sender.is_empty() && !key.is_empty() => {
+                    // Self-contained payload: bundle the sender's contact data right here.
+                    let display_name =
+                        sender.split('@').next().unwrap_or(&sender).to_string();
+                    let contact =
+                        crate::vault::contacts::Contact::new(&sender, &display_name, &key);
+                    ctx.contact_book.add(contact);
+                    ctx.save_contacts();
+                    Output::success(&format!("Contact added: {}", sender));
+                    Output::info("You can now send encrypted messages to this contact.");
+                }
+                Some((id, _, _)) => {
+                    // Legacy format: only an id, no contact data. Works only when sender
+                    // and recipient share the same machine/database.
+                    match ctx.invite_manager.accept_invite(&id, "") {
+                        Ok(_) => {
+                            Output::success(&format!("Invite accepted: {}", id));
+                            Output::info("Contact will be added after confirmation.");
+                        }
+                        Err(e) => {
+                            Output::error(&format!(
+                                "{} — the legacy invite \"{}\" carries no contact data; \
+                                 ask the sender for a new self-contained invite link.",
+                                e, id
+                            ));
+                        }
                     }
                 }
-            };
-            Output::success(&format!("Invite accepted: {}", invite_id));
-            Output::info("Contact will be added after confirmation.");
+                None => {
+                    Output::error("Invalid invite code or link");
+                }
+            }
         }
         Command::Confirm { email } => {
-            Output::success(&format!("Contact confirmed: {}", email));
-            Output::info("You can now send encrypted messages.");
+            // Confirm an invite sent to this email (sender side).
+            let invite_id = ctx
+                .invite_manager
+                .invites_for(&email)
+                .first()
+                .map(|i| i.id.clone());
+            match invite_id {
+                Some(id) => match ctx.invite_manager.confirm_invite(&id) {
+                    Ok(_) => {
+                        Output::success(&format!("Contact confirmed: {}", email));
+                        Output::info("You can now send encrypted messages.");
+                    }
+                    Err(e) => {
+                        Output::warn(&format!("Nothing to confirm for {}: {}", email, e));
+                    }
+                },
+                None => {
+                    Output::warn(&format!(
+                        "No invite found for {}. Nothing to confirm.",
+                        email
+                    ));
+                }
+            }
         }
 
         // ── Crypto ───────────────────────────────────────────
