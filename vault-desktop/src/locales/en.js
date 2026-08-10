@@ -55,6 +55,8 @@ export default {
   contacts_search: 'Search contacts...',
   contacts_empty: 'No contacts',
   contacts_add: 'Add Contact',
+  contacts_empty_title: 'No contacts',
+  contacts_empty_hint: 'Add a peer key to start chatting: generate your own key and exchange public keys',
 
   // Keys
   keys_title: 'Key Management',
@@ -68,6 +70,8 @@ export default {
   keys_export: 'Export Keys',
   keys_delete_all: 'Delete All Keys',
   keys_copy: 'Copy public key',
+  nav_keys: 'Keys',
+  nav_add_contact: 'Add contact',
 
   // General
   general_loading: 'Loading...',

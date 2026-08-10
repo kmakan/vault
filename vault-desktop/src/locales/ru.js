@@ -55,6 +55,8 @@ export default {
   contacts_search: 'Поиск контактов...',
   contacts_empty: 'Нет контактов',
   contacts_add: 'Добавить контакт',
+  contacts_empty_title: 'Нет контактов',
+  contacts_empty_hint: 'Добавьте ключ собеседника, чтобы начать чат: сгенерируйте свой ключ и обменяйтесь публичными ключами',
 
   // Keys
   keys_title: 'Управление ключами',
@@ -68,6 +70,8 @@ export default {
   keys_export: 'Экспорт ключей',
   keys_delete_all: 'Удалить все ключи',
   keys_copy: 'Копировать публичный ключ',
+  nav_keys: 'Ключи',
+  nav_add_contact: 'Добавить контакт',
 
   // General
   general_loading: 'Загрузка...',

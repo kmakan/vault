@@ -1,5 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 
+// Pure, testable helper: a stored keypair is valid only when both keys are
+// 64-char hex (32 bytes), differ from each other, and are not placeholders.
+export function isValidKeypair(kp) {
+  if (!kp || typeof kp !== 'object') return false;
+  if (typeof kp.public_key !== 'string' || typeof kp.private_key !== 'string') return false;
+  const hex64 = /^[0-9a-f]{64}$/i;
+  if (!hex64.test(kp.public_key) || !hex64.test(kp.private_key)) return false;
+  if (kp.private_key === kp.public_key) return false;
+  return true;
+}
+
 export class CryptoClient {
   constructor() {
     this.privateKey = null;
@@ -16,7 +27,9 @@ export class CryptoClient {
 
   async initFromStorage() {
     const stored = await invoke('load_my_keypair');
-    if (stored) {
+    // Only accept a real keypair. Placeholders/short keys must be rejected so
+    // the caller regenerates a proper X25519 keypair.
+    if (stored && isValidKeypair(stored)) {
       this.privateKey = stored.private_key;
       this.publicKey = stored.public_key;
       return { keypair: stored, loaded: true };

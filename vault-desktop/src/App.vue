@@ -34,6 +34,8 @@
           <span class="app-logo-name">Vault</span>
         </div>
         <div class="header-actions">
+          <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
+          <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
           <button @click="showSettings = true" title="Settings">⚙️</button>
         </div>
       </div>
@@ -41,6 +43,15 @@
       <div class="contacts-list">
         <div class="search-box">
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
+        </div>
+        <!-- Onboarding: no contacts and no peer keys yet -->
+        <div v-if="contacts.length === 0 && Object.keys(peerKeys).length === 0" class="contacts-empty">
+          <div class="contacts-empty-title">{{ t('contacts_empty_title') }}</div>
+          <div class="contacts-empty-hint">{{ t('contacts_empty_hint') }}</div>
+          <div class="contacts-empty-actions">
+            <button class="btn-primary" @click="showKeyManager = true">🔑 {{ t('nav_keys') }}</button>
+            <button class="btn-secondary" @click="showQRCode = true">🔗 {{ t('nav_add_contact') }}</button>
+          </div>
         </div>
         <div class="group-create-row">
           <button class="group-create-btn" @click="showCreateGroup = true">
@@ -1018,16 +1029,19 @@ export default {
           alert('Invalid public key format');
           return;
         }
-        
-        this.peerKeys[publicKeyHex] = {
-          added: new Date().toISOString(),
-          source: 'qr-code'
-        };
-        
-        await crypto.savePeerKeys(this.peerKeys);
-        alert('Public key added successfully!');
+        // QR-скан даёт только публичный ключ (без email) — спросим email контакта,
+        // т.к. peerKeys индексируется по email (см. loadStoredPeerKeys).
+        const email = prompt('Email контакта?');
+        if (!email || !email.includes('@')) {
+          alert('Введите email контакта');
+          return;
+        }
+        const normalized = email.trim().toLowerCase();
+        await crypto.savePeerKey(normalized, publicKeyHex, null);
+        this.peerKeys[normalized] = publicKeyHex;
+        this.peerKeysLoaded[normalized] = true;
+        await this.loadContacts(); // список чатов обновится из load_peer_keys
         this.showQRCode = false;
-        
       } catch (error) {
         alert('Failed to add peer key: ' + error.message);
       }
@@ -1862,6 +1876,40 @@ body {
   overflow-y: auto;
 }
 
+.contacts-empty {
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.contacts-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.contacts-empty-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.contacts-empty-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contacts-empty-actions .btn-primary,
+.contacts-empty-actions .btn-secondary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .contact-item {
   display: flex;
   align-items: center;
@@ -2559,6 +2607,23 @@ body {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  background: var(--bg-tertiary, #1a1a3a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  color: var(--text-primary, #f1f5f9);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent-primary, #6366f1);
+  color: var(--text-primary, #f1f5f9);
 }
 
 /* Export dropdown */

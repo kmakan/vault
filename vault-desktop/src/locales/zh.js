@@ -55,6 +55,8 @@ export default {
   contacts_search: '搜索联系人...',
   contacts_empty: '暂无联系人',
   contacts_add: '添加联系人',
+  contacts_empty_title: '没有联系人',
+  contacts_empty_hint: '添加对方的密钥以开始聊天：生成自己的密钥并交换公钥',
 
   // Keys
   keys_title: '密钥管理',
@@ -68,6 +70,8 @@ export default {
   keys_export: '导出密钥',
   keys_delete_all: '删除所有密钥',
   keys_copy: '复制公钥',
+  nav_keys: '密钥',
+  nav_add_contact: '添加联系人',
 
   // General
   general_loading: '加载中...',
