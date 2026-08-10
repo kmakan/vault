@@ -18,6 +18,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.email_test_env.py
 
 # Logs
 *.log
@@ -36,3 +37,7 @@ mailcipher-android/
 *.jks
 *.keystore
 release-key.jks
+
+# Python
+__pycache__/
+*.pyc

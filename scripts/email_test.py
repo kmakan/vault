@@ -22,11 +22,16 @@ import base64
 import secrets
 
 # ─── Конфигурация ───────────────────────────────────────────────
+# Пароли приложений НЕ хранятся в git. Файл scripts/.email_test_env.py
+# (gitignored) содержит ACCOUNTS с реальными паролями. Если его нет —
+# берём из env-переменных VAULT_ALICE_APP_PASSWORD / VAULT_BOB_APP_PASSWORD.
+
+import importlib.util
 
 ACCOUNTS = {
     "alice": {
         "email": "icemaksim@gmail.com",
-        "password": "rrlb wmsn uxoj wctq",
+        "password": None,
         "imap_server": "imap.gmail.com",
         "imap_port": 993,
         "smtp_server": "smtp.gmail.com",
@@ -34,7 +39,7 @@ ACCOUNTS = {
     },
     "bob": {
         "email": "koanmak@gmail.com",
-        "password": "ldel yktv cwhq wrvs",
+        "password": None,
         "imap_server": "imap.gmail.com",
         "imap_port": 993,
         "smtp_server": "smtp.gmail.com",
@@ -42,104 +47,78 @@ ACCOUNTS = {
     },
 }
 
-# ─── Простой шифр (Alpha + Columnar) ────────────────────────────
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".email_test_env.py")
+if os.path.exists(_env_path):
+    _spec = importlib.util.spec_from_file_location("email_test_env", _env_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    for _k, _acc in getattr(_mod, "ACCOUNTS", {}).items():
+        if _k in ACCOUNTS:
+            ACCOUNTS[_k]["password"] = _acc.get("password")
+else:
+    ACCOUNTS["alice"]["password"] = os.environ.get("VAULT_ALICE_APP_PASSWORD")
+    ACCOUNTS["bob"]["password"] = os.environ.get("VAULT_BOB_APP_PASSWORD")
 
-def alpha_encrypt(text: str, key: str) -> str:
-    """Шифр Альфа: замена символов на основе ключа (только ASCII A-Z)"""
-    result = []
-    key_idx = 0
-    for ch in text.upper():
-        if 'A' <= ch <= 'Z':
-            shift = ord(key[key_idx % len(key)]) - ord('A')
-            encrypted = chr((ord(ch) - ord('A') + shift) % 26 + ord('A'))
-            result.append(encrypted)
-            key_idx += 1
-        else:
-            result.append(ch)
-    return ''.join(result)
+for _acc in ACCOUNTS.values():
+    if not _acc["password"]:
+        print("⚠️  Нет пароля приложения для", _acc["email"], "- создайте scripts/.email_test_env.py")
+        sys.exit(1)
 
+# ─── Современное шифрование (XChaCha20-Poly1305 + Ed25519) ─────
+# Формат повторяет vault-client/src/crypto/encryptor.rs:
+#   enc_key (32B, эфемерный) → XChaCha20-Poly1305(nonce24 || ct)
+#   payload = nonce(24) || ciphertext || enc_key(32)
+#   signature = Ed25519(payload)
+#   ---BEGIN VAULT ENCRYPTED---
+#   Version: 1
+#   Type: text
+#   ---
+#   base64(payload)
+#   base64(signature)
+#   ---END VAULT ENCRYPTED---
 
-def alpha_decrypt(cipher: str, key: str) -> str:
-    """Обратная операция Alpha (только ASCII A-Z)"""
-    result = []
-    key_idx = 0
-    for ch in cipher.upper():
-        if 'A' <= ch <= 'Z':
-            shift = ord(key[key_idx % len(key)]) - ord('A')
-            decrypted = chr((ord(ch) - ord('A') - shift) % 26 + ord('A'))
-            result.append(decrypted)
-            key_idx += 1
-        else:
-            result.append(ch)
-    return ''.join(result)
-
-
-def columnar_encrypt(text: str, key: str) -> str:
-    """Шифр колонной замены"""
-    text = text.replace(" ", "")
-    cols = len(key)
-    rows = (len(text) + cols - 1) // cols
-
-    # Заполняем матрицу по строкам
-    matrix = [['' for _ in range(cols)] for _ in range(rows)]
-    idx = 0
-    for i in range(rows):
-        for j in range(cols):
-            if idx < len(text):
-                matrix[i][j] = text[idx]
-                idx += 1
-
-    # Читаем по колоннам в порядке ключа
-    order = sorted(range(len(key)), key=lambda k: key[k])
-    result = []
-    for col in order:
-        for row in range(rows):
-            ch = matrix[row][col]
-            if ch:
-                result.append(ch)
-    return ''.join(result)
+from cryptography.hazmat.primitives.ciphers.aead import XChaCha20Poly1305
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
-def columnar_decrypt(cipher: str, key: str) -> str:
-    """Обратная операция Columnar"""
-    cols = len(key)
-    order = sorted(range(len(key)), key=lambda k: key[k])
+def vault_encrypt(text: str) -> str:
+    """Зашифровать в формат Vault (XChaCha20-Poly1305 + Ed25519)"""
+    enc_key = secrets.token_bytes(32)
+    nonce = secrets.token_bytes(24)
+    cipher = XChaCha20Poly1305(enc_key)
+    ciphertext = cipher.encrypt(nonce, text.encode("utf-8"))
 
-    total = len(cipher)
-    full_rows = total // cols
-    extra = total % cols  # сколько первых колонн (по индексу) имеют +1
+    payload = nonce + ciphertext + enc_key
+    signing_key = Ed25519PrivateKey.generate()
+    signature = signing_key.sign(payload)
 
-    # Колонны 0..extra-1 имеют full_rows+1, остальные full_rows
-    col_lengths = {}
-    for c in range(cols):
-        col_lengths[c] = full_rows + (1 if c < extra else 0)
-
-    # Заполняем матрицу по колоннам в порядке ключа
-    num_rows = full_rows + (1 if extra else 0)
-    matrix = [['' for _ in range(cols)] for _ in range(num_rows)]
-    idx = 0
-    for col_idx in order:
-        length = col_lengths[col_idx]
-        for row in range(length):
-            if idx < len(cipher):
-                matrix[row][col_idx] = cipher[idx]
-                idx += 1
-
-    # Читаем по строкам
-    result = []
-    for i in range(num_rows):
-        for j in range(cols):
-            if matrix[i][j]:
-                result.append(matrix[i][j])
-    return ''.join(result)
+    header = "Version: 1\nType: text\n---\n"
+    return (
+        "---BEGIN VAULT ENCRYPTED---\n"
+        + header
+        + base64.b64encode(payload).decode()
+        + "\n"
+        + base64.b64encode(signature).decode()
+        + "\n"
+        + "---END VAULT ENCRYPTED---\n"
+    )
 
 
-def combined_encrypt(text: str, alpha_key: str, column_key: str) -> str:
-    return columnar_encrypt(alpha_encrypt(text, alpha_key), column_key)
-
-
-def combined_decrypt(cipher: str, alpha_key: str, column_key: str) -> str:
-    return alpha_decrypt(columnar_decrypt(cipher, column_key), alpha_key)
+def vault_decrypt(block: str) -> str:
+    """Расшифровать блок Vault (для теста — без проверки подписи ключом)"""
+    payload_b64 = ""
+    for line in block.splitlines():
+        if line and line != "---END VAULT ENCRYPTED---" and not line.startswith("---"):
+            if not payload_b64:
+                payload_b64 = line
+            else:
+                break
+    payload = base64.b64decode(payload_b64)
+    nonce = payload[:24]
+    enc_key = payload[-32:]
+    ciphertext = payload[24:-32]
+    cipher = XChaCha20Poly1305(enc_key)
+    return cipher.decrypt(nonce, ciphertext).decode("utf-8")
 
 
 # ─── Тестовые функции ───────────────────────────────────────────
@@ -421,30 +400,26 @@ def main():
         results.fail("Bob получил письмо", str(e))
 
     # ── Тест 6: Шифрование → отправка → расшифрование ─────────────
-    print(f"\n🔐 Тест 6: Шифрование (Alpha + Columnar)")
-    alpha_key = "MAGIC"
-    column_key = "3124"
+    print(f"\n🔐 Тест 6: Шифрование (XChaCha20-Poly1305 + Ed25519)")
     original_text = "Привет, Боб! Это зашифрованное сообщение через Vault. Timestamp: " + str(timestamp)
 
     try:
-        encrypted = combined_encrypt(original_text, alpha_key, column_key)
+        encrypted = vault_encrypt(original_text)
         print(f"  Оригинал: {original_text[:60]}...")
-        print(f"  Зашифр.:  {encrypted[:60]}...")
+        print(f"  Шифр.:    {encrypted[:60]}...")
 
-        decrypted = combined_decrypt(encrypted, alpha_key, column_key)
-        # Сравниваем (колонная замена убирает пробелы)
-        original_no_spaces = original_text.replace(" ", "").upper()
-        if decrypted == original_no_spaces:
-            results.ok("Шифрование/расшифрование (Alpha + Columnar)")
+        decrypted = vault_decrypt(encrypted)
+        if decrypted == original_text:
+            results.ok("Шифрование/расшифрование (XChaCha20-Poly1305)")
         else:
             results.fail("Шифрование/расшифрование",
-                         f"Расшифр. текст не совпадает.\n    Ожидалось: {original_no_spaces[:80]}\n    Получено: {decrypted[:80]}")
+                         f"Расшифр. текст не совпадает.\n    Ожидалось: {original_text[:80]}\n    Получено: {decrypted[:80]}")
     except Exception as e:
         results.fail("Шифрование/расшифрование", str(e))
 
     # ── Тест 7: Зашифрованное письмо A→B ─────────────────────────
     enc_subject = f"[Vault Encrypted] {timestamp}"
-    enc_body = f"-----BEGIN ENCRYPTED MESSAGE-----\n{encrypted}\n-----END ENCRYPTED MESSAGE-----"
+    enc_body = encrypted
 
     print(f"\n🔒 Тест 7: Зашифрованное письмо Alice → Bob")
     print(f"  Тема: {enc_subject}")
@@ -477,24 +452,22 @@ def main():
         if found:
             body = fetch_body_by_subject(bob_mail, enc_subject)
             if body:
-                # Извлекаем зашифрованный текст
-                if "BEGIN ENCRYPTED MESSAGE" in body:
-                    start = body.index("BEGIN ENCRYPTED MESSAGE") + len("BEGIN ENCRYPTED MESSAGE")
-                    end = body.index("END ENCRYPTED MESSAGE")
-                    enc_text = body[start:end].strip()
-                    decrypted = combined_decrypt(enc_text, alpha_key, column_key)
-                    original_no_spaces = original_text.replace(" ", "").upper()
-                    if decrypted == original_no_spaces:
+                # Извлекаем зашифрованный блок
+                if "BEGIN VAULT ENCRYPTED" in body:
+                    start = body.index("BEGIN VAULT ENCRYPTED")
+                    enc_block = body[start:]
+                    decrypted = vault_decrypt(enc_block)
+                    if decrypted == original_text:
                         results.ok("Bob расшифровал письмо")
                         print(f"    Расшифр.: {decrypted[:60]}...")
                     else:
                         results.fail("Расшифрование на Bob",
-                                     f"Текст не совпадает.\n    Ожидалось: {original_no_spaces[:80]}\n    Получено: {decrypted[:80]}")
+                                     f"Текст не совпадает.\n    Ожидалось: {original_text[:80]}\n    Получено: {decrypted[:80]}")
                 else:
                     # Отладка: показать что нашли
                     print(f"    [debug] Тело письма ({len(body)} символов):")
                     print(f"    [debug] {repr(body[:200])}")
-                    results.fail("Расшифрование на Bob", "Не найдены маркеры ENCRYPTED MESSAGE")
+                    results.fail("Расшифрование на Bob", "Не найден маркер BEGIN VAULT ENCRYPTED")
             else:
                 results.fail("Получение зашифрованного письма", "Письмо не найдено")
         else:

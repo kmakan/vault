@@ -91,6 +91,7 @@ pub async fn list_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::push::models::Platform;
 
     #[test]
     fn test_register_request_deserialize() {
