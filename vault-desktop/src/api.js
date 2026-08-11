@@ -101,8 +101,32 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send vault email');
     return { ok: true };
   }
-  async getGroupMessages(groupId) { return []; } // TODO serverless-chats via email
-  async sendGroupMessage(groupId, content) { return { ok: true }; } // TODO serverless-chats via email
+  async getGroupMessages(groupId) {
+    const msgs = await this.fetchEmails('local');
+    const mine = msgs.filter(m => (m.subject || '').startsWith('VaultGroup: ' + groupId));
+    const out = [];
+    for (const m of mine) {
+      const body = await this.fetchEmailBody('local', m.uid);
+      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
+    }
+    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: ' + groupId));
+    for (const m of invites) {
+      const body = await this.fetchEmailBody('local', m.uid);
+      const parsed = urlSafeB64Decode(body);
+      await invoke('groups_import', { groupId: parsed.group_id, name: parsed.group_name, groupKey: parsed.group_key, sender: parsed.sender });
+      out.push({ id: 'invite:' + m.uid, content: '🔑 Group invite accepted', sender_id: parsed.sender, created_at: new Date(m.date), is_read: true, is_sent: false });
+    }
+    return out;
+  }
+  async sendGroupMessage(groupId, content) {
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    for (const member of g.members || []) {
+      if (member.email === this.email) continue;
+      await this.sendEmail('local', { to: member.email, subject: 'VaultGroup: ' + g.id, body: content });
+    }
+    return { ok: true };
+  }
 
   // --- Contacts (local: key_store peer keys + in-memory stubs) ---
   async getContacts() {
@@ -219,14 +243,51 @@ export class ApiClient {
   async uploadGroupAvatar(groupId, dataUrl) { return null; }
   async deleteGroupAvatar(groupId) { return true; }
 
-  // --- Groups (TODO: serverless-chats via email) ---
-  async getGroups() { return []; }
-  async createGroup(name, description) { return null; }
-  async getGroupMembers(groupId) { return []; }
-  async addGroupMember(groupId, userId, role) { return { ok: true }; }
+  // --- Groups (serverless via email) ---
+  async getGroups() {
+    try {
+      return await invoke('groups_load');
+    } catch (e) {
+      return [];
+    }
+  }
+  async createGroup(name, description) {
+    return await invoke('groups_create', { name, creator: this.email || '' });
+  }
+  async getGroupMembers(groupId) {
+    const g = await invoke('groups_get', { groupId });
+    return (g && g.members) || [];
+  }
+  async addGroupMember(groupId, email, role) {
+    await invoke('groups_add_member', { groupId, email });
+    const g = await invoke('groups_get', { groupId });
+    if (g && g.group_key) {
+      const payload = urlSafeB64({ group_id: g.id, group_name: g.name, group_key: g.group_key, sender: this.email });
+      await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
+    }
+    return g;
+  }
   async distributeGroupKey(groupId, userId, encryptedKey) { return { ok: true }; }
-  async getMyGroupKey(groupId) { return null; }
-  async getGroupKeys(groupId) { return []; }
+  async getMyGroupKey(groupId) {
+    const g = await invoke('groups_get', { groupId });
+    return (g && g.group_key) ? { group_key: g.group_key } : null;
+  }
+  async getGroupKeys(groupId) {
+    const g = await invoke('groups_get', { groupId });
+    return (g && g.group_key) ? [g.group_key] : [];
+  }
 }
 
 export default new ApiClient();
+
+// --- url-safe base64 helpers (CLI group protocol uses URL_SAFE_NO_PAD) ---
+function urlSafeB64(obj) {
+  const json = JSON.stringify(obj);
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function urlSafeB64Decode(str) {
+  const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+  return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))));
+}
