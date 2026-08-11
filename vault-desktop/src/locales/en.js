@@ -136,4 +136,22 @@ export default {
   avatar_too_large: 'Image must be under 500KB',
   avatar_upload: 'Upload Photo',
   typing: 'typing...',
+
+  // Cipher
+  cipher_title: 'Cipher',
+  cipher_encrypt_tab: 'Encrypt',
+  cipher_decrypt_tab: 'Decrypt',
+  cipher_contact: 'Contact',
+  cipher_text_placeholder: 'Text to encrypt…',
+  cipher_output_placeholder: 'Ciphertext…',
+  cipher_decrypt_placeholder: 'Paste ciphertext from any channel…',
+  cipher_result_placeholder: 'Decrypted text…',
+  cipher_action_encrypt: 'Encrypt',
+  cipher_action_decrypt: 'Decrypt',
+  cipher_copy: 'Copy',
+  cipher_copied: 'Copied ✓',
+  cipher_no_contacts_title: 'No contacts with keys',
+  cipher_no_contacts_hint: 'Exchange keys first (🔑 Keys)',
+  cipher_error: 'Decrypt failed — check contact and ciphertext',
+  cipher_open_keys: 'Open Keys',
 }

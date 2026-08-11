@@ -136,4 +136,22 @@ export default {
   avatar_too_large: 'Изображение должно быть менее 500KB',
   avatar_upload: 'Загрузить фото',
   typing: 'печатает...',
+
+  // Cipher
+  cipher_title: 'Шифр',
+  cipher_encrypt_tab: 'Зашифровать',
+  cipher_decrypt_tab: 'Расшифровать',
+  cipher_contact: 'Контакт',
+  cipher_text_placeholder: 'Текст для шифрования…',
+  cipher_output_placeholder: 'Шифротекст…',
+  cipher_decrypt_placeholder: 'Вставьте шифротекст из любого канала…',
+  cipher_result_placeholder: 'Расшифрованный текст…',
+  cipher_action_encrypt: 'Зашифровать',
+  cipher_action_decrypt: 'Расшифровать',
+  cipher_copy: 'Копировать',
+  cipher_copied: 'Скопировано ✓',
+  cipher_no_contacts_title: 'Нет контактов с ключами',
+  cipher_no_contacts_hint: 'Сначала обменяйтесь ключами (🔑 Ключи)',
+  cipher_error: 'Не удалось расшифровать — проверьте контакт и шифротекст',
+  cipher_open_keys: 'Открыть Ключи'
 }

@@ -136,4 +136,22 @@ export default {
   avatar_too_large: '图片大小不能超过500KB',
   avatar_upload: '上传头像',
   typing: '正在输入...',
+
+  // Cipher
+  cipher_title: '加密',
+  cipher_encrypt_tab: '加密',
+  cipher_decrypt_tab: '解密',
+  cipher_contact: '联系人',
+  cipher_text_placeholder: '要加密的文本…',
+  cipher_output_placeholder: '密文…',
+  cipher_decrypt_placeholder: '从任何渠道粘贴密文…',
+  cipher_result_placeholder: '解密文本…',
+  cipher_action_encrypt: '加密',
+  cipher_action_decrypt: '解密',
+  cipher_copy: '复制',
+  cipher_copied: '已复制 ✓',
+  cipher_no_contacts_title: '没有带密钥的联系人',
+  cipher_no_contacts_hint: '先交换密钥（🔑 密钥）',
+  cipher_error: '解密失败 — 请检查联系人和密文',
+  cipher_open_keys: '打开密钥'
 }

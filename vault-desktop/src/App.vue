@@ -36,6 +36,7 @@
         <div class="header-actions">
           <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
+          <button :title="t('cipher_title')" @click="showCipher = true">🛡</button>
           <button @click="showSettings = true" title="Settings">⚙️</button>
         </div>
       </div>
@@ -124,6 +125,9 @@
           @key-scanned="addPeerKey"
         />
       </div>
+
+      <!-- CIPHER TOOL -->
+      <CipherTool v-if="showCipher" :peerKeys="peerKeys" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
 
       <!-- SETTINGS MODAL -->
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
@@ -391,6 +395,7 @@ import FontSelector from './components/FontSelector.vue';
 import IconPicker from './components/IconPicker.vue';
 import AppBehavior from './components/AppBehavior.vue';
 import AvatarUpload from './components/AvatarUpload.vue';
+import CipherTool from './components/CipherTool.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
@@ -412,7 +417,8 @@ export default {
     FontSelector,
     IconPicker,
     AppBehavior,
-    AvatarUpload
+    AvatarUpload,
+    CipherTool
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -452,6 +458,7 @@ export default {
       peerKeyInput: '',
       showKeyManager: false,
       showQRCode: false,
+      showCipher: false,
       peerKeysLoaded: {},
       searchQuery: '',
       // Groups
@@ -1436,12 +1443,16 @@ body {
   color: var(--text-primary);
 }
 
-/* Bottom nav switch (Чаты / Почта) — two side-by-side toggle buttons */
+/* Bottom nav switch (Чаты / Почта) — two side-by-side toggle buttons.
+   Mirrors .sidebar-header spacing (20px 24px) so buttons don't stick to
+   the window edge. */
 .nav-switch {
   display: flex;
   flex-direction: row;
   margin-top: auto;
   border-top: 1px solid var(--border-subtle);
+  padding: 16px 24px 20px;
+  gap: 8px;
 }
 
 .nav-chats-btn,
@@ -1451,9 +1462,10 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 14px 12px;
+  padding: 12px 12px;
   background: transparent;
   border: none;
+  border-radius: 8px;
   color: var(--text-secondary);
   font-size: 14px;
   font-weight: 500;
@@ -1462,7 +1474,7 @@ body {
 }
 
 .nav-chats-btn + .mail-nav-btn {
-  border-left: 1px solid var(--border-subtle);
+  border-left: none;
 }
 
 .nav-chats-btn:hover,
