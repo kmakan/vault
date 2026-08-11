@@ -163,6 +163,10 @@ pub enum Command {
         group_id: String,
         email: String,
     },
+    GroupSend {
+        group_id: String,
+        text: String,
+    },
 
     // ── Папки (folders) ─────────────────────────────────────
     FolderCreate {
@@ -522,6 +526,16 @@ impl Command {
                         _ => Command::Unknown("/groupremove requires <group_id> <email>".into()),
                     }
                 }
+                "groupsend" | "gs" => {
+                    let mut parts = args.splitn(2, ' ');
+                    match (parts.next(), parts.next()) {
+                        (Some(gid), Some(text)) => Command::GroupSend {
+                            group_id: gid.to_string(),
+                            text: text.to_string(),
+                        },
+                        _ => Command::Unknown("/groupsend requires <group_id> <text>".into()),
+                    }
+                }
                 "promote" | "pm" => {
                     let mut parts = args.splitn(2, ' ');
                     match (parts.next(), parts.next()) {
@@ -874,6 +888,9 @@ impl fmt::Display for Command {
             }
             Command::GroupRemove { group_id, email } => {
                 write!(f, "groupremove {} {}", group_id, email)
+            }
+            Command::GroupSend { group_id, text } => {
+                write!(f, "groupsend {} {}", group_id, text)
             }
             Command::Promote { group_id, email } => {
                 write!(f, "promote {} {}", group_id, email)
@@ -1413,6 +1430,22 @@ mod tests {
                 assert_eq!(email, "bob@test.com");
             }
             _ => panic!(),
+        }
+        let cmd = Command::parse("/groupsend grp123 hello team");
+        match cmd {
+            Command::GroupSend { group_id, text } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(text, "hello team");
+            }
+            _ => panic!("Expected GroupSend"),
+        }
+        let cmd = Command::parse("/gs grp123 hi");
+        match cmd {
+            Command::GroupSend { group_id, text } => {
+                assert_eq!(group_id, "grp123");
+                assert_eq!(text, "hi");
+            }
+            _ => panic!("Expected GroupSend (alias)"),
         }
     }
 

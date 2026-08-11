@@ -1,3 +1,4 @@
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,6 +14,9 @@ pub struct Group {
     #[serde(default)]
     pub blocked: Vec<String>,
     pub encrypted: bool,
+    /// Hex-encoded 32-byte key for group encryption (XChaCha20-Poly1305)
+    #[serde(default)]
+    pub group_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +66,10 @@ impl GroupManager {
         creator: &str,
     ) -> Result<Group, Box<dyn std::error::Error>> {
         let id = format!("grp_{}", hex::encode(&uuid::Uuid::new_v4().as_bytes()[..8]));
+        // Generate a random 32-byte key for the group
+        let mut key_bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        let group_key = hex::encode(key_bytes);
         let group = Group {
             id: id.clone(),
             name: name.to_string(),
@@ -75,6 +83,7 @@ impl GroupManager {
             }],
             blocked: Vec::new(),
             encrypted: true,
+            group_key,
         };
 
         self.groups.insert(id.clone(), group.clone());
@@ -218,6 +227,47 @@ impl GroupManager {
         }
     }
 
+    /// Import a group from an invitation (used when accepting a group invite)
+    /// Creates the group if it doesn't exist, or updates the group key if it does.
+    /// The sender is added as a member with role Member (unless they are the creator).
+    pub fn import_group(
+        &mut self,
+        group_id: &str,
+        group_name: &str,
+        group_key: &str,
+        sender_email: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut group = self.groups.remove(group_id).unwrap_or_else(|| Group {
+            id: group_id.to_string(),
+            name: group_name.to_string(),
+            created_by: sender_email.to_string(), // The sender is considered the creator for the imported group
+            created_at: chrono::Utc::now().to_rfc3339(),
+            members: Vec::new(),
+            blocked: Vec::new(),
+            encrypted: true,
+            group_key: group_key.to_string(),
+        });
+
+        // Ensure the group key is set (if the group existed but had no key, we set it)
+        if group.group_key.is_empty() {
+            group.group_key = group_key.to_string();
+        }
+
+        // Add the sender as a member if not already present
+        if !group.members.iter().any(|m| m.email == sender_email) {
+            group.members.push(GroupMember {
+                email: sender_email.to_string(),
+                role: GroupRole::Member,
+                joined_at: chrono::Utc::now().to_rfc3339(),
+                key_shared: false,
+            });
+        }
+
+        self.groups.insert(group_id.to_string(), group);
+        self.save()?;
+        Ok(())
+    }
+
     /// Check if user is blocked in group
     pub fn is_blocked(&self, group_id: &str, email: &str) -> bool {
         self.groups
@@ -347,5 +397,38 @@ mod tests {
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.block_user(&group.id, "user@test.com").unwrap();
         assert!(mgr.block_user(&group.id, "user@test.com").is_err());
+    }
+
+    #[test]
+    fn test_create_group_generates_key() {
+        let mut mgr = GroupManager::new();
+        let group = mgr.create_group("Keyed", "admin@test.com").unwrap();
+        assert_eq!(group.group_key.len(), 64, "32 bytes as hex");
+        hex::decode(&group.group_key).expect("valid hex");
+    }
+
+    #[test]
+    fn test_import_group_creates_with_key() {
+        let mut mgr = GroupManager::new();
+        mgr.import_group("grp_import", "Imported", &"ab".repeat(32), "alice@test.com")
+            .unwrap();
+        let g = mgr.get_group("grp_import").unwrap();
+        assert_eq!(g.group_key, "ab".repeat(32));
+        assert!(g.members.iter().any(|m| m.email == "alice@test.com"));
+    }
+
+    #[test]
+    fn test_import_group_updates_existing_key() {
+        let mut mgr = GroupManager::new();
+        let group = mgr.create_group("Keyed", "admin@test.com").unwrap();
+        // Simulate a group without a key (legacy storage)
+        let mut g = mgr.get_group(&group.id).unwrap().clone();
+        g.group_key = String::new();
+        mgr.groups.insert(group.id.clone(), g);
+        mgr.import_group(&group.id, "Keyed", &"cd".repeat(32), "bob@test.com")
+            .unwrap();
+        let g = mgr.get_group(&group.id).unwrap();
+        assert_eq!(g.group_key, "cd".repeat(32));
+        assert!(g.members.iter().any(|m| m.email == "bob@test.com"));
     }
 }

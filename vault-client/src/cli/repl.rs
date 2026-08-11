@@ -333,6 +333,110 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             }
                         }
 
+                        // ── Group invites: accept & import group with key ──
+                        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+                        for msg in &messages {
+                            if let Some(gid) = msg.subject.strip_prefix("VaultGroupInvite:") {
+                                let gid = gid.trim().to_string();
+                                match URL_SAFE_NO_PAD.decode(msg.body.trim()) {
+                                    Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                        Ok(payload) => {
+                                            let group_id = payload
+                                                .get("group_id")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(&gid)
+                                                .to_string();
+                                            let group_name = payload
+                                                .get("group_name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("group")
+                                                .to_string();
+                                            let group_key = payload
+                                                .get("group_key")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let sender = payload
+                                                .get("sender")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or(&msg.from)
+                                                .to_string();
+                                            let mut gm = crate::vault::GroupManager::new();
+                                            match gm.import_group(
+                                                &group_id,
+                                                &group_name,
+                                                &group_key,
+                                                &sender,
+                                            ) {
+                                                Ok(()) => Output::success(&format!(
+                                                    "Group invite accepted: {} ({})",
+                                                    group_name, group_id
+                                                )),
+                                                Err(e) => {
+                                                    Output::warn(&format!(
+                                                        "Failed to import group: {}",
+                                                        e
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            tracing::warn!("Invalid group invite payload from {}", msg.from);
+                                        }
+                                    },
+                                    Err(_) => {
+                                        tracing::warn!("Invalid group invite b64 from {}", msg.from);
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── Group messages: decrypt & display ──
+                        let group_msgs: Vec<_> = messages
+                            .iter()
+                            .filter(|m| m.subject.starts_with("VaultGroup: "))
+                            .collect();
+                        for gmsg in &group_msgs {
+                            let gid = gmsg
+                                .subject
+                                .strip_prefix("VaultGroup: ")
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            let gm = crate::vault::GroupManager::new();
+                            match gm.get_group(&gid) {
+                                Some(group) if !group.group_key.is_empty() => {
+                                    match hex::decode(&group.group_key) {
+                                        Ok(kb) if kb.len() == 32 => {
+                                            let mut arr = [0u8; 32];
+                                            arr.copy_from_slice(&kb);
+                                            let enc = crate::crypto::encryptor::Encryptor::from_key_bytes(&arr);
+                                                match enc.decrypt(&gmsg.body) {
+                                                    Ok(crate::crypto::encryptor::DecryptedContent::Text(text)) => {
+                                                        let date: String = gmsg.date.chars().take(12).collect();
+                                                        Output::divider();
+                                                        println!("  [{}] [{}] {} — {}", date, group.name, gmsg.from, text);
+                                                    }
+                                                    _ => {
+                                                        tracing::warn!(
+                                                            "Failed to decrypt group msg from {}",
+                                                            gmsg.from
+                                                        );
+                                                    }
+                                                }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {
+                                    tracing::warn!(
+                                        "Group message for unknown group {} from {}",
+                                        gid, gmsg.from
+                                    );
+                                }
+                            }
+                        }
+
                         // Filter: only Vault messages from contacts
                         let vault_msgs = VaultFilter::filter_vault_messages(&messages);
                         // Further filter: only from contacts
@@ -1062,7 +1166,40 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::GroupInvite { group_id, email } => {
             let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.add_member(&group_id, &email) {
-                Ok(()) => Output::success(&format!("Invited {} to group {}", email, group_id)),
+                Ok(()) => {
+                    Output::success(&format!("Invited {} to group {}", email, group_id));
+                    // Distribute the group key to the new member via email:
+                    // subject "VaultGroupInvite: <group_id>", body = base64url(JSON)
+                    // {group_id, group_name, group_key, sender}.
+                    // TODO(security): encrypt group_key with member's public key
+                    // once contact keys are mandatory for group members.
+                    if let Some(ref client) = ctx.email_client {
+                        let sender = ctx.config.email.clone().unwrap_or_default();
+                        if let Some(group) = group_mgr.get_group(&group_id) {
+                            let payload = serde_json::json!({
+                                "group_id": group.id,
+                                "group_name": group.name,
+                                "group_key": group.group_key,
+                                "sender": sender,
+                            });
+                            let json = serde_json::to_string(&payload).unwrap_or_default();
+                            use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+                            let body = URL_SAFE_NO_PAD.encode(json.as_bytes());
+                            match client
+                                .send_email(&email, &format!("VaultGroupInvite: {}", group_id), &body)
+                                .await
+                            {
+                                Ok(_) => Output::info("Group key invite sent by email"),
+                                Err(e) => {
+                                    Output::warn(&format!(
+                                        "Member added but key invite failed: {}",
+                                        e
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
                 Err(e) => Output::error(&format!("Failed to invite: {}", e)),
             }
         }
@@ -1071,6 +1208,63 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             match group_mgr.remove_member(&group_id, &email) {
                 Ok(()) => Output::success(&format!("Removed {} from group {}", email, group_id)),
                 Err(e) => Output::error(&format!("Failed to remove: {}", e)),
+            }
+        }
+        Command::GroupSend { group_id, text } => {
+            if let Some(ref client) = ctx.email_client {
+                let group_mgr = crate::vault::GroupManager::new();
+                match group_mgr.get_group(&group_id) {
+                    Some(group) if group.group_key.is_empty() => {
+                        Output::error("Group has no key — recreate it with /creategroup");
+                    }
+                    Some(group) => {
+                        let key_bytes = match hex::decode(&group.group_key) {
+                            Ok(mut kb) if kb.len() == 32 => {
+                                kb.resize(32, 0);
+                                kb.try_into()
+                                    .map_err(|_| "bad key length")
+                                    .expect("32 bytes")
+                            }
+                            _ => {
+                                Output::error("Invalid group key stored locally");
+                                return Ok(true);
+                            }
+                        };
+                        let encryptor =
+                            crate::crypto::encryptor::Encryptor::from_key_bytes(&key_bytes);
+                        let encrypted = encryptor.encrypt_text(&text);
+                        let subject = format!("VaultGroup: {}", group_id);
+                        let self_email = ctx.config.email.as_deref().unwrap_or("");
+                        let mut sent = 0usize;
+                        let mut errors = 0usize;
+                        for m in &group.members {
+                            if m.email == self_email {
+                                continue;
+                            }
+                            match client.send_email(&m.email, &subject, &encrypted).await {
+                                Ok(_) => sent += 1,
+                                Err(e) => {
+                                    errors += 1;
+                                    tracing::warn!("Failed to send group msg to {}: {}", m.email, e);
+                                }
+                            }
+                        }
+                        if errors == 0 {
+                            Output::success(&format!(
+                                "Sent to group {} ({}) — {} member(s)",
+                                group.name, group_id, sent
+                            ));
+                        } else {
+                            Output::warn(&format!(
+                                "Sent to {} member(s), {} failed in group {}",
+                                sent, errors, group_id
+                            ));
+                        }
+                    }
+                    None => Output::error("Group not found. Use /groupmembers to list groups."),
+                }
+            } else {
+                Output::error("Not connected. Use /connect first.");
             }
         }
         Command::Promote { group_id, email } => {
@@ -1697,7 +1891,8 @@ fn print_help(topic: Option<&str>) {
                 &[
                     "  /creategroup <name>         Create a new group",
                     "  /groupmembers <id>         List group members",
-                    "  /groupinvite <id> <email>  Add a member (admin only)",
+                    "  /groupinvite <id> <email>  Add a member + send group key (admin only)",
+                    "  /groupsend <id> <text>      Send encrypted message to all members",
                     "  /groupremove <id> <email>  Remove a member (admin only)",
                     "  /promote <id> <email>      Promote to admin",
                     "  /demote <id> <email>       Demote to member",
@@ -1705,11 +1900,14 @@ fn print_help(topic: Option<&str>) {
                     "  /unblock <id> <email>      Unblock user",
                     "  /leavegroup <id>           Leave group",
                     "",
-                    "Shortcuts: /cg, /gm, /gi, /gr, /pm, /dm, /bk, /ub",
+                    "Shortcuts: /cg, /gm, /gi, /gs, /gr, /pm, /dm, /bk, /ub",
                     "",
                     "How groups work:",
                     "  • Creator is admin by default",
                     "  • Admins can invite/remove members",
+                    "  • /groupinvite emails the group key to the new member",
+                    "  • /groupsend encrypts with the group key (XChaCha20-Poly1305)",
+                    "    and sends one email per member (subject 'VaultGroup: <id>')",
                     "  • Blocking is LOCAL (you won't see blocked users' messages)",
                     "  • Roles are advisory — no server to enforce them",
                     "  • Group data stored in ~/.vault/groups.json",
