@@ -701,7 +701,11 @@ export default {
       if (!this.groupKeys[group.id] && this.cryptoReady) {
         try {
           const keyData = await api.getMyGroupKey(group.id);
-          if (keyData && keyData.encrypted_key) {
+          if (keyData && keyData.group_key) {
+            // Serverless: group key is stored locally in ~/.vault/groups.json
+            // (the same file the CLI reads) — no per-user encryption needed.
+            this.groupKeys[group.id] = keyData.group_key;
+          } else if (keyData && keyData.encrypted_key) {
             // Decrypt the group key with our private key
             // The encrypted_key was encrypted with our public key by the group creator
             // We need the group creator's public key to decrypt

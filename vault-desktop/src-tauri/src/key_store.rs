@@ -29,6 +29,11 @@ pub struct KeyStoreMetadata {
 }
 
 fn get_keys_dir() -> anyhow::Result<PathBuf> {
+    // Tests (and power users) can redirect the storage dir; keeps the real
+    // `~/.vault/keys` untouched.
+    if let Ok(p) = std::env::var("VAULT_KEYS_DIR") {
+        return Ok(PathBuf::from(p));
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".vault").join(KEYS_DIR))
 }
@@ -180,34 +185,59 @@ pub fn delete_all_keys() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+    /// Env vars are process-global, so tests that redirect VAULT_KEYS_DIR
+    /// must run one at a time (cargo runs tests in parallel by default).
+    static TMP_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Point VAULT_KEYS_DIR at a fresh temp dir so tests never touch the
+    /// real `~/.vault/keys`.
+    fn with_tmp_keys<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = TMP_LOCK.lock().unwrap();
+        let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("vault-keys-test-{}-{}", std::process::id(), seq));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("VAULT_KEYS_DIR", &dir);
+        let result = f();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("VAULT_KEYS_DIR");
+        result
+    }
 
     #[test]
     fn test_save_and_load_keypair() {
-        let kp = StoredKeyPair {
-            public_key: "abcd1234".to_string(),
-            private_key: "ef567890".to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-        };
-        save_keypair(&kp).unwrap();
-        let loaded = load_keypair().unwrap().unwrap();
-        assert_eq!(loaded.public_key, kp.public_key);
+        with_tmp_keys(|| {
+            let kp = StoredKeyPair {
+                public_key: "abcd1234".to_string(),
+                private_key: "ef567890".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            save_keypair(&kp).unwrap();
+            let loaded = load_keypair().unwrap().unwrap();
+            assert_eq!(loaded.public_key, kp.public_key);
+        });
     }
 
     #[test]
     fn test_peer_keys_crud() {
-        let key = StoredPeerKey {
-            email: "test@example.com".to_string(),
-            public_key: "aabbccdd".to_string(),
-            label: Some("Test User".to_string()),
-            added_at: "2024-01-01T00:00:00Z".to_string(),
-        };
-        add_peer_key(key.clone()).unwrap();
-        let keys = load_peer_keys().unwrap();
-        assert_eq!(keys.len(), 1);
+        with_tmp_keys(|| {
+            let key = StoredPeerKey {
+                email: "test@example.com".to_string(),
+                public_key: "aabbccdd".to_string(),
+                label: Some("Test User".to_string()),
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            add_peer_key(key.clone()).unwrap();
+            let keys = load_peer_keys().unwrap();
+            assert_eq!(keys.len(), 1);
 
-        let removed = remove_peer_key("test@example.com").unwrap();
-        assert!(removed);
-        let keys = load_peer_keys().unwrap();
-        assert!(keys.is_empty());
+            let removed = remove_peer_key("test@example.com").unwrap();
+            assert!(removed);
+            let keys = load_peer_keys().unwrap();
+            assert!(keys.is_empty());
+        });
     }
 }

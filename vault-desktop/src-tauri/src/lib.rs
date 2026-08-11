@@ -3,6 +3,7 @@ mod crypto;
 mod email;
 mod key_store;
 mod storage;
+mod groups;
 
 use crypto::{CryptoState, KeyPair};
 use email::{EmailClient, EmailConfig, EmailMessage};
@@ -237,6 +238,64 @@ async fn email_disconnect(state: State<'_, EmailState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn groups_load() -> Result<Vec<groups::Group>, String> {
+    groups::load_groups()
+        .map(|g| g.into_values().collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn groups_create(name: String, creator: String) -> Result<groups::Group, String> {
+    groups::create_group(&name, &creator).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn groups_add_member(group_id: String, email: String) -> Result<groups::Group, String> {
+    groups::add_member(&group_id, &email)
+        .map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
+    groups::remove_member(&group_id, &email)
+        .map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn groups_leave(group_id: String, email: String) -> Result<groups::Group, String> {
+    groups::remove_member(&group_id, &email)
+        .map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn groups_get(group_id: String) -> Result<Option<groups::Group>, String> {
+    groups::load_groups()
+        .map(|g| g.get(&group_id).cloned())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn groups_import(group_id: String, name: String, group_key: String, sender: String) -> Result<groups::Group, String> {
+    groups::import_group(&group_id, &name, &group_key, &sender)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn groups_set_key(group_id: String, group_key: String) -> Result<(), String> {
+    groups::set_group_key(&group_id, &group_key)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -269,6 +328,14 @@ pub fn run() {
             email_fetch_body,
             email_send,
             email_disconnect,
+            groups_load,
+            groups_create,
+            groups_add_member,
+            groups_remove_member,
+            groups_leave,
+            groups_get,
+            groups_import,
+            groups_set_key,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources
