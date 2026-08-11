@@ -46,6 +46,12 @@ impl GroupManager {
             .join(".vault")
             .join("groups.json");
 
+        Self::with_path(storage_path)
+    }
+
+    /// Create a manager backed by a specific storage file (used by tests to
+    /// keep the real `~/.vault/groups.json` untouched).
+    pub fn with_path(storage_path: PathBuf) -> Self {
         let groups = if storage_path.exists() {
             let data = std::fs::read_to_string(&storage_path).unwrap_or_default();
             serde_json::from_str(&data).unwrap_or_default()

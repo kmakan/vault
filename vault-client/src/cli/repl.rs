@@ -338,7 +338,14 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         for msg in &messages {
                             if let Some(gid) = msg.subject.strip_prefix("VaultGroupInvite:") {
                                 let gid = gid.trim().to_string();
-                                match URL_SAFE_NO_PAD.decode(msg.body.trim()) {
+                                // IMAP bodies arrive wrapped at 76 chars (RFC 2045) —
+                                // strip ALL whitespace before base64-decoding.
+                                let compact: String = msg
+                                    .body
+                                    .chars()
+                                    .filter(|c| !c.is_whitespace())
+                                    .collect();
+                                match URL_SAFE_NO_PAD.decode(compact) {
                                     Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
                                         Ok(payload) => {
                                             let group_id = payload
