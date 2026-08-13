@@ -1161,6 +1161,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     for m in &group.members {
                         let role = match m.role {
                             crate::vault::groups::GroupRole::Admin => "admin",
+                            crate::vault::groups::GroupRole::Moderator => "moderator",
                             crate::vault::groups::GroupRole::Member => "member",
                         };
                         println!("  • {} ({})", m.email, role);

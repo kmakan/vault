@@ -69,18 +69,16 @@
             </span>
           </div>
           <div class="member-item__actions" v-if="isAdmin && member.email !== currentUser">
-            <button
-              v-if="member.role === 'Member'"
-              class="btn-sm btn-success"
-              @click="$emit('promote', member.email)"
-              :title="t('promote') || 'Promote to admin'"
-            >↑</button>
-            <button
-              v-if="member.role === 'Admin' && member.email !== group.created_by"
-              class="btn-sm btn-warning"
-              @click="$emit('demote', member.email)"
-              :title="t('demote') || 'Demote to member'"
-            >↓</button>
+            <select
+              :value="member.role"
+              @change="$emit('role-change', member.email, $event.target.value)"
+              class="role-select"
+              :disabled="member.email === group.created_by"
+            >
+              <option value="Admin">{{ t('role_admin') }}</option>
+              <option value="Moderator">{{ t('role_moderator') }}</option>
+              <option value="Member">{{ t('role_member') }}</option>
+            </select>
             <button
               class="btn-sm btn-danger"
               @click="$emit('remove', member.email)"
@@ -142,7 +140,7 @@ const props = defineProps({
   currentUser: { type: String, required: true },
 })
 
-const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member'])
+const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change'])
 
 const newMemberEmail = ref('')
 
@@ -285,6 +283,21 @@ async function onGroupAvatarSelected(e) {
   background: var(--bg-primary, #0d0d1a);
   color: var(--text-primary, #fff);
   font-size: 13px;
+}
+
+.role-select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-primary, #0d0d1a);
+  color: var(--text-primary, #fff);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.role-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .add-member-btn {

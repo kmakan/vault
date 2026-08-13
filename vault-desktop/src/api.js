@@ -267,6 +267,9 @@ export class ApiClient {
     }
     return g;
   }
+  async setGroupMemberRole(groupId, email, role) {
+    return await invoke('groups_set_member_role', { groupId, email, role });
+  }
   async distributeGroupKey(groupId, userId, encryptedKey) { return { ok: true }; }
   async getMyGroupKey(groupId) {
     const g = await invoke('groups_get', { groupId });

@@ -30,6 +30,7 @@ pub struct GroupMember {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GroupRole {
     Admin,
+    Moderator,
     Member,
 }
 
@@ -154,7 +155,8 @@ impl GroupManager {
         Ok(())
     }
 
-    /// Promote member to admin
+    /// Promote member up one step: Member -> Moderator -> Admin.
+    /// Admin promote is a no-op.
     pub fn promote_member(
         &mut self,
         group_id: &str,
@@ -164,7 +166,11 @@ impl GroupManager {
             let member = group.members.iter_mut().find(|m| m.email == email);
             match member {
                 Some(m) => {
-                    m.role = GroupRole::Admin;
+                    m.role = match m.role {
+                        GroupRole::Member => GroupRole::Moderator,
+                        GroupRole::Moderator => GroupRole::Admin,
+                        GroupRole::Admin => GroupRole::Admin,
+                    };
                     self.save()?;
                     Ok(())
                 }
@@ -175,21 +181,32 @@ impl GroupManager {
         }
     }
 
-    /// Demote admin to member
+    /// Demote member down one step: Admin -> Moderator -> Member.
+    /// Member demote is a no-op.
     pub fn demote_member(
         &mut self,
         group_id: &str,
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            // Cannot demote the group creator
+            // Cannot demote the group creator while they hold Admin.
             if group.created_by == email {
-                return Err("Cannot demote the group creator".into());
+                let is_admin = group
+                    .members
+                    .iter()
+                    .any(|m| m.email == email && matches!(m.role, GroupRole::Admin));
+                if is_admin {
+                    return Err("Cannot demote the group creator".into());
+                }
             }
             let member = group.members.iter_mut().find(|m| m.email == email);
             match member {
                 Some(m) => {
-                    m.role = GroupRole::Member;
+                    m.role = match m.role {
+                        GroupRole::Admin => GroupRole::Moderator,
+                        GroupRole::Moderator => GroupRole::Member,
+                        GroupRole::Member => GroupRole::Member,
+                    };
                     self.save()?;
                     Ok(())
                 }
@@ -344,6 +361,16 @@ mod tests {
         let mut mgr = GroupManager::new();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
+        // Member -> Moderator
+        mgr.promote_member(&group.id, "user@test.com").unwrap();
+        let g = mgr.get_group(&group.id).unwrap();
+        let m = g
+            .members
+            .iter()
+            .find(|m| m.email == "user@test.com")
+            .unwrap();
+        assert!(matches!(m.role, GroupRole::Moderator));
+        // Moderator -> Admin
         mgr.promote_member(&group.id, "user@test.com").unwrap();
         let g = mgr.get_group(&group.id).unwrap();
         let m = g
@@ -352,6 +379,8 @@ mod tests {
             .find(|m| m.email == "user@test.com")
             .unwrap();
         assert!(matches!(m.role, GroupRole::Admin));
+        // Admin -> Admin (no-op)
+        mgr.promote_member(&group.id, "user@test.com").unwrap();
     }
 
     #[test]

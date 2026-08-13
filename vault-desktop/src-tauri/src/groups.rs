@@ -48,6 +48,7 @@ pub struct GroupMember {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GroupRole {
     Admin,
+    Moderator,
     Member,
 }
 pub fn load_groups() -> Result<HashMap<String, Group>> {
@@ -201,6 +202,27 @@ pub fn remove_member(group_id: &str, email: &str) -> Result<()> {
     }
     Ok(())
 }
+
+pub fn set_member_role(group_id: &str, email: &str, role: GroupRole) -> Result<()> {
+    let mut groups = load_groups()?;
+    if let Some(group) = groups.get_mut(group_id) {
+        // The group creator cannot be demoted from Admin.
+        if email == group.created_by && role != GroupRole::Admin {
+            anyhow::bail!("Cannot change creator role");
+        }
+        let member = group.members.iter_mut().find(|m| m.email == email);
+        match member {
+            Some(m) => {
+                m.role = role;
+                save_groups(&groups)?;
+            }
+            None => anyhow::bail!("Member not found in group"),
+        }
+    } else {
+        anyhow::bail!("Group not found");
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +273,37 @@ mod tests {
             assert_eq!(g.members[1].email, "bob@example.com");
             assert_eq!(g.members[1].role, GroupRole::Member);
             assert!(!g.members[1].key_shared);
+        });
+    }
+
+    #[test]
+    fn test_set_member_role() {
+        with_tmp_groups(|| {
+            let group = create_group("test group", "alice@example.com").unwrap();
+            let id = group.id.clone();
+            add_member(&id, "bob@example.com").unwrap();
+
+            set_member_role(&id, "bob@example.com", GroupRole::Moderator).unwrap();
+            let groups = load_groups().unwrap();
+            let g = groups.get(&id).unwrap();
+            assert_eq!(g.members[1].role, GroupRole::Moderator);
+
+            set_member_role(&id, "bob@example.com", GroupRole::Member).unwrap();
+            set_member_role(&id, "bob@example.com", GroupRole::Admin).unwrap();
+            let groups = load_groups().unwrap();
+            let g = groups.get(&id).unwrap();
+            assert_eq!(g.members[1].role, GroupRole::Admin);
+
+            // Creator cannot be brought below Admin.
+            assert!(set_member_role(&id, "alice@example.com", GroupRole::Member).is_err());
+            assert!(set_member_role(&id, "alice@example.com", GroupRole::Moderator).is_err());
+            // Creator staying Admin is allowed (no-op).
+            set_member_role(&id, "alice@example.com", GroupRole::Admin).unwrap();
+
+            // Unknown member.
+            assert!(set_member_role(&id, "nobody@example.com", GroupRole::Member).is_err());
+            // Unknown group.
+            assert!(set_member_role("grp_missing", "bob@example.com", GroupRole::Member).is_err());
         });
     }
 

@@ -239,6 +239,7 @@
           @close="showGroupSettings = false"
           @promote="promoteMember"
           @demote="demoteMember"
+          @role-change="changeMemberRole"
           @remove="removeMember"
           @unblock="unblockUser"
           @leave="leaveGroup"
@@ -1288,6 +1289,16 @@ export default {
     removeMember(email) {
       if (!this.currentGroup) return;
       this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== email);
+    },
+    async changeMemberRole(email, role) {
+      if (!this.currentGroup) return;
+      try {
+        await api.setGroupMemberRole(this.currentGroup.id, email, role);
+        const m = this.currentGroup.members.find(m => m.email === email);
+        if (m) m.role = role;
+      } catch (e) {
+        alert('Failed to set role: ' + e.message);
+      }
     },
     async addMember(email) {
       if (!this.currentGroup || !email) return;

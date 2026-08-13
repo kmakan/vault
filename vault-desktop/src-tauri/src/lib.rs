@@ -269,6 +269,21 @@ fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group
 }
 
 #[tauri::command]
+fn groups_set_member_role(group_id: String, email: String, role: String) -> Result<groups::Group, String> {
+    let role = match role.as_str() {
+        "Admin" => groups::GroupRole::Admin,
+        "Moderator" => groups::GroupRole::Moderator,
+        "Member" => groups::GroupRole::Member,
+        _ => return Err("Unknown role".to_string()),
+    };
+    groups::set_member_role(&group_id, &email, role)
+        .map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn groups_leave(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email)
         .map_err(|e| e.to_string())?;
@@ -332,6 +347,7 @@ pub fn run() {
             groups_create,
             groups_add_member,
             groups_remove_member,
+            groups_set_member_role,
             groups_leave,
             groups_get,
             groups_import,
