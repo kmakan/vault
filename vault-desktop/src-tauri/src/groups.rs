@@ -223,6 +223,16 @@ pub fn set_member_role(group_id: &str, email: &str, role: GroupRole) -> Result<(
     }
     Ok(())
 }
+
+pub fn delete_group(group_id: &str) -> Result<()> {
+    let mut groups = load_groups()?;
+    if groups.remove(group_id).is_some() {
+        save_groups(&groups)?;
+    } else {
+        anyhow::bail!("Group not found");
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +338,17 @@ mod tests {
             let groups = load_groups().unwrap();
             let g = groups.get(&group.id).unwrap();
             assert_eq!(g.group_key, new_key);
+        });
+    }
+
+    #[test]
+    fn test_delete_group() {
+        with_tmp_groups(|| {
+            let group = create_group("test group", "alice@example.com").unwrap();
+            assert!(load_groups().unwrap().contains_key(&group.id));
+            delete_group(&group.id).unwrap();
+            assert!(!load_groups().unwrap().contains_key(&group.id));
+            assert!(delete_group(&group.id).is_err()); // второй раз — уже нет
         });
     }
 }

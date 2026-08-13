@@ -777,7 +777,9 @@ export default {
     },
     async loadContacts() {
       try {
-        this.contacts = await api.getContacts();
+        const all = await api.getContacts();
+        // Контакты — общий peer-key store на машину; себя не показываем.
+        this.contacts = (all || []).filter(c => c.email !== this.email);
       } catch (error) {
         // /api/contacts may not exist yet
         this.contacts = [];
@@ -785,7 +787,23 @@ export default {
     },
     async loadGroups() {
       try {
-        this.groups = await api.getGroups();
+        const all = await api.getGroups();
+        // groups.json — общий файл на машину для всех аккаунтов. Показываем
+        // только группы, где текущий пользователь участник или создатель.
+        this.groups = (all || []).filter(g =>
+          g.created_by === this.email ||
+          (g.members || []).some(m => m.email === this.email)
+        );
+        // Участники групп — тоже контакты (кроме себя): так под приглашённым
+        // аккаунтом виден отправитель инвайта (icemaksim → koanmak и наоборот).
+        const seen = new Set(this.contacts.map(c => c.email));
+        for (const g of this.groups) {
+          for (const m of g.members || []) {
+            if (m.email === this.email || seen.has(m.email)) continue;
+            seen.add(m.email);
+            this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
+          }
+        }
       } catch (error) {
         console.error('Failed to load groups:', error);
       }
@@ -1431,11 +1449,6 @@ export default {
         alert('Failed to create group: ' + error.message);
       }
     },
-    selectGroup(group) {
-      this.currentGroup = group;
-      this.activeChat = null;
-      this.showGroupSettings = true;
-    },
     createGroupAndClose() {
       this.createGroup();
       this.showCreateGroup = false;
@@ -1454,7 +1467,9 @@ export default {
     },
     removeMember(email) {
       if (!this.currentGroup) return;
-      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== email);
+      api.removeGroupMember(this.currentGroup.id, email)
+        .then(() => this.refreshGroupMembers())
+        .catch(e => console.error('removeMember failed:', e));
     },
     async changeMemberRole(email, role) {
       if (!this.currentGroup) return;
@@ -1586,17 +1601,40 @@ export default {
       if (!this.currentGroup) return;
       this.currentGroup.blocked = this.currentGroup.blocked.filter(e => e !== email);
     },
-    leaveGroup() {
+    async leaveGroup() {
       if (!this.currentGroup) return;
-      this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== this.email);
+      const gid = this.currentGroup.id;
+      try {
+        await api.leaveGroup(gid);
+      } catch (e) {
+        console.error('leaveGroup failed:', e);
+      }
+      // Покинутая группа исчезает из списка (мы больше не участник).
+      this.groups = this.groups.filter(g => g.id !== gid);
       this.showGroupSettings = false;
       this.currentGroup = null;
+      if (this.activeChat === `group:${gid}`) {
+        ws.unsubscribe(`group:${gid}`);
+        this.activeChat = null;
+        this.messages = [];
+      }
     },
-    deleteGroup() {
+    async deleteGroup() {
       if (!this.currentGroup) return;
-      this.groups = this.groups.filter(g => g.id !== this.currentGroup.id);
+      const gid = this.currentGroup.id;
+      try {
+        await api.deleteGroup(gid);
+      } catch (e) {
+        console.error('deleteGroup failed:', e);
+      }
+      this.groups = this.groups.filter(g => g.id !== gid);
       this.showGroupSettings = false;
       this.currentGroup = null;
+      if (this.activeChat === `group:${gid}`) {
+        ws.unsubscribe(`group:${gid}`);
+        this.activeChat = null;
+        this.messages = [];
+      }
     }
   }
 }

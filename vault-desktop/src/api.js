@@ -285,6 +285,11 @@ export class ApiClient {
       groupKey: payload.group_key,
       sender: payload.sender,
     });
+    // Добавляем СЕБЯ как участника (роль Member) — import_group добавляет
+    // только отправителя, а принимающий иначе не попадёт в members.
+    try {
+      await invoke('groups_add_member', { groupId, email: this.email });
+    } catch (e) { /* уже участник или временная ошибка — не блокируем */ }
     // Отправляем пригласившему письмо VaultGroupAccept (подтверждение согласия).
     const name = localStorage.getItem('vault-display-name') || this.email;
     const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
@@ -321,6 +326,17 @@ export class ApiClient {
   }
   async setGroupMemberRole(groupId, email, role) {
     return await invoke('groups_set_member_role', { groupId, email, role });
+  }
+  async removeGroupMember(groupId, email) {
+    return await invoke('groups_remove_member', { groupId, email });
+  }
+  async leaveGroup(groupId) {
+    // Покинуть группу: удаляем себя из members (~/.vault/groups.json).
+    return await invoke('groups_leave', { groupId, email: this.email });
+  }
+  async deleteGroup(groupId) {
+    // Удалить группу полностью (только создатель, UI блокирует остальных).
+    return await invoke('groups_delete', { groupId });
   }
   async distributeGroupKey(groupId, userId, encryptedKey) { return { ok: true }; }
   async getMyGroupKey(groupId) {
@@ -378,11 +394,16 @@ export class ApiClient {
         continue;
       }
       if (!parsed || !parsed.group_id) continue;
-      // Пропускаем, если уже отклонён или группа уже импортирована.
+      // Пропускаем, если уже отклонён.
       if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
+      // Группу пропускаем, только если МЫ уже участник/создатель.
+      // (groups.json общий на машину — сама по себе существующая группа не
+      // означает, что инвайт принят этим аккаунтом.)
       try {
         const g = await invoke('groups_get', { groupId: parsed.group_id });
-        if (g) continue;
+        if (g && (g.created_by === this.email || (g.members || []).some(mm => mm.email === this.email))) {
+          continue;
+        }
       } catch (e) { /* группа ещё не импортирована */ }
       out.push({
         group_id: parsed.group_id,

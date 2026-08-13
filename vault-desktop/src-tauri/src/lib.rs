@@ -293,6 +293,11 @@ fn groups_leave(group_id: String, email: String) -> Result<groups::Group, String
 }
 
 #[tauri::command]
+fn groups_delete(group_id: String) -> Result<(), String> {
+    groups::delete_group(&group_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn groups_get(group_id: String) -> Result<Option<groups::Group>, String> {
     groups::load_groups()
         .map(|g| g.get(&group_id).cloned())
@@ -352,6 +357,7 @@ pub fn run() {
             groups_get,
             groups_import,
             groups_set_key,
+            groups_delete,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources
