@@ -243,6 +243,7 @@
           @unblock="unblockUser"
           @leave="leaveGroup"
           @delete="deleteGroup"
+          @add-member="addMember"
         />
         
         <div class="messages" ref="messagesContainer">
@@ -995,11 +996,13 @@ export default {
         let content = payload;
 
         if (this.activeChatType === 'group') {
-          // Group message — encrypt with group key
+          // Group message — encrypt with group key; never send plaintext without it
           const groupKey = this.groupKeys[this.currentGroup.id];
-          if (groupKey) {
-            content = await crypto.encryptWithGroupKey(payload, groupKey);
+          if (!groupKey) {
+            alert('Групповой ключ не загружен — переоткройте группу');
+            return;
           }
+          content = await crypto.encryptWithGroupKey(payload, groupKey);
           await api.sendGroupMessage(this.currentGroup.id, content);
           // Reload from server to get proper server timestamp and UUID
           await this.loadGroupMessages(this.currentGroup.id);
@@ -1285,6 +1288,15 @@ export default {
     removeMember(email) {
       if (!this.currentGroup) return;
       this.currentGroup.members = this.currentGroup.members.filter(m => m.email !== email);
+    },
+    async addMember(email) {
+      if (!this.currentGroup || !email) return;
+      try {
+        await api.addGroupMember(this.currentGroup.id, email);
+        this.currentGroup.members = await api.getGroupMembers(this.currentGroup.id);
+      } catch (e) {
+        alert('Failed to add member: ' + e.message);
+      }
     },
     blockUser(email) {
       if (!this.currentGroup) return;

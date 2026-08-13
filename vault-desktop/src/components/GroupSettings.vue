@@ -37,6 +37,21 @@
       </div>
     </div>
 
+    <!-- Add Member -->
+    <div class="group-settings__section">
+      <h4>{{ t('add_member') || 'Add Member' }}</h4>
+      <div class="add-member-row">
+        <input
+          v-model="newMemberEmail"
+          type="email"
+          placeholder="email участника"
+          class="add-member-input"
+          @keyup.enter="addMember"
+        />
+        <button class="btn btn-primary add-member-btn" @click="addMember">Добавить</button>
+      </div>
+    </div>
+
     <!-- Members List -->
     <div class="group-settings__section">
       <h4>{{ t('members') || 'Members' }}</h4>
@@ -127,7 +142,14 @@ const props = defineProps({
   currentUser: { type: String, required: true },
 })
 
-const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update'])
+const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member'])
+
+const newMemberEmail = ref('')
+
+function addMember() {
+  emit('add-member', newMemberEmail.value.trim())
+  newMemberEmail.value = ''
+}
 
 const isAdmin = computed(() => {
   const member = props.group.members?.find(m => m.email === props.currentUser)
@@ -246,6 +268,27 @@ async function onGroupAvatarSelected(e) {
   text-transform: uppercase;
   color: var(--text-muted, #888);
   letter-spacing: 0.5px;
+}
+
+.add-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-member-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-primary, #0d0d1a);
+  color: var(--text-primary, #fff);
+  font-size: 13px;
+}
+
+.add-member-btn {
+  flex-shrink: 0;
 }
 
 .member-list {
