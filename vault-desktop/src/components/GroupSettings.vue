@@ -39,16 +39,16 @@
 
     <!-- Add Member -->
     <div class="group-settings__section">
-      <h4>Добавить участника</h4>
+      <h4>{{ t('add_member') }}</h4>
       <div class="add-member-row">
         <input
           v-model="newMemberEmail"
           type="email"
-          placeholder="email участника"
+          :placeholder="t('add_member_placeholder')"
           class="add-member-input"
           @keyup.enter="addMember"
         />
-        <button class="btn btn-primary add-member-btn" @click="addMember">Добавить</button>
+        <button class="btn btn-primary add-member-btn" @click="addMember">{{ t('add') }}</button>
       </div>
     </div>
 
