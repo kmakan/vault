@@ -54,7 +54,14 @@
   /groupsend + раздача ключа инвайтом + автоприём) + Desktop (Tauri-команды
   sendGroupMessage/getGroupMessages/getGroups, selectGroup по group_key) +
   e2e на реальных Gmail (group_e2e.rs, RFC2045 whitespace fix) — ВСЁ ГОТОВО
-- Git: чистый, remote НЕ создан (по решению пользователя)
+- Группы в Desktop — соц. функции (13.08, коммиты 43dbe55 → 1a269aa): роли
+  Admin/Moderator/Member (персист в groups.json, select в UI); инвайт-флоу с
+  согласием (VaultGroupInvite → попап ← → VaultGroupAccept → идемпотентный
+  groups_add_member); имя/аватар отправителя в чатах (кэш vault-profiles);
+  попап добавления участника из контактов Vault; поллинг писем 30с (тихий,
+  попап инвайта приходит автоматически). Проверки: npm ✅, cargo ✅,
+  src-tauri 13 ✅, vault-client 177 ✅
+- Git: чистый, remote gitverse.ru/maksim/vault-msg (приватный, 13.08)
 
 ### 🚧 До демо (13.08)
 - Визуальный тест Desktop на реальных Gmail (ТЕСТ-01/05, с Максимом)
