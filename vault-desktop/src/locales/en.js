@@ -161,4 +161,16 @@ export default {
   cipher_no_contacts_hint: 'Exchange keys first (🔑 Keys)',
   cipher_error: 'Decrypt failed — check contact and ciphertext',
   cipher_open_keys: 'Open Keys',
+
+  // Groups: invite with consent
+  invite_title: 'Group invite',
+  invite_text: 'You were invited to group',
+  invite_accept: 'Accept',
+  invite_decline: 'Decline',
+  invite_sent: 'Invitation sent',
+  invite_pending: 'invited',
+  add_member_from_contacts: 'Add member from contacts',
+  search_contacts: 'Search contacts…',
+  enter_email_manual: 'Enter email manually',
+  no_contacts: 'No contacts found',
 }

@@ -137,6 +137,70 @@
         </div>
       </div>
 
+      <!-- INVITE POPUP (приглашение в группу с согласием) -->
+      <div v-if="showInvitePopup && pendingInvites.length" class="modal-overlay" @click.self="showInvitePopup = false">
+        <div class="modal-settings">
+          <button class="modal-close" @click="showInvitePopup = false">←</button>
+          <template v-if="pendingInvites[invitePopupIndex]">
+            <h3 class="invite-popup-title">{{ t('invite_title') || 'Приглашение в группу' }}</h3>
+            <p class="invite-popup-text">{{ t('invite_text') }}</p>
+            <p class="invite-popup-name">{{ pendingInvites[invitePopupIndex].group_name }}</p>
+            <div class="invite-popup-sender">
+              <UserAvatar
+                :email="pendingInvites[invitePopupIndex].sender"
+                :avatarUrl="pendingInvites[invitePopupIndex].sender_avatar"
+                :size="28"
+              />
+              <span class="invite-popup-sender-name">
+                {{ pendingInvites[invitePopupIndex].sender_name || pendingInvites[invitePopupIndex].sender }}
+              </span>
+            </div>
+            <div class="invite-popup-actions">
+              <button class="btn btn-primary" @click="acceptInvite(pendingInvites[invitePopupIndex])">
+                {{ t('invite_accept') || 'Принять' }}
+              </button>
+              <button class="btn btn-secondary" @click="declineInvite(pendingInvites[invitePopupIndex])">
+                {{ t('invite_decline') || 'Отклонить' }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- ADD MEMBER POPUP (выбор контактов) -->
+      <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
+        <div class="modal-settings">
+          <button class="modal-close" @click="showAddMemberPopup = false">←</button>
+          <h3 class="add-member-popup-title">{{ t('add_member_from_contacts') || 'Добавить участника из контактов' }}</h3>
+          <input
+            v-model="addMemberQuery"
+            type="text"
+            :placeholder="t('search_contacts') || 'Поиск контактов…'"
+            class="add-member-search"
+            @keyup.enter="enterManualEmail"
+          />
+          <div class="add-member-contacts">
+            <div
+              v-for="c in filteredAddContacts"
+              :key="c.email"
+              class="add-member-contact"
+              @click="inviteContact(c.email)"
+            >
+              <UserAvatar :email="c.email" :size="28" />
+              <span class="add-member-contact-name">{{ c.name || c.email }}</span>
+              <span class="add-member-contact-email">{{ c.email }}</span>
+            </div>
+            <div v-if="filteredAddContacts.length === 0" class="add-member-none">
+              {{ t('no_contacts') || 'Контакты не найдены' }}
+            </div>
+            <div class="add-member-manual" @click="enterManualEmail">
+              ✏️ {{ t('enter_email_manual') || 'Ввести email вручную' }}
+              <span v-if="addMemberQuery" class="add-member-manual-email">— {{ addMemberQuery }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- AVATAR UPLOAD MODAL -->
       <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
         <div class="modal-avatar">
@@ -236,6 +300,7 @@
           v-if="showGroupSettings && currentGroup"
           :group="currentGroup"
           :currentUser="email"
+          :profiles="profiles"
           @close="showGroupSettings = false"
           @promote="promoteMember"
           @demote="demoteMember"
@@ -258,6 +323,11 @@
             :class="['message', { own: msg.from === 'me' }]"
             @click.stop="toggleReactionPicker(msg.id)"
           >
+            <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
+            <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
+              <UserAvatar :email="msg.sender_id" :avatarUrl="avatarOf(msg.sender_id)" :size="20" />
+              <span class="message-sender-name">{{ nameOf(msg.sender_id) }}</span>
+            </div>
             <div class="message-content">
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
               <span>{{ replyBody(msg.content) }}</span>
@@ -450,6 +520,7 @@ export default {
       emails: [],
       emailsLoading: false,
       emailError: '',
+      pollTimer: null,
       selectedEmail: null,
       emailBody: '',
       emailBodyLoading: false,
@@ -470,6 +541,17 @@ export default {
       activeChatType: 'chat', // 'chat' or 'group'
       newGroupName: '',
       newGroupIcon: '📁',
+      // Group Settings
+      showGroupSettings: false,
+      // Invite popup (приглашение в группу с согласием)
+      pendingInvites: [],
+      showInvitePopup: false,
+      invitePopupIndex: 0,
+      // Add-member popup (выбор контактов)
+      showAddMemberPopup: false,
+      addMemberQuery: '',
+      // Profile cache (имя/аватар из настроек)
+      profiles: {},
       // Emoji
       showEmojiPicker: false,
       // Reactions
@@ -519,6 +601,20 @@ export default {
         m.content && m.content.toLowerCase().includes(q)
       );
     },
+    filteredAddContacts() {
+      const q = (this.addMemberQuery || '').toLowerCase();
+      const seen = new Set();
+      const list = [];
+      for (const c of this.contacts) {
+        if (!c.email || seen.has(c.email)) continue;
+        seen.add(c.email);
+        const name = c.name || c.email;
+        if (!q || name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)) {
+          list.push(c);
+        }
+      }
+      return list;
+    },
     activeChatName() {
       if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
       if (!this.activeChat) return '';
@@ -546,6 +642,9 @@ export default {
     if (this.email) {
       this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || ''
     }
+    // Display name + кэш профилей (имя/аватар участников групп).
+    this.displayName = localStorage.getItem('vault-display-name') || this.email || ''
+    this.loadProfiles()
     // Validate saved token
     if (api.token) {
       try {
@@ -558,6 +657,7 @@ export default {
         this.isLoggedIn = true;
         ws.connect(api.token);
         ws.on('typing', (msg) => this.onTypingEvent(msg));
+        this.startPolling()
       } catch (e) {
         // Session died on restart (parole не храним) — просим ввести пароль снова
         api.token = null;
@@ -566,6 +666,9 @@ export default {
       }
     }
     await this.initCrypto()
+  },
+  beforeUnmount() {
+    this.stopPolling()
   },
   methods: {
     onAppIconChanged(id) {
@@ -617,6 +720,7 @@ export default {
         await this.loadContacts();
         await this.loadGroups();
         await this.loadEmails();
+        this.startPolling()
       } catch (error) {
         this.loginError = error.message;
       } finally {
@@ -636,6 +740,7 @@ export default {
         await this.loadContacts();
         await this.loadGroups();
         await this.loadEmails();
+        this.startPolling()
       } catch (error) {
         this.regError = error.message;
       } finally {
@@ -948,6 +1053,10 @@ export default {
     },
     onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
+      // Сохраняем свой профиль в кэш, чтобы имя/аватар отображались и у других.
+      localStorage.setItem(`vault-avatar-${this.email}`, dataUrl || '')
+      api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
+      this.loadProfiles()
     },
     onAvatarFileSelect(e) {
       const file = e.target.files[0];
@@ -1061,9 +1170,11 @@ export default {
         alert('Failed to add peer key: ' + error.message);
       }
     },
-    async loadEmails() {
-      this.emailsLoading = true;
-      this.emailError = '';
+    async loadEmails(silent = false) {
+      if (!silent) {
+        this.emailsLoading = true;
+        this.emailError = '';
+      }
       try {
         const accounts = await api.getEmailAccounts();
         this.emails = [];
@@ -1073,7 +1184,7 @@ export default {
             this.emails = this.emails.concat(msgs || []);
           } catch (e) {
             console.error('Failed to fetch emails for account:', e);
-            this.emailError = 'fetch: ' + (e && e.message || e);
+            if (!silent) this.emailError = 'fetch: ' + (e && e.message || e);
             // Re-throw "Not connected" so mounted() can ask for the password again
             if (String(e && e.message || e).toLowerCase().includes('not connected')) {
               throw e;
@@ -1081,18 +1192,45 @@ export default {
           }
         }
         console.log(`[Emails] loaded ${this.emails.length} messages`);
-        if (this.emails.length === 0 && !this.emailError) {
+        if (!silent && this.emails.length === 0 && !this.emailError) {
           this.emailError = 'INBOX пуст или письма не найдены';
         }
+        // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
+        await this.processInvites();
       } catch (error) {
         // let "Not connected" propagate to the caller (app restart re-login)
         if (String(error && error.message || error).toLowerCase().includes('not connected')) {
           throw error;
         }
         console.error('Failed to load emails:', error);
-        this.emailError = 'load: ' + (error && error.message || error);
+        if (!silent) this.emailError = 'load: ' + (error && error.message || error);
       } finally {
-        this.emailsLoading = false;
+        if (!silent) this.emailsLoading = false;
+      }
+    },
+    startPolling(intervalMs = 30000) {
+      if (this.pollTimer) return;
+      this.pollTimer = setInterval(async () => {
+        if (!this.isLoggedIn) return;
+        try {
+          // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
+          // инвайты (попап согласия) и обновляет список писем.
+          await this.loadEmails(true);
+        } catch (e) {
+          // "Not connected" — сессия IMAP умерла; останавливаем поллинг,
+          // следующий релог через mounted()/экран логина.
+          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+            this.stopPolling();
+          } else {
+            console.error('Polling loadEmails failed:', e);
+          }
+        }
+      }, intervalMs);
+    },
+    stopPolling() {
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = null;
       }
     },
     openEmail(email) {
@@ -1301,12 +1439,113 @@ export default {
       }
     },
     async addMember(email) {
+      // Основной UX добавления участника — попап выбора контактов.
+      this.openAddMemberPopup();
+    },
+    openAddMemberPopup() {
+      this.addMemberQuery = '';
+      this.showAddMemberPopup = true;
+    },
+    async inviteContact(email) {
       if (!this.currentGroup || !email) return;
       try {
-        await api.addGroupMember(this.currentGroup.id, email);
+        await api.inviteGroupMember(this.currentGroup.id, email);
+        this.showAddMemberPopup = false;
+        // Помечаем локально как «приглашён» в списке участников (появится после accept).
+        const members = this.currentGroup.members || [];
+        if (!members.some(m => m.email === email)) {
+          members.push({ email, role: 'Member', invited: true });
+        }
+      } catch (e) {
+        alert('Failed to invite member: ' + e.message);
+      }
+    },
+    enterManualEmail() {
+      const email = (this.addMemberQuery || '').trim();
+      if (!email) return;
+      this.inviteContact(email);
+    },
+    // --- Инвайты группы: попап согласия ---
+    async processInvites() {
+      try {
+        // Обрабатываем accept-письма (добавление принявших участников).
+        const accepts = await api.fetchPendingAccepts();
+        if (accepts.length) {
+          await this.loadGroups();
+          if (this.currentGroup) {
+            await this.loadGroupMessages(this.currentGroup.id);
+            await this.refreshGroupMembers();
+          }
+        }
+        // Собираем непрочитанные инвайты для попапа согласия.
+        const invites = await api.fetchPendingInvites();
+        if (invites.length) {
+          this.pendingInvites = invites;
+          this.invitePopupIndex = 0;
+          this.showInvitePopup = true;
+        }
+        this.loadProfiles();
+      } catch (e) {
+        console.error('processInvites failed:', e);
+      }
+    },
+    async refreshGroupMembers() {
+      if (!this.currentGroup) return;
+      try {
         this.currentGroup.members = await api.getGroupMembers(this.currentGroup.id);
       } catch (e) {
-        alert('Failed to add member: ' + e.message);
+        console.error('refreshGroupMembers failed:', e);
+      }
+    },
+    async acceptInvite(inv) {
+      try {
+        await api.acceptGroupInvite(inv.group_id, inv);
+      } catch (e) {
+        alert('Failed to accept invite: ' + e.message);
+      }
+      this.pendingInvites.splice(this.invitePopupIndex, 1);
+      this.showInvitePopup = false;
+      await this.loadGroups();
+      if (this.currentGroup?.id === inv.group_id) {
+        await this.loadGroupMessages(inv.group_id);
+      }
+      this.showNextInvite();
+    },
+    async declineInvite(inv) {
+      try {
+        await api.declineGroupInvite(inv.group_id, inv.uid, inv.sender);
+      } catch (e) {
+        // ignore
+      }
+      this.pendingInvites.splice(this.invitePopupIndex, 1);
+      this.showInvitePopup = false;
+      this.showNextInvite();
+    },
+    showNextInvite() {
+      if (this.pendingInvites.length > 0) {
+        if (this.invitePopupIndex >= this.pendingInvites.length) this.invitePopupIndex = 0;
+        this.showInvitePopup = true;
+      } else {
+        this.showInvitePopup = false;
+      }
+    },
+    // --- Профили (имя/аватар отправителей в групповых чатах) ---
+    profileOf(email) {
+      return this.profiles[email] || null;
+    },
+    nameOf(email) {
+      const p = this.profileOf(email);
+      return (p && p.name) || email;
+    },
+    avatarOf(email) {
+      const p = this.profileOf(email);
+      return (p && p.avatar) || '';
+    },
+    loadProfiles() {
+      try {
+        this.profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+      } catch (e) {
+        this.profiles = {};
       }
     },
     blockUser(email) {
@@ -2966,5 +3205,115 @@ body {
   .main-area {
     display: none;
   }
+}
+
+/* ── Invite popup (приглашение в группу) ── */
+.invite-popup-title {
+  margin: 0 0 12px;
+}
+.invite-popup-text {
+  margin: 0 0 4px;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+}
+.invite-popup-name {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+.invite-popup-sender {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.invite-popup-sender-name {
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+}
+.invite-popup-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Add-member popup (выбор контактов) ── */
+.add-member-popup-title {
+  margin: 0 0 12px;
+}
+.add-member-search {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-primary, #0d0d1a);
+  color: var(--text-primary, #fff);
+  font-size: 13px;
+}
+.add-member-contacts {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.add-member-contact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--bg-primary, #0d0d1a);
+}
+.add-member-contact:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+.add-member-contact-name {
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+  flex: 1;
+}
+.add-member-contact-email {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+.add-member-none {
+  padding: 12px;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  text-align: center;
+}
+.add-member-manual {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+  border: 1px dashed var(--border-color, #333);
+}
+.add-member-manual:hover {
+  background: var(--bg-hover, #1e1e4a);
+}
+.add-member-manual-email {
+  color: var(--text-muted, #888);
+}
+
+/* ── Sender line in group messages ── */
+.message-sender {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+.message-sender-name {
+  font-size: 12px;
+  color: var(--text-muted, #aaa);
 }
 </style>

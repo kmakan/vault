@@ -109,13 +109,8 @@ export class ApiClient {
       const body = await this.fetchEmailBody('local', m.uid);
       out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
     }
-    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: ' + groupId));
-    for (const m of invites) {
-      const body = await this.fetchEmailBody('local', m.uid);
-      const parsed = urlSafeB64Decode(body);
-      await invoke('groups_import', { groupId: parsed.group_id, name: parsed.group_name, groupKey: parsed.group_key, sender: parsed.sender });
-      out.push({ id: 'invite:' + m.uid, content: '🔑 Group invite accepted', sender_id: parsed.sender, created_at: new Date(m.date), is_read: true, is_sent: false });
-    }
+    // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
+    // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
     return out;
   }
   async sendGroupMessage(groupId, content) {
@@ -258,14 +253,71 @@ export class ApiClient {
     const g = await invoke('groups_get', { groupId });
     return (g && g.members) || [];
   }
-  async addGroupMember(groupId, email, role) {
-    await invoke('groups_add_member', { groupId, email });
+  async inviteGroupMember(groupId, email) {
+    // Инвайт участника: НЕ добавляем мгновенно через groups_add_member — вместо
+    // этого отправляем письмо VaultGroupInvite. Участник попадёт в группу только
+    // после того, как примет приглашение (fetchPendingAccepts → groups_add_member).
     const g = await invoke('groups_get', { groupId });
-    if (g && g.group_key) {
-      const payload = urlSafeB64({ group_id: g.id, group_name: g.name, group_key: g.group_key, sender: this.email });
-      await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
+    if (!g || !g.group_key) throw new Error('Group not found');
+    const name = localStorage.getItem('vault-display-name') || this.email;
+    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const payload = urlSafeB64({
+      group_id: g.id,
+      group_name: g.name,
+      group_key: g.group_key,
+      sender: this.email,
+      sender_name: name,
+      sender_avatar: avatar,
+    });
+    await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
+    return { ok: true, invited: true, email };
+  }
+  // Alias для обратной совместимости — не добавляет мгновенно, а шлёт инвайт.
+  async addGroupMember(groupId, email, role) {
+    return await this.inviteGroupMember(groupId, email);
+  }
+  async acceptGroupInvite(groupId, invitePayload) {
+    const payload = invitePayload || {};
+    // Импортируем группу с ключом из инвайта.
+    await invoke('groups_import', {
+      groupId,
+      name: payload.group_name,
+      groupKey: payload.group_key,
+      sender: payload.sender,
+    });
+    // Отправляем пригласившему письмо VaultGroupAccept (подтверждение согласия).
+    const name = localStorage.getItem('vault-display-name') || this.email;
+    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const body = urlSafeB64({
+      group_id: groupId,
+      sender: this.email,
+      sender_name: name,
+      sender_avatar: avatar,
+    });
+    if (payload.sender) {
+      await this.sendEmail('local', { to: payload.sender, subject: 'VaultGroupAccept: ' + groupId, body });
+      // Сохраняем профиль пригласившего в кэш.
+      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar);
     }
-    return g;
+    return { ok: true, group_id: groupId };
+  }
+  async declineGroupInvite(groupId, msgUid, senderEmail) {
+    // Ничего не отправляем — просто помечаем инвайт как отклонённый, чтобы при
+    // следующем поллинге он больше не предлагался.
+    const key = `${groupId}|${msgUid}`;
+    const declined = this.getDeclinedInvites();
+    if (!declined.includes(key)) {
+      declined.push(key);
+      localStorage.setItem('vault-declined-invites', JSON.stringify(declined));
+    }
+    return { ok: true };
+  }
+  getDeclinedInvites() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-declined-invites') || '[]');
+    } catch (e) {
+      return [];
+    }
   }
   async setGroupMemberRole(groupId, email, role) {
     return await invoke('groups_set_member_role', { groupId, email, role });
@@ -278,6 +330,97 @@ export class ApiClient {
   async getGroupKeys(groupId) {
     const g = await invoke('groups_get', { groupId });
     return (g && g.group_key) ? [g.group_key] : [];
+  }
+
+  // --- Profile cache (имя/аватар из настроек, кэш для отображения в чатах) ---
+  saveProfile(email, name, avatar) {
+    if (!email) return;
+    let profiles = {};
+    try {
+      profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+    } catch (e) {
+      profiles = {};
+    }
+    const p = profiles[email] || {};
+    if (name) p.name = name;
+    if (avatar) p.avatar = avatar;
+    if (name || avatar) profiles[email] = p;
+    localStorage.setItem('vault-profiles', JSON.stringify(profiles));
+  }
+  getProfile(email) {
+    if (!email) return null;
+    // Для самого пользователя профиль = displayName + vault-avatar-<email>.
+    if (email === this.email) {
+      return {
+        name: localStorage.getItem('vault-display-name') || this.email,
+        avatar: localStorage.getItem('vault-avatar-' + this.email) || '',
+      };
+    }
+    try {
+      const profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+      return profiles[email] || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // --- Групповые инвайты: ожидающие подтверждения ---
+  async fetchPendingInvites() {
+    const msgs = await this.fetchEmails('local');
+    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: '));
+    const declined = this.getDeclinedInvites();
+    const out = [];
+    for (const m of invites) {
+      let parsed;
+      try {
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+      } catch (e) {
+        continue;
+      }
+      if (!parsed || !parsed.group_id) continue;
+      // Пропускаем, если уже отклонён или группа уже импортирована.
+      if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
+      try {
+        const g = await invoke('groups_get', { groupId: parsed.group_id });
+        if (g) continue;
+      } catch (e) { /* группа ещё не импортирована */ }
+      out.push({
+        group_id: parsed.group_id,
+        group_name: parsed.group_name,
+        group_key: parsed.group_key,
+        sender: parsed.sender,
+        sender_name: parsed.sender_name,
+        sender_avatar: parsed.sender_avatar,
+        uid: m.uid,
+        date: m.date,
+      });
+    }
+    return out;
+  }
+
+  // --- Групповые accept-письма: добавить принявших участников ---
+  async fetchPendingAccepts() {
+    const msgs = await this.fetchEmails('local');
+    const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultGroupAccept: '));
+    const out = [];
+    for (const m of accepts) {
+      let payload;
+      try {
+        payload = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+      } catch (e) {
+        continue;
+      }
+      if (!payload || !payload.group_id) continue;
+      // Идемпотентно добавляем принявшего участника (обёртка не падает, если уже участник).
+      try {
+        await invoke('groups_add_member', { groupId: payload.group_id, email: payload.sender });
+      } catch (e) {
+        // уже участник или временная ошибка — игнорируем
+      }
+      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar);
+      out.push({ group_id: payload.group_id, sender: payload.sender });
+    }
+    return out;
   }
 }
 

@@ -160,5 +160,17 @@ export default {
   cipher_no_contacts_title: '没有带密钥的联系人',
   cipher_no_contacts_hint: '先交换密钥（🔑 密钥）',
   cipher_error: '解密失败 — 请检查联系人和密文',
-  cipher_open_keys: '打开密钥'
+  cipher_open_keys: '打开密钥',
+
+  // 群组：邀请并征得同意
+  invite_title: '群组邀请',
+  invite_text: '您被邀请加入群组',
+  invite_accept: '接受',
+  invite_decline: '拒绝',
+  invite_sent: '邀请已发送',
+  invite_pending: '已邀请',
+  add_member_from_contacts: '从联系人添加成员',
+  search_contacts: '搜索联系人…',
+  enter_email_manual: '手动输入邮箱',
+  no_contacts: '未找到联系人'
 }

@@ -41,14 +41,9 @@
     <div class="group-settings__section">
       <h4>{{ t('add_member') }}</h4>
       <div class="add-member-row">
-        <input
-          v-model="newMemberEmail"
-          type="email"
-          :placeholder="t('add_member_placeholder')"
-          class="add-member-input"
-          @keyup.enter="addMember"
-        />
-        <button class="btn btn-primary add-member-btn" @click="addMember">{{ t('add') }}</button>
+        <button class="btn btn-primary add-member-btn" @click="addMember">
+          {{ t('add_member') }}
+        </button>
       </div>
     </div>
 
@@ -63,7 +58,8 @@
         >
           <UserAvatar :email="member.email" :size="32" />
           <div class="member-item__info">
-            <span class="member-item__email">{{ member.email }}</span>
+            <span class="member-item__email">{{ memberName(member.email) }}</span>
+            <span v-if="member.invited" class="member-item__invited">{{ t('invite_pending') }}</span>
             <span class="member-item__role" :class="'role--' + member.role.toLowerCase()">
               {{ member.role }}
             </span>
@@ -138,15 +134,20 @@ const { t } = useI18n()
 const props = defineProps({
   group: { type: Object, required: true },
   currentUser: { type: String, required: true },
+  profiles: { type: Object, default: () => ({}) },
 })
 
 const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change'])
 
-const newMemberEmail = ref('')
-
 function addMember() {
-  emit('add-member', newMemberEmail.value.trim())
-  newMemberEmail.value = ''
+  // Открываем попап выбора контактов (основной UX добавления участника).
+  emit('add-member')
+}
+
+// Имя участника из профиля (если есть), иначе email.
+function memberName(email) {
+  const p = props.profiles && props.profiles[email]
+  return (p && p.name) || email
 }
 
 const isAdmin = computed(() => {
@@ -335,6 +336,15 @@ async function onGroupAvatarSelected(e) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.member-item__invited {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--accent-primary, #00d4aa);
+  text-transform: none;
+  letter-spacing: 0.2px;
 }
 
 .member-item__role {

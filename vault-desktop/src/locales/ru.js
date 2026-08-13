@@ -160,5 +160,17 @@ export default {
   cipher_no_contacts_title: 'Нет контактов с ключами',
   cipher_no_contacts_hint: 'Сначала обменяйтесь ключами (🔑 Ключи)',
   cipher_error: 'Не удалось расшифровать — проверьте контакт и шифротекст',
-  cipher_open_keys: 'Открыть Ключи'
+  cipher_open_keys: 'Открыть Ключи',
+
+  // Группы: инвайт с согласием
+  invite_title: 'Приглашение в группу',
+  invite_text: 'Вас пригласили в группу',
+  invite_accept: 'Принять',
+  invite_decline: 'Отклонить',
+  invite_sent: 'Приглашение отправлено',
+  invite_pending: 'приглашён',
+  add_member_from_contacts: 'Добавить участника из контактов',
+  search_contacts: 'Поиск контактов…',
+  enter_email_manual: 'Ввести email вручную',
+  no_contacts: 'Контакты не найдены'
 }
