@@ -99,6 +99,7 @@
       <div v-if="showQRCode" class="qr-code-overlay">
         <QRCodePanel 
           :publicKey="publicKey" 
+          :myEmail="email"
           @close="showQRCode = false"
           @key-scanned="addPeerKey"
           @invite-by-id="inviteContactById"
@@ -1415,7 +1416,18 @@ export default {
     async inviteContact(email) {
       if (!this.currentGroup || !email) return;
       try {
-        await api.inviteGroupMember(this.currentGroup.id, email);
+        // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
+        // Без ключа собеседника безопасный инвайт невозможен — как в Session:
+        // в группу добавляют только установленные контакты.
+        const peerPub = this.peerKeys[email] || null;
+        if (!peerPub) {
+          alert('Сначала добавьте контакт: обменяйтесь ключами через 🔗 (по id участника или QR). Тогда собеседник сможет расшифровать приглашение в группу.');
+          return;
+        }
+        const groupKeys = await api.getGroupKeys(this.currentGroup.id);
+        if (!groupKeys.length) throw new Error('No group key');
+        const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);
+        await api.inviteGroupMember(this.currentGroup.id, email, enc, this.publicKey);
         this.showAddMemberPopup = false;
         // Помечаем локально как «приглашён» в списке участников (появится после accept).
         const members = this.currentGroup.members || [];
@@ -1481,7 +1493,15 @@ export default {
     },
     async acceptInvite(inv) {
       try {
-        await api.acceptGroupInvite(inv.group_id, inv);
+        // Новый формат: group_key зашифрован на нашем публичном ключе —
+        // расшифровываем своим приватным ключом (ECDH + sender_public_key).
+        let groupKey = inv.group_key || null;
+        if (!groupKey && inv.group_key_enc && inv.sender_public_key && this.cryptoReady) {
+          groupKey = await crypto.decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
+          if (!groupKey) throw new Error('Не удалось расшифровать ключ группы');
+        }
+        if (!groupKey) throw new Error('В приглашении нет ключа группы');
+        await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
       } catch (e) {
         alert('Failed to accept invite: ' + e.message);
       }

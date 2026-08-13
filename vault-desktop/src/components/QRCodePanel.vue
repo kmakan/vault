@@ -52,6 +52,15 @@
       <button @click="copyPublicKey">Копировать</button>
     </div>
     
+    <div v-if="myEmail" class="key-info">
+      <h4>Ваш id участника</h4>
+      <code class="public-key">{{ myEmail }}</code>
+      <button @click="copyMyId">Копировать id</button>
+      <p class="scan-instructions">
+        Передайте его собеседнику — он введёт его в этом окне и отправит вам предложение обменяться ключами
+      </p>
+    </div>
+    
     <button @click="$emit('close')">Закрыть</button>
   </div>
 </template>
@@ -66,6 +75,10 @@ export default {
     publicKey: {
       type: String,
       required: true
+    },
+    myEmail: {
+      type: String,
+      default: ''
     }
   },
   data() {
@@ -135,6 +148,10 @@ export default {
     copyPublicKey() {
       navigator.clipboard.writeText(this.publicKey);
       alert('Публичный ключ скопирован в буфер обмена');
+    },
+    copyMyId() {
+      navigator.clipboard.writeText(this.myEmail);
+      alert('Ваш id участника скопирован в буфер обмена');
     },
     sendInviteById() {
       const email = (this.inviteEmail || '').trim();

@@ -342,10 +342,14 @@ export class ApiClient {
     const g = await invoke('groups_get', { groupId });
     return (g && g.members) || [];
   }
-  async inviteGroupMember(groupId, email) {
+  async inviteGroupMember(groupId, email, groupKeyEnc, senderPublicKey) {
     // Инвайт участника: НЕ добавляем мгновенно через groups_add_member — вместо
     // этого отправляем письмо VaultGroupInvite. Участник попадёт в группу только
     // после того, как примет приглашение (fetchPendingAccepts → groups_add_member).
+    // Ключ группы НИКОГДА не уходит открытым текстом: groupKeyEnc — это group_key,
+    // зашифрованный на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519 + XChaCha20,
+    // см. crypto.encryptGroupKeyForUser). Прочитав письмо в почтовом клиенте,
+    // расшифровать его невозможно без приватного ключа получателя.
     const g = await invoke('groups_get', { groupId });
     if (!g || !g.group_key) throw new Error('Group not found');
     const name = localStorage.getItem('vault-display-name') || this.email;
@@ -353,17 +357,20 @@ export class ApiClient {
     const payload = urlSafeB64({
       group_id: g.id,
       group_name: g.name,
-      group_key: g.group_key,
+      group_key_enc: groupKeyEnc || '',
       sender: this.email,
       sender_name: name,
       sender_avatar: avatar,
+      // Публичный ключ отправителя — не секрет; нужен принимающему для ECDH.
+      sender_public_key: senderPublicKey || '',
     });
     await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
     return { ok: true, invited: true, email };
   }
   // Alias для обратной совместимости — не добавляет мгновенно, а шлёт инвайт.
-  async addGroupMember(groupId, email, role) {
-    return await this.inviteGroupMember(groupId, email);
+  // Требует зашифрованный group key (см. inviteGroupMember).
+  async addGroupMember(groupId, email) {
+    throw new Error('addGroupMember: приглашение требует зашифрованный ключ группы — используйте inviteGroupMember через UI');
   }
   async acceptGroupInvite(groupId, invitePayload) {
     const payload = invitePayload || {};
@@ -497,7 +504,11 @@ export class ApiClient {
       out.push({
         group_id: parsed.group_id,
         group_name: parsed.group_name,
-        group_key: parsed.group_key,
+        // Новый формат: group_key зашифрован на нашем публичном ключе.
+        group_key_enc: parsed.group_key_enc || null,
+        sender_public_key: parsed.sender_public_key || null,
+        // Legacy-инвайты (до шифрования ключей) — открытый group_key.
+        group_key: parsed.group_key || null,
         sender: parsed.sender,
         sender_name: parsed.sender_name,
         sender_avatar: parsed.sender_avatar,
