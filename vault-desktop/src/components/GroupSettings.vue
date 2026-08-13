@@ -39,7 +39,7 @@
 
     <!-- Add Member -->
     <div class="group-settings__section">
-      <h4>{{ t('add_member') || 'Add Member' }}</h4>
+      <h4>Добавить участника</h4>
       <div class="add-member-row">
         <input
           v-model="newMemberEmail"

@@ -480,7 +480,7 @@ export default {
       // Create group modal
       showCreateGroup: false,
       inviteEmail: '',
-      groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '💼', '🚀', '⭐', '🎯', '💡'],
+      groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '🚀', '⭐', '🎯', '💡'],
       // Audio
       showAudioRecorder: false,
       // Export
