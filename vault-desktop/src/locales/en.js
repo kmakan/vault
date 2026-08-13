@@ -5,7 +5,7 @@ export default {
 
   // Login (serverless: sign-in = connect your mailbox, no registration)
   login: 'Sign in',
-  login_hint: 'No registration needed: Vault has no server — the app runs on top of your mailbox. Sign in with your email, keys are created automatically. Add peers by participant ID or QR code (🔗 at the top).',
+  login_hint: 'Vault encrypts everything on your device. Sign-in = connect your mailbox as the transport. Keys are automatic. Contacts are added only on your choice: by participant ID or QR (🔗).',
 
   // Navigation
   nav_inbox: 'Inbox',
