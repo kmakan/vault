@@ -224,7 +224,8 @@ export default {
         const result = await crypto.decryptVault(this.ciphertext);
         this.decryptedText = result;
         this.decryptError = '';
-        this.ciphertext = '';
+        // Вставленный шифротекст сохраняем — пользователь может сравнить
+        // или расшифровать повторно.
       } catch (error) {
         this.decryptError = this.t('cipher_error');
         this.decryptedText = '';

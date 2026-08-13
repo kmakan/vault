@@ -107,7 +107,7 @@
       </div>
 
       <!-- CIPHER TOOL -->
-      <CipherTool v-if="showCipher" :peerKeys="peerKeys" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
+      <CipherTool v-if="showCipher" :peerKeys="peerKeys" :contacts="contacts" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
 
       <!-- SETTINGS MODAL -->
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
