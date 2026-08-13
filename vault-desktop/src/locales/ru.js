@@ -16,6 +16,7 @@ export default {
 
   // Settings
   settings_title: 'Настройки',
+  settings_logout: 'Выйти из аккаунта',
   settings_email_accounts: 'Почтовые аккаунты',
   settings_add_account: 'Добавить аккаунт',
   settings_email_address: 'Email адрес',

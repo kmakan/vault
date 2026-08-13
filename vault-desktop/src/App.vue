@@ -133,7 +133,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close" @click="showSettings = false">←</button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" />
         </div>
       </div>
 
@@ -746,6 +746,34 @@ export default {
       } finally {
         this.regLoading = false;
       }
+    },
+    async handleLogout() {
+      this.stopPolling();
+      try { ws.disconnect(); } catch (e) { /* ignore */ }
+      try { await api.logout(); } catch (e) { /* ignore */ }
+      // Сбрасываем всё состояние сессии к экрану логина.
+      this.isLoggedIn = false;
+      this.userId = null;
+      this.email = '';
+      this.password = '';
+      this.groups = [];
+      this.groupKeys = {};
+      this.currentGroup = null;
+      this.activeChatType = 'chat';
+      this.contacts = [];
+      this.activeChat = null;
+      this.messages = [];
+      this.emails = [];
+      this.emailError = '';
+      this.pendingInvites = [];
+      this.showInvitePopup = false;
+      this.showSettings = false;
+      this.showGroupSettings = false;
+      this.showAddMemberPopup = false;
+      this.profiles = {};
+      this.userAvatarUrl = '';
+      this.displayName = '';
+      localStorage.removeItem('vault-display-name');
     },
     async loadContacts() {
       try {

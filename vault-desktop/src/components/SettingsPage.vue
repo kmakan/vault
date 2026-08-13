@@ -27,6 +27,7 @@
           <input v-model="localDisplayName" type="text" placeholder="Ваше имя" />
         </div>
         <button @click="saveDisplayName" class="save-btn">Сохранить</button>
+        <button @click="$emit('logout')" class="logout-btn">← {{ t('settings_logout') }}</button>
       </div>
 
       <!-- ВНЕШНИЙ ВИД -->
@@ -365,6 +366,20 @@ export default {
 }
 
 .danger-btn:hover { background: #f85149; }
+
+.logout-btn {
+  margin-top: 12px;
+  padding: 10px 24px;
+  background: transparent;
+  color: #f85149;
+  border: 1px solid #f85149;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.logout-btn:hover { background: rgba(248, 81, 73, 0.15); }
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }

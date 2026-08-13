@@ -16,6 +16,7 @@ export default {
 
   // Settings
   settings_title: '设置',
+  settings_logout: '退出登录',
   settings_email_accounts: '邮箱账户',
   settings_add_account: '添加邮箱账户',
   settings_email_address: '邮箱地址',
