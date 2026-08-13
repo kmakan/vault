@@ -3,6 +3,10 @@ export default {
   app_name: 'Vault',
   app_tagline: '安全通信',
 
+  // Login (serverless: 登录 = 连接邮箱，无需注册)
+  login: '登录',
+  login_hint: '无需注册：Vault 没有服务器 — 应用基于您的邮箱运行。用您的邮箱登录，密钥会自动生成。通过参与者 ID 或二维码（顶部 🔗）添加联系人。',
+
   // Navigation
   nav_inbox: '收件箱',
   nav_mail: '邮件',

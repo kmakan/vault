@@ -64,18 +64,6 @@ export class ApiClient {
     return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
-  async register(username, email, password) {
-    // Serverless: no backend registration — the mailbox IS the identity.
-    await this.emailConnect({ email, password });
-    this.email = email;
-    this.password = password;
-    this.connected = true;
-    this.token = `serverless-${email}`;
-    localStorage.setItem('vault-token', this.token);
-    localStorage.setItem('vault-email', email);
-    return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
-  }
-
   async logout() {
     try { await invoke('email_disconnect'); } catch (e) { /* ignore disconnect errors */ }
     this.email = null;
@@ -93,7 +81,7 @@ export class ApiClient {
   async sendMessage(chatId, content, contentType) {
     // Serverless: a chat message IS an encrypted vault email to the peer — the
     // chat id is the peer's email address. The "Vault:" subject marker is the
-    // single transport-level signal that both the CLI and EmailInbox.isVault
+    // single transport-level signal that both the CLI and the vault inbox
     // rely on to flag the incoming message as a vault message.
     const to = chatId;
     const subject = `Vault: ${to}`;
@@ -149,6 +137,107 @@ export class ApiClient {
     if (this.contacts.some(c => c.email === email)) return { ok: true };
     this.contacts.push({ id: email, email, name: email, online: false });
     return { ok: true, id: email, email };
+  }
+
+  // --- Контакты 1-на-1: приглашение по id участника (как Session: ID/QR → запрос → принятие) ---
+  async loadPeerKeyEmails() {
+    const set = new Set();
+    try {
+      const peers = await invoke('load_peer_keys');
+      for (const pk of peers || []) set.add(pk.email);
+    } catch (e) { /* ignore */ }
+    return set;
+  }
+  getDeclinedContacts() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-declined-contacts') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  async sendContactInvite(email, publicKey) {
+    // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
+    // согласия сохранит наш публичный ключ (контакт появится у обоих).
+    const name = localStorage.getItem('vault-display-name') || this.email;
+    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const payload = urlSafeB64({
+      sender: this.email,
+      sender_name: name,
+      sender_avatar: avatar,
+      public_key: publicKey,
+    });
+    await this.sendEmail('local', { to: email, subject: 'VaultContactInvite: ' + this.email, body: payload });
+    return { ok: true, invited: true, email };
+  }
+  async fetchPendingContactInvites() {
+    const msgs = await this.fetchEmails('local');
+    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
+    const declined = this.getDeclinedContacts();
+    const peers = await this.loadPeerKeyEmails();
+    const out = [];
+    for (const m of invites) {
+      const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
+      if (!sender || sender === this.email) continue; // себе не предлагаем
+      if (declined.includes(`${sender}|${m.uid}`)) continue;
+      if (peers.has(sender)) continue; // уже контакт
+      let parsed;
+      try {
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+      } catch (e) {
+        continue;
+      }
+      if (!parsed || !parsed.public_key) continue;
+      out.push({
+        sender,
+        sender_name: parsed.sender_name || sender,
+        sender_avatar: parsed.sender_avatar || '',
+        public_key: parsed.public_key,
+        uid: m.uid,
+        date: m.date,
+      });
+    }
+    return out;
+  }
+  async sendContactAccept(email, publicKey) {
+    const name = localStorage.getItem('vault-display-name') || this.email;
+    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const payload = urlSafeB64({
+      sender: this.email,
+      sender_name: name,
+      sender_avatar: avatar,
+      public_key: publicKey,
+    });
+    await this.sendEmail('local', { to: email, subject: 'VaultContactAccept: ' + this.email, body: payload });
+    return { ok: true };
+  }
+  async fetchPendingContactAccepts() {
+    const msgs = await this.fetchEmails('local');
+    const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
+    const peers = await this.loadPeerKeyEmails();
+    const out = [];
+    for (const m of accepts) {
+      const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
+      if (!sender || sender === this.email) continue;
+      if (peers.has(sender)) continue; // ключ уже сохранён
+      let parsed;
+      try {
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+      } catch (e) {
+        continue;
+      }
+      if (!parsed || !parsed.public_key) continue;
+      try {
+        await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
+      } catch (e) {
+        continue;
+      }
+      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      if (!this.contacts.some(c => c.email === sender)) {
+        this.contacts.push({ id: sender, email: sender, name: parsed.sender_name || sender, online: false });
+      }
+      out.push({ sender });
+    }
+    return out;
   }
 
   // --- Window/app icon (set the native window icon shown in waybar/dock) ---

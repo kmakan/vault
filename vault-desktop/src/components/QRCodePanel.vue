@@ -28,6 +28,24 @@
       </p>
     </div>
     
+    <div class="invite-section">
+      <h4>Пригласить участника по id</h4>
+      <div class="scan-input">
+        <input 
+          v-model="inviteEmail" 
+          type="email"
+          placeholder="Email участника (например, user@example.com)"
+          @keyup.enter="sendInviteById"
+        />
+        <button @click="sendInviteById" :disabled="!inviteEmail">
+          Пригласить
+        </button>
+      </div>
+      <p class="scan-instructions">
+        Собеседник получит запрос контакта и после принятия появится в ваших чатах
+      </p>
+    </div>
+    
     <div class="key-info">
       <h4>Ваш публичный ключ</h4>
       <code class="public-key">{{ publicKey }}</code>
@@ -52,7 +70,8 @@ export default {
   },
   data() {
     return {
-      scanInput: ''
+      scanInput: '',
+      inviteEmail: ''
     };
   },
   mounted() {
@@ -116,6 +135,12 @@ export default {
     copyPublicKey() {
       navigator.clipboard.writeText(this.publicKey);
       alert('Публичный ключ скопирован в буфер обмена');
+    },
+    sendInviteById() {
+      const email = (this.inviteEmail || '').trim();
+      if (!email) return;
+      this.$emit('invite-by-id', email);
+      this.inviteEmail = '';
     }
   },
   watch: {

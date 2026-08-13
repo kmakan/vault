@@ -13,17 +13,7 @@
           </button>
           <p v-if="loginError" class="login-error">{{ loginError }}</p>
         </form>
-        <hr>
-        <p class="login-hint">Don't have an account? Register:</p>
-        <form @submit.prevent="register">
-          <input v-model="regUsername" type="text" placeholder="Username" required />
-          <input v-model="regEmail" type="email" placeholder="Email" required />
-          <input v-model="regPassword" type="password" placeholder="Password" required />
-          <button type="submit" :disabled="regLoading">
-            {{ regLoading ? '...' : t('register') || 'Register' }}
-          </button>
-          <p v-if="regError" class="login-error">{{ regError }}</p>
-        </form>
+        <p class="login-hint">{{ t('login_hint') || 'Регистрация не нужна: у Vault нет сервера — приложение работает поверх вашей почты. Войдите под своим email, ключи создадутся автоматически. Добавляйте собеседников по id участника или QR-коду (🔗 вверху).' }}</p>
       </div>
     </div>
     <!-- MAIN APP -->
@@ -99,18 +89,6 @@
           </div>
         </div>
       </div>
-<!-- Bottom nav switch: Chat / Mail -->
-        <div class="nav-switch">
-          <button class="nav-chats-btn" :class="{ active: currentView !== 'email' }" @click="currentView = 'chats'">
-            <span class="mail-nav-ico">💬</span>
-            <span class="mail-nav-label">{{ t('nav_chats') || 'Чаты' }}</span>
-          </button>
-          <button class="mail-nav-btn" :class="{ active: currentView === 'email' }" @click="openEmailView">
-            <span class="mail-nav-ico">📧</span>
-            <span class="mail-nav-label">{{ t('nav_mail') || 'Почта' }}</span>
-            <span v-if="emails.length" class="mail-nav-count">{{ emails.length }}</span>
-          </button>
-        </div>
     </div>
     
     <div class="main-area">
@@ -123,6 +101,7 @@
           :publicKey="publicKey" 
           @close="showQRCode = false"
           @key-scanned="addPeerKey"
+          @invite-by-id="inviteContactById"
         />
       </div>
 
@@ -160,6 +139,35 @@
                 {{ t('invite_accept') || 'Принять' }}
               </button>
               <button class="btn btn-secondary" @click="declineInvite(pendingInvites[invitePopupIndex])">
+                {{ t('invite_decline') || 'Отклонить' }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
+      <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
+        <div class="modal-settings">
+          <button class="modal-close" @click="showContactPopup = false">←</button>
+          <template v-if="pendingContacts[contactPopupIndex]">
+            <h3 class="invite-popup-title">{{ t('contact_request_title') || 'Запрос контакта' }}</h3>
+            <p class="invite-popup-text">{{ t('contact_request_text') || 'Примите запрос — и собеседник появится в ваших контактах.' }}</p>
+            <div class="invite-popup-sender">
+              <UserAvatar
+                :email="pendingContacts[contactPopupIndex].sender"
+                :avatarUrl="pendingContacts[contactPopupIndex].sender_avatar"
+                :size="28"
+              />
+              <span class="invite-popup-sender-name">
+                {{ pendingContacts[contactPopupIndex].sender_name || pendingContacts[contactPopupIndex].sender }}
+              </span>
+            </div>
+            <div class="invite-popup-actions">
+              <button class="btn btn-primary" @click="acceptContactInvite(pendingContacts[contactPopupIndex])">
+                {{ t('invite_accept') || 'Принять' }}
+              </button>
+              <button class="btn btn-secondary" @click="declineContactInvite(pendingContacts[contactPopupIndex])">
                 {{ t('invite_decline') || 'Отклонить' }}
               </button>
             </div>
@@ -218,32 +226,6 @@
         </div>
       </div>
       
-<!-- EMAIL VIEW (mailbox) -->
-      <div v-if="currentView === 'email'" class="email-view">
-        <EmailInbox v-if="!selectedEmail" :emails="emails" :loading="emailsLoading" @open-email="openEmail" />
-        <div v-else class="email-detail">
-          <div class="email-detail-header">
-            <button class="email-back-btn" @click="closeEmailDetail">←</button>
-            <div class="email-detail-meta">
-              <div class="email-detail-from">{{ selectedEmail.from }}</div>
-              <div class="email-detail-subject">{{ selectedEmail.subject || '' }}</div>
-              <div class="email-detail-date">{{ selectedEmail.date }}</div>
-            </div>
-          </div>
-          <div class="email-detail-body">
-            <div v-if="isVaultEmail(selectedEmail)" class="email-detail-locked">
-              <div class="locked-icon">🔒</div>
-              <div class="locked-title">{{ t('email_locked') || 'Зашифрованное сообщение Vault' }}</div>
-              <div class="locked-note">{{ t('email_locked_note') || 'Сообщение защищено сквозным шифрованием. Откройте чат с этим контактом, чтобы расшифровать его.' }}</div>
-            </div>
-            <template v-else>
-              <div v-if="emailBodyLoading" class="email-body-loading">{{ t('email_loading') || 'Загрузка…' }}</div>
-              <pre v-else class="email-detail-text">{{ emailBody }}</pre>
-            </template>
-          </div>
-        </div>
-      </div>
-
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
@@ -455,7 +437,6 @@ import ws from './ws.js';
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
 import EmailSettings from './components/EmailSettings.vue';
-import EmailInbox from './components/EmailInbox.vue';
 import KeyManager from './components/KeyManager.vue';
 import LanguageSelector from './components/LanguageSelector.vue';
 import UserAvatar from './components/UserAvatar.vue';
@@ -478,7 +459,6 @@ export default {
   components: {
     SettingsPage,
     EmailSettings,
-    EmailInbox,
     KeyManager,
     LanguageSelector,
     UserAvatar,
@@ -512,18 +492,10 @@ export default {
       password: '',
       loginLoading: false,
       loginError: '',
-      regUsername: '',
-      regEmail: '',
-      regPassword: '',
-      regLoading: false,
-      regError: '',
       emails: [],
       emailsLoading: false,
       emailError: '',
       pollTimer: null,
-      selectedEmail: null,
-      emailBody: '',
-      emailBodyLoading: false,
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
@@ -547,6 +519,9 @@ export default {
       pendingInvites: [],
       showInvitePopup: false,
       invitePopupIndex: 0,
+      pendingContacts: [],
+      showContactPopup: false,
+      contactPopupIndex: 0,
       // Add-member popup (выбор контактов)
       showAddMemberPopup: false,
       addMemberQuery: '',
@@ -727,26 +702,6 @@ export default {
         this.loginLoading = false;
       }
     },
-    async register() {
-      this.regLoading = true;
-      this.regError = '';
-      try {
-        const data = await api.register(this.regUsername, this.regEmail, this.regPassword);
-        this.userId = data.user_id;
-        this.isLoggedIn = true;
-        this.email = this.regEmail;
-        ws.connect(api.token);
-        ws.on('typing', (msg) => this.onTypingEvent(msg));
-        await this.loadContacts();
-        await this.loadGroups();
-        await this.loadEmails();
-        this.startPolling()
-      } catch (error) {
-        this.regError = error.message;
-      } finally {
-        this.regLoading = false;
-      }
-    },
     async handleLogout() {
       this.stopPolling();
       try { ws.disconnect(); } catch (e) { /* ignore */ }
@@ -767,6 +722,8 @@ export default {
       this.emailError = '';
       this.pendingInvites = [];
       this.showInvitePopup = false;
+      this.pendingContacts = [];
+      this.showContactPopup = false;
       this.showSettings = false;
       this.showGroupSettings = false;
       this.showAddMemberPopup = false;
@@ -1279,40 +1236,6 @@ export default {
         this.pollTimer = null;
       }
     },
-    openEmail(email) {
-      this.selectedEmail = email;
-      this.loadEmailBody(email);
-    },
-    openEmailView() {
-      // Reset any open message detail — show the plain inbox listing
-      this.selectedEmail = null;
-      this.emailBody = '';
-      this.currentView = 'email';
-    },
-    closeEmailDetail() {
-      this.selectedEmail = null;
-      this.emailBody = '';
-    },
-    async loadEmailBody(email) {
-      this.emailBody = '';
-      this.emailBodyLoading = true;
-      try {
-        const body = await api.fetchEmailBody(email.accountId || 'local', email.uid || email.id);
-        this.emailBody = body || '';
-      } catch (e) {
-        this.emailBody = '';
-      } finally {
-        this.emailBodyLoading = false;
-      }
-    },
-    isVaultEmail(email) {
-      if (!email) return false;
-      const subject = String(email.subject || '').trim();
-      const body = email.body || this.emailBody || '';
-      const subjectFlag = /^\[Vault/i.test(subject) || /^Vault:/i.test(subject) || /^\[VAULT-/.test(subject);
-      const bodyFlag = body.includes('---BEGIN VAULT ENCRYPTED---');
-      return subjectFlag || bodyFlag;
-    },
     // Emoji
     insertEmoji(emoji) {
       this.newMessage += emoji
@@ -1508,7 +1431,7 @@ export default {
       if (!email) return;
       this.inviteContact(email);
     },
-    // --- Инвайты группы: попап согласия ---
+    // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     async processInvites() {
       try {
         // Обрабатываем accept-письма (добавление принявших участников).
@@ -1520,12 +1443,28 @@ export default {
             await this.refreshGroupMembers();
           }
         }
+        // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
+        const contactAccepts = await api.fetchPendingContactAccepts();
+        if (contactAccepts.length) {
+          this.peerKeys = Object.assign({}, this.peerKeys);
+          await this.loadContacts();
+        }
         // Собираем непрочитанные инвайты для попапа согласия.
         const invites = await api.fetchPendingInvites();
         if (invites.length) {
           this.pendingInvites = invites;
           this.invitePopupIndex = 0;
           this.showInvitePopup = true;
+        }
+        // Запросы контактов 1-на-1 — попап «Принять/Отклонить».
+        const contacts = await api.fetchPendingContactInvites();
+        if (contacts.length) {
+          // Групповой попап имеет приоритет; контактный покажем следом.
+          if (!this.showInvitePopup) {
+            this.pendingContacts = contacts;
+            this.contactPopupIndex = 0;
+            this.showContactPopup = true;
+          }
         }
         this.loadProfiles();
       } catch (e) {
@@ -1570,6 +1509,54 @@ export default {
         this.showInvitePopup = true;
       } else {
         this.showInvitePopup = false;
+        // Групповой попап закрыт — показываем накопившиеся запросы контактов.
+        if (this.pendingContacts.length) {
+          this.showContactPopup = true;
+        }
+      }
+    },
+    // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
+    async acceptContactInvite(c) {
+      try {
+        await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
+        await api.addContact(c.sender);
+        api.saveProfile(c.sender, c.sender_name, c.sender_avatar);
+        this.loadProfiles();
+        // Отвечаем своим публичным ключом — у пригласившего появится наш контакт.
+        await api.sendContactAccept(c.sender, this.publicKey);
+        await this.loadContacts();
+      } catch (e) {
+        alert('Failed to accept contact: ' + e.message);
+      }
+      this.pendingContacts.splice(this.contactPopupIndex, 1);
+      this.showNextContact();
+    },
+    async declineContactInvite(c) {
+      const key = `${c.sender}|${c.uid}`;
+      try {
+        const declined = JSON.parse(localStorage.getItem('vault-declined-contacts') || '[]');
+        if (!declined.includes(key)) declined.push(key);
+        localStorage.setItem('vault-declined-contacts', JSON.stringify(declined));
+      } catch (e) { /* ignore */ }
+      this.pendingContacts.splice(this.contactPopupIndex, 1);
+      this.showNextContact();
+    },
+    showNextContact() {
+      if (this.pendingContacts.length > 0) {
+        if (this.contactPopupIndex >= this.pendingContacts.length) this.contactPopupIndex = 0;
+        this.showContactPopup = true;
+      } else {
+        this.showContactPopup = false;
+      }
+    },
+    async inviteContactById(email) {
+      const id = (email || '').trim();
+      if (!id) return;
+      try {
+        await api.sendContactInvite(id, this.publicKey);
+        alert('Приглашение отправлено: ' + id);
+      } catch (e) {
+        alert('Failed to send invite: ' + e.message);
       }
     },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---

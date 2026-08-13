@@ -3,6 +3,10 @@ export default {
   app_name: 'Vault',
   app_tagline: 'Secure Communication',
 
+  // Login (serverless: sign-in = connect your mailbox, no registration)
+  login: 'Sign in',
+  login_hint: 'No registration needed: Vault has no server — the app runs on top of your mailbox. Sign in with your email, keys are created automatically. Add peers by participant ID or QR code (🔗 at the top).',
+
   // Navigation
   nav_inbox: 'Inbox',
   nav_mail: 'Mail',
