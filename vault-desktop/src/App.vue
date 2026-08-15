@@ -1104,7 +1104,12 @@ export default {
               if (env) {
                 content = env.text;
                 if (env.id) msgId = env.id;
-                const sender = isOut ? this.email : email;
+                // isOut=true = письмо прислал СОБЕСЕДНИК (см. from: isOut?'them':'me').
+                // Аватар/имя в конверте принадлежат отправителю письма:
+                //   входящее (isOut) -> собеседник (email), исходящее -> я (this.email).
+                // Раньше было наоборот — входящий аватар сохранялся под МОИМ email,
+                // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
+                const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
                   api.saveProfile(sender, env.name, env.avatar);
                 }
