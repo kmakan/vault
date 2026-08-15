@@ -63,6 +63,7 @@
           <div class="contact-status">
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span class="status-dot" :class="{ online: contact.online }"></span>
+            <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)">🗑</button>
           </div>
         </div>
         
@@ -1595,6 +1596,21 @@ export default {
         alert('Failed to send invite: ' + e.message);
       }
     },
+    async deleteContact(email) {
+      if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
+      try {
+        await crypto.removePeerKey(email);
+        delete this.peerKeys[email];
+        delete this.peerKeysLoaded[email];
+        if (this.activeChat === email) {
+          this.activeChat = null;
+          this.activeChatType = 'chat';
+        }
+        await this.loadContacts();
+      } catch (e) {
+        alert('Failed to delete contact: ' + e.message);
+      }
+    },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---
     profileOf(email) {
       return this.profiles[email] || null;
@@ -2359,6 +2375,27 @@ body {
   font-size: 12px;
   opacity: 0.7;
   cursor: help;
+}
+
+/* Удаление контакта — появляется при наведении на контакт */
+.contact-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.contact-item:hover .contact-delete {
+  opacity: 0.55;
+}
+
+.contact-item:hover .contact-delete:hover {
+  opacity: 1;
+  background: rgba(220, 60, 60, 0.18);
 }
 
 .status-dot {
