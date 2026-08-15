@@ -495,6 +495,9 @@ export default {
       activeChat: null,
       messages: [],
       newMessage: '',
+      // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
+      // не перефетчивая и не расшифровывая повторно.
+      emailBodyCache: {},
       replyTo: null,
       showSettings: false,
       showMembers: false,
@@ -803,6 +806,9 @@ export default {
       if (this.activeChat) {
         ws.unsubscribe(this.activeChat);
       }
+      // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
+      // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
+      this.messages = [];
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
@@ -922,18 +928,44 @@ export default {
         this.messages = [];
         return;
       }
-      const related = this.emails.filter(m => {
-        const f = (m.from || '').toLowerCase();
-        const t = (m.to || '').toLowerCase();
-        return f.includes(email.toLowerCase()) || t.includes(email.toLowerCase());
-      });
+      const related = this.emails
+        .filter(m => {
+          const f = (m.from || '').toLowerCase();
+          const t = (m.to || '').toLowerCase();
+          return f.includes(email.toLowerCase()) || t.includes(email.toLowerCase());
+        })
+        // Свежие сверху. Расшифровываем только последние 30: фетч тела идёт
+        // по одному письму (с переключением папки) — на всю переписку это
+        // минуты и чат выглядит пустым. Старая история — отдельная задача
+        // (локальное хранилище, инкрементальный поиск с последнего письма).
+        .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+        .slice(0, 30);
+      console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length);
       if (related.length > 0) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
+        // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
+        // командой (Rust выбирает папку один раз). Поштучный фетч делал
+        // чат пустым на минуту — теперь открытие чата почти мгновенно.
+        const byFolder = {};
+        for (const m of related) {
+          const f = m.folder || 'INBOX';
+          (byFolder[f] = byFolder[f] || []).push(m);
+        }
+        for (const [folder, msgs] of Object.entries(byFolder)) {
+          const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+          if (missing.length) {
+            const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            for (const m of missing) {
+              this.emailBodyCache[`${folder}:${m.uid || m.id}`] = bodies[String(m.uid || m.id)] || '';
+            }
+          }
+        }
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
           try {
-            const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id, m.folder);
+            const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
+            const body = this.emailBodyCache[cacheKey] || '';
             const parsed = this.parseMessageContent(body);
             content = parsed.text || content;
             if (parsed.attachment) {
@@ -949,6 +981,7 @@ export default {
                 content = pp.text || content;
               } catch (de) {
                 // Cannot authenticate/decrypt as a vault message — not ours.
+                console.log('[decrypt fail] uid=' + (m.uid || m.id) + ' folder=' + (m.folder || 'INBOX') + ' err=' + (de && de.message || de));
                 return null;
               }
             } else {
@@ -1131,7 +1164,6 @@ export default {
         }
 
         let content = payload;
-        console.log('[sendMessage] step1 activeChatType=' + this.activeChatType + ' activeChat=' + this.activeChat);
 
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
@@ -1218,11 +1250,13 @@ export default {
       }
       try {
         const accounts = await api.getEmailAccounts();
-        this.emails = [];
+        // Не сбрасываем this.emails в начале: пока фетч идёт (или падает),
+        // старый список остаётся в UI — клик по чату не видит пустоту.
+        const fetched = [];
         for (const account of accounts) {
           try {
             const msgs = await api.fetchEmails(account.id, { limit: 50 });
-            this.emails = this.emails.concat(msgs || []);
+            fetched.push(...(msgs || []));
           } catch (e) {
             console.error('Failed to fetch emails for account:', e);
             if (!silent) this.emailError = 'fetch: ' + (e && e.message || e);
@@ -1232,6 +1266,7 @@ export default {
             }
           }
         }
+        this.emails = fetched;
         console.log(`[Emails] loaded ${this.emails.length} messages`);
         if (!silent && this.emails.length === 0 && !this.emailError) {
           this.emailError = 'INBOX пуст или письма не найдены';

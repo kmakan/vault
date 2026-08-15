@@ -226,8 +226,14 @@ pub fn decrypt_vault_cmd(
 ) -> anyhow::Result<String> {
     use chacha20poly1305::aead::Payload;
 
+    // SMTP-переносы (fold ≤76 колонок) оставляют в теле \n — base64-декодер
+    // должен их игнорировать, иначе НИ ОДНО входящее письмо не расшифруется.
+    let cleaned: String = ciphertext
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     let decoded = base64::engine::general_purpose::STANDARD
-        .decode(ciphertext)
+        .decode(&cleaned)
         .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
 
     if decoded.len() < NONCE_LEN {

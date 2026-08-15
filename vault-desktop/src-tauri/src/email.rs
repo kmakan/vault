@@ -150,9 +150,18 @@ impl EmailClient {
 
         let mut uids: Vec<u32> = message_ids.iter().copied().collect();
         uids.sort_by(|a, b| b.cmp(a));
+        uids.truncate(limit);
 
-        for uid in uids.iter().take(limit) {
-            if let Ok(data) = session.uid_fetch(uid.to_string(), "(UID FLAGS RFC822.HEADER)") {
+        // Один round-trip вместо поштучных uid_fetch: на ящике с тысячами
+        // писем последовательные запросы занимали минуты, и поллинг/клик
+        // по чату «зависали» (а то и умирали по таймауту).
+        if !uids.is_empty() {
+            let uid_set = uids
+                .iter()
+                .map(|u| u.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            if let Ok(data) = session.uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)") {
                 for fetch in data.iter() {
                     let uid = fetch.uid.unwrap_or_default().to_string();
                     let flags = fetch.flags();
@@ -183,8 +192,18 @@ impl EmailClient {
             }
         }
 
-        messages.reverse();
+        messages.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(messages)
+    }
+
+    /// Переустановить IMAP-соединение (сервер оборвал его — idle-таймаут,
+    /// сетевой сбой). Конфиг уже хранится в клиенте, поэтому можно просто
+    /// заново подключиться без участия UI.
+    pub async fn reconnect_imap(&mut self) -> Result<()> {
+        if let Some(mut session) = self.imap_session.take() {
+            let _ = session.logout();
+        }
+        self.connect_imap().await
     }
 
     /// Fetch recent messages: the All Mail mailbox (full history — incoming
@@ -237,6 +256,46 @@ impl EmailClient {
         }
 
         Ok(body)
+    }
+
+    /// Fetch bodies of many messages from one mailbox in a batch: select the
+    /// folder once, then UID FETCH each id. The UI previously fetched bodies
+    /// one-by-one (each call re-selecting the folder) — dozens of round-trips
+    /// made the chat look empty for a minute.
+    pub async fn fetch_bodies(
+        &mut self,
+        uids: &[String],
+        folder: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")?;
+
+        if folder != "INBOX" {
+            let _ = session.select(folder);
+        }
+
+        let mut out = Vec::with_capacity(uids.len());
+        for uid in uids {
+            if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
+                for fetch in data.iter() {
+                    if let Some(text) = fetch.text() {
+                        out.push((
+                            uid.clone(),
+                            decode_quoted_printable(&String::from_utf8_lossy(text)),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if folder != "INBOX" {
+            let _ = session.select("INBOX");
+        }
+
+        Ok(out)
     }
 
     pub async fn send_email(&mut self, to: &str, subject: &str, body: &str) -> Result<()> {

@@ -193,10 +193,18 @@ async fn email_fetch_messages(
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    client
-        .fetch_messages()
-        .await
-        .map_err(|e| e.to_string())
+    match client.fetch_messages().await {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            // Gmail обрывает idle-соединения — не требуем от UI релогина,
+            // а просто переподключаемся и повторяем один раз.
+            client
+                .reconnect_imap()
+                .await
+                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
+            client.fetch_messages().await.map_err(|e| e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -205,14 +213,50 @@ async fn email_fetch_body(
     folder: Option<String>,
     state: State<'_, EmailState>,
 ) -> Result<String, String> {
+    let folder = folder.unwrap_or_else(|| "INBOX".to_string());
     let mut guard = state.0.lock().await;
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    client
-        .fetch_message_body(&uid, &folder.unwrap_or_else(|| "INBOX".to_string()))
-        .await
-        .map_err(|e| e.to_string())
+    match client.fetch_message_body(&uid, &folder).await {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            client
+                .reconnect_imap()
+                .await
+                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
+            client
+                .fetch_message_body(&uid, &folder)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+async fn email_fetch_bodies(
+    uids: Vec<String>,
+    folder: Option<String>,
+    state: State<'_, EmailState>,
+) -> Result<Vec<(String, String)>, String> {
+    let folder = folder.unwrap_or_else(|| "INBOX".to_string());
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    match client.fetch_bodies(&uids, &folder).await {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            client
+                .reconnect_imap()
+                .await
+                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
+            client
+                .fetch_bodies(&uids, &folder)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 #[tauri::command]
@@ -350,6 +394,7 @@ pub fn run() {
             email_connect,
             email_fetch_messages,
             email_fetch_body,
+            email_fetch_bodies,
             email_send,
             email_disconnect,
             groups_load,

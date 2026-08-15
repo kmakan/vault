@@ -307,6 +307,15 @@ export class ApiClient {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }
 
+  async fetchEmailBodies(folder, uids) {
+    // Батч-фетч тел одной папки (Rust выбирает папку один раз) —
+    // без него чат фетчил каждое тело отдельным round-trip'ом.
+    const list = await invoke('email_fetch_bodies', { uids: uids.map(String), folder: folder || 'INBOX' });
+    const out = {};
+    for (const [uid, body] of list || []) out[String(uid)] = body;
+    return out;
+  }
+
   async sendEmail(accountId, emailData = {}) {
     const data = emailData || {};
     const ok = await invoke('email_send', {
