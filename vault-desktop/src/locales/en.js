@@ -54,6 +54,10 @@ export default {
   message_placeholder: 'Type a message',
   chat_empty: 'No messages yet — send the first one 🔒',
   chat_reply_to: 'Reply to',
+  copy_text: 'Copy text',
+  copy_all: 'Copy all',
+  copied: 'Copied',
+  copy_failed: 'Copy failed',
 
   // Contacts
   contacts_title: 'Contacts',

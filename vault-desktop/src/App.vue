@@ -313,6 +313,7 @@
             :key="msg.id"
             :class="['message', { own: msg.from === 'me' }]"
             @click.stop="toggleReactionPicker(msg.id)"
+            @contextmenu.prevent="openMessageMenu($event, msg)"
           >
             <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
             <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
@@ -336,6 +337,8 @@
             </div>
             <!-- Reply button (visible on hover) -->
             <button class="reply-btn" title="Reply" @click.stop="setReply(msg)">↩</button>
+            <!-- Copy button (visible on hover) -->
+            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)">⧉</button>
             <!-- Reactions -->
             <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
               <span
@@ -361,7 +364,15 @@
             </div>
           </div>
         </div>
-        
+
+        <!-- Контекстное меню сообщения (правый клик): копирование -->
+        <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
+          <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
+            <button @click="copyMessageText(messageMenu.msg); messageMenu = null">⧉ {{ t('copy_text') || 'Копировать текст' }}</button>
+            <button @click="copyMessageAll(messageMenu.msg); messageMenu = null">📋 {{ t('copy_all') || 'Копировать всё' }}</button>
+          </div>
+        </div>
+
         <!-- Typing indicator -->
         <div v-if="Object.keys(typingUsers).length > 0" class="typing-indicator">
           <span class="typing-dots">
@@ -498,6 +509,11 @@ export default {
       // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
       // не перефетчивая и не расшифровывая повторно.
       emailBodyCache: {},
+      // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
+      // loadMessages старого чата не должен перезаписать новый чат.
+      loadSeq: 0,
+      // Контекстное меню сообщения (копирование)
+      messageMenu: null,
       replyTo: null,
       showSettings: false,
       showMembers: false,
@@ -809,6 +825,9 @@ export default {
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.messages = [];
+      // Токен загрузки: незавершённый loadMessages прошлого чата увидит
+      // новый seq и не применит свои результаты.
+      this.loadSeq++;
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
@@ -847,6 +866,8 @@ export default {
       if (this.activeChat) {
         ws.unsubscribe(this.activeChat);
       }
+      this.messages = [];
+      this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
       this.currentGroup = group;
@@ -898,6 +919,58 @@ export default {
       } catch { /* not JSON — plain text message */ }
       return { text: content, attachment: null };
     },
+    // --- Конверт сообщения (метаданные ВНУТРИ шифра) ---
+    // Формат: {"vault":1,"id":"<uuid>","text":"...","name":"...","avatar":"dataURL"}
+    // Всё под E2E — провайдер видит только base64. Обратная совместимость:
+    // не-JSON или vault!==1 = старый формат (простой текст).
+    newMessageId() {
+      try {
+        // ВАЖНО: window.crypto — НЕ импортированный модуль crypto.js!
+        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+      } catch (e) { /* fallback below */ }
+      return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    },
+    // Уменьшить аватар до 64x64 JPEG, если dataURL слишком большой (лимит ~8KB,
+    // чтобы не раздувать каждое письмо). Возвращает '' если не удалось.
+    async shrinkAvatar(dataUrl) {
+      if (!dataUrl || dataUrl.length <= 8192) return dataUrl || '';
+      try {
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, 64, 64);
+        const small = canvas.toDataURL('image/jpeg', 0.7);
+        return small.length <= 8192 ? small : '';
+      } catch (e) {
+        return '';
+      }
+    },
+    // Обернуть текст в конверт перед шифрованием.
+    async buildEnvelope(text) {
+      const name = localStorage.getItem('vault-display-name') || this.email || '';
+      let avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+      avatar = await this.shrinkAvatar(avatar);
+      return JSON.stringify({
+        vault: 1,
+        id: this.newMessageId(),
+        text: text,
+        name: name,
+        avatar: avatar,
+      });
+    },
+    // Распарсить расшифрованный конверт. null = старый формат (простой текст).
+    parseEnvelope(decrypted) {
+      if (!decrypted || typeof decrypted !== 'string') return null;
+      try {
+        const obj = JSON.parse(decrypted);
+        if (obj && obj.vault === 1 && typeof obj.text === 'string') {
+          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '' };
+        }
+      } catch { /* not an envelope — legacy plaintext */ }
+      return null;
+    },
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) {
       if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
@@ -939,13 +1012,19 @@ export default {
       this.replyTo = null;
     },
     async loadMessages(email) {
+      // Токен загрузки: если пользователь уже переключился на другой чат,
+      // результаты этого (медленного) фетча применять нельзя — иначе
+      // сообщения прошлого чата перезапишут новый.
+      const seq = this.loadSeq;
+      const chat = email;
+      const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!this.peerKeys[email]) {
         this.messages = [];
         return;
       }
-      const related = this.emails
+      const relatedAll = this.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
@@ -957,14 +1036,18 @@ export default {
         // (локальное хранилище, инкрементальный поиск с последнего письма).
         .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
         .slice(0, 30);
-      console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length);
-      if (related.length > 0) {
+      // Письма-реакции (VaultReact:) — не сообщения, а транспорт реакций:
+      // разбираем отдельно, в чат не показываем.
+      const reactEmails = relatedAll.filter(m => (m.subject || '').startsWith('VaultReact:'));
+      const related = relatedAll.filter(m => !(m.subject || '').startsWith('VaultReact:'));
+      console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length + ' react=' + reactEmails.length);
+      if (related.length > 0 || reactEmails.length > 0) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
         // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
         // командой (Rust выбирает папку один раз). Поштучный фетч делал
         // чат пустым на минуту — теперь открытие чата почти мгновенно.
         const byFolder = {};
-        for (const m of related) {
+        for (const m of [...related, ...reactEmails]) {
           const f = m.folder || 'INBOX';
           (byFolder[f] = byFolder[f] || []).push(m);
         }
@@ -972,14 +1055,35 @@ export default {
           const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
           if (missing.length) {
             const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            if (stale()) return;
             for (const m of missing) {
               this.emailBodyCache[`${folder}:${m.uid || m.id}`] = bodies[String(m.uid || m.id)] || '';
             }
           }
         }
+        // Реакции из писем VaultReact: расшифровываем и накапливаем.
+        const wireReactions = {}; // msg_id -> [{emoji, user, action}]
+        for (const m of reactEmails) {
+          const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
+          const body = this.emailBodyCache[cacheKey] || '';
+          if (!body) continue;
+          try {
+            const text = await crypto.decryptVault(body);
+            const obj = JSON.parse(text);
+            if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
+              (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
+                emoji: obj.emoji,
+                user: (m.from || '').toLowerCase().includes(this.email.toLowerCase()) ? this.email : email,
+                action: obj.action === 'remove' ? 'remove' : 'add',
+              });
+            }
+          } catch (e) { /* не наше или битое — пропускаем */ }
+        }
+        if (stale()) return;
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
+          let msgId = m.uid || m.id;
           try {
             const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
             const body = this.emailBodyCache[cacheKey] || '';
@@ -994,8 +1098,21 @@ export default {
             if (this.cryptoReady) {
               try {
                 const text = await crypto.decryptVault(body);
-                const pp = this.parseMessageContent(text);
-                content = pp.text || content;
+                // Конверт {vault:1,id,text,name,avatar}: новые сообщения несут
+                // имя/аватар отправителя и стабильный id (для реакций).
+                const env = this.parseEnvelope(text);
+                if (env) {
+                  content = env.text;
+                  if (env.id) msgId = env.id;
+                  // Профиль отправителя — в кэш (аватар/имя у собеседника).
+                  const sender = isOut ? this.email : email;
+                  if (env.name || env.avatar) {
+                    api.saveProfile(sender, env.name, env.avatar);
+                  }
+                } else {
+                  const pp = this.parseMessageContent(text);
+                  content = pp.text || content;
+                }
               } catch (de) {
                 // Cannot authenticate/decrypt as a vault message — not ours.
                 console.log('[decrypt fail] uid=' + (m.uid || m.id) + ' folder=' + (m.folder || 'INBOX') + ' err=' + (de && de.message || de));
@@ -1006,7 +1123,7 @@ export default {
               return null;
             }
             return {
-              id: m.uid || m.id,
+              id: msgId,
               content,
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
@@ -1016,7 +1133,7 @@ export default {
             };
           } catch (e) {
             return {
-              id: m.uid || m.id,
+              id: msgId,
               content,
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
@@ -1025,13 +1142,18 @@ export default {
             };
           }
         }));
-        this.messages = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        if (stale()) return;
+        this.loadProfiles();
+        const list = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        this.applyReactions(list, chat, wireReactions);
+        this.messages = list;
         return;
       }
 
       // Fallback: legacy backend path (groups, peer-key chats)
       try {
         const raw = await api.getMessages(email);
+        if (stale()) return;
         if (this.cryptoReady && this.peerKeys[email]) {
           crypto.setPeerPublicKey(this.peerKeys[email]);
           const decrypted = await Promise.all(
@@ -1048,6 +1170,11 @@ export default {
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const text = await crypto.decryptVault(msg.content);
+                  const env = this.parseEnvelope(text);
+                  if (env) {
+                    const parsed = this.parseMessageContent(env.text);
+                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true };
+                  }
                   const parsed = this.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
@@ -1057,6 +1184,7 @@ export default {
               return { ...base, encrypted: false };
             })
           );
+          if (stale()) return;
           this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         } else {
           this.messages = raw.map(msg => {
@@ -1074,13 +1202,41 @@ export default {
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
-        this.messages = [];
+        if (!stale()) this.messages = [];
       }
     },
     async loadGroupMessages(groupId) {
+      // Токен загрузки — см. loadMessages (защита от гонки переключения).
+      const seq = this.loadSeq;
+      const chat = 'group:' + groupId;
+      const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
       try {
         const raw = await api.getGroupMessages(groupId);
+        if (stale()) return;
         const groupKey = this.groupKeys[groupId];
+
+        // Реакции группы: письма VaultGroupReact: <id> (транспорт, не сообщения).
+        const wireReactions = {};
+        if (groupKey) {
+          try {
+            const reactRaw = await api.getGroupReactEmails(groupId);
+            for (const msg of reactRaw || []) {
+              if (!crypto.isEncrypted(msg.content)) continue;
+              try {
+                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                const obj = JSON.parse(plaintext);
+                if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
+                  (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
+                    emoji: obj.emoji,
+                    user: msg.sender_id,
+                    action: obj.action === 'remove' ? 'remove' : 'add',
+                  });
+                }
+              } catch (e) { /* не реакция или битое */ }
+            }
+          } catch (e) { /* нет react-писем — не критично */ }
+          if (stale()) return;
+        }
 
         if (groupKey) {
           // Decrypt messages with group key
@@ -1098,6 +1254,16 @@ export default {
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                  // Конверт {vault:1,id,text,name,avatar} — имя/аватар
+                  // отправителя и стабильный id (для реакций).
+                  const env = this.parseEnvelope(plaintext);
+                  if (env) {
+                    const parsed = this.parseMessageContent(env.text);
+                    if ((env.name || env.avatar) && msg.sender_id) {
+                      api.saveProfile(msg.sender_id, env.name, env.avatar);
+                    }
+                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true };
+                  }
                   const parsed = this.parseMessageContent(plaintext);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
@@ -1107,7 +1273,11 @@ export default {
               return { ...base, encrypted: false };
             })
           );
-          this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          if (stale()) return;
+          this.loadProfiles();
+          const list = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          this.applyReactions(list, chat, wireReactions);
+          this.messages = list;
         } else {
           // No group key — show as-is (unencrypted)
           this.messages = raw.map(msg => {
@@ -1125,7 +1295,7 @@ export default {
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);
-        this.messages = [];
+        if (!stale()) this.messages = [];
       }
     },
     onAvatarUpdate(dataUrl) {
@@ -1182,6 +1352,11 @@ export default {
 
         let content = payload;
 
+        // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
+        // (имя/аватар) и стабильный id сообщения внутри шифра.
+        const envelope = await this.buildEnvelope(payload);
+        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
+
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
           const groupKey = this.groupKeys[this.currentGroup.id];
@@ -1189,7 +1364,7 @@ export default {
             alert('Групповой ключ не загружен — переоткройте группу');
             return;
           }
-          content = await crypto.encryptWithGroupKey(payload, groupKey);
+          content = await crypto.encryptWithGroupKey(envelope, groupKey);
           await api.sendGroupMessage(this.currentGroup.id, content);
           // Reload from server to get proper server timestamp and UUID
           await this.loadGroupMessages(this.currentGroup.id);
@@ -1199,13 +1374,13 @@ export default {
             crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
             // Encrypt as a vault message (AAD="VAULT") so the peer can recognize
             // and authenticate it as ours.
-            content = await crypto.encryptVault(payload);
+            content = await crypto.encryptVault(envelope);
           }
           // Оптимистично показываем своё сообщение сразу: SMTP Gmail отвечает
           // медленно (до минуты), ждать отправку в UI не нужно — письмо при
           // доставке подхватится поллингом (startPolling обновляет активный чат).
           this.messages.push({
-            id: 'local-' + Date.now(),
+            id: envelopeId || ('local-' + Date.now()),
             content: payload,
             from: 'me',
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -1414,7 +1589,83 @@ export default {
       event.target.value = '';
     },
     // Reactions
+    // --- Персистентность реакций ---
+    // localStorage "vault-reactions-<email>": {chatKey: {msg_id: [{emoji, user}]}}.
+    // Поллинг перерисовывает сообщения из почты — без хранилища реакции
+    // исчезали через 30 сек даже у отправителя.
+    reactionsStorageKey() {
+      return 'vault-reactions-' + (this.email || 'anon');
+    },
+    loadStoredReactions() {
+      try {
+        return JSON.parse(localStorage.getItem(this.reactionsStorageKey()) || '{}');
+      } catch (e) {
+        return {};
+      }
+    },
+    saveStoredReactions(data) {
+      try {
+        localStorage.setItem(this.reactionsStorageKey(), JSON.stringify(data));
+      } catch (e) {
+        console.error('Failed to save reactions:', e);
+      }
+    },
+    // Мерж сохранённых реакций + реакций из писем (wireReactions: msg_id ->
+    // [{emoji, user, action}]). Результат пишется в хранилище и в msg.reactions.
+    applyReactions(list, chatKey, wireReactions) {
+      const stored = this.loadStoredReactions();
+      const chatReactions = stored[chatKey] || {};
+      // Применяем реакции из писем (add/remove) к хранилищу.
+      if (wireReactions && Object.keys(wireReactions).length) {
+        for (const [msgId, reactions] of Object.entries(wireReactions)) {
+          const cur = chatReactions[msgId] || [];
+          for (const r of reactions) {
+            const idx = cur.findIndex(x => x.emoji === r.emoji && x.user === r.user);
+            if (r.action === 'remove') {
+              if (idx >= 0) cur.splice(idx, 1);
+            } else if (idx < 0) {
+              cur.push({ emoji: r.emoji, user: r.user });
+            }
+          }
+          if (cur.length) chatReactions[msgId] = cur;
+          else delete chatReactions[msgId];
+        }
+        stored[chatKey] = chatReactions;
+        this.saveStoredReactions(stored);
+      }
+      // Проставляем на сообщения (массив эмодзи для рендера).
+      for (const msg of list) {
+        const rs = chatReactions[msg.id];
+        msg.reactions = rs ? [...new Set(rs.map(r => r.emoji))] : [];
+      }
+    },
+    // Отправить реакцию письмом (транспорт E2E). Ошибки — не критичны.
+    sendReactionEmail(msgId, emoji, action) {
+      const payload = JSON.stringify({ react: 1, msg_id: msgId, emoji, action });
+      (async () => {
+        try {
+          if (this.activeChatType === 'group' && this.currentGroup) {
+            const groupKey = this.groupKeys[this.currentGroup.id];
+            if (!groupKey) return;
+            const content = await crypto.encryptWithGroupKey(payload, groupKey);
+            await api.sendGroupReact(this.currentGroup.id, content);
+          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            const content = await crypto.encryptVault(payload);
+            await api.sendReaction(this.activeChat, content);
+          }
+        } catch (e) {
+          console.error('Failed to send reaction email:', e);
+        }
+      })();
+    },
     toggleReactionPicker(msgId) {
+      // Если пользователь выделял текст (копирование) — клик не должен
+      // открывать пикер реакций.
+      try {
+        const sel = window.getSelection && window.getSelection();
+        if (sel && String(sel).length > 0) return;
+      } catch (e) { /* ignore */ }
       this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
     },
     addReaction(msgId, emoji) {
@@ -1424,6 +1675,19 @@ export default {
       if (!msg.reactions.includes(emoji)) {
         msg.reactions.push(emoji)
       }
+      // Персистентность: сохранить сразу (переживёт поллинг).
+      const chatKey = this.activeChatType === 'group' ? this.activeChat : this.activeChat;
+      const stored = this.loadStoredReactions();
+      const chatReactions = stored[chatKey] || {};
+      const cur = chatReactions[msgId] || [];
+      if (!cur.some(r => r.emoji === emoji && r.user === this.email)) {
+        cur.push({ emoji, user: this.email });
+      }
+      chatReactions[msgId] = cur;
+      stored[chatKey] = chatReactions;
+      this.saveStoredReactions(stored);
+      // Транспорт: отправить реакцию собеседнику/группе.
+      this.sendReactionEmail(msgId, emoji, 'add');
       this.reactionPickerMsgId = null
     },
     toggleReaction(msgId, emoji) {
@@ -1433,6 +1697,56 @@ export default {
       if (idx >= 0) {
         msg.reactions.splice(idx, 1)
       }
+      // Убрать из хранилища и уведомить собеседника.
+      const chatKey = this.activeChat;
+      const stored = this.loadStoredReactions();
+      const chatReactions = stored[chatKey] || {};
+      const cur = chatReactions[msgId] || [];
+      const ri = cur.findIndex(r => r.emoji === emoji && r.user === this.email);
+      if (ri >= 0) {
+        cur.splice(ri, 1);
+        if (cur.length) chatReactions[msgId] = cur;
+        else delete chatReactions[msgId];
+        stored[chatKey] = chatReactions;
+        this.saveStoredReactions(stored);
+        this.sendReactionEmail(msgId, emoji, 'remove');
+      }
+    },
+    // --- Копирование сообщений ---
+    openMessageMenu(event, msg) {
+      this.messageMenu = { x: event.clientX, y: event.clientY, msg };
+    },
+    // Копирование с fallback для WebKitGTK (clipboard API может быть
+    // недоступен без фокуса — тогда через временный textarea).
+    async copyText(text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          alert(this.t('copied') || 'Скопировано');
+          return;
+        }
+      } catch (e) { /* fallback ниже */ }
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert(this.t('copied') || 'Скопировано');
+      } catch (e) {
+        alert(this.t('copy_failed') || 'Не удалось скопировать');
+      }
+    },
+    copyMessageText(msg) {
+      if (!msg) return;
+      this.copyText(this.replyBody(msg.content || ''));
+    },
+    copyMessageAll(msg) {
+      if (!msg) return;
+      this.copyText(msg.content || '');
     },
     // Export
     exportAsJSON() {
@@ -2664,6 +2978,12 @@ body {
   color: var(--text-primary);
   line-height: 1.5;
   box-shadow: var(--shadow-sm);
+  /* Текст сообщений можно выделять и копировать (WebKitGTK требует
+     явного разрешения). */
+  user-select: text;
+  cursor: text;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 .message.own .message-content {
@@ -2714,6 +3034,72 @@ body {
 .reply-btn:hover {
   background: var(--bg-hover, #1e1e4a);
   color: var(--text-primary, #f1f5f9);
+}
+
+/* Copy button (visible on hover) — рядом с reply-btn */
+.copy-btn {
+  position: absolute;
+  top: 12px;
+  right: 42px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 150ms ease);
+  z-index: 10;
+}
+
+.message:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+/* Контекстное меню сообщения (правый клик) */
+.message-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+
+.message-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-hover, rgba(255,255,255,0.1));
+  border-radius: var(--radius-md, 10px);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.5));
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.message-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-primary, #f1f5f9);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-menu button:hover {
+  background: var(--bg-hover, #1e1e4a);
 }
 
 /* Reply quote bar above the message input */

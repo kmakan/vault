@@ -101,12 +101,44 @@ export class ApiClient {
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
     return out;
   }
+  // Письма-реакции группы (VaultGroupReact: <id>) — транспорт реакций,
+  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
+  async getGroupReactEmails(groupId) {
+    const msgs = await this.fetchEmails('local');
+    const react = msgs.filter(m => (m.subject || '').startsWith('VaultGroupReact: ' + groupId));
+    const out = [];
+    for (const m of react) {
+      try {
+        const body = await this.fetchEmailBody('local', m.uid, m.folder);
+        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
+      } catch (e) { /* тело не прочиталось — пропускаем */ }
+    }
+    return out;
+  }
   async sendGroupMessage(groupId, content) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
       await this.sendEmail('local', { to: member.email, subject: 'VaultGroup: ' + g.id, body: content });
+    }
+    return { ok: true };
+  }
+  // Реакция в 1-на-1 чат: зашифрованное письмо VaultReact: <peer>.
+  // Тело — encryptVault(JSON {react:1, msg_id, emoji, action}).
+  async sendReaction(peerEmail, encryptedContent) {
+    const subject = 'VaultReact: ' + peerEmail;
+    const res = await this.sendEmail('local', { to: peerEmail, subject, body: encryptedContent });
+    if (!res || !res.ok) throw new Error('Failed to send reaction email');
+    return { ok: true };
+  }
+  // Реакция в группу: каждому участнику (кроме себя) письмо VaultGroupReact: <id>.
+  async sendGroupReact(groupId, encryptedContent) {
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    for (const member of g.members || []) {
+      if (member.email === this.email) continue;
+      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupReact: ' + g.id, body: encryptedContent });
     }
     return { ok: true };
   }

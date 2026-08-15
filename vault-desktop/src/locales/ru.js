@@ -54,6 +54,10 @@ export default {
   message_placeholder: 'Сообщение',
   chat_empty: 'Нет сообщений — отправьте первое 🔒',
   chat_reply_to: 'Ответ на',
+  copy_text: 'Копировать текст',
+  copy_all: 'Копировать всё',
+  copied: 'Скопировано',
+  copy_failed: 'Не удалось скопировать',
 
   // Contacts
   contacts_title: 'Контакты',

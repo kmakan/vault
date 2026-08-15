@@ -54,6 +54,10 @@ export default {
   message_placeholder: '输入消息',
   chat_empty: '暂无消息 — 发送第一条 🔒',
   chat_reply_to: '回复',
+  copy_text: '复制文本',
+  copy_all: '复制全部',
+  copied: '已复制',
+  copy_failed: '复制失败',
 
   // Contacts
   contacts_title: '联系人',
