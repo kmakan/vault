@@ -55,7 +55,7 @@
           :class="['contact-item', { active: activeChat === contact.email }]"
           @click="selectChat(contact.email)"
         >
-          <UserAvatar :email="contact.email" :size="36" />
+          <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
           <div class="contact-info">
             <div class="contact-name">{{ contact.name }}</div>
             <div class="contact-email">{{ contact.email }}</div>
@@ -259,7 +259,7 @@
               </div>
             </template>
             <template v-else>
-              <UserAvatar :email="activeChat" :size="40" />
+              <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
             </template>
             <div>
               <h3>{{ activeChatName }}</h3>

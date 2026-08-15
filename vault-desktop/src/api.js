@@ -257,7 +257,6 @@ export class ApiClient {
     for (const m of accepts) {
       const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
-      if (peers.has(sender)) continue; // ключ уже сохранён
       let parsed;
       try {
         parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
@@ -265,12 +264,15 @@ export class ApiClient {
         continue;
       }
       if (!parsed || !parsed.public_key) continue;
+      // Профиль/аватар обновляем ВСЕГДА (даже если ключ уже сохранён) —
+      // иначе аватар, загруженный после принятия контакта, никогда не дойдёт.
+      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      if (peers.has(sender)) continue; // ключ уже сохранён — только профиль обновили
       try {
         await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
       } catch (e) {
         continue;
       }
-      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
       if (!this.contacts.some(c => c.email === sender)) {
         this.contacts.push({ id: sender, email: sender, name: parsed.sender_name || sender, online: false });
       }
@@ -507,6 +509,11 @@ export class ApiClient {
     if (avatar) p.avatar = avatar;
     if (name || avatar) profiles[email] = p;
     localStorage.setItem('vault-profiles', JSON.stringify(profiles));
+    // Синхронизируем быстрый кэш UserAvatar (vault-avatar-<email>),
+    // чтобы 1-на-1 чат и список контактов видели аватар без getProfile.
+    if (avatar) {
+      localStorage.setItem('vault-avatar-' + email, avatar);
+    }
   }
   getProfile(email) {
     if (!email) return null;
