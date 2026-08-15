@@ -1174,7 +1174,7 @@ export default {
         }
         // QR-скан даёт только публичный ключ (без email) — спросим email контакта,
         // т.к. peerKeys индексируется по email (см. loadStoredPeerKeys).
-        const email = prompt('Email контакта?');
+        const email = await prompt('Email контакта?');
         if (!email || !email.includes('@')) {
           alert('Введите email контакта');
           return;

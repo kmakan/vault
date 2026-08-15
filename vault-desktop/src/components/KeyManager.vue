@@ -165,7 +165,7 @@ export default {
       }
     },
     async removePeerKey(email) {
-      if (!confirm(`Remove peer key for ${email}?`)) return;
+      if (!(await confirm(`Remove peer key for ${email}?`))) return;
       try {
         await crypto.removePeerKey(email);
         this.peerKeys = await crypto.loadPeerKeys();
@@ -175,8 +175,8 @@ export default {
       }
     },
     async confirmDelete() {
-      if (!confirm('Delete ALL keys? This cannot be undone.')) return;
-      if (!confirm('Are you really sure? All encryption keys will be lost.')) return;
+      if (!(await confirm('Delete ALL keys? This cannot be undone.'))) return;
+      if (!(await confirm('Are you really sure? All encryption keys will be lost.'))) return;
       try {
         await crypto.deleteAllKeys();
         await this.loadState();

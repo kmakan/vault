@@ -185,7 +185,7 @@ export default {
       }
     },
     async deleteAccount(id) {
-      if (!confirm('Удалить аккаунт? Ключи E2E останутся.')) return;
+      if (!(await confirm('Удалить аккаунт? Ключи E2E останутся.'))) return;
       try { await api.deleteEmailAccount(id); await this.loadAccounts(); }
       catch (e) { alert('Ошибка: ' + e.message); }
     },

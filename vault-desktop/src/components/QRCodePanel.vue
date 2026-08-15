@@ -1,73 +1,72 @@
 <template>
   <div class="qr-code-panel">
-    <h3>QR Code для обмена ключами</h3>
-    
-    <div class="qr-section">
-      <div class="qr-display">
-        <canvas ref="qrCanvas"></canvas>
+    <div class="qr-panel-card">
+      <h3>Добавить контакт</h3>
+      <p class="panel-subtitle">Обменяйтесь ключами, чтобы начать защищённый чат</p>
+
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Сообщите собеседнику ваш ID</h4>
+          <div class="id-row">
+            <code class="my-id">{{ myEmail }}</code>
+            <button @click="copyMyId">Копировать</button>
+          </div>
+          <details class="qr-collapse" v-if="publicKey">
+            <summary>Показать QR-код (для Android / другого устройства)</summary>
+            <div class="qr-display">
+              <canvas ref="qrCanvas"></canvas>
+            </div>
+            <p class="hint">Отсканируйте код устройством с Vault — ключ добавится автоматически.</p>
+          </details>
+        </div>
       </div>
-      <p class="qr-instructions">
-        Отсканируйте этот QR-код другим устройством для обмена публичным ключом
-      </p>
-    </div>
-    
-    <div class="scan-section">
-      <h4>Сканировать QR-код</h4>
-      <div class="scan-input">
-        <input 
-          v-model="scanInput" 
-          placeholder="Вставьте QR-код или введите публичный ключ вручную..."
-          @keyup.enter="addScannedKey"
-        />
-        <button @click="addScannedKey" :disabled="!scanInput">
-          Добавить ключ
-        </button>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Введите ID собеседника</h4>
+          <div class="scan-input">
+            <input
+              v-model="inviteEmail"
+              placeholder="ID собеседника (email)"
+              @keyup.enter="sendInviteById"
+            />
+            <button @click="sendInviteById" :disabled="!inviteEmail">
+              Отправить запрос
+            </button>
+          </div>
+          <p class="hint">
+            Собеседник получит приглашение. После принятия чат появится в списке.
+          </p>
+        </div>
       </div>
-      <p class="scan-instructions">
-        Или введите публичный ключ вручную в формате hex
-      </p>
-    </div>
-    
-    <div class="invite-section">
-      <h4>Пригласить участника по id</h4>
-      <div class="scan-input">
-        <input 
-          v-model="inviteEmail" 
-          type="email"
-          placeholder="Email участника (например, user@example.com)"
-          @keyup.enter="sendInviteById"
-        />
-        <button @click="sendInviteById" :disabled="!inviteEmail">
-          Пригласить
-        </button>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>Или вставьте ключ из QR-кода собеседника</h4>
+          <div class="scan-input">
+            <input
+              v-model="scanInput"
+              placeholder="Содержимое QR-кода или ключ (hex)"
+              @keyup.enter="addScannedKey"
+            />
+            <button @click="addScannedKey" :disabled="!scanInput">
+              Добавить ключ
+            </button>
+          </div>
+          <p class="hint">Подходит, если собеседник прислал вам свой QR-код или ключ.</p>
+        </div>
       </div>
-      <p class="scan-instructions">
-        Собеседник получит запрос контакта и после принятия появится в ваших чатах
-      </p>
+
+      <button class="close-btn" @click="$emit('close')">Закрыть</button>
     </div>
-    
-    <div class="key-info">
-      <h4>Ваш публичный ключ</h4>
-      <code class="public-key">{{ publicKey }}</code>
-      <button @click="copyPublicKey">Копировать</button>
-    </div>
-    
-    <div v-if="myEmail" class="key-info">
-      <h4>Ваш id участника</h4>
-      <code class="public-key">{{ myEmail }}</code>
-      <button @click="copyMyId">Копировать id</button>
-      <p class="scan-instructions">
-        Передайте его собеседнику — он введёт его в этом окне и отправит вам предложение обменяться ключами
-      </p>
-    </div>
-    
-    <button @click="$emit('close')">Закрыть</button>
   </div>
 </template>
 
 <script>
 import QRCode from 'qrcode';
-import crypto from '../crypto.js';
 
 export default {
   name: 'QRCodePanel',
@@ -94,7 +93,7 @@ export default {
     async generateQRCode() {
       const canvas = this.$refs.qrCanvas;
       if (!canvas || !this.publicKey) return;
-      
+
       try {
         // Create a compact QR code data
         const qrData = {
@@ -103,9 +102,9 @@ export default {
           publicKey: this.publicKey,
           timestamp: Date.now()
         };
-        
+
         await QRCode.toCanvas(canvas, JSON.stringify(qrData), {
-          width: 200,
+          width: 180,
           margin: 2,
           color: {
             dark: '#000000',
@@ -118,11 +117,11 @@ export default {
     },
     async addScannedKey() {
       if (!this.scanInput) return;
-      
+
       try {
         // Try to parse as QR data
         let publicKey = this.scanInput;
-        
+
         // Check if it's a JSON QR code
         if (this.scanInput.startsWith('{')) {
           const qrData = JSON.parse(this.scanInput);
@@ -130,28 +129,23 @@ export default {
             publicKey = qrData.publicKey;
           }
         }
-        
+
         // Validate the public key
         if (!/^[0-9a-f]{64}$/i.test(publicKey)) {
-          alert('Неверный формат публичного ключа. Ожидается hex строка длиной 64 символа.');
+          alert('Неверный формат ключа. Ожидается hex строка длиной 64 символа.');
           return;
         }
-        
+
         // Emit event to add the key
         this.$emit('key-scanned', publicKey);
         this.scanInput = '';
-        
       } catch (error) {
         alert('Ошибка при обработке QR-кода: ' + error.message);
       }
     },
-    copyPublicKey() {
-      navigator.clipboard.writeText(this.publicKey);
-      alert('Публичный ключ скопирован в буфер обмена');
-    },
     copyMyId() {
       navigator.clipboard.writeText(this.myEmail);
-      alert('Ваш id участника скопирован в буфер обмена');
+      alert('Ваш ID скопирован — отправьте его собеседнику');
     },
     sendInviteById() {
       const email = (this.inviteEmail || '').trim();
@@ -177,27 +171,129 @@ export default {
   bottom: 0;
   background: rgba(0, 0, 0, 0.8);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   z-index: 1000;
 }
 
-.qr-section {
-  text-align: center;
-  margin-bottom: 20px;
+.qr-panel-card {
+  background: #141a26;
+  border: 1px solid #2e3a52;
+  border-radius: 12px;
+  padding: 24px 28px;
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  color: #e6edf3;
+}
+
+.qr-panel-card h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  color: #f3f4f6;
+}
+
+.panel-subtitle {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: #8b949e;
+}
+
+.step {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.step-num {
+  flex: 0 0 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #0f3460;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-body h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #e6edf3;
+  font-weight: 600;
+}
+
+.id-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.my-id {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: #0f1420;
+  border: 1px solid #2e3a52;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #e6edf3;
+  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.id-row button {
+  padding: 8px 12px;
+  background: #0f3460;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.id-row button:hover {
+  background: #16487f;
+}
+
+.qr-collapse {
+  margin-top: 10px;
+}
+
+.qr-collapse summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #7ea6d8;
+  user-select: none;
+}
+
+.qr-collapse summary:hover {
+  color: #a5c4ec;
 }
 
 .qr-display {
-  background: white;
-  padding: 20px;
+  background: #fff;
+  padding: 12px;
   border-radius: 8px;
-  margin-bottom: 10px;
+  margin-top: 10px;
+  width: fit-content;
 }
 
-.scan-section {
-  margin-bottom: 20px;
-  width: 300px;
+.qr-display canvas {
+  display: block;
 }
 
 .scan-input {
@@ -207,22 +303,30 @@ export default {
 
 .scan-input input {
   flex: 1;
-  padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
-  border-radius: 4px;
-  color: white;
+  min-width: 0;
+  padding: 8px 10px;
+  background: #0f1420;
+  border: 1px solid #2e3a52;
+  border-radius: 6px;
+  color: #e6edf3;
   font-family: monospace;
   font-size: 12px;
+  outline: none;
+}
+
+.scan-input input:focus {
+  border-color: #4f6fa8;
 }
 
 .scan-input button {
-  padding: 8px 16px;
+  padding: 8px 12px;
   background: #0f3460;
   border: none;
-  border-radius: 4px;
-  color: white;
+  border-radius: 6px;
+  color: #fff;
   cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .scan-input button:disabled {
@@ -230,35 +334,25 @@ export default {
   cursor: not-allowed;
 }
 
-.key-info {
-  margin-bottom: 20px;
-  text-align: center;
-}
-
-.public-key {
-  display: block;
-  padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
-  border-radius: 4px;
-  font-family: monospace;
-  font-size: 10px;
-  word-break: break-all;
-  margin-bottom: 8px;
-}
-
-.qr-instructions, .scan-instructions {
+.hint {
   font-size: 12px;
-  color: #888;
-  margin-top: 8px;
+  color: #8b949e;
+  margin: 8px 0 0;
 }
 
-button:last-child {
-  padding: 8px 16px;
-  background: #16213e;
+.close-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px;
+  background: #232b3d;
   border: none;
-  border-radius: 4px;
-  color: white;
+  border-radius: 8px;
+  color: #c8d1e0;
   cursor: pointer;
+  font-size: 14px;
+}
+
+.close-btn:hover {
+  background: #2e3a52;
 }
 </style>

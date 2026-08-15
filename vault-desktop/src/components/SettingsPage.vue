@@ -154,9 +154,9 @@ export default {
       // Forward to the app root so the visible header logo swaps live
       this.$emit('icon-changed', id);
     },
-    clearLocalData() {
-      if (!confirm('Вы уверены? Все данные будут удалены навсегда.')) return;
-      if (!confirm('Точно удалить?')) return;
+    async clearLocalData() {
+      if (!(await confirm('Вы уверены? Все данные будут удалены навсегда.'))) return;
+      if (!(await confirm('Точно удалить?'))) return;
       localStorage.clear();
       indexedDB.deleteDatabase('vault');
       location.reload();
