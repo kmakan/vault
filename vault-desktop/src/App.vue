@@ -930,10 +930,25 @@ export default {
       } catch (e) { /* fallback below */ }
       return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     },
-    // Уменьшить аватар до 64x64 JPEG, если dataURL слишком большой (лимит ~8KB,
-    // чтобы не раздувать каждое письмо). Возвращает '' если не удалось.
+    // Временная диагностика аватаров: пишем в localStorage, чтобы читать
+    // эмпирически (консоль WebView не всегда доступна). Ключ vault-avatar-trace.
+    trace(msg) {
+      try {
+        const key = 'vault-avatar-trace';
+        const arr = JSON.parse(localStorage.getItem(key) || '[]');
+        arr.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
+        while (arr.length > 40) arr.shift();
+        localStorage.setItem(key, JSON.stringify(arr));
+      } catch (e) { /* ignore */ }
+      console.log('[avatar-trace] ' + msg);
+    },
+    // Уменьшить аватар до 64x64 JPEG, если dataURL слишком большой (чтобы не
+    // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
+    // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
+    // 200KB, а вот пустой аватар = собеседник никогда не увидит картинку).
     async shrinkAvatar(dataUrl) {
-      if (!dataUrl || dataUrl.length <= 8192) return dataUrl || '';
+      if (!dataUrl) return '';
+      if (dataUrl.length <= 8192) return dataUrl;
       try {
         const img = new Image();
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
@@ -942,16 +957,20 @@ export default {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, 64, 64);
         const small = canvas.toDataURL('image/jpeg', 0.7);
-        return small.length <= 8192 ? small : '';
+        // Берём сжатый только если он реально получился и меньше оригинала.
+        if (small && small.length > 0 && small.length < dataUrl.length) return small;
+        return dataUrl; // сжатие не помогло — шлём оригинал, не роняем аватар
       } catch (e) {
-        return '';
+        return dataUrl; // canvas недоступен — шлём оригинал, не роняем аватар
       }
     },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text) {
       const name = localStorage.getItem('vault-display-name') || this.email || '';
       let avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+      const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
+      this.trace('send me=' + this.email + ' name=' + name + ' avatarRaw=' + rawLen + ' avatarFinal=' + avatar.length);
       return JSON.stringify({
         vault: 1,
         id: this.newMessageId(),
@@ -1111,6 +1130,7 @@ export default {
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
+                  this.trace('recv sender=' + sender + ' name=' + (env.name||'') + ' avatarLen=' + (env.avatar||'').length);
                   api.saveProfile(sender, env.name, env.avatar);
                 }
               } else {

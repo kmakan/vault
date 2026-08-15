@@ -218,7 +218,6 @@ export class ApiClient {
       const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
       if (!sender || sender === this.email) continue; // себе не предлагаем
       if (declined.includes(`${sender}|${m.uid}`)) continue;
-      if (peers.has(sender)) continue; // уже контакт
       let parsed;
       try {
         parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
@@ -226,6 +225,11 @@ export class ApiClient {
         continue;
       }
       if (!parsed || !parsed.public_key) continue;
+      // Профиль/аватар сохраняем ВСЕГДА — даже если это уже контакт.
+      // Иначе аватар из инвайта никогда не дойдёт до существующего контакта
+      // (раньше здесь был continue до парсинга — корень асимметрии аватаров).
+      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      if (peers.has(sender)) continue; // уже контакт — попап не показываем
       out.push({
         sender,
         sender_name: parsed.sender_name || sender,
