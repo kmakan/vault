@@ -105,25 +105,27 @@ impl EmailClient {
         Ok(())
     }
 
-    /// Find the Junk/Spam mailbox name (Gmail localizes it, e.g. «Спам»),
-    /// using the standard \Junk attribute from LIST.
-    fn find_junk_folder(&mut self) -> Option<String> {
+    /// Find a special-use mailbox by LIST attribute (e.g. "\All", "\Junk").
+    /// Gmail localizes folder names (e.g. «Вся почта», «Спам») — the attribute
+    /// is the only stable way to locate them.
+    fn find_folder_by_attr(&mut self, attr: &str) -> Option<String> {
         let session = self
             .imap_session
             .as_mut()
             .context("Not connected to IMAP server")
             .ok()?;
+        let attr_l = attr.to_ascii_lowercase();
         let list = session.list(None, Some("*")).ok()?;
         for item in list.iter() {
             let name = item.name();
-            let is_junk = item.attributes().iter().any(|a| {
+            let hit = item.attributes().iter().any(|a| {
                 if let imap::types::NameAttribute::Custom(s) = a {
-                    s.to_ascii_lowercase().contains("junk")
+                    s.to_ascii_lowercase().contains(&attr_l)
                 } else {
                     false
                 }
             });
-            if is_junk && !name.is_empty() {
+            if hit && !name.is_empty() {
                 return Some(name.to_string());
             }
         }
@@ -185,12 +187,17 @@ impl EmailClient {
         Ok(messages)
     }
 
-    /// Fetch the most recent 50 messages from INBOX plus the Junk mailbox
-    /// (Gmail routes Vault's encrypted mails to Junk — without this the
-    /// desktop would silently miss incoming messages, see CLI fix).
+    /// Fetch recent messages: the All Mail mailbox (full history — incoming
+    /// AND sent, so both sides of a 1:1 chat are visible) plus the Junk
+    /// mailbox (Gmail routes Vault's encrypted mails there).
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
-        let mut messages = self.fetch_folder("INBOX", 50)?;
-        if let Some(junk) = self.find_junk_folder() {
+        // \All presents the whole message store; fall back to INBOX if the
+        // provider doesn't expose it.
+        let all = self
+            .find_folder_by_attr("\\All")
+            .unwrap_or_else(|| "INBOX".to_string());
+        let mut messages = self.fetch_folder(&all, 100)?;
+        if let Some(junk) = self.find_folder_by_attr("\\Junk") {
             if let Ok(junk_msgs) = self.fetch_folder(&junk, 50) {
                 messages.extend(junk_msgs);
             }
@@ -250,6 +257,7 @@ impl EmailClient {
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
                 .credentials(creds)
                 .port(self.config.smtp_port)
+                .timeout(Some(std::time::Duration::from_secs(30)))
                 .build();
 
         transport

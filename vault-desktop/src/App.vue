@@ -811,6 +811,13 @@ export default {
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
       }
+      // Если письма ещё не загружены (клик сразу после входа — поллинг идёт
+      // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.
+      if (this.emails.length === 0) {
+        try {
+          await this.loadEmails(true);
+        } catch (e) { /* Not connected — тихий фолбэк */ }
+      }
       await this.loadMessages(email);
     },
     async selectGroup(group) {
@@ -1124,6 +1131,7 @@ export default {
         }
 
         let content = payload;
+        console.log('[sendMessage] step1 activeChatType=' + this.activeChatType + ' activeChat=' + this.activeChat);
 
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
@@ -1144,12 +1152,9 @@ export default {
             // and authenticate it as ours.
             content = await crypto.encryptVault(payload);
           }
-          await api.sendMessage(this.activeChat, content);
-          // Reload from server to get proper server timestamp and UUID
-          await this.loadMessages(this.activeChat);
-          // Отправленное письмо живёт в Sent, а список чата строится из INBOX —
-          // без локального добавления отправитель не видит своё сообщение
-          // (его письмо подхватится при поллинге только после ответа).
+          // Оптимистично показываем своё сообщение сразу: SMTP Gmail отвечает
+          // медленно (до минуты), ждать отправку в UI не нужно — письмо при
+          // доставке подхватится поллингом (startPolling обновляет активный чат).
           this.messages.push({
             id: 'local-' + Date.now(),
             content: payload,
@@ -1158,6 +1163,11 @@ export default {
             encrypted: true,
             vault: true,
           });
+          try {
+            await api.sendMessage(this.activeChat, content);
+          } catch (e) {
+            alert('Failed to send message: ' + e.message);
+          }
         }
 
         this.newMessage = '';
@@ -1247,6 +1257,11 @@ export default {
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
           await this.loadEmails(true);
+          // Новые письма могли прийти в любой момент — перерисовываем
+          // открытый чат, чтобы не приходилось переоткрывать его вручную.
+          if (this.activeChat && this.activeChatType === 'chat') {
+            await this.loadMessages(this.activeChat);
+          }
         } catch (e) {
           // "Not connected" — сессия IMAP умерла; останавливаем поллинг,
           // следующий релог через mounted()/экран логина.
