@@ -825,6 +825,22 @@ export default {
         } catch (e) { /* Not connected — тихий фолбэк */ }
       }
       await this.loadMessages(email);
+      // Как в других мессенджерах: при открытии чата — сразу к последнему
+      // сообщению (вниз).
+      this.scrollToBottom(true);
+    },
+    // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
+    // своя отправка); force=false — только если пользователь уже у низа
+    // (поллинг не должен выдёргивать из чтения истории).
+    scrollToBottom(force = false) {
+      this.$nextTick(() => {
+        const el = this.$refs.messagesContainer;
+        if (!el) return;
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+        if (force || nearBottom) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
     },
     async selectGroup(group) {
       // Unsubscribe from previous chat
@@ -865,6 +881,7 @@ export default {
       }
 
       await this.loadGroupMessages(group.id);
+      this.scrollToBottom(true);
     },
     // Parse message content — detect vault_attachment JSON and extract preview
     parseMessageContent(content) {
@@ -1204,9 +1221,8 @@ export default {
 
         this.newMessage = '';
         this.cancelReply();
-        this.$nextTick(() => {
-          this.$refs.messagesContainer.scrollTop = this.$refs.messagesContainer.scrollHeight;
-        });
+        // Своё сообщение — всегда прокручиваем вниз.
+        this.scrollToBottom(true);
       } catch (error) {
         alert('Failed to send message: ' + error.message);
       }
@@ -1296,6 +1312,9 @@ export default {
           // открытый чат, чтобы не приходилось переоткрывать его вручную.
           if (this.activeChat && this.activeChatType === 'chat') {
             await this.loadMessages(this.activeChat);
+            // Не выдёргиваем из чтения истории: прокручиваем только если
+            // пользователь уже у низа чата.
+            this.scrollToBottom(false);
           }
         } catch (e) {
           // "Not connected" — сессия IMAP умерла; останавливаем поллинг,
@@ -2328,6 +2347,7 @@ body {
 
 .contacts-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -2516,9 +2536,14 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* min-width/min-height: 0 — без них flex-ребёнок не сжимается меньше
+     контента: список сообщений выпирает и выталкивает поле ввода за экран. */
+  min-width: 0;
+  min-height: 0;
 }
 
 .chat-header {
+  flex-shrink: 0;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
@@ -2600,6 +2625,10 @@ body {
 
 .messages {
   flex: 1;
+  /* Ключевой фикс прокрутки: flex-элемент с overflow:auto обязан иметь
+     min-height: 0, иначе он растягивается на высоту контента и скролл
+     (в т.ч. колесиком мыши) не появляется. */
+  min-height: 0;
   overflow-y: auto;
   padding: 24px;
   display: flex;
@@ -2689,6 +2718,7 @@ body {
 
 /* Reply quote bar above the message input */
 .reply-bar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2788,6 +2818,7 @@ body {
 
 /* Typing indicator */
 .typing-indicator {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2880,10 +2911,14 @@ body {
 
 .message {
   position: relative;
+  /* Сообщения не должны сжиматься по высоте внутри flex-колонки .messages —
+     иначе при длинной переписке они сплющиваются вместо прокрутки. */
+  flex-shrink: 0;
 }
 
 /* Chat search bar */
 .chat-search-bar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3189,6 +3224,9 @@ body {
    ═══════════════════════════════════════════════════════════════ */
 
 .message-input {
+  /* Закреплена внизу чата при любой длине переписки (как в других
+     мессенджерах): не сжимается и не уходит за экран. */
+  flex-shrink: 0;
   padding: 16px 24px;
   border-top: 1px solid var(--border-subtle);
   display: flex;
