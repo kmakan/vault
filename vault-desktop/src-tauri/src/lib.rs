@@ -200,13 +200,17 @@ async fn email_fetch_messages(
 }
 
 #[tauri::command]
-async fn email_fetch_body(uid: String, state: State<'_, EmailState>) -> Result<String, String> {
+async fn email_fetch_body(
+    uid: String,
+    folder: Option<String>,
+    state: State<'_, EmailState>,
+) -> Result<String, String> {
     let mut guard = state.0.lock().await;
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
     client
-        .fetch_message_body(&uid)
+        .fetch_message_body(&uid, &folder.unwrap_or_else(|| "INBOX".to_string()))
         .await
         .map_err(|e| e.to_string())
 }

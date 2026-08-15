@@ -926,7 +926,7 @@ export default {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
           try {
-            const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id);
+            const body = await api.fetchEmailBody(m.accountId || 'local', m.uid || m.id, m.folder);
             const parsed = this.parseMessageContent(body);
             content = parsed.text || content;
             if (parsed.attachment) {
@@ -1147,6 +1147,17 @@ export default {
           await api.sendMessage(this.activeChat, content);
           // Reload from server to get proper server timestamp and UUID
           await this.loadMessages(this.activeChat);
+          // Отправленное письмо живёт в Sent, а список чата строится из INBOX —
+          // без локального добавления отправитель не видит своё сообщение
+          // (его письмо подхватится при поллинге только после ответа).
+          this.messages.push({
+            id: 'local-' + Date.now(),
+            content: payload,
+            from: 'me',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            encrypted: true,
+            vault: true,
+          });
         }
 
         this.newMessage = '';

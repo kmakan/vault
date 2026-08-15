@@ -48,7 +48,7 @@ impl Default for EmailConfig {
 }
 
 /// A message summary. Body is intentionally NOT included in the list — it is
-/// heavy. Fetch it on demand via `fetch_message_body(uid)`.
+/// heavy. Fetch it on demand via `fetch_message_body(uid, folder)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailMessage {
     pub id: String,
@@ -57,6 +57,17 @@ pub struct EmailMessage {
     pub subject: String,
     pub date: String,
     pub is_read: bool,
+    /// Mailbox the message lives in ("INBOX" or the Junk folder name) — needed
+    /// because UIDs are per-folder, so fetching the body requires re-selecting
+    /// the same folder. Gmail's spam filter routes Vault's encrypted mails to
+    /// Junk; without this the desktop would silently miss them (CLI already
+    /// searches Junk — see vault-client email.rs).
+    #[serde(default = "default_inbox")]
+    pub folder: String,
+}
+
+fn default_inbox() -> String {
+    "INBOX".to_string()
 }
 
 pub struct EmailClient {
@@ -94,15 +105,43 @@ impl EmailClient {
         Ok(())
     }
 
-    /// Fetch the most recent 50 messages from INBOX. UIDs are sorted descending
-    /// (newest first) so we take the latest messages, not the oldest.
-    pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
+    /// Find the Junk/Spam mailbox name (Gmail localizes it, e.g. «Спам»),
+    /// using the standard \Junk attribute from LIST.
+    fn find_junk_folder(&mut self) -> Option<String> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")
+            .ok()?;
+        let list = session.list(None, Some("*")).ok()?;
+        for item in list.iter() {
+            let name = item.name();
+            let is_junk = item.attributes().iter().any(|a| {
+                if let imap::types::NameAttribute::Custom(s) = a {
+                    s.to_ascii_lowercase().contains("junk")
+                } else {
+                    false
+                }
+            });
+            if is_junk && !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
+    /// Fetch the most recent `limit` messages from one mailbox, newest first.
+    fn fetch_folder(
+        &mut self,
+        folder: &str,
+        limit: usize,
+    ) -> Result<Vec<EmailMessage>> {
         let session = self
             .imap_session
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        session.select("INBOX")?;
+        session.select(folder)?;
 
         let message_ids = session.uid_search("ALL")?;
         let mut messages = Vec::new();
@@ -110,7 +149,7 @@ impl EmailClient {
         let mut uids: Vec<u32> = message_ids.iter().copied().collect();
         uids.sort_by(|a, b| b.cmp(a));
 
-        for uid in uids.iter().take(50) {
+        for uid in uids.iter().take(limit) {
             if let Ok(data) = session.uid_fetch(uid.to_string(), "(UID FLAGS RFC822.HEADER)") {
                 for fetch in data.iter() {
                     let uid = fetch.uid.unwrap_or_default().to_string();
@@ -135,6 +174,7 @@ impl EmailClient {
                             subject,
                             date,
                             is_read,
+                            folder: folder.to_string(),
                         });
                     }
                 }
@@ -145,23 +185,51 @@ impl EmailClient {
         Ok(messages)
     }
 
+    /// Fetch the most recent 50 messages from INBOX plus the Junk mailbox
+    /// (Gmail routes Vault's encrypted mails to Junk — without this the
+    /// desktop would silently miss incoming messages, see CLI fix).
+    pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
+        let mut messages = self.fetch_folder("INBOX", 50)?;
+        if let Some(junk) = self.find_junk_folder() {
+            if let Ok(junk_msgs) = self.fetch_folder(&junk, 50) {
+                messages.extend(junk_msgs);
+            }
+        }
+        // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
+        let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
+        Ok(messages)
+    }
+
     /// Fetch the body of a single message by UID, decoding quoted-printable so
     /// the Vault encrypted base64 block survives provider line wrapping.
-    pub async fn fetch_message_body(&mut self, uid: &str) -> Result<String> {
+    /// `folder` must match the mailbox the message lives in (UIDs are
+    /// per-folder); defaults to INBOX.
+    pub async fn fetch_message_body(&mut self, uid: &str, folder: &str) -> Result<String> {
         let session = self
             .imap_session
             .as_mut()
             .context("Not connected to IMAP server")?;
 
+        if folder != "INBOX" {
+            let _ = session.select(folder);
+        }
+
+        let mut body = String::new();
         if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
             for fetch in data.iter() {
-                if let Some(body) = fetch.text() {
-                    return Ok(decode_quoted_printable(&String::from_utf8_lossy(body)));
+                if let Some(text) = fetch.text() {
+                    body = decode_quoted_printable(&String::from_utf8_lossy(text));
+                    break;
                 }
             }
         }
 
-        Ok(String::new())
+        // Вернуть сессию в INBOX.
+        if folder != "INBOX" {
+            let _ = session.select("INBOX");
+        }
+
+        Ok(body)
     }
 
     pub async fn send_email(&mut self, to: &str, subject: &str, body: &str) -> Result<()> {

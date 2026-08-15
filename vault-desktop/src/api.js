@@ -94,7 +94,7 @@ export class ApiClient {
     const mine = msgs.filter(m => (m.subject || '').startsWith('VaultGroup: ' + groupId));
     const out = [];
     for (const m of mine) {
-      const body = await this.fetchEmailBody('local', m.uid);
+      const body = await this.fetchEmailBody('local', m.uid, m.folder);
       out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
     }
     // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
@@ -299,11 +299,12 @@ export class ApiClient {
       subject: m.subject,
       date: m.date,
       is_read: m.is_read,
+      folder: m.folder || 'INBOX',
     }));
   }
 
-  async fetchEmailBody(accountId, uid) {
-    return await invoke('email_fetch_body', { uid: String(uid) });
+  async fetchEmailBody(accountId, uid, folder) {
+    return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }
 
   async sendEmail(accountId, emailData = {}) {
