@@ -80,11 +80,17 @@ export class ApiClient {
   async getMessages(chatId) { return []; } // TODO serverless-chats via email
   async sendMessage(chatId, content, contentType) {
     // Serverless: a chat message IS an encrypted vault email to the peer — the
-    // chat id is the peer's email address. The "Vault:" subject marker is the
-    // single transport-level signal that both the CLI and the vault inbox
-    // rely on to flag the incoming message as a vault message.
+    // chat id is the peer's email address.
+    //
+    // STEALTH: the subject is intentionally EMPTY. The old "Vault: <peer>"
+    // subject leaked the very fact that this is a Vault/secure-messenger
+    // conversation to the mail provider (inbox lists, push notifications,
+    // provider logs). Receive does NOT depend on the subject: loadMessages()
+    // locates mail by from/to and authenticates it as a vault message via
+    // AAD-authenticated decryption (decryptVault, AAD="VAULT"). So an empty
+    // subject is safe and removes the transport-level marker.
     const to = chatId;
-    const subject = `Vault: ${to}`;
+    const subject = '';
     const res = await this.sendEmail('local', { to, subject, body: content });
     if (!res || !res.ok) throw new Error('Failed to send vault email');
     return { ok: true };
@@ -124,10 +130,11 @@ export class ApiClient {
     }
     return { ok: true };
   }
-  // Реакция в 1-на-1 чат: зашифрованное письмо VaultReact: <peer>.
-  // Тело — encryptVault(JSON {react:1, msg_id, emoji, action}).
+  // Реакция в 1-на-1 чат: зашифрованное письмо с ПУСТОЙ темой (stealth).
+  // Тело — encryptVault(JSON {react:1, msg_id, emoji, action}); приём
+  // классифицирует по содержимому, а не по теме.
   async sendReaction(peerEmail, encryptedContent) {
-    const subject = 'VaultReact: ' + peerEmail;
+    const subject = '';
     const res = await this.sendEmail('local', { to: peerEmail, subject, body: encryptedContent });
     if (!res || !res.ok) throw new Error('Failed to send reaction email');
     return { ok: true };

@@ -1036,18 +1036,20 @@ export default {
         // (локальное хранилище, инкрементальный поиск с последнего письма).
         .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
         .slice(0, 30);
-      // Письма-реакции (VaultReact:) — не сообщения, а транспорт реакций:
-      // разбираем отдельно, в чат не показываем.
-      const reactEmails = relatedAll.filter(m => (m.subject || '').startsWith('VaultReact:'));
-      const related = relatedAll.filter(m => !(m.subject || '').startsWith('VaultReact:'));
-      console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length + ' react=' + reactEmails.length);
-      if (related.length > 0 || reactEmails.length > 0) {
+      // STEALTH: больше НЕ разделяем письма по теме. И сообщения, и реакции
+      // 1-на-1 идут с ПУСТОЙ темой (см. api.sendMessage / sendReaction) —
+      // провайдер не видит никаких Vault-маркеров. Классификация идёт по
+      // расшифрованному содержимому: {react:1,...} = реакция, {vault:1,...}
+      // = конверт сообщения, иначе = legacy-текст.
+      const related = relatedAll;
+      console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length);
+      if (related.length > 0) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
         // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
         // командой (Rust выбирает папку один раз). Поштучный фетч делал
         // чат пустым на минуту — теперь открытие чата почти мгновенно.
         const byFolder = {};
-        for (const m of [...related, ...reactEmails]) {
+        for (const m of related) {
           const f = m.folder || 'INBOX';
           (byFolder[f] = byFolder[f] || []).push(m);
         }
@@ -1061,25 +1063,9 @@ export default {
             }
           }
         }
-        // Реакции из писем VaultReact: расшифровываем и накапливаем.
+        // Единый проход: расшифровываем каждое письмо и классифицируем по
+        // содержимому (реакция / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
-        for (const m of reactEmails) {
-          const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
-          const body = this.emailBodyCache[cacheKey] || '';
-          if (!body) continue;
-          try {
-            const text = await crypto.decryptVault(body);
-            const obj = JSON.parse(text);
-            if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
-              (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
-                emoji: obj.emoji,
-                user: (m.from || '').toLowerCase().includes(this.email.toLowerCase()) ? this.email : email,
-                action: obj.action === 'remove' ? 'remove' : 'add',
-              });
-            }
-          } catch (e) { /* не наше или битое — пропускаем */ }
-        }
-        if (stale()) return;
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
@@ -1087,36 +1073,48 @@ export default {
           try {
             const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
             const body = this.emailBodyCache[cacheKey] || '';
-            const parsed = this.parseMessageContent(body);
-            content = parsed.text || content;
-            if (parsed.attachment) {
-              content = `${content}\n📎 ${parsed.attachment.name}`;
-            }
             // Vault messages carry a raw base64 body — decrypt with AAD="VAULT".
             // Only a message that authenticates as a vault message is shown in
             // the chat; anything else is treated as ordinary/foreign mail.
             if (this.cryptoReady) {
+              let text;
               try {
-                const text = await crypto.decryptVault(body);
-                // Конверт {vault:1,id,text,name,avatar}: новые сообщения несут
-                // имя/аватар отправителя и стабильный id (для реакций).
-                const env = this.parseEnvelope(text);
-                if (env) {
-                  content = env.text;
-                  if (env.id) msgId = env.id;
-                  // Профиль отправителя — в кэш (аватар/имя у собеседника).
-                  const sender = isOut ? this.email : email;
-                  if (env.name || env.avatar) {
-                    api.saveProfile(sender, env.name, env.avatar);
-                  }
-                } else {
-                  const pp = this.parseMessageContent(text);
-                  content = pp.text || content;
-                }
+                text = await crypto.decryptVault(body);
               } catch (de) {
                 // Cannot authenticate/decrypt as a vault message — not ours.
                 console.log('[decrypt fail] uid=' + (m.uid || m.id) + ' folder=' + (m.folder || 'INBOX') + ' err=' + (de && de.message || de));
                 return null;
+              }
+              // 1) Реакция: {react:1, msg_id, emoji, action} — в чат не
+              //    показываем, накапливаем для applyReactions.
+              try {
+                const robj = JSON.parse(text);
+                if (robj && robj.react === 1 && robj.msg_id && robj.emoji) {
+                  (wireReactions[robj.msg_id] = wireReactions[robj.msg_id] || []).push({
+                    emoji: robj.emoji,
+                    user: isOut ? email : this.email,
+                    action: robj.action === 'remove' ? 'remove' : 'add',
+                  });
+                  return null; // не сообщение
+                }
+              } catch (e) { /* не JSON — продолжаем как сообщение */ }
+              // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
+              //    отправителя и стабильный id (для реакций).
+              const env = this.parseEnvelope(text);
+              if (env) {
+                content = env.text;
+                if (env.id) msgId = env.id;
+                const sender = isOut ? this.email : email;
+                if (env.name || env.avatar) {
+                  api.saveProfile(sender, env.name, env.avatar);
+                }
+              } else {
+                // 3) Legacy: простой текст (старые письма без конверта).
+                const pp = this.parseMessageContent(text);
+                content = pp.text || content;
+                if (pp.attachment) {
+                  content = `${content}\n📎 ${pp.attachment.name}`;
+                }
               }
             } else {
               // No crypto — not a vault message.
