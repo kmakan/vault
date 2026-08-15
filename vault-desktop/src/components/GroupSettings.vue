@@ -60,13 +60,13 @@
           <div class="member-item__info">
             <span class="member-item__email">{{ memberName(member.email) }}</span>
             <span v-if="member.invited" class="member-item__invited">{{ t('invite_pending') }}</span>
-            <span class="member-item__role" :class="'role--' + member.role.toLowerCase()">
+            <span class="member-item__role" :class="'role--' + (member.role || 'Member').toLowerCase()">
               {{ member.role }}
             </span>
           </div>
           <div class="member-item__actions" v-if="isAdmin && member.email !== currentUser">
             <select
-              :value="member.role"
+              :value="member.role || 'Member'"
               @change="$emit('role-change', member.email, $event.target.value)"
               class="role-select"
               :disabled="member.email === group.created_by"

@@ -177,5 +177,9 @@ export default {
   add_member_from_contacts: '从联系人添加成员',
   search_contacts: '搜索联系人…',
   enter_email_manual: '手动输入邮箱',
-  no_contacts: '未找到联系人'
+  no_contacts: '未找到联系人',
+
+  // 一对一聊天：没有密钥的联系人
+  chat_no_key: '还没有对方的密钥——请通过 🔗（添加联系人）交换密钥：输入参与者 ID 或扫描二维码。',
+  contact_no_key_hint: '没有对方密钥——请通过 🔗（参与者 ID 或二维码）交换密钥'
 }

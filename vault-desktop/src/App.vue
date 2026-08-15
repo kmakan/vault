@@ -61,6 +61,7 @@
             <div class="contact-email">{{ contact.email }}</div>
           </div>
           <div class="contact-status">
+            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span class="status-dot" :class="{ online: contact.online }"></span>
           </div>
         </div>
@@ -227,6 +228,26 @@
         </div>
       </div>
       
+      <!-- GROUP SETTINGS MODAL (полноценный оверлей, не сжимает чат) -->
+      <div v-if="showGroupSettings && currentGroup" class="modal-overlay" @click.self="showGroupSettings = false">
+        <div class="group-settings-panel">
+          <GroupSettings
+            :group="currentGroup"
+            :currentUser="email"
+            :profiles="profiles"
+            @close="showGroupSettings = false"
+            @promote="promoteMember"
+            @demote="demoteMember"
+            @role-change="changeMemberRole"
+            @remove="removeMember"
+            @unblock="unblockUser"
+            @leave="leaveGroup"
+            @delete="deleteGroup"
+            @add-member="addMember"
+          />
+        </div>
+      </div>
+
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
@@ -252,7 +273,10 @@
             </div>
           </div>
           <div class="chat-actions">
-            <button @click="showGroupSettings = !showGroupSettings" title="Members">👥</button>
+            <template v-if="activeChatType === 'group'">
+              <button class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
+              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
+            </template>
             <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
             <div class="export-dropdown" v-if="activeChat">
               <button @click="showExportMenu = !showExportMenu" title="Export">📥</button>
@@ -278,23 +302,6 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false">✕</button>
         </div>
 
-        <!-- Group Settings Panel -->
-        <GroupSettings
-          v-if="showGroupSettings && currentGroup"
-          :group="currentGroup"
-          :currentUser="email"
-          :profiles="profiles"
-          @close="showGroupSettings = false"
-          @promote="promoteMember"
-          @demote="demoteMember"
-          @role-change="changeMemberRole"
-          @remove="removeMember"
-          @unblock="unblockUser"
-          @leave="leaveGroup"
-          @delete="deleteGroup"
-          @add-member="addMember"
-        />
-        
         <div class="messages" ref="messagesContainer">
           <div v-if="activeChat && messages.length === 0" class="messages-empty">
             <div class="empty-icon">🔒</div>
@@ -450,6 +457,7 @@ import IconPicker from './components/IconPicker.vue';
 import AppBehavior from './components/AppBehavior.vue';
 import AvatarUpload from './components/AvatarUpload.vue';
 import CipherTool from './components/CipherTool.vue';
+import QRCodePanel from './components/QRCodePanel.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
@@ -471,7 +479,8 @@ export default {
     IconPicker,
     AppBehavior,
     AvatarUpload,
-    CipherTool
+    CipherTool,
+    QRCodePanel
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -782,7 +791,13 @@ export default {
       // Vault chat requires a peer key — without it there is nothing (and nothing
       // encrypted) to show. Contacts without keys are already hidden from the list;
       // this is a hard guard on top.
-      if (!this.peerKeys[email]) return;
+      if (!this.peerKeys[email]) {
+        // Не молчим: объясняем, что нужно обменяться ключами, и сразу открываем
+        // панель 🔗 (QRCodePanel) — ввод id участника или сканирование QR.
+        alert(this.t('chat_no_key') || 'Нет ключа собеседника — обменяйтесь ключами: нажмите 🔗 (Добавить контакт) и введите id участника или отсканируйте QR-код.');
+        this.showQRCode = true;
+        return;
+      }
       // Unsubscribe from previous chat
       if (this.activeChat) {
         ws.unsubscribe(this.activeChat);
@@ -1434,6 +1449,7 @@ export default {
         if (!members.some(m => m.email === email)) {
           members.push({ email, role: 'Member', invited: true });
         }
+        alert((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + email);
       } catch (e) {
         alert('Failed to invite member: ' + e.message);
       }
@@ -1574,7 +1590,7 @@ export default {
       if (!id) return;
       try {
         await api.sendContactInvite(id, this.publicKey);
-        alert('Приглашение отправлено: ' + id);
+        alert((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id);
       } catch (e) {
         alert('Failed to send invite: ' + e.message);
       }
@@ -2062,6 +2078,17 @@ body {
   overflow-y: auto;
 }
 
+/* Group settings modal — рамка вокруг GroupSettings.vue (оверлей, не инлайн) */
+.group-settings-panel {
+  position: relative;
+  background: transparent;
+  width: calc(100% - 40px);
+  max-width: 620px;
+  max-height: calc(100% - 40px);
+  overflow-y: auto;
+  animation: slideUp 0.2s ease;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Avatar Upload Modal
    ═══════════════════════════════════════════════════════════════ */
@@ -2321,6 +2348,17 @@ body {
 
 .contact-status {
   margin-left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Бейдж «нет ключа» — контакт виден (напр. из участников группы), но для
+   чата 1-на-1 нужно сначала обменяться ключами (🔗). */
+.contact-no-key {
+  font-size: 12px;
+  opacity: 0.7;
+  cursor: help;
 }
 
 .status-dot {
@@ -2435,6 +2473,27 @@ body {
 
 .chat-actions button:hover {
   background: var(--bg-hover);
+}
+
+/* Текстовые кнопки действий в шапке группового чата
+   («Добавить участника», «Настройки») — заметнее, чем голые эмодзи. */
+.chat-actions button.chat-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border-radius: var(--radius-sm, 8px);
+  color: var(--text-secondary, #aaa);
+  white-space: nowrap;
+}
+
+.chat-actions button.chat-action-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary, #fff);
+  border-color: var(--border, rgba(255,255,255,0.2));
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2807,6 +2866,21 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 200;
+  animation: fadeIn 0.15s ease;
+}
+
+/* QR code overlay — обёртка для QRCodePanel (обмен ключами :id / QR) */
+.qr-code-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   animation: fadeIn 0.15s ease;
 }
 

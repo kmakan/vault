@@ -178,4 +178,8 @@ export default {
   search_contacts: 'Search contacts…',
   enter_email_manual: 'Enter email manually',
   no_contacts: 'No contacts found',
+
+  // 1-to-1 chats: contact without a key
+  chat_no_key: 'No key for this contact yet — exchange keys: press 🔗 (Add Contact) and enter the participant ID or scan the QR code.',
+  contact_no_key_hint: 'No peer key yet — exchange keys via 🔗 (participant ID or QR)',
 }
