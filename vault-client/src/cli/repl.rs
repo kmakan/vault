@@ -546,29 +546,64 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             match ctx.crypto.decrypt_vault(&body) {
                                 Ok(inner) => {
                                     Output::info("Decrypted vault message:");
-                                    println!("  {}", inner);
 
-                                    // Send read receipt
+                                    // Parse Desktop-compatible envelopes: reactions
+                                    // are applied locally, vault converts show their
+                                    // inner text, and everything else shows raw.
+                                    let displayed =
+                                        match serde_json::from_str::<serde_json::Value>(&inner)
+                                        {
+                                            Ok(obj)
+                                                if obj.get("react").and_then(|v| v.as_i64())
+                                                    == Some(1) =>
+                                            {
+                                                let mid = obj
+                                                    .get("msg_id")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?");
+                                                let em = obj
+                                                    .get("emoji")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?");
+                                                let act = obj
+                                                    .get("action")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("add");
+                                                // Apply to local reaction store, as Desktop
+                                                let user = extract_sender_from_body(&body)
+                                                    .unwrap_or_else(|| "peer".to_string());
+                                                if act == "remove" {
+                                                    let _ = ctx
+                                                        .reaction_store
+                                                        .remove_reaction(mid, em, &user);
+                                                } else {
+                                                    let _ = ctx
+                                                        .reaction_store
+                                                        .add_reaction(mid, em, &user);
+                                                }
+                                                format!(
+                                                    "[reaction {} on message {} ({})]",
+                                                    em, mid, act
+                                                )
+                                            }
+                                            Ok(obj)
+                                                if obj.get("vault").and_then(|v| v.as_i64())
+                                                    == Some(1) =>
+                                            {
+                                                obj.get("text")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string()
+                                            }
+                                            _ => inner.clone(), // legacy: not JSON or old format
+                                        };
+                                    println!("  {}", displayed);
+
+                                    // Record read receipt locally only (no email sent —
+                                    // stealth: the desktop client does not send receipts).
                                     if let Some(ref sender) =
                                         extract_sender_from_body(&body)
                                     {
-                                        let receipt = crate::vault::VaultMessage::receipt(
-                                            ctx.config.email.as_deref().unwrap_or(""),
-                                            sender,
-                                            &id,
-                                            crate::vault::MessageStatus::Read,
-                                        );
-                                        let receipt_body = receipt.to_email_body();
-                                        let _ = client
-                                            .send_email(
-                                                sender,
-                                                &format!("[VAULT-RECEIPT] {}", id),
-                                                &receipt_body,
-                                            )
-                                            .await;
-                                        Output::info("✓ Read receipt sent");
-
-                                        // Record read receipt locally
                                         let reader = ctx.config.email.as_deref().unwrap_or("");
                                         if let Err(e) = ctx
                                             .receipt_store
@@ -620,16 +655,45 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 Output::error("Not connected.");
             }
         }
-        Command::Reply { id, message } => {
+        Command::Reply { id: _id, message } => {
+            // Desktop-compatible reply: send as a vault envelope to the active chat.
+            let to = match ctx.active_chat.clone() {
+                Some(t) => t,
+                None => {
+                    Output::error("No active chat. Use /chat <contact> first.");
+                    return Ok(false);
+                }
+            };
+
             if let Some(ref client) = ctx.email_client {
+                // Set the recipient's public key so we encrypt on the shared
+                // X25519 ECDH secret (Desktop-compatible), like /send.
+                if let Some(contact) = ctx.contact_book.get(&to) {
+                    if !contact.public_key.is_empty() {
+                        if let Err(e) = ctx.crypto.set_peer_key(&contact.public_key) {
+                            Output::warn(&format!("Could not set peer key: {}", e));
+                        }
+                    } else {
+                        Output::warn("Contact has no public key — message will NOT be Desktop-compatible. Add key via /add <email> <name> <pubkey> or /accept first.");
+                    }
+                }
+
+                // Wrap plaintext in the Desktop-compatible JSON envelope,
+                // then encrypt with AAD marker "VAULT".
+                let envelope = serde_json::json!({
+                    "vault": 1,
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "text": &message,
+                    "name": ctx.config.email.as_deref().unwrap_or(""),
+                    "avatar": ""
+                });
                 let encrypted = ctx
                     .crypto
-                    .encrypt_vault(&message)
+                    .encrypt_vault(&envelope.to_string())
                     .unwrap_or_else(|_| ctx.crypto.encrypt(&message));
-                match client
-                    .send_email("", &format!("Re: {}", id), &encrypted)
-                    .await
-                {
+                let subject = String::new(); // stealth — empty subject
+
+                match client.send_email(&to, &subject, &encrypted).await {
                     Ok(_) => Output::success("Reply sent"),
                     Err(e) => Output::error(&format!("Reply failed: {}", e)),
                 }
@@ -666,15 +730,66 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                                 // Try to decrypt and show preview
                                 let preview = if ctx.crypto.is_encrypted(&msg.body) {
-                                    match ctx.crypto.decrypt(&msg.body) {
-                                        Ok(plain) => {
-                                            let lines: Vec<&str> = plain.lines().collect();
-                                            let first_line = lines.first().unwrap_or(&"");
-                                            let short: String =
-                                                first_line.chars().take(40).collect();
-                                            format!("[encrypted] {}...", short)
+                                    // Try AAD-authenticated vault decryption first.
+                                    match ctx.crypto.decrypt_vault(&msg.body) {
+                                        Ok(inner) => {
+                                            // Parse Desktop-compatible envelopes for preview.
+                                            match serde_json::from_str::<serde_json::Value>(&inner)
+                                            {
+                                                Ok(obj)
+                                                    if obj.get("react").and_then(|v| v.as_i64())
+                                                        == Some(1) =>
+                                                {
+                                                    let em = obj
+                                                        .get("emoji")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("?");
+                                                    let mid = obj
+                                                        .get("msg_id")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("?");
+                                                    format!("[react {} → {}]", em, mid)
+                                                }
+                                                Ok(obj)
+                                                    if obj.get("vault").and_then(|v| v.as_i64())
+                                                        == Some(1) =>
+                                                {
+                                                    let short: String = obj
+                                                        .get("text")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("")
+                                                        .chars()
+                                                        .take(40)
+                                                        .collect();
+                                                    format!("[encrypted] {}...", short)
+                                                }
+                                                _ => {
+                                                    let short: String =
+                                                        inner.chars().take(40).collect();
+                                                    format!("[encrypted] {}...", short)
+                                                }
+                                            }
                                         }
-                                        Err(_) => "[encrypted] (cannot decrypt)".to_string(),
+                                        Err(_aad_err) => {
+                                            // Fall back to the legacy non-AAD decrypt for
+                                            // backwards-compatible preview of old messages.
+                                            match ctx.crypto.decrypt(&msg.body) {
+                                                Ok(plain) => {
+                                                    let lines: Vec<&str> =
+                                                        plain.lines().collect();
+                                                    let first_line =
+                                                        lines.first().unwrap_or(&"");
+                                                    let short: String = first_line
+                                                        .chars()
+                                                        .take(40)
+                                                        .collect();
+                                                    format!("[encrypted] {}...", short)
+                                                }
+                                                Err(_) => {
+                                                    "[encrypted] (cannot decrypt)".to_string()
+                                                }
+                                            }
+                                        }
                                     }
                                 } else {
                                     let short: String = msg.body.chars().take(40).collect();

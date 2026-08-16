@@ -20,8 +20,6 @@ pub use folders::FolderStore;
 pub use groups::GroupManager;
 pub use invite::InviteManager;
 pub use media::{MediaInfo, ThumbnailManager, ThumbnailSize};
-pub use protocol::VaultMessage;
 pub use reactions::{Reaction, ReactionStore};
 pub use read_receipts::ReadReceiptStore;
 pub use search::{IndexEntry, MessageIndex};
-pub use status::MessageStatus;
