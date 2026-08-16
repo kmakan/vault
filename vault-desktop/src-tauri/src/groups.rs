@@ -71,7 +71,12 @@ pub fn save_groups(groups: &HashMap<String, Group>) -> Result<()> {
         fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_string_pretty(groups)?;
-    fs::write(&path, json)?;
+    // Атомарная запись: временный файл + rename. Прямой fs::write при
+    // параллельном доступе (несколько окон/процессов) может оставить файл
+    // обрезанным → следующий load получит пустой HashMap → потеря групп.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, json)?;
+    fs::rename(&tmp, &path)?;
     Ok(())
 }
 

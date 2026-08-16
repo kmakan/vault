@@ -312,7 +312,13 @@ impl GroupManager {
             std::fs::create_dir_all(parent)?;
         }
         let data = serde_json::to_string_pretty(&self.groups)?;
-        std::fs::write(&self.storage_path, data)?;
+        // Атомарная запись: сначала во временный файл рядом, затем rename.
+        // Прямой fs::write (truncate+write) при параллельном доступе
+        // (несколько процессов/тестов) оставляет файл пустым/обрезанным,
+        // и следующий load получает пустой HashMap → потеря групп.
+        let tmp = self.storage_path.with_extension("json.tmp");
+        std::fs::write(&tmp, data)?;
+        std::fs::rename(&tmp, &self.storage_path)?;
         Ok(())
     }
 }
@@ -321,9 +327,26 @@ impl GroupManager {
 mod tests {
     use super::*;
 
+    /// Каждый тест получает GroupManager с УНИКАЛЬНЫМ временным файлом.
+    /// Раньше тесты использовали test_mgr() → писали в реальный
+    /// ~/.vault/groups.json; при параллельном прогоне (cargo test) это
+    /// гонка read-modify-write, которая затирала живые группы пользователя.
+    fn test_mgr() -> GroupManager {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "vault-groups-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        GroupManager::with_path(dir.join("groups.json"))
+    }
+
     #[test]
     fn test_create_group() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test Group", "admin@test.com").unwrap();
         assert_eq!(group.name, "Test Group");
         assert_eq!(group.members.len(), 1);
@@ -332,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_add_member() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
         let g = mgr.get_group(&group.id).unwrap();
@@ -341,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_remove_member() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
         mgr.remove_member(&group.id, "user@test.com").unwrap();
@@ -351,14 +374,14 @@ mod tests {
 
     #[test]
     fn test_duplicate_member() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         assert!(mgr.add_member(&group.id, "admin@test.com").is_err());
     }
 
     #[test]
     fn test_promote_member() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
         // Member -> Moderator
@@ -385,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_demote_member() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
         mgr.promote_member(&group.id, "user@test.com").unwrap();
@@ -401,14 +424,14 @@ mod tests {
 
     #[test]
     fn test_cannot_demote_creator() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         assert!(mgr.demote_member(&group.id, "admin@test.com").is_err());
     }
 
     #[test]
     fn test_block_user() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
         mgr.block_user(&group.id, "user@test.com").unwrap();
@@ -418,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_unblock_user() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.block_user(&group.id, "user@test.com").unwrap();
         mgr.unblock_user(&group.id, "user@test.com").unwrap();
@@ -428,7 +451,7 @@ mod tests {
 
     #[test]
     fn test_block_already_blocked() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.block_user(&group.id, "user@test.com").unwrap();
         assert!(mgr.block_user(&group.id, "user@test.com").is_err());
@@ -436,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_create_group_generates_key() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Keyed", "admin@test.com").unwrap();
         assert_eq!(group.group_key.len(), 64, "32 bytes as hex");
         hex::decode(&group.group_key).expect("valid hex");
@@ -444,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_import_group_creates_with_key() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         mgr.import_group("grp_import", "Imported", &"ab".repeat(32), "alice@test.com")
             .unwrap();
         let g = mgr.get_group("grp_import").unwrap();
@@ -454,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_import_group_updates_existing_key() {
-        let mut mgr = GroupManager::new();
+        let mut mgr = test_mgr();
         let group = mgr.create_group("Keyed", "admin@test.com").unwrap();
         // Simulate a group without a key (legacy storage)
         let mut g = mgr.get_group(&group.id).unwrap().clone();
