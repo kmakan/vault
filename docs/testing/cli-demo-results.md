@@ -1,108 +1,264 @@
 # CLI Demo Test Results
 
-Дата: 2026-07-15
+Дата: Вс 16 авг 2026 15:08:55 MSK
 
-## Тест 1: Запуск клиента
-Команда: `cargo run --bin vault-client`
+## Test: Help command
+Команда: `/help`
 
 Вывод:
 ```
-⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
   ⣿                                                            ⣿
   ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
   ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
   ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
-  ⣿   ██║╚██╗██║██╔══╝   ╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
   ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
   ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
   ⣿                                                            ⣿
   ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
   v0.1.0 | type /help for commands
 
-⚠ Not connected. Use /connect <email> <app-password>
+
+  ⚠ Not connected. Use /connect <email> <app-password>
+
+
+  Vault CLI — Commands
+  ──────────────────────────────────────────────────
+  
+    /help [topic]     Show detailed help for a topic
+    /status           Show connection and key status
+    /clear            Clear screen
+    /quit             Exit Vault
+  
+    SESSION
+      /connect <email> <pass> [server]   Connect to IMAP
+      /chat <email>      Enter chat mode
+      /inbox             List recent messages
+      /read <id>         Read a message
+  
+    MESSAGING
+      /send <message>    Send encrypted message
+      /reply <id> <msg>  Reply to a message
+      /forward <id> <email>  Forward a message
+      /thread <subject>  Show message thread
+      /search <query>    Search messages
+  
+    KEYS & ENCRYPTION
+      /keygen            Generate key pair
+      /keys              Show key status
+      /ks <email> [m]  Share public key (copy|signal|pgp|briar)
+      /encrypt <text>    Encrypt text
+      /decrypt <text>    Decrypt text
+  
+    REACTIONS & PINNING
+      /react <id> <emoji>    React to message
+      /unreact <id> <emoji>  Remove reaction
+      /pin <id>              Pin message
+      /unpin <id>            Unpin message
+  
+    GROUPS
+      /cg <name>         Create group
+      /gm <id>           List members
+      /gi <id> <email>   Invite member
+      /gr <id> <email>   Remove member
+      /pm <id> <email>   Promote to admin
+      /dm <id> <email>   Demote to member
+      /bk <id> <email>   Block user
 ```
 
-✅ PASS — Клиент запускается, показывает ASCII баннер и версию
+✅ PASS
 
 ---
 
-## Тест 2: Интерактивный режим
-Команда: Запуск в PTY терминале
+## Test: Status command
+Команда: `/status`
 
-Ожидаемое поведение:
-- REPL запускается
-- Приглашение `vault>` 
-- Команда `/help` показывает список команд
-- `/keygen` генерирует ключи
-- `/status` показывает статус подключения
+Вывод:
+```
 
-⚠️ Требует ручного тестирования в интерактивном терминале (PTY)
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
 
----
 
-## Тест 3: Сборка клиента
-Команда: `cargo build --bin vault-client`
+  ⚠ Not connected. Use /connect <email> <app-password>
 
-✅ PASS — Сборка проходит без ошибок
+  ──────────────────────────────────────────────────
+  ○ Email: not connected
+  ○ Chat: none
+  ○ Keys: none (use /keygen)
+  ──────────────────────────────────────────────────
+```
 
----
-
-## Тест 4: Юнит-тесты
-Команда: `cargo test`
-
-Результат: **62/62 тестов проходят** ✅
-
-Включает:
-- X3DH key exchange (9 тестов)
-- Double Ratchet (4 теста)
-- PAKE authentication (3 теста)
-- XChaCha20-Poly1305 (4 теста)
-- Ed25519 signing (5 тестов)
-- Kyber-1024 post-quantum (4 теста)
-- Hybrid encryption (3 теста)
-- CLI commands (10 тестов)
-- Encryptor/Decryptor (12 тестов)
+✅ PASS
 
 ---
 
-## Тест 5: Slash-команды (проверка наличия в коде)
+## Test: Key generation
+Команда: `/keygen`
 
-| Команда | Описание | Статус |
-|---------|----------|--------|
-| `/help` | Список команд | ✅ Есть |
-| `/status` | Статус подключения | ✅ Есть |
-| `/keygen` | Генерация ключей | ✅ Есть |
-| `/keys` | Просмотр ключей | ✅ Есть |
-| `/connect` | Подключение к почте | ✅ Есть |
-| `/chat` | Выбор чата | ✅ Есть |
-| `/send` | Отправка сообщения | ✅ Есть |
-| `/inbox` | Входящие | ✅ Есть |
-| `/read` | Чтение сообщения | ✅ Есть |
-| `/reply` | Ответ на сообщение | ✅ Есть |
-| `/contacts` | Список контактов | ✅ Есть |
-| `/add` | Добавить контакт | ✅ Есть |
-| `/encrypt` | Шифрование текста | ✅ Есть |
-| `/decrypt` | Дешифрование текста | ✅ Есть |
-| `/creategroup` | Создать группу | ✅ Есть |
-| `/settings` | Настройки | ✅ Есть |
+Вывод:
+```
 
----
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
 
-## Выводы
 
-1. **Клиент компилируется и запускается** ✅
-2. **ASCII баннер отображается корректно** ✅
-3. **Все 62 юнит-теста проходят** ✅
-4. **Все slash-команды реализованы** ✅
-5. **Интерактивный режим требует PTY** — не работает через piped stdin
+  ⚠ Not connected. Use /connect <email> <app-password>
 
-## Рекомендации
+  → Generating new key pair...
+  ✓ New key pair generated
+  🔐 728a7d642951d58552dd8b5d11e7994bb6826bc56a592e000290b70976a45e45
+  → Share your public key with /keyshare <contact>
+```
 
-1. Добавить `--non-interactive` режим для тестирования
-2. Создать CI pipeline для автоматического тестирования
-3. Добавить интеграционные тесты с mock SMTP/IMAP сервером
+✅ PASS
 
 ---
 
-*Тесты проведены: 2026-07-15*
-*Тестирующий: Hermes Agent*
+## Test: Contacts list
+Команда: `/contacts`
+
+Вывод:
+```
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
+
+
+  ⚠ Not connected. Use /connect <email> <app-password>
+
+  → No contacts yet. Use /add <email> [name] or /invite <email>.
+```
+
+✅ PASS
+
+---
+
+## Test: Settings
+Команда: `/settings`
+
+Вывод:
+```
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
+
+
+  ⚠ Not connected. Use /connect <email> <app-password>
+
+  ──────────────────────────────────────────────────
+  → Settings:
+  Email:   not set
+  Server:  default
+  ──────────────────────────────────────────────────
+```
+
+✅ PASS
+
+---
+
+## Test: Inbox
+Команда: `/inbox`
+
+Вывод:
+```
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
+
+
+  ⚠ Not connected. Use /connect <email> <app-password>
+
+  ✗ Not connected. Use /connect first.
+```
+
+✅ PASS
+
+---
+
+## Test: Keys display
+Команда: `/keys`
+
+Вывод:
+```
+
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  ⣿                                                            ⣿
+  ⣿   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗            ⣿
+  ⣿   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝            ⣿
+  ⣿   ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗            ⣿
+  ⣿   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║            ⣿
+  ⣿   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║            ⣿
+  ⣿   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝            ⣿
+  ⣿                   E2E Encrypted Messenger                    ⣿
+  ⣿                                                            ⣿
+  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+  v0.1.0 | type /help for commands
+
+
+  ⚠ Not connected. Use /connect <email> <app-password>
+
+  ──────────────────────────────────────────────────
+  → Key status:
+  ○ No keys generated
+  → Use /keygen to generate a key pair
+  ──────────────────────────────────────────────────
+```
+
+✅ PASS
+
+---
+

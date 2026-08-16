@@ -687,7 +687,7 @@ impl Command {
                 }
 
                 // Медиа-превью
-                "thumb" | "th" => {
+                "thumb" => {
                     let parts: Vec<&str> = args.splitn(2, ' ').collect();
                     if parts.is_empty() || parts[0].is_empty() {
                         Command::Unknown("/thumb requires <file_path> [size]".into())

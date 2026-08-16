@@ -35,59 +35,77 @@ pub fn strip_vault_magic(plain: &str) -> Option<String> {
 
 /// Main CLI REPL entry point
 pub async fn run_cli(config: Config) -> Result<()> {
-    let history_path = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(HISTORY_FILE);
-
-    let history = Box::new(
-        FileBackedHistory::with_file(500, history_path)
-            .unwrap_or_else(|_| FileBackedHistory::new(500).expect("Failed to create history")),
-    );
-
-    let mut editor = Reedline::create().with_history(history);
-    let prompt = DefaultPrompt::default();
-
     let mut ctx = CliContext::new(config);
 
     Output::banner();
     print_welcome(&ctx);
 
-    loop {
-        match editor.read_line(&prompt) {
-            Ok(Signal::Success(line)) => {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        // Интерактивный REPL: Reedline с историей
+        let history_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(HISTORY_FILE);
+
+        let history = Box::new(
+            FileBackedHistory::with_file(500, history_path)
+                .unwrap_or_else(|_| FileBackedHistory::new(500).expect("Failed to create history")),
+        );
+
+        let mut editor = Reedline::create().with_history(history);
+        let prompt = DefaultPrompt::default();
+
+        loop {
+            match editor.read_line(&prompt) {
+                Ok(Signal::Success(line)) => {
+                    if dispatch_line(&mut ctx, line).await? {
+                        break;
+                    }
                 }
-
-                let cmd = Command::parse(&line);
-
-                // In chat mode, bare text → send
-                let cmd = if ctx.active_chat.is_some()
-                    && matches!(&cmd, Command::Unknown(s) if !s.is_empty())
-                {
-                    Command::Send { message: line }
-                } else {
-                    cmd
-                };
-
-                let should_quit = handle_command(&mut ctx, cmd).await?;
-                if should_quit {
+                Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
+                    Output::info("Goodbye!");
+                    break;
+                }
+                Err(e) => {
+                    Output::error(&format!("Readline error: {}", e));
                     break;
                 }
             }
-            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
-                Output::info("Goodbye!");
-                break;
-            }
-            Err(e) => {
-                Output::error(&format!("Readline error: {}", e));
+        }
+    } else {
+        // Неинтерактивный режим: команды из пайпа (демо-скрипты, автотесты).
+        // Reedline требует TTY, поэтому читаем stdin напрямую.
+        use std::io::BufRead;
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            let line = line?;
+            if dispatch_line(&mut ctx, line).await? {
                 break;
             }
         }
     }
 
     Ok(())
+}
+
+/// Разбор и выполнение одной строки ввода. Возвращает true, если пора выйти.
+async fn dispatch_line(ctx: &mut CliContext, raw: String) -> Result<bool> {
+    let line = raw.trim().to_string();
+    if line.is_empty() {
+        return Ok(false);
+    }
+
+    let cmd = Command::parse(&line);
+
+    // In chat mode, bare text → send
+    let cmd = if ctx.active_chat.is_some()
+        && matches!(&cmd, Command::Unknown(s) if !s.is_empty())
+    {
+        Command::Send { message: line }
+    } else {
+        cmd
+    };
+
+    handle_command(ctx, cmd).await
 }
 
 /// CLI state
@@ -1885,26 +1903,6 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Typing => {
             Output::info("⌨️  Typing indicator sent (no-op for email transport)");
         }
-        Command::Unreact { id, emoji } => {
-            Output::info(&format!("Removed reaction {} from message {}", emoji, id));
-        }
-        Command::Verify { email } => {
-            Output::success(&format!("Contact verified: {}", email));
-        }
-        Command::Unverify { email } => {
-            Output::info(&format!("Verification removed for: {}", email));
-        }
-        Command::Export { email } => {
-            Output::info(&format!("Exporting keys for: {}", email));
-            Output::info("(Export not yet implemented)");
-        }
-        Command::Import { json } => {
-            Output::info(&format!(
-                "Importing keys from JSON: {}",
-                &json[..json.len().min(20)]
-            ));
-            Output::info("(Import not yet implemented)");
-        }
 
         // ── Unknown ──────────────────────────────────────────
         Command::Unknown(s) if !s.is_empty() => {
@@ -2257,7 +2255,7 @@ fn print_help(topic: Option<&str>) {
                     "Encrypt:    /encrypt, /enc, /decrypt, /dec",
                     "Files:      /attach, /sendfile, /sf",
                     "Folders:    /fc, /fd, /fr, /fa, /frem, /fl, /fch",
-                    "Media:      /thumb, /th, /thumbinfo, /ti",
+                    "Media:      /thumb, /thumbinfo, /ti",
                     "Groups:     /cg, /gm, /gi, /gr, /pm, /dm, /bk, /ub",
                     "Search:     /search, /find",
                     "Thread:     /thread, /th",

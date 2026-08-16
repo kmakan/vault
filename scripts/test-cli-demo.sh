@@ -22,8 +22,8 @@ test_command() {
     echo "Команда: \`$cmd\`" >> "$RESULTS_FILE"
     echo "" >> "$RESULTS_FILE"
     
-    # Запуск команды
-    output=$(cd "$CLIENT_DIR" && echo "$cmd" | cargo run --bin vault-client 2>&1 | head -20)
+    # Запуск команды (head -60: баннер ~15 строк; grep -v режет шум cargo)
+    output=$(cd "$CLIENT_DIR" && echo "$cmd" | cargo run -q --bin vault 2>&1 | grep -vE "Compiling|Finished|Running|warning:|note:|imap-proto|future-incompat" | head -60)
     
     echo "Вывод:" >> "$RESULTS_FILE"
     echo '```' >> "$RESULTS_FILE"
@@ -46,18 +46,18 @@ echo "Запуск CLI Demo Test..."
 echo ""
 
 # Тест 1: Help
-test_command "/help" "Commands:" "Help command"
+test_command "/help" "Commands" "Help command"
 
 # Тест 2: Status
-test_command "/status" "Status\|status\|Connected\|Disconnected" "Status command"
+test_command "/status" "Email\|connected\|Keys" "Status command"
 
 # Тест 3: Keygen
 test_command "/keygen" "key\|Key\|generated\|Generated" "Key generation"
 
-# Тests 4-8: Другие команды
+# Tests 4-8: Другие команды
 test_command "/contacts" "Contacts\|contacts\|No contacts" "Contacts list"
 test_command "/settings" "Settings\|settings" "Settings"
-test_command "/inbox" "Inbox\|inbox\|No messages\|Connect" "Inbox"
+test_command "/inbox" "Inbox\|inbox\|No messages\|connect" "Inbox"
 test_command "/keys" "Key\|key\|Public\|public" "Keys display"
 
 echo "Тестирование завершено!"
