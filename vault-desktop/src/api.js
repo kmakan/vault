@@ -614,7 +614,12 @@ function urlSafeB64(obj) {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function urlSafeB64Decode(str) {
-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  // Приём ОБЯЗАН убирать whitespace перед base64-декодом: отправка фолдит
+  // строки ≤76 (fold_lines в email.rs), SMTP-хопы тоже могут перекодировать —
+  // без этого atob падает на '\n' и инвайт молча пропускается. Тот же урок,
+  // что в CLI (7b6b978: strip whitespace before base64 decode).
+  const clean = (str || '').replace(/\s+/g, '');
+  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');
   const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
   return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))));
 }
