@@ -6,6 +6,7 @@ export default {
   // Login (serverless: sign-in = connect your mailbox, no registration)
   login: 'Sign in',
   login_hint: 'Vault encrypts everything on your device. Sign-in = connect your mailbox as the transport. Keys are automatic. Contacts are added only on your choice: by participant ID or QR (🔗).',
+  login_remember: 'Remember on this device (password stored encrypted, sign-in will be automatic)',
 
   // Navigation
   nav_inbox: 'Inbox',

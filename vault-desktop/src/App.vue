@@ -8,6 +8,10 @@
         <form @submit.prevent="login">
           <input v-model="email" type="email" placeholder="Email" required />
           <input v-model="password" type="password" placeholder="Password" required />
+          <label class="remember-label">
+            <input type="checkbox" v-model="rememberMe" />
+            <span>{{ t('login_remember') || 'Запомнить на этом устройстве' }}</span>
+          </label>
           <button type="submit" :disabled="loginLoading">
             {{ loginLoading ? '...' : t('login') || 'Login' }}
           </button>
@@ -525,6 +529,7 @@ export default {
       isLoggedIn: false,
       email: '',
       password: '',
+      rememberMe: true,
       loginLoading: false,
       loginError: '',
       emails: [],
@@ -657,6 +662,10 @@ export default {
     this.loadProfiles()
     // Validate saved token
     if (api.token) {
+      // Авто-вход: IMAP-сессия Rust умирает при перезапуске приложения, но
+      // учётные данные почты зашифрованы на устройстве (device-ключ) —
+      // восстанавливаем подключение без повторного ввода пароля.
+      try { await api.restoreSession(); } catch (e) { console.error('restoreSession error:', e); }
       try {
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await api.getChats();
@@ -668,7 +677,8 @@ export default {
         this.isLoggedIn = true;
         this.startPolling()
       } catch (e) {
-        // Session died on restart (parole не храним) — просим ввести пароль снова
+        // Session died on restart and auto-login could not restore it —
+        // просим ввести пароль снова
         api.token = null;
         localStorage.removeItem('vault-token');
         this.email = api.email || this.email; // pre-fill login form
@@ -721,7 +731,7 @@ export default {
       this.loginLoading = true;
       this.loginError = '';
       try {
-        const data = await api.login(this.email, this.password);
+        const data = await api.login(this.email, this.password, { remember: this.rememberMe });
         this.userId = data.user_id;
         this.isLoggedIn = true;
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
@@ -1589,10 +1599,16 @@ export default {
             this.scrollToBottom(false);
           }
         } catch (e) {
-          // "Not connected" — сессия IMAP умерла; останавливаем поллинг,
-          // следующий релог через mounted()/экран логина.
+          // "Not connected" — сессия IMAP умерла; пробуем тихо восстановить её
+          // из сохранённых (зашифрованных на устройстве) учётных данных —
+          // без релога и остановки поллинга.
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-            this.stopPolling();
+            try {
+              const ok = await api.restoreSession();
+              if (!ok) this.stopPolling();
+            } catch (_) {
+              this.stopPolling();
+            }
           } else {
             console.error('Polling loadEmails failed:', e);
           }
@@ -2192,6 +2208,8 @@ export default {
 }
 .login-box button:disabled { opacity: 0.5; cursor: not-allowed; }
 .login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
+.remember-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; user-select: none; }
+.remember-label input { width: auto; margin: 0; cursor: pointer; }
 .login-hint { font-size: 13px; margin: 16px 0 8px !important; }
 .login-box hr { border: none; border-top: 1px solid var(--border, #30363d); margin: 20px 0; }
 /* ═══════════════════════════════════════════════════════════════

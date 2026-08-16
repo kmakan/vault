@@ -6,6 +6,7 @@ export default {
   // Login (serverless: 登录 = 连接邮箱，无需注册)
   login: '登录',
   login_hint: 'Vault 在您的设备上加密一切。登录 = 将邮箱连接为传输通道。密钥自动生成。联系人只能由您选择添加：按参与者 ID 或二维码 (🔗)。',
+  login_remember: '在此设备上记住我（密码加密存储，下次自动登录）',
 
   // Navigation
   nav_inbox: '收件箱',

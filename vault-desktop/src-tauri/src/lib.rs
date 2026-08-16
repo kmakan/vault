@@ -1,9 +1,12 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
+mod credential_store;
 mod crypto;
 mod email;
 mod key_store;
 mod storage;
 mod groups;
+
+use credential_store::StoredCredentials;
 
 use crypto::{CryptoState, KeyPair};
 use email::{EmailClient, EmailConfig, EmailMessage};
@@ -141,6 +144,39 @@ fn delete_all_keys() -> Result<(), String> {
 #[tauri::command]
 fn set_close_to_tray(enabled: bool) {
     CLOSE_TO_TRAY.store(enabled, Ordering::Relaxed);
+}
+
+// --- Saved mailbox credentials (encrypted on device, auto-login on start) ---
+
+#[tauri::command]
+fn save_credentials(
+    email: String,
+    password: String,
+    imap_server: String,
+    imap_port: u16,
+    smtp_server: String,
+    smtp_port: u16,
+) -> Result<(), String> {
+    let creds = StoredCredentials {
+        email,
+        password,
+        imap_server,
+        imap_port,
+        smtp_server,
+        smtp_port,
+        saved_at: chrono::Utc::now().to_rfc3339(),
+    };
+    credential_store::save_credentials(&creds).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn load_credentials() -> Result<Option<StoredCredentials>, String> {
+    credential_store::load_credentials().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_credentials() -> Result<bool, String> {
+    credential_store::delete_credentials().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -389,6 +425,9 @@ pub fn run() {
             delete_all_keys,
             set_close_to_tray,
             get_close_to_tray,
+            save_credentials,
+            load_credentials,
+            delete_credentials,
             encrypt_symmetric,
             decrypt_symmetric,
             email_connect,

@@ -53,7 +53,7 @@ export class ApiClient {
   }
 
   // --- Auth (serverless): login === connect the mailbox ---
-  async login(email, password) {
+  async login(email, password, { remember = true } = {}) {
     await this.emailConnect({ email, password });
     this.email = email;
     this.password = password; // memory only
@@ -61,11 +61,73 @@ export class ApiClient {
     this.token = `serverless-${email}`;
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', email);
+    // «Запомнить меня»: учётные данные шифруются device-ключом и пишутся в
+    // ~/.vault/credentials/ — при следующем запуске вход автоматический.
+    if (remember) {
+      try {
+        const c = this.emailConfig || {};
+        await invoke('save_credentials', {
+          email,
+          password,
+          imapServer: c.imap_server || GMAIL_CONFIG.imap_server,
+          imapPort: c.imap_port || GMAIL_CONFIG.imap_port,
+          smtpServer: c.smtp_server || GMAIL_CONFIG.smtp_server,
+          smtpPort: c.smtp_port || GMAIL_CONFIG.smtp_port,
+        });
+      } catch (e) {
+        console.error('Failed to save credentials:', e);
+      }
+    }
     return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
+  }
+
+  // --- Auto-login: restore the saved (device-encrypted) mailbox credentials
+  // and reconnect IMAP. Returns true on success; false when nothing is saved
+  // or the saved password no longer works (caller shows the login screen).
+  async restoreSession() {
+    let creds = null;
+    try {
+      creds = await invoke('load_credentials');
+    } catch (e) {
+      console.error('Failed to load saved credentials:', e);
+      return false;
+    }
+    if (!creds || !creds.email || !creds.password) return false;
+    try {
+      await this.emailConnect({
+        email: creds.email,
+        password: creds.password,
+        imap_server: creds.imap_server,
+        imap_port: creds.imap_port,
+        smtp_server: creds.smtp_server,
+        smtp_port: creds.smtp_port,
+      });
+    } catch (e) {
+      const msg = String((e && e.message) || e).toLowerCase();
+      // Стирать сохранённые учётные данные можно ТОЛЬКО при отказе
+      // аутентификации (пароль сменён/отозван). Сетевая ошибка при старте
+      // (нет интернета) не должна терять пароль — иначе авто-вход сломается.
+      if (msg.includes('login failed') || msg.includes('authentication')) {
+        console.error('Auto-login: saved password rejected, clearing it:', e);
+        try { await invoke('delete_credentials'); } catch (_) { /* ignore */ }
+      } else {
+        console.error('Auto-login: connection failed (credentials kept):', e);
+      }
+      return false;
+    }
+    this.email = creds.email;
+    this.password = creds.password; // memory only
+    this.connected = true;
+    this.token = `serverless-${creds.email}`;
+    localStorage.setItem('vault-token', this.token);
+    localStorage.setItem('vault-email', creds.email);
+    return true;
   }
 
   async logout() {
     try { await invoke('email_disconnect'); } catch (e) { /* ignore disconnect errors */ }
+    // Выход = «забыть меня»: стираем сохранённые учётные данные с устройства.
+    try { await invoke('delete_credentials'); } catch (e) { /* ignore */ }
     this.email = null;
     this.password = null;
     this.connected = false;
@@ -321,11 +383,29 @@ export class ApiClient {
     if (data.email) this.email = data.email;
     if (password) this.password = password;
     this.connected = true;
+    // Обновляем сохранённые учётные данные (смена пароля/сервера в настройках),
+    // чтобы авто-вход после перезапуска использовал свежие данные.
+    if (password) {
+      try {
+        const c = this.emailConfig || {};
+        await invoke('save_credentials', {
+          email: this.email,
+          password,
+          imapServer: c.imap_server || GMAIL_CONFIG.imap_server,
+          imapPort: c.imap_port || GMAIL_CONFIG.imap_port,
+          smtpServer: c.smtp_server || GMAIL_CONFIG.smtp_server,
+          smtpPort: c.smtp_port || GMAIL_CONFIG.smtp_port,
+        });
+      } catch (e) {
+        console.error('Failed to update saved credentials:', e);
+      }
+    }
     return { id: 'local', email: this.email };
   }
 
   async deleteEmailAccount(accountId) {
     try { await invoke('email_disconnect'); } catch (e) { /* ignore */ }
+    try { await invoke('delete_credentials'); } catch (e) { /* ignore */ }
     this.email = null;
     this.password = null;
     this.connected = false;
