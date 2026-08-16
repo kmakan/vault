@@ -13,6 +13,8 @@ export default {
   restore_failed_generic: 'Автоматический вход не удался. Войдите заново.',
   server_settings: 'Настройки сервера',
   server_hint: 'Оставьте пустыми для значений по умолчанию (Gmail).',
+  provider: 'Провайдер',
+  provider_custom: 'Другой (вручную)',
 
   // Navigation
   nav_inbox: 'Входящие',

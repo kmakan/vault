@@ -27,6 +27,13 @@
           </button>
           <div v-if="showServerSettings" class="server-settings">
             <div class="server-row">
+              <label>{{ t('provider') || 'Провайдер' }}</label>
+              <select v-model="mailProvider" class="server-provider" @change="onMailProviderChange">
+                <option v-for="p in mailProviders" :key="p.id" :value="p.id">{{ p.label }}</option>
+                <option :value="customProviderId">{{ t('provider_custom') || 'Другой (вручную)' }}</option>
+              </select>
+            </div>
+            <div class="server-row">
               <label>IMAP</label>
               <input v-model="imapServer" type="text" placeholder="imap.gmail.com" />
               <input v-model="imapPort" type="text" placeholder="993" class="server-port" />
@@ -36,6 +43,7 @@
               <input v-model="smtpServer" type="text" placeholder="smtp.gmail.com" />
               <input v-model="smtpPort" type="text" placeholder="587" class="server-port" />
             </div>
+            <p v-if="mailProviderHint" class="server-hint">{{ mailProviderHint }}</p>
             <p class="server-hint">{{ t('server_hint') || 'Оставьте пустыми для значений по умолчанию (Gmail).' }}</p>
           </div>
           <button type="submit" :disabled="loginLoading">
@@ -549,6 +557,7 @@ import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
+import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail } from './mailProviders.js';
 
 export default {
   name: 'ChatApp',
@@ -610,6 +619,9 @@ export default {
       imapPort: '',
       smtpServer: '',
       smtpPort: '',
+      // Выбранный провайдер почты (каталог IMAP/SMTP в mailProviders.js).
+      // '' = ещё не выбран; 'custom' = ручные поля.
+      mailProvider: '',
       emails: [],
       emailsLoading: false,
       emailError: '',
@@ -745,6 +757,28 @@ export default {
         merged[email] = { ...(merged[email] || {}), ...lp };
       }
       return merged;
+    },
+    // Каталог провайдеров для селекта в «Настройках сервера».
+    mailProviders() {
+      return MAIL_PROVIDERS;
+    },
+    customProviderId() {
+      return CUSTOM_PROVIDER_ID;
+    },
+    // Подсказка выбранного провайдера (пароли приложений, региональные домены).
+    mailProviderHint() {
+      const p = findProvider(this.mailProvider);
+      return (p && p.hint) || '';
+    }
+  },
+  watch: {
+    // Автоподбор провайдера по домену введённого email: пользователь вводит
+    // kmakan@zoho.com — селект сам становится на Zoho, поля IMAP/SMTP
+    // заполняются, вводить серверы вручную не нужно.
+    email(val) {
+      if (this.mailProvider) return; // уже выбран вручную — не переопределяем
+      const id = detectProviderByEmail(val);
+      if (id) this.applyMailProvider(id);
     }
   },
   async mounted() {
@@ -789,6 +823,13 @@ export default {
           // Восстанавливаем email в UI (при авто-входе форма не заполнялась,
           // а loadGroups/профили фильтруют по this.email).
           this.email = api.email || this.email;
+          // Перечитываем всё, что привязано к email: в mounted() эти вызовы
+          // отработали с пустым email (авто-вход ещё не восстановил его),
+          // поэтому локальные имена контактов и свой аватар «пропадали»
+          // после перезапуска.
+          this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || '';
+          this.displayName = localStorage.getItem('vault-display-name') || this.email || '';
+          this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
           await api.getChats();
           await this.loadContacts();
@@ -888,6 +929,31 @@ export default {
       this.smtpServer = c.smtp_server || '';
       this.smtpPort = c.smtp_port ? String(c.smtp_port) : '';
       if (this.imapServer || this.smtpServer) this.showServerSettings = true;
+      // Восстанавливаем селект провайдера по сохранённому IMAP-хосту,
+      // чтобы пользователь видел, какой провайдер был выбран.
+      this.mailProvider = detectProviderByServer(this.imapServer);
+    },
+    // Заполнить поля IMAP/SMTP из каталога провайдеров. Вызывается при выборе
+    // провайдера в селекте и при автоподборе по домену email (watch: email).
+    applyMailProvider(id) {
+      this.mailProvider = id;
+      const p = findProvider(id);
+      if (!p) return; // 'custom' или пусто — поля остаются как есть
+      this.imapServer = p.imap_server;
+      this.imapPort = String(p.imap_port);
+      this.smtpServer = p.smtp_server;
+      this.smtpPort = String(p.smtp_port);
+    },
+    // Обработчик селекта: «Другой (вручную)» очищает поля для ручного ввода.
+    onMailProviderChange() {
+      if (this.mailProvider === CUSTOM_PROVIDER_ID) {
+        this.imapServer = '';
+        this.imapPort = '';
+        this.smtpServer = '';
+        this.smtpPort = '';
+      } else {
+        this.applyMailProvider(this.mailProvider);
+      }
     },
     async login() {
       this.loginLoading = true;
@@ -2611,6 +2677,7 @@ export default {
 .server-row label { width: 44px; font-size: 12px; color: var(--text-secondary, #8b949e); flex-shrink: 0; }
 .server-row input { flex: 1; margin: 0; padding: 6px 8px; font-size: 13px; }
 .server-row .server-port { flex: 0 0 64px; }
+.server-row select.server-provider { flex: 1; margin: 0; padding: 6px 8px; font-size: 13px; background: var(--bg-secondary, #161b22); color: var(--text-primary, #e6edf3); border: 1px solid var(--border, #30363d); border-radius: 6px; }
 .server-hint { margin: 0; font-size: 11px; color: var(--text-secondary, #8b949e); }
 .login-hint { font-size: 13px; margin: 16px 0 8px !important; }
 .login-box hr { border: none; border-top: 1px solid var(--border, #30363d); margin: 20px 0; }

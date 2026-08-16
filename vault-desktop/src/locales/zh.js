@@ -13,6 +13,8 @@ export default {
   restore_failed_generic: '自动登录失败，请重新登录。',
   server_settings: '服务器设置',
   server_hint: '留空则使用默认值（Gmail）。',
+  provider: '邮件服务商',
+  provider_custom: '其他（手动）',
 
   // Navigation
   nav_inbox: '收件箱',

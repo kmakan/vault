@@ -13,6 +13,8 @@ export default {
   restore_failed_generic: 'Automatic sign-in failed. Please sign in again.',
   server_settings: 'Server settings',
   server_hint: 'Leave empty to use the defaults (Gmail).',
+  provider: 'Provider',
+  provider_custom: 'Other (manual)',
 
   // Navigation
   nav_inbox: 'Inbox',
