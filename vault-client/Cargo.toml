@@ -24,7 +24,10 @@ dirs = "5.0"
 toml = "0.8"
 
 # IMAP/SMTP
-imap = "2.4"
+# imap: вендоренная копия 2.4.1 (../../vendor/imap) — патч client.rs:1369:
+# assert_eq! тегов команды/ответа заменён на ошибку. Zoho присылает ответы со
+# сдвинутыми тегами, и оригинальный assert паниковал (panic=abort → крэш).
+imap = { path = "../vendor/imap" }
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
 native-tls = "0.2"
 

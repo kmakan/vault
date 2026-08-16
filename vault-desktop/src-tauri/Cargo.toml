@@ -28,7 +28,10 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Email transport (serverless IMAP/SMTP)
-imap = "2.4"
+# imap: вендоренная копия 2.4.1 — патч client.rs:1369 (assert_eq! тегов →
+# ошибка вместо паники; zoho присылает ответы со сдвинутыми тегами, и с
+# panic=abort оригинальный assert убивал приложение при sign-in).
+imap = { path = "../../vendor/imap" }
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
 native-tls = "0.2"
 tokio = { version = "1", features = ["full"] }
