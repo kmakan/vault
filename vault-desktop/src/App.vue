@@ -453,7 +453,8 @@
 <script>
 import api from './api.js';
 import crypto from './crypto.js';
-import ws from './ws.js';
+// ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
+// убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
 import EmailSettings from './components/EmailSettings.vue';
@@ -660,8 +661,6 @@ export default {
         // then we must ask for the password again.
         await this.loadEmails();
         this.isLoggedIn = true;
-        ws.connect(api.token);
-        ws.on('typing', (msg) => this.onTypingEvent(msg));
         this.startPolling()
       } catch (e) {
         // Session died on restart (parole не храним) — просим ввести пароль снова
@@ -720,8 +719,6 @@ export default {
         const data = await api.login(this.email, this.password);
         this.userId = data.user_id;
         this.isLoggedIn = true;
-        ws.connect(api.token);
-        ws.on('typing', (msg) => this.onTypingEvent(msg));
         await this.loadContacts();
         await this.loadGroups();
         await this.loadEmails();
@@ -734,7 +731,6 @@ export default {
     },
     async handleLogout() {
       this.stopPolling();
-      try { ws.disconnect(); } catch (e) { /* ignore */ }
       try { await api.logout(); } catch (e) { /* ignore */ }
       // Сбрасываем всё состояние сессии к экрану логина.
       this.isLoggedIn = false;
@@ -818,10 +814,6 @@ export default {
         this.showQRCode = true;
         return;
       }
-      // Unsubscribe from previous chat
-      if (this.activeChat) {
-        ws.unsubscribe(this.activeChat);
-      }
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.messages = [];
@@ -831,8 +823,6 @@ export default {
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
-      // Subscribe to new chat channel
-      ws.subscribe(email);
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
       }
@@ -862,17 +852,11 @@ export default {
       });
     },
     async selectGroup(group) {
-      // Unsubscribe from previous chat
-      if (this.activeChat) {
-        ws.unsubscribe(this.activeChat);
-      }
       this.messages = [];
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
       this.currentGroup = group;
-      // Subscribe to group channel
-      ws.subscribe(`group:${group.id}`);
 
       // Load group key if not already in memory
       if (!this.groupKeys[group.id] && this.cryptoReady) {
@@ -1358,8 +1342,7 @@ export default {
       }
     },
     onTypingInput() {
-      if (!this.activeChat) return;
-      ws.sendTyping(this.activeChat);
+      // typing-индикатор: транспорт появится на M3 (ws.js удалён 16.08)
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
@@ -2070,7 +2053,6 @@ export default {
       this.showGroupSettings = false;
       this.currentGroup = null;
       if (this.activeChat === `group:${gid}`) {
-        ws.unsubscribe(`group:${gid}`);
         this.activeChat = null;
         this.messages = [];
       }
@@ -2087,7 +2069,6 @@ export default {
       this.showGroupSettings = false;
       this.currentGroup = null;
       if (this.activeChat === `group:${gid}`) {
-        ws.unsubscribe(`group:${gid}`);
         this.activeChat = null;
         this.messages = [];
       }
