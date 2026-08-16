@@ -83,6 +83,18 @@ pub fn load_peer_keys() -> anyhow::Result<Vec<StoredPeerKey>> {
 }
 
 pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
+    // SELF-KEY GUARD: saving one's own public key as a peer's key silently
+    // breaks ECDH in BOTH directions (encrypt-to-self / decrypt mismatch).
+    // Root cause of the 15.08 "messages don't work both ways" incident: a
+    // stale invite sent from a shared-HOME instance carried the sender's own
+    // keypair as "their" public key, and the acceptor stored it. Reject at
+    // the single choke point all peer-key writes go through (contact invite
+    // accept, contact accept, manual paste).
+    if let Some(kp) = load_keypair()? {
+        if kp.public_key == key.public_key {
+            anyhow::bail!("Refusing to save your own public key as a peer key");
+        }
+    }
     let mut keys = load_peer_keys()?;
     if let Some(existing) = keys.iter_mut().find(|k| k.email == key.email) {
         existing.public_key = key.public_key;
@@ -238,6 +250,40 @@ mod tests {
             assert!(removed);
             let keys = load_peer_keys().unwrap();
             assert!(keys.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_add_peer_key_rejects_own_public_key() {
+        // SELF-KEY GUARD: saving one's own public key as a peer's key breaks
+        // ECDH silently in both directions — must be rejected at the store.
+        with_tmp_keys(|| {
+            let kp = StoredKeyPair {
+                public_key: "abcd1234".to_string(),
+                private_key: "ef567890".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            save_keypair(&kp).unwrap();
+
+            let own_as_peer = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: kp.public_key.clone(),
+                label: None,
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            let err = add_peer_key(own_as_peer).unwrap_err();
+            assert!(err.to_string().contains("own public key"));
+            assert!(load_peer_keys().unwrap().is_empty());
+
+            // A genuinely different key still saves fine.
+            let real_peer = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: "ffff0000".to_string(),
+                label: None,
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            add_peer_key(real_peer).unwrap();
+            assert_eq!(load_peer_keys().unwrap().len(), 1);
         });
     }
 }

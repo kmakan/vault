@@ -220,7 +220,7 @@ export class ApiClient {
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
       } catch (e) {
         continue;
       }
@@ -263,7 +263,7 @@ export class ApiClient {
       if (!sender || sender === this.email) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
       } catch (e) {
         continue;
       }
@@ -545,7 +545,7 @@ export class ApiClient {
     for (const m of invites) {
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
       } catch (e) {
         continue;
       }
@@ -587,7 +587,7 @@ export class ApiClient {
     for (const m of accepts) {
       let payload;
       try {
-        payload = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid));
+        payload = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
       } catch (e) {
         continue;
       }
