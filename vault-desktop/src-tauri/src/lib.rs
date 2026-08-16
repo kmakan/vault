@@ -389,9 +389,23 @@ fn groups_get(group_id: String) -> Result<Option<groups::Group>, String> {
 }
 
 #[tauri::command]
-fn groups_import(group_id: String, name: String, group_key: String, sender: String) -> Result<groups::Group, String> {
-    groups::import_group(&group_id, &name, &group_key, &sender)
-        .map_err(|e| e.to_string())
+fn groups_import(
+    group_id: String,
+    name: String,
+    group_key: String,
+    sender: String,
+    created_by: Option<String>,
+    members: Option<Vec<groups::GroupMember>>,
+) -> Result<groups::Group, String> {
+    groups::import_group(
+        &group_id,
+        &name,
+        &group_key,
+        &sender,
+        created_by.as_deref(),
+        members.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

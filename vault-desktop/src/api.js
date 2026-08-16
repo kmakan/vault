@@ -515,6 +515,12 @@ export class ApiClient {
       sender_avatar: avatar,
       // Публичный ключ отправителя — не секрет; нужен принимающему для ECDH.
       sender_public_key: senderPublicKey || '',
+      // Состав группы на момент инвайта: создатель + участники с ролями.
+      // Принимающий импортирует их через groups_import — роли авторитетны.
+      created_by: g.created_by || '',
+      members: (g.members || [])
+        .filter(m => m && m.email)
+        .map(m => ({ email: m.email, role: m.role || 'Member' })),
     });
     await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
     return { ok: true, invited: true, email };
@@ -526,12 +532,22 @@ export class ApiClient {
   }
   async acceptGroupInvite(groupId, invitePayload) {
     const payload = invitePayload || {};
-    // Импортируем группу с ключом из инвайта.
+    // Импортируем группу с ключом из инвайта. Роли и создатель приходят из
+    // инвайта (created_by + members) — Rust сливает их с локальными.
+    // Роли нормализуем к валидным значениям enum GroupRole.
+    const validRoles = ['Admin', 'Moderator', 'Member'];
+    const inviteMembers = Array.isArray(payload.members)
+      ? payload.members
+          .filter(m => m && m.email)
+          .map(m => ({ email: m.email, role: validRoles.includes(m.role) ? m.role : 'Member' }))
+      : null;
     await invoke('groups_import', {
       groupId,
       name: payload.group_name,
       groupKey: payload.group_key,
       sender: payload.sender,
+      createdBy: payload.created_by || null,
+      members: inviteMembers,
     });
     // Добавляем СЕБЯ как участника (роль Member) — import_group добавляет
     // только отправителя, а принимающий иначе не попадёт в members.
@@ -669,6 +685,9 @@ export class ApiClient {
         sender: parsed.sender,
         sender_name: parsed.sender_name,
         sender_avatar: parsed.sender_avatar,
+        // Состав группы с ролями на момент инвайта (для groups_import).
+        created_by: parsed.created_by || null,
+        members: Array.isArray(parsed.members) ? parsed.members : null,
         uid: m.uid,
         date: m.date,
       });

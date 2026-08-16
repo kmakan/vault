@@ -37,8 +37,8 @@
       </div>
     </div>
 
-    <!-- Add Member -->
-    <div class="group-settings__section">
+    <!-- Add Member — только для админов (создатель или роль Admin) -->
+    <div class="group-settings__section" v-if="isAdmin">
       <h4>{{ t('add_member') }}</h4>
       <div class="add-member-row">
         <button class="btn btn-primary add-member-btn" @click="addMember">

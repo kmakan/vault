@@ -116,7 +116,7 @@
             </div>
             <div class="contact-info">
               <div class="contact-name">{{ group.name }}</div>
-              <div class="contact-email">{{ group.member_count || 0 }} members</div>
+              <div class="contact-email">{{ (group.members || []).length }} {{ membersLabel((group.members || []).length) }}</div>
             </div>
           </div>
         </div>
@@ -329,7 +329,7 @@
               <h3>{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
-                  👥 {{ currentGroup?.member_count || 0 }} members
+                  👥 {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
                 </template>
                 <template v-else>
                   {{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}
@@ -339,7 +339,7 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
+              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
             </template>
             <template v-else-if="activeChat">
@@ -724,6 +724,14 @@ export default {
       const c = this.contacts.find(c => c.email === this.activeChat);
       return c ? c.name : this.activeChat;
     },
+    // Я — админ текущей группы (создатель или роль Admin). Право добавлять
+    // участников, менять роли и удалять — только у админов.
+    isGroupAdmin() {
+      if (this.activeChatType !== 'group' || !this.currentGroup) return false;
+      if (this.currentGroup.created_by === this.email) return true;
+      const me = (this.currentGroup.members || []).find(m => m.email === this.email);
+      return !!(me && me.role === 'Admin');
+    },
     // Профили с локальными переопределениями — для GroupSettings (список
     // участников группы тоже показывает локальные имена/аватары).
     mergedProfiles() {
@@ -802,6 +810,18 @@ export default {
     this.stopPolling()
   },
   methods: {
+    // Плюрализация «участник/участника/участников» по текущей локали.
+    // Вызывается из шаблона рядом со счётчиком участников.
+    membersLabel(n) {
+      const locale = String(this.currentLocale || 'en').slice(0, 2);
+      if (locale === 'ru') {
+        const m10 = n % 10, m100 = n % 100;
+        if (m10 === 1 && m100 !== 11) return 'участник';
+        if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'участника';
+        return 'участников';
+      }
+      return n === 1 ? 'member' : 'members';
+    },
     onAppIconChanged(id) {
       this.appIconId = id;
       // Persist so the chosen icon survives restarts and is reflected everywhere.
@@ -1420,7 +1440,7 @@ export default {
               const base = {
                 ...msg,
                 content: text,
-                from: msg.sender_id === this.userId ? 'me' : 'them',
+                from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
                 time: new Date(msg.created_at).toLocaleTimeString(),
                 status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
                 attachment,
@@ -1450,7 +1470,7 @@ export default {
             return {
               ...msg,
               content: text,
-              from: msg.sender_id === this.userId ? 'me' : 'them',
+              from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: false,
@@ -1504,7 +1524,7 @@ export default {
               const base = {
                 ...msg,
                 content: text,
-                from: msg.sender_id === this.userId ? 'me' : 'them',
+                from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
                 time: new Date(msg.created_at).toLocaleTimeString(),
                 status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
                 attachment,
@@ -1544,7 +1564,7 @@ export default {
             return {
               ...msg,
               content: text,
-              from: msg.sender_id === this.userId ? 'me' : 'them',
+              from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: false,
@@ -1623,9 +1643,24 @@ export default {
             return;
           }
           content = await crypto.encryptWithGroupKey(envelope, groupKey);
-          await api.sendGroupMessage(this.currentGroup.id, content);
-          // Reload from server to get proper server timestamp and UUID
-          await this.loadGroupMessages(this.currentGroup.id);
+          // Оптимистичный показ (как в 1-на-1): Gmail SMTP отвечает медленно,
+          // а немедленная перезагрузка чата стирала ещё не доставленное
+          // сообщение — выглядело как будто ответ/сообщение не отправилось.
+          // Письмо подхватится поллингом (startPolling обновляет группу).
+          this.messages.push({
+            id: envelopeId || ('local-' + Date.now()),
+            content: payload,
+            from: 'me',
+            sender_id: this.email,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            encrypted: true,
+            vault: true,
+          });
+          try {
+            await api.sendGroupMessage(this.currentGroup.id, content);
+          } catch (e) {
+            alert('Failed to send group message: ' + e.message);
+          }
         } else {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
@@ -1754,6 +1789,11 @@ export default {
             await this.loadMessages(this.activeChat);
             // Не выдёргиваем из чтения истории: прокручиваем только если
             // пользователь уже у низа чата.
+            this.scrollToBottom(false);
+          } else if (this.activeChatType === 'group' && this.currentGroup) {
+            // Группы тоже обновляем поллингом: новые сообщения и реакции
+            // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
+            await this.loadGroupMessages(this.currentGroup.id);
             this.scrollToBottom(false);
           }
         } catch (e) {
@@ -1925,6 +1965,14 @@ export default {
     },
     // Мерж сохранённых реакций + реакций из писем (wireReactions: msg_id ->
     // [{emoji, user, action}]). Результат пишется в хранилище и в msg.reactions.
+    // Отправитель письма — мы сами: sender_id это сырой заголовок From
+    // («Имя <email>» или просто email). userId — рудимент серверной эпохи,
+    // в serverless он всегда null, поэтому сравниваем по своему email
+    // (тот же приём, что isOut в 1-на-1 пути loadMessages).
+    isOwnSender(senderId) {
+      if (!senderId || !this.email) return false;
+      return String(senderId).toLowerCase().includes(this.email.toLowerCase());
+    },
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
       const chatReactions = stored[chatKey] || {};
@@ -2114,6 +2162,8 @@ export default {
     },
     removeMember(email) {
       if (!this.currentGroup) return;
+      // Защита от обхода UI: удаление — только для админов группы.
+      if (!this.isGroupAdmin) return;
       api.removeGroupMember(this.currentGroup.id, email)
         .then(() => this.refreshGroupMembers())
         .catch(e => console.error('removeMember failed:', e));

@@ -41,7 +41,11 @@ pub struct Group {
 pub struct GroupMember {
     pub email: String,
     pub role: GroupRole,
+    // Инвайт передаёт список участников только с email+role — при десериализации
+    // отсутствующие поля получают значения по умолчанию.
+    #[serde(default)]
     pub joined_at: String,
+    #[serde(default)]
     pub key_shared: bool,
 }
 
@@ -131,50 +135,80 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn import_group(group_id: &str, name: &str, group_key: &str, sender: &str) -> Result<Group> {
+pub fn import_group(
+    group_id: &str,
+    name: &str,
+    group_key: &str,
+    sender: &str,
+    created_by: Option<&str>,
+    invite_members: Option<&[GroupMember]>,
+) -> Result<Group> {
     let mut groups = load_groups()?;
     let now = Utc::now().to_rfc3339();
-    let mut members = Vec::new();
+
+    // Слить список участников инвайта с локальным: роли из инвайта авторитетны
+    // для уже известных участников; новые участники добавляются с ролью из
+    // инвайта (обычно Member). Отправитель инвайта всегда присутствует.
+    let merge_members = |existing: &mut Vec<GroupMember>| {
+        if let Some(inv) = invite_members {
+            for im in inv {
+                if im.email.is_empty() {
+                    continue;
+                }
+                match existing.iter_mut().find(|m| m.email == im.email) {
+                    Some(m) => m.role = im.role.clone(),
+                    None => existing.push(GroupMember {
+                        email: im.email.clone(),
+                        role: im.role.clone(),
+                        joined_at: now.clone(),
+                        key_shared: false,
+                    }),
+                }
+            }
+        }
+        if !existing.iter().any(|m| m.email == sender) {
+            existing.push(GroupMember {
+                email: sender.to_string(),
+                role: GroupRole::Member,
+                joined_at: now.clone(),
+                key_shared: true, // sender has the key (just invited us)
+            });
+        }
+    };
 
     if let Some(existing) = groups.get_mut(group_id) {
         // Update existing group
         existing.name = name.to_string();
         existing.group_key = group_key.to_string();
-        // Ensure sender is in members
-        if !existing.members.iter().any(|m| m.email == sender) {
-            existing.members.push(GroupMember {
-                email: sender.to_string(),
-                role: GroupRole::Member,
-                joined_at: now.clone(),
-                key_shared: true, // sender has the key (just imported)
-            });
+        if let Some(cb) = created_by {
+            if !cb.is_empty() {
+                existing.created_by = cb.to_string();
+            }
         }
+        merge_members(&mut existing.members);
         // Clone before releasing the mutable borrow, then persist.
         let cloned = existing.clone();
         save_groups(&groups)?;
         return Ok(cloned);
-    } else {
-        // Create new group
-        members.push(GroupMember {
-            email: sender.to_string(),
-            role: GroupRole::Member, // sender is added as a member with role Member
-            joined_at: now.clone(),
-            key_shared: true,
-        });
-        let group = Group {
-            id: group_id.to_string(),
-            name: name.to_string(),
-            created_by: sender.to_string(), // Actually, created_by should be the original creator? But we don't have that info. We'll set to sender for now.
-            created_at: now,
-            members,
-            blocked: Vec::new(),
-            encrypted: true,
-            group_key: group_key.to_string(),
-        };
-        groups.insert(group.id.clone(), group.clone());
-        save_groups(&groups)?;
-        Ok(group)
     }
+
+    // Create new group
+    let mut members = Vec::new();
+    merge_members(&mut members);
+    let group = Group {
+        id: group_id.to_string(),
+        name: name.to_string(),
+        // Реальный создатель группы приходит в инвайте; без него — отправитель.
+        created_by: created_by.filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| sender.to_string()),
+        created_at: now,
+        members,
+        blocked: Vec::new(),
+        encrypted: true,
+        group_key: group_key.to_string(),
+    };
+    groups.insert(group.id.clone(), group.clone());
+    save_groups(&groups)?;
+    Ok(group)
 }
 
 pub fn set_group_key(group_id: &str, group_key: &str) -> Result<()> {
@@ -321,11 +355,49 @@ mod tests {
     fn test_import_group() {
         with_tmp_groups(|| {
             let group = create_group("test group", "alice@example.com").unwrap();
-            let imported = import_group(&group.id, "test group", &group.group_key, "bob@example.com").unwrap();
+            let imported = import_group(&group.id, "test group", &group.group_key, "bob@example.com", None, None).unwrap();
             assert_eq!(imported.members.len(), 2);
             assert_eq!(imported.members[1].email, "bob@example.com");
             assert_eq!(imported.members[1].role, GroupRole::Member);
             assert_eq!(imported.group_key, group.group_key);
+        });
+    }
+
+    #[test]
+    fn test_import_group_with_roles() {
+        with_tmp_groups(|| {
+            let group = create_group("test group", "alice@example.com").unwrap();
+            // Инвайт несёт создателя и список участников с ролями — импорт
+            // должен сохранить их (иначе приглашённый видит всех как Member).
+            let invite_members = vec![
+                GroupMember {
+                    email: "alice@example.com".into(),
+                    role: GroupRole::Admin,
+                    joined_at: String::new(),
+                    key_shared: false,
+                },
+                GroupMember {
+                    email: "carol@example.com".into(),
+                    role: GroupRole::Moderator,
+                    joined_at: String::new(),
+                    key_shared: false,
+                },
+            ];
+            let imported = import_group(
+                &group.id,
+                "test group",
+                &group.group_key,
+                "bob@example.com",
+                Some("alice@example.com"),
+                Some(&invite_members),
+            )
+            .unwrap();
+            assert_eq!(imported.created_by, "alice@example.com");
+            let alice = imported.members.iter().find(|m| m.email == "alice@example.com").unwrap();
+            assert_eq!(alice.role, GroupRole::Admin);
+            let carol = imported.members.iter().find(|m| m.email == "carol@example.com").unwrap();
+            assert_eq!(carol.role, GroupRole::Moderator);
+            assert!(imported.members.iter().any(|m| m.email == "bob@example.com"));
         });
     }
 
