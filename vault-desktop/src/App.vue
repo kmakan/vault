@@ -111,8 +111,9 @@
             :class="['contact-item', { active: activeChat === `group:${group.id}` }]"
             @click="selectGroup(group)"
           >
-            <div class="group-avatar">
-              {{ group.name.charAt(0).toUpperCase() }}
+            <img v-if="groupAvatars[group.id]" :src="groupAvatars[group.id]" class="group-avatar group-avatar-img" :alt="group.name" />
+            <div v-else class="group-avatar">
+              {{ groupIconMap[group.id] || group.name.charAt(0).toUpperCase() }}
             </div>
             <div class="contact-info">
               <div class="contact-name">{{ group.name }}</div>
@@ -309,6 +310,7 @@
             @leave="leaveGroup"
             @delete="deleteGroup"
             @add-member="addMember"
+            @avatar-update="onGroupAvatarUpdate"
           />
         </div>
       </div>
@@ -318,8 +320,9 @@
         <div class="chat-header" v-if="activeChat">
           <div class="chat-header-info">
             <template v-if="activeChatType === 'group'">
-              <div class="group-avatar">
-                {{ currentGroup?.name?.charAt(0).toUpperCase() || '?' }}
+              <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
+              <div v-else class="group-avatar">
+                {{ (currentGroup && (groupIconMap[currentGroup.id] || currentGroup.name?.charAt(0).toUpperCase())) || '?' }}
               </div>
             </template>
             <template v-else>
@@ -624,6 +627,8 @@ export default {
       // Groups
       groups: [],
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
+      groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
+      groupIconMap: {},  // group_id → эмодзи-иконка (выбор при создании)
       currentGroup: null,
       activeChatType: 'chat', // 'chat' or 'group'
       newGroupName: '',
@@ -962,6 +967,12 @@ export default {
         // аккаунтом виден отправитель инвайта (icemaksim → koanmak и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));
         for (const g of this.groups) {
+          // Аватар/иконка группы: локальный кэш (localStorage) — аватар
+          // устанавливает админ, участникам он приходит письмами (см. конверт).
+          const av = localStorage.getItem('vault-group-avatar-' + g.id);
+          if (av) this.groupAvatars[g.id] = av;
+          const ic = localStorage.getItem('vault-group-icon-' + g.id);
+          if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
             seen.add(m.email);
@@ -1516,6 +1527,32 @@ export default {
           if (stale()) return;
         }
 
+        // Мета-обновления группы (аватар): письма VaultGroupMeta: <id>.
+        // Берём последнее по дате — оно авторитетно.
+        if (groupKey) {
+          try {
+            const metaRaw = await api.getGroupMetaEmails(groupId);
+            let latest = null;
+            for (const msg of metaRaw || []) {
+              if (!crypto.isEncrypted(msg.content)) continue;
+              try {
+                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                const obj = JSON.parse(plaintext);
+                if (obj && obj.meta === 1 && obj.avatar) {
+                  if (!latest || new Date(msg.created_at) >= new Date(latest.created_at)) {
+                    latest = { avatar: obj.avatar, created_at: msg.created_at };
+                  }
+                }
+              } catch (e) { /* не meta или битое */ }
+            }
+            if (latest && latest.avatar !== localStorage.getItem('vault-group-avatar-' + groupId)) {
+              localStorage.setItem('vault-group-avatar-' + groupId, latest.avatar);
+              this.groupAvatars[groupId] = latest.avatar;
+            }
+          } catch (e) { /* нет meta-писем — не критично */ }
+          if (stale()) return;
+        }
+
         if (groupKey) {
           // Decrypt messages with group key
           const decrypted = await Promise.all(
@@ -1583,6 +1620,21 @@ export default {
       localStorage.setItem(`vault-avatar-${this.email}`, dataUrl || '')
       api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
       this.loadProfiles()
+    },
+    // Аватар группы обновил админ (GroupSettings): сохраняем локально и
+    // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
+    async onGroupAvatarUpdate({ groupId, avatar }) {
+      this.groupAvatars[groupId] = avatar;
+      localStorage.setItem('vault-group-avatar-' + groupId, avatar || '');
+      const groupKey = this.groupKeys[groupId];
+      if (!groupKey || !avatar) return;
+      try {
+        const payload = JSON.stringify({ meta: 1, avatar });
+        const content = await crypto.encryptWithGroupKey(payload, groupKey);
+        await api.sendGroupMeta(groupId, content);
+      } catch (e) {
+        console.error('Failed to broadcast group avatar:', e);
+      }
     },
     onAvatarFileSelect(e) {
       const file = e.target.files[0];
@@ -2127,6 +2179,12 @@ export default {
         const group = await api.createGroup(this.newGroupName.trim(), '');
         group.members = group.members || [];
         group.blocked = group.blocked || [];
+        // Выбранная эмодзи-иконка — сохраняется локально (показывается, пока
+        // админ не загрузит полноценный аватар).
+        if (this.newGroupIcon) {
+          localStorage.setItem('vault-group-icon-' + group.id, this.newGroupIcon);
+          this.groupIconMap[group.id] = this.newGroupIcon;
+        }
         this.groups.push(group);
         this.currentGroup = group;
 
@@ -2279,6 +2337,11 @@ export default {
         }
         if (!groupKey) throw new Error('В приглашении нет ключа группы');
         await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
+        // Аватар группы из инвайта — сохраняем локально (как у админа).
+        if (inv.group_avatar) {
+          localStorage.setItem('vault-group-avatar-' + inv.group_id, inv.group_avatar);
+          this.groupAvatars[inv.group_id] = inv.group_avatar;
+        }
       } catch (e) {
         alert('Failed to accept invite: ' + e.message);
       }
@@ -3356,6 +3419,12 @@ body {
   justify-content: center;
   font-weight: 600;
   font-size: 14px;
+}
+
+/* Загруженный аватар группы (изображение вместо буквы/иконки) */
+.group-avatar-img {
+  object-fit: cover;
+  background: var(--bg-secondary);
 }
 
 /* ═══════════════════════════════════════════════════════════════

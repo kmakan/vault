@@ -228,6 +228,31 @@ export class ApiClient {
     }
     return { ok: true };
   }
+  // Мета-обновление группы (аватар и т.п.): каждому участнику письмо
+  // VaultGroupMeta: <id> с зашифрованным групповым ключом payload {meta:1,...}.
+  async sendGroupMeta(groupId, encryptedContent) {
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    for (const member of g.members || []) {
+      if (member.email === this.email) continue;
+      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupMeta: ' + g.id, body: encryptedContent });
+    }
+    return { ok: true };
+  }
+  // Письма мета-обновлений группы (VaultGroupMeta: <id>) — транспорт аватара,
+  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
+  async getGroupMetaEmails(groupId) {
+    const msgs = await this.fetchEmails('local');
+    const meta = msgs.filter(m => (m.subject || '').startsWith('VaultGroupMeta: ' + groupId));
+    const out = [];
+    for (const m of meta) {
+      try {
+        const body = await this.fetchEmailBody('local', m.uid, m.folder);
+        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
+      } catch (e) { /* тело не прочиталось — пропускаем */ }
+    }
+    return out;
+  }
 
   // --- Contacts (local: key_store peer keys + in-memory stubs) ---
   async getContacts() {
@@ -521,6 +546,8 @@ export class ApiClient {
       members: (g.members || [])
         .filter(m => m && m.email)
         .map(m => ({ email: m.email, role: m.role || 'Member' })),
+      // Аватар группы (если установлен админом) — новый участник увидит его сразу.
+      group_avatar: localStorage.getItem('vault-group-avatar-' + g.id) || '',
     });
     await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
     return { ok: true, invited: true, email };
@@ -688,6 +715,8 @@ export class ApiClient {
         // Состав группы с ролями на момент инвайта (для groups_import).
         created_by: parsed.created_by || null,
         members: Array.isArray(parsed.members) ? parsed.members : null,
+        // Аватар группы на момент инвайта.
+        group_avatar: parsed.group_avatar || null,
         uid: m.uid,
         date: m.date,
       });

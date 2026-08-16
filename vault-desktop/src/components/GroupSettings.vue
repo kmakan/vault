@@ -5,21 +5,22 @@
       <button class="btn-icon" @click="$emit('close')">✕</button>
     </div>
 
-    <!-- Group Avatar + Info -->
+    <!-- Group Avatar + Info. Загрузка аватара — только админам группы. -->
     <div class="group-settings__info">
       <div class="group-settings__avatar-row">
-        <div class="group-avatar-preview" @click="triggerGroupAvatar">
+        <div class="group-avatar-preview" :class="{ clickable: isAdmin }" @click="isAdmin && triggerGroupAvatar()">
           <UserAvatar
             :email="group.id || group.name"
             :avatarUrl="groupAvatarUrl"
             :size="64"
             :showPattern="true"
           />
-          <div class="group-avatar-overlay">
+          <div class="group-avatar-overlay" v-if="isAdmin">
             <span>📷</span>
           </div>
         </div>
         <input
+          v-if="isAdmin"
           ref="groupAvatarInput"
           type="file"
           accept="image/png,image/jpeg,image/webp"
@@ -181,15 +182,17 @@ async function onGroupAvatarSelected(e) {
   reader.onload = () => {
     const img = new Image()
     img.onload = async () => {
+      // Аватар группы рассылается участникам письмами (под шифром), поэтому
+      // сжимаем до 128×128 JPEG — достаточно для UI и мало весит в конверте.
       const canvas = document.createElement('canvas')
-      canvas.width = 256
-      canvas.height = 256
+      canvas.width = 128
+      canvas.height = 128
       const ctx = canvas.getContext('2d')
       const size = Math.min(img.width, img.height)
       const sx = (img.width - size) / 2
       const sy = (img.height - size) / 2
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, 256, 256)
-      const dataUrl = canvas.toDataURL('image/png')
+      ctx.drawImage(img, sx, sy, size, size, 0, 0, 128, 128)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
       localStorage.setItem(`vault-group-avatar-${props.group.id}`, dataUrl)
       groupAvatarUrl.value = dataUrl
       // Sync to backend
@@ -429,10 +432,15 @@ async function onGroupAvatarSelected(e) {
 
 .group-avatar-preview {
   position: relative;
-  cursor: pointer;
+  cursor: default;
   border-radius: 50%;
   overflow: hidden;
   flex-shrink: 0;
+}
+
+/* Только админы могут менять аватар — курсор-подсказка */
+.group-avatar-preview.clickable {
+  cursor: pointer;
 }
 
 .group-avatar-overlay {
