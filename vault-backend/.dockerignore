@@ -1,5 +1,0 @@
-target/
-.git
-.gitignore
-*.md
-tests/

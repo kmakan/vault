@@ -10,22 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check-backend:
-    name: Check Backend
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: vault-backend -> target
-      - name: Check
-        working-directory: vault-backend
-        run: cargo check
-      - name: Test
-        working-directory: vault-backend
-        run: cargo test
-
   check-client:
     name: Check Client
     runs-on: ubuntu-22.04

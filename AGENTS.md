@@ -110,11 +110,10 @@ mimo run "Обновить документацию для X" --agent build
 
 Доска: `vault` (56 ready + 2 todo задач)
 
-### Приоритеты
-1. **Backend (Rust)** — базовая структура
-2. **Клиент: чаты и групповые чаты** (terminal/ratatui)
-3. **Шифрование** (после стабильности клиента)
-4. **Ручная загрузка ключей** + генератор в клиенте
+### Приоритеты (актуально с 16.08.2026, см. docs/ROADMAP-2026-08-16.md)
+1. **M0**: CLI-совместимость с Desktop (wire-формат, stealth)
+2. **M1**: паритет ядра обмена (группы, редактирование, вложения)
+3. Каналы/монетизация, мини-приложения (M2+)
 
 ### Команды канбана
 ```bash
@@ -134,16 +133,11 @@ hermes kanban --board vault comment t_XXXXXXXX "текст"
 ## Директории проекта
 
 ```
-~/vault/                          # Код проекта
-├── vault-backend/             # Rust Axum + SQLx + PostgreSQL
-├── docs/                           # Документация
-│   ├── agents/                     # Инструкции для агентов
-│   ├── architecture/               # ADR, схема БД
-│   ├── api/                        # OpenAPI, эндпоинты
-│   ├── development/                # Гайды по разработке
-│   ├── deployment/                 # Docker, Nginx, systemd
-│   ├── security/                   # Threat model, аудит
-│   └── operations/                 # Мониторинг, бэкапы
+~/whisper/                        # Код проекта (serverless, email-транспорт)
+├── vault-client/                 # Rust CLI (REPL) + e2e тесты
+├── vault-desktop/                # Tauri 2.0 (Rust + Vue 3)
+├── vault-android/                # Tauri 2.0 Android
+├── docs/                         # Документация (ROADMAP-2026-08-16.md актуален)
 
 /home/maksim/Notes/Projects/vault/  # Исходная документация
 ├── ARCHITECTURE.md

@@ -19,14 +19,14 @@
 
 ## Архитектура (решение 10.08.2026): SERVERLESS
 Клиент ходит в почту напрямую (IMAP/SMTP), шифрует сам (XChaCha20-Poly1305 + X25519),
-сервер не нужен. Backend/Axum/PostgreSQL/Docker — вне критического пути (оставлен как
-резерв/эталон). Почтовый сервер видит «мусор», клиент — чат. Zero-knowledge.
+сервер не нужен. Backend/Axum/PostgreSQL/Docker удалены 16.08.2026 (клиент-серверная
+эпоха закрыта; код recoverable из git-истории). Почтовый сервер видит «мусор»,
+клиент — чат. Zero-knowledge.
 
 ## Стек технологий
 - **CLI (terminal)**: Rust (REPL `vault --cli`; ratatui опционально)
 - **Desktop**: Tauri 2.0 (Rust + Vue 3 + Vite) — serverless, email через Tauri-команды
 - **Android**: Tauri 2.0 (Rust + WebView), не тестирован на устройстве
-- **Backend (резерв)**: Rust Axum + SQLx + PostgreSQL 17 (компилируется, 111 тестов)
 - **БД в клиенте**: SQLite / JSON-файлы (контакты, ключи)
 
 ## Криптография ✅ (с тестами)
@@ -34,7 +34,8 @@
 - Stealth-метка: AAD="VAULT" (Associated Data) — метка vault-писем живёт ТОЛЬКО в
   MAC-аутентификации Poly1305, в потоке (ciphertext/base64) её НЕТ; получатель
   определяет своё по успешной расшифровке; письма без метки = обычная почта
-- X3DH, Double Ratchet, PAKE, Kyber, Hybrid, Sealed — готовы в backend-модулях
+- X3DH, Double Ratchet, PAKE, Kyber, Hybrid, Sealed — были в backend-модулях
+  (удалены вместе с backend 16.08; при необходимости восстанавливаются из git-истории)
 - Обмен ключами: /keygen, /invite (самодостаточная ссылка base64url JSON {id,sender,key}),
   /accept (добавляет контакт с ключом), /confirm, /keyshare, /add <email> [name] [pubkey], QR (desktop)
 
@@ -49,7 +50,7 @@
   - тест ищет письма и в Junk (флаг \Junk, локализованное имя) — спам уводит b→a
 
 ## Тесты (10.08.2026)
-- Backend: 111 unit ✅; Client: 235 ✅; e2e email + key-exchange: PASS на реальных Gmail
+- Client: 235 ✅; e2e email + key-exchange: PASS на реальных Gmail
 - Desktop: vite build ✅ + Tauri cargo check/build ✅; Android: crypto 3/3 ✅
 
 ## Текущий статус этапа 1 (до демо 20.08)
@@ -139,11 +140,9 @@ Multi-relay / multi-path delivery, post-quantum (Kyber/hybrid), Forward Secrecy
 ## Директории проекта
 ```
 ~/whisper/
-├── vault-backend/          # Rust Axum + SQLx + PostgreSQL (резерв)
 ├── vault-desktop/          # Tauri 2.0 (Rust + Vue 3) — serverless
 ├── vault-client/           # Rust CLI (REPL) + тесты e2e
 ├── vault-android/          # Tauri 2.0 Android
-├── vault-web/              # Web UI (не в критическом пути)
 ├── docs/                   # ROADMAP-2026-08-16.md (актуален), PLAN-2026-08-10.md, ROADMAP/TIMELINE (устарели)
 ├── scripts/                # run-email-e2e.sh, .email_test_env (gitignored)
 └── .github/workflows/      # CI/CD

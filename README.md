@@ -225,7 +225,6 @@ vault/
 │   │   └── i18n.js
 │   ├── src-tauri/         # Rust backend (Tauri)
 │   └── package.json
-├── vault-web/        # Web UI
 ├── docs/                  # Documentation
 │   ├── design/            # Design docs
 │   ├── deployment/        # Build & deploy guides
