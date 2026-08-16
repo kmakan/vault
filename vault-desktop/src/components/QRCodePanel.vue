@@ -19,6 +19,17 @@
             </div>
             <p class="hint">Отсканируйте код устройством с Vault — ключ добавится автоматически.</p>
           </details>
+          <details class="qr-collapse" v-if="publicKey">
+            <summary>Скопировать ключ (передать через любой канал: мессенджер, SMS…)</summary>
+            <div class="id-row key-row">
+              <code class="my-id key-preview">{{ keyPreview }}</code>
+              <button @click="copyMyKey">Копировать ключ</button>
+            </div>
+            <p class="hint">
+              Собеседник вставит это в поле «Добавить ключ» (шаг 3) — email-письмо не нужно.
+              Ключ публичный: его можно передавать открыто, переписку он не раскрывает.
+            </p>
+          </details>
         </div>
       </div>
 
@@ -86,6 +97,12 @@ export default {
       inviteEmail: ''
     };
   },
+  computed: {
+    keyPreview() {
+      const k = this.publicKey || '';
+      return k.length > 24 ? k.slice(0, 12) + '…' + k.slice(-12) : k;
+    }
+  },
   mounted() {
     this.generateQRCode();
   },
@@ -95,10 +112,12 @@ export default {
       if (!canvas || !this.publicKey) return;
 
       try {
-        // Create a compact QR code data
+        // Create a compact QR code data. email включён (v2) — при сканировании
+        // контакт добавится сразу с email, без ручного ввода.
         const qrData = {
           type: 'vault-key',
-          version: 1,
+          version: 2,
+          email: this.myEmail || '',
           publicKey: this.publicKey,
           timestamp: Date.now()
         };
@@ -121,12 +140,14 @@ export default {
       try {
         // Try to parse as QR data
         let publicKey = this.scanInput;
+        let email = '';
 
         // Check if it's a JSON QR code
         if (this.scanInput.startsWith('{')) {
           const qrData = JSON.parse(this.scanInput);
           if (qrData.type === 'vault-key' && qrData.publicKey) {
             publicKey = qrData.publicKey;
+            email = qrData.email || '';
           }
         }
 
@@ -136,8 +157,8 @@ export default {
           return;
         }
 
-        // Emit event to add the key
-        this.$emit('key-scanned', publicKey);
+        // Emit event to add the key (email из QR — если есть, без ручного ввода)
+        this.$emit('key-scanned', { publicKey, email });
         this.scanInput = '';
       } catch (error) {
         alert('Ошибка при обработке QR-кода: ' + error.message);
@@ -146,6 +167,11 @@ export default {
     copyMyId() {
       navigator.clipboard.writeText(this.myEmail);
       alert('Ваш ID скопирован — отправьте его собеседнику');
+    },
+    copyMyKey() {
+      if (!this.publicKey) return;
+      navigator.clipboard.writeText(this.publicKey);
+      alert('Публичный ключ скопирован — передайте его собеседнику любым удобным способом');
     },
     sendInviteById() {
       const email = (this.inviteEmail || '').trim();
@@ -267,6 +293,14 @@ export default {
 
 .id-row button:hover {
   background: #16487f;
+}
+
+.key-row {
+  margin-top: 8px;
+}
+
+.key-preview {
+  font-size: 11px;
 }
 
 .qr-collapse {

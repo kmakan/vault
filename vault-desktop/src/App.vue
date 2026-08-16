@@ -508,8 +508,12 @@ export default {
       messages: [],
       newMessage: '',
       // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
-      // не перефетчивая и не расшифровывая повторно.
+      // не перефетчивая и не расшифровывая повторно. Персистится в
+      // localStorage (loadBodyCache/persistBodyCache) — после перезапуска
+      // чат открывается без повторного фетча тел из IMAP.
       emailBodyCache: {},
+      bodyCacheOrder: [],       // ключи кэша, старые первые (для trimming'а)
+      bodyCacheSaveTimer: null, // debounce записи в localStorage
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
@@ -654,6 +658,7 @@ export default {
     // Validate saved token
     if (api.token) {
       try {
+        this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await api.getChats();
         await this.loadContacts();
         await this.loadGroups();
@@ -719,6 +724,7 @@ export default {
         const data = await api.login(this.email, this.password);
         this.userId = data.user_id;
         this.isLoggedIn = true;
+        this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
         await this.loadGroups();
         await this.loadEmails();
@@ -817,6 +823,10 @@ export default {
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.messages = [];
+      // Мгновенное открытие: показываем кэш прошлой сессии, пока идёт
+      // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
+      const cachedChat = this.loadChatCache(email);
+      if (cachedChat && cachedChat.length) this.messages = cachedChat;
       // Токен загрузки: незавершённый loadMessages прошлого чата увидит
       // новый seq и не применит свои результаты.
       this.loadSeq++;
@@ -851,8 +861,79 @@ export default {
         }
       });
     },
+    // --- Персистентный кэш (localStorage): мгновенное открытие чатов ---
+    // Ключи привязаны к email аккаунта — на одной машине может быть
+    // несколько ящиков, кэши не должны смешиваться.
+    bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
+    chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
+    // Загрузка кэша тел писем — вызывается после логина/восстановления сессии.
+    loadBodyCache() {
+      try {
+        const raw = localStorage.getItem(this.bodyCacheKey());
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        this.emailBodyCache = parsed.bodies || {};
+        this.bodyCacheOrder = parsed.order || Object.keys(this.emailBodyCache);
+      } catch (e) {
+        this.emailBodyCache = {};
+        this.bodyCacheOrder = [];
+      }
+    },
+    // Запись тела в кэш + отложенная персистенция (debounce 2 сек).
+    // Лимит ~400 тел: старые вытесняются (FIFO по bodyCacheOrder).
+    cacheBody(key, body) {
+      this.emailBodyCache[key] = body;
+      const i = this.bodyCacheOrder.indexOf(key);
+      if (i >= 0) this.bodyCacheOrder.splice(i, 1);
+      this.bodyCacheOrder.push(key);
+      while (this.bodyCacheOrder.length > 400) {
+        const old = this.bodyCacheOrder.shift();
+        delete this.emailBodyCache[old];
+      }
+      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
+      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
+    },
+    persistBodyCache() {
+      try {
+        const data = JSON.stringify({ bodies: this.emailBodyCache, order: this.bodyCacheOrder });
+        localStorage.setItem(this.bodyCacheKey(), data);
+      } catch (e) {
+        // QuotaExceeded: кэш слишком большой — режем вдвое и повторяем один раз.
+        try {
+          this.bodyCacheOrder = this.bodyCacheOrder.slice(-200);
+          const trimmed = {};
+          for (const k of this.bodyCacheOrder) trimmed[k] = this.emailBodyCache[k];
+          this.emailBodyCache = trimmed;
+          localStorage.setItem(this.bodyCacheKey(), JSON.stringify({ bodies: trimmed, order: this.bodyCacheOrder }));
+        } catch (e2) { /* кэш не критичен — молча пропускаем */ }
+      }
+    },
+    // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
+    loadChatCache(chat) {
+      try {
+        const raw = localStorage.getItem(this.chatCacheKey(chat));
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    },
+    saveChatCache(chat, list) {
+      try {
+        // email-объект письма не персистим (тяжёлый и не нужен для рендера).
+        const slim = (list || []).map(m => ({
+          id: m.id, content: m.content, from: m.from, time: m.time,
+          encrypted: m.encrypted, vault: m.vault, status: m.status,
+          reactions: m.reactions || undefined,
+        }));
+        localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
+      } catch (e) { /* quota — не критично */ }
+    },
     async selectGroup(group) {
       this.messages = [];
+      // Мгновенное открытие группы из кэша (как и 1-на-1 чаты).
+      const cachedGroup = this.loadChatCache(`group:${group.id}`);
+      if (cachedGroup && cachedGroup.length) this.messages = cachedGroup;
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
@@ -1062,7 +1143,7 @@ export default {
             const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
             if (stale()) return;
             for (const m of missing) {
-              this.emailBodyCache[`${folder}:${m.uid || m.id}`] = bodies[String(m.uid || m.id)] || '';
+              this.cacheBody(`${folder}:${m.uid || m.id}`, bodies[String(m.uid || m.id)] || '');
             }
           }
         }
@@ -1154,6 +1235,8 @@ export default {
         const list = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
         this.applyReactions(list, chat, wireReactions);
         this.messages = list;
+        // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
+        this.saveChatCache(chat, list);
         return;
       }
 
@@ -1285,6 +1368,7 @@ export default {
           const list = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
           this.applyReactions(list, chat, wireReactions);
           this.messages = list;
+          this.saveChatCache(chat, list);
         } else {
           // No group key — show as-is (unencrypted)
           this.messages = raw.map(msg => {
@@ -1417,15 +1501,22 @@ export default {
       }
       await this.loadStoredPeerKeys();
     },
-    async addPeerKey(publicKeyHex) {
+    async addPeerKey(payload) {
       try {
+        // QRCodePanel шлёт {publicKey, email} (email из QR v2); старый формат —
+        // просто hex-строка (ручная вставка ключа без email).
+        const publicKeyHex = typeof payload === 'string' ? payload : (payload && payload.publicKey) || '';
+        const knownEmail = (typeof payload === 'object' && payload && payload.email) ? String(payload.email).trim().toLowerCase() : '';
         if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) {
           alert('Invalid public key format');
           return;
         }
-        // QR-скан даёт только публичный ключ (без email) — спросим email контакта,
-        // т.к. peerKeys индексируется по email (см. loadStoredPeerKeys).
-        const email = await prompt('Email контакта?');
+        // QR v2 несёт email контакта — ручной ввод не нужен. Для голого ключа
+        // (вставка hex) спрашиваем email: peerKeys индексируется по email.
+        let email = knownEmail;
+        if (!email || !email.includes('@')) {
+          email = await prompt('Email контакта?');
+        }
         if (!email || !email.includes('@')) {
           alert('Введите email контакта');
           return;
