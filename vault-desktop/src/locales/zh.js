@@ -8,6 +8,11 @@ export default {
   login_hint: 'Vault 在您的设备上加密一切。登录 = 将邮箱连接为传输通道。密钥自动生成。联系人只能由您选择添加：按参与者 ID 或二维码 (🔗)。',
   login_remember: '在此设备上记住我（密码加密存储，下次自动登录）',
   restoring_session: '正在连接邮箱…',
+  restore_failed_auth: '邮箱/密码组合无效：密码已被更改或撤销。请重新输入密码。',
+  restore_failed_network: '无法连接到邮箱：服务器不可达或 IMAP/SMTP 设置已更改。请检查网络或打开“服务器设置”。',
+  restore_failed_generic: '自动登录失败，请重新登录。',
+  server_settings: '服务器设置',
+  server_hint: '留空则使用默认值（Gmail）。',
 
   // Navigation
   nav_inbox: '收件箱',
@@ -97,6 +102,13 @@ export default {
   general_delete: '删除',
   general_confirm: '确认',
   general_yes: '是',
+  contact_edit: '此联系人的本地名称和头像',
+  contact_edit_title: '联系人名称和头像',
+  contact_edit_hint: '仅对您可见 — 联系人的真实名称和头像不会改变。',
+  contact_edit_name_placeholder: '本地名称（例如：妈妈、老板）',
+  contact_edit_avatar: '头像',
+  contact_edit_remove_avatar: '移除头像',
+  contact_edit_reset: '重置',
   general_no: '否',
 
   // Language

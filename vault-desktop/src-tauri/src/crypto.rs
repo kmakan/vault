@@ -318,8 +318,16 @@ pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<S
 
 /// Symmetric decrypt with a raw 32-byte hex key (for group shared keys)
 pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<String> {
+    // Групповые сообщения идут через SMTP: отправка фолдит base64 строками ≤76
+    // (спам-фильтр), и письмо приходит с '\n' внутри. Строгий base64-декодер
+    // падает на переносах → сообщение не расшифровывается. Игнорируем все
+    // пробельные символы (тот же фикс, что в decrypt_vault_cmd).
+    let cleaned: String = ciphertext
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
     let decoded = base64::engine::general_purpose::STANDARD
-        .decode(ciphertext)
+        .decode(&cleaned)
         .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
 
     if decoded.len() < NONCE_LEN {

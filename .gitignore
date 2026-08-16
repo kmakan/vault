@@ -18,6 +18,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Временный отладочный harness (командный канал для автотестов, не коммитить)
+vault-desktop/src/dbg.js
 .email_test_env.py
 .email_test_env
 

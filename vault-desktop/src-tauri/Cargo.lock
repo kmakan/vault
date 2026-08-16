@@ -4416,6 +4416,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-shell",
  "tokio",
+ "webkit2gtk",
  "x25519-dalek",
 ]
 

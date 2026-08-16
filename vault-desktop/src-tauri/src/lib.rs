@@ -471,6 +471,45 @@ pub fn run() {
                 .tooltip("Vault - E2E Encrypted Messenger")
                 .icon(icon)
                 .build(app)?;
+
+            // Linux: WebKitGTK по умолчанию отклоняет getUserMedia (микрофон) —
+            // без явного обработчика разрешений голосовые сообщения не работают
+            // ни у кого. Tauri/wry не подключают сигнал permission-request,
+            // поэтому подключаем его напрямую к нативному WebView: разрешаем
+            // захват аудио/видео (UserMediaPermissionRequest), остальное
+            // оставляем дефолтному поведению (отклонение).
+            #[cfg(any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            ))]
+            {
+                use webkit2gtk::glib::prelude::ObjectExt;
+                use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+                if let Some(webview_window) = app.get_webview_window("main") {
+                    let _ = webview_window.with_webview(|webview| {
+                        let wk = webview.inner();
+                        // Включаем медиа-захват в настройках WebKit
+                        // (enable-media-stream по умолчанию выключен).
+                        if let Some(settings) = wk.settings() {
+                            settings.set_enable_media_stream(true);
+                            settings.set_enable_mediasource(true);
+                        }
+                        // Собственно выдача разрешений.
+                        wk.connect_permission_request(|_view, request| {
+                            if request.is::<webkit2gtk::UserMediaPermissionRequest>() {
+                                request.allow();
+                                true // обработано
+                            } else {
+                                false // дефолт WebKit (отклонение)
+                            }
+                        });
+                    });
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -19,6 +19,25 @@
             <input type="checkbox" v-model="rememberMe" />
             <span>{{ t('login_remember') || 'Запомнить на этом устройстве' }}</span>
           </label>
+          <!-- Настройки серверов почты: провайдер может сменить IMAP/SMTP,
+               пользователь должен мочь исправить их вручную. -->
+          <button type="button" class="server-toggle" @click="showServerSettings = !showServerSettings">
+            ⚙ {{ t('server_settings') || 'Настройки сервера' }}
+            <span class="server-toggle-arrow">{{ showServerSettings ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="showServerSettings" class="server-settings">
+            <div class="server-row">
+              <label>IMAP</label>
+              <input v-model="imapServer" type="text" placeholder="imap.gmail.com" />
+              <input v-model="imapPort" type="text" placeholder="993" class="server-port" />
+            </div>
+            <div class="server-row">
+              <label>SMTP</label>
+              <input v-model="smtpServer" type="text" placeholder="smtp.gmail.com" />
+              <input v-model="smtpPort" type="text" placeholder="587" class="server-port" />
+            </div>
+            <p class="server-hint">{{ t('server_hint') || 'Оставьте пустыми для значений по умолчанию (Gmail).' }}</p>
+          </div>
           <button type="submit" :disabled="loginLoading">
             {{ loginLoading ? '...' : t('login') || 'Login' }}
           </button>
@@ -68,7 +87,7 @@
         >
           <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
           <div class="contact-info">
-            <div class="contact-name">{{ contact.name }}</div>
+            <div class="contact-name">{{ localProfileOf(contact.email)?.name || contact.name }}</div>
             <div class="contact-email">{{ contact.email }}</div>
           </div>
           <div class="contact-status">
@@ -239,6 +258,40 @@
           </label>
         </div>
       </div>
+
+      <!-- CONTACT EDIT MODAL: локальные имя/аватар контакта (видны только мне,
+           реальные имя/аватар собеседника не меняются) -->
+      <div v-if="showContactEdit && editingContact" class="modal-overlay" @click.self="showContactEdit = false">
+        <div class="modal-content contact-edit-panel">
+          <h3>{{ t('contact_edit_title') || 'Имя и аватар контакта' }}</h3>
+          <p class="contact-edit-email">{{ editingContact }}</p>
+          <p class="avatar-hint">{{ t('contact_edit_hint') || 'Видно только вам — реальные имя и аватар собеседника не меняются.' }}</p>
+          <div class="avatar-preview-circle">
+            <img v-if="editContactAvatar" :src="editContactAvatar" class="avatar-preview-img" />
+            <span v-else class="avatar-initials avatar-preview-initials">{{ (nameOf(editingContact) || '?').charAt(0).toUpperCase() }}</span>
+          </div>
+          <input
+            v-model="editContactName"
+            class="contact-edit-name-input"
+            :placeholder="t('contact_edit_name_placeholder') || 'Локальное имя (например: Мама, Босс)'"
+            maxlength="64"
+          />
+          <div class="contact-edit-actions">
+            <label class="avatar-upload-btn">
+              📷 {{ t('contact_edit_avatar') || 'Аватар' }}
+              <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="handleContactAvatarSelect" hidden />
+            </label>
+            <button v-if="editContactAvatar" class="contact-edit-btn contact-edit-btn--ghost" @click="editContactAvatar = ''">✕ {{ t('contact_edit_remove_avatar') || 'Убрать аватар' }}</button>
+          </div>
+          <div class="contact-edit-footer">
+            <button class="contact-edit-btn contact-edit-btn--ghost" @click="resetContactEdit">{{ t('contact_edit_reset') || 'Сбросить' }}</button>
+            <div class="contact-edit-footer-right">
+              <button class="contact-edit-btn contact-edit-btn--ghost" @click="showContactEdit = false">{{ t('general_cancel') || 'Отмена' }}</button>
+              <button class="contact-edit-btn contact-edit-btn--primary" @click="saveContactEdit">{{ t('general_save') || 'Сохранить' }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
       
       <!-- GROUP SETTINGS MODAL (полноценный оверлей, не сжимает чат) -->
       <div v-if="showGroupSettings && currentGroup" class="modal-overlay" @click.self="showGroupSettings = false">
@@ -246,7 +299,7 @@
           <GroupSettings
             :group="currentGroup"
             :currentUser="email"
-            :profiles="profiles"
+            :profiles="mergedProfiles"
             @close="showGroupSettings = false"
             @promote="promoteMember"
             @demote="demoteMember"
@@ -288,6 +341,9 @@
             <template v-if="activeChatType === 'group'">
               <button class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
+            </template>
+            <template v-else-if="activeChat">
+              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'">✏️</button>
             </template>
             <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
             <div class="export-dropdown" v-if="activeChat">
@@ -338,6 +394,10 @@
                 <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data" 
                      :alt="msg.attachment.name" 
                      class="attachment-image" />
+              </div>
+              <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
+                <audio controls class="attachment-audio"
+                       :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
               </div>
               <div v-else-if="msg.attachment" class="attachment-preview">
                 <div class="attachment-file">
@@ -540,6 +600,13 @@ export default {
       rememberMe: true,
       loginLoading: false,
       loginError: '',
+      // Настройки серверов почты в форме входа (провайдер может сменить
+      // IMAP/SMTP — пользователь должен мочь исправить их вручную).
+      showServerSettings: false,
+      imapServer: '',
+      imapPort: '',
+      smtpServer: '',
+      smtpPort: '',
       emails: [],
       emailsLoading: false,
       emailError: '',
@@ -595,6 +662,14 @@ export default {
       // Avatar
       userAvatarUrl: '',
       displayName: '',
+      // Локальные переопределения имён/аватаров контактов (per-account):
+      // пользователь может называть собеседника как удобно и ставить свой
+      // аватар для него — это НЕ меняет реальные имя/аватар собеседника.
+      localProfiles: {},
+      showContactEdit: false,
+      editingContact: null,
+      editContactName: '',
+      editContactAvatar: '',
       // User identity
       userId: null,
       // Typing indicators
@@ -613,9 +688,11 @@ export default {
     filteredContacts() {
       if (!this.searchQuery) return this.contacts;
       const q = this.searchQuery.toLowerCase();
-      return this.contacts.filter(c =>
-        c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)
-      );
+      return this.contacts.filter(c => {
+        const lp = this.localProfileOf(c.email);
+        const localName = (lp && lp.name) || '';
+        return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || localName.toLowerCase().includes(q);
+      });
     },
     filteredMessages() {
       if (!this.chatSearchQuery) return this.messages;
@@ -641,8 +718,20 @@ export default {
     activeChatName() {
       if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
       if (!this.activeChat) return '';
+      // Локальное имя контакта (если задано) — выше реального.
+      const lp = this.localProfileOf(this.activeChat);
+      if (lp && lp.name) return lp.name;
       const c = this.contacts.find(c => c.email === this.activeChat);
       return c ? c.name : this.activeChat;
+    },
+    // Профили с локальными переопределениями — для GroupSettings (список
+    // участников группы тоже показывает локальные имена/аватары).
+    mergedProfiles() {
+      const merged = { ...this.profiles };
+      for (const [email, lp] of Object.entries(this.localProfiles)) {
+        merged[email] = { ...(merged[email] || {}), ...lp };
+      }
+      return merged;
     }
   },
   async mounted() {
@@ -668,31 +757,43 @@ export default {
     // Display name + кэш профилей (имя/аватар участников групп).
     this.displayName = localStorage.getItem('vault-display-name') || this.email || ''
     this.loadProfiles()
+    this.loadLocalProfiles()
     // Validate saved token
     if (api.token) {
       // Авто-вход: IMAP-сессия Rust умирает при перезапуске приложения, но
       // учётные данные почты зашифрованы на устройстве (device-ключ) —
       // восстанавливаем подключение без повторного ввода пароля.
       this.restoringSession = true;
-      try { await api.restoreSession(); } catch (e) { console.error('restoreSession error:', e); }
-      try {
-        this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
-        await api.getChats();
-        await this.loadContacts();
-        await this.loadGroups();
-        // This throws "Not connected" if the IMAP session died on restart —
-        // then we must ask for the password again.
-        await this.loadEmails();
-        this.isLoggedIn = true;
-        this.startPolling()
-      } catch (e) {
-        // Session died on restart and auto-login could not restore it —
-        // просим ввести пароль снова
-        api.token = null;
-        localStorage.removeItem('vault-token');
-        this.email = api.email || this.email; // pre-fill login form
-      } finally {
+      let restored = false;
+      try { restored = await api.restoreSession(); } catch (e) { console.error('restoreSession error:', e); }
+      if (!restored) {
+        // Авто-вход не удался — показываем форму входа с объяснением,
+        // чтобы пользователь мог исправить пароль/настройки серверов.
+        this.showRestoreFailure();
         this.restoringSession = false;
+      } else {
+        try {
+          // Восстанавливаем email в UI (при авто-входе форма не заполнялась,
+          // а loadGroups/профили фильтруют по this.email).
+          this.email = api.email || this.email;
+          this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
+          await api.getChats();
+          await this.loadContacts();
+          await this.loadGroups();
+          // This throws "Not connected" if the IMAP session died on restart —
+          // then we must ask for the password again.
+          await this.loadEmails();
+          this.isLoggedIn = true;
+          this.startPolling()
+        } catch (e) {
+          // Session died on restart and auto-login could not restore it —
+          // просим ввести пароль снова
+          api.token = null;
+          localStorage.removeItem('vault-token');
+          this.showRestoreFailure();
+        } finally {
+          this.restoringSession = false;
+        }
       }
     }
     await this.initCrypto()
@@ -738,13 +839,46 @@ export default {
         console.error('Failed to load peer keys:', error);
       }
     },
+    // Авто-вход не удался: показываем форму входа с понятным сообщением и
+    // предзаполняем email + сохранённые серверы (провайдер мог сменить
+    // IMAP/SMTP — пользователь может исправить их в «Настройках сервера»).
+    showRestoreFailure() {
+      this.email = api.email || this.email;
+      const reason = api.lastRestoreError;
+      if (reason === 'auth') {
+        this.loginError = this.t('restore_failed_auth') ||
+          'Пара email/пароль не сработала: пароль был изменён или отозван. Введите пароль заново.';
+      } else if (reason === 'network') {
+        this.loginError = this.t('restore_failed_network') ||
+          'Не удалось подключиться к почте: сервер недоступен или настройки IMAP/SMTP изменились. Проверьте интернет или откройте «Настройки сервера».';
+      } else {
+        this.loginError = this.t('restore_failed_generic') ||
+          'Автоматический вход не удался. Войдите заново.';
+      }
+      // Предзаполняем сохранённые серверные настройки, чтобы их можно было
+      // исправить прямо в форме входа.
+      const c = api.savedConfig || {};
+      this.imapServer = c.imap_server || '';
+      this.imapPort = c.imap_port ? String(c.imap_port) : '';
+      this.smtpServer = c.smtp_server || '';
+      this.smtpPort = c.smtp_port ? String(c.smtp_port) : '';
+      if (this.imapServer || this.smtpServer) this.showServerSettings = true;
+    },
     async login() {
       this.loginLoading = true;
       this.loginError = '';
       try {
-        const data = await api.login(this.email, this.password, { remember: this.rememberMe });
+        // Пользовательские настройки серверов (если заполнены) — иначе
+        // дефолты Gmail внутри emailConnect.
+        const config = {};
+        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
+        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
+        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
+        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
+        const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
         this.userId = data.user_id;
         this.isLoggedIn = true;
+        this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
         await this.loadGroups();
@@ -997,9 +1131,13 @@ export default {
         const parsed = JSON.parse(content);
         if (parsed && parsed.vault_attachment) {
           const isImage = parsed.type && parsed.type.startsWith('image/');
+          const isAudio = parsed.type && parsed.type.startsWith('audio/');
+          const label = isAudio
+            ? `🎙️ ${parsed.name}`
+            : (isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`);
           return {
-            text: isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`,
-            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage },
+            text: label,
+            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage, isAudio },
           };
         }
       } catch { /* not JSON — plain text message */ }
@@ -1175,6 +1313,7 @@ export default {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
           let msgId = m.uid || m.id;
+          let attachment = null;
           try {
             const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
             const body = this.emailBodyCache[cacheKey] || '';
@@ -1209,6 +1348,13 @@ export default {
               if (env) {
                 content = env.text;
                 if (env.id) msgId = env.id;
+                // Вложение внутри конверта: text = JSON {vault_attachment,...}
+                // (файлы и голосовые идут этим путём).
+                const pp = this.parseMessageContent(env.text);
+                if (pp.attachment) {
+                  attachment = pp.attachment;
+                  content = pp.text;
+                }
                 // isOut=true = письмо прислал СОБЕСЕДНИК (см. from: isOut?'them':'me').
                 // Аватар/имя в конверте принадлежат отправителю письма:
                 //   входящее (isOut) -> собеседник (email), исходящее -> я (this.email).
@@ -1224,7 +1370,7 @@ export default {
                 const pp = this.parseMessageContent(text);
                 content = pp.text || content;
                 if (pp.attachment) {
-                  content = `${content}\n📎 ${pp.attachment.name}`;
+                  attachment = pp.attachment;
                 }
               }
             } else {
@@ -1234,6 +1380,7 @@ export default {
             return {
               id: msgId,
               content,
+              attachment,
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
               encrypted: true,
@@ -1638,19 +1785,52 @@ export default {
       this.showEmojiPicker = false
     },
     // Audio messages
-    sendAudioMessage(audioData) {
-      // Audio is encrypted and sent as attachment
-      // For now, show as text indicator
+    async sendAudioMessage(audioData) {
+      // Голосовое = вложение audio/webm, зашифрованное как обычное сообщение
+      // (конверт {vault:1,...,text:<JSON вложения>} + encryptVault, AAD="VAULT").
+      const name = `voice-${Date.now()}.webm`;
+      const attachmentPayload = JSON.stringify({
+        vault_attachment: true,
+        name,
+        type: audioData.mimeType || 'audio/webm',
+        size: audioData.size,
+        data: audioData.base64,
+      });
+
+      // Оптимистичный предпросмотр у отправителя.
       const msg = {
         id: Date.now().toString(36),
         content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
         from: 'me',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         encrypted: this.cryptoReady,
-        audioData: audioData.base64,
+        attachment: {
+          name,
+          type: audioData.mimeType || 'audio/webm',
+          size: audioData.size,
+          data: audioData.base64,
+          isImage: false,
+          isAudio: true,
+        },
+      };
+      this.messages.push(msg);
+      this.showAudioRecorder = false;
+      this.scrollToBottom(true);
+
+      if (this.activeChat) {
+        try {
+          let wire = attachmentPayload;
+          if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            const envelope = await this.buildEnvelope(attachmentPayload);
+            wire = await crypto.encryptVault(envelope);
+          }
+          await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
+        } catch (err) {
+          console.error('Failed to send audio:', err);
+          alert('Failed to send voice message: ' + (err && err.message || err));
+        }
       }
-      this.messages.push(msg)
-      this.showAudioRecorder = false
     },
     // File attachments
     async handleFileSelect(event) {
@@ -1694,10 +1874,19 @@ export default {
             };
             this.messages.push(msg);
 
-            // Send to API — content is the JSON payload, server stores it as-is
+            // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
+            // зашифрованный как обычное сообщение (AAD="VAULT"). БЕЗ шифрования
+            // получатель не сможет расшифровать (AAD не сойдётся) и письмо
+            // молча отбросится.
             if (this.activeChat) {
               try {
-                await api.sendMessage(this.activeChat, attachmentPayload, file.type);
+                let wire = attachmentPayload;
+                if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+                  crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+                  const envelope = await this.buildEnvelope(attachmentPayload);
+                  wire = await crypto.encryptVault(envelope);
+                }
+                await api.sendMessage(this.activeChat, wire, file.type);
               } catch (err) {
                 console.error('Failed to send attachment:', err);
               }
@@ -2140,13 +2329,86 @@ export default {
     profileOf(email) {
       return this.profiles[email] || null;
     },
+    // Локальные переопределения (per-account): пользователь сам решает, как
+    // называть контакт и какой аватар ему ставить. Приоритет выше, чем у
+    // синхронизированного профиля собеседника.
+    localProfileOf(email) {
+      return this.localProfiles[email] || null;
+    },
     nameOf(email) {
+      const lp = this.localProfileOf(email);
+      if (lp && lp.name) return lp.name;
       const p = this.profileOf(email);
       return (p && p.name) || email;
     },
     avatarOf(email) {
+      const lp = this.localProfileOf(email);
+      if (lp && lp.avatar) return lp.avatar;
       const p = this.profileOf(email);
       return (p && p.avatar) || '';
+    },
+    loadLocalProfiles() {
+      try {
+        this.localProfiles = JSON.parse(localStorage.getItem('vault-local-profiles-' + this.email) || '{}');
+      } catch (e) {
+        this.localProfiles = {};
+      }
+    },
+    saveLocalProfiles() {
+      try {
+        localStorage.setItem('vault-local-profiles-' + this.email, JSON.stringify(this.localProfiles));
+      } catch (e) {
+        console.error('Failed to save local profiles:', e);
+      }
+    },
+    // Модалка редактирования контакта (локальные имя/аватар).
+    openContactEdit(email) {
+      if (!email) return;
+      this.editingContact = email;
+      const lp = this.localProfileOf(email);
+      this.editContactName = (lp && lp.name) || '';
+      this.editContactAvatar = (lp && lp.avatar) || '';
+      this.showContactEdit = true;
+    },
+    async handleContactAvatarSelect(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        // Сжимаем до 64×64, как и свои аватары (localStorage не резиновый).
+        this.editContactAvatar = await this.shrinkAvatar(e.target.result);
+      };
+      reader.readAsDataURL(file);
+      event.target.value = '';
+    },
+    saveContactEdit() {
+      const email = this.editingContact;
+      if (!email) return;
+      const name = this.editContactName.trim();
+      const avatar = this.editContactAvatar || '';
+      if (!name && !avatar) {
+        // Пусто = сброс к реальным имени/аватару собеседника.
+        delete this.localProfiles[email];
+      } else {
+        this.localProfiles[email] = { name, avatar };
+      }
+      this.saveLocalProfiles();
+      // Обновляем отображение в списке контактов (contact.name берётся из
+      // peer-key label — подменяем на локальное имя, если задано).
+      const c = this.contacts.find(x => x.email === email);
+      if (c) c.name = name || this.nameOf(email);
+      this.showContactEdit = false;
+      this.editingContact = null;
+    },
+    resetContactEdit() {
+      if (this.editingContact) {
+        delete this.localProfiles[this.editingContact];
+        this.saveLocalProfiles();
+        const c = this.contacts.find(x => x.email === this.editingContact);
+        if (c) c.name = this.nameOf(this.editingContact);
+      }
+      this.showContactEdit = false;
+      this.editingContact = null;
     },
     loadProfiles() {
       try {
@@ -2228,6 +2490,15 @@ export default {
 .login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
 .remember-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; user-select: none; }
 .remember-label input { width: auto; margin: 0; cursor: pointer; }
+.server-toggle { display: flex; align-items: center; gap: 6px; background: none; border: none; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; padding: 6px 0; margin: 4px 0; width: 100%; text-align: left; }
+.server-toggle:hover { color: var(--text-primary, #e6edf3); }
+.server-toggle-arrow { margin-left: auto; }
+.server-settings { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #30363d); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.server-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.server-row label { width: 44px; font-size: 12px; color: var(--text-secondary, #8b949e); flex-shrink: 0; }
+.server-row input { flex: 1; margin: 0; padding: 6px 8px; font-size: 13px; }
+.server-row .server-port { flex: 0 0 64px; }
+.server-hint { margin: 0; font-size: 11px; color: var(--text-secondary, #8b949e); }
 .login-hint { font-size: 13px; margin: 16px 0 8px !important; }
 .login-box hr { border: none; border-top: 1px solid var(--border, #30363d); margin: 20px 0; }
 /* ═══════════════════════════════════════════════════════════════
@@ -2701,6 +2972,77 @@ body {
 .avatar-upload-btn:hover {
   background: var(--accent-hover, #5558e6);
   transform: translateY(-1px);
+}
+
+/* Contact edit modal (локальные имя/аватар контакта) */
+.contact-edit-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 380px;
+}
+.contact-edit-email {
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  word-break: break-all;
+  margin: 0;
+}
+.contact-edit-name-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border-subtle, #333);
+  border-radius: var(--radius-md, 8px);
+  color: var(--text-primary, #eee);
+  font-size: 14px;
+  outline: none;
+}
+.contact-edit-name-input:focus {
+  border-color: var(--accent-primary, #6366f1);
+}
+.contact-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.contact-edit-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-top: 4px;
+}
+.contact-edit-footer-right {
+  display: flex;
+  gap: 8px;
+}
+.contact-edit-btn {
+  padding: 9px 18px;
+  border-radius: var(--radius-md, 8px);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.contact-edit-btn--primary {
+  background: var(--accent-primary, #6366f1);
+  color: white;
+}
+.contact-edit-btn--primary:hover {
+  background: var(--accent-hover, #5558e6);
+}
+.contact-edit-btn--ghost {
+  background: transparent;
+  color: var(--text-secondary, #999);
+  border: 1px solid var(--border-subtle, #333);
+}
+.contact-edit-btn--ghost:hover {
+  color: var(--text-primary, #eee);
+  border-color: var(--text-secondary, #666);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3307,6 +3649,12 @@ body {
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
+}
+
+.attachment-audio {
+  width: 260px;
+  max-width: 100%;
+  height: 36px;
 }
 
 .message-time {

@@ -8,6 +8,11 @@ export default {
   login_hint: 'Vault encrypts everything on your device. Sign-in = connect your mailbox as the transport. Keys are automatic. Contacts are added only on your choice: by participant ID or QR (🔗).',
   login_remember: 'Remember on this device (password stored encrypted, sign-in will be automatic)',
   restoring_session: 'Connecting to your mailbox…',
+  restore_failed_auth: 'The email/password pair did not work: the password was changed or revoked. Please enter your password again.',
+  restore_failed_network: 'Could not connect to your mailbox: the server is unreachable or the IMAP/SMTP settings have changed. Check your internet or open “Server settings”.',
+  restore_failed_generic: 'Automatic sign-in failed. Please sign in again.',
+  server_settings: 'Server settings',
+  server_hint: 'Leave empty to use the defaults (Gmail).',
 
   // Navigation
   nav_inbox: 'Inbox',
@@ -97,6 +102,13 @@ export default {
   general_delete: 'Delete',
   general_confirm: 'Confirm',
   general_yes: 'Yes',
+  contact_edit: 'Local name and avatar for this contact',
+  contact_edit_title: 'Contact name and avatar',
+  contact_edit_hint: 'Visible only to you — the contact\'s real name and avatar are not changed.',
+  contact_edit_name_placeholder: 'Local name (e.g. Mom, Boss)',
+  contact_edit_avatar: 'Avatar',
+  contact_edit_remove_avatar: 'Remove avatar',
+  contact_edit_reset: 'Reset',
   general_no: 'No',
 
   // Language

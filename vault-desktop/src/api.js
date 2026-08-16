@@ -24,6 +24,11 @@ export class ApiClient {
     const savedEmail = localStorage.getItem('vault-email');
     this.email = savedEmail || null;
     this.password = null; // in-memory ONLY — never persisted to localStorage
+    // Диагностика авто-входа: 'auth' | 'network' | 'none' (ставит restoreSession).
+    this.lastRestoreError = null;
+    // Сохранённые серверные настройки (из credentials) — для предзаполнения
+    // формы входа, если провайдер сменил IMAP/SMTP и пользователь их правит.
+    this.savedConfig = null;
     // On page reload the Tauri Rust email session (EmailState) survives, so a
     // saved email means we can keep fetching without re-login.
     this.connected = !!savedEmail;
@@ -53,8 +58,8 @@ export class ApiClient {
   }
 
   // --- Auth (serverless): login === connect the mailbox ---
-  async login(email, password, { remember = true } = {}) {
-    await this.emailConnect({ email, password });
+  async login(email, password, { remember = true, config = null } = {}) {
+    await this.emailConnect({ email, password, ...(config || {}) });
     this.email = email;
     this.password = password; // memory only
     this.connected = true;
@@ -85,14 +90,24 @@ export class ApiClient {
   // and reconnect IMAP. Returns true on success; false when nothing is saved
   // or the saved password no longer works (caller shows the login screen).
   async restoreSession() {
+    this.lastRestoreError = null;
     let creds = null;
     try {
       creds = await invoke('load_credentials');
     } catch (e) {
       console.error('Failed to load saved credentials:', e);
+      this.lastRestoreError = 'none';
       return false;
     }
     if (!creds || !creds.email || !creds.password) return false;
+    // Запоминаем серверные настройки для предзаполнения формы входа: провайдер
+    // мог сменить IMAP/SMTP, пользователь должен мочь их исправить.
+    this.savedConfig = {
+      imap_server: creds.imap_server || '',
+      imap_port: creds.imap_port || '',
+      smtp_server: creds.smtp_server || '',
+      smtp_port: creds.smtp_port || '',
+    };
     try {
       await this.emailConnect({
         email: creds.email,
@@ -110,8 +125,10 @@ export class ApiClient {
       if (msg.includes('login failed') || msg.includes('authentication')) {
         console.error('Auto-login: saved password rejected, clearing it:', e);
         try { await invoke('delete_credentials'); } catch (_) { /* ignore */ }
+        this.lastRestoreError = 'auth';
       } else {
         console.error('Auto-login: connection failed (credentials kept):', e);
+        this.lastRestoreError = 'network';
       }
       return false;
     }
