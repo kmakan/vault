@@ -1,7 +1,14 @@
 <template>
   <div class="app-container">
+    <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
+    <div v-if="!isLoggedIn && restoringSession" class="login-screen">
+      <div class="login-box">
+        <h1>🔒 Vault</h1>
+        <p class="login-hint">{{ t('restoring_session') || 'Подключение к почте…' }}</p>
+      </div>
+    </div>
     <!-- LOGIN SCREEN -->
-    <div v-if="!isLoggedIn" class="login-screen">
+    <div v-else-if="!isLoggedIn" class="login-screen">
       <div class="login-box">
         <h1>🔒 Vault</h1>
         <p>E2E Encrypted Messenger</p>
@@ -527,6 +534,7 @@ export default {
       showSettings: false,
       showMembers: false,
       isLoggedIn: false,
+      restoringSession: false,
       email: '',
       password: '',
       rememberMe: true,
@@ -665,6 +673,7 @@ export default {
       // Авто-вход: IMAP-сессия Rust умирает при перезапуске приложения, но
       // учётные данные почты зашифрованы на устройстве (device-ключ) —
       // восстанавливаем подключение без повторного ввода пароля.
+      this.restoringSession = true;
       try { await api.restoreSession(); } catch (e) { console.error('restoreSession error:', e); }
       try {
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
@@ -682,6 +691,8 @@ export default {
         api.token = null;
         localStorage.removeItem('vault-token');
         this.email = api.email || this.email; // pre-fill login form
+      } finally {
+        this.restoringSession = false;
       }
     }
     await this.initCrypto()
@@ -1982,7 +1993,10 @@ export default {
         // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
         const contactAccepts = await api.fetchPendingContactAccepts();
         if (contactAccepts.length) {
-          this.peerKeys = Object.assign({}, this.peerKeys);
+          // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
+          // но НЕ в this.peerKeys — перечитываем с диска, иначе selectChat
+          // не найдёт ключ и предложит «добавить контакт».
+          await this.loadStoredPeerKeys();
           await this.loadContacts();
         }
         // Собираем непрочитанные инвайты для попапа согласия.
@@ -2063,6 +2077,10 @@ export default {
     async acceptContactInvite(c) {
       try {
         await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
+        // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
+        // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
+        this.peerKeys[c.sender] = c.public_key;
+        this.peerKeysLoaded[c.sender] = true;
         await api.addContact(c.sender);
         api.saveProfile(c.sender, c.sender_name, c.sender_avatar);
         this.loadProfiles();
