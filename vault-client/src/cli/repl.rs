@@ -228,17 +228,36 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Send { message } => {
             if let Some(ref chat) = ctx.active_chat {
                 if let Some(ref client) = ctx.email_client {
-                    // Encrypt the plaintext with AAD marker "VAULT" so the
-                    // receiver can authenticate this as a vault message
-                    // (Poly1305 AAD — no plaintext prefix in the ciphertext).
+                    // Set the recipient's public key so we encrypt on the
+                    // shared X25519 ECDH secret (Desktop-compatible).
+                    if let Some(contact) = ctx.contact_book.get(chat) {
+                        if !contact.public_key.is_empty() {
+                            if let Err(e) = ctx.crypto.set_peer_key(&contact.public_key) {
+                                Output::warn(&format!("Could not set peer key: {}", e));
+                            }
+                        } else {
+                            Output::warn("Contact has no public key — message will NOT be Desktop-compatible. Add key via /add <email> <name> <pubkey> or /accept first.");
+                        }
+                    }
+
+                    // Wrap plaintext in the Desktop-compatible JSON envelope,
+                    // then encrypt with AAD marker "VAULT".
+                    let envelope = serde_json::json!({
+                        "vault": 1,
+                        "id": uuid::Uuid::new_v4().to_string(),
+                        "text": &message,
+                        "name": ctx.config.email.as_deref().unwrap_or(""),
+                        "avatar": ""
+                    });
                     let encrypted = ctx
                         .crypto
-                        .encrypt_vault(&message)
+                        .encrypt_vault(&envelope.to_string())
                         .unwrap_or_else(|e| {
                             Output::warn(&format!("Encrypt failed: {}", e));
                             ctx.crypto.encrypt(&message)
                         });
-                    let subject = format!("Vault: {}", chat);
+
+                    let subject = String::new(); // stealth — empty subject
 
                     // Check for queued attachments
                     if !ctx.attachments.is_empty() {
@@ -1235,7 +1254,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             }
                             _ => {
                                 Output::error("Invalid group key stored locally");
-                                return Ok(true);
+                                return Ok(false);
                             }
                         };
                         let encryptor =
@@ -1578,31 +1597,49 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     "Invalid emoji '{}'. Use one of: 👍 ❤️ 😂 😮 😢 🔥",
                     emoji
                 ));
-            } else {
-                // Encrypt reaction data and store locally
-                let reaction_json =
-                    serde_json::to_string(&crate::vault::Reaction::new(&id, &emoji, user))
-                        .unwrap_or_default();
-                let encrypted = ctx.crypto.encrypt(&reaction_json);
-                match ctx.reaction_store.add_reaction(&id, &emoji, user) {
-                    Ok(true) => {
-                        Output::success(&format!("Reacted {} to message {}", emoji, id));
-                        // Also send reaction email notification if connected
-                        if let Some(ref mut client) = ctx.email_client {
-                            let _ = client
-                                .send_email(
-                                    "",
-                                    &format!("[VAULT-REACT] {} {}", id, emoji),
-                                    &encrypted,
-                                )
-                                .await;
-                        }
-                    }
-                    Ok(false) => {
-                        Output::error(&format!("Invalid emoji: {}", emoji));
-                    }
-                    Err(e) => Output::error(&format!("Failed to react: {}", e)),
+                return Ok(false);
+            }
+
+            let to = match ctx.active_chat.clone() {
+                Some(t) => t,
+                None => {
+                    Output::error("No active chat. Use /chat <contact> first.");
+                    return Ok(false);
                 }
+            };
+
+            // Set the recipient's public key (Desktop-compatible shared secret).
+            if let Some(c) = ctx.contact_book.get(&to) {
+                if !c.public_key.is_empty() {
+                    let _ = ctx.crypto.set_peer_key(&c.public_key);
+                }
+            }
+
+            // Desktop-compatible reaction envelope with empty (stealth) subject.
+            let payload = serde_json::json!({
+                "react": 1,
+                "msg_id": &id,
+                "emoji": &emoji,
+                "action": "add"
+            });
+            let encrypted = ctx
+                .crypto
+                .encrypt_vault(&payload.to_string())
+                .unwrap_or_else(|_| ctx.crypto.encrypt(&payload.to_string()));
+            let subject = String::new(); // stealth
+
+            match ctx.reaction_store.add_reaction(&id, &emoji, user) {
+                Ok(true) => {
+                    Output::success(&format!("Reacted {} to message {}", emoji, id));
+                    // Also send reaction email notification if connected
+                    if let Some(ref mut client) = ctx.email_client {
+                        let _ = client.send_email(&to, &subject, &encrypted).await;
+                    }
+                }
+                Ok(false) => {
+                    Output::error(&format!("Invalid emoji: {}", emoji));
+                }
+                Err(e) => Output::error(&format!("Failed to react: {}", e)),
             }
         }
         Command::Unreact { id, emoji } => {
@@ -1610,6 +1647,28 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             match ctx.reaction_store.remove_reaction(&id, &emoji, user) {
                 Ok(true) => {
                     Output::success(&format!("Removed {} reaction from message {}", emoji, id));
+                    // Send a "remove" reaction envelope to the active chat (if any).
+                    if let Some(to) = ctx.active_chat.clone() {
+                        if let Some(c) = ctx.contact_book.get(&to) {
+                            if !c.public_key.is_empty() {
+                                let _ = ctx.crypto.set_peer_key(&c.public_key);
+                            }
+                        }
+                        let payload = serde_json::json!({
+                            "react": 1,
+                            "msg_id": &id,
+                            "emoji": &emoji,
+                            "action": "remove"
+                        });
+                        let encrypted = ctx
+                            .crypto
+                            .encrypt_vault(&payload.to_string())
+                            .unwrap_or_else(|_| ctx.crypto.encrypt(&payload.to_string()));
+                        let subject = String::new(); // stealth
+                        if let Some(ref mut client) = ctx.email_client {
+                            let _ = client.send_email(&to, &subject, &encrypted).await;
+                        }
+                    }
                 }
                 Ok(false) => {
                     Output::info(&format!("No {} reaction found on message {}", emoji, id));
