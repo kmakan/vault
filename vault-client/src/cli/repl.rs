@@ -274,8 +274,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                 &info.filename,
                                                 &info.mime_type,
                                             );
-                                        let file_subject =
-                                            format!("Vault: file {}", info.filename);
+                                        let file_subject = String::new(); // stealth — empty subject
                                         match client
                                             .send_email(chat, &file_subject, &mime_body)
                                             .await
@@ -1218,8 +1217,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                 );
 
                                             let to = ctx.active_chat.as_deref().unwrap_or("");
-                                            let subject =
-                                                format!("Vault: file {}", info.filename);
+                                            let subject = String::new(); // stealth — empty subject
 
                                             match client.send_email(to, &subject, &mime_body).await
                                             {
