@@ -340,7 +340,9 @@
               <h3>{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
-                  👥 {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
+                  <span class="members-count" @click="showMembersList = true">
+                    👥 {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
+                  </span>
                 </template>
                 <template v-else>
                   {{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}
@@ -402,17 +404,21 @@
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
               <span>{{ replyBody(msg.content) }}</span>
               <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
-                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data" 
-                     :alt="msg.attachment.name" 
-                     class="attachment-image" />
+                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
+                     :alt="msg.attachment.name"
+                     class="attachment-image"
+                     @click="openImageViewer(msg.attachment)" />
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
               </div>
               <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
                 <audio controls class="attachment-audio"
                        :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
               </div>
               <div v-else-if="msg.attachment" class="attachment-preview">
-                <div class="attachment-file">
+                <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
                   📄 {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
+                  <span class="attachment-dl-btn">⬇️ {{ t('download') || 'Скачать' }}</span>
                 </div>
               </div>
               <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
@@ -501,6 +507,36 @@
       </div>
     </div>
 
+    <!-- Image viewer (полноэкранный просмотр вложения-изображения) -->
+    <div v-if="viewingImage" class="modal-overlay image-viewer-overlay" @click.self="closeImageViewer">
+      <div class="image-viewer">
+        <button class="modal-close" @click="closeImageViewer">←</button>
+        <img :src="'data:' + viewingImage.type + ';base64,' + viewingImage.data"
+             :alt="viewingImage.name" class="image-viewer-img" />
+        <div class="image-viewer-actions">
+          <span class="image-viewer-name">{{ viewingImage.name }}</span>
+          <button class="btn btn-primary" @click="downloadAttachment(viewingImage)">⬇️ {{ t('download') || 'Скачать' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Members list (список участников группы по клику на счётчик) -->
+    <div v-if="showMembersList && currentGroup" class="modal-overlay" @click.self="showMembersList = false">
+      <div class="modal-settings">
+        <button class="modal-close" @click="showMembersList = false">←</button>
+        <h3 class="invite-popup-title">{{ (currentGroup.members || []).length }} {{ membersLabel((currentGroup.members || []).length) }}</h3>
+        <div class="member-list">
+          <div v-for="member in (currentGroup.members || [])" :key="member.email" class="member-item">
+            <UserAvatar :email="member.email" :avatarUrl="avatarOf(member.email)" :size="36" />
+            <div class="member-item__info">
+              <span class="member-item__email">{{ nameOf(member.email) }}</span>
+              <span class="member-item__role" :class="'role--' + (member.role || 'Member').toLowerCase()">{{ member.role || 'Member' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Create Group Modal -->
     <div v-if="showCreateGroup" class="modal-overlay" @click.self="showCreateGroup = false">
       <div class="modal-card">
@@ -555,7 +591,7 @@ import CipherTool from './components/CipherTool.vue';
 import QRCodePanel from './components/QRCodePanel.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
-import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
+import { exportChatJSON, exportChatTXT, downloadFile, downloadBase64 } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail } from './mailProviders.js';
 
@@ -657,6 +693,10 @@ export default {
       // Add-member popup (выбор контактов)
       showAddMemberPopup: false,
       addMemberQuery: '',
+      // Список участников группы (модалка по клику на счётчик)
+      showMembersList: false,
+      // Полноэкранный просмотр изображения-вложения
+      viewingImage: null,
       // Profile cache (имя/аватар из настроек)
       profiles: {},
       // Emoji
@@ -867,6 +907,18 @@ export default {
         return 'участников';
       }
       return n === 1 ? 'member' : 'members';
+    },
+    // Скачивание вложения (байты из base64 → Blob → file download)
+    downloadAttachment(attachment) {
+      if (!attachment || !attachment.data) return;
+      downloadBase64(attachment.data, attachment.name, attachment.type);
+    },
+    // Полноэкранный просмотр изображения-вложения
+    openImageViewer(attachment) {
+      this.viewingImage = attachment;
+    },
+    closeImageViewer() {
+      this.viewingImage = null;
     },
     onAppIconChanged(id) {
       this.appIconId = id;
@@ -3835,12 +3887,112 @@ body {
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
+  cursor: pointer;
+}
+
+.attachment-dl-btn {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-primary, #fff);
 }
 
 .attachment-audio {
   width: 260px;
   max-width: 100%;
   height: 36px;
+}
+
+/* Image viewer (полноэкранный просмотр вложения-изображения) */
+.image-viewer-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-viewer {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.image-viewer-img {
+  max-width: 90vw;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.image-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.image-viewer-name {
+  color: inherit;
+  opacity: 0.8;
+  font-size: 13px;
+}
+
+/* Members count (кликабельный счётчик участников в шапке группы) */
+.members-count {
+  cursor: pointer;
+}
+
+/* Members list (модалка со списком участников группы) */
+.member-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.member-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.member-item__info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.member-item__email {
+  font-size: 13px;
+}
+
+.member-item__role {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0.8;
+}
+
+.role--admin {
+  background: rgba(255, 152, 0, 0.25);
+  color: #ff9800;
+}
+
+.role--moderator {
+  background: rgba(33, 150, 243, 0.25);
+  color: #2196f3;
+}
+
+.role--member {
+  background: rgba(158, 158, 158, 0.25);
+  color: #9e9e9e;
 }
 
 .message-time {

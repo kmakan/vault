@@ -203,5 +203,7 @@ export default {
   chat_no_key: '还没有对方的密钥——请通过 🔗（添加联系人）交换密钥：输入参与者 ID 或扫描二维码。',
   contact_no_key_hint: '没有对方密钥——请通过 🔗（参与者 ID 或二维码）交换密钥',
   contact_delete: '删除联系人',
-  contact_delete_confirm: '删除此联系人？其加密密钥将被移除。'
+  contact_delete_confirm: '删除此联系人？其加密密钥将被移除。',
+// 通用操作
+  download: '下载',
 }

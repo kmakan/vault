@@ -204,4 +204,6 @@ export default {
   contact_no_key_hint: 'No peer key yet — exchange keys via 🔗 (participant ID or QR)',
   contact_delete: 'Delete contact',
   contact_delete_confirm: 'Delete this contact? Its encryption key will be removed.',
+// General actions
+  download: 'Download',
 }
