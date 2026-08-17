@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
-DESKTOP_DIR="$PROJECT_DIR/vault-desktop"
+DESKTOP_DIR="$PROJECT_DIR"
 TAURI_DIR="$DESKTOP_DIR/src-tauri"
 
 MODE="${1:---release}"
