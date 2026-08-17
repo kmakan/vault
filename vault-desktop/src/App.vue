@@ -420,6 +420,10 @@
                        :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
                 <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
               </div>
+              <div v-else-if="msg.attachment && msg.attachment.isText" class="attachment-preview">
+                <pre class="attachment-text">{{ msg.attachment.textContent }}</pre>
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
+              </div>
               <div v-else-if="msg.attachment" class="attachment-preview">
                 <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
                   📄 {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
@@ -1303,6 +1307,15 @@ export default {
       this.scrollToBottom(true);
     },
     // Parse message content — detect vault_attachment JSON and extract preview
+    isTextMime(type, name) {
+      if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
+      const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+      if (ext) {
+        const textExts = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'sh', 'bash', 'zsh', 'py', 'js', 'ts', 'vue', 'html', 'css', 'rs', 'go', 'c', 'h', 'cpp', 'hpp', 'java', 'kt', 'swift', 'sql', 'env', 'gitignore', 'editorconfig'];
+        if (textExts.includes(ext[1])) return true;
+      }
+      return false;
+    },
     parseMessageContent(content) {
       if (!content || typeof content !== 'string') return { text: content, attachment: null };
       try {
@@ -1310,12 +1323,23 @@ export default {
         if (parsed && parsed.vault_attachment) {
           const isImage = parsed.type && parsed.type.startsWith('image/');
           const isAudio = parsed.type && parsed.type.startsWith('audio/');
+          // Текстовые файлы (text/*, json, md, csv...) показываем инлайн,
+          // как картинки/аудио, а не только как файл для скачивания.
+          const isText = !isImage && !isAudio && this.isTextMime(parsed.type, parsed.name);
+          let textContent = '';
+          if (isText) {
+            try {
+              textContent = atob(String(parsed.data || '').replace(/-/g, '+').replace(/_/g, '/'));
+              try { textContent = decodeURIComponent(escape(textContent)); } catch { /* уже utf-8 */ }
+            } catch { textContent = ''; }
+            if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
+          }
           const label = isAudio
             ? `🎙️ ${parsed.name}`
             : (isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`);
           return {
             text: label,
-            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage, isAudio },
+            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage, isAudio, isText, textContent },
           };
         }
       } catch { /* not JSON — plain text message */ }
@@ -1439,7 +1463,9 @@ export default {
       if (msg.attachment) return;
       this.editingMessage = msg;
       this.replyTo = null;
-      this.newMessage = msg.content || '';
+      // Редактируем только тело ответа; цитата "> ..." остаётся нетронутой
+      // (раньше в поле попадал весь content с цитатой — правка её стирала).
+      this.newMessage = this.replyBody(msg.content || '');
       this.$nextTick(() => {
         const input = this.$refs.messageInput;
         if (input && input.focus) input.focus();
@@ -1528,12 +1554,20 @@ export default {
           (byFolder[f] = byFolder[f] || []).push(m);
         }
         for (const [folder, msgs] of Object.entries(byFolder)) {
-          const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+          // Пустое тело = ошибка фетча (IMAP-сессия вернула пусто при рассинхроне),
+          // а НЕ валидный кэш. Такие письма не кэшируем и перефетчиваем каждый
+          // поллинг — иначе инвайты/вложения/голосовые «застревают» пустыми
+          // навсегда (так пропадали приглашения и аудио после гонки доставки).
+          const missing = msgs.filter(m => {
+            const b = this.emailBodyCache[`${folder}:${m.uid || m.id}`];
+            return b === undefined || b === '';
+          });
           if (missing.length) {
             const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
             if (stale()) return;
             for (const m of missing) {
-              this.cacheBody(`${folder}:${m.uid || m.id}`, bodies[String(m.uid || m.id)] || '');
+              const b = bodies[String(m.uid || m.id)];
+              if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
             }
           }
         }
@@ -1910,14 +1944,19 @@ export default {
         const msg = this.editingMessage;
         const newText = this.newMessage.trim();
         this.cancelEdit();
-        if (!newText || newText === msg.content) return;
-        msg.content = newText;
+        const oldBody = this.replyBody(msg.content || '');
+        if (!newText || newText === oldBody) return;
+        // Цитата "> ..." сохраняется: правка заменяет только тело ответа,
+        // а в edit-письмо и локальную запись идёт полный content.
+        const quote = this.replyQuote(msg.content || '');
+        const fullText = quote ? `> ${quote}\n\n${newText}` : newText;
+        msg.content = fullText;
         msg.edited = true;
         const chatKey = this.activeChatType === 'group' && this.currentGroup
           ? 'group:' + this.currentGroup.id
           : this.activeChat;
-        this.recordLocalEdit(chatKey, msg.id, newText, 'edit');
-        this.sendEditEmail(msg.id, newText, 'edit');
+        this.recordLocalEdit(chatKey, msg.id, fullText, 'edit');
+        this.sendEditEmail(msg.id, fullText, 'edit');
         return;
       }
 
@@ -2185,6 +2224,16 @@ export default {
           reader.onload = async (e) => {
             const base64 = e.target.result.split(',')[1];
             const isImage = file.type.startsWith('image/');
+            const isAudio = file.type.startsWith('audio/');
+            const isText = !isImage && !isAudio && this.isTextMime(file.type, file.name);
+            let textContent = '';
+            if (isText) {
+              try {
+                textContent = atob(base64);
+                try { textContent = decodeURIComponent(escape(textContent)); } catch { /* уже utf-8 */ }
+              } catch { textContent = ''; }
+              if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
+            }
 
             // Encode attachment as structured JSON for server storage
             const attachmentPayload = JSON.stringify({
@@ -2212,6 +2261,9 @@ export default {
                 size: file.size,
                 data: base64,
                 isImage: isImage,
+                isAudio: isAudio,
+                isText: isText,
+                textContent: textContent,
               },
             };
             this.messages.push(msg);
@@ -4159,6 +4211,23 @@ body {
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* Инлайн-показ текстовых вложений (txt/md/json/csv/код) */
+.attachment-text {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .attachment-dl-btn {

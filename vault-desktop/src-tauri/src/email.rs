@@ -230,6 +230,12 @@ impl EmailClient {
     /// the Vault encrypted base64 block survives provider line wrapping.
     /// `folder` must match the mailbox the message lives in (UIDs are
     /// per-folder); defaults to INBOX.
+    ///
+    /// Returns Err (not Ok("")) when the body comes back empty: a desynced IMAP
+    /// session can answer a UID FETCH with no literal, and the caller (lib.rs)
+    /// treats Err as "reconnect + retry". Returning Ok("") used to poison the
+    /// frontend body-cache permanently — invites/attachments/voice notes then
+    /// rendered blank forever.
     pub async fn fetch_message_body(&mut self, uid: &str, folder: &str) -> Result<String> {
         let session = self
             .imap_session
@@ -241,7 +247,8 @@ impl EmailClient {
         }
 
         let mut body = String::new();
-        if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
+        let fetch_res = session.uid_fetch(uid, "(RFC822.TEXT)");
+        if let Ok(data) = fetch_res {
             for fetch in data.iter() {
                 if let Some(text) = fetch.text() {
                     body = decode_quoted_printable(&String::from_utf8_lossy(text));
@@ -255,6 +262,9 @@ impl EmailClient {
             let _ = session.select("INBOX");
         }
 
+        if body.is_empty() {
+            anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
+        }
         Ok(body)
     }
 
@@ -277,24 +287,34 @@ impl EmailClient {
         }
 
         let mut out = Vec::with_capacity(uids.len());
+        let mut empty_uid: Option<String> = None;
         for uid in uids {
+            let mut body = String::new();
             if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
                 for fetch in data.iter() {
                     if let Some(text) = fetch.text() {
-                        out.push((
-                            uid.clone(),
-                            decode_quoted_printable(&String::from_utf8_lossy(text)),
-                        ));
+                        body = decode_quoted_printable(&String::from_utf8_lossy(text));
                         break;
                     }
                 }
             }
+            if body.is_empty() {
+                empty_uid = Some(uid.clone());
+                break;
+            }
+            out.push((uid.clone(), body));
         }
 
         if folder != "INBOX" {
             let _ = session.select("INBOX");
         }
 
+        // Пустое тело = рассинхрон сессии (см. fetch_message_body): Err, чтобы
+        // lib.rs сделал reconnect и повторил весь батч. Ok с дырками раньше
+        // намертво кэшировался фронтом как пустые сообщения.
+        if let Some(uid) = empty_uid {
+            anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
+        }
         Ok(out)
     }
 
