@@ -206,4 +206,10 @@ export default {
   contact_delete_confirm: '删除此联系人？其加密密钥将被移除。',
 // 通用操作
   download: '下载',
+  edit_message: '编辑',
+  delete_message: '删除',
+  delete_message_confirm: '为所有人删除此消息？',
+  message_deleted: '消息已删除',
+  edited: '已编辑',
+  editing_message: '正在编辑',
 }

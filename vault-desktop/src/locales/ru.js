@@ -206,4 +206,10 @@ export default {
   contact_delete_confirm: 'Удалить контакт? Его ключ шифрования будет удалён.',
 // Общие действия
   download: 'Скачать',
+  edit_message: 'Редактировать',
+  delete_message: 'Удалить',
+  delete_message_confirm: 'Удалить сообщение у всех?',
+  message_deleted: 'Сообщение удалено',
+  edited: 'Отредактировано',
+  editing_message: 'Редактирование',
 }

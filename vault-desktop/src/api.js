@@ -228,6 +228,40 @@ export class ApiClient {
     }
     return { ok: true };
   }
+  // Редактирование/удаление сообщения в 1-на-1 чат: зашифрованное письмо
+  // с ПУСТОЙ темой (stealth). Тело — encryptVault(JSON {edit:1, msg_id,
+  // text?, action:'edit'|'delete'}); приём классифицирует по содержимому.
+  async sendEdit(peerEmail, encryptedContent) {
+    const subject = '';
+    const res = await this.sendEmail('local', { to: peerEmail, subject, body: encryptedContent });
+    if (!res || !res.ok) throw new Error('Failed to send edit email');
+    return { ok: true };
+  }
+  // Редактирование/удаление в группе: каждому участнику (кроме себя)
+  // письмо VaultGroupEdit: <id> с шифром групповым ключом.
+  async sendGroupEdit(groupId, encryptedContent) {
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    for (const member of g.members || []) {
+      if (member.email === this.email) continue;
+      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupEdit: ' + g.id, body: encryptedContent });
+    }
+    return { ok: true };
+  }
+  // Письма правок группы (VaultGroupEdit: <id>) — транспорт edit/delete,
+  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
+  async getGroupEditEmails(groupId) {
+    const msgs = await this.fetchEmails('local');
+    const edits = msgs.filter(m => (m.subject || '').startsWith('VaultGroupEdit: ' + groupId));
+    const out = [];
+    for (const m of edits) {
+      try {
+        const body = await this.fetchEmailBody('local', m.uid, m.folder);
+        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
+      } catch (e) { /* тело не прочиталось — пропускаем */ }
+    }
+    return out;
+  }
   // Мета-обновление группы (аватар и т.п.): каждому участнику письмо
   // VaultGroupMeta: <id> с зашифрованным групповым ключом payload {meta:1,...}.
   async sendGroupMeta(groupId, encryptedContent) {

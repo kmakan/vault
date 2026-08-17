@@ -38,8 +38,8 @@
       </div>
     </div>
 
-    <!-- Add Member — только для админов (создатель или роль Admin) -->
-    <div class="group-settings__section" v-if="isAdmin">
+    <!-- Add Member — для админов и модераторов (создатель, роль Admin или Moderator) -->
+    <div class="group-settings__section" v-if="isModerator">
       <h4>{{ t('add_member') }}</h4>
       <div class="add-member-row">
         <button class="btn btn-primary add-member-btn" @click="addMember">
@@ -65,8 +65,9 @@
               {{ member.role }}
             </span>
           </div>
-          <div class="member-item__actions" v-if="isAdmin && member.email !== currentUser">
+          <div class="member-item__actions" v-if="isModerator && member.email !== currentUser">
             <select
+              v-if="isAdmin"
               :value="member.role || 'Member'"
               @change="$emit('role-change', member.email, $event.target.value)"
               class="role-select"
@@ -154,6 +155,11 @@ function memberName(email) {
 const isAdmin = computed(() => {
   const member = props.group.members?.find(m => m.email === props.currentUser)
   return member?.role === 'Admin' || props.group.created_by === props.currentUser
+})
+
+const isModerator = computed(() => {
+  const member = props.group.members?.find(m => m.email === props.currentUser)
+  return isAdmin.value || member?.role === 'Moderator'
 })
 
 const isCreator = computed(() => props.group.created_by === props.currentUser)

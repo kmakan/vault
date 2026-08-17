@@ -206,4 +206,10 @@ export default {
   contact_delete_confirm: 'Delete this contact? Its encryption key will be removed.',
 // General actions
   download: 'Download',
+  edit_message: 'Edit',
+  delete_message: 'Delete',
+  delete_message_confirm: 'Delete message for everyone?',
+  message_deleted: 'Message deleted',
+  edited: 'Edited',
+  editing_message: 'Editing',
 }

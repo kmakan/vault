@@ -352,7 +352,7 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
+              <button v-if="isGroupModerator" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
             </template>
             <template v-else-if="activeChat">
@@ -401,8 +401,13 @@
               <span class="message-sender-name">{{ nameOf(msg.sender_id) }}</span>
             </div>
             <div class="message-content">
+              <template v-if="msg.deleted">
+                <span class="message-deleted">🚫 {{ t('message_deleted') || 'Сообщение удалено' }}</span>
+              </template>
+              <template v-else>
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
               <span>{{ replyBody(msg.content) }}</span>
+              <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
               <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
                 <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
                      :alt="msg.attachment.name"
@@ -421,12 +426,16 @@
                   <span class="attachment-dl-btn">⬇️ {{ t('download') || 'Скачать' }}</span>
                 </div>
               </div>
+              </template>
               <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
             </div>
             <!-- Reply button (visible on hover) -->
             <button class="reply-btn" title="Reply" @click.stop="setReply(msg)">↩</button>
             <!-- Copy button (visible on hover) -->
             <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)">⧉</button>
+            <!-- Edit/Delete — только свои сообщения (видны на hover) -->
+            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)">✏️</button>
+            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)">🗑</button>
             <!-- Reactions -->
             <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
               <span
@@ -476,6 +485,13 @@
           <button class="reply-bar-close" @click="cancelReply" title="Cancel reply">✕</button>
         </div>
 
+        <!-- Edit bar (shown while editing own message) -->
+        <div v-if="editingMessage" class="reply-bar edit-bar">
+          <span class="reply-bar-label">✏️ {{ t('editing_message') || 'Редактирование' }}</span>
+          <span class="reply-bar-text">{{ replyPreview(editingMessage) }}</span>
+          <button class="reply-bar-close" @click="cancelEdit" title="Cancel edit">✕</button>
+        </div>
+
         <div class="message-input" v-if="activeChat">
         <div class="input-wrapper">
           <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji">😊</button>
@@ -485,6 +501,7 @@
             @close="showEmojiPicker = false"
           />
           <input
+            ref="messageInput"
             v-model="newMessage"
             @keyup.enter="sendMessage"
             @input="onTypingInput"
@@ -639,6 +656,8 @@ export default {
       // Контекстное меню сообщения (копирование)
       messageMenu: null,
       replyTo: null,
+      // Сообщение, которое сейчас редактируется (только своё).
+      editingMessage: null,
       showSettings: false,
       showMembers: false,
       isLoggedIn: false,
@@ -788,6 +807,14 @@ export default {
       if (this.currentGroup.created_by === this.email) return true;
       const me = (this.currentGroup.members || []).find(m => m.email === this.email);
       return !!(me && me.role === 'Admin');
+    },
+    // Я — модератор текущей группы (создатель или роль Admin/Moderator). Имеет право
+    // добавлять и удалять участников, но не назначать роли (это только у админов).
+    isGroupModerator() {
+      if (this.activeChatType !== 'group' || !this.currentGroup) return false;
+      if (this.currentGroup.created_by === this.email) return true;
+      const me = (this.currentGroup.members || []).find(m => m.email === this.email);
+      return !!(me && (me.role === 'Admin' || me.role === 'Moderator'));
     },
     // Профили с локальными переопределениями — для GroupSettings (список
     // участников группы тоже показывает локальные имена/аватары).
@@ -1229,6 +1256,8 @@ export default {
           id: m.id, content: m.content, from: m.from, time: m.time,
           encrypted: m.encrypted, vault: m.vault, status: m.status,
           reactions: m.reactions || undefined,
+          deleted: m.deleted || undefined,
+          edited: m.edited || undefined,
         }));
         localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
       } catch (e) { /* quota — не критично */ }
@@ -1403,6 +1432,59 @@ export default {
     cancelReply() {
       this.replyTo = null;
     },
+    // --- Редактирование/удаление сообщений (только свои) ---
+    startEditMessage(msg) {
+      if (!msg || msg.from !== 'me' || msg.deleted) return;
+      // Вложения редактировать нельзя — только текст.
+      if (msg.attachment) return;
+      this.editingMessage = msg;
+      this.replyTo = null;
+      this.newMessage = msg.content || '';
+      this.$nextTick(() => {
+        const input = this.$refs.messageInput;
+        if (input && input.focus) input.focus();
+      });
+    },
+    cancelEdit() {
+      this.editingMessage = null;
+      this.newMessage = '';
+    },
+    async deleteMessage(msg) {
+      if (!msg || msg.from !== 'me' || msg.deleted) return;
+      const ok = await confirm(this.t('delete_message_confirm') || 'Удалить сообщение у всех?');
+      if (!ok) return;
+      // Оптимистично помечаем удалённым локально + персистим (поллинг
+      // не «воскресит» сообщение, пока edit-письмо в пути).
+      msg.deleted = true;
+      msg.content = '';
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      this.recordLocalEdit(chatKey, msg.id, null, 'delete');
+      await this.sendEditEmail(msg.id, null, 'delete');
+    },
+    // Транспорт правок (паттерн sendReactionEmail):
+    // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
+    // группа — encryptWithGroupKey, письма VaultGroupEdit: <id>.
+    sendEditEmail(msgId, text, action) {
+      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action });
+      (async () => {
+        try {
+          if (this.activeChatType === 'group' && this.currentGroup) {
+            const groupKey = this.groupKeys[this.currentGroup.id];
+            if (!groupKey) return;
+            const content = await crypto.encryptWithGroupKey(payload, groupKey);
+            await api.sendGroupEdit(this.currentGroup.id, content);
+          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            const content = await crypto.encryptVault(payload);
+            await api.sendEdit(this.activeChat, content);
+          }
+        } catch (e) {
+          console.error('Failed to send edit email:', e);
+        }
+      })();
+    },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
       // результаты этого (медленного) фетча применять нельзя — иначе
@@ -1456,8 +1538,9 @@ export default {
           }
         }
         // Единый проход: расшифровываем каждое письмо и классифицируем по
-        // содержимому (реакция / конверт / legacy-текст).
+        // содержимому (реакция / правка / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
+        const wireEdits = {}; // msg_id -> [{text, action, date}]
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
@@ -1487,6 +1570,16 @@ export default {
                     emoji: robj.emoji,
                     user: isOut ? email : this.email,
                     action: robj.action === 'remove' ? 'remove' : 'add',
+                  });
+                  return null; // не сообщение
+                }
+                // 1б) Правка: {edit:1, msg_id, text?, action:'edit'|'delete'} —
+                //     накапливаем для applyEdits, в чат не показываем.
+                if (robj && robj.edit === 1 && robj.msg_id) {
+                  (wireEdits[robj.msg_id] = wireEdits[robj.msg_id] || []).push({
+                    text: robj.text || '',
+                    action: robj.action === 'delete' ? 'delete' : 'edit',
+                    date: m.date || 0,
                   });
                   return null; // не сообщение
                 }
@@ -1551,6 +1644,7 @@ export default {
         this.loadProfiles();
         const list = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
         this.applyReactions(list, chat, wireReactions);
+        this.applyEdits(list, chat, wireEdits);
         this.messages = list;
         // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
         this.saveChatCache(chat, list);
@@ -1624,6 +1718,8 @@ export default {
 
         // Реакции группы: письма VaultGroupReact: <id> (транспорт, не сообщения).
         const wireReactions = {};
+        // Правки группы: письма VaultGroupEdit: <id> (edit/delete сообщений).
+        const wireEdits = {};
         if (groupKey) {
           try {
             const reactRaw = await api.getGroupReactEmails(groupId);
@@ -1642,6 +1738,24 @@ export default {
               } catch (e) { /* не реакция или битое */ }
             }
           } catch (e) { /* нет react-писем — не критично */ }
+          if (stale()) return;
+          try {
+            const editRaw = await api.getGroupEditEmails(groupId);
+            for (const msg of editRaw || []) {
+              if (!crypto.isEncrypted(msg.content)) continue;
+              try {
+                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                const obj = JSON.parse(plaintext);
+                if (obj && obj.edit === 1 && obj.msg_id) {
+                  (wireEdits[obj.msg_id] = wireEdits[obj.msg_id] || []).push({
+                    text: obj.text || '',
+                    action: obj.action === 'delete' ? 'delete' : 'edit',
+                    date: msg.created_at || 0,
+                  });
+                }
+              } catch (e) { /* не правка или битое */ }
+            }
+          } catch (e) { /* нет edit-писем — не критично */ }
           if (stale()) return;
         }
 
@@ -1710,6 +1824,7 @@ export default {
           this.loadProfiles();
           const list = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
           this.applyReactions(list, chat, wireReactions);
+          this.applyEdits(list, chat, wireEdits);
           this.messages = list;
           this.saveChatCache(chat, list);
         } else {
@@ -1788,6 +1903,23 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
+
+      // Режим редактирования: вместо нового сообщения отправляем правку
+      // существующего (edit-письмо), обновляем локально и выходим.
+      if (this.editingMessage) {
+        const msg = this.editingMessage;
+        const newText = this.newMessage.trim();
+        this.cancelEdit();
+        if (!newText || newText === msg.content) return;
+        msg.content = newText;
+        msg.edited = true;
+        const chatKey = this.activeChatType === 'group' && this.currentGroup
+          ? 'group:' + this.currentGroup.id
+          : this.activeChat;
+        this.recordLocalEdit(chatKey, msg.id, newText, 'edit');
+        this.sendEditEmail(msg.id, newText, 'edit');
+        return;
+      }
 
       try {
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
@@ -2170,6 +2302,68 @@ export default {
         msg.reactions = rs ? [...new Set(rs.map(r => r.emoji))] : [];
       }
     },
+    // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
+    // Паттерн applyReactions: мерж писем в localStorage-хранилище
+    // (vault-edits-<email>), иначе поллинг «откатывал» правку, пока
+    // edit-письмо в пути. Последняя по дате правка авторитетна:
+    // delete → msg.deleted, edit → msg.content = новый текст + msg.edited.
+    editsStorageKey() {
+      return 'vault-edits-' + (this.email || 'anon');
+    },
+    loadStoredEdits() {
+      try {
+        return JSON.parse(localStorage.getItem(this.editsStorageKey()) || '{}');
+      } catch (e) {
+        return {};
+      }
+    },
+    saveStoredEdits(data) {
+      try {
+        localStorage.setItem(this.editsStorageKey(), JSON.stringify(data));
+      } catch (e) {
+        console.error('Failed to save edits:', e);
+      }
+    },
+    // Локальная (оптимистичная) запись правки — до доставки письма.
+    recordLocalEdit(chatKey, msgId, text, action) {
+      const stored = this.loadStoredEdits();
+      const chatEdits = stored[chatKey] || {};
+      const cur = chatEdits[msgId] || [];
+      cur.push({ text: text || '', action, date: Date.now() });
+      chatEdits[msgId] = cur;
+      stored[chatKey] = chatEdits;
+      this.saveStoredEdits(stored);
+    },
+    applyEdits(list, chatKey, wireEdits) {
+      const stored = this.loadStoredEdits();
+      const chatEdits = stored[chatKey] || {};
+      // Мерж правок из писем в хранилище (дедупликация по дате+тексту+действию).
+      if (wireEdits && Object.keys(wireEdits).length) {
+        for (const [msgId, edits] of Object.entries(wireEdits)) {
+          const cur = chatEdits[msgId] || [];
+          for (const e of edits) {
+            const dup = cur.some(x => x.text === e.text && x.action === e.action && String(x.date || 0) === String(e.date || 0));
+            if (!dup) cur.push(e);
+          }
+          chatEdits[msgId] = cur;
+        }
+        stored[chatKey] = chatEdits;
+        this.saveStoredEdits(stored);
+      }
+      // Проставляем на сообщения.
+      for (const msg of list) {
+        const edits = chatEdits[msg.id];
+        if (!edits || !edits.length) continue;
+        const latest = edits.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
+        if (latest.action === 'delete') {
+          msg.deleted = true;
+          msg.content = '';
+        } else if (latest.text) {
+          msg.content = latest.text;
+          msg.edited = true;
+        }
+      }
+    },
     // Отправить реакцию письмом (транспорт E2E). Ошибки — не критичны.
     sendReactionEmail(msgId, emoji, action) {
       const payload = JSON.stringify({ react: 1, msg_id: msgId, emoji, action });
@@ -2338,8 +2532,8 @@ export default {
     },
     removeMember(email) {
       if (!this.currentGroup) return;
-      // Защита от обхода UI: удаление — только для админов группы.
-      if (!this.isGroupAdmin) return;
+      // Защита от обхода UI: удаление — для админов и модераторов группы.
+      if (!this.isGroupModerator) return;
       api.removeGroupMember(this.currentGroup.id, email)
         .then(() => this.refreshGroupMembers())
         .catch(e => console.error('removeMember failed:', e));
@@ -3773,6 +3967,83 @@ body {
 .copy-btn:hover {
   background: var(--bg-hover, #1e1e4a);
   color: var(--text-primary, #f1f5f9);
+}
+
+/* Edit button (visible on hover) — только свои сообщения */
+.edit-btn {
+  position: absolute;
+  top: 12px;
+  right: 76px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 150ms ease);
+  z-index: 10;
+}
+
+.message:hover .edit-btn {
+  opacity: 1;
+}
+
+.edit-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+/* Delete button (visible on hover) — только свои сообщения */
+.delete-btn {
+  position: absolute;
+  top: 12px;
+  right: 110px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 150ms ease);
+  z-index: 10;
+}
+
+.message:hover .delete-btn {
+  opacity: 1;
+}
+
+.delete-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+/* Удалённое сообщение — плейсхолдер */
+.message-deleted {
+  color: var(--text-secondary, #94a3b8);
+  font-style: italic;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* Бейдж «отредактировано» */
+.message-edited-badge {
+  color: var(--text-secondary, #94a3b8);
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
+/* Edit bar — подсветка при редактировании */
+.edit-bar {
+  border-top: 1px solid var(--accent-primary, #6366f1);
 }
 
 /* Контекстное меню сообщения (правый клик) */
