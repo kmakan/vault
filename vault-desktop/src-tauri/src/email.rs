@@ -15,6 +15,7 @@
 
 use anyhow::{Context, Result};
 use imap::Session;
+use std::collections::HashSet;
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
 use lettre::message::Message;
@@ -64,10 +65,24 @@ pub struct EmailMessage {
     /// searches Junk — see vault-client email.rs).
     #[serde(default = "default_inbox")]
     pub folder: String,
+    /// RFC 5322 Message-ID — для дедупликации одного и того же письма из
+    /// разных папок (у Gmail письмо лежит и в INBOX/Junk, и в All Mail под
+    /// разными UID). Пусто, если заголовок отсутствует.
+    #[serde(default)]
+    pub message_id: String,
 }
 
 fn default_inbox() -> String {
     "INBOX".to_string()
+}
+
+/// Специальные папки, найденные одним LIST-запросом.
+#[derive(Debug, Default)]
+struct SpecialFolders {
+    /// «Вся почта» (\All) — есть у Gmail, отсутствует у Zoho/Mail.ru/Yandex.
+    all: Option<String>,
+    /// Спам (\Junk/\Spam или папка с именем Spam/Junk/Спам).
+    junk: Option<String>,
 }
 
 pub struct EmailClient {
@@ -105,31 +120,58 @@ impl EmailClient {
         Ok(())
     }
 
-    /// Find a special-use mailbox by LIST attribute (e.g. "\All", "\Junk").
-    /// Gmail localizes folder names (e.g. «Вся почта», «Спам») — the attribute
-    /// is the only stable way to locate them.
-    fn find_folder_by_attr(&mut self, attr: &str) -> Option<String> {
-        let session = self
-            .imap_session
-            .as_mut()
-            .context("Not connected to IMAP server")
-            .ok()?;
-        let attr_l = attr.to_ascii_lowercase();
-        let list = session.list(None, Some("*")).ok()?;
+    /// Один LIST-запрос вместо трёх: находим специальные папки за один
+    /// round-trip. Gmail локализует имена («Вся почта», «Спам»), поэтому
+    /// спам ищем сначала по атрибуту (\Junk/\Spam), потом по имени папки.
+    /// \All — опционально (есть у Gmail, нет у Zoho/Mail.ru/Yandex).
+    fn find_special_folders(&mut self) -> SpecialFolders {
+        let mut out = SpecialFolders::default();
+        let session = match self.imap_session.as_mut() {
+            Some(s) => s,
+            None => return out,
+        };
+        let list = match session.list(None, Some("*")) {
+            Ok(l) => l,
+            Err(_) => return out,
+        };
         for item in list.iter() {
             let name = item.name();
-            let hit = item.attributes().iter().any(|a| {
-                if let imap::types::NameAttribute::Custom(s) = a {
-                    s.to_ascii_lowercase().contains(&attr_l)
-                } else {
-                    false
-                }
-            });
-            if hit && !name.is_empty() {
-                return Some(name.to_string());
+            if name.is_empty() {
+                continue;
+            }
+            let attrs: Vec<String> = item
+                .attributes()
+                .iter()
+                .filter_map(|a| {
+                    if let imap::types::NameAttribute::Custom(s) = a {
+                        Some(s.to_ascii_lowercase())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let name_l = name.to_ascii_lowercase();
+            if out.all.is_none() && attrs.iter().any(|a| a == "\\all") {
+                out.all = Some(name.to_string());
+            }
+            if out.junk.is_none()
+                && attrs.iter().any(|a| a == "\\junk" || a == "\\spam")
+            {
+                out.junk = Some(name.to_string());
+            }
+            // Фолбэк по имени — для провайдеров без атрибутов (Spam, Junk,
+            // «Спам», [Gmail]/Spam). Берём только если атрибут не нашёлся.
+            if out.junk.is_none()
+                && (name_l == "spam"
+                    || name_l == "junk"
+                    || name_l == "спам"
+                    || name_l.ends_with("/spam")
+                    || name_l.ends_with("/junk"))
+            {
+                out.junk = Some(name.to_string());
             }
         }
-        None
+        out
     }
 
     /// Fetch the most recent `limit` messages from one mailbox, newest first.
@@ -155,39 +197,46 @@ impl EmailClient {
         // Один round-trip вместо поштучных uid_fetch: на ящике с тысячами
         // писем последовательные запросы занимали минуты, и поллинг/клик
         // по чату «зависали» (а то и умирали по таймауту).
+        // Ошибка батч-фетча пробрасывается наверх (НЕ молчаливый пустой
+        // список): lib.rs трактует Err как «reconnect + retry». Раньше
+        // if-let-Ok глотал ошибку, и приложение молча видело пустой ящик.
         if !uids.is_empty() {
             let uid_set = uids
                 .iter()
                 .map(|u| u.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            if let Ok(data) = session.uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)") {
-                for fetch in data.iter() {
-                    let uid = fetch.uid.unwrap_or_default().to_string();
-                    let flags = fetch.flags();
-                    let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
+            let data = session
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
+            for fetch in data.iter() {
+                let uid = fetch.uid.unwrap_or_default().to_string();
+                let flags = fetch.flags();
+                let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
 
-                    if let Some(header) = fetch.header() {
-                        let header_str = String::from_utf8_lossy(header);
-                        let from = extract_header(&header_str, "From:")
-                            .unwrap_or_else(|| "Unknown".to_string());
-                        let to = extract_header(&header_str, "To:")
-                            .unwrap_or_else(|| "Unknown".to_string());
-                        let subject = extract_header(&header_str, "Subject:")
-                            .unwrap_or_else(|| "(no subject)".to_string());
-                        let date = extract_header(&header_str, "Date:")
-                            .unwrap_or_else(|| "Unknown".to_string());
+                if let Some(header) = fetch.header() {
+                    let header_str = String::from_utf8_lossy(header);
+                    let from = extract_header(&header_str, "From:")
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let to = extract_header(&header_str, "To:")
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let subject = extract_header(&header_str, "Subject:")
+                        .unwrap_or_else(|| "(no subject)".to_string());
+                    let date = extract_header(&header_str, "Date:")
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    let message_id = extract_header(&header_str, "Message-ID:")
+                        .unwrap_or_default();
 
-                        messages.push(EmailMessage {
-                            id: uid,
-                            from,
-                            to,
-                            subject,
-                            date,
-                            is_read,
-                            folder: folder.to_string(),
-                        });
-                    }
+                    messages.push(EmailMessage {
+                        id: uid,
+                        from,
+                        to,
+                        subject,
+                        date,
+                        is_read,
+                        folder: folder.to_string(),
+                        message_id,
+                    });
                 }
             }
         }
@@ -206,21 +255,55 @@ impl EmailClient {
         self.connect_imap().await
     }
 
-    /// Fetch recent messages: the All Mail mailbox (full history — incoming
-    /// AND sent, so both sides of a 1:1 chat are visible) plus the Junk
-    /// mailbox (Gmail routes Vault's encrypted mails there).
+    /// Fetch recent messages. Стратегия выбора папок (не все провайдеры
+    /// имеют «Вся почта»/\All):
+    ///   1. INBOX — всегда явно (основной источник входящих).
+    ///   2. Спам — всегда: Gmail кладёт шифрописьма в Junk, а у провайдеров
+    ///      без \All это единственный шанс их увидеть.
+    ///   3. \All (если есть, Gmail) — как дополнительный источник: там видны
+    ///      и отправленные нами письма (вторая сторона 1:1-чата). Дедупликация
+    ///      по Message-ID, т.к. у Gmail одно письмо лежит в INBOX и All Mail
+    ///      под разными UID.
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
-        // \All presents the whole message store; fall back to INBOX if the
-        // provider doesn't expose it.
-        let all = self
-            .find_folder_by_attr("\\All")
-            .unwrap_or_else(|| "INBOX".to_string());
-        let mut messages = self.fetch_folder(&all, 100)?;
-        if let Some(junk) = self.find_folder_by_attr("\\Junk") {
-            if let Ok(junk_msgs) = self.fetch_folder(&junk, 50) {
-                messages.extend(junk_msgs);
+        let folders = self.find_special_folders();
+
+        let mut messages = self.fetch_folder("INBOX", 100)?;
+        let mut seen: HashSet<String> = messages
+            .iter()
+            .filter(|m| !m.message_id.is_empty())
+            .map(|m| m.message_id.clone())
+            .collect();
+
+        if let Some(junk) = &folders.junk {
+            match self.fetch_folder(junk, 50) {
+                Ok(junk_msgs) => {
+                    for m in junk_msgs {
+                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                            continue;
+                        }
+                        messages.push(m);
+                    }
+                }
+                // Папка спама может отсутствовать/быть недоступной — это не
+                // повод ронять весь фетч: INBOX уже получен.
+                Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
             }
         }
+
+        if let Some(all) = &folders.all {
+            match self.fetch_folder(all, 100) {
+                Ok(all_msgs) => {
+                    for m in all_msgs {
+                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                            continue;
+                        }
+                        messages.push(m);
+                    }
+                }
+                Err(e) => eprintln!("[email] All Mail folder {all} fetch failed: {e}"),
+            }
+        }
+
         // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
         let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
         Ok(messages)

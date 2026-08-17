@@ -721,9 +721,14 @@ export class ApiClient {
       try {
         parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
       } catch (e) {
+        // Раньше молчаливый continue — инвайт пропадал без следа.
+        console.warn('[invites] body fetch failed for uid', m.uid, 'folder', m.folder, e);
         continue;
       }
-      if (!parsed || !parsed.group_id) continue;
+      if (!parsed || !parsed.group_id) {
+        console.warn('[invites] unparseable invite body, uid', m.uid);
+        continue;
+      }
       // Пропускаем, если уже отклонён.
       if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
       // Группу пропускаем, только если МЫ уже участник/создатель.

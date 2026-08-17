@@ -1338,6 +1338,35 @@ impl<T: Read + Write> Connection<T> {
         Ok(v)
     }
 
+    /// PATCH(vault): убирает хвостовые пробелы/табы перед первым CRLF в текущей
+    /// untagged-строке (`* ...`). Zoho шлёт пустой UID SEARCH как `* SEARCH \r\n`
+    /// (с хвостовым пробелом), который imap-proto 0.10.2 не парсит
+    /// (many0!(tag!(" ") >> number) падает на number), отравляя всю сессию:
+    /// ParseError::Invalid → "Unable to parse status response" → desync →
+    /// последующие фетчи тел возвращают пусто. imap-proto 0.16.7 такой хвост
+    /// допускает — делаем так же. Безопасно для литералов: в строках с `{N}\r\n`
+    /// перед первым CRLF стоит `}`, а не пробел.
+    fn strip_trailing_ws_before_crlf(data: &mut Vec<u8>, line_start: usize) {
+        if !data.get(line_start..).map_or(false, |l| l.starts_with(b"* ")) {
+            return;
+        }
+        let crlf_rel = match data[line_start..].windows(2).position(|w| w == b"\r\n") {
+            Some(p) => p,
+            None => return,
+        };
+        let crlf_abs = line_start + crlf_rel; // позиция '\r'
+        let mut remove_from = crlf_abs;
+        while remove_from > line_start {
+            match data[remove_from - 1] {
+                b' ' | b'\t' => remove_from -= 1,
+                _ => break,
+            }
+        }
+        if remove_from < crlf_abs {
+            data.drain(remove_from..crlf_abs);
+        }
+    }
+
     pub(crate) fn read_response_onto(&mut self, data: &mut Vec<u8>) -> Result<()> {
         let mut continue_from = None;
         let mut try_first = !data.is_empty();
@@ -1351,6 +1380,10 @@ impl<T: Read + Write> Connection<T> {
                 self.readline(data)?;
                 continue_from.take().unwrap_or(start_new)
             };
+
+            // PATCH(vault): нормализуем хвостовые пробелы Zoho перед парсингом
+            // (см. strip_trailing_ws_before_crlf).
+            Self::strip_trailing_ws_before_crlf(data, line_start);
 
             let break_with = {
                 use imap_proto::{parse_response, Response, Status};
@@ -1473,6 +1506,53 @@ mod tests {
         let mut client = Client::new(mock_stream);
         let actual_response = client.read_response().unwrap();
         assert_eq!(Vec::<u8>::new(), actual_response);
+    }
+
+    /// PATCH(vault): Zoho шлёт пустой UID SEARCH как `* SEARCH \r\n` (хвостовой
+    /// пробел), который imap-proto 0.10.2 не парсит. strip_trailing_ws_before_crlf
+    /// должен убирать пробел, чтобы строка распарсилась.
+    #[test]
+    fn strip_trailing_ws_zoho_empty_search() {
+        // Пустой SEARCH с хвостовым пробелом → пробел убран.
+        let mut data = b"* SEARCH \r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 0);
+        assert_eq!(data, b"* SEARCH\r\n");
+
+        // Несколько пробелов/табов.
+        let mut data = b"* SEARCH  \t \r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 0);
+        assert_eq!(data, b"* SEARCH\r\n");
+
+        // Непустой SEARCH — числа не трогаем.
+        let mut data = b"* SEARCH 1 2 3\r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 0);
+        assert_eq!(data, b"* SEARCH 1 2 3\r\n");
+
+        // Литерал {N}\r\n — перед CRLF стоит '}', ничего не трогаем.
+        let mut data = b"* 1 FETCH (BODY[TEXT] {3}\r\nfoo)\r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 0);
+        assert_eq!(data, b"* 1 FETCH (BODY[TEXT] {3}\r\nfoo)\r\n");
+
+        // Не-untagged строка (tagged) — не трогаем.
+        let mut data = b"a0 OK done \r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 0);
+        assert_eq!(data, b"a0 OK done \r\n");
+
+        // line_start > 0: нормализуем только текущую строку.
+        let mut data = b"* SEARCH 1\r\n* SEARCH \r\n".to_vec();
+        Connection::<MockStream>::strip_trailing_ws_before_crlf(&mut data, 12);
+        assert_eq!(data, b"* SEARCH 1\r\n* SEARCH\r\n");
+    }
+
+    /// Интеграция: read_response_onto переживает zoho-пустой SEARCH.
+    /// read_response возвращает untagged-данные; главное — нет ParseError.
+    #[test]
+    fn read_response_zoho_empty_search() {
+        let response = "* SEARCH \r\na0 OK Success\r\n";
+        let mock_stream = MockStream::new(response.as_bytes().to_vec());
+        let mut client = Client::new(mock_stream);
+        let actual_response = client.read_response().unwrap();
+        assert_eq!(b"* SEARCH\r\n".to_vec(), actual_response);
     }
 
     #[test]

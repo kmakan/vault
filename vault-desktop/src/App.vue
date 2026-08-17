@@ -2641,8 +2641,12 @@ export default {
     },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     async processInvites() {
+      // Каждый этап — в своём try/catch: раньше общий try означал, что
+      // падение fetchPendingAccepts (например «Not connected») блокировало
+      // показ попапа инвайтов. Этапы независимы — ошибка одного не должна
+      // ронять остальные.
+      // Обрабатываем accept-письма (добавление принявших участников).
       try {
-        // Обрабатываем accept-письма (добавление принявших участников).
         const accepts = await api.fetchPendingAccepts();
         if (accepts.length) {
           await this.loadGroups();
@@ -2651,7 +2655,11 @@ export default {
             await this.refreshGroupMembers();
           }
         }
-        // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
+      } catch (e) {
+        console.error('processInvites: accepts failed:', e);
+      }
+      // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
+      try {
         const contactAccepts = await api.fetchPendingContactAccepts();
         if (contactAccepts.length) {
           // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
@@ -2660,14 +2668,22 @@ export default {
           await this.loadStoredPeerKeys();
           await this.loadContacts();
         }
-        // Собираем непрочитанные инвайты для попапа согласия.
+      } catch (e) {
+        console.error('processInvites: contact accepts failed:', e);
+      }
+      // Собираем непрочитанные инвайты для попапа согласия.
+      try {
         const invites = await api.fetchPendingInvites();
         if (invites.length) {
           this.pendingInvites = invites;
           this.invitePopupIndex = 0;
           this.showInvitePopup = true;
         }
-        // Запросы контактов 1-на-1 — попап «Принять/Отклонить».
+      } catch (e) {
+        console.error('processInvites: invites failed:', e);
+      }
+      // Запросы контактов 1-на-1 — попап «Принять/Отклонить».
+      try {
         const contacts = await api.fetchPendingContactInvites();
         if (contacts.length) {
           // Групповой попап имеет приоритет; контактный покажем следом.
@@ -2677,9 +2693,13 @@ export default {
             this.showContactPopup = true;
           }
         }
+      } catch (e) {
+        console.error('processInvites: contact invites failed:', e);
+      }
+      try {
         this.loadProfiles();
       } catch (e) {
-        console.error('processInvites failed:', e);
+        console.error('processInvites: loadProfiles failed:', e);
       }
     },
     async refreshGroupMembers() {
