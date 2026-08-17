@@ -217,7 +217,7 @@
         </div>
       </div>
 
-      <!-- ADD MEMBER POPUP (выбор контактов) -->
+      <!-- ADD MEMBER POPUP (выбор контактов, мульти-выбор чекбоксами) -->
       <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
         <div class="modal-settings invite-popup-panel">
           <button class="modal-close" @click="showAddMemberPopup = false">←</button>
@@ -227,15 +227,17 @@
             type="text"
             :placeholder="t('search_contacts') || 'Поиск контактов…'"
             class="add-member-search"
-            @keyup.enter="enterManualEmail"
+            @keyup.enter="addManualEmail"
           />
           <div class="add-member-contacts">
             <div
               v-for="c in filteredAddContacts"
               :key="c.email"
               class="add-member-contact"
-              @click="inviteContact(c.email)"
+              :class="{ selected: addMemberSelected.includes(c.email) }"
+              @click="toggleAddMember(c.email)"
             >
+              <span class="add-member-checkbox" :class="{ checked: addMemberSelected.includes(c.email) }">{{ addMemberSelected.includes(c.email) ? '✓' : '' }}</span>
               <UserAvatar :email="c.email" :size="28" />
               <span class="add-member-contact-name">{{ c.name || c.email }}</span>
               <span class="add-member-contact-email">{{ c.email }}</span>
@@ -243,11 +245,27 @@
             <div v-if="filteredAddContacts.length === 0" class="add-member-none">
               {{ t('no_contacts') || 'Контакты не найдены' }}
             </div>
-            <div class="add-member-manual" @click="enterManualEmail">
+            <div v-if="addMemberQuery.includes('@')" class="add-member-manual" @click="addManualEmail">
               ✏️ {{ t('enter_email_manual') || 'Ввести email вручную' }}
-              <span v-if="addMemberQuery" class="add-member-manual-email">— {{ addMemberQuery }}</span>
+              <span class="add-member-manual-email">— {{ addMemberQuery }}</span>
             </div>
           </div>
+          <div v-if="addMemberSelected.length" class="add-member-selected-chips">
+            <span
+              v-for="em in addMemberSelected"
+              :key="em"
+              class="add-member-chip"
+              :title="t('general_cancel') || 'Cancel'"
+              @click="toggleAddMember(em)"
+            >{{ em }} ✕</span>
+          </div>
+          <button
+            class="btn-primary add-member-invite-btn"
+            :disabled="addMemberSelected.length === 0"
+            @click="inviteSelectedMembers"
+          >
+            {{ t('add_member_invite_btn') || 'Пригласить' }}<template v-if="addMemberSelected.length"> ({{ addMemberSelected.length }})</template>
+          </button>
         </div>
       </div>
 
@@ -553,6 +571,7 @@
               <span class="member-item__email">{{ nameOf(member.email) }}</span>
               <span class="member-item__role" :class="'role--' + (member.role || 'Member').toLowerCase()">{{ member.role || 'Member' }}</span>
             </div>
+            <span v-if="member.invited" class="member-invited-badge">{{ t('invite_pending') || 'приглашён' }}</span>
           </div>
         </div>
       </div>
@@ -717,9 +736,10 @@ export default {
       // должен показать их повторно (ключи «group_id|uid» / «sender|uid»).
       handledInviteKeys: [],
       handledContactKeys: [],
-      // Add-member popup (выбор контактов)
+      // Add-member popup (выбор контактов, мульти-выбор)
       showAddMemberPopup: false,
       addMemberQuery: '',
+      addMemberSelected: [],
       // Список участников группы (модалка по клику на счётчик)
       showMembersList: false,
       // Полноэкранный просмотр изображения-вложения
@@ -789,8 +809,11 @@ export default {
       const q = (this.addMemberQuery || '').toLowerCase();
       const seen = new Set();
       const list = [];
+      // Уже в группе — не показываем: инвайтить их не нужно.
+      const members = new Set((this.currentGroup?.members || []).map(m => m.email));
       for (const c of this.contacts) {
         if (!c.email || seen.has(c.email)) continue;
+        if (members.has(c.email)) continue;
         seen.add(c.email);
         const name = c.name || c.email;
         if (!q || name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)) {
@@ -2612,43 +2635,66 @@ export default {
     },
     openAddMemberPopup() {
       this.addMemberQuery = '';
+      this.addMemberSelected = [];
       this.showAddMemberPopup = true;
     },
-    async inviteContact(email) {
-      if (!this.currentGroup || !email) return;
-      // Уже участник — не шлём повторный инвайт (защита от дублей).
-      if ((this.currentGroup.members || []).some(m => m.email === email)) {
+    toggleAddMember(email) {
+      const i = this.addMemberSelected.indexOf(email);
+      if (i >= 0) this.addMemberSelected.splice(i, 1);
+      else this.addMemberSelected.push(email);
+    },
+    addManualEmail() {
+      // Ввод email вручную: добавляем в выборку, отправка — кнопкой «Пригласить».
+      const email = (this.addMemberQuery || '').trim();
+      if (!email || !email.includes('@')) return;
+      if ((this.currentGroup?.members || []).some(m => m.email === email)) {
         alert(this.t('already_in_group') || 'Этот участник уже в группе');
         return;
       }
-      try {
-        // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
-        // Без ключа собеседника безопасный инвайт невозможен — как в Session:
-        // в группу добавляют только установленные контакты.
-        const peerPub = this.peerKeys[email] || null;
-        if (!peerPub) {
-          alert('Сначала добавьте контакт: обменяйтесь ключами через 🔗 (по id участника или QR). Тогда собеседник сможет расшифровать приглашение в группу.');
-          return;
-        }
-        const groupKeys = await api.getGroupKeys(this.currentGroup.id);
-        if (!groupKeys.length) throw new Error('No group key');
-        const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);
-        await api.inviteGroupMember(this.currentGroup.id, email, enc, this.publicKey);
-        this.showAddMemberPopup = false;
-        // Помечаем локально как «приглашён» в списке участников (появится после accept).
-        const members = this.currentGroup.members || [];
-        if (!members.some(m => m.email === email)) {
-          members.push({ email, role: 'Member', invited: true });
-        }
-        alert((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + email);
-      } catch (e) {
-        alert('Failed to invite member: ' + e.message);
-      }
+      if (!this.addMemberSelected.includes(email)) this.addMemberSelected.push(email);
+      this.addMemberQuery = '';
     },
-    enterManualEmail() {
-      const email = (this.addMemberQuery || '').trim();
-      if (!email) return;
-      this.inviteContact(email);
+    async inviteSelectedMembers() {
+      // Попап закрываем СРАЗУ — отправка идёт в фоне, итог сообщаем alert'ом.
+      // Раньше попап висел 30-60 с (медленный SMTP) и было непонятно,
+      // отправлено приглашение или нет.
+      const emails = [...this.addMemberSelected];
+      if (!this.currentGroup || !emails.length) return;
+      this.showAddMemberPopup = false;
+      this.addMemberSelected = [];
+      this.addMemberQuery = '';
+      const sent = [];
+      const failed = [];
+      for (const email of emails) {
+        try {
+          // Уже участник (мог добавиться, пока попап был открыт) — пропускаем.
+          if ((this.currentGroup.members || []).some(m => m.email === email)) continue;
+          // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
+          // Без ключа собеседника безопасный инвайт невозможен — как в Session:
+          // в группу добавляют только установленные контакты.
+          const peerPub = this.peerKeys[email] || null;
+          if (!peerPub) {
+            failed.push(email + ' — ' + (this.t('add_member_no_key') || 'нет ключа: сначала добавьте контакт (🔗)'));
+            continue;
+          }
+          const groupKeys = await api.getGroupKeys(this.currentGroup.id);
+          if (!groupKeys.length) throw new Error('No group key');
+          const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);
+          await api.inviteGroupMember(this.currentGroup.id, email, enc, this.publicKey);
+          // Помечаем локально как «приглашён» в списке участников (появится после accept).
+          const members = this.currentGroup.members || [];
+          if (!members.some(m => m.email === email)) {
+            members.push({ email, role: 'Member', invited: true });
+          }
+          sent.push(email);
+        } catch (e) {
+          failed.push(email + ' — ' + e.message);
+        }
+      }
+      const parts = [];
+      if (sent.length) parts.push((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
+      if (failed.length) parts.push((this.t('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
+      alert(parts.join('\n\n') || (this.t('add_member_nothing') || 'Приглашения не отправлены'));
     },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     async processInvites() {
@@ -4409,6 +4455,16 @@ body {
   opacity: 0.8;
 }
 
+.member-invited-badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--accent-primary, #818cf8);
+  white-space: nowrap;
+}
+
 .role--admin {
   background: rgba(255, 152, 0, 0.25);
   color: #ff9800;
@@ -5224,6 +5280,48 @@ body {
 }
 .add-member-manual-email {
   color: var(--text-muted, #888);
+}
+.add-member-contact.selected {
+  background: var(--bg-hover, #1e1e4a);
+  outline: 1px solid var(--accent-primary, #6366f1);
+}
+.add-member-checkbox {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border-color, #444);
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #fff;
+  background: transparent;
+}
+.add-member-checkbox.checked {
+  background: var(--accent-primary, #6366f1);
+  border-color: var(--accent-primary, #6366f1);
+}
+.add-member-selected-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.add-member-chip {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+}
+.add-member-chip:hover {
+  opacity: 0.8;
+}
+.add-member-invite-btn {
+  width: 100%;
+  margin-top: 12px;
 }
 
 /* ── Sender line in group messages ── */
