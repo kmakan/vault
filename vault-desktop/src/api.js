@@ -624,8 +624,27 @@ export class ApiClient {
       sender_name: name,
       sender_avatar: avatar,
     });
+    // Письмо-подтверждение шлём ВСЕМ участникам группы (кроме себя), а не
+    // только пригласившему: так каждый участник локально добавит новичка
+    // (fetchPendingAccepts → groups_add_member идемпотентно). Раньше accept
+    // уходил одному инвайтеру — у остальных groups.json никогда не обновлялся
+    // (рассинхрон ростера: участник есть у одного, отсутствует у другого).
+    const roster = new Set();
+    try {
+      const g = await invoke('groups_get', { groupId });
+      for (const m of (g && g.members) || []) {
+        if (m && m.email && m.email !== this.email) roster.add(m.email);
+      }
+    } catch (e) { /* группа ещё не импортирована — отправим хотя бы инвайтеру */ }
+    if (payload.sender && payload.sender !== this.email) roster.add(payload.sender);
+    for (const to of roster) {
+      try {
+        await this.sendEmail('local', { to, subject: 'VaultGroupAccept: ' + groupId, body });
+      } catch (e) {
+        console.error('accept mail failed for', to, e);
+      }
+    }
     if (payload.sender) {
-      await this.sendEmail('local', { to: payload.sender, subject: 'VaultGroupAccept: ' + groupId, body });
       // Сохраняем профиль пригласившего в кэш.
       this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar);
     }

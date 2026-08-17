@@ -194,6 +194,8 @@ export default {
   invite_decline: 'Отклонить',
   invite_sent: 'Приглашение отправлено',
   invite_pending: 'приглашён',
+  already_in_group: 'Этот участник уже в группе',
+  already_in_contacts: 'Этот контакт уже в вашем списке',
   add_member_from_contacts: 'Добавить участника из контактов',
   search_contacts: 'Поиск контактов…',
   enter_email_manual: 'Ввести email вручную',

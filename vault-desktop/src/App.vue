@@ -160,7 +160,7 @@
 
       <!-- INVITE POPUP (приглашение в группу с согласием) -->
       <div v-if="showInvitePopup && pendingInvites.length" class="modal-overlay" @click.self="showInvitePopup = false">
-        <div class="modal-settings">
+        <div class="modal-settings invite-popup-panel">
           <button class="modal-close" @click="showInvitePopup = false">←</button>
           <template v-if="pendingInvites[invitePopupIndex]">
             <h3 class="invite-popup-title">{{ t('invite_title') || 'Приглашение в группу' }}</h3>
@@ -190,7 +190,7 @@
 
       <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
       <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
-        <div class="modal-settings">
+        <div class="modal-settings invite-popup-panel">
           <button class="modal-close" @click="showContactPopup = false">←</button>
           <template v-if="pendingContacts[contactPopupIndex]">
             <h3 class="invite-popup-title">{{ t('contact_request_title') || 'Запрос контакта' }}</h3>
@@ -219,7 +219,7 @@
 
       <!-- ADD MEMBER POPUP (выбор контактов) -->
       <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
-        <div class="modal-settings">
+        <div class="modal-settings invite-popup-panel">
           <button class="modal-close" @click="showAddMemberPopup = false">←</button>
           <h3 class="add-member-popup-title">{{ t('add_member_from_contacts') || 'Добавить участника из контактов' }}</h3>
           <input
@@ -713,6 +713,10 @@ export default {
       pendingContacts: [],
       showContactPopup: false,
       contactPopupIndex: 0,
+      // Инвайты/запросы в обработке: пока идёт медленный SMTP, поллинг не
+      // должен показать их повторно (ключи «group_id|uid» / «sender|uid»).
+      handledInviteKeys: [],
+      handledContactKeys: [],
       // Add-member popup (выбор контактов)
       showAddMemberPopup: false,
       addMemberQuery: '',
@@ -1968,6 +1972,10 @@ export default {
           const quote = this.replyPreview(this.replyTo);
           if (quote) payload = `> ${quote}\n\n${this.newMessage}`;
         }
+        // Очищаем поле и ответ СРАЗУ — SMTP медленный (30–60 с), UI не должен
+        // ждать завершения отправки, чтобы поле опустело.
+        this.newMessage = '';
+        this.cancelReply();
 
         let content = payload;
 
@@ -2028,8 +2036,6 @@ export default {
           }
         }
 
-        this.newMessage = '';
-        this.cancelReply();
         // Своё сообщение — всегда прокручиваем вниз.
         this.scrollToBottom(true);
       } catch (error) {
@@ -2610,6 +2616,11 @@ export default {
     },
     async inviteContact(email) {
       if (!this.currentGroup || !email) return;
+      // Уже участник — не шлём повторный инвайт (защита от дублей).
+      if ((this.currentGroup.members || []).some(m => m.email === email)) {
+        alert(this.t('already_in_group') || 'Этот участник уже в группе');
+        return;
+      }
       try {
         // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
         // Без ключа собеседника безопасный инвайт невозможен — как в Session:
@@ -2674,10 +2685,21 @@ export default {
       // Собираем непрочитанные инвайты для попапа согласия.
       try {
         const invites = await api.fetchPendingInvites();
-        if (invites.length) {
-          this.pendingInvites = invites;
-          this.invitePopupIndex = 0;
-          this.showInvitePopup = true;
+        // Вырезаем инвайты, которые уже обрабатываются (accept в полёте —
+        // письмо ещё в ящике, а groups_import мог ещё не завершиться).
+        const fresh = invites.filter(
+          inv => !this.handledInviteKeys.includes(`${inv.group_id}|${inv.uid}`)
+        );
+        if (fresh.length) {
+          // Пока попап показан, очередью управляют accept/decline (splice) —
+          // перезапись от поллинга сбивала invitePopupIndex посреди разбора.
+          if (!this.showInvitePopup) {
+            this.pendingInvites = fresh;
+            this.invitePopupIndex = 0;
+            this.showInvitePopup = true;
+          }
+        } else if (!this.showInvitePopup) {
+          this.pendingInvites = [];
         }
       } catch (e) {
         console.error('processInvites: invites failed:', e);
@@ -2685,13 +2707,20 @@ export default {
       // Запросы контактов 1-на-1 — попап «Принять/Отклонить».
       try {
         const contacts = await api.fetchPendingContactInvites();
-        if (contacts.length) {
-          // Групповой попап имеет приоритет; контактный покажем следом.
-          if (!this.showInvitePopup) {
-            this.pendingContacts = contacts;
-            this.contactPopupIndex = 0;
-            this.showContactPopup = true;
+        const fresh = contacts.filter(
+          c => !this.handledContactKeys.includes(`${c.sender}|${c.uid}`)
+        );
+        if (fresh.length) {
+          if (!this.showContactPopup) {
+            this.pendingContacts = fresh;
+            // Групповой попап имеет приоритет; контактный покажем следом.
+            if (!this.showInvitePopup) {
+              this.contactPopupIndex = 0;
+              this.showContactPopup = true;
+            }
           }
+        } else if (!this.showContactPopup) {
+          this.pendingContacts = [];
         }
       } catch (e) {
         console.error('processInvites: contact invites failed:', e);
@@ -2711,6 +2740,12 @@ export default {
       }
     },
     async acceptInvite(inv) {
+      const key = `${inv.group_id}|${inv.uid}`;
+      if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key);
+      // Попап закрываем СРАЗУ — медленный SMTP (accept-письмо) не должен
+      // висеть в UI. Поллинг инвайт повторно не покажет (handledInviteKeys).
+      this.pendingInvites.splice(this.invitePopupIndex, 1);
+      this.showInvitePopup = false;
       try {
         // Новый формат: group_key зашифрован на нашем публичном ключе —
         // расшифровываем своим приватным ключом (ECDH + sender_public_key).
@@ -2726,41 +2761,60 @@ export default {
           localStorage.setItem('vault-group-avatar-' + inv.group_id, inv.group_avatar);
           this.groupAvatars[inv.group_id] = inv.group_avatar;
         }
+        await this.loadGroups();
+        if (this.currentGroup?.id === inv.group_id) {
+          await this.loadGroupMessages(inv.group_id);
+        }
       } catch (e) {
         alert('Failed to accept invite: ' + e.message);
-      }
-      this.pendingInvites.splice(this.invitePopupIndex, 1);
-      this.showInvitePopup = false;
-      await this.loadGroups();
-      if (this.currentGroup?.id === inv.group_id) {
-        await this.loadGroupMessages(inv.group_id);
+        // Не приняли — возвращаем инвайт в очередь для повторной попытки.
+        const i = this.handledInviteKeys.indexOf(key);
+        if (i >= 0) this.handledInviteKeys.splice(i, 1);
+        this.pendingInvites.push(inv);
       }
       this.showNextInvite();
     },
     async declineInvite(inv) {
+      const key = `${inv.group_id}|${inv.uid}`;
+      if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key);
+      this.pendingInvites.splice(this.invitePopupIndex, 1);
+      this.showInvitePopup = false;
       try {
         await api.declineGroupInvite(inv.group_id, inv.uid, inv.sender);
       } catch (e) {
         // ignore
       }
-      this.pendingInvites.splice(this.invitePopupIndex, 1);
-      this.showInvitePopup = false;
       this.showNextInvite();
     },
     showNextInvite() {
+      clearTimeout(this._nextInviteTimer);
       if (this.pendingInvites.length > 0) {
         if (this.invitePopupIndex >= this.pendingInvites.length) this.invitePopupIndex = 0;
-        this.showInvitePopup = true;
+        // Небольшая задержка: попап должен заметно исчезнуть после
+        // принять/отклонить, а не «сменить содержимое» без закрытия.
+        this._nextInviteTimer = setTimeout(() => {
+          if (this.pendingInvites.length && !this.showInvitePopup) {
+            this.showInvitePopup = true;
+          }
+        }, 1200);
       } else {
         this.showInvitePopup = false;
         // Групповой попап закрыт — показываем накопившиеся запросы контактов.
         if (this.pendingContacts.length) {
-          this.showContactPopup = true;
+          this._nextInviteTimer = setTimeout(() => {
+            if (this.pendingContacts.length && !this.showContactPopup) {
+              this.showContactPopup = true;
+            }
+          }, 1200);
         }
       }
     },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
     async acceptContactInvite(c) {
+      const key = `${c.sender}|${c.uid}`;
+      if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key);
+      // Попап закрываем СРАЗУ — accept-письмо идёт через медленный SMTP.
+      this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
         await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
@@ -2775,24 +2829,34 @@ export default {
         await this.loadContacts();
       } catch (e) {
         alert('Failed to accept contact: ' + e.message);
+        // Не приняли — возвращаем запрос в очередь для повторной попытки.
+        const i = this.handledContactKeys.indexOf(key);
+        if (i >= 0) this.handledContactKeys.splice(i, 1);
+        this.pendingContacts.push(c);
       }
-      this.pendingContacts.splice(this.contactPopupIndex, 1);
       this.showNextContact();
     },
     async declineContactInvite(c) {
       const key = `${c.sender}|${c.uid}`;
+      if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key);
+      this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
         const declined = JSON.parse(localStorage.getItem('vault-declined-contacts') || '[]');
         if (!declined.includes(key)) declined.push(key);
         localStorage.setItem('vault-declined-contacts', JSON.stringify(declined));
       } catch (e) { /* ignore */ }
-      this.pendingContacts.splice(this.contactPopupIndex, 1);
       this.showNextContact();
     },
     showNextContact() {
+      clearTimeout(this._nextContactTimer);
       if (this.pendingContacts.length > 0) {
         if (this.contactPopupIndex >= this.pendingContacts.length) this.contactPopupIndex = 0;
-        this.showContactPopup = true;
+        // Задержка: попап должен заметно исчезнуть, а не «сменить содержимое».
+        this._nextContactTimer = setTimeout(() => {
+          if (this.pendingContacts.length && !this.showContactPopup) {
+            this.showContactPopup = true;
+          }
+        }, 1200);
       } else {
         this.showContactPopup = false;
       }
@@ -2800,6 +2864,11 @@ export default {
     async inviteContactById(email) {
       const id = (email || '').trim();
       if (!id) return;
+      // Уже в контактах — не шлём повторный запрос (защита от дублей).
+      if (this.peerKeys[id] || this.peerKeys[id.toLowerCase()]) {
+        alert(this.t('already_in_contacts') || 'Этот контакт уже в вашем списке');
+        return;
+      }
       try {
         await api.sendContactInvite(id, this.publicKey);
         alert((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id);
@@ -5051,6 +5120,13 @@ body {
   .main-area {
     display: none;
   }
+}
+
+/* Попапы инвайтов/контактов/добавления участника используют modal-settings,
+   но им нужны внутренние отступы (у самого modal-settings их нет — туда
+   вставляется SettingsPage, который сам занимает всё пространство). */
+.invite-popup-panel {
+  padding: 20px 24px 24px;
 }
 
 /* ── Invite popup (приглашение в группу) ── */
