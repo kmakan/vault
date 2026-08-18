@@ -73,6 +73,21 @@
         <div class="search-box">
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
+
+        <!-- Заметки для себя: локальный чат с собой (Session/Telegram pattern).
+             Не зависит от peer_keys, почты и шифрования — хранится только
+             в localStorage vault-notes-<email>. -->
+        <div
+          class="contact-item notes-self"
+          :class="{ active: activeChat === '__notes__' }"
+          @click="selectNotes"
+        >
+          <div class="notes-self-avatar">📝</div>
+          <div class="contact-info">
+            <div class="contact-name">{{ t('notes_self') || 'Заметки для себя' }}</div>
+            <div class="contact-email">{{ t('notes_self_hint') || 'Только на этом устройстве' }}</div>
+          </div>
+        </div>
         <!-- Onboarding: no contacts and no peer keys yet -->
         <div v-if="contacts.length === 0 && Object.keys(peerKeys).length === 0" class="contacts-empty">
           <div class="contacts-empty-title">{{ t('contacts_empty_title') }}</div>
@@ -346,6 +361,9 @@
                 {{ (currentGroup && (groupIconMap[currentGroup.id] || currentGroup.name?.charAt(0).toUpperCase())) || '?' }}
               </div>
             </template>
+            <template v-else-if="activeChat === '__notes__'">
+              <div class="notes-self-avatar notes-self-avatar-lg">📝</div>
+            </template>
             <template v-else>
               <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
             </template>
@@ -356,6 +374,9 @@
                   <span class="members-count" @click="showMembersList = true">
                     👥 {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
                   </span>
+                </template>
+                <template v-else-if="activeChat === '__notes__'">
+                  <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
                 </template>
                 <template v-else>
                   {{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}
@@ -368,7 +389,7 @@
               <button v-if="isGroupModerator" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
             </template>
-            <template v-else-if="activeChat">
+            <template v-else-if="activeChat && activeChat !== '__notes__'">
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'">✏️</button>
             </template>
             <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
@@ -830,6 +851,7 @@ export default {
       return list;
     },
     activeChatName() {
+      if (this.activeChat === '__notes__') return this.t('notes_self') || 'Заметки для себя';
       if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
       if (!this.activeChat) return '';
       // Локальное имя контакта (если задано) — выше реального.
@@ -1389,6 +1411,34 @@ export default {
       }
 
       await this.loadGroupMessages(group.id);
+      this.scrollToBottom(true);
+    },
+    // --- Заметки для себя (локальный чат, Session/Telegram pattern) ---
+    // Хранятся ТОЛЬКО в localStorage (vault-notes-<email>), не шифруются,
+    // не уходят по почте, работают офлайн и мгновенно.
+    notesStoreKey() {
+      return 'vault-notes-' + (this.email || 'anon');
+    },
+    loadNotes() {
+      try {
+        return JSON.parse(localStorage.getItem(this.notesStoreKey()) || '[]');
+      } catch (e) {
+        return [];
+      }
+    },
+    saveNotes(list) {
+      try {
+        localStorage.setItem(this.notesStoreKey(), JSON.stringify(list));
+      } catch (e) {
+        console.error('Failed to save notes:', e);
+      }
+    },
+    selectNotes() {
+      this.messages = this.loadNotes();
+      this.loadSeq++;
+      this.activeChat = '__notes__';
+      this.activeChatType = 'chat';
+      this.currentGroup = null;
       this.scrollToBottom(true);
     },
     // Parse message content — detect vault_attachment JSON and extract preview
@@ -2197,6 +2247,26 @@ export default {
 
         let content = payload;
 
+        // Заметки для себя: локальная запись без почты и шифрования.
+        if (this.activeChat === '__notes__') {
+          const note = {
+            id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+            content: payload,
+            from: 'me',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            encrypted: false,
+            vault: false,
+            status: 'sent',
+            _notes: true,
+          };
+          const list = this.loadNotes();
+          list.push(note);
+          this.saveNotes(list);
+          this.messages = [...list];
+          this.scrollToBottom(true);
+          return;
+        }
+
         // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
         // (имя/аватар) и стабильный id сообщения внутри шифра.
         const envelope = await this.buildEnvelope(payload);
@@ -2370,7 +2440,10 @@ export default {
           await this.loadEmails(true);
           // Новые письма могли прийти в любой момент — перерисовываем
           // открытый чат, чтобы не приходилось переоткрывать его вручную.
-          if (this.activeChat && this.activeChatType === 'chat') {
+          if (this.activeChat === '__notes__') {
+            // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
+            // перезаписал бы пустым списком из IMAP).
+          } else if (this.activeChat && this.activeChatType === 'chat') {
             await this.loadMessages(this.activeChat);
             // Не выдёргиваем из чтения истории: прокручиваем только если
             // пользователь уже у низа чата.
@@ -2411,6 +2484,8 @@ export default {
     },
     // Audio messages
     async sendAudioMessage(audioData) {
+      // Заметки для себя не принимают вложения (локальный текстовый чат).
+      if (this.activeChat === '__notes__') return;
       // Голосовое = вложение audio/webm, зашифрованное как обычное сообщение
       // (конверт {vault:1,...,text:<JSON вложения>} + encryptVault, AAD="VAULT").
       const name = `voice-${Date.now()}.webm`;
@@ -2485,6 +2560,8 @@ export default {
     async handleFileSelect(event) {
       const files = event.target.files;
       if (!files || files.length === 0) return;
+      // Заметки для себя не принимают вложения (локальный текстовый чат).
+      if (this.activeChat === '__notes__') return;
 
       for (const file of files) {
         try {
@@ -4256,6 +4333,26 @@ body {
 .group-avatar-img {
   object-fit: cover;
   background: var(--bg-secondary);
+}
+
+/* Заметки для себя: пункт сайдбара и аватар-эмодзи в чате */
+.notes-self-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.notes-self-avatar-lg {
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
