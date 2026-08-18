@@ -410,8 +410,8 @@
           >
             <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
             <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
-              <UserAvatar :email="msg.sender_id" :avatarUrl="avatarOf(msg.sender_id)" :size="20" />
-              <span class="message-sender-name">{{ nameOf(msg.sender_id) }}</span>
+              <UserAvatar :email="senderEmail(msg.sender_id)" :avatarUrl="avatarOf(senderEmail(msg.sender_id))" :size="26" />
+              <span class="message-sender-name">{{ nameOf(senderEmail(msg.sender_id)) }}</span>
             </div>
             <div class="message-content">
               <template v-if="msg.deleted">
@@ -1298,6 +1298,10 @@ export default {
           reactions: m.reactions || undefined,
           deleted: m.deleted || undefined,
           edited: m.edited || undefined,
+          // sender_id нужен групповому рендеру (аватар/имя отправителя над
+          // чужим сообщением) — без него из кэша блок отправителя исчезал,
+          // хотя при свежем фетче появлялся («аватарки то есть, то нет»).
+          sender_id: m.sender_id || undefined,
           attachment: m.attachment || undefined,
         }));
         localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
@@ -2666,6 +2670,14 @@ export default {
     isOwnSender(senderId) {
       if (!senderId || !this.email) return false;
       return String(senderId).toLowerCase().includes(this.email.toLowerCase());
+    },
+    // Нормализация сырого заголовка From («Имя <email>») до чистого email.
+    // avatarOf/nameOf ищут профили по email — без этого аватар/имя
+    // отправителя в группе не рендерились («аватарки не добавились»).
+    senderEmail(raw) {
+      if (!raw) return '';
+      const m = String(raw).match(/<([^>]+)>/);
+      return (m ? m[1] : raw).trim().toLowerCase();
     },
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
@@ -5664,12 +5676,13 @@ body {
 .message-sender {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 4px;
   padding-left: 4px;
 }
 .message-sender-name {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-muted, #aaa);
 }
 </style>
