@@ -83,6 +83,10 @@ struct SpecialFolders {
     all: Option<String>,
     /// Спам (\Junk/\Spam или папка с именем Spam/Junk/Спам).
     junk: Option<String>,
+    /// Отправленные (\Sent) — нужны провайдерам БЕЗ \All (Zoho и др.):
+    /// только там лежат копии наших исходящих писем (отправитель должен
+    /// видеть свои сообщения в чате).
+    sent: Option<String>,
 }
 
 pub struct EmailClient {
@@ -159,6 +163,9 @@ impl EmailClient {
             {
                 out.junk = Some(name.to_string());
             }
+            if out.sent.is_none() && attrs.iter().any(|a| a == "\\sent") {
+                out.sent = Some(name.to_string());
+            }
             // Фолбэк по имени — для провайдеров без атрибутов (Spam, Junk,
             // «Спам», [Gmail]/Spam). Берём только если атрибут не нашёлся.
             if out.junk.is_none()
@@ -169,6 +176,14 @@ impl EmailClient {
                     || name_l.ends_with("/junk"))
             {
                 out.junk = Some(name.to_string());
+            }
+            if out.sent.is_none()
+                && (name_l == "sent"
+                    || name_l == "sent items"
+                    || name_l == "sent messages"
+                    || name_l.ends_with("/sent"))
+            {
+                out.sent = Some(name.to_string());
             }
         }
         out
@@ -301,6 +316,22 @@ impl EmailClient {
                     }
                 }
                 Err(e) => eprintln!("[email] All Mail folder {all} fetch failed: {e}"),
+            }
+        } else if let Some(sent) = &folders.sent {
+            // Нет \All (Zoho и др.): копии наших исходящих лежат ТОЛЬКО в Sent.
+            // Без него отправитель не видит свои сообщения, а поллинг
+            // затирает оптимистичный показ. С \All Sent избыточен (All Mail
+            // уже содержит исходящие) — не тратим round-trip.
+            match self.fetch_folder(sent, 50) {
+                Ok(sent_msgs) => {
+                    for m in sent_msgs {
+                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                            continue;
+                        }
+                        messages.push(m);
+                    }
+                }
+                Err(e) => eprintln!("[email] Sent folder {sent} fetch failed: {e}"),
             }
         }
 

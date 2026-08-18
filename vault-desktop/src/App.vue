@@ -1283,12 +1283,15 @@ export default {
     saveChatCache(chat, list) {
       try {
         // email-объект письма не персистим (тяжёлый и не нужен для рендера).
+        // attachment персистим: без него из кэша пропадают плеер аудио,
+        // кнопка «скачать» и текст вложения (регрессия демо 17.08).
         const slim = (list || []).map(m => ({
           id: m.id, content: m.content, from: m.from, time: m.time,
           encrypted: m.encrypted, vault: m.vault, status: m.status,
           reactions: m.reactions || undefined,
           deleted: m.deleted || undefined,
           edited: m.edited || undefined,
+          attachment: m.attachment || undefined,
         }));
         localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
       } catch (e) { /* quota — не критично */ }
@@ -1590,7 +1593,16 @@ export default {
             return b === undefined || b === '';
           });
           if (missing.length) {
-            const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            // Ошибка батча (IMAP-рассинхрон, одно пустое тело роняет весь
+            // запрос в Rust) НЕ должна обнулять чат: без try/catch падал
+            // весь loadMessages и чат застревал на slim-кэше без вложений
+            // (регрессия демо 17.08 — получатель не видел сообщения).
+            let bodies = {};
+            try {
+              bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            } catch (e) {
+              console.log('[loadMessages] fetchEmailBodies failed folder=' + folder + ' n=' + missing.length + ' err=' + (e && e.message || e));
+            }
             if (stale()) return;
             for (const m of missing) {
               const b = bodies[String(m.uid || m.id)];
@@ -1775,7 +1787,24 @@ export default {
       try {
         const raw = await api.getGroupMessages(groupId);
         if (stale()) return;
-        const groupKey = this.groupKeys[groupId];
+        let groupKey = this.groupKeys[groupId];
+        // Гонка инициализации: группа могла открыться (или восстановиться
+        // из кэша) до того, как crypto завершил initCrypto() — тогда в
+        // selectGroup загрузка ключа была пропущена (guard `cryptoReady`),
+        // и в памяти ключа нет, хотя группы.json уже содержит его. Догружаем
+        // ключ прямо здесь, чтобы групповые сообщения не рендерились
+        // шифротекстом (баг демо 17.08 — группа «Три» у koanmak).
+        if (!groupKey && this.cryptoReady) {
+          try {
+            const kd = await api.getMyGroupKey(groupId);
+            if (kd && kd.group_key) {
+              this.groupKeys[groupId] = kd.group_key;
+              groupKey = kd.group_key;
+            }
+          } catch (e) {
+            console.warn('Could not lazily load group key:', e);
+          }
+        }
 
         // Реакции группы: письма VaultGroupReact: <id> (транспорт, не сообщения).
         const wireReactions = {};

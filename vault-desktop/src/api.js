@@ -179,8 +179,14 @@ export class ApiClient {
     const mine = msgs.filter(m => (m.subject || '').startsWith('VaultGroup: ' + groupId));
     const out = [];
     for (const m of mine) {
-      const body = await this.fetchEmailBody('local', m.uid, m.folder);
-      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
+      // Одно непрочитавшееся тело (пустой ответ IMAP при рассинхроне) НЕ
+      // должно ронять весь групповой чат: без try/catch падал getGroupMessages
+      // целиком и loadGroupMessages обнулял messages (регрессия демо 17.08 —
+      // группа «Три» показывала пустой чат). Ср. getGroupReactEmails.
+      try {
+        const body = await this.fetchEmailBody('local', m.uid, m.folder);
+        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
+      } catch (e) { /* тело не прочиталось — перефетчится в следующий поллинг */ }
     }
     // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
@@ -610,6 +616,19 @@ export class ApiClient {
       createdBy: payload.created_by || null,
       members: inviteMembers,
     });
+    // Персистим ключ принятого инвайта («group_id|uid»). handledInviteKeys в
+    // App.vue — только in-memory и сбрасывается при перезапуске; без этой
+    // записи fetchPendingInvites после рестарта снова найдёт письмо-инвайт
+    // (оно всё ещё в ящике) и попап согласия всплывёт повторно, даже если
+    // группа уже импортирована. Принятые инвайты больше не показываем.
+    if (payload.uid != null) {
+      const accepted = this.getAcceptedInvites();
+      const akey = `${groupId}|${payload.uid}`;
+      if (!accepted.includes(akey)) {
+        accepted.push(akey);
+        localStorage.setItem('vault-accepted-invites', JSON.stringify(accepted));
+      }
+    }
     // Добавляем СЕБЯ как участника (роль Member) — import_group добавляет
     // только отправителя, а принимающий иначе не попадёт в members.
     try {
@@ -664,6 +683,13 @@ export class ApiClient {
   getDeclinedInvites() {
     try {
       return JSON.parse(localStorage.getItem('vault-declined-invites') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  getAcceptedInvites() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-accepted-invites') || '[]');
     } catch (e) {
       return [];
     }
@@ -734,6 +760,7 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: '));
     const declined = this.getDeclinedInvites();
+    const accepted = this.getAcceptedInvites();
     const out = [];
     for (const m of invites) {
       let parsed;
@@ -750,6 +777,10 @@ export class ApiClient {
       }
       // Пропускаем, если уже отклонён.
       if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
+      // Пропускаем, если уже принят (персистится в acceptGroupInvite).
+      // Без этого после перезапуска инвайт-письмо снова находится в ящике
+      // и попап согласия всплывает повторно.
+      if (accepted.includes(`${parsed.group_id}|${m.uid}`)) continue;
       // Группу пропускаем, только если МЫ уже участник/создатель.
       // (groups.json общий на машину — сама по себе существующая группа не
       // означает, что инвайт принят этим аккаунтом.)
