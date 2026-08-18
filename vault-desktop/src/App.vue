@@ -1429,8 +1429,10 @@ export default {
     saveNotes(list) {
       try {
         localStorage.setItem(this.notesStoreKey(), JSON.stringify(list));
+        return true;
       } catch (e) {
         console.error('Failed to save notes:', e);
+        return false;
       }
     },
     selectNotes() {
@@ -2261,7 +2263,12 @@ export default {
           };
           const list = this.loadNotes();
           list.push(note);
-          this.saveNotes(list);
+          if (!this.saveNotes(list)) {
+            list.pop();
+            this.messages = [...list];
+            alert('Локальное хранилище заметок переполнено — заметка не сохранена.');
+            return;
+          }
           this.messages = [...list];
           this.scrollToBottom(true);
           return;
@@ -2484,8 +2491,42 @@ export default {
     },
     // Audio messages
     async sendAudioMessage(audioData) {
-      // Заметки для себя не принимают вложения (локальный текстовый чат).
-      if (this.activeChat === '__notes__') return;
+      // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
+      // шифрования и почты — так же, как текст заметок.
+      if (this.activeChat === '__notes__') {
+        const name = `voice-${Date.now()}.webm`;
+        const msg = {
+          id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+          content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+          from: 'me',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          encrypted: false,
+          vault: false,
+          status: 'sent',
+          _notes: true,
+          attachment: {
+            name,
+            type: audioData.mimeType || 'audio/webm',
+            size: audioData.size,
+            data: audioData.base64,
+            isImage: false,
+            isAudio: true,
+          },
+        };
+        const list = this.loadNotes();
+        list.push(msg);
+        if (!this.saveNotes(list)) {
+          list.pop();
+          this.messages = [...list];
+          alert('Локальное хранилище заметок переполнено — голосовое не сохранено. Удалите часть заметок/вложений.');
+          this.showAudioRecorder = false;
+          return;
+        }
+        this.messages = [...list];
+        this.showAudioRecorder = false;
+        this.scrollToBottom(true);
+        return;
+      }
       // Голосовое = вложение audio/webm, зашифрованное как обычное сообщение
       // (конверт {vault:1,...,text:<JSON вложения>} + encryptVault, AAD="VAULT").
       const name = `voice-${Date.now()}.webm`;
@@ -2560,11 +2601,16 @@ export default {
     async handleFileSelect(event) {
       const files = event.target.files;
       if (!files || files.length === 0) return;
-      // Заметки для себя не принимают вложения (локальный текстовый чат).
-      if (this.activeChat === '__notes__') return;
 
       for (const file of files) {
         try {
+          // Для заметок почтовый лимит провайдера неважен (файл никуда не
+          // отправляется), но localStorage ограничен (~5МБ) — не даём выбрать
+          // заведомо непомещающийся файл.
+          if (this.activeChat === '__notes__' && file.size > 3 * 1024 * 1024) {
+            alert(`Файл «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ. В «Заметки для себя» вложения хранятся локально (лимит ~5 МБ на весь чат), файлы больше 3 МБ не прикрепляются.`);
+            continue;
+          }
           // Лимит вложений провайдера (Gmail 25MB, Zoho 25MB, ...): письмо с
           // base64-телом ~на 33% больше файла, поэтому сравниваем с 70% от
           // лимита — предупреждаем ДО отправки, пока провайдер не отклонил.
@@ -2605,6 +2651,42 @@ export default {
             const displayContent = isImage
               ? `📎 ${file.name}`
               : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
+
+            // Заметки для себя: файл хранится ЛОКАЛЬНО (localStorage), без
+            // шифрования и почты — так же, как текст заметок.
+            if (this.activeChat === '__notes__') {
+              const noteMsg = {
+                id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+                content: displayContent,
+                from: 'me',
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                encrypted: false,
+                vault: false,
+                status: 'sent',
+                _notes: true,
+                attachment: {
+                  name: file.name,
+                  type: file.type,
+                  size: file.size,
+                  data: base64,
+                  isImage: isImage,
+                  isAudio: isAudio,
+                  isText: isText,
+                  textContent: textContent,
+                },
+              };
+              const noteList = this.loadNotes();
+              noteList.push(noteMsg);
+              if (!this.saveNotes(noteList)) {
+                noteList.pop();
+                this.messages = [...noteList];
+                alert('Локальное хранилище заметок переполнено — файл не сохранён.');
+                return;
+              }
+              this.messages = [...noteList];
+              this.scrollToBottom(true);
+              return;
+            }
 
             // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
             // зашифрованный как обычное сообщение (AAD="VAULT"). БЕЗ шифрования

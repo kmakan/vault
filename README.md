@@ -75,6 +75,7 @@ npx tauri android build
 - ✅ Folders for chats
 - ✅ Search (FTS5 full-text)
 - ✅ Pin / mute chats
+- ✅ Notes to Self — instant local notes (stored unencrypted on the device, never sent via email)
 
 ### Groups
 - ✅ Create group, invite members
