@@ -2134,8 +2134,24 @@ export default {
     async onGroupAvatarUpdate({ groupId, avatar }) {
       this.groupAvatars[groupId] = avatar;
       localStorage.setItem('vault-group-avatar-' + groupId, avatar || '');
-      const groupKey = this.groupKeys[groupId];
-      if (!groupKey || !avatar) return;
+      if (!avatar) return;
+      // Ключ группы мог быть ещё не загружен (настройки открыты без чата) —
+      // тогда `if (!groupKey) return` выше МОЛЧА пропускал рассылку и у
+      // участников аватар не появлялся никогда. Догружаем ключ (как в
+      // selectGroup) и шлём meta-письма в любом случае.
+      let groupKey = this.groupKeys[groupId];
+      if (!groupKey && this.cryptoReady) {
+        try {
+          const kd = await api.getMyGroupKey(groupId);
+          if (kd && kd.group_key) {
+            this.groupKeys[groupId] = kd.group_key;
+            groupKey = kd.group_key;
+          }
+        } catch (e) {
+          console.warn('Could not load group key for avatar broadcast:', e);
+        }
+      }
+      if (!groupKey) return;
       try {
         const payload = JSON.stringify({ meta: 1, avatar });
         const content = await crypto.encryptWithGroupKey(payload, groupKey);
