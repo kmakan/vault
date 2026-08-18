@@ -175,14 +175,27 @@ export class ApiClient {
     return { ok: true };
   }
   async getGroupMessages(groupId) {
+    // STEALTH-ГРУППЫ (18.08): темы у групповых писем ПУСТЫЕ (как в 1:1), так
+    // что фильтрация по subject невозможна. Возвращаем ВСЕ письма, чей
+    // отправитель — участник группы; классификация по содержимому после
+    // расшифровки групповым ключом происходит в loadGroupMessages
+    // (расшифровка не пройдёт для 1:1-писем/чужих — криптография фильтрует).
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    const memberEmails = (g.members || [])
+      .map(m => String(m.email || '').toLowerCase())
+      .filter(Boolean);
     const msgs = await this.fetchEmails('local');
-    const mine = msgs.filter(m => (m.subject || '').startsWith('VaultGroup: ' + groupId));
+    const mine = msgs.filter(m => {
+      const from = String(m.from || '').toLowerCase();
+      return memberEmails.some(e => from.includes(e));
+    });
     const out = [];
     for (const m of mine) {
       // Одно непрочитавшееся тело (пустой ответ IMAP при рассинхроне) НЕ
       // должно ронять весь групповой чат: без try/catch падал getGroupMessages
       // целиком и loadGroupMessages обнулял messages (регрессия демо 17.08 —
-      // группа «Три» показывала пустой чат). Ср. getGroupReactEmails.
+      // группа «Три» показывала пустой чат).
       try {
         const body = await this.fetchEmailBody('local', m.uid, m.folder);
         out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
@@ -192,26 +205,25 @@ export class ApiClient {
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
     return out;
   }
-  // Письма-реакции группы (VaultGroupReact: <id>) — транспорт реакций,
-  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
-  async getGroupReactEmails(groupId) {
-    const msgs = await this.fetchEmails('local');
-    const react = msgs.filter(m => (m.subject || '').startsWith('VaultGroupReact: ' + groupId));
-    const out = [];
-    for (const m of react) {
-      try {
-        const body = await this.fetchEmailBody('local', m.uid, m.folder);
-        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
-      } catch (e) { /* тело не прочиталось — пропускаем */ }
-    }
-    return out;
-  }
   async sendGroupMessage(groupId, content) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    // STEALTH: пустая тема (как 1:1). Получатель классифицирует по
+    // содержимому (расшифровка групповым ключом), а не по теме.
+    // Per-member try/catch: сбой SMTP одного адресата (троттлинг, таймаут)
+    // не должен рвать цикл и лишать письма остальных участников.
+    const failed = [];
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
-      await this.sendEmail('local', { to: member.email, subject: 'VaultGroup: ' + g.id, body: content });
+      try {
+        await this.sendEmail('local', { to: member.email, subject: '', body: content });
+      } catch (e) {
+        console.error(`sendGroupMessage: ${member.email} failed:`, e);
+        failed.push(member.email);
+      }
+    }
+    if (failed.length) {
+      throw new Error('Group message: SMTP failed for: ' + failed.join(', '));
     }
     return { ok: true };
   }
@@ -224,14 +236,22 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send reaction email');
     return { ok: true };
   }
-  // Реакция в группу: каждому участнику (кроме себя) письмо VaultGroupReact: <id>.
+  // Реакция в группу: каждому участнику (кроме себя) письмо с ПУСТОЙ темой
+  // (stealth, как 1:1) — классификация по содержимому после расшифровки.
   async sendGroupReact(groupId, encryptedContent) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    const failed = [];
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
-      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupReact: ' + g.id, body: encryptedContent });
+      try {
+        await this.sendEmail('local', { to: member.email, subject: '', body: encryptedContent });
+      } catch (e) {
+        console.error(`sendGroupReact: ${member.email} failed:`, e);
+        failed.push(member.email);
+      }
     }
+    if (failed.length) throw new Error('React: SMTP failed for: ' + failed.join(', '));
     return { ok: true };
   }
   // Редактирование/удаление сообщения в 1-на-1 чат: зашифрованное письмо
@@ -253,78 +273,60 @@ export class ApiClient {
     return { ok: true };
   }
   // Редактирование/удаление в группе: каждому участнику (кроме себя)
-  // письмо VaultGroupEdit: <id> с шифром групповым ключом.
+  // письмо с ПУСТОЙ темой (stealth) — классификация по содержимому.
   async sendGroupEdit(groupId, encryptedContent) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    const failed = [];
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
-      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupEdit: ' + g.id, body: encryptedContent });
+      try {
+        await this.sendEmail('local', { to: member.email, subject: '', body: encryptedContent });
+      } catch (e) {
+        console.error(`sendGroupEdit: ${member.email} failed:`, e);
+        failed.push(member.email);
+      }
     }
+    if (failed.length) throw new Error('Edit: SMTP failed for: ' + failed.join(', '));
     return { ok: true };
   }
-  // Письма правок группы (VaultGroupEdit: <id>) — транспорт edit/delete,
-  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
-  async getGroupEditEmails(groupId) {
-    const msgs = await this.fetchEmails('local');
-    const edits = msgs.filter(m => (m.subject || '').startsWith('VaultGroupEdit: ' + groupId));
-    const out = [];
-    for (const m of edits) {
-      try {
-        const body = await this.fetchEmailBody('local', m.uid, m.folder);
-        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
-      } catch (e) { /* тело не прочиталось — пропускаем */ }
-    }
-    return out;
-  }
-  // Квитанции чтения группы (VaultGroupRead: <id>) — транспорт метки
-  // «просмотрено»: получатель при открытии чата шлёт одно письмо со списком
-  // прочитанных msg_id (шифр групповым ключом).
-  async getGroupReadEmails(groupId) {
-    const msgs = await this.fetchEmails('local');
-    const reads = msgs.filter(m => (m.subject || '').startsWith('VaultGroupRead: ' + groupId));
-    const out = [];
-    for (const m of reads) {
-      try {
-        const body = await this.fetchEmailBody('local', m.uid, m.folder);
-        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
-      } catch (e) { /* тело не прочиталось — пропускаем */ }
-    }
-    return out;
-  }
+  // Квитанции чтения группы (stealth-письмо с пустой темой): получатель при
+  // открытии чата шлёт одно письмо со списком прочитанных msg_id (шифр
+  // групповым ключом). Классификация — по содержимому {read:1,...}.
   async sendGroupRead(groupId, encryptedContent) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    const failed = [];
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
-      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupRead: ' + g.id, body: encryptedContent });
+      try {
+        await this.sendEmail('local', { to: member.email, subject: '', body: encryptedContent });
+      } catch (e) {
+        console.error(`sendGroupRead: ${member.email} failed:`, e);
+        failed.push(member.email);
+      }
     }
+    if (failed.length) throw new Error('Read: SMTP failed for: ' + failed.join(', '));
     return { ok: true };
   }
   // Мета-обновление группы (аватар и т.п.): каждому участнику письмо
-  // VaultGroupMeta: <id> с зашифрованным групповым ключом payload {meta:1,...}.
+  // с ПУСТОЙ темой (stealth) с зашифрованным групповым ключом payload
+  // {meta:1,...}; классификация — по содержимому.
   async sendGroupMeta(groupId, encryptedContent) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    const failed = [];
     for (const member of g.members || []) {
       if (member.email === this.email) continue;
-      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupMeta: ' + g.id, body: encryptedContent });
-    }
-    return { ok: true };
-  }
-  // Письма мета-обновлений группы (VaultGroupMeta: <id>) — транспорт аватара,
-  // не сообщения. Возвращаем тела для расшифровки групповым ключом.
-  async getGroupMetaEmails(groupId) {
-    const msgs = await this.fetchEmails('local');
-    const meta = msgs.filter(m => (m.subject || '').startsWith('VaultGroupMeta: ' + groupId));
-    const out = [];
-    for (const m of meta) {
       try {
-        const body = await this.fetchEmailBody('local', m.uid, m.folder);
-        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
-      } catch (e) { /* тело не прочиталось — пропускаем */ }
+        await this.sendEmail('local', { to: member.email, subject: '', body: encryptedContent });
+      } catch (e) {
+        console.error(`sendGroupMeta: ${member.email} failed:`, e);
+        failed.push(member.email);
+      }
     }
-    return out;
+    if (failed.length) throw new Error('Meta: SMTP failed for: ' + failed.join(', '));
+    return { ok: true };
   }
 
   // --- Contacts (local: key_store peer keys + in-memory stubs) ---

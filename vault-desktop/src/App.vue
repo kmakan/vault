@@ -1903,131 +1903,83 @@ export default {
           }
         }
 
-        // Реакции группы: письма VaultGroupReact: <id> (транспорт, не сообщения).
-        const wireReactions = {};
-        // Правки группы: письма VaultGroupEdit: <id> (edit/delete сообщений).
-        const wireEdits = {};
-        // Квитанции чтения: msg_id -> {email участника: true} (метка «просмотрено»).
-        const wireAcks = {};
+        // STEALTH-ГРУППЫ (18.08): у групповых писем темы ПУСТЫЕ (как в 1:1),
+        // поэтому subject-фильтрации нет. getGroupMessages вернул ВСЕ письма,
+        // чей отправитель — участник группы; здесь — единый проход:
+        //   1) расшифровка групповым ключом (не расшифровалось = чужое
+        //      письмо/1:1/инвайт — криптография сама отфильтровала);
+        //   2) классификация по СОДЕРЖИМОМУ: реакция / правка / квитанция
+        //      чтения / meta (аватар) / сообщение (конверт или legacy).
+        const wireReactions = {}; // msg_id -> [{emoji, user, action}]
+        const wireEdits = {}; // msg_id -> [{text, action, date}]
+        const wireAcks = {}; // msg_id -> {email участника: true}
+        const decrypted = [];
+        let metaLatest = null; // {avatar, created_at} — последний по дате
         if (groupKey) {
-          try {
-            const reactRaw = await api.getGroupReactEmails(groupId);
-            for (const msg of reactRaw || []) {
-              if (!crypto.isEncrypted(msg.content)) continue;
-              try {
-                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                const obj = JSON.parse(plaintext);
-                if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
-                  (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
-                    emoji: obj.emoji,
-                    user: msg.sender_id,
-                    action: obj.action === 'remove' ? 'remove' : 'add',
-                  });
-                }
-              } catch (e) { /* не реакция или битое */ }
+          for (const msg of raw || []) {
+            if (!crypto.isEncrypted(msg.content)) continue; // не наше
+            let plaintext;
+            try {
+              plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+            } catch (e) {
+              continue; // расшифровка не прошла — письмо не из этой группы
             }
-          } catch (e) { /* нет react-писем — не критично */ }
-          if (stale()) return;
-          try {
-            const editRaw = await api.getGroupEditEmails(groupId);
-            for (const msg of editRaw || []) {
-              if (!crypto.isEncrypted(msg.content)) continue;
-              try {
-                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                const obj = JSON.parse(plaintext);
-                if (obj && obj.edit === 1 && obj.msg_id) {
-                  (wireEdits[obj.msg_id] = wireEdits[obj.msg_id] || []).push({
-                    text: obj.text || '',
-                    action: obj.action === 'delete' ? 'delete' : 'edit',
-                    date: msg.created_at || 0,
-                  });
-                }
-              } catch (e) { /* не правка или битое */ }
+            let obj = null;
+            try { obj = JSON.parse(plaintext); } catch { /* не JSON */ }
+            if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
+              (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
+                emoji: obj.emoji,
+                user: msg.sender_id,
+                action: obj.action === 'remove' ? 'remove' : 'add',
+              });
+              continue; // реакция не рендерится как сообщение
             }
-          } catch (e) { /* нет edit-писем — не критично */ }
-          if (stale()) return;
-          // Квитанции чтения группы: письма VaultGroupRead: <id> — участники
-          // открыли наши сообщения; накапливаем для метки «просмотрено».
-          try {
-            const readRaw = await api.getGroupReadEmails(groupId);
-            for (const msg of readRaw || []) {
-              if (!crypto.isEncrypted(msg.content)) continue;
-              try {
-                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                const obj = JSON.parse(plaintext);
-                if (obj && obj.read === 1 && Array.isArray(obj.msg_ids)) {
-                  for (const rid of obj.msg_ids) {
-                    (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
-                  }
-                }
-              } catch (e) { /* не квитанция или битое */ }
+            if (obj && obj.edit === 1 && obj.msg_id) {
+              (wireEdits[obj.msg_id] = wireEdits[obj.msg_id] || []).push({
+                text: obj.text || '',
+                action: obj.action === 'delete' ? 'delete' : 'edit',
+                date: msg.created_at || 0,
+              });
+              continue; // правка не рендерится как сообщение
             }
-          } catch (e) { /* нет read-писем — не критично */ }
-          if (stale()) return;
-        }
-
-        // Мета-обновления группы (аватар): письма VaultGroupMeta: <id>.
-        // Берём последнее по дате — оно авторитетно.
-        if (groupKey) {
-          try {
-            const metaRaw = await api.getGroupMetaEmails(groupId);
-            let latest = null;
-            for (const msg of metaRaw || []) {
-              if (!crypto.isEncrypted(msg.content)) continue;
-              try {
-                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                const obj = JSON.parse(plaintext);
-                if (obj && obj.meta === 1 && obj.avatar) {
-                  if (!latest || new Date(msg.created_at) >= new Date(latest.created_at)) {
-                    latest = { avatar: obj.avatar, created_at: msg.created_at };
-                  }
-                }
-              } catch (e) { /* не meta или битое */ }
-            }
-            if (latest && latest.avatar !== localStorage.getItem('vault-group-avatar-' + groupId)) {
-              localStorage.setItem('vault-group-avatar-' + groupId, latest.avatar);
-              this.groupAvatars[groupId] = latest.avatar;
-            }
-          } catch (e) { /* нет meta-писем — не критично */ }
-          if (stale()) return;
-        }
-
-        if (groupKey) {
-          // Decrypt messages with group key
-          const decrypted = await Promise.all(
-            raw.map(async (msg) => {
-              const { text, attachment } = this.parseMessageContent(msg.content);
-              const base = {
-                ...msg,
-                content: text,
-                from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
-                time: new Date(msg.created_at).toLocaleTimeString(),
-                status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
-                attachment,
-              };
-              if (crypto.isEncrypted(msg.content)) {
-                try {
-                  const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
-                  // Конверт {vault:1,id,text,name,avatar} — имя/аватар
-                  // отправителя и стабильный id (для реакций).
-                  const env = this.parseEnvelope(plaintext);
-                  if (env) {
-                    const parsed = this.parseMessageContent(env.text);
-                    if ((env.name || env.avatar) && msg.sender_id) {
-                      api.saveProfile(msg.sender_id, env.name, env.avatar);
-                    }
-                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true };
-                  }
-                  const parsed = this.parseMessageContent(plaintext);
-                  return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
-                } catch {
-                  return { ...base, encrypted: false };
-                }
+            if (obj && obj.read === 1 && Array.isArray(obj.msg_ids)) {
+              for (const rid of obj.msg_ids) {
+                (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
               }
-              return { ...base, encrypted: false };
-            })
-          );
+              continue; // квитанция не рендерится как сообщение
+            }
+            if (obj && obj.meta === 1 && obj.avatar) {
+              if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
+                metaLatest = { avatar: obj.avatar, created_at: msg.created_at };
+              }
+              continue; // meta (аватар) не рендерится как сообщение
+            }
+            // Сообщение: конверт {vault:1,id,text,name,avatar} или legacy-текст.
+            const env = this.parseEnvelope(plaintext);
+            if (env) {
+              if ((env.name || env.avatar) && msg.sender_id) {
+                api.saveProfile(msg.sender_id, env.name, env.avatar);
+              }
+              plaintext = env.text; // содержимое конверта
+            }
+            const { text, attachment } = this.parseMessageContent(plaintext);
+            decrypted.push({
+              ...msg,
+              content: text,
+              attachment,
+              from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+              time: new Date(msg.created_at).toLocaleTimeString(),
+              status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+              encrypted: true,
+              ...(env && env.id ? { id: env.id } : {}),
+            });
+          }
           if (stale()) return;
+          // Мета-обновления группы (аватар): последнее по дате — авторитетно.
+          if (metaLatest && metaLatest.avatar !== localStorage.getItem('vault-group-avatar-' + groupId)) {
+            localStorage.setItem('vault-group-avatar-' + groupId, metaLatest.avatar);
+            this.groupAvatars[groupId] = metaLatest.avatar;
+          }
           this.loadProfiles();
           // Дедупликация по id конверта: sendGroupMessage шлёт каждому
           // участнику отдельное письмо, поэтому в Sent отправителя лежит
@@ -2040,7 +1992,7 @@ export default {
           }
           const list = [...dedup.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
           // Статусы наших сообщений: письмо уже в ящике = доставлено;
-          // квитанции VaultGroupRead от участников = просмотрено.
+          // квитанции {read:1} от участников = просмотрено.
           for (const m of list) {
             if (m.from !== 'me') continue;
             const acks = wireAcks[m.id];
@@ -2089,17 +2041,26 @@ export default {
       const emails = this.emails || [];
       for (const g of this.groups) {
         if (!g || !g.id) continue;
-        // Последнее по дате meta-письмо этой группы из уже загруженного списка.
+        // STEALTH (18.08): тема пустая, поэтому meta-письмо ищем по
+        // отправителю — участнику группы (как getGroupMessages).
+        const members = (g.members || [])
+          .map(m => String(m.email || '').toLowerCase())
+          .filter(Boolean);
+        // Последнее по дате письмо от участника этой группы.
         let latest = null;
         for (const m of emails) {
-          if ((m.subject || '').startsWith('VaultGroupMeta: ' + g.id)) {
-            if (!latest || new Date(m.date) >= new Date(latest.date)) latest = m;
-          }
+          const from = String(m.from || '').toLowerCase();
+          if (!members.some(e => from.includes(e))) continue;
+          if (!latest || new Date(m.date) >= new Date(latest.date)) latest = m;
         }
         if (!latest) continue;
         // Уже применяли это письмо ранее — пропускаем (без повторного фетча тела).
+        // ВАЖНО: uid уникален только В ПРЕДЕЛАХ папки, а письма групп живут в
+        // разных папках (INBOX/Sent/Junk) — ключ включает folder, иначе
+        // «применено» фиксировалось бы по совпавшему uid из другой папки.
         const appliedKey = 'vault-group-meta-applied-' + g.id;
-        if (localStorage.getItem(appliedKey) === String(latest.uid)) continue;
+        const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
+        if (localStorage.getItem(appliedKey) === appliedSig) continue;
         let groupKey = this.groupKeys[g.id];
         if (!groupKey && this.cryptoReady) {
           try {
@@ -2121,7 +2082,7 @@ export default {
               localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
               this.groupAvatars[g.id] = obj.avatar;
             }
-            localStorage.setItem(appliedKey, String(latest.uid));
+            localStorage.setItem(appliedKey, appliedSig);
           }
         } catch (e) { /* не meta или битое — не критично */ }
       }
