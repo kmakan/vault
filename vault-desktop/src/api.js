@@ -180,6 +180,12 @@ export class ApiClient {
     // отправитель — участник группы; классификация по содержимому после
     // расшифровки групповым ключом происходит в loadGroupMessages
     // (расшифровка не пройдёт для 1:1-писем/чужих — криптография фильтрует).
+    //
+    // ВАЖНО (регрессия 18.08, 124ac4d): тела фетчим БАТЧЕМ по папкам
+    // (fetchEmailBodies — один round-trip на папку), а НЕ по одному письму:
+    // при фильтре «все письма участников» сюда попадают и 1:1-письма
+    // (десятки!), и по-писемный фетч вызывал IMAP-троттлинг Gmail → фетчи
+    // тихо падали и групповой чат не загружался вовсе.
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
     const memberEmails = (g.members || [])
@@ -190,16 +196,29 @@ export class ApiClient {
       const from = String(m.from || '').toLowerCase();
       return memberEmails.some(e => from.includes(e));
     });
+    // Группируем по папке → по одному батч-фетчу тел на папку.
+    const byFolder = {};
+    for (const m of mine) {
+      const f = m.folder || 'INBOX';
+      (byFolder[f] = byFolder[f] || []).push(m);
+    }
+    const bodiesByFolder = {};
+    for (const [folder, list] of Object.entries(byFolder)) {
+      const uids = list.map(m => m.uid || m.id);
+      try {
+        bodiesByFolder[folder] = await this.fetchEmailBodies(folder, uids);
+      } catch (e) {
+        console.log('[getGroupMessages] batch failed folder=' + folder + ' n=' + uids.length + ' err=' + (e && e.message || e));
+      }
+    }
     const out = [];
     for (const m of mine) {
-      // Одно непрочитавшееся тело (пустой ответ IMAP при рассинхроне) НЕ
-      // должно ронять весь групповой чат: без try/catch падал getGroupMessages
-      // целиком и loadGroupMessages обнулял messages (регрессия демо 17.08 —
-      // группа «Три» показывала пустой чат).
-      try {
-        const body = await this.fetchEmailBody('local', m.uid, m.folder);
-        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
-      } catch (e) { /* тело не прочиталось — перефетчится в следующий поллинг */ }
+      const folder = m.folder || 'INBOX';
+      const body = bodiesByFolder[folder] && bodiesByFolder[folder][String(m.uid || m.id)];
+      // Пропускаем письма без тела (батч упал/тело пустое) — они перефетчатся
+      // в следующий поллинг; одно плохое письмо не роняет весь чат.
+      if (!body) continue;
+      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
     }
     // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
