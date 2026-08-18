@@ -32,6 +32,13 @@
             >
               {{ t('cipher_decrypt_tab') }}
             </button>
+            <button 
+              class="tab-btn" 
+              :class="{ active: activeTab === 'file' }"
+              @click="activeTab = 'file'"
+            >
+              {{ t('cipher_file_tab') || '📁 Файл' }}
+            </button>
           </div>
 
           <div v-show="activeTab === 'encrypt'" class="tab-content">
@@ -141,6 +148,50 @@
               {{ decryptError }}
             </div>
           </div>
+
+          <div v-show="activeTab === 'file'" class="tab-content">
+            <p class="file-tab-hint">{{ t('cipher_file_hint') }}</p>
+            <div class="form-group">
+              <label>{{ t('cipher_contact') }}</label>
+              <select v-model="selectedContact" class="form-control">
+                <option value="" disabled>{{ t('cipher_contact') }}...</option>
+                <option 
+                  v-for="([email, key], index) in Object.entries(peerKeys)" 
+                  :key="'file-' + index" 
+                  :value="email"
+                >
+                  {{ (contacts.find(c => c.email === email) || {}).name || email }}
+                </option>
+              </select>
+            </div>
+
+            <!-- Шифрование файла -->
+            <div class="file-zone">
+              <div class="file-zone-title">{{ t('cipher_file_encrypt_title') }}</div>
+              <input type="file" ref="encryptFileInput" class="file-input" @change="onFileEncryptSelect" />
+              <div v-if="fileEncrypting" class="file-status">⏳ {{ t('cipher_file_working') }}…</div>
+              <div v-if="fileEncryptName" class="file-status">
+                ✅ {{ t('cipher_file_encrypted') }}: {{ fileEncryptName }}
+                ({{ formatBytes(fileEncryptSize) }})
+              </div>
+              <button
+                v-if="fileCiphertext"
+                @click="downloadVaultFile"
+                class="btn-primary"
+              >
+                {{ t('cipher_file_download_vault') }}
+              </button>
+            </div>
+
+            <!-- Расшифровка файла -->
+            <div class="file-zone">
+              <div class="file-zone-title">{{ t('cipher_file_decrypt_title') }}</div>
+              <input type="file" ref="decryptFileInput" class="file-input" accept=".vault,.txt,text/plain" @change="onFileDecryptSelect" />
+              <div v-if="fileDecrypting" class="file-status">⏳ {{ t('cipher_file_working') }}…</div>
+              <div v-if="fileDecryptResult" class="file-status">✅ {{ fileDecryptResult }}</div>
+            </div>
+            <div v-if="fileError" class="error-message">{{ fileError }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -150,6 +201,7 @@
 <script>
 import crypto from '../crypto.js';
 import { useI18n } from '../i18n.js';
+import { downloadBase64 } from '../chatExport.js';
 
 export default {
   name: 'CipherTool',
@@ -168,6 +220,14 @@ export default {
       selectedContact: '',
       cryptoReady: false,
       copiedText: '',
+      // Файлы: шифрование в .vault / восстановление из .vault
+      fileEncrypting: false,
+      fileEncryptName: '',
+      fileEncryptSize: 0,
+      fileCiphertext: '',
+      fileDecrypting: false,
+      fileDecryptResult: '',
+      fileError: '',
     };
   },
   props: {
@@ -230,6 +290,102 @@ export default {
         this.decryptError = this.t('cipher_error');
         this.decryptedText = '';
         console.error('Decryption failed:', error);
+      }
+    },
+    // --- Файлы через шифратор ---
+    // Прочитать File как base64 (data URL без префикса).
+    readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(String(e.target.result).split(',')[1] || '');
+        reader.onerror = (e) => reject(e);
+        reader.readAsDataURL(file);
+      });
+    },
+    formatBytes(bytes) {
+      if (!bytes) return '0 B';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    },
+    // Шифровать ФАЙЛ для выбранного контакта: результат — .vault-файл
+    // (текст шифротекста), который можно передать ЛЮБЫМ транспортом.
+    // Получатель открывает его во вкладке «Файл» и восстанавливает.
+    async onFileEncryptSelect(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      this.fileError = '';
+      this.fileCiphertext = '';
+      this.fileEncryptName = '';
+      if (!this.selectedContact || !this.cryptoReady) {
+        this.fileError = this.t('cipher_file_no_contact') || 'Сначала выберите контакт';
+        return;
+      }
+      // Ограничение ~20MB: шифротекст в base64-файле, чтобы .vault можно
+      // было передать даже почтой (лимит вложений 25MB у Gmail).
+      if (file.size > 20 * 1024 * 1024) {
+        this.fileError = this.t('cipher_file_too_large') || 'Файл слишком большой (макс 20MB)';
+        return;
+      }
+      this.fileEncrypting = true;
+      try {
+        const base64 = await this.readFileAsBase64(file);
+        const payload = JSON.stringify({
+          vault_file: 1,
+          name: file.name,
+          type: file.type || 'application/octet-stream',
+          size: file.size,
+          data: base64,
+        });
+        crypto.setPeerPublicKey(this.peerKeys[this.selectedContact]);
+        this.fileCiphertext = await crypto.encryptVault(payload);
+        this.fileEncryptName = file.name;
+        this.fileEncryptSize = file.size;
+      } catch (err) {
+        this.fileError = this.t('cipher_file_encrypt_error') || 'Не удалось зашифровать файл';
+        console.error('File encrypt failed:', err);
+      } finally {
+        this.fileEncrypting = false;
+        if (this.$refs.encryptFileInput) this.$refs.encryptFileInput.value = '';
+      }
+    },
+    // Скачать зашифрованный файл (.vault) — текст шифротекста.
+    downloadVaultFile() {
+      if (!this.fileCiphertext) return;
+      const name = (this.fileEncryptName || 'file') + '.vault';
+      downloadBase64(this.fileCiphertext, name, 'text/plain');
+    },
+    // Расшифровать .vault-файл: восстанавливаем оригинал и скачиваем.
+    async onFileDecryptSelect(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      this.fileError = '';
+      this.fileDecryptResult = '';
+      if (!this.selectedContact || !this.cryptoReady) {
+        this.fileError = this.t('cipher_file_no_contact') || 'Сначала выберите контакт';
+        return;
+      }
+      this.fileDecrypting = true;
+      try {
+        const text = await file.text();
+        crypto.setPeerPublicKey(this.peerKeys[this.selectedContact]);
+        const plaintext = await crypto.decryptVault(text.trim());
+        let obj = null;
+        try { obj = JSON.parse(plaintext); } catch { /* не JSON */ }
+        if (!obj || obj.vault_file !== 1 || !obj.data) {
+          this.fileError = this.t('cipher_file_not_vault') || 'Это не зашифрованный файл Vault';
+          return;
+        }
+        downloadBase64(obj.data, obj.name || 'decrypted.bin', obj.type || 'application/octet-stream');
+        this.fileDecryptResult =
+          (this.t('cipher_file_recovered') || 'Файл расшифрован и скачан') +
+          `: ${obj.name} (${this.formatBytes(obj.size || 0)})`;
+      } catch (err) {
+        this.fileError = this.t('cipher_error');
+        console.error('File decrypt failed:', err);
+      } finally {
+        this.fileDecrypting = false;
+        if (this.$refs.decryptFileInput) this.$refs.decryptFileInput.value = '';
       }
     },
     async copyCiphertext() {
@@ -509,6 +665,54 @@ export default {
   color: #fca5a5;
   border-radius: 6px;
   font-size: 14px;
+}
+
+.file-tab-hint {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.file-zone {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--bg-hover);
+  border-radius: 8px;
+}
+
+.file-zone-title {
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.file-input {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.file-input::-webkit-file-upload-button {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-right: 10px;
+}
+
+.file-status {
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-word;
 }
 
 @keyframes fade-in {

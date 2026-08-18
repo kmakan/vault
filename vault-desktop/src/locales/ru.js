@@ -170,6 +170,8 @@ export default {
   avatar_title: 'Фото профиля',
   avatar_remove: 'Удалить',
   avatar_too_large: 'Изображение должно быть менее 500KB',
+  file_too_large: 'Файл не пройдёт через почту: лимит вложений вашего провайдера',
+  file_too_large_hint: ' Файл не отправлен.',
   avatar_upload: 'Загрузить фото',
   typing: 'печатает...',
 
@@ -190,6 +192,18 @@ export default {
   cipher_no_contacts_hint: 'Сначала обменяйтесь ключами (🔑 Ключи)',
   cipher_error: 'Не удалось расшифровать — проверьте контакт и шифротекст',
   cipher_open_keys: 'Открыть Ключи',
+  cipher_file_tab: 'Файл',
+  cipher_file_hint: 'Зашифруйте файл целиком и передайте .vault любым способом — получатель восстановит его здесь.',
+  cipher_file_encrypt_title: 'Зашифровать файл',
+  cipher_file_decrypt_title: 'Расшифровать .vault',
+  cipher_file_working: 'Работаю',
+  cipher_file_encrypted: 'Зашифровано',
+  cipher_file_download_vault: 'Скачать .vault',
+  cipher_file_no_contact: 'Сначала выберите контакт',
+  cipher_file_too_large: 'Файл слишком большой (макс 20MB)',
+  cipher_file_encrypt_error: 'Не удалось зашифровать файл',
+  cipher_file_not_vault: 'Это не зашифрованный файл Vault',
+  cipher_file_recovered: 'Файл расшифрован и скачан',
 
   // Группы: инвайт с согласием
   invite_title: 'Приглашение в группу',

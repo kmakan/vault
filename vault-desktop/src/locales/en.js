@@ -170,6 +170,8 @@ export default {
   avatar_title: 'Profile Photo',
   avatar_remove: 'Remove',
   avatar_too_large: 'Image must be under 500KB',
+  file_too_large: 'File will not pass through email: your provider attachment limit is',
+  file_too_large_hint: ' File was not sent.',
   avatar_upload: 'Upload Photo',
   typing: 'typing...',
 
@@ -190,6 +192,18 @@ export default {
   cipher_no_contacts_hint: 'Exchange keys first (🔑 Keys)',
   cipher_error: 'Decrypt failed — check contact and ciphertext',
   cipher_open_keys: 'Open Keys',
+  cipher_file_tab: 'File',
+  cipher_file_hint: 'Encrypt a whole file and pass the .vault anywhere — the recipient restores it here.',
+  cipher_file_encrypt_title: 'Encrypt file',
+  cipher_file_decrypt_title: 'Decrypt .vault',
+  cipher_file_working: 'Working',
+  cipher_file_encrypted: 'Encrypted',
+  cipher_file_download_vault: 'Download .vault',
+  cipher_file_no_contact: 'Select a contact first',
+  cipher_file_too_large: 'File too large (max 20MB)',
+  cipher_file_encrypt_error: 'Failed to encrypt file',
+  cipher_file_not_vault: 'This is not a Vault-encrypted file',
+  cipher_file_recovered: 'File decrypted and downloaded',
 
   // Groups: invite with consent
   invite_title: 'Group invite',

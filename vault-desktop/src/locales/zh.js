@@ -170,6 +170,8 @@ export default {
   avatar_title: '个人头像',
   avatar_remove: '移除',
   avatar_too_large: '图片大小不能超过500KB',
+  file_too_large: '文件无法通过邮件发送：您的邮件服务商附件限制为',
+  file_too_large_hint: ' 文件未发送。',
   avatar_upload: '上传头像',
   typing: '正在输入...',
 
@@ -190,6 +192,18 @@ export default {
   cipher_no_contacts_hint: '先交换密钥（🔑 密钥）',
   cipher_error: '解密失败 — 请检查联系人和密文',
   cipher_open_keys: '打开密钥',
+  cipher_file_tab: '文件',
+  cipher_file_hint: '加密整个文件，将 .vault 通过任何方式传递 — 接收方在这里恢复。',
+  cipher_file_encrypt_title: '加密文件',
+  cipher_file_decrypt_title: '解密 .vault',
+  cipher_file_working: '正在处理',
+  cipher_file_encrypted: '已加密',
+  cipher_file_download_vault: '下载 .vault',
+  cipher_file_no_contact: '请先选择联系人',
+  cipher_file_too_large: '文件太大（最大20MB）',
+  cipher_file_encrypt_error: '文件加密失败',
+  cipher_file_not_vault: '这不是Vault加密的文件',
+  cipher_file_recovered: '文件已解密并下载',
 
   // 群组：邀请并征得同意
   invite_title: '群组邀请',

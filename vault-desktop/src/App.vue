@@ -634,7 +634,7 @@ import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile, downloadBase64 } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
-import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail } from './mailProviders.js';
+import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 
 export default {
   name: 'ChatApp',
@@ -2523,6 +2523,19 @@ export default {
 
       for (const file of files) {
         try {
+          // Лимит вложений провайдера (Gmail 25MB, Zoho 25MB, ...): письмо с
+          // base64-телом ~на 33% больше файла, поэтому сравниваем с 70% от
+          // лимита — предупреждаем ДО отправки, пока провайдер не отклонил.
+          const limitMb = getAttachmentLimitMb(this.email);
+          const limitBytes = Math.floor(limitMb * 1024 * 1024 * 0.7);
+          if (file.size > limitBytes) {
+            alert(
+              (this.t('file_too_large') || 'Файл не пройдёт через почту: лимит вложений вашего провайдера') +
+              ` ~${limitMb} МБ, а «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ.` +
+              (this.t('file_too_large_hint') || ' Файл не отправлен.')
+            );
+            continue; // пропускаем файл, остальные отправляем
+          }
           const reader = new FileReader();
           reader.onload = async (e) => {
             const base64 = e.target.result.split(',')[1];

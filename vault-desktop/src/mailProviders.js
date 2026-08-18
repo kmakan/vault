@@ -5,6 +5,11 @@
 // Порты/хосты проверены: Gmail (дефолт приложения), Zoho (тест kmakan,
 // 16.08.2026 — imap.zoho.com:993 + smtp.zoho.com:587 STARTTLS).
 // Остальные — стандартные публичные значения провайдеров.
+//
+// max_attachment_mb — консервативный лимит размера ВЛОЖЕНИЯ (не письма):
+// письмо с base64-телом ~на 33% больше файла, поэтому проверка в
+// handleFileSelect сравнивает file.size с ~70% от этого лимита, чтобы
+// предупредить ДО отправки, пока провайдер ещё не отклонил письмо.
 
 export const MAIL_PROVIDERS = [
   {
@@ -15,6 +20,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.gmail.com',
     smtp_port: 587,
+    max_attachment_mb: 25,
     hint: 'Нужен «Пароль приложения» (Google Аккаунт → Безопасность → 2FA → Пароли приложений).',
   },
   {
@@ -25,6 +31,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.zoho.com',
     smtp_port: 587,
+    max_attachment_mb: 25,
     hint: 'Для EU/IN-аккаунтов замените домен: imap.zoho.eu, smtp.zoho.eu (или .in).',
   },
   {
@@ -35,6 +42,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.yandex.com',
     smtp_port: 465,
+    max_attachment_mb: 30,
     hint: 'Включите «Пароли приложений» в настройках Яндекс ID и используйте его вместо пароля.',
   },
   {
@@ -45,6 +53,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.mail.ru',
     smtp_port: 465,
+    max_attachment_mb: 30,
     hint: 'Нужен «Пароль для внешних приложений» (Mail.ru → Безопасность → Пароли для внешних приложений).',
   },
   {
@@ -55,6 +64,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.office365.com',
     smtp_port: 587,
+    max_attachment_mb: 20,
     hint: '',
   },
   {
@@ -65,6 +75,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.mail.me.com',
     smtp_port: 587,
+    max_attachment_mb: 20,
     hint: 'Нужен пароль приложения (appleid.apple.com → Безопасность).',
   },
   {
@@ -75,6 +86,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.gmx.net',
     smtp_port: 587,
+    max_attachment_mb: 50,
     hint: '',
   },
   {
@@ -85,6 +97,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.web.de',
     smtp_port: 587,
+    max_attachment_mb: 50,
     hint: '',
   },
   {
@@ -95,6 +108,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.fastmail.com',
     smtp_port: 587,
+    max_attachment_mb: 70,
     hint: 'Используйте App Password (Settings → Privacy & Security).',
   },
   {
@@ -105,6 +119,7 @@ export const MAIL_PROVIDERS = [
     imap_port: 993,
     smtp_server: 'smtp.rambler.ru',
     smtp_port: 465,
+    max_attachment_mb: 25,
     hint: '',
   },
 ];
@@ -133,4 +148,13 @@ export function detectProviderByEmail(email) {
   if (!domain) return '';
   const p = MAIL_PROVIDERS.find(pr => (pr.domains || []).includes(domain));
   return p ? p.id : '';
+}
+
+// Консервативный лимит вложений (МБ) для текущего email: по домену из
+// каталога; неизвестный/кастомный домен — дефолт 25 МБ (как у Gmail).
+// ВАЖНО: это лимит размера ФАЙЛА, а не письма (base64-тело ~+33%).
+export function getAttachmentLimitMb(email) {
+  const id = detectProviderByEmail(email);
+  const p = id ? findProvider(id) : null;
+  return (p && p.max_attachment_mb) || 25;
 }
