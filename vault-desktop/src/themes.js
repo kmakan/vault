@@ -4,6 +4,7 @@ export const themes = {
     name: 'Dark',
     icon: '🌙',
     vars: {
+      'color-scheme': 'dark',
       '--bg-primary': '#0a0a1a',
       '--bg-secondary': '#12122a',
       '--bg-tertiary': '#1a1a3e',
@@ -23,6 +24,7 @@ export const themes = {
     name: 'Light',
     icon: '☀️',
     vars: {
+      'color-scheme': 'light',
       '--bg-primary': '#ffffff',
       '--bg-secondary': '#f8fafc',
       '--bg-tertiary': '#f1f5f9',
@@ -42,6 +44,7 @@ export const themes = {
     name: 'Dracula',
     icon: '🧛',
     vars: {
+      'color-scheme': 'dark',
       '--bg-primary': '#282a36',
       '--bg-secondary': '#21222c',
       '--bg-tertiary': '#343746',
@@ -63,6 +66,7 @@ export const themes = {
     name: 'Kanagawa',
     icon: '🏯',
     vars: {
+      'color-scheme': 'dark',
       '--bg-primary': '#1f1f28',
       '--bg-secondary': '#16161d',
       '--bg-tertiary': '#2a2a37',
@@ -84,6 +88,7 @@ export const themes = {
     name: 'Nord',
     icon: '❄️',
     vars: {
+      'color-scheme': 'dark',
       '--bg-primary': '#2e3440',
       '--bg-secondary': '#3b4252',
       '--bg-tertiary': '#434c5e',
@@ -105,6 +110,7 @@ export const themes = {
     name: 'Solarized',
     icon: '🌅',
     vars: {
+      'color-scheme': 'dark',
       '--bg-primary': '#002b36',
       '--bg-secondary': '#073642',
       '--bg-tertiary': '#0a4050',
@@ -126,6 +132,7 @@ export const themes = {
     name: 'Vendetta',
     icon: '🎭',
     vars: {
+      'color-scheme': 'dark',
       // Чёрный антрацит — как флаг анархии
       '--bg-primary': '#0a0a0a',
       '--bg-secondary': '#141414',

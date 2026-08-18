@@ -109,13 +109,28 @@ impl EmailClient {
             .build()
             .context("Failed to create TLS connector")?;
 
-        let client = imap::connect(
-            (self.config.imap_server.as_str(), self.config.imap_port),
-            &self.config.imap_server,
-            &tls,
-        )
+        // Ручное соединение вместо imap::connect(): imap::connect() внутри себя
+        // делает TcpStream::connect + TLS handshake, но НЕ ставит таймаут на
+        // чтение/запись. BufStream-обёртка imap-крейта читает блокирующим
+        // read() — при зависшем/заторможенном сервере (троттлинг Gmail,
+        // рассинхрон сессии) вызов висит ВЕЧНО, окно перестаёт отвечать на
+        // всё (это и была «поломка» 18.08). Таймаут read/write 30 с даёт
+        // Err, который существующий reconnect-путь уже умеет обрабатывать.
+        let tcp: TcpStream = TcpStream::connect((
+            self.config.imap_server.as_str(),
+            self.config.imap_port,
+        ))
         .context("Failed to connect to IMAP server")?;
+        let timeout = std::time::Duration::from_secs(30);
+        tcp.set_read_timeout(Some(timeout))
+            .context("Failed to set read timeout")?;
+        tcp.set_write_timeout(Some(timeout))
+            .context("Failed to set write timeout")?;
+        let ssl_stream = tls
+            .connect(&self.config.imap_server, tcp)
+            .context("Failed TLS handshake")?;
 
+        let client = imap::Client::new(ssl_stream);
         let session = client
             .login(&self.config.email, &self.config.password)
             .map_err(|e| anyhow::anyhow!("IMAP login failed: {}", e.0))?;

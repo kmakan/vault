@@ -53,8 +53,17 @@ const props = defineProps({
 
 // Resolve avatar: prop > localStorage > API
 const resolvedAvatar = ref('')
+// Токен загрузки: при смене email/avatarUrl (переход между чатами) старый
+// async-запрос не должен перетереть новый результат (гонка). Каждый вызов
+// loadAvatar инкрементирует seq; результат применяется только если seq
+// актуален на момент завершения.
+let avatarSeq = 0
 
 async function loadAvatar() {
+  // Сбрасываем сразу: при переходе на контакт БЕЗ аватара в шапке иначе
+  // остаётся аватар предыдущего чата (resolvedAvatar от старого email).
+  resolvedAvatar.value = ''
+  const seq = ++avatarSeq
   if (props.avatarUrl) {
     resolvedAvatar.value = props.avatarUrl
     return
@@ -68,6 +77,7 @@ async function loadAvatar() {
   // Fetch from server
   try {
     const url = await api.getAvatar(props.email)
+    if (seq !== avatarSeq) return // устаревший запрос — email уже сменился
     if (url) {
       resolvedAvatar.value = url
       // Cache locally

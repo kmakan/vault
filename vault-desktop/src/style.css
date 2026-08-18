@@ -12,6 +12,28 @@ body {
   margin: 0;
 }
 
+/* color-scheme говорит WebKitGTK рендерить нативные контролы (выпадающие
+   списки <select>, скроллбары) в тёмной/светлой схеме. Без него попап
+   селекта всегда светлый (GTK-тема), а текст опций наследует светлый
+   --text-primary → светлое на светлом, нечитаемо. applyTheme()
+   переопределяет свойство на :root при смене темы. */
+:root {
+  color-scheme: dark;
+}
+
+/* Выпадающие списки: явный фон/текст опций по переменным темы. В WebKitGTK
+   option внутри попапа не всегда наследует CSS-переменные — дублируем
+   цвета напрямую, чтобы текст был виден в любой из 7 тем. */
+select {
+  background-color: var(--bg-secondary, #12122a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+option {
+  background-color: var(--bg-secondary, #12122a);
+  color: var(--text-primary, #f1f5f9);
+}
+
 #app {
   width: 100%;
   height: 100%;

@@ -243,6 +243,15 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send edit email');
     return { ok: true };
   }
+  // Квитанция «просмотрено» в 1-на-1: зашифрованное письмо с ПУСТОЙ темой
+  // (stealth). Тело — encryptVault(JSON {read:1, msg_ids:[...]}); отправитель
+  // классифицирует по содержимому как квитанцию чтения и ставит синий кружок.
+  async sendReadReceipt(peerEmail, encryptedContent) {
+    const subject = '';
+    const res = await this.sendEmail('local', { to: peerEmail, subject, body: encryptedContent });
+    if (!res || !res.ok) throw new Error('Failed to send read receipt');
+    return { ok: true };
+  }
   // Редактирование/удаление в группе: каждому участнику (кроме себя)
   // письмо VaultGroupEdit: <id> с шифром групповым ключом.
   async sendGroupEdit(groupId, encryptedContent) {
@@ -267,6 +276,30 @@ export class ApiClient {
       } catch (e) { /* тело не прочиталось — пропускаем */ }
     }
     return out;
+  }
+  // Квитанции чтения группы (VaultGroupRead: <id>) — транспорт метки
+  // «просмотрено»: получатель при открытии чата шлёт одно письмо со списком
+  // прочитанных msg_id (шифр групповым ключом).
+  async getGroupReadEmails(groupId) {
+    const msgs = await this.fetchEmails('local');
+    const reads = msgs.filter(m => (m.subject || '').startsWith('VaultGroupRead: ' + groupId));
+    const out = [];
+    for (const m of reads) {
+      try {
+        const body = await this.fetchEmailBody('local', m.uid, m.folder);
+        out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date) });
+      } catch (e) { /* тело не прочиталось — пропускаем */ }
+    }
+    return out;
+  }
+  async sendGroupRead(groupId, encryptedContent) {
+    const g = await invoke('groups_get', { groupId });
+    if (!g) throw new Error('Group not found');
+    for (const member of g.members || []) {
+      if (member.email === this.email) continue;
+      await this.sendEmail('local', { to: member.email, subject: 'VaultGroupRead: ' + g.id, body: encryptedContent });
+    }
+    return { ok: true };
   }
   // Мета-обновление группы (аватар и т.п.): каждому участнику письмо
   // VaultGroupMeta: <id> с зашифрованным групповым ключом payload {meta:1,...}.

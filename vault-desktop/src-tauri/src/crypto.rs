@@ -305,8 +305,18 @@ pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<S
     let nonce_bytes: [u8; NONCE_LEN] = rand::random();
     let nonce = XNonce::from_slice(&nonce_bytes);
 
+    use chacha20poly1305::aead::Payload;
+    // Стелс-метка: аутентифицируем групповые письма AAD="VAULT" — тот же
+    // маркер, что у 1-на-1 (encrypt_vault_cmd). Раньше групповые письма шли
+    // БЕЗ AAD и определялись только по видимой теме `VaultGroup: <id>` —
+    // не стелс и не надёжно. С меткой приём проверяет «это письмо Vault»
+    // криптографически (Poly1305), как и в 1-на-1.
+    let payload = Payload {
+        msg: plaintext.as_bytes(),
+        aad: b"VAULT",
+    };
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(nonce, payload)
         .map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))?;
 
     let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
@@ -346,9 +356,16 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
     let cipher = XChaCha20Poly1305::new((&key_arr).into());
     let nonce = XNonce::from_slice(nonce_bytes);
 
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext_bytes)
-        .map_err(|_| anyhow::anyhow!("Decryption failed (wrong key or corrupted data)"))?;
+    use chacha20poly1305::aead::Payload;
+    // Сначала пробуем формат со стелс-меткой (AAD="VAULT", текущий); при
+    // неудаче — legacy-формат БЕЗ AAD, чтобы групповые письма, зашифрованные
+    // до введения метки, продолжали расшифровываться.
+    let plaintext = match cipher.decrypt(nonce, Payload { msg: ciphertext_bytes, aad: b"VAULT" }) {
+        Ok(pt) => pt,
+        Err(_) => cipher
+            .decrypt(nonce, ciphertext_bytes)
+            .map_err(|_| anyhow::anyhow!("Decryption failed (wrong key or corrupted data)"))?,
+    };
 
     String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
 }
@@ -413,5 +430,34 @@ mod tests {
         let encrypted = encrypt_symmetric_cmd("secret", &key1).unwrap();
         let result = decrypt_symmetric_cmd(&encrypted, &key2);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_symmetric_vault_aad_roundtrip() {
+        // Новый формат несёт стелс-метку AAD="VAULT" и расшифровывается ею.
+        let key = hex::encode([7u8; 32]);
+        let encrypted = encrypt_symmetric_cmd("group stealth msg", &key).unwrap();
+        let decrypted = decrypt_symmetric_cmd(&encrypted, &key).unwrap();
+        assert_eq!(decrypted, "group stealth msg");
+    }
+
+    #[test]
+    fn test_symmetric_legacy_no_aad_still_decrypts() {
+        // Legacy-письмо (до метки, без AAD) должно читаться через фолбэк.
+        use chacha20poly1305::aead::Aead;
+        let key_arr = [9u8; 32];
+        let key = hex::encode(key_arr);
+        let cipher = XChaCha20Poly1305::new((&key_arr).into());
+        let nonce_bytes: [u8; NONCE_LEN] = rand::random();
+        let nonce = XNonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, b"legacy group msg" as &[u8])
+            .unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        let legacy_b64 = base64::engine::general_purpose::STANDARD.encode(&out);
+        let decrypted = decrypt_symmetric_cmd(&legacy_b64, &key).unwrap();
+        assert_eq!(decrypted, "legacy group msg");
     }
 }

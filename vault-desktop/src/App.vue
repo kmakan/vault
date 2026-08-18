@@ -62,10 +62,10 @@
         </div>
         <div class="header-actions">
           <button :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">➕</button>
-          <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
+          <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
           <button :title="t('cipher_title')" @click="showCipher = true">🛡</button>
-          <button @click="showSettings = true" title="Settings">⚙️</button>
+          <button @click="showSettings = true" :title="t('nav_settings') || 'Settings'">⚙️</button>
         </div>
       </div>
       
@@ -106,7 +106,7 @@
         <!-- Groups Section -->
         <div v-if="groups.length > 0" class="groups-section">
           <div class="groups-header">
-            <span>👥 {{ t('groups') || 'Groups' }}</span>
+            <span>👥 {{ t('nav_groups') || 'Groups' }}</span>
           </div>
           <div 
             v-for="group in groups" 
@@ -464,9 +464,15 @@
             </div>
             <div class="message-footer">
               <div class="message-time">{{ msg.time }}</div>
-              <span v-if="msg.from === 'me'" class="message-status" :title="msg.status === 'read' ? 'Read' : msg.status === 'delivered' ? 'Delivered' : 'Sent'">
-                {{ msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : '✓' }}
-              </span>
+              <!-- Статус — маленький цветной кружок (без текста, чтобы не
+                   путаться с языками): красный=отправка, жёлтый=отправлено,
+                   зелёный=доставлено, синий=просмотрено -->
+              <span
+                v-if="msg.from === 'me'"
+                class="message-status-dot"
+                :class="msg.status || 'sent'"
+                :title="statusTitle(msg)"
+              ></span>
             </div>
             <!-- Reaction picker popup -->
             <div
@@ -699,6 +705,12 @@ export default {
       emailsLoading: false,
       emailError: '',
       pollTimer: null,
+      // Оптимистичные исходящие, ещё не подтверждённые письмом из ящика:
+      // chatKey → { msgId: msg }. Поллинг перестраивает messages из IMAP и
+      // стирал ещё не доставленное сообщение (оно «появлялось и исчезало»);
+      // теперь mergePending подмешивает их обратно, пока копия письма не
+      // придёт из Sent/All Mail — тогда реальное письмо заменяет запись.
+      pendingOutgoing: {},
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
@@ -1291,6 +1303,50 @@ export default {
         localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
       } catch (e) { /* quota — не критично */ }
     },
+    // --- Оптимистичные исходящие (pendingOutgoing) ---
+    // Отправка SMTP медленная (до минуты), а поллинг каждые 30 с перестраивает
+    // messages из IMAP. Без этого сообщение «появлялось и исчезало» у
+    // отправителя: оптимистичная запись стиралась, пока письмо не сделает
+    // круг SMTP → ящик → INBOX/Sent. Здесь:
+    //  - markPending: регистрируем оптимистичное сообщение;
+    //  - mergePending: при перестроении списка подмешиваем ещё не
+    //    подтверждённые записи (их нет в IMAP-списке), а подтверждённые
+    //    (id уже отрисован из письма) — удаляем из реестра.
+    markPending(chatKey, msg) {
+      if (!msg || !msg.id) return;
+      const bucket = this.pendingOutgoing[chatKey] || {};
+      bucket[msg.id] = msg;
+      this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: bucket };
+    },
+    mergePending(chatKey, list) {
+      const bucket = this.pendingOutgoing[chatKey];
+      if (!bucket || !Object.keys(bucket).length) return list;
+      const now = Date.now();
+      const out = [...list];
+      const seen = new Set(list.map(m => m.id));
+      const remaining = {};
+      for (const [id, msg] of Object.entries(bucket)) {
+        if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
+        // Страховка: не держим запись дольше 10 минут (если SMTP молча не
+        // отправил письмо, сообщение не должно висеть «отправленным» вечно).
+        if (msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
+        remaining[id] = msg;
+        out.push(msg);
+      }
+      if (Object.keys(remaining).length) {
+        this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: remaining };
+      } else {
+        const copy = { ...this.pendingOutgoing };
+        delete copy[chatKey];
+        this.pendingOutgoing = copy;
+      }
+      out.sort((a, b) => {
+        const da = a.email?.date ? new Date(a.email.date) : (a._pendingAt || 0);
+        const db = b.email?.date ? new Date(b.email.date) : (b._pendingAt || 0);
+        return new Date(da) - new Date(db);
+      });
+      return out;
+    },
     async selectGroup(group) {
       this.messages = [];
       // Мгновенное открытие группы из кэша (как и 1-на-1 чаты).
@@ -1475,6 +1531,14 @@ export default {
       if (text.length > 60) text = text.slice(0, 60).trim() + '…';
       return text;
     },
+    // Подпись (tooltip) к цветному кружку статуса исходящего сообщения.
+    statusTitle(msg) {
+      const st = (msg && msg.status) || 'sent';
+      if (st === 'read') return this.t('status_read') || 'Read';
+      if (st === 'delivered') return this.t('status_delivered') || 'Delivered';
+      if (st === 'sending') return this.t('status_sending') || 'Sending';
+      return this.t('status_sent') || 'Sent';
+    },
     setReply(msg) {
       this.replyTo = msg;
     },
@@ -1609,6 +1673,9 @@ export default {
         // содержимому (реакция / правка / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
         const wireEdits = {}; // msg_id -> [{text, action, date}]
+        // Квитанции получателя: {delivered:1|read:1, msg_ids:[...]} — для
+        // меток статуса наших сообщений (🟢 доставлено / 🔵 просмотрено).
+        const wireAcks = {}; // msg_id -> {delivered: bool, read: bool}
         const rendered = await Promise.all(related.map(async (m) => {
           const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
           let content = m.subject || '(no subject)';
@@ -1649,6 +1716,16 @@ export default {
                     action: robj.action === 'delete' ? 'delete' : 'edit',
                     date: m.date || 0,
                   });
+                  return null; // не сообщение
+                }
+                // 1в) Квитанции получателя: {delivered:1|read:1, msg_ids:[...]} —
+                //     его клиент обработал (доставлено) / открыл (просмотрено)
+                //     наши сообщения; накапливаем для меток статуса.
+                if (robj && (robj.read === 1 || robj.delivered === 1) && Array.isArray(robj.msg_ids)) {
+                  const level = robj.read === 1 ? 'read' : 'delivered';
+                  for (const rid of robj.msg_ids) {
+                    (wireAcks[rid] = wireAcks[rid] || {})[level] = true;
+                  }
                   return null; // не сообщение
                 }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
@@ -1710,12 +1787,33 @@ export default {
         }));
         if (stale()) return;
         this.loadProfiles();
-        const list = rendered.filter(r => r && r.vault).sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        // Дедупликация по id конверта: одно письмо может лежать в нескольких
+        // папках (Rust дедуплицирует по Message-ID, но письма без заголовка
+        // проскакивают дважды; плюс Sent-копии наших исходящих).
+        const dedup = new Map();
+        for (const r of rendered.filter(r => r && r.vault)) {
+          if (!dedup.has(r.id)) dedup.set(r.id, r);
+        }
+        const list = [...dedup.values()].sort((a, b) => new Date(a.email?.date || 0) - new Date(b.email?.date || 0));
+        // Статусы наших сообщений: квитанции получателя (delivered/read);
+        // если квитанций нет, но письмо уже в ящике — круг через сервер
+        // завершён, считаем доставленным.
+        for (const m of list) {
+          if (m.from !== 'me') continue;
+          const ack = wireAcks[m.id];
+          m.status = ack && ack.read ? 'read' : 'delivered';
+        }
         this.applyReactions(list, chat, wireReactions);
         this.applyEdits(list, chat, wireEdits);
-        this.messages = list;
+        // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
+        // подмешиваются обратно — иначе поллинг стирал их («появлялось
+        // и исчезало» у отправителя).
+        this.messages = this.mergePending(chat, list);
         // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
-        this.saveChatCache(chat, list);
+        this.saveChatCache(chat, this.messages);
+        // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
+        const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
+        this.sendReadReceipts(incoming);
         return;
       }
 
@@ -1805,6 +1903,8 @@ export default {
         const wireReactions = {};
         // Правки группы: письма VaultGroupEdit: <id> (edit/delete сообщений).
         const wireEdits = {};
+        // Квитанции чтения: msg_id -> {email участника: true} (метка «просмотрено»).
+        const wireAcks = {};
         if (groupKey) {
           try {
             const reactRaw = await api.getGroupReactEmails(groupId);
@@ -1841,6 +1941,24 @@ export default {
               } catch (e) { /* не правка или битое */ }
             }
           } catch (e) { /* нет edit-писем — не критично */ }
+          if (stale()) return;
+          // Квитанции чтения группы: письма VaultGroupRead: <id> — участники
+          // открыли наши сообщения; накапливаем для метки «просмотрено».
+          try {
+            const readRaw = await api.getGroupReadEmails(groupId);
+            for (const msg of readRaw || []) {
+              if (!crypto.isEncrypted(msg.content)) continue;
+              try {
+                const plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
+                const obj = JSON.parse(plaintext);
+                if (obj && obj.read === 1 && Array.isArray(obj.msg_ids)) {
+                  for (const rid of obj.msg_ids) {
+                    (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
+                  }
+                }
+              } catch (e) { /* не квитанция или битое */ }
+            }
+          } catch (e) { /* нет read-писем — не критично */ }
           if (stale()) return;
         }
 
@@ -1907,11 +2025,32 @@ export default {
           );
           if (stale()) return;
           this.loadProfiles();
-          const list = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          // Дедупликация по id конверта: sendGroupMessage шлёт каждому
+          // участнику отдельное письмо, поэтому в Sent отправителя лежит
+          // N−1 копий одного сообщения — все расшифровываются в один
+          // конверт с одинаковым id. Без дедупликации отправитель видел
+          // дубли (у получателя копия одна — дубля не было).
+          const dedup = new Map();
+          for (const m of decrypted) {
+            if (!dedup.has(m.id)) dedup.set(m.id, m);
+          }
+          const list = [...dedup.values()].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          // Статусы наших сообщений: письмо уже в ящике = доставлено;
+          // квитанции VaultGroupRead от участников = просмотрено.
+          for (const m of list) {
+            if (m.from !== 'me') continue;
+            const acks = wireAcks[m.id];
+            m.status = acks && Object.keys(acks).length ? 'read' : 'delivered';
+          }
           this.applyReactions(list, chat, wireReactions);
           this.applyEdits(list, chat, wireEdits);
-          this.messages = list;
-          this.saveChatCache(chat, list);
+          // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
+          // подмешиваются обратно (иначе поллинг стирал их).
+          this.messages = this.mergePending(chat, list);
+          this.saveChatCache(chat, this.messages);
+          // Открыли группу — шлём участникам квитанции «просмотрено» по входящим.
+          const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
+          this.sendReadReceipts(incoming);
         } else {
           // No group key — show as-is (unencrypted)
           this.messages = raw.map(msg => {
@@ -1930,6 +2069,57 @@ export default {
       } catch (error) {
         console.error('Failed to load group messages:', error);
         if (!stale()) this.messages = [];
+      }
+    },
+    // Мета-письма групп (VaultGroupMeta: <id>, аватар от админа) — для ВСЕХ
+    // групп, где мы участники, а не только для открытой. Вызывается из
+    // loadEmails (поллинг): участник, не открывавший группу после смены
+    // аватара, всё равно получает его (sidebar + шапка при следующем
+    // открытии). Расшифровка — групповым ключом, как в loadGroupMessages.
+    // Список писем НЕ фетчим заново: берём уже загруженный this.emails
+    // (loadEmails вызвал fetchEmails выше) — только тела новых meta-писем
+    // подтягиваются по одному. Применённый uid кэшируем в localStorage,
+    // чтобы не перечитывать одно и то же письмо на каждом поллинге.
+    async syncGroupAvatarsFromMeta() {
+      if (!this.isLoggedIn || !this.groups || !this.groups.length) return;
+      const emails = this.emails || [];
+      for (const g of this.groups) {
+        if (!g || !g.id) continue;
+        // Последнее по дате meta-письмо этой группы из уже загруженного списка.
+        let latest = null;
+        for (const m of emails) {
+          if ((m.subject || '').startsWith('VaultGroupMeta: ' + g.id)) {
+            if (!latest || new Date(m.date) >= new Date(latest.date)) latest = m;
+          }
+        }
+        if (!latest) continue;
+        // Уже применяли это письмо ранее — пропускаем (без повторного фетча тела).
+        const appliedKey = 'vault-group-meta-applied-' + g.id;
+        if (localStorage.getItem(appliedKey) === String(latest.uid)) continue;
+        let groupKey = this.groupKeys[g.id];
+        if (!groupKey && this.cryptoReady) {
+          try {
+            const kd = await api.getMyGroupKey(g.id);
+            if (kd && kd.group_key) {
+              this.groupKeys[g.id] = kd.group_key;
+              groupKey = kd.group_key;
+            }
+          } catch (e) { /* ключ не загрузился — группу пропускаем */ }
+        }
+        if (!groupKey) continue;
+        try {
+          const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
+          if (!body || !crypto.isEncrypted(body)) continue;
+          const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
+          const obj = JSON.parse(plaintext);
+          if (obj && obj.meta === 1 && obj.avatar) {
+            if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
+              localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
+              this.groupAvatars[g.id] = obj.avatar;
+            }
+            localStorage.setItem(appliedKey, String(latest.uid));
+          }
+        } catch (e) { /* не meta или битое — не критично */ }
       }
     },
     onAvatarUpdate(dataUrl) {
@@ -2042,8 +2232,9 @@ export default {
           // Оптимистичный показ (как в 1-на-1): Gmail SMTP отвечает медленно,
           // а немедленная перезагрузка чата стирала ещё не доставленное
           // сообщение — выглядело как будто ответ/сообщение не отправилось.
-          // Письмо подхватится поллингом (startPolling обновляет группу).
-          this.messages.push({
+          // Запись регистрируется в pendingOutgoing: поллинг подмешивает её
+          // обратно, пока письмо не сделает круг через ящик (mergePending).
+          const pendingMsg = {
             id: envelopeId || ('local-' + Date.now()),
             content: payload,
             from: 'me',
@@ -2051,9 +2242,16 @@ export default {
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             encrypted: true,
             vault: true,
-          });
+            status: 'sending',
+            _pendingAt: Date.now(),
+          };
+          this.messages.push(pendingMsg);
+          this.markPending('group:' + this.currentGroup.id, pendingMsg);
           try {
             await api.sendGroupMessage(this.currentGroup.id, content);
+            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
+            // через ящик: его подтвердит поллинг).
+            pendingMsg.status = 'sent';
           } catch (e) {
             alert('Failed to send group message: ' + e.message);
           }
@@ -2066,18 +2264,26 @@ export default {
             content = await crypto.encryptVault(envelope);
           }
           // Оптимистично показываем своё сообщение сразу: SMTP Gmail отвечает
-          // медленно (до минуты), ждать отправку в UI не нужно — письмо при
-          // доставке подхватится поллингом (startPolling обновляет активный чат).
-          this.messages.push({
+          // медленно (до минуты), ждать отправку в UI не нужно. Запись
+          // регистрируется в pendingOutgoing: поллинг подмешивает её обратно,
+          // пока письмо не сделает круг через ящик (mergePending).
+          const pendingMsg = {
             id: envelopeId || ('local-' + Date.now()),
             content: payload,
             from: 'me',
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             encrypted: true,
             vault: true,
-          });
+            status: 'sending',
+            _pendingAt: Date.now(),
+          };
+          this.messages.push(pendingMsg);
+          this.markPending(this.activeChat, pendingMsg);
           try {
             await api.sendMessage(this.activeChat, content);
+            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
+            // через ящик: его подтвердит поллинг).
+            pendingMsg.status = 'sent';
           } catch (e) {
             alert('Failed to send message: ' + e.message);
           }
@@ -2158,6 +2364,10 @@ export default {
         }
         // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
         await this.processInvites();
+        // Аватары групп: meta-письма (VaultGroupMeta) разбираем здесь же, а не
+        // только при открытии группы — иначе участник, не открывавший группу,
+        // новый аватар админа не увидит никогда.
+        await this.syncGroupAvatarsFromMeta();
       } catch (error) {
         // let "Not connected" propagate to the caller (app restart re-login)
         if (String(error && error.message || error).toLowerCase().includes('not connected')) {
@@ -2231,13 +2441,34 @@ export default {
         data: audioData.base64,
       });
 
+      // Конверт строим ДО оптимистичного показа: его id — ключ слияния с
+      // реальным письмом (иначе поллинг не смог бы заменить предпросмотр,
+      // и голосовое «появлялось и исчезало»).
+      let wire = attachmentPayload;
+      let envelopeId = '';
+      if (this.activeChatType === 'group' && this.currentGroup) {
+        const groupKey = this.groupKeys[this.currentGroup.id];
+        if (groupKey) {
+          const envelope = await this.buildEnvelope(attachmentPayload);
+          try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+          wire = await crypto.encryptWithGroupKey(envelope, groupKey);
+        }
+      } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+        crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+        const envelope = await this.buildEnvelope(attachmentPayload);
+        try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+        wire = await crypto.encryptVault(envelope);
+      }
+
       // Оптимистичный предпросмотр у отправителя.
       const msg = {
-        id: Date.now().toString(36),
+        id: envelopeId || ('local-' + Date.now()),
         content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
         from: 'me',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         encrypted: this.cryptoReady,
+        status: 'sending',
+        _pendingAt: Date.now(),
         attachment: {
           name,
           type: audioData.mimeType || 'audio/webm',
@@ -2248,18 +2479,21 @@ export default {
         },
       };
       this.messages.push(msg);
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      this.markPending(chatKey, msg);
       this.showAudioRecorder = false;
       this.scrollToBottom(true);
 
       if (this.activeChat) {
         try {
-          let wire = attachmentPayload;
-          if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
-            const envelope = await this.buildEnvelope(attachmentPayload);
-            wire = await crypto.encryptVault(envelope);
+          if (this.activeChatType === 'group' && this.currentGroup) {
+            await api.sendGroupMessage(this.currentGroup.id, wire);
+          } else {
+            await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
           }
-          await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
+          msg.status = 'sent';
         } catch (err) {
           console.error('Failed to send audio:', err);
           alert('Failed to send voice message: ' + (err && err.message || err));
@@ -2301,13 +2535,37 @@ export default {
               ? `📎 ${file.name}`
               : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
 
+            // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
+            // зашифрованный как обычное сообщение (AAD="VAULT"). БЕЗ шифрования
+            // получатель не сможет расшифровать (AAD не сойдётся) и письмо
+            // молча отбросится. Конверт строим ДО предпросмотра: его id — ключ
+            // слияния с реальным письмом (иначе поллинг не заменит предпросмотр,
+            // и файл «появится и исчезнет» у отправителя).
+            let wire = attachmentPayload;
+            let envelopeId = '';
+            if (this.activeChatType === 'group' && this.currentGroup) {
+              const groupKey = this.groupKeys[this.currentGroup.id];
+              if (groupKey) {
+                const envelope = await this.buildEnvelope(attachmentPayload);
+                try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+                wire = await crypto.encryptWithGroupKey(envelope, groupKey);
+              }
+            } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+              crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+              const envelope = await this.buildEnvelope(attachmentPayload);
+              try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+              wire = await crypto.encryptVault(envelope);
+            }
+
             // Create preview message
             const msg = {
-              id: Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+              id: envelopeId || ('local-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5)),
               content: displayContent,
               from: 'me',
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               encrypted: this.cryptoReady,
+              status: 'sending',
+              _pendingAt: Date.now(),
               attachment: {
                 name: file.name,
                 type: file.type,
@@ -2320,20 +2578,20 @@ export default {
               },
             };
             this.messages.push(msg);
+            const chatKey = this.activeChatType === 'group' && this.currentGroup
+              ? 'group:' + this.currentGroup.id
+              : this.activeChat;
+            this.markPending(chatKey, msg);
+            this.scrollToBottom(true);
 
-            // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
-            // зашифрованный как обычное сообщение (AAD="VAULT"). БЕЗ шифрования
-            // получатель не сможет расшифровать (AAD не сойдётся) и письмо
-            // молча отбросится.
             if (this.activeChat) {
               try {
-                let wire = attachmentPayload;
-                if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-                  crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
-                  const envelope = await this.buildEnvelope(attachmentPayload);
-                  wire = await crypto.encryptVault(envelope);
+                if (this.activeChatType === 'group' && this.currentGroup) {
+                  await api.sendGroupMessage(this.currentGroup.id, wire);
+                } else {
+                  await api.sendMessage(this.activeChat, wire, file.type);
                 }
-                await api.sendMessage(this.activeChat, wire, file.type);
+                msg.status = 'sent';
               } catch (err) {
                 console.error('Failed to send attachment:', err);
               }
@@ -2428,6 +2686,59 @@ export default {
       } catch (e) {
         console.error('Failed to save edits:', e);
       }
+    },
+    // --- Квитанции чтения («просмотрено») ---
+    // Получатель при открытии чата шлёт отправителю квитанцию {read:1,
+    // msg_ids:[...]} (1-на-1: encryptVault с пустой темой; группа:
+    // encryptWithGroupKey письмами VaultGroupRead: <id>). Храним уже отосланные
+    // msg_id по каждому чату, чтобы не слать повторно при каждом поллинге.
+    readsSentStorageKey() {
+      return 'vault-reads-sent-' + (this.email || 'anon');
+    },
+    loadSentReads() {
+      try {
+        return JSON.parse(localStorage.getItem(this.readsSentStorageKey()) || '{}');
+      } catch (e) {
+        return {};
+      }
+    },
+    saveSentReads(data) {
+      try {
+        localStorage.setItem(this.readsSentStorageKey(), JSON.stringify(data));
+      } catch (e) {
+        console.error('Failed to save read receipts:', e);
+      }
+    },
+    // Отправить квитанцию «просмотрено» по входящим сообщениям текущего чата.
+    // Вызывается после рендера сообщений (открытие чата и поллинг).
+    async sendReadReceipts(incomingIds) {
+      if (!incomingIds || !incomingIds.length) return;
+      const sent = this.loadSentReads();
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      const sentIds = sent[chatKey] || [];
+      const fresh = incomingIds.filter(id => id && sentIds.indexOf(id) < 0);
+      if (!fresh.length) return;
+      const payload = JSON.stringify({ read: 1, msg_ids: fresh });
+      (async () => {
+        try {
+          if (this.activeChatType === 'group' && this.currentGroup) {
+            const groupKey = this.groupKeys[this.currentGroup.id];
+            if (!groupKey) return;
+            const content = await crypto.encryptWithGroupKey(payload, groupKey);
+            await api.sendGroupRead(this.currentGroup.id, content);
+          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            const content = await crypto.encryptVault(payload);
+            await api.sendReadReceipt(this.activeChat, content);
+          }
+          sent[chatKey] = sentIds.concat(fresh);
+          this.saveSentReads(sent);
+        } catch (e) {
+          console.error('Failed to send read receipts:', e);
+        }
+      })();
     },
     // Локальная (оптимистичная) запись правки — до доставки письма.
     recordLocalEdit(chatKey, msgId, text, action) {
@@ -4511,16 +4822,21 @@ body {
   margin-top: 6px;
 }
 
-.message-status {
-  font-size: 12px;
-  color: var(--text-muted);
-  opacity: 0.7;
+/* Статус исходящего — маленький цветной кружок:
+   красный = отправка, жёлтый = отправлено,
+   зелёный = доставлено, синий = просмотрено */
+.message-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.message-status.read {
-  color: #6366f1;
-  opacity: 1;
-}
+.message-status-dot.sending { background: #ef4444; }
+.message-status-dot.sent { background: #eab308; }
+.message-status-dot.delivered { background: #22c55e; }
+.message-status-dot.read { background: #3b82f6; }
 
 /* Typing indicator */
 .typing-indicator {
