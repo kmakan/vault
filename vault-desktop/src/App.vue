@@ -59,9 +59,9 @@
       <div class="sidebar-header">
         <div class="app-logo" :title="t('app_name') || 'Vault'">
           <img :src="appIconUrl" alt="Vault" class="app-logo-img" />
-          <span class="app-logo-name">Vault</span>
         </div>
         <div class="header-actions">
+          <button :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">➕</button>
           <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
           <button :title="t('cipher_title')" @click="showCipher = true">🛡</button>
@@ -81,11 +81,6 @@
             <button class="btn-primary" @click="showKeyManager = true">🔑 {{ t('nav_keys') }}</button>
             <button class="btn-secondary" @click="showQRCode = true">🔗 {{ t('nav_add_contact') }}</button>
           </div>
-        </div>
-        <div class="group-create-row">
-          <button class="group-create-btn" @click="showCreateGroup = true">
-            <span>➕</span> {{ t('group_create') || 'New Group' }}
-          </button>
         </div>
         <div 
           v-for="contact in filteredContacts" 
@@ -3246,12 +3241,6 @@ body {
   object-fit: cover;
 }
 
-.app-logo-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
 /* Bottom nav switch (Чаты / Почта) — two side-by-side toggle buttons.
    Mirrors .sidebar-header spacing (20px 24px) so buttons don't stick to
    the window edge. */
@@ -4675,33 +4664,6 @@ body {
 
 .chat-search-close:hover {
   color: var(--text-primary, #f1f5f9);
-}
-
-/* Group create button */
-.group-create-row {
-  padding: 8px 16px;
-}
-
-.group-create-btn {
-  width: 100%;
-  padding: 8px 12px;
-  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: all var(--transition-fast, 150ms ease);
-}
-
-.group-create-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px var(--accent-glow, rgba(99, 102, 241, 0.3));
 }
 
 /* Modal */
