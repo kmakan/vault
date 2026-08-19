@@ -174,7 +174,7 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send vault email');
     return { ok: true };
   }
-  async getGroupMessages(groupId) {
+  async getGroupMessages(groupId, emails) {
     // STEALTH-ГРУППЫ (18.08): темы у групповых писем ПУСТЫЕ (как в 1:1), так
     // что фильтрация по subject невозможна. Возвращаем ВСЕ письма, чей
     // отправитель — участник группы; классификация по содержимому после
@@ -191,7 +191,14 @@ export class ApiClient {
     const memberEmails = (g.members || [])
       .map(m => String(m.email || '').toLowerCase())
       .filter(Boolean);
-    const msgs = await this.fetchEmails('local');
+    // ФИКС 20.08: поллинг группы (каждые 30с) НЕ должен делать полный
+    // IMAP-скан (fetchEmails) — это был триггер Gmail-троттлинга: при
+    // открытой группе × несколько окон аккаунт упирался в rate limit,
+    // SMTP-отправки начинали падать («метка красная», письмо одному из
+    // участников не уходило). Поллинг передаёт актуальный this.emails
+    // (loadEmails обновляет его инкрементально); полный скан остаётся
+    // только как fallback, когда список ещё пуст (первый вход).
+    const msgs = emails && emails.length ? emails : await this.fetchEmails('local');
     const mine = msgs.filter(m => {
       const from = String(m.from || '').toLowerCase();
       return memberEmails.some(e => from.includes(e));
@@ -242,7 +249,11 @@ export class ApiClient {
       }
     }
     if (failed.length) {
-      throw new Error('Group message: SMTP failed for: ' + failed.join(', '));
+      // ФИКС 20.08: не бросаем целиком — письма успешным участникам уже
+      // ушли, а UI помечает сообщение 'failed' («не доставлено: ...»).
+      // Раньше throw оставлял статус 'sending' (красный) навсегда, а через
+      // 10 минут mergePending-страховка молча удаляла сообщение.
+      return { ok: false, failed };
     }
     return { ok: true };
   }

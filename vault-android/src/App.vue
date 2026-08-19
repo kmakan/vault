@@ -588,7 +588,7 @@
           @send="sendAudioMessage"
           @close="showAudioRecorder = false"
         />
-          <button class="send-btn" @click="sendMessage">
+          <button class="send-btn" @click="sendMessage" :disabled="sending">
             <span class="send-icon">➤</span>
           </button>
         </div>
@@ -724,6 +724,9 @@ export default {
       activeChat: null,
       messages: [],
       newMessage: '',
+      // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
+      // слать копию письма (двойные сообщения у получателей, 20.08).
+      sending: false,
       // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
       // не перефетчивая и не расшифровывая повторно. Персистится в
       // localStorage (loadBodyCache/persistBodyCache) — после перезапуска
@@ -1473,7 +1476,9 @@ export default {
         if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
         // Страховка: не держим запись дольше 10 минут (если SMTP молча не
         // отправил письмо, сообщение не должно висеть «отправленным» вечно).
-        if (msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
+        // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
+        // должен видеть, что сообщение не дошло (фикс 20.08).
+        if (msg.status !== 'failed' && msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
         remaining[id] = msg;
         out.push(msg);
       }
@@ -1490,6 +1495,35 @@ export default {
         return new Date(da) - new Date(db);
       });
       return out;
+    },
+    // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
+    // из IndexedDB. История — источник истины: отправленные/полученные
+    // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
+    // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
+    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает (20.08).
+    async mergeHistory(chatKey, list) {
+      let hist = null;
+      try {
+        hist = await loadHistory(this.email, chatKey);
+      } catch (e) {
+        return list;
+      }
+      if (!hist || !hist.length) return list;
+      const ids = new Set();
+      for (const m of list) if (m && m.id) ids.add(m.id);
+      const extra = hist.filter(h => h && h.id && !ids.has(h.id));
+      if (!extra.length) return list;
+      const merged = [...list, ...extra];
+      merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+      return merged;
+    },
+    // Машинная временная метка сообщения для сортировки чата.
+    msgTs(m) {
+      if (!m) return 0;
+      if (m.ts) return m.ts;
+      if (m.email && m.email.date) return new Date(m.email.date).getTime();
+      if (m.created_at) return new Date(m.created_at).getTime();
+      return 0;
     },
     async selectGroup(group) {
       this.messages = [];
@@ -1753,6 +1787,10 @@ export default {
       if (st === 'read') return this.t('status_read') || 'Read';
       if (st === 'delivered') return this.t('status_delivered') || 'Delivered';
       if (st === 'sending') return this.t('status_sending') || 'Sending';
+      if (st === 'failed') {
+        const who = msg.failedTo && msg.failedTo.length ? ': ' + msg.failedTo.join(', ') : '';
+        return 'Not delivered' + who;
+      }
       return this.t('status_sent') || 'Sent';
     },
     setReply(msg) {
@@ -2041,12 +2079,21 @@ export default {
           const ack = wireAcks[m.id];
           m.status = ack && ack.read ? 'read' : 'delivered';
         }
+        // pending-записи отправителя: квитанции {read:1}/{delivered:1} снимают
+        // 'failed'/'sent' → 'read'/'delivered' (фикс 20.08).
+        const pb = this.pendingOutgoing[chat] || {};
+        for (const [pid, pmsg] of Object.entries(pb)) {
+          const ack = wireAcks[pid];
+          if (!ack) continue;
+          if (ack.read) pmsg.status = 'read';
+          else if (ack.delivered) pmsg.status = 'delivered';
+        }
         this.applyReactions(list, chat, wireReactions);
         this.applyEdits(list, chat, wireEdits);
         // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
         // подмешиваются обратно — иначе поллинг стирал их («появлялось
         // и исчезало» у отправителя).
-        this.messages = this.mergePending(chat, list);
+        this.messages = this.mergePending(chat, await this.mergeHistory(chat, list));
         // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
         this.saveChatCache(chat, this.messages);
         // Локальная история (IndexedDB) — полный архив чата.
@@ -2130,7 +2177,7 @@ export default {
         this.pinnedPreview = (pin && pin.preview) || '';
       }
       try {
-        const raw = await api.getGroupMessages(groupId);
+        const raw = await api.getGroupMessages(groupId, this.emails);
         if (stale()) return;
         let groupKey = this.groupKeys[groupId];
         // Гонка инициализации: группа могла открыться (или восстановиться
@@ -2257,11 +2304,19 @@ export default {
             const acks = wireAcks[m.id];
             m.status = acks && Object.keys(acks).length ? 'read' : 'delivered';
           }
+          // pending-записи отправителя (свою копию он не получает — живут
+          // только в pendingOutgoing): квитанции {read:1} участников снимают
+          // 'failed'/'sent' → 'read' (фикс 20.08).
+          const pb = this.pendingOutgoing[chat] || {};
+          for (const [pid, pmsg] of Object.entries(pb)) {
+            const ack = wireAcks[pid];
+            if (ack && Object.keys(ack).length) pmsg.status = 'read';
+          }
           this.applyReactions(list, chat, wireReactions);
           this.applyEdits(list, chat, wireEdits);
           // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
           // подмешиваются обратно (иначе поллинг стирал их).
-          this.messages = this.mergePending(chat, list);
+          this.messages = this.mergePending(chat, await this.mergeHistory(chat, list));
           this.saveChatCache(chat, this.messages);
           // Локальная история (IndexedDB) — полный архив группы.
           this.saveCurrentHistory(chat);
@@ -2420,6 +2475,10 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
+      // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
+      // игнорируем — иначе уходит 2+ письма с разными id и получатели видят
+      // «одно сообщение несколько раз».
+      if (this.sending) return;
 
       // Режим редактирования: вместо нового сообщения отправляем правку
       // существующего (edit-письмо), обновляем локально и выходим.
@@ -2444,6 +2503,7 @@ export default {
       }
 
       try {
+        this.sending = true;
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
         let payload = this.newMessage;
@@ -2515,12 +2575,29 @@ export default {
           this.messages.push(pendingMsg);
           this.markPending('group:' + this.currentGroup.id, pendingMsg);
           try {
-            await api.sendGroupMessage(this.currentGroup.id, content);
-            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
-            // через ящик: его подтвердит поллинг).
-            pendingMsg.status = 'sent';
+            const res = await api.sendGroupMessage(this.currentGroup.id, content);
+            // Частичный фейл (SMTP одного из участников): статус 'failed'
+            // (красный) — сообщение остаётся в чате и НЕ исчезает через
+            // 10 минут (mergePending уважает failed-записи). Полный успех —
+            // «отправлено» (до «доставлено» ждём квитанции получателей).
+            if (res && res.failed && res.failed.length) {
+              pendingMsg.status = 'failed';
+              pendingMsg.failedTo = res.failed;
+              console.error('Group message not delivered to:', res.failed.join(', '));
+            } else {
+              pendingMsg.status = 'sent';
+            }
           } catch (e) {
-            alert('Failed to send group message: ' + e.message);
+            pendingMsg.status = 'failed';
+            pendingMsg.failedTo = [e && e.message || String(e)];
+            console.error('Failed to send group message:', e);
+          }
+          // Персистим обновлённый статус в pendingOutgoing (иначе поллинг
+          // подмешивал бы запись со старым 'sending').
+          const bucket = this.pendingOutgoing['group:' + this.currentGroup.id];
+          if (bucket && bucket[pendingMsg.id]) {
+            bucket[pendingMsg.id] = pendingMsg;
+            this.pendingOutgoing = { ...this.pendingOutgoing, ['group:' + this.currentGroup.id]: bucket };
           }
         } else {
           // Regular chat message
@@ -2552,7 +2629,17 @@ export default {
             // через ящик: его подтвердит поллинг).
             pendingMsg.status = 'sent';
           } catch (e) {
-            alert('Failed to send message: ' + e.message);
+            // ФИКС 20.08: при фейле отправки помечаем 'failed' (красный) и
+            // персистим — раньше статус навсегда оставался 'sending',
+            // а через 10 минут запись молча исчезала.
+            pendingMsg.status = 'failed';
+            pendingMsg.failedTo = [e && e.message || String(e)];
+            console.error('Failed to send message:', e);
+          }
+          const bucket = this.pendingOutgoing[this.activeChat];
+          if (bucket && bucket[pendingMsg.id]) {
+            bucket[pendingMsg.id] = pendingMsg;
+            this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: bucket };
           }
         }
 
@@ -2560,6 +2647,8 @@ export default {
         this.scrollToBottom(true);
       } catch (error) {
         alert('Failed to send message: ' + error.message);
+      } finally {
+        this.sending = false;
       }
     },
     searchMessages() {
@@ -3135,6 +3224,13 @@ export default {
       const fresh = incomingIds.filter(id => id && sentIds.indexOf(id) < 0);
       if (!fresh.length) return;
       const payload = JSON.stringify({ read: 1, msg_ids: fresh });
+      // ФИКС 20.08 (дубли квитанций): помечаем id как отправленные ДО SMTP —
+      // иначе при медленном SMTP (30-60с) следующий поллинг (30с) считает
+      // fresh заново и уходит вторая копия квитанции (в ящиках лежали дубли
+      // {read:1} с одинаковыми msg_ids — «письма отправляются циклично»).
+      // При фейле SMTP откатываем метку — поллинг попробует ещё раз.
+      sent[chatKey] = sentIds.concat(fresh);
+      this.saveSentReads(sent);
       (async () => {
         try {
           if (this.activeChatType === 'group' && this.currentGroup) {
@@ -3147,10 +3243,11 @@ export default {
             const content = await crypto.encryptVault(payload);
             await api.sendReadReceipt(this.activeChat, content);
           }
-          sent[chatKey] = sentIds.concat(fresh);
-          this.saveSentReads(sent);
         } catch (e) {
           console.error('Failed to send read receipts:', e);
+          // SMTP упал — снимаем метку, чтобы квитанция повторилась позже.
+          sent[chatKey] = sentIds;
+          this.saveSentReads(sent);
         }
       })();
     },
@@ -5416,6 +5513,7 @@ body {
 }
 
 .message-status-dot.sending { background: #ef4444; }
+.message-status-dot.failed { background: #ef4444; }
 .message-status-dot.sent { background: #eab308; }
 .message-status-dot.delivered { background: #22c55e; }
 .message-status-dot.read { background: #3b82f6; }
