@@ -23,6 +23,16 @@
             signingConfig = signingConfigs.getByName("release")
 ```
 
+> ⚠️ **НЕ запускать `npx tauri icon` в vault-android!** Он перезапишет
+> `gen/android/app/src/main/res/mipmap-*/ic_launcher*.png` — а это
+> УТВЕРЖДЁННАЯ пользователем лаунчер-иконка Android: историческая
+> голубо-жёлтая (два полукруга с точками, 19.08: «она мне понравилась, она
+> и будет теперь иконкой приложения»). Фиолетовый контурный V — только в
+> окне приложения (src-tauri/icons), НЕ на рабочем столе. Если mipmap
+> случайно перезаписаны — восстановить: `git checkout --
+> src-tauri/gen/android/app/src/main/res/mipmap-*/ic_launcher*.png`
+> (gen/android в git).
+
 Сборка подписанного релиза:
 
 > ⚠️ `signingConfigs.create("release")` в build.gradle.kts выполняется при
