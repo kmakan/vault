@@ -727,6 +727,10 @@ export default {
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
       // слать копию письма (двойные сообщения у получателей, 20.08).
       sending: false,
+      // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
+      // чат секунды назад (двойной Enter с паузой), повторную отправку
+      // игнорируем — иначе получатели видят «одно сообщение дважды».
+      lastSend: null,
       // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
       // не перефетчивая и не расшифровывая повторно. Персистится в
       // localStorage (loadBodyCache/persistBodyCache) — после перезапуска
@@ -2479,6 +2483,20 @@ export default {
       // игнорируем — иначе уходит 2+ письма с разными id и получатели видят
       // «одно сообщение несколько раз».
       if (this.sending) return;
+      // Анти-дубль ПОСЛЕ отправки: двойной Enter с паузой (первая отправка
+      // уже завершилась) — тот же текст в тот же чат в течение 30 секунд
+      // не отправляется повторно (фикс 20.08: «сообщение отправляется не
+      // один раз»).
+      const chatId = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      const text = this.newMessage.trim();
+      if (this.lastSend && this.lastSend.chat === chatId && this.lastSend.text === text
+          && Date.now() - this.lastSend.ts < 30000) {
+        console.log('[sendMessage] duplicate ignored (same text sent recently)');
+        return;
+      }
+      this.lastSend = { chat: chatId, text, ts: Date.now() };
 
       // Режим редактирования: вместо нового сообщения отправляем правку
       // существующего (edit-письмо), обновляем локально и выходим.

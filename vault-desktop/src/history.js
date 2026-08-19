@@ -25,6 +25,11 @@ function openDB() {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // onblocked не даёт ни onsuccess, ни onerror — промис висел бы вечно,
+    // а с ним и loadMessages/loadGroupMessages (чаты открывались пустыми,
+    // кэш не писался). Таймаут: история недоступна — работаем без неё,
+    // чат строится из писем IMAP (фикс 20.08).
+    setTimeout(() => reject(new Error('IndexedDB open timeout (blocked)')), 3000);
   });
   return dbPromise;
 }
