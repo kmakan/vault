@@ -8,7 +8,7 @@
 
       <div class="panel-body">
         <div v-if="Object.keys(peerKeys).length === 0" class="empty-keys-state">
-          <div class="empty-icon">🛡️</div>
+          <div class="empty-icon"><Icon name="shield" :size="28" /></div>
           <h4>{{ t('cipher_no_contacts_title') }}</h4>
           <p>{{ t('cipher_no_contacts_hint') }}</p>
           <button class="btn-primary" @click="openKeysManager" title="Open Keys">
@@ -200,6 +200,7 @@
 
 <script>
 import crypto from '../crypto.js';
+import Icon from './Icon.vue'
 import { useI18n } from '../i18n.js';
 import { downloadBase64 } from '../chatExport.js';
 

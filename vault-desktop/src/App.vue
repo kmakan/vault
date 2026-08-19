@@ -62,23 +62,12 @@
         </div>
         <div class="header-actions">
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
-            <svg class="group-create-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <defs>
-                <linearGradient id="group-create-gradient" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#818cf8" />
-                  <stop offset="100%" stop-color="#c084fc" />
-                </linearGradient>
-              </defs>
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-              <circle cx="9" cy="7" r="4" stroke="url(#group-create-gradient)" stroke-width="2.4" />
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <Icon name="user-plus" :size="22" gradient cls="group-create-icon" />
           </button>
-          <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
-          <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
-          <button :title="t('cipher_title')" @click="showCipher = true">🛡</button>
-          <button @click="showSettings = true" :title="t('nav_settings') || 'Settings'">⚙️</button>
+          <button :title="t('nav_add_contact')" @click="showQRCode = true"><Icon name="link" :size="20" /></button>
+          <button :title="t('nav_keys')" @click="showKeyManager = true"><Icon name="key" :size="20" /></button>
+          <button :title="t('cipher_title')" @click="showCipher = true"><Icon name="shield" :size="20" /></button>
+          <button @click="showSettings = true" :title="t('nav_settings') || 'Settings'"><Icon name="settings" :size="20" /></button>
         </div>
       </div>
       
@@ -96,15 +85,7 @@
           @click="selectNotes"
         >
           <div class="notes-self-avatar">
-            <svg class="notes-self-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <defs>
-                <linearGradient id="notes-self-gradient" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#818cf8" />
-                  <stop offset="100%" stop-color="#c084fc" />
-                </linearGradient>
-              </defs>
-              <path d="M15.5 4.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" stroke="url(#notes-self-gradient)" stroke-width="2.2" stroke-linejoin="round" />
-            </svg>
+            <Icon name="pencil" :size="18" gradient cls="notes-self-icon" />
           </div>
           <div class="contact-info">
             <div class="contact-name">{{ t('notes_self') || 'Заметки для себя' }}</div>
@@ -116,8 +97,8 @@
           <div class="contacts-empty-title">{{ t('contacts_empty_title') }}</div>
           <div class="contacts-empty-hint">{{ t('contacts_empty_hint') }}</div>
           <div class="contacts-empty-actions">
-            <button class="btn-primary" @click="showKeyManager = true">🔑 {{ t('nav_keys') }}</button>
-            <button class="btn-secondary" @click="showQRCode = true">🔗 {{ t('nav_add_contact') }}</button>
+            <button class="btn-primary" @click="showKeyManager = true"><Icon name="key" :size="15" /> {{ t('nav_keys') }}</button>
+            <button class="btn-secondary" @click="showQRCode = true"><Icon name="link" :size="15" /> {{ t('nav_add_contact') }}</button>
           </div>
         </div>
         <div 
@@ -134,7 +115,7 @@
           <div class="contact-status">
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span class="status-dot" :class="{ online: contact.online }"></span>
-            <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)">🗑</button>
+            <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
           </div>
         </div>
         
@@ -144,12 +125,7 @@
         <!-- Groups Section -->
         <div v-if="groups.length > 0" class="groups-section">
           <div class="groups-header">
-            <svg class="groups-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-              <circle cx="9" cy="7" r="4" stroke="currentColor" stroke-width="2.4" />
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <Icon name="users" :size="14" cls="groups-header-icon" />
             {{ t('nav_groups') || 'Groups' }}
           </div>
           <div 
@@ -319,7 +295,7 @@
           </div>
           <p class="avatar-hint">Формат: PNG, JPG, SVG. Рекомендуется 100×100 px.</p>
           <label class="avatar-upload-btn">
-            📷 Выбрать файл
+            <Icon name="camera" :size="14" /> Выбрать файл
             <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="onAvatarFileSelect" hidden />
           </label>
         </div>
@@ -344,7 +320,7 @@
           />
           <div class="contact-edit-actions">
             <label class="avatar-upload-btn">
-              📷 {{ t('contact_edit_avatar') || 'Аватар' }}
+              <Icon name="camera" :size="14" /> {{ t('contact_edit_avatar') || 'Аватар' }}
               <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="handleContactAvatarSelect" hidden />
             </label>
             <button v-if="editContactAvatar" class="contact-edit-btn contact-edit-btn--ghost" @click="editContactAvatar = ''">✕ {{ t('contact_edit_remove_avatar') || 'Убрать аватар' }}</button>
@@ -390,15 +366,7 @@
             </template>
             <template v-else-if="activeChat === '__notes__'">
               <div class="notes-self-avatar notes-self-avatar-lg">
-                <svg class="notes-self-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <defs>
-                    <linearGradient id="notes-self-gradient" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0%" stop-color="#818cf8" />
-                      <stop offset="100%" stop-color="#c084fc" />
-                    </linearGradient>
-                  </defs>
-                  <path d="M15.5 4.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" stroke="url(#notes-self-gradient)" stroke-width="2.2" stroke-linejoin="round" />
-                </svg>
+                <Icon name="pencil" :size="20" gradient cls="notes-self-icon" />
               </div>
             </template>
             <template v-else>
@@ -409,18 +377,7 @@
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
                   <span class="members-count" @click="showMembersList = true">
-                    <svg class="members-count-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <defs>
-                        <linearGradient id="members-count-gradient" x1="0" y1="0" x2="1" y2="1">
-                          <stop offset="0%" stop-color="#818cf8" />
-                          <stop offset="100%" stop-color="#c084fc" />
-                        </linearGradient>
-                      </defs>
-                      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="url(#members-count-gradient)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-                      <circle cx="9" cy="7" r="4" stroke="url(#members-count-gradient)" stroke-width="2.2" />
-                      <path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke="url(#members-count-gradient)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-                      <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="url(#members-count-gradient)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
+                    <Icon name="users" :size="15" gradient cls="members-count-icon" />
                     {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
                   </span>
                 </template>
@@ -435,24 +392,20 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
+              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /> {{ t('add_member') || 'Добавить участника' }}</button>
+              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /> {{ t('group_settings') || 'Настройки' }}</button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'">✏️</button>
+              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
-            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'">🔍</button>
+            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
             <div class="export-dropdown" v-if="activeChat">
               <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
-                <svg class="chat-action-icon export-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M7 10l5 5 5-5" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                  <path d="M12 15V3" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
+                <Icon name="download" :size="17" cls="export-icon" />
               </button>
               <div v-if="showExportMenu" class="export-menu">
-                <button @click="exportAsJSON">📄 JSON</button>
-                <button @click="exportAsTXT">📝 TXT</button>
+                <button @click="exportAsJSON"><Icon name="copy" :size="14" /> JSON</button>
+                <button @click="exportAsTXT"><Icon name="pencil" :size="14" /> TXT</button>
               </div>
             </div>
           </div>
@@ -469,7 +422,7 @@
           <span v-if="chatSearchQuery" class="chat-search-count">
             {{ filteredMessages.length }}/{{ messages.length }}
           </span>
-          <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false">✕</button>
+          <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false"><Icon name="x" :size="13" /></button>
         </div>
 
         <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
@@ -479,9 +432,9 @@
           </div>
           <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
           <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
-            <span class="pinned-banner-icon">📌</span>
+            <Icon name="pin" :size="14" cls="pinned-banner-icon" />
             <span class="pinned-banner-text">{{ pinnedPreview || t('pinned_message') || 'Закреплённое сообщение' }}</span>
-            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage">✕</button>
+            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage"><Icon name="x" :size="13" /></button>
           </div>
           <div
             v-for="msg in filteredMessages"
@@ -515,34 +468,34 @@
                      :alt="msg.attachment.name"
                      class="attachment-image"
                      @click="openImageViewer(msg.attachment)" />
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
               </div>
               <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
                 <audio controls class="attachment-audio"
                        :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
               </div>
               <div v-else-if="msg.attachment && msg.attachment.isText" class="attachment-preview">
                 <pre class="attachment-text">{{ msg.attachment.textContent }}</pre>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)">⬇️ {{ t('download') || 'Скачать' }}</button>
+                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
               </div>
               <div v-else-if="msg.attachment" class="attachment-preview">
                 <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
                   📄 {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
-                  <span class="attachment-dl-btn">⬇️ {{ t('download') || 'Скачать' }}</span>
+                  <span class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</span>
                 </div>
               </div>
               </template>
             </div>
             <!-- Reply button (visible on hover) -->
-            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)">↩</button>
+            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)"><Icon name="reply" :size="13" /></button>
             <!-- Copy button (visible on hover) -->
-            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)">⧉</button>
+            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)"><Icon name="copy" :size="13" /></button>
             <!-- Pin — только админ группы (hover) -->
-            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)">📌</button>
+            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)"><Icon name="pin" :size="13" /></button>
             <!-- Edit/Delete — только свои сообщения (видны на hover) -->
-            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)">✏️</button>
-            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)">🗑</button>
+            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)"><Icon name="pencil" :size="13" /></button>
+            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)"><Icon name="trash" :size="13" /></button>
             <!-- Reactions -->
             <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
               <span
@@ -577,13 +530,13 @@
 
         <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
              вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
-        <button v-if="showJumpToBottom" class="jump-to-bottom" :title="t('jump_to_bottom') || 'К последним сообщениям'" @click="jumpToBottom">⬇</button>
+        <button v-if="showJumpToBottom" class="jump-to-bottom" :title="t('jump_to_bottom') || 'К последним сообщениям'" @click="jumpToBottom"><Icon name="arrow-down" :size="18" /></button>
 
         <!-- Контекстное меню сообщения (правый клик): копирование -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
           <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
-            <button @click="copyMessageText(messageMenu.msg); messageMenu = null">⧉ {{ t('copy_text') || 'Копировать текст' }}</button>
-            <button @click="copyMessageAll(messageMenu.msg); messageMenu = null">📋 {{ t('copy_all') || 'Копировать всё' }}</button>
+            <button @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
+            <button @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
           </div>
         </div>
 
@@ -597,21 +550,22 @@
 
         <!-- Reply quote bar (shown while replying to a message) -->
         <div v-if="replyTo" class="reply-bar">
-          <span class="reply-bar-label">↩ {{ t('chat_reply_to') || 'Ответ на' }}</span>
+          <Icon name="reply" :size="14" cls="reply-bar-ic" />
+          <span class="reply-bar-label">{{ t('chat_reply_to') || 'Ответ на' }}</span>
           <span class="reply-bar-text">{{ replyPreview(replyTo) }}</span>
-          <button class="reply-bar-close" @click="cancelReply" title="Cancel reply">✕</button>
+          <button class="reply-bar-close" @click="cancelReply" title="Cancel reply"><Icon name="x" :size="13" /></button>
         </div>
 
         <!-- Edit bar (shown while editing own message) -->
         <div v-if="editingMessage" class="reply-bar edit-bar">
-          <span class="reply-bar-label">✏️ {{ t('editing_message') || 'Редактирование' }}</span>
+          <span class="reply-bar-label">{{ t('editing_message') || 'Редактирование' }}</span>
           <span class="reply-bar-text">{{ replyPreview(editingMessage) }}</span>
-          <button class="reply-bar-close" @click="cancelEdit" title="Cancel edit">✕</button>
+          <button class="reply-bar-close" @click="cancelEdit" title="Cancel edit"><Icon name="x" :size="13" /></button>
         </div>
 
         <div class="message-input" v-if="activeChat">
         <div class="input-wrapper">
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji">😊</button>
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
           <EmojiPicker
             :show="showEmojiPicker"
             @select="insertEmoji"
@@ -626,9 +580,9 @@
             class="message-field"
           />
         </div>
-        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()">📎</button>
+        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()"><Icon name="paperclip" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
-        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message">🎙️</button>
+        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message"><Icon name="mic" :size="19" /></button>
         <AudioRecorder
           :show="showAudioRecorder"
           @send="sendAudioMessage"
@@ -649,7 +603,7 @@
              :alt="viewingImage.name" class="image-viewer-img" />
         <div class="image-viewer-actions">
           <span class="image-viewer-name">{{ viewingImage.name }}</span>
-          <button class="btn btn-primary" @click="downloadAttachment(viewingImage)">⬇️ {{ t('download') || 'Скачать' }}</button>
+          <button class="btn btn-primary" @click="downloadAttachment(viewingImage)"><Icon name="download" :size="14" /> {{ t('download') || 'Скачать' }}</button>
         </div>
       </div>
     </div>
@@ -715,6 +669,7 @@ import KeyManager from './components/KeyManager.vue';
 import LanguageSelector from './components/LanguageSelector.vue';
 import UserAvatar from './components/UserAvatar.vue';
 import GroupSettings from './components/GroupSettings.vue';
+import Icon from './components/Icon.vue';
 import EmojiPicker from './components/EmojiPicker.vue';
 import AudioRecorder from './components/AudioRecorder.vue';
 import ThemeSelector from './components/ThemeSelector.vue';
@@ -746,6 +701,7 @@ export default {
     LanguageSelector,
     UserAvatar,
     GroupSettings,
+    Icon,
     EmojiPicker,
     AudioRecorder,
     ThemeSelector,
@@ -4891,7 +4847,13 @@ body {
   flex-shrink: 0;
   font-size: 13px;
 }
-.pinned-banner-icon { flex-shrink: 0; }
+.pinned-banner-icon { flex-shrink: 0; color: var(--accent-primary, #6366f1); }
+
+/* Экспорт чата — solid indigo (решение 19.08: градиент плавил верх стрелки) */
+.export-icon { color: #818cf8; }
+
+/* Reply-иконка в баре ответа/редактирования */
+.reply-bar-ic { flex-shrink: 0; color: var(--accent-primary, #6366f1); }
 .pinned-banner-text {
   flex: 1;
   color: var(--text-primary, #f1f5f9);

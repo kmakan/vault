@@ -19,7 +19,7 @@
           </div>
         </div>
         <div class="account-actions">
-          <button @click="startEdit(accounts[0])" class="edit-btn">✏️</button>
+          <button @click="startEdit(accounts[0])" class="edit-btn"><Icon name="pencil" :size="13" /></button>
           <button @click="deleteAccount(accounts[0].id)" class="delete-btn">×</button>
         </div>
       </div>
@@ -98,6 +98,7 @@
 
 <script>
 import api from '../api.js';
+import Icon from './Icon.vue'
 import { useI18n } from '../i18n.js';
 
 const PROVIDER_PRESETS = {

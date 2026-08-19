@@ -2,7 +2,7 @@
   <div class="audio-recorder" v-if="show">
     <div class="audio-recorder__card">
       <div class="audio-recorder__header">
-        <span class="recorder-title">🎙️ {{ t('audio_record') || 'Voice Message' }}</span>
+        <span class="recorder-title"><Icon name="mic" :size="15" /> {{ t('audio_record') || 'Voice Message' }}</span>
         <button class="recorder-close" @click="cancel">✕</button>
       </div>
 
@@ -25,7 +25,7 @@
         </div>
         <div class="recording-actions">
           <button class="btn-discard" @click="cancel">
-            <span>🗑️</span> {{ t('audio_discard') || 'Discard' }}
+            <Icon name="trash" :size="14" /> {{ t('audio_discard') || 'Discard' }}
           </button>
           <button class="btn-stop" @click="stopRecording">
             <span>⏹️</span> {{ t('audio_stop') || 'Stop' }}
@@ -41,7 +41,7 @@
         </div>
         <div class="preview-actions">
           <button class="btn-discard" @click="cancel">
-            <span>🗑️</span> {{ t('audio_discard') || 'Discard' }}
+            <Icon name="trash" :size="14" /> {{ t('audio_discard') || 'Discard' }}
           </button>
           <button class="btn-send" @click="send">
             <span>➤</span> {{ t('audio_send') || 'Send Voice' }}
@@ -55,6 +55,7 @@
 <script setup>
 import { ref, computed, onUnmounted } from 'vue'
 import { useI18n } from '../i18n.js'
+import Icon from './Icon.vue'
 
 const { t } = useI18n()
 

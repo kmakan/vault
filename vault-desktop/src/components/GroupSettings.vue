@@ -2,7 +2,7 @@
   <div class="group-settings" v-if="group">
     <div class="group-settings__header">
       <h3>{{ t('group_settings') || 'Group Settings' }}</h3>
-      <button class="btn-icon" @click="$emit('close')">✕</button>
+      <button class="btn-icon" @click="$emit('close')"><Icon name="x" :size="14" /></button>
     </div>
 
     <!-- Group Avatar + Info. Загрузка аватара — только админам группы. -->
@@ -16,7 +16,7 @@
             :showPattern="true"
           />
           <div class="group-avatar-overlay" v-if="isAdmin">
-            <span>📷</span>
+            <Icon name="camera" :size="18" />
           </div>
         </div>
         <input
@@ -128,6 +128,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useI18n } from '../i18n.js'
 import UserAvatar from './UserAvatar.vue'
+import Icon from './Icon.vue'
 import api from '../api.js'
 
 const { t } = useI18n()
