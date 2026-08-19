@@ -25,6 +25,12 @@
 
 Сборка подписанного релиза:
 
+> ⚠️ `signingConfigs.create("release")` в build.gradle.kts выполняется при
+> конфигурации проекта ВСЕГДА (не только для release buildType) — без
+> `VAULT_KEYSTORE` падает ЛЮБАЯ сборка, включая debug:
+> `Cannot convert '' to File` (app/build.gradle.kts:19). Env обязателен
+> перед каждым `tauri android build`, не только release.
+
 ```bash
 export ANDROID_HOME=~/Android/Sdk
 export ANDROID_NDK_HOME=~/Android/Sdk/ndk/27.0.12077973
