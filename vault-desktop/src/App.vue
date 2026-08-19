@@ -69,10 +69,10 @@
                   <stop offset="100%" stop-color="#c084fc" />
                 </linearGradient>
               </defs>
-              <circle cx="7" cy="6.5" r="3.6" stroke="url(#group-create-gradient)" stroke-width="2.4" />
-              <path d="M2 19a6 6 0 0 1 10-4.8" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" />
-              <circle cx="19" cy="19" r="4" fill="url(#group-create-gradient)" />
-              <path d="M19 17.2v3.6M17.2 19h3.6" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="9" cy="7" r="4" stroke="url(#group-create-gradient)" stroke-width="2.4" />
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
