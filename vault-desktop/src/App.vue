@@ -62,14 +62,17 @@
         </div>
         <div class="header-actions">
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
-            <svg class="group-create-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg class="group-create-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <defs>
                 <linearGradient id="group-create-gradient" x1="0" y1="0" x2="1" y2="1">
                   <stop offset="0%" stop-color="#818cf8" />
                   <stop offset="100%" stop-color="#c084fc" />
                 </linearGradient>
               </defs>
-              <path d="M12 5v14M5 12h14" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" />
+              <circle cx="10" cy="8" r="5" stroke="url(#group-create-gradient)" stroke-width="2" />
+              <path d="M2 21a8 8 0 0 1 13.292-6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
+              <path d="M19 8v6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
+              <path d="M22 11h-6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
             </svg>
           </button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
