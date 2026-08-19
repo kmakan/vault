@@ -472,15 +472,28 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false">✕</button>
         </div>
 
-        <div class="messages" ref="messagesContainer">
+        <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
           <div v-if="activeChat && messages.length === 0" class="messages-empty">
             <div class="empty-icon">🔒</div>
             <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое 🔒' }}</div>
           </div>
+          <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
+          <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
+            <span class="pinned-banner-icon">📌</span>
+            <span class="pinned-banner-text">{{ pinnedPreview || t('pinned_message') || 'Закреплённое сообщение' }}</span>
+            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage">✕</button>
+          </div>
           <div
             v-for="msg in filteredMessages"
             :key="msg.id"
-            :class="['message', { own: msg.from === 'me' }]"
+            :data-msg-id="msg.id"
+            :class="['message', { own: msg.from === 'me', 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
+            :draggable="activeChat === '__notes__'"
+            @dragstart="onNoteDragStart($event, msg)"
+            @dragover="onNoteDragOver($event, msg)"
+            @dragleave="onNoteDragLeave($event, msg)"
+            @drop="onNoteDrop($event, msg)"
+            @dragend="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
             @click.stop="toggleReactionPicker(msg.id)"
             @contextmenu.prevent="openMessageMenu($event, msg)"
           >
@@ -525,6 +538,8 @@
             <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)">↩</button>
             <!-- Copy button (visible on hover) -->
             <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)">⧉</button>
+            <!-- Pin — только админ группы (hover) -->
+            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)">📌</button>
             <!-- Edit/Delete — только свои сообщения (видны на hover) -->
             <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)">✏️</button>
             <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)">🗑</button>
@@ -559,6 +574,10 @@
             </div>
           </div>
         </div>
+
+        <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
+             вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
+        <button v-if="showJumpToBottom" class="jump-to-bottom" :title="t('jump_to_bottom') || 'К последним сообщениям'" @click="jumpToBottom">⬇</button>
 
         <!-- Контекстное меню сообщения (правый клик): копирование -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
@@ -761,6 +780,15 @@ export default {
       // Контекстное меню сообщения (копирование)
       messageMenu: null,
       replyTo: null,
+      // Перетаскивание заметок (__notes__): ид заметки и цель drop.
+      draggedNoteId: null,
+      dragOverNoteId: null,
+      dragOverPos: null, // 'before' | 'after'
+      // Закреплённое сообщение группы (админ): id + превью для баннера.
+      pinnedMsgId: null,
+      pinnedPreview: '',
+      // Стрелка «вниз к последним сообщениям» в длинных чатах.
+      showJumpToBottom: false,
       // Сообщение, которое сейчас редактируется (только своё).
       editingMessage: null,
       showSettings: false,
@@ -1304,6 +1332,87 @@ export default {
         }
       });
     },
+    // Стрелка «вниз к последним сообщениям»: показываем, когда пользователь
+    // ушёл от низа чата больше чем на 200px (поллинг/свои отправки его не
+    // выдёргивают — только клик по стрелке).
+    onMessagesScroll() {
+      const el = this.$refs.messagesContainer;
+      if (!el) return;
+      this.showJumpToBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
+    },
+    jumpToBottom() {
+      const el = this.$refs.messagesContainer;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      this.showJumpToBottom = false;
+    },
+    // --- Закрепление сообщения в группе (только админ) ---
+    // Хранится в localStorage vault-pinned-<groupId> (последнее по дате —
+    // как meta-аватар) + бродкастится письмом {pin:1, msg_id, action,
+    // preview} под групповым ключом (stealth, пустая тема — единый проход
+    // loadGroupMessages классифицирует по содержимому).
+    readPinned(groupId) {
+      try {
+        const raw = localStorage.getItem('vault-pinned-' + groupId);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        return null;
+      }
+    },
+    setPinnedState(groupId, pin) {
+      if (pin && pin.msg_id) {
+        localStorage.setItem('vault-pinned-' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
+        this.pinnedMsgId = pin.msg_id;
+        this.pinnedPreview = pin.preview || '';
+      } else {
+        localStorage.removeItem('vault-pinned-' + groupId);
+        this.pinnedMsgId = null;
+        this.pinnedPreview = '';
+      }
+    },
+    applyPinFromWire(groupId, pin) {
+      // Последний по дате pin-письмо авторитетно (unpin = пустой pin.msg_id).
+      const cur = this.readPinned(groupId);
+      if (pin.ts && cur && cur.ts && Number(pin.ts) < Number(cur.ts)) return;
+      if (!pin.msg_id) {
+        this.setPinnedState(groupId, null);
+      } else {
+        this.setPinnedState(groupId, { msg_id: pin.msg_id, preview: pin.preview, ts: pin.ts });
+      }
+    },
+    async pinGroupMessage(msg) {
+      if (!this.isGroupAdmin || !this.currentGroup || !msg || !msg.id) return;
+      const gid = this.currentGroup.id;
+      const currentlyPinned = this.readPinned(gid);
+      const pinning = !(currentlyPinned && currentlyPinned.msg_id === msg.id);
+      const pin = {
+        msg_id: msg.id,
+        action: pinning ? 'pin' : 'unpin',
+        preview: String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 140),
+        ts: Date.now(),
+      };
+      // Оптимистично применяем локально (SMTP-круг займёт десятки секунд).
+      this.setPinnedState(gid, pinning ? pin : null);
+      try {
+        const groupKey = this.groupKeys[gid] || (await api.getMyGroupKey(gid))?.group_key;
+        if (!groupKey) return;
+        const content = await crypto.encryptWithGroupKey(JSON.stringify({ pin: 1, msg_id: pin.msg_id, action: pin.action, preview: pin.preview, ts: pin.ts }), groupKey);
+        await api.sendGroupMeta(gid, content);
+      } catch (e) {
+        console.error('pinGroupMessage failed:', e);
+      }
+    },
+    unpinGroupMessage() {
+      if (!this.isGroupAdmin || !this.currentGroup) return;
+      this.pinGroupMessage({ id: this.pinnedMsgId, content: '' });
+    },
+    scrollPinnedToView() {
+      const el = this.$refs.messagesContainer;
+      if (!el) return;
+      const t = el.querySelector('[data-msg-id="' + CSS.escape(this.pinnedMsgId) + '"]');
+      if (!t) { this.jumpToBottom(); return; }
+      el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
+    },
     // --- Персистентный кэш (localStorage): мгновенное открытие чатов ---
     // Ключи привязаны к email аккаунта — на одной машине может быть
     // несколько ящиков, кэши не должны смешиваться.
@@ -1495,6 +1604,48 @@ export default {
       this.currentGroup = null;
       this.scrollToBottom(true);
     },
+    // --- Перетаскивание заметок (__notes__): ручной порядок ---
+    onNoteDragStart(e, msg) {
+      this.draggedNoteId = msg.id;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', msg.id);
+    },
+    onNoteDragOver(e, msg) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (!this.draggedNoteId || msg.id === this.draggedNoteId) {
+        this.dragOverNoteId = null;
+        this.dragOverPos = null;
+        return;
+      }
+      const rect = e.currentTarget.getBoundingClientRect();
+      this.dragOverNoteId = msg.id;
+      this.dragOverPos = (e.clientY - rect.top) < rect.height / 2 ? 'before' : 'after';
+    },
+    onNoteDragLeave(e, msg) {
+      if (this.dragOverNoteId === msg.id) {
+        this.dragOverNoteId = null;
+        this.dragOverPos = null;
+      }
+    },
+    onNoteDrop(e, msg) {
+      e.preventDefault();
+      const id = this.draggedNoteId || e.dataTransfer.getData('text/plain');
+      this.draggedNoteId = null;
+      const overId = this.dragOverNoteId;
+      const pos = this.dragOverPos;
+      this.dragOverNoteId = null;
+      this.dragOverPos = null;
+      if (!id || !overId || id === overId) return;
+      const list = this.loadNotes();
+      const from = list.findIndex(n => n.id === id);
+      if (from < 0) return;
+      const [moved] = list.splice(from, 1);
+      const to = list.findIndex(n => n.id === overId);
+      if (to < 0) { list.splice(from, 0, moved); return; }
+      list.splice(pos === 'after' ? to + 1 : to, 0, moved);
+      if (this.saveNotes(list)) this.messages = list;
+    },
     // Parse message content — detect vault_attachment JSON and extract preview
     isTextMime(type, name) {
       if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
@@ -1674,6 +1825,16 @@ export default {
     },
     async deleteMessage(msg) {
       if (!msg || msg.from !== 'me' || msg.deleted) return;
+      // Заметки для себя: удаляем заметку ПОЛНОСТЬЮ (никаких писем по почте
+      // и «воскрешения» поллингом — заметки не читаются из IMAP).
+      if (this.activeChat === '__notes__') {
+        const ok = await confirm(this.t('delete_message_confirm') || 'Удалить заметку?');
+        if (!ok) return;
+        const list = this.loadNotes().filter(n => n.id !== msg.id);
+        this.saveNotes(list);
+        this.messages = list;
+        return;
+      }
       const ok = await confirm(this.t('delete_message_confirm') || 'Удалить сообщение у всех?');
       if (!ok) return;
       // Оптимистично помечаем удалённым локально + персистим (поллинг
@@ -1985,6 +2146,13 @@ export default {
       const seq = this.loadSeq;
       const chat = 'group:' + groupId;
       const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
+      // Закреплённое сообщение группы — баннер виден сразу (без ожидания
+      // поллинга), потом pin-письма из цикла ниже обновят его по дате.
+      if (!stale()) {
+        const pin = this.readPinned(groupId);
+        this.pinnedMsgId = (pin && pin.msg_id) || null;
+        this.pinnedPreview = (pin && pin.preview) || '';
+      }
       try {
         const raw = await api.getGroupMessages(groupId);
         if (stale()) return;
@@ -2051,6 +2219,17 @@ export default {
                 (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
               }
               continue; // квитанция не рендерится как сообщение
+            }
+            // 1г) Закрепление: {pin:1, msg_id, action:'pin'|'unpin', preview,
+            //     ts} — последнее по ts авторитетно; не рендерится.
+            if (obj && obj.pin === 1 && obj.msg_id) {
+              const ts = obj.ts || Date.parse(msg.created_at || 0) || 0;
+              this.applyPinFromWire(groupId, {
+                msg_id: obj.action === 'unpin' ? null : obj.msg_id,
+                preview: obj.preview || '',
+                ts,
+              });
+              continue;
             }
             if (obj && obj.meta === 1 && obj.avatar) {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
@@ -4541,6 +4720,7 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  position: relative;
   /* min-width/min-height: 0 — без них flex-ребёнок не сжимается меньше
      контента: список сообщений выпирает и выталкивает поле ввода за экран. */
   min-width: 0;
@@ -4639,7 +4819,66 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  position: relative; /* offsetTop элементов считается от этого контейнера */
 }
+
+/* Закреплённое сообщение группы (баннер поверх списка) */
+.pinned-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.pinned-banner-icon { flex-shrink: 0; }
+.pinned-banner-text {
+  flex: 1;
+  color: var(--text-primary, #f1f5f9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pinned-banner-unpin {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.pinned-banner-unpin:hover { background: rgba(255,255,255,0.1); color: var(--text-primary, #f1f5f9); }
+
+/* Подсветка позиции при перетаскивании заметок */
+.drag-over-before { box-shadow: 0 -2px 0 0 var(--accent-primary, #6366f1); }
+.drag-over-after { box-shadow: 0 2px 0 0 var(--accent-primary, #6366f1); }
+
+/* Стрелка «вниз к последним сообщениям» */
+.jump-to-bottom {
+  position: absolute;
+  bottom: 96px;
+  right: 24px;
+  z-index: 5;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-primary, #6366f1);
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.jump-to-bottom:hover { filter: brightness(1.12); }
 
 .message {
   max-width: 70%;
@@ -4753,10 +4992,36 @@ body {
 }
 
 /* Edit button (visible on hover) — только свои сообщения */
-.edit-btn {
+.pin-btn {
   position: absolute;
   top: 12px;
   right: 76px;
+  background: var(--bg-secondary, #12122a);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+  font-size: 13px;
+}
+.message:hover .pin-btn {
+  opacity: 1;
+}
+.pin-btn:hover {
+  background: var(--bg-hover, #1e1e4a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+.edit-btn {
+  position: absolute;
+  top: 12px;
+  right: 110px;
   background: var(--bg-secondary, #12122a);
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
   border-radius: var(--radius-sm, 6px);
@@ -4784,7 +5049,7 @@ body {
 .delete-btn {
   position: absolute;
   top: 12px;
-  right: 110px;
+  right: 144px;
   background: var(--bg-secondary, #12122a);
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
   border-radius: var(--radius-sm, 6px);
