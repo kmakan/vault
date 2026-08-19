@@ -2058,6 +2058,11 @@ export default {
       }
 
       // Fallback: legacy backend path (groups, peer-key chats)
+      // Фикс 19.08: если в фетче писем НЕТ (все старее лимитов/курсоров),
+      // а локальная история чата уже показана (showHistoryFirst) — не
+      // затираем её. Иначе после перезапуска чаты «пустели», хотя кэш
+      // истории на месте (регрессия инкрементального фетча 5e9e4e6).
+      if (this.messages && this.messages.length) return;
       try {
         const raw = await api.getMessages(email);
         if (stale()) return;
@@ -2633,7 +2638,12 @@ export default {
             // последних писем + инициализация курсоров. Раньше каждые 30с
             // пересканировались последние 50-100 писем каждой папки — это
             // и лишний трафик, и триггер троттлинга Gmail.
-            const cursors = this.loadCursors(account.id);
+            // ВАЖНО (фикс 19.08): при НЕ тихом фетче (логин/авто-вход после
+            // перезапуска) всегда идём с ПУСТЫМИ курсорами — полный скан.
+            // Иначе курсоры из localStorage уже продвинуты вперёд, инкремент
+            // возвращает пусто, и все письма (чаты) «исчезали» после
+            // перезапуска приложения. Поллинг (silent) — лёгкий инкремент.
+            const cursors = silent ? this.loadCursors(account.id) : {};
             const res = await api.fetchEmailsIncremental(account.id, cursors);
             fetched.push(...(res.messages || []));
             this.saveCursors(account.id, res.cursors);

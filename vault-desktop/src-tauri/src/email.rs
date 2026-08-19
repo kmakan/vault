@@ -297,7 +297,7 @@ impl EmailClient {
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
         let folders = self.find_special_folders();
 
-        let mut messages = self.fetch_folder("INBOX", 100)?;
+        let mut messages = self.fetch_folder("INBOX", 250)?;
         let mut seen: HashSet<String> = messages
             .iter()
             .filter(|m| !m.message_id.is_empty())
@@ -305,7 +305,7 @@ impl EmailClient {
             .collect();
 
         if let Some(junk) = &folders.junk {
-            match self.fetch_folder(junk, 50) {
+            match self.fetch_folder(junk, 150) {
                 Ok(junk_msgs) => {
                     for m in junk_msgs {
                         if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
@@ -321,7 +321,7 @@ impl EmailClient {
         }
 
         if let Some(all) = &folders.all {
-            match self.fetch_folder(all, 100) {
+            match self.fetch_folder(all, 250) {
                 Ok(all_msgs) => {
                     for m in all_msgs {
                         if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
@@ -337,7 +337,7 @@ impl EmailClient {
             // Без него отправитель не видит свои сообщения, а поллинг
             // затирает оптимистичный показ. С \All Sent избыточен (All Mail
             // уже содержит исходящие) — не тратим round-trip.
-            match self.fetch_folder(sent, 50) {
+            match self.fetch_folder(sent, 150) {
                 Ok(sent_msgs) => {
                     for m in sent_msgs {
                         if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
