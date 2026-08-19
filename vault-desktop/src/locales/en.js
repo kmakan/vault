@@ -233,6 +233,7 @@ export default {
   notes_self_status: 'Local · this device only',
 // General actions
   download: 'Download',
+  chat_export: 'Export chat',
   edit_message: 'Edit',
   delete_message: 'Delete',
   delete_message_confirm: 'Delete message for everyone?',

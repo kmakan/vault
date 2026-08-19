@@ -234,6 +234,7 @@ export default {
   notes_self_status: 'Локально · только на этом устройстве',
 // Общие действия
   download: 'Скачать',
+  chat_export: 'Экспорт чата',
   edit_message: 'Редактировать',
   delete_message: 'Удалить',
   delete_message_confirm: 'Удалить сообщение у всех?',

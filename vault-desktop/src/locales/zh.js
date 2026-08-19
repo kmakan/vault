@@ -233,6 +233,7 @@ export default {
   notes_self_status: '本地 · 仅此设备',
 // 通用操作
   download: '下载',
+  chat_export: '导出聊天',
   edit_message: '编辑',
   delete_message: '删除',
   delete_message_confirm: '为所有人删除此消息？',
