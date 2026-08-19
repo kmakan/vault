@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result};
 use imap::Session;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
 use lettre::message::Message;
@@ -353,6 +353,142 @@ impl EmailClient {
         // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
         let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
         Ok(messages)
+    }
+
+    /// Fetch messages in one mailbox: either the most recent `limit`
+    /// (first sync, no cursor) or everything with UID > `last_uid`
+    /// (incremental poll). Returns the messages and the new high-water mark
+    /// (max UID actually seen in this folder).
+    fn fetch_folder_from(
+        &mut self,
+        folder: &str,
+        last_uid: Option<u32>,
+        limit: usize,
+    ) -> Result<(Vec<EmailMessage>, u32)> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")?;
+
+        session.select(folder)?;
+
+        let uid_list = match last_uid {
+            None => session.uid_search("ALL")?,
+            Some(last) => session.uid_search(&format!("UID {}:*", last + 1))?,
+        };
+        let mut uids: Vec<u32> = uid_list.iter().copied().collect();
+        let max_uid = uids.iter().copied().max().unwrap_or(0);
+        uids.sort_by(|a, b| b.cmp(a));
+        if last_uid.is_none() {
+            uids.truncate(limit);
+        }
+
+        let mut messages = Vec::new();
+        if !uids.is_empty() {
+            let uid_set = uids
+                .iter()
+                .map(|u| u.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let data = session
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
+            for fetch in data.iter() {
+                let uid = fetch.uid.unwrap_or_default().to_string();
+                let flags = fetch.flags();
+                let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
+                if let Some(header) = fetch.header() {
+                    let header_str = String::from_utf8_lossy(header);
+                    messages.push(EmailMessage {
+                        id: uid,
+                        from: extract_header(&header_str, "From:")
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        to: extract_header(&header_str, "To:")
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        subject: extract_header(&header_str, "Subject:")
+                            .unwrap_or_else(|| "(no subject)".to_string()),
+                        date: extract_header(&header_str, "Date:")
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        is_read,
+                        folder: folder.to_string(),
+                        message_id: extract_header(&header_str, "Message-ID:").unwrap_or_default(),
+                    });
+                }
+            }
+        }
+
+        messages.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok((messages, max_uid))
+    }
+
+    /// Incremental fetch: only messages NEWER than the per-folder UID cursors,
+    /// then advance the cursors. First sync (empty cursors) does a full scan
+    /// of the recent folders (like fetch_messages) and seeds the cursors.
+    /// Polling the mailbox every 30s with a full re-scan was both wasteful and
+    /// a Gmail-throttling trigger; with cursors a quiet inbox costs one UID
+    /// SEARCH per folder instead of re-fetching the last 50-100 envelopes.
+    /// Returns (new_messages, updated_cursors).
+    pub async fn fetch_newer(
+        &mut self,
+        cursors: &HashMap<String, u32>,
+    ) -> Result<(Vec<EmailMessage>, HashMap<String, u32>)> {
+        let folders = self.find_special_folders();
+        let mut new_cursors = cursors.clone();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut messages: Vec<EmailMessage> = Vec::new();
+
+        let mut collect =
+            |folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
+                new_cursors.insert(fallback.to_string(), max_uid);
+                if max_uid == 0 {
+                    return; // empty folder — nothing new
+                }
+                for m in msgs {
+                    if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                        continue;
+                    }
+                    messages.push(m);
+                }
+            };
+
+        // INBOX — всегда (основной источник входящих).
+        match self
+            .fetch_folder_from("INBOX", cursors.get("INBOX").copied(), 100)
+        {
+            Ok((msgs, max)) => collect("INBOX", "INBOX", msgs, max),
+            Err(e) => eprintln!("[email] INBOX incremental fetch failed: {e}"),
+        }
+
+        // Спам — всегда: Gmail кладёт шифрописьма в Junk.
+        if let Some(junk) = &folders.junk {
+            match self
+                .fetch_folder_from(junk, cursors.get(junk).copied(), 50)
+            {
+                Ok((msgs, max)) => collect(junk, junk, msgs, max),
+                Err(e) => eprintln!("[email] Junk folder {junk} incremental fetch failed: {e}"),
+            }
+        }
+
+        // \\All (Gmail) или Sent (Zoho и др., нет \\All) — исходящие копии.
+        if let Some(all) = &folders.all {
+            match self
+                .fetch_folder_from(all, cursors.get(all).copied(), 100)
+            {
+                Ok((msgs, max)) => collect(all, all, msgs, max),
+                Err(e) => eprintln!("[email] All Mail folder {all} incremental fetch failed: {e}"),
+            }
+        } else if let Some(sent) = &folders.sent {
+            match self
+                .fetch_folder_from(sent, cursors.get(sent).copied(), 50)
+            {
+                Ok((msgs, max)) => collect(sent, sent, msgs, max),
+                Err(e) => eprintln!("[email] Sent folder {sent} incremental fetch failed: {e}"),
+            }
+        }
+
+        // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
+        let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
+        Ok((messages, new_cursors))
     }
 
     /// Fetch the body of a single message by UID, decoding quoted-printable so

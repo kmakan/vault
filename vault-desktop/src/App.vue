@@ -2623,6 +2623,26 @@ export default {
         alert('Failed to add peer key: ' + error.message);
       }
     },
+    // Per-folder UID-курсоры для инкрементального фетча (vault-imap-cursors-<account>).
+    imapCursorsKey(accountId) {
+      return 'vault-imap-cursors-' + accountId;
+    },
+    loadCursors(accountId) {
+      try {
+        return JSON.parse(localStorage.getItem(this.imapCursorsKey(accountId)) || '{}');
+      } catch (e) {
+        return {};
+      }
+    },
+    saveCursors(accountId, cursors) {
+      try {
+        if (cursors && Object.keys(cursors).length) {
+          localStorage.setItem(this.imapCursorsKey(accountId), JSON.stringify(cursors));
+        }
+      } catch (e) {
+        console.error('saveCursors failed:', e);
+      }
+    },
     async loadEmails(silent = false) {
       if (!silent) {
         this.emailsLoading = true;
@@ -2635,8 +2655,15 @@ export default {
         const fetched = [];
         for (const account of accounts) {
           try {
-            const msgs = await api.fetchEmails(account.id, { limit: 50 });
-            fetched.push(...(msgs || []));
+            // Инкрементальный фетч (M1): только письма новее per-folder
+            // UID-курсоров. Первый запуск (нет курсоров) — полный скан
+            // последних писем + инициализация курсоров. Раньше каждые 30с
+            // пересканировались последние 50-100 писем каждой папки — это
+            // и лишний трафик, и триггер троттлинга Gmail.
+            const cursors = this.loadCursors(account.id);
+            const res = await api.fetchEmailsIncremental(account.id, cursors);
+            fetched.push(...(res.messages || []));
+            this.saveCursors(account.id, res.cursors);
           } catch (e) {
             console.error('Failed to fetch emails for account:', e);
             if (!silent) this.emailError = 'fetch: ' + (e && e.message || e);
@@ -2646,8 +2673,20 @@ export default {
             }
           }
         }
-        this.emails = fetched;
-        console.log(`[Emails] loaded ${this.emails.length} messages`);
+        // Мержим новые письма со старым списком (полный рескан больше не
+        // делается — старые остаются в памяти, новые добавляются сверху).
+        // Дедуп по uid+папка; cap 2000 — старые конверты уходят (история
+        // чатов вскоре будет в IndexedDB, для инвайтов/аватаров хватает).
+        const merged = [...this.emails];
+        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+        for (const m of fetched) {
+          const k = m.uid + '|' + (m.folder || 'INBOX');
+          if (!seen.has(k)) { seen.add(k); merged.push(m); }
+        }
+        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        if (merged.length > 2000) merged.length = 2000;
+        this.emails = merged;
+        console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
         if (!silent && this.emails.length === 0 && !this.emailError) {
           this.emailError = 'INBOX пуст или письма не найдены';
         }

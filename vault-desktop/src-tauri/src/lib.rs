@@ -11,6 +11,8 @@ use credential_store::StoredCredentials;
 use crypto::{CryptoState, KeyPair};
 use email::{EmailClient, EmailConfig, EmailMessage};
 use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
@@ -197,6 +199,13 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
 /// Holds the live IMAP/SMTP session between Tauri command calls.
 pub struct EmailState(pub Mutex<Option<EmailClient>>);
 
+/// Результат инкрементального фетча: новые письма + обновлённые курсоры.
+#[derive(Serialize)]
+pub struct IncrementalFetchResult {
+    pub messages: Vec<EmailMessage>,
+    pub cursors: HashMap<String, u32>,
+}
+
 impl Default for EmailState {
     fn default() -> Self {
         Self(Mutex::new(None))
@@ -239,6 +248,34 @@ async fn email_fetch_messages(
                 .await
                 .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
             client.fetch_messages().await.map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Инкрементальный фетч: только письма новее per-folder UID-курсоров.
+/// Возвращает новые письма + обновлённые курсоры; первый запуск (пустые
+/// курсоры) — полный скан последних писем + инициализация курсоров.
+#[tauri::command]
+async fn email_fetch_incremental(
+    state: State<'_, EmailState>,
+    cursors: HashMap<String, u32>,
+) -> Result<IncrementalFetchResult, String> {
+    let mut guard = state.0.lock().await;
+    let client = guard
+        .as_mut()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let to_result = |r: anyhow::Result<(Vec<EmailMessage>, HashMap<String, u32>)>| {
+        r.map(|(messages, cursors)| IncrementalFetchResult { messages, cursors })
+            .map_err(|e| e.to_string())
+    };
+    match to_result(client.fetch_newer(&cursors).await) {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            client
+                .reconnect_imap()
+                .await
+                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
+            to_result(client.fetch_newer(&cursors).await)
         }
     }
 }
@@ -446,6 +483,7 @@ pub fn run() {
             decrypt_symmetric,
             email_connect,
             email_fetch_messages,
+            email_fetch_incremental,
             email_fetch_body,
             email_fetch_bodies,
             email_send,

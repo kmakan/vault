@@ -564,6 +564,24 @@ export class ApiClient {
     }));
   }
 
+  // Инкрементальный фетч: только письма новее per-folder UID-курсоров.
+  // Возвращает { messages, cursors }; пустые курсоры = первый полный скан.
+  async fetchEmailsIncremental(accountId, cursors = {}) {
+    const res = await invoke('email_fetch_incremental', { cursors });
+    const mapped = (res && res.messages || []).map(m => ({
+      uid: m.id,
+      id: m.id,
+      from: m.from,
+      to: m.to,
+      subject: m.subject,
+      date: m.date,
+      is_read: m.is_read,
+      folder: m.folder || 'INBOX',
+      message_id: m.message_id || '',
+    }));
+    return { messages: mapped, cursors: (res && res.cursors) || {} };
+  }
+
   async fetchEmailBody(accountId, uid, folder) {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }
