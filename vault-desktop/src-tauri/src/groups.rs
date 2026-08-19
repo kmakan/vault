@@ -229,6 +229,10 @@ pub fn set_group_key(group_id: &str, group_key: &str) -> Result<()> {
 pub fn remove_member(group_id: &str, email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
+        // The group creator cannot be removed by anyone — only leave voluntarily.
+        if email == group.created_by {
+            anyhow::bail!("Cannot remove group creator");
+        }
         let before_len = group.members.len();
         group.members.retain(|m| m.email != email);
         if group.members.len() == before_len {
@@ -353,6 +357,29 @@ mod tests {
             assert!(set_member_role(&id, "nobody@example.com", GroupRole::Member).is_err());
             // Unknown group.
             assert!(set_member_role("grp_missing", "bob@example.com", GroupRole::Member).is_err());
+        });
+    }
+
+    #[test]
+    fn test_remove_member_protects_creator() {
+        with_tmp_groups(|| {
+            let group = create_group("test group", "alice@example.com").unwrap();
+            let id = group.id.clone();
+            add_member(&id, "bob@example.com").unwrap();
+
+            // Creator cannot be removed by anyone (only voluntary leave).
+            assert!(remove_member(&id, "alice@example.com").is_err());
+            let groups = load_groups().unwrap();
+            assert_eq!(groups.get(&id).unwrap().members.len(), 2);
+
+            // Regular member removal still works.
+            remove_member(&id, "bob@example.com").unwrap();
+            let groups = load_groups().unwrap();
+            assert_eq!(groups.get(&id).unwrap().members.len(), 1);
+
+            // Unknown member / unknown group.
+            assert!(remove_member(&id, "nobody@example.com").is_err());
+            assert!(remove_member("grp_missing", "bob@example.com").is_err());
         });
     }
 

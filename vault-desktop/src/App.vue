@@ -367,8 +367,6 @@
             :currentUser="email"
             :profiles="mergedProfiles"
             @close="showGroupSettings = false"
-            @promote="promoteMember"
-            @demote="demoteMember"
             @role-change="changeMemberRole"
             @remove="removeMember"
             @unblock="unblockUser"
@@ -437,7 +435,7 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupModerator" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
+              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'">➕ {{ t('add_member') || 'Добавить участника' }}</button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'">⚙️ {{ t('group_settings') || 'Настройки' }}</button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
@@ -928,21 +926,13 @@ export default {
       const c = this.contacts.find(c => c.email === this.activeChat);
       return c ? c.name : this.activeChat;
     },
-    // Я — админ текущей группы (создатель или роль Admin). Право добавлять
-    // участников, менять роли и удалять — только у админов.
+    // Я — админ текущей группы (создатель или назначенный админ). Управление
+    // составом (добавление/удаление участников) и ролями — только у админов.
     isGroupAdmin() {
       if (this.activeChatType !== 'group' || !this.currentGroup) return false;
       if (this.currentGroup.created_by === this.email) return true;
       const me = (this.currentGroup.members || []).find(m => m.email === this.email);
       return !!(me && me.role === 'Admin');
-    },
-    // Я — модератор текущей группы (создатель или роль Admin/Moderator). Имеет право
-    // добавлять и удалять участников, но не назначать роли (это только у админов).
-    isGroupModerator() {
-      if (this.activeChatType !== 'group' || !this.currentGroup) return false;
-      if (this.currentGroup.created_by === this.email) return true;
-      const me = (this.currentGroup.members || []).find(m => m.email === this.email);
-      return !!(me && (me.role === 'Admin' || me.role === 'Moderator'));
     },
     // Профили с локальными переопределениями — для GroupSettings (список
     // участников группы тоже показывает локальные имена/аватары).
@@ -3173,28 +3163,27 @@ export default {
       this.createGroup();
       this.showCreateGroup = false;
     },
-    promoteMember(email) {
-      if (!this.currentGroup) return;
-      const member = this.currentGroup.members.find(m => m.email === email);
-      if (member) member.role = 'Admin';
-    },
-    demoteMember(email) {
-      if (!this.currentGroup) return;
-      const member = this.currentGroup.members.find(m => m.email === email);
-      if (member && email !== this.currentGroup.created_by) {
-        member.role = 'Member';
-      }
-    },
     removeMember(email) {
       if (!this.currentGroup) return;
-      // Защита от обхода UI: удаление — для админов и модераторов группы.
-      if (!this.isGroupModerator) return;
+      // Защита от обхода UI: удаление участников — только у админов.
+      if (!this.isGroupAdmin) return;
+      const member = this.currentGroup.members.find(m => m.email === email);
+      if (!member) return;
+      // Создатель неприкосновенен — может только выйти сам; себя через
+      // «Покинуть группу», а не удалением.
+      if (email === this.currentGroup.created_by) {
+        alert(this.t('cannot_remove_creator') || 'Создателя группы нельзя удалить');
+        return;
+      }
       api.removeGroupMember(this.currentGroup.id, email)
         .then(() => this.refreshGroupMembers())
         .catch(e => console.error('removeMember failed:', e));
     },
     async changeMemberRole(email, role) {
       if (!this.currentGroup) return;
+      // Смена ролей — только у админов (участники всем пользуются в чате,
+      // но ролями и составом не управляют).
+      if (!this.isGroupAdmin) return;
       try {
         await api.setGroupMemberRole(this.currentGroup.id, email, role);
         const m = this.currentGroup.members.find(m => m.email === email);

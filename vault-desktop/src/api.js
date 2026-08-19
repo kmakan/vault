@@ -655,12 +655,12 @@ export class ApiClient {
     const payload = invitePayload || {};
     // Импортируем группу с ключом из инвайта. Роли и создатель приходят из
     // инвайта (created_by + members) — Rust сливает их с локальными.
-    // Роли нормализуем к валидным значениям enum GroupRole.
-    const validRoles = ['Admin', 'Moderator', 'Member'];
+    // Роли нормализуем к модели Admin/Member (legacy Moderator → Member).
+    const validRoles = ['Admin', 'Member'];
     const inviteMembers = Array.isArray(payload.members)
       ? payload.members
           .filter(m => m && m.email)
-          .map(m => ({ email: m.email, role: validRoles.includes(m.role) ? m.role : 'Member' }))
+          .map(m => ({ email: m.email, role: m.role === 'Moderator' ? 'Member' : (validRoles.includes(m.role) ? m.role : 'Member') }))
       : null;
     await invoke('groups_import', {
       groupId,

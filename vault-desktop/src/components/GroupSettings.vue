@@ -38,8 +38,8 @@
       </div>
     </div>
 
-    <!-- Add Member — для админов и модераторов (создатель, роль Admin или Moderator) -->
-    <div class="group-settings__section" v-if="isModerator">
+    <!-- Add Member — только для админов (создатель или назначенный) -->
+    <div class="group-settings__section" v-if="isAdmin">
       <h4>{{ t('add_member') }}</h4>
       <div class="add-member-row">
         <button class="btn btn-primary add-member-btn" @click="addMember">
@@ -65,7 +65,7 @@
               {{ member.role }}
             </span>
           </div>
-          <div class="member-item__actions" v-if="isModerator && member.email !== currentUser">
+          <div class="member-item__actions" v-if="canRemove(member)">
             <select
               v-if="isAdmin"
               :value="member.role || 'Member'"
@@ -74,7 +74,6 @@
               :disabled="member.email === group.created_by"
             >
               <option value="Admin">{{ t('role_admin') }}</option>
-              <option value="Moderator">{{ t('role_moderator') }}</option>
               <option value="Member">{{ t('role_member') }}</option>
             </select>
             <button
@@ -157,10 +156,17 @@ const isAdmin = computed(() => {
   return member?.role === 'Admin' || props.group.created_by === props.currentUser
 })
 
-const isModerator = computed(() => {
-  const member = props.group.members?.find(m => m.email === props.currentUser)
-  return isAdmin.value || member?.role === 'Moderator'
-})
+// Кого текущий пользователь имеет право удалить:
+// - только админы удаляют участников;
+// - создателя не удаляет никто (он может только выйти сам);
+// - себя через «Покинуть группу».
+function canRemove(member) {
+  if (!props.group) return false
+  if (!isAdmin.value) return false
+  if (member.email === props.group.created_by) return false
+  if (member.email === props.currentUser) return false
+  return true
+}
 
 const isCreator = computed(() => props.group.created_by === props.currentUser)
 

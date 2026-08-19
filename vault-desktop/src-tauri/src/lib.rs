@@ -356,8 +356,8 @@ fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group
 fn groups_set_member_role(group_id: String, email: String, role: String) -> Result<groups::Group, String> {
     let role = match role.as_str() {
         "Admin" => groups::GroupRole::Admin,
-        "Moderator" => groups::GroupRole::Moderator,
         "Member" => groups::GroupRole::Member,
+        // "Moderator" is a legacy role (removed from the model) — cannot be assigned.
         _ => return Err("Unknown role".to_string()),
     };
     groups::set_member_role(&group_id, &email, role)

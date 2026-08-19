@@ -155,8 +155,7 @@ impl GroupManager {
         Ok(())
     }
 
-    /// Promote member up one step: Member -> Moderator -> Admin.
-    /// Admin promote is a no-op.
+    /// Promote member to Admin (Member -> Admin). Admin promote is a no-op.
     pub fn promote_member(
         &mut self,
         group_id: &str,
@@ -167,9 +166,10 @@ impl GroupManager {
             match member {
                 Some(m) => {
                     m.role = match m.role {
-                        GroupRole::Member => GroupRole::Moderator,
-                        GroupRole::Moderator => GroupRole::Admin,
+                        GroupRole::Member => GroupRole::Admin,
                         GroupRole::Admin => GroupRole::Admin,
+                        // Legacy role: a stored Moderator becomes a plain member.
+                        GroupRole::Moderator => GroupRole::Member,
                     };
                     self.save()?;
                     Ok(())
@@ -181,8 +181,7 @@ impl GroupManager {
         }
     }
 
-    /// Demote member down one step: Admin -> Moderator -> Member.
-    /// Member demote is a no-op.
+    /// Demote member to Member (Admin -> Member). Member demote is a no-op.
     pub fn demote_member(
         &mut self,
         group_id: &str,
@@ -203,9 +202,10 @@ impl GroupManager {
             match member {
                 Some(m) => {
                     m.role = match m.role {
-                        GroupRole::Admin => GroupRole::Moderator,
-                        GroupRole::Moderator => GroupRole::Member,
+                        GroupRole::Admin => GroupRole::Member,
                         GroupRole::Member => GroupRole::Member,
+                        // Legacy role: a stored Moderator becomes a plain member.
+                        GroupRole::Moderator => GroupRole::Member,
                     };
                     self.save()?;
                     Ok(())
@@ -384,16 +384,7 @@ mod tests {
         let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.add_member(&group.id, "user@test.com").unwrap();
-        // Member -> Moderator
-        mgr.promote_member(&group.id, "user@test.com").unwrap();
-        let g = mgr.get_group(&group.id).unwrap();
-        let m = g
-            .members
-            .iter()
-            .find(|m| m.email == "user@test.com")
-            .unwrap();
-        assert!(matches!(m.role, GroupRole::Moderator));
-        // Moderator -> Admin
+        // Member -> Admin (single step, no Moderator tier)
         mgr.promote_member(&group.id, "user@test.com").unwrap();
         let g = mgr.get_group(&group.id).unwrap();
         let m = g
