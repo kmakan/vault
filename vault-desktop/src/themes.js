@@ -128,37 +128,7 @@ export const themes = {
       '--status-encrypted': '#268bd2',
     }
   },
-  vendetta: {
-    name: 'Vendetta',
-    icon: '🎭',
-    vars: {
-      'color-scheme': 'dark',
-      // Чёрный антрацит — как флаг анархии
-      '--bg-primary': '#0a0a0a',
-      '--bg-secondary': '#141414',
-      '--bg-tertiary': '#1e1e1e',
-      '--bg-hover': '#2a2a2a',
-      '--bg-active': '#3a3a3a',
-      // Красный акцент — как буква V в иконке Vendetta
-      '--accent-primary': '#d21f2b',
-      '--accent-secondary': '#e53945',
-      '--accent-glow': 'rgba(210, 31, 43, 0.28)',
-      // Серые оттенки текста
-      '--text-primary': '#e8e8e8',
-      '--text-secondary': '#9a9a9a',
-      '--text-muted': '#6b6b6b',
-      '--border-subtle': 'rgba(255, 255, 255, 0.07)',
-      '--border-hover': 'rgba(255, 255, 255, 0.13)',
-      // Дополнительные (используются компонентами)
-      '--status-online': '#2ecc71',
-      '--status-warning': '#e67e22',
-      '--status-encrypted': '#d21f2b',
-      '--danger': '#d21f2b',
-      '--danger-hover': '#b01822',
-      '--success': '#27ae60',
-    }
-  },
-}
+
 
 export function applyTheme(themeId) {
   const theme = themes[themeId]
