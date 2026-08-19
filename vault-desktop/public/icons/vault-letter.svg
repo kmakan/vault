@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <!-- Vault logo: violet outline letter V on transparent circle (19.08) -->
   <circle cx="64" cy="64" r="56" fill="none"/>
-  <path d="M36 28 L64 96 L92 28" fill="none" stroke="#8b5cf6" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M36 28 L64 96 L92 28" fill="none" stroke="#8b5cf6" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

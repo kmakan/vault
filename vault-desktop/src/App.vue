@@ -3959,8 +3959,8 @@ body {
 }
 
 .app-logo-img {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-full);
   object-fit: cover;
 }
@@ -4184,6 +4184,9 @@ body {
   padding: 8px;
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .header-actions button:hover {
