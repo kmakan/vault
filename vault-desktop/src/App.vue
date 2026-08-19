@@ -449,8 +449,8 @@
                 <svg class="chat-action-icon export-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <defs>
                     <linearGradient id="export-icon-gradient" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0%" stop-color="#818cf8" />
-                      <stop offset="100%" stop-color="#c084fc" />
+                      <stop offset="0%" stop-color="#60a5fa" />
+                      <stop offset="100%" stop-color="#38bdf8" />
                     </linearGradient>
                   </defs>
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="url(#export-icon-gradient)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -5476,7 +5476,7 @@ body {
 }
 
 .export-icon {
-  filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.4));
+  filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.4));
 }
 
 .export-menu {
