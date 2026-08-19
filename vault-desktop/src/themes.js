@@ -128,7 +128,7 @@ export const themes = {
       '--status-encrypted': '#268bd2',
     }
   },
-
+};
 
 export function applyTheme(themeId) {
   const theme = themes[themeId]
