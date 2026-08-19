@@ -6056,14 +6056,14 @@ body {
 /* ═══════════════════════════════════════════════════════════════
    Responsive (for future use)
    ═══════════════════════════════════════════════════════════════ */
-/* УДАЛЕНО 19.08: @media (max-width: 768px) { .sidebar { width:100% }
-   .main-area { display:none } } — на Android (viewport 412px) медиазапрос
-   срабатывал, main-area скрывался, а ВСЕ модалки (QR, настройки,
-   инвайт-попапы) рендерятся ВНУТРИ .main-area → «add contact/настройки
-   не реагируют» (модалка открывалась, но была невидима). Десктоп не
-   страдал только потому, что окно обычно развёрнуто (>768px).
-   Когда понадобится мобильная навигация sidebar↔chat — сделать её
-   явно (переключение вкладок), не скрывая контейнер модалок. */
+/* REMOVED 19.08: @media (max-width: 768px) { .sidebar { width:100% }
+   .main-area { display:none } } — on Android (viewport 412px) the query
+   fired, .main-area got hidden, and ALL modals (QR add-contact, settings,
+   invite popups) render INSIDE .main-area → "add contact/settings not
+   responding" (modal opened but invisible). Desktop was unaffected only
+   because the window is usually maximized (>768px).
+   When mobile sidebar↔chat navigation is needed later — implement it
+   explicitly (tab switching), do NOT hide the modal container. */
 
 /* Попапы инвайтов/контактов/добавления участника используют modal-settings,
    но им нужны внутренние отступы (у самого modal-settings их нет — туда
