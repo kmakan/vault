@@ -144,7 +144,13 @@
         <!-- Groups Section -->
         <div v-if="groups.length > 0" class="groups-section">
           <div class="groups-header">
-            <span>👥 {{ t('nav_groups') || 'Groups' }}</span>
+            <svg class="groups-header-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="9" cy="7" r="4" stroke="currentColor" stroke-width="2.4" />
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            {{ t('nav_groups') || 'Groups' }}
           </div>
           <div 
             v-for="group in groups" 
@@ -4444,6 +4450,14 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.groups-header-icon {
+  display: block;
+  flex-shrink: 0;
 }
 
 .group-avatar {
