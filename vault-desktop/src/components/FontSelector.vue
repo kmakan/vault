@@ -78,12 +78,7 @@ function selectFont(id) {
 }
 
 .font-card.pro {
-  border-style: dashed;
   border-color: var(--accent-secondary, #818cf8);
-}
-
-.font-card.pro.active {
-  border-style: solid;
 }
 
 .font-icon {

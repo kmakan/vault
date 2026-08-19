@@ -61,7 +61,17 @@
           <img :src="appIconUrl" alt="Vault" class="app-logo-img" />
         </div>
         <div class="header-actions">
-          <button :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">➕</button>
+          <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
+            <svg class="group-create-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="group-create-gradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#818cf8" />
+                  <stop offset="100%" stop-color="#c084fc" />
+                </linearGradient>
+              </defs>
+              <path d="M12 5v14M5 12h14" stroke="url(#group-create-gradient)" stroke-width="2.4" stroke-linecap="round" />
+            </svg>
+          </button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
           <button :title="t('nav_keys')" @click="showKeyManager = true">🔑</button>
           <button :title="t('cipher_title')" @click="showCipher = true">🛡</button>
@@ -3936,6 +3946,21 @@ body {
 
 .header-actions button:hover {
   background: var(--bg-hover);
+}
+
+.header-actions .group-create-btn {
+  padding: 8px;
+}
+
+.group-create-icon {
+  display: block;
+  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.5));
+  transition: filter var(--transition-fast), transform 0.15s;
+}
+
+.header-actions .group-create-btn:hover .group-create-icon {
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 6px rgba(139, 92, 246, 0.8));
 }
 
 /* ═══════════════════════════════════════════════════════════════

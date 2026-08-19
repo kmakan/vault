@@ -71,10 +71,6 @@
           <span class="badge badge-green">Включено</span>
         </div>
         <div class="setting-row">
-          <span>Скрыть номер телефона</span>
-          <label class="toggle"><input type="checkbox" v-model="hidePhone" /><span class="slider"></span></label>
-        </div>
-        <div class="setting-row">
           <span>Скрыть последний вход</span>
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
@@ -131,7 +127,6 @@ export default {
       localDisplayName: this.displayName || '',
       notifSound: true,
       notifTray: true,
-      hidePhone: false,
       hideLastSeen: false,
       categories: [
         { id: 'profile', icon: '👤', label: 'Профиль' },
