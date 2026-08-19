@@ -62,17 +62,17 @@
         </div>
         <div class="header-actions">
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
-            <svg class="group-create-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <svg class="group-create-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <defs>
                 <linearGradient id="group-create-gradient" x1="0" y1="0" x2="1" y2="1">
                   <stop offset="0%" stop-color="#818cf8" />
                   <stop offset="100%" stop-color="#c084fc" />
                 </linearGradient>
               </defs>
-              <circle cx="10" cy="8" r="5" stroke="url(#group-create-gradient)" stroke-width="2" />
-              <path d="M2 21a8 8 0 0 1 13.292-6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
-              <path d="M19 8v6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
-              <path d="M22 11h-6" stroke="url(#group-create-gradient)" stroke-width="2" stroke-linecap="round" />
+              <circle cx="10" cy="8" r="5" stroke="url(#group-create-gradient)" stroke-width="2.6" />
+              <path d="M2 21a8 8 0 0 1 13.292-6" stroke="url(#group-create-gradient)" stroke-width="2.6" stroke-linecap="round" />
+              <path d="M19 8v6" stroke="url(#group-create-gradient)" stroke-width="2.6" stroke-linecap="round" />
+              <path d="M22 11h-6" stroke="url(#group-create-gradient)" stroke-width="2.6" stroke-linecap="round" />
             </svg>
           </button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true">🔗</button>
@@ -95,7 +95,17 @@
           :class="{ active: activeChat === '__notes__' }"
           @click="selectNotes"
         >
-          <div class="notes-self-avatar">📝</div>
+          <div class="notes-self-avatar">
+            <svg class="notes-self-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="notes-self-gradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stop-color="#818cf8" />
+                  <stop offset="100%" stop-color="#c084fc" />
+                </linearGradient>
+              </defs>
+              <path d="M15.5 4.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" stroke="url(#notes-self-gradient)" stroke-width="2.2" stroke-linejoin="round" />
+            </svg>
+          </div>
           <div class="contact-info">
             <div class="contact-name">{{ t('notes_self') || 'Заметки для себя' }}</div>
             <div class="contact-email">{{ t('notes_self_hint') || 'Только на этом устройстве' }}</div>
@@ -375,7 +385,17 @@
               </div>
             </template>
             <template v-else-if="activeChat === '__notes__'">
-              <div class="notes-self-avatar notes-self-avatar-lg">📝</div>
+              <div class="notes-self-avatar notes-self-avatar-lg">
+                <svg class="notes-self-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="notes-self-gradient" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stop-color="#818cf8" />
+                      <stop offset="100%" stop-color="#c084fc" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M15.5 4.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" stroke="url(#notes-self-gradient)" stroke-width="2.2" stroke-linejoin="round" />
+                </svg>
+              </div>
             </template>
             <template v-else>
               <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
@@ -4463,6 +4483,11 @@ body {
   width: 40px;
   height: 40px;
   font-size: 18px;
+}
+
+.notes-self-icon {
+  display: block;
+  filter: drop-shadow(0 0 4px rgba(139, 92, 246, 0.4));
 }
 
 /* ═══════════════════════════════════════════════════════════════

@@ -77,10 +77,6 @@ function selectFont(id) {
   background: var(--accent-glow, rgba(99, 102, 241, 0.15));
 }
 
-.font-card.pro {
-  border-color: var(--accent-secondary, #818cf8);
-}
-
 .font-icon {
   font-size: 16px;
 }
