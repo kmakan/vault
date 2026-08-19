@@ -528,7 +528,6 @@
                 </div>
               </div>
               </template>
-              <span v-if="msg.encrypted" class="encrypted-badge" title="End-to-end encrypted">🔒</span>
             </div>
             <!-- Reply button (visible on hover) -->
             <button class="reply-btn" title="Reply" @click.stop="setReply(msg)">↩</button>
@@ -4683,11 +4682,6 @@ body {
   background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
   border-bottom-left-radius: var(--radius-lg);
   border-bottom-right-radius: 4px;
-}
-
-.encrypted-badge {
-  margin-left: 6px;
-  font-size: 12px;
 }
 
 /* Reply (quote a message, like other messengers) */
