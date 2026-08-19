@@ -6,6 +6,8 @@
 приложения».
 
 Файлы:
+- `vault-android-launcher.svg` — векторная версия (проверена: рендер
+  совпадает с оригиналом на 99.5%)
 - `vault-android-launcher-192.png` — оригинал из gen/android
   (mipmap-xxxhdpi/ic_launcher.png)
 - `vault-android-launcher-512.png` — увеличенная копия для просмотра
