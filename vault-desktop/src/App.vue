@@ -57,7 +57,7 @@
     <!-- MAIN APP -->
     <div v-else class="sidebar">
       <div class="sidebar-header">
-        <div class="app-logo" :title="t('app_name') || 'Vault'">
+        <div class="app-logo" :title="t('app_name') || 'Vault'" @click="openAppSite">
           <img :src="appIconUrl" alt="Vault" class="app-logo-img" />
         </div>
         <div class="header-actions">
@@ -718,6 +718,12 @@ import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile, downloadBase64 } from './chatExport.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
+import { open as openExternal } from '@tauri-apps/plugin-shell';
+
+// Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
+// когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
+// и клик по логотипу в шапке откроет его во внешнем браузере.
+const APP_SITE_URL = '';
 
 export default {
   name: 'ChatApp',
@@ -3079,6 +3085,16 @@ export default {
     // --- Копирование сообщений ---
     openMessageMenu(event, msg) {
       this.messageMenu = { x: event.clientX, y: event.clientY, msg };
+    },
+    // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
+    // Пока APP_SITE_URL пустой — клик ничего не делает.
+    openAppSite() {
+      if (!APP_SITE_URL) return;
+      try {
+        openExternal(APP_SITE_URL);
+      } catch (e) {
+        window.open(APP_SITE_URL, '_blank');
+      }
     },
     // Копирование с fallback для WebKitGTK (clipboard API может быть
     // недоступен без фокуса — тогда через временный textarea).
