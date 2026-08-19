@@ -72,7 +72,6 @@ fn set_app_icon(app: tauri::AppHandle, icon_id: String) -> Result<(), String> {
         "keyhole" => include_bytes!("../icons/vault_icon_vault-keyhole.png"),
         "letter" => include_bytes!("../icons/vault_icon_vault-letter.png"),
         "shield" => include_bytes!("../icons/vault_icon_vault-shield.png"),
-        "vendetta" => include_bytes!("../icons/vault_icon_vault-vendetta.png"),
         _ => return Err("unknown icon".to_string()),
     };
 
