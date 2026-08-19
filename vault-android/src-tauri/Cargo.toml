@@ -11,12 +11,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Encryption (same as desktop)
+# Encryption
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 sha2 = "0.10"
@@ -27,12 +27,36 @@ anyhow = "1"
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
+# Email transport (serverless IMAP/SMTP)
+# imap: вендоренная копия 2.4.1 — патч client.rs:1369 (assert_eq! тегов →
+# ошибка вместо паники; zoho присылает ответы со сдвинутыми тегами, и с
+# panic=abort оригинальный assert убивал приложение при sign-in).
+imap = { path = "../../vendor/imap" }
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
+native-tls = "0.2"
+
+# Android: openssl-sys не находит системный OpenSSL при кросс-компиляции —
+# собираем openssl из исходников (vendored) для android-таргета.
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
 # Local database
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Linux: прямой доступ к WebKitGTK WebView для обработчика разрешений
+# (getUserMedia для голосовых сообщений) — только desktop.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+webkit2gtk = { version = "2", features = ["v2_40"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
-opt-level = "s"
+opt-level = "s"    # optimize for size
 panic = "abort"

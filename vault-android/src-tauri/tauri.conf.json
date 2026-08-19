@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.vault.vault",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:9443 http://localhost:9443/api; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": null
     }
   },
   "bundle": {
@@ -33,7 +33,7 @@
     ],
     "category": "Communication",
     "shortDescription": "E2E Encrypted Messenger",
-    "longDescription": "Vault (Vault) is an end-to-end encrypted messenger with support for individual and group chats."
+    "longDescription": "Vault (Vault) is an end-to-end encrypted messenger with support for individual and group chats, file sharing, and email integration."
   },
   "plugins": {
     "shell": {

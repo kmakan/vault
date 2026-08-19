@@ -1,0 +1,156 @@
+/* ==========================================================================
+   Vault — базовые стили.
+   Стили шаблона Vite (#app width:1126px, font:18px/145%, min-height:100svh,
+   .hero / #center / #next-steps / #spacer / .ticks ...) УДАЛЕНЫ: они зажимали
+   весь интерфейс в центрированную колонку 1126px и ломали раскладку чата
+   (список сообщений не прокручивался, поле ввода уходило за экран).
+   ========================================================================== */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+/* color-scheme говорит WebKitGTK рендерить нативные контролы (выпадающие
+   списки <select>, скроллбары) в тёмной/светлой схеме. Без него попап
+   селекта всегда светлый (GTK-тема), а текст опций наследует светлый
+   --text-primary → светлое на светлом, нечитаемо. applyTheme()
+   переопределяет свойство на :root при смене темы. */
+:root {
+  color-scheme: dark;
+}
+
+/* Выпадающие списки: явный фон/текст опций по переменным темы. В WebKitGTK
+   option внутри попапа не всегда наследует CSS-переменные — дублируем
+   цвета напрямую, чтобы текст был виден в любой из 7 тем. */
+select {
+  background-color: var(--bg-secondary, #12122a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+option {
+  background-color: var(--bg-secondary, #12122a);
+  color: var(--text-primary, #f1f5f9);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}
+
+/* --- Замены нативных диалогов (ui.js): toast + модалки --- */
+#vault-ui-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2500;
+}
+
+.vault-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: 380px;
+  padding: 10px 16px;
+  background: #1c2333;
+  color: #e6edf3;
+  border: 1px solid #2e3a52;
+  border-radius: 8px;
+  font: 13px/1.4 system-ui, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.vault-toast-show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.vault-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  z-index: 2600;
+}
+
+.vault-dialog {
+  min-width: 320px;
+  max-width: 440px;
+  background: #141a26;
+  color: #e6edf3;
+  border: 1px solid #2e3a52;
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  font: 14px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+.vault-dialog-title {
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 8px;
+  color: #f3f4f6;
+}
+
+.vault-dialog-msg {
+  color: #9ca3af;
+  margin-bottom: 14px;
+  white-space: pre-line;
+}
+
+.vault-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  margin-bottom: 14px;
+  background: #0f1420;
+  color: #e6edf3;
+  border: 1px solid #2e3a52;
+  border-radius: 6px;
+  font: 13px system-ui, 'Segoe UI', Roboto, sans-serif;
+  outline: none;
+}
+
+.vault-dialog-input:focus {
+  border-color: #4f6fa8;
+}
+
+.vault-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.vault-dialog-buttons button {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 6px;
+  font: 13px system-ui, 'Segoe UI', Roboto, sans-serif;
+  cursor: pointer;
+}
+
+.vault-dialog-ok {
+  background: #0f3460;
+  color: #fff;
+}
+
+.vault-dialog-ok:hover {
+  background: #16487f;
+}
+
+.vault-dialog-cancel {
+  background: #232b3d;
+  color: #c8d1e0;
+}
+
+.vault-dialog-cancel:hover {
+  background: #2e3a52;
+}
