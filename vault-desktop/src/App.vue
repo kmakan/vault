@@ -443,7 +443,7 @@
             <template v-else-if="activeChat && activeChat !== '__notes__'">
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'">✏️</button>
             </template>
-            <button @click="showChatSearch = !showChatSearch" title="Search">🔍</button>
+            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'">🔍</button>
             <div class="export-dropdown" v-if="activeChat">
               <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
                 <svg class="chat-action-icon export-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -530,7 +530,7 @@
               </template>
             </div>
             <!-- Reply button (visible on hover) -->
-            <button class="reply-btn" title="Reply" @click.stop="setReply(msg)">↩</button>
+            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)">↩</button>
             <!-- Copy button (visible on hover) -->
             <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)">⧉</button>
             <!-- Edit/Delete — только свои сообщения (видны на hover) -->
