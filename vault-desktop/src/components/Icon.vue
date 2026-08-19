@@ -7,15 +7,9 @@
     :class="['vault-icon', cls]"
     aria-hidden="true"
   >
-    <defs v-if="gradient">
-      <linearGradient :id="gradId" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#818cf8" />
-        <stop offset="100%" stop-color="#c084fc" />
-      </linearGradient>
-    </defs>
     <g
-      :stroke="gradient ? `url(#${gradId})` : 'currentColor'"
-      stroke-width="2"
+      :stroke="strokeColor"
+      :stroke-width="strokeWidth"
       stroke-linecap="round"
       stroke-linejoin="round"
     >
@@ -36,10 +30,15 @@ import { icons } from '../icons.js';
 const props = defineProps({
   name: { type: String, required: true },
   size: { type: [Number, String], default: 18 },
-  gradient: { type: Boolean, default: false },
+  // Единый цвет иконок Vault (решение 19.08: все функциональные иконки —
+  // одним фиолетовым; градиент на мелких глифах не читается).
+  color: { type: String, default: '#8b5cf6' },
+  // Толщина линий: единая 2.25; шестерёнка (settings) — 2.0, её огромный
+  // путь при большей толщине слипается (замечание пользователя 19.08).
   cls: { type: String, default: '' },
 });
 
 const paths = computed(() => icons[props.name] || []);
-const gradId = 'vault-icon-grad-' + props.name;
+const strokeColor = props.color;
+const strokeWidth = props.name === 'settings' ? 2 : 2.25;
 </script>
