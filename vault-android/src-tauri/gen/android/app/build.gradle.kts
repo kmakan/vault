@@ -14,6 +14,14 @@ val tauriProperties = Properties().apply {
 }
 
 android {
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("VAULT_KEYSTORE") ?: "")
+            storePassword = System.getenv("VAULT_KEYSTORE_PASS") ?: ""
+            keyAlias = "vault"
+            keyPassword = System.getenv("VAULT_KEYSTORE_PASS") ?: ""
+        }
+    }
     compileSdk = 36
     namespace = "com.vault.vault"
     defaultConfig {
@@ -37,6 +45,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
