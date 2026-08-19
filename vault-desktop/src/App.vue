@@ -4850,13 +4850,10 @@ body {
   flex-shrink: 0;
   font-size: 13px;
 }
-.pinned-banner-icon { flex-shrink: 0; color: var(--accent-primary, #6366f1); }
-
-/* Экспорт чата — solid indigo (решение 19.08: градиент плавил верх стрелки) */
-.export-icon { color: #818cf8; }
+.pinned-banner-icon { flex-shrink: 0; }
 
 /* Reply-иконка в баре ответа/редактирования */
-.reply-bar-ic { flex-shrink: 0; color: var(--accent-primary, #6366f1); }
+.reply-bar-ic { flex-shrink: 0; }
 .pinned-banner-text {
   flex: 1;
   color: var(--text-primary, #f1f5f9);
