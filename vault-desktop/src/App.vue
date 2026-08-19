@@ -727,6 +727,7 @@ import QRCodePanel from './components/QRCodePanel.vue';
 import { applyTheme, loadSavedTheme } from './themes.js';
 import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile, downloadBase64 } from './chatExport.js';
+import { saveHistory, loadHistory } from './history.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
@@ -1869,6 +1870,16 @@ export default {
         }
       })();
     },
+    // Локальная история (IndexedDB): мгновенный показ до живого фетча —
+    // чат открывается без ожидания IMAP, история переживает перезапуск.
+    showHistoryFirst(chatKey, isStale) {
+      return loadHistory(this.email, chatKey).then(hist => {
+        if (hist && hist.length && !isStale()) this.messages = hist;
+      });
+    },
+    saveCurrentHistory(chatKey) {
+      saveHistory(this.email, chatKey, this.messages);
+    },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
       // результаты этого (медленного) фетча применять нельзя — иначе
@@ -1876,6 +1887,8 @@ export default {
       const seq = this.loadSeq;
       const chat = email;
       const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
+      // Мгновенный показ локальной истории (если есть) до живого фетча.
+      this.showHistoryFirst(chat, stale);
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!this.peerKeys[email]) {
@@ -2080,6 +2093,8 @@ export default {
         this.messages = this.mergePending(chat, list);
         // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
         this.saveChatCache(chat, this.messages);
+        // Локальная история (IndexedDB) — полный архив чата.
+        this.saveCurrentHistory(chat);
         // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
         const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
         this.sendReadReceipts(incoming);
@@ -2287,6 +2302,8 @@ export default {
           // подмешиваются обратно (иначе поллинг стирал их).
           this.messages = this.mergePending(chat, list);
           this.saveChatCache(chat, this.messages);
+          // Локальная история (IndexedDB) — полный архив группы.
+          this.saveCurrentHistory(chat);
           // Открыли группу — шлём участникам квитанции «просмотрено» по входящим.
           const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
           this.sendReadReceipts(incoming);
