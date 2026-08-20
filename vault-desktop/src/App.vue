@@ -1965,7 +1965,10 @@ export default {
       const chat = email;
       const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
       // Мгновенный показ локальной истории (если есть) до живого фетча.
-      this.showHistoryFirst(chat, stale);
+      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // гонка с loadMessages: merged=[] без истории и saveCurrentHistory([])
+      // затирал сохранённую историю → сообщения «пропадали» (kmakan).
+      await this.showHistoryFirst(chat, stale);
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!this.peerKeys[email]) {
@@ -2276,6 +2279,11 @@ export default {
         this.pinnedMsgId = (pin && pin.msg_id) || null;
         this.pinnedPreview = (pin && pin.preview) || '';
       }
+      // Мгновенный показ локальной истории (если есть) до живого фетча.
+      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // гонка с loadGroupMessages: merged=[] без истории и saveCurrentHistory
+      // затирал сохранённую историю → сообщения «пропадали» (kmakan).
+      await this.showHistoryFirst(chat, stale);
       try {
         const raw = await api.getGroupMessages(groupId, this.emails);
         if (stale()) return;

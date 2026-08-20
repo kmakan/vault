@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -142,6 +143,25 @@ impl Storage {
                 key TEXT NOT NULL,
                 value TEXT NOT NULL,
                 PRIMARY KEY (account, key)
+            );
+            -- 6) envelope cache (Delta Chat-style): the fetched mail list per
+            --    account. this.emails is in-memory only — on restart it was
+            --    empty while UID cursors were already advanced, so old mails
+            --    (below the cursor) never came back and chats looked empty
+            --    (20.08 icemaksim: «сообщение не появилось»). Persisting the
+            --    envelope list keeps cursors and mails consistent across
+            --    restarts without a full IMAP rescan.
+            CREATE TABLE IF NOT EXISTS emails (
+                account TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                from_addr TEXT NOT NULL DEFAULT '',
+                to_addr TEXT NOT NULL DEFAULT '',
+                subject TEXT NOT NULL DEFAULT '',
+                date TEXT NOT NULL DEFAULT '',
+                is_read INTEGER NOT NULL DEFAULT 0,
+                message_id TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (account, folder, uid)
             );
             ",
         )?;
@@ -497,11 +517,57 @@ pub fn kv_delete(&self, account: &str, key: &str) -> Result<()> {
         .execute("DELETE FROM kv_store WHERE account=?1 AND key=?2", params![account, key])?;
     Ok(())
 }
+
+// Email envelope cache: persists this.emails across restarts so UID cursors
+// and the mail list stay consistent (no full IMAP rescan needed).
+pub fn save_emails(&self, account: &str, emails_json: &str) -> Result<()> {
+    let parsed: Vec<EmailRow> = serde_json::from_str(emails_json).unwrap_or_default();
+    let mut stmt = self.conn.prepare(
+        "INSERT OR REPLACE INTO emails (account, uid, folder, from_addr, to_addr, subject, date, is_read, message_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+    )?;
+    for e in parsed {
+        stmt.execute(params![account, e.uid, e.folder, e.from, e.to, e.subject, e.date, e.is_read as i32, e.message_id])?;
+    }
+    Ok(())
+}
+
+pub fn load_emails(&self, account: &str) -> Result<Vec<EmailRow>> {
+    let mut stmt = self.conn.prepare(
+        "SELECT uid, folder, from_addr, to_addr, subject, date, is_read, message_id FROM emails WHERE account=?1 ORDER BY date DESC LIMIT 2000"
+    )?;
+    let rows = stmt.query_map(params![account], |row| Ok(EmailRow {
+        uid: row.get(0)?,
+        folder: row.get(1)?,
+        from: row.get(2)?,
+        to: row.get(3)?,
+        subject: row.get(4)?,
+        date: row.get(5)?,
+        is_read: row.get::<_, i32>(6)? != 0,
+        message_id: row.get(7)?,
+    }))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+pub fn clear_emails(&self, account: &str) -> Result<()> {
+    self.conn.execute("DELETE FROM emails WHERE account=?1", params![account])?;
+    Ok(())
+}
 }
 
 // ─── Data Types ──────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailRow {
+    pub uid: String,
+    pub folder: String,
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub date: String,
+    pub is_read: bool,
+    pub message_id: String,
+}
 pub struct UserRecord {
     pub id: String,
     pub email: String,
