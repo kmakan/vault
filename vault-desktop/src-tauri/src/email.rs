@@ -439,7 +439,14 @@ impl EmailClient {
 
         let mut collect =
             |folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
-                new_cursors.insert(fallback.to_string(), max_uid);
+                // Пустой результат НЕ продвигает курсор: uid_search мог вернуть
+                // пусто из-за троттлинга/рассинхрона сессии, и запись 0
+                // «отравляла» папку — инкремент от 0 при следующих поллингах
+                // тоже возвращал пусто (Zoho), чаты пустели навсегда (20.08).
+                // Курсор движется только при реально полученных письмах.
+                if max_uid > 0 {
+                    new_cursors.insert(fallback.to_string(), max_uid);
+                }
                 if max_uid == 0 {
                     return; // empty folder — nothing new
                 }

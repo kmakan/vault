@@ -2097,7 +2097,18 @@ export default {
         // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
         // подмешиваются обратно — иначе поллинг стирал их («появлялось
         // и исчезало» у отправителя).
-        this.messages = this.mergePending(chat, await this.mergeHistory(chat, list));
+        // ФИКС 20.08: пустой фетч (IMAP упал/троттлинг/сессия умерла) не
+        // должен затирать показанный чат — иначе при сбое почты все чаты
+        // становятся пустыми, а курсоры 0 «отравляют» приложение навсегда.
+        const hadMessages = this.messages && this.messages.length > 0;
+        const merged = this.mergePending(chat, await this.mergeHistory(chat, list));
+        if (!merged.length && hadMessages && !stale()) {
+          // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
+          // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
+          // сохранённую историю чата).
+          return;
+        }
+        this.messages = merged;
         // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
         this.saveChatCache(chat, this.messages);
         // Локальная история (IndexedDB) — полный архив чата.
@@ -2320,7 +2331,13 @@ export default {
           this.applyEdits(list, chat, wireEdits);
           // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
           // подмешиваются обратно (иначе поллинг стирал их).
-          this.messages = this.mergePending(chat, await this.mergeHistory(chat, list));
+          // ФИКС 20.08: пустой фетч не затирает показанный чат (см. loadMessages).
+          const hadMessages = this.messages && this.messages.length > 0;
+          const merged = this.mergePending(chat, await this.mergeHistory(chat, list));
+          if (!merged.length && hadMessages && !stale()) {
+            return;
+          }
+          this.messages = merged;
           this.saveChatCache(chat, this.messages);
           // Локальная история (IndexedDB) — полный архив группы.
           this.saveCurrentHistory(chat);
