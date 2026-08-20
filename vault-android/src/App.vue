@@ -1505,19 +1505,52 @@ export default {
     // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
     // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
     // транспорт: приносит НОВЫЕ письма, уже показанное не затирает (20.08).
-    async mergeHistory(chatKey, list) {
-      let hist = null;
+    // Локальная история чата: IndexedDB (основной) + localStorage-копия.
+    // IndexedDB в WebKitGTK может молча не открываться (onblocked) — тогда
+    // история живёт в localStorage-копии, и чаты всё равно открываются из
+    // своих данных, а не из почты (фикс 20.08).
+    async loadLocalHistory(chatKey) {
       try {
-        hist = await loadHistory(this.email, chatKey);
-      } catch (e) {
-        return list;
-      }
+        const hist = await loadHistory(this.email, chatKey);
+        if (hist && hist.length) return hist;
+      } catch (e) { /* fallback ниже */ }
+      try {
+        const raw = localStorage.getItem('vault-hist:' + this.email + ':' + chatKey);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr) && arr.length) return arr;
+        }
+      } catch (e) { /* ignore */ }
+      return null;
+    },
+    saveLocalHistory(chatKey, messages) {
+      try {
+        const slim = (messages || []).map(m => ({
+          id: m.id, content: m.content, from: m.from,
+          sender_id: m.sender_id, time: m.time,
+          ts: m.ts || this.msgTs(m), status: m.status,
+          attachment: m.attachment || undefined,
+          reactions: m.reactions || undefined,
+          deleted: m.deleted || undefined,
+          edited: m.edited || undefined,
+        }));
+        localStorage.setItem('vault-hist:' + this.email + ':' + chatKey, JSON.stringify(slim));
+      } catch (e) { /* quota — не критично */ }
+    },
+    // mergeHistory: ИСТОРИЯ — источник истины (сообщения, отправленные или
+    // полученные когда-либо, остаются в чате навсегда, с датами), а письма
+    // из IMAP только ДОБАВЛЯЮТ новое. Раньше было наоборот — чат каждый
+    // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
+    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами (20.08).
+    async mergeHistory(chatKey, list) {
+      const hist = await this.loadLocalHistory(chatKey);
       if (!hist || !hist.length) return list;
       const ids = new Set();
-      for (const m of list) if (m && m.id) ids.add(m.id);
-      const extra = hist.filter(h => h && h.id && !ids.has(h.id));
-      if (!extra.length) return list;
-      const merged = [...list, ...extra];
+      for (const m of hist) if (m && m.id) ids.add(m.id);
+      // Из писем добавляем только то, чего ещё нет в истории (новое).
+      const extra = list.filter(m => m && m.id && !ids.has(m.id));
+      if (!extra.length) return hist;
+      const merged = [...hist, ...extra];
       merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
       return merged;
     },
@@ -1868,15 +1901,19 @@ export default {
         }
       })();
     },
-    // Локальная история (IndexedDB): мгновенный показ до живого фетча —
-    // чат открывается без ожидания IMAP, история переживает перезапуск.
+    // Локальная история: мгновенный показ до живого фетча — чат открывается
+    // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
+    // в localStorage, см. loadLocalHistory).
     showHistoryFirst(chatKey, isStale) {
-      return loadHistory(this.email, chatKey).then(hist => {
+      return this.loadLocalHistory(chatKey).then(hist => {
         if (hist && hist.length && !isStale()) this.messages = hist;
       });
     },
     saveCurrentHistory(chatKey) {
       saveHistory(this.email, chatKey, this.messages);
+      // Копия в localStorage: IndexedDB может молча падать (WebKitGTK
+      // onblocked) — без копии история терялась и чаты пустели.
+      this.saveLocalHistory(chatKey, this.messages);
     },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
@@ -2092,16 +2129,20 @@ export default {
           if (ack.read) pmsg.status = 'read';
           else if (ack.delivered) pmsg.status = 'delivered';
         }
-        this.applyReactions(list, chat, wireReactions);
-        this.applyEdits(list, chat, wireEdits);
-        // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
-        // подмешиваются обратно — иначе поллинг стирал их («появлялось
-        // и исчезало» у отправителя).
-        // ФИКС 20.08: пустой фетч (IMAP упал/троттлинг/сессия умерла) не
-        // должен затирать показанный чат — иначе при сбое почты все чаты
-        // становятся пустыми, а курсоры 0 «отравляют» приложение навсегда.
+        // История — основа чата, письма добавляют новое (mergeHistory).
+        // Статусы/реакции/правки применяем к ИТОГОВОМУ списку: в истории
+        // могли остаться старые статусы, а письмо принесло свежий.
         const hadMessages = this.messages && this.messages.length > 0;
-        const merged = this.mergePending(chat, await this.mergeHistory(chat, list));
+        const merged0 = await this.mergeHistory(chat, list);
+        const statusById = new Map();
+        for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
+        for (const m of merged0) {
+          const st = statusById.get(m.id);
+          if (st) m.status = st;
+        }
+        this.applyReactions(merged0, chat, wireReactions);
+        this.applyEdits(merged0, chat, wireEdits);
+        const merged = this.mergePending(chat, merged0);
         if (!merged.length && hadMessages && !stale()) {
           // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
           // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
@@ -2327,13 +2368,20 @@ export default {
             const ack = wireAcks[pid];
             if (ack && Object.keys(ack).length) pmsg.status = 'read';
           }
-          this.applyReactions(list, chat, wireReactions);
-          this.applyEdits(list, chat, wireEdits);
-          // Оптимистичные исходящие, ещё не сделавшие круг через ящик,
-          // подмешиваются обратно (иначе поллинг стирал их).
-          // ФИКС 20.08: пустой фетч не затирает показанный чат (см. loadMessages).
+          // История — основа чата, письма добавляют новое (mergeHistory).
+          // Статусы/реакции/правки — к итоговому списку (в истории старые
+          // статусы, письмо приносит свежий).
           const hadMessages = this.messages && this.messages.length > 0;
-          const merged = this.mergePending(chat, await this.mergeHistory(chat, list));
+          const merged0 = await this.mergeHistory(chat, list);
+          const statusById = new Map();
+          for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
+          for (const m of merged0) {
+            const st = statusById.get(m.id);
+            if (st) m.status = st;
+          }
+          this.applyReactions(merged0, chat, wireReactions);
+          this.applyEdits(merged0, chat, wireEdits);
+          const merged = this.mergePending(chat, merged0);
           if (!merged.length && hadMessages && !stale()) {
             return;
           }
