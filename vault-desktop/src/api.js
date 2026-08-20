@@ -225,7 +225,7 @@ export class ApiClient {
       // Пропускаем письма без тела (батч упал/тело пустое) — они перефетчатся
       // в следующий поллинг; одно плохое письмо не роняет весь чат.
       if (!body) continue;
-      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
+      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false, message_id: m.message_id || '' });
     }
     // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).

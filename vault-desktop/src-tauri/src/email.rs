@@ -285,15 +285,11 @@ impl EmailClient {
         self.connect_imap().await
     }
 
-    /// Fetch recent messages. Стратегия выбора папок (не все провайдеры
-    /// имеют «Вся почта»/\All):
-    ///   1. INBOX — всегда явно (основной источник входящих).
-    ///   2. Спам — всегда: Gmail кладёт шифрописьма в Junk, а у провайдеров
-    ///      без \All это единственный шанс их увидеть.
-    ///   3. \All (если есть, Gmail) — как дополнительный источник: там видны
-    ///      и отправленные нами письма (вторая сторона 1:1-чата). Дедупликация
-    ///      по Message-ID, т.к. у Gmail одно письмо лежит в INBOX и All Mail
-    ///      под разными UID.
+    /// Fetch recent messages. Folder strategy (user-confirmed 20.08): ALWAYS
+    /// INBOX + Junk + Sent. All Mail is NEVER read: Gmail keeps every
+    /// label-removed mail alive in All Mail, so a message the user deleted in
+    /// the web UI would "resurrect" on the next fetch. Sent is read
+    /// unconditionally so the sender sees their own copies.
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
         let folders = self.find_special_folders();
 
@@ -314,29 +310,16 @@ impl EmailClient {
                         messages.push(m);
                     }
                 }
-                // Папка спама может отсутствовать/быть недоступной — это не
-                // повод ронять весь фетч: INBOX уже получен.
+                // The Junk folder may be missing/unreachable — do not fail the
+                // whole fetch, INBOX is already retrieved.
                 Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
             }
         }
 
-        if let Some(all) = &folders.all {
-            match self.fetch_folder(all, 250) {
-                Ok(all_msgs) => {
-                    for m in all_msgs {
-                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                            continue;
-                        }
-                        messages.push(m);
-                    }
-                }
-                Err(e) => eprintln!("[email] All Mail folder {all} fetch failed: {e}"),
-            }
-        } else if let Some(sent) = &folders.sent {
-            // Нет \All (Zoho и др.): копии наших исходящих лежат ТОЛЬКО в Sent.
-            // Без него отправитель не видит свои сообщения, а поллинг
-            // затирает оптимистичный показ. С \All Sent избыточен (All Mail
-            // уже содержит исходящие) — не тратим round-trip.
+        if let Some(sent) = &folders.sent {
+            // Copies of our outgoing mail live ONLY in Sent — without them the
+            // sender never sees their own messages and polling would wipe the
+            // optimistic display.
             match self.fetch_folder(sent, 150) {
                 Ok(sent_msgs) => {
                     for m in sent_msgs {
@@ -476,15 +459,9 @@ impl EmailClient {
             }
         }
 
-        // \\All (Gmail) или Sent (Zoho и др., нет \\All) — исходящие копии.
-        if let Some(all) = &folders.all {
-            match self
-                .fetch_folder_from(all, cursors.get(all).copied(), 100)
-            {
-                Ok((msgs, max)) => collect(all, all, msgs, max),
-                Err(e) => eprintln!("[email] All Mail folder {all} incremental fetch failed: {e}"),
-            }
-        } else if let Some(sent) = &folders.sent {
+        // Sent — ALWAYS (same rule as fetch_messages: All Mail is never read,
+        // so the sender's own copies only live in Sent).
+        if let Some(sent) = &folders.sent {
             match self
                 .fetch_folder_from(sent, cursors.get(sent).copied(), 50)
             {

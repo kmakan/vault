@@ -1504,10 +1504,13 @@ export default {
     },
     // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
     // удалён навсегда) или deleted-метка из истории — фильтруются при
-    // каждом построении чата (история + письма + pending).
+    // каждом построении чата (история + письма + pending). Message-ID
+    // tombstones (mid) отсекают письма, вернувшиеся из другой папки/All
+    // Mail с новым uid (DC-аналог rfc724_mid).
     filterDeleted(list) {
       const tombs = this.loadTombstones();
-      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)));
+      const mids = this.loadMidTombstones();
+      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
     },
     // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
     // из IndexedDB. История — источник истины: отправленные/полученные
@@ -1881,6 +1884,7 @@ export default {
       // Оптимистично помечаем удалённым локально + tombstone (поллинг
       // не «воскресит» сообщение: письмо-оригинал и история фильтруются).
       this.addTombstone(msg.id);
+      this.addMidTombstone(msg.mid);
       msg.deleted = true;
       msg.content = '';
       // Мгновенно убираем из чата — удалённое сообщение исчезает у всех
@@ -2114,6 +2118,7 @@ export default {
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
               encrypted: true,
               vault: true,
+              mid: m.message_id || '',
               email: m,
             };
           } catch (e) {
@@ -2123,6 +2128,7 @@ export default {
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
               encrypted: false,
+              mid: m.message_id || '',
               email: m,
             };
           }
@@ -2358,6 +2364,7 @@ export default {
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: true,
+              mid: msg.message_id || '',
               ...(env && env.id ? { id: env.id } : {}),
             });
           }
@@ -3405,6 +3412,33 @@ export default {
       if (!msgId) return false;
       return this.loadTombstones().includes(msgId);
     },
+    // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
+    // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
+    // или повторной доставке с новым UID. В отличие от msg_id-tombstones
+    // (которые привязаны к uid-папки), mid-tombstones работают ГЛОБАЛЬНО:
+    // письмо, вернувшееся из All Mail любого провайдера, будет отфильтровано.
+    midTombstonesKey() {
+      return 'vault-mid-tombstones-' + (this.email || 'anon');
+    },
+    loadMidTombstones() {
+      try {
+        return JSON.parse(localStorage.getItem(this.midTombstonesKey()) || '[]');
+      } catch (e) {
+        return [];
+      }
+    },
+    addMidTombstone(mid) {
+      if (!mid) return;
+      const list = this.loadMidTombstones();
+      if (!list.includes(mid)) {
+        list.push(mid);
+        try { localStorage.setItem(this.midTombstonesKey(), JSON.stringify(list)); } catch (e) { /* ignore */ }
+      }
+    },
+    isMidTombstoned(mid) {
+      if (!mid) return false;
+      return this.loadMidTombstones().includes(mid);
+    },
     applyEdits(list, chatKey, wireEdits) {
       const stored = this.loadStoredEdits();
       const chatEdits = stored[chatKey] || {};
@@ -3444,6 +3478,7 @@ export default {
         if (latest.action === 'delete') {
           // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
           this.addTombstone(msg.id);
+          this.addMidTombstone(msg.mid);
           msg.deleted = true;
           msg.content = '';
         } else if (latest.text) {
