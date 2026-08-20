@@ -3569,9 +3569,14 @@ export default {
       if (!this.isLoggedIn || !this.cryptoReady || !fetched || !fetched.length) return;
       const myEmail = (this.email || '').toLowerCase();
       if (!myEmail) return;
-      const sentKey = 'vault-delivered-sent-' + myEmail;
+      // Дедуп в sqlite kv_store (НЕ localStorage — он может переполниться;
+      // 20.08: localStorage запрещён как источник данных Vault).
+      const acc = this.email || 'anon';
       let sentMap = {};
-      try { sentMap = JSON.parse(localStorage.getItem(sentKey) || '{}'); } catch (e) { sentMap = {}; }
+      try {
+        const raw = await db.kvGet(acc, 'delivered-sent');
+        if (raw) sentMap = JSON.parse(raw);
+      } catch (e) { sentMap = {}; }
       // Кандидаты: входящие от известных пиров (есть ключ — можно расшифровать).
       const candidates = fetched.filter(m => {
         const sender = this.senderEmail(m.from);
@@ -3631,7 +3636,7 @@ export default {
         entries.sort((a, b) => (b[1] || 0) - (a[1] || 0));
         sentMap = Object.fromEntries(entries.slice(0, 500));
       }
-      try { localStorage.setItem(sentKey, JSON.stringify(sentMap)); } catch (e) { /* quota */ }
+      db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
     },
     // Локальная (оптимистичная) запись правки — до доставки письма.
     recordLocalEdit(chatKey, msgId, text, action) {
