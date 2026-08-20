@@ -8,6 +8,7 @@ mod groups;
 mod history_store;
 
 use credential_store::StoredCredentials;
+use storage::sqlite::Storage;
 
 use crypto::{CryptoState, KeyPair};
 use email::{EmailClient, EmailConfig, EmailMessage};
@@ -451,24 +452,112 @@ fn groups_set_key(group_id: String, group_key: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-// --- Chat history (local files, like Delta Chat's disk storage) ---
-// История чатов живёт на диске (JSON-файл на чат), а не в IndexedDB/
-// localStorage: нет квот, нет зависимости от WebKitGTK IndexedDB (у части
-// пользователей он молча не работает). localStorage остаётся только кэшем.
+// --- Local persistence (Delta Chat-style disk DB, replaces
+// localStorage/IndexedDB for durable state) ---
+// Всё локальное состояние Vault живёт в sqlite (~/.local/share/
+// com.vault.vault/vault.db): история чатов, tombstones, IMAP-курсоры,
+// кэш тел, key/value. localStorage больше не источник истины — у него
+// квота ~5 МБ (body-cache у Gmail-аккаунтов уже 3–7 МБ) и он ненадёжен
+// в WebKitGTK. Никакой зависимости от IndexedDB.
 
-#[tauri::command]
-fn history_save(email: String, chat_key: String, messages_json: String) -> Result<(), String> {
-    history_store::save_history(&email, &chat_key, &messages_json).map_err(|e| e.to_string())
+fn open_db() -> Result<Storage, String> {
+    Storage::open(None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn history_load(email: String, chat_key: String) -> Result<Option<String>, String> {
-    history_store::load_history(&email, &chat_key).map_err(|e| e.to_string())
+fn db_history_save(account: String, chat_key: String, messages_json: String) -> Result<(), String> {
+    open_db()?
+        .save_history(&account, &chat_key, &messages_json)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn history_clear(email: String) -> Result<(), String> {
-    history_store::clear_history(&email).map_err(|e| e.to_string())
+fn db_history_load(account: String, chat_key: String) -> Result<Option<String>, String> {
+    open_db()?
+        .load_history(&account, &chat_key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_history_clear(account: String) -> Result<(), String> {
+    open_db()?.clear_history(&account).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_tombstone_add(account: String, msg_id: String, mid: String) -> Result<(), String> {
+    open_db()?
+        .add_tombstone(&account, &msg_id, &mid)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_tombstones_load(account: String) -> Result<Vec<(String, String)>, String> {
+    open_db()?
+        .load_tombstones(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_tombstones_clear(account: String) -> Result<(), String> {
+    open_db()?
+        .clear_tombstones(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_cursors_save(account: String, cursors_json: String) -> Result<(), String> {
+    open_db()?
+        .save_cursors(&account, &cursors_json)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_cursors_load(account: String) -> Result<HashMap<String, u32>, String> {
+    open_db()?
+        .load_cursors(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_body_cache_set(account: String, cache_key: String, body: String) -> Result<(), String> {
+    open_db()?
+        .body_cache_set(&account, &cache_key, &body)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_body_cache_get(account: String, cache_key: String) -> Result<Option<String>, String> {
+    open_db()?
+        .body_cache_get(&account, &cache_key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_body_cache_clear(account: String) -> Result<(), String> {
+    open_db()?
+        .body_cache_clear(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_kv_set(account: String, key: String, value: String) -> Result<(), String> {
+    open_db()?
+        .kv_set(&account, &key, &value)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_kv_get(account: String, key: String) -> Result<Option<String>, String> {
+    open_db()?
+        .kv_get(&account, &key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_kv_delete(account: String, key: String) -> Result<(), String> {
+    open_db()?
+        .kv_delete(&account, &key)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -518,9 +607,20 @@ pub fn run() {
             groups_import,
             groups_set_key,
             groups_delete,
-            history_save,
-            history_load,
-            history_clear,
+            db_history_save,
+            db_history_load,
+            db_history_clear,
+            db_tombstone_add,
+            db_tombstones_load,
+            db_tombstones_clear,
+            db_cursors_save,
+            db_cursors_load,
+            db_body_cache_set,
+            db_body_cache_get,
+            db_body_cache_clear,
+            db_kv_set,
+            db_kv_get,
+            db_kv_delete,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources

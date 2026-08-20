@@ -1,45 +1,41 @@
-// Локальная история чатов (M1, 19.08 → 20.08): расшифрованные сообщения
-// персистятся в ФАЙЛ на диске через Rust-бэкенд (history_save/history_load,
-// JSON-файл на чат) — как Delta Chat хранит историю в SQLite-файле, а не в
-// браузерных хранилищах. Причины (фикс 20.08):
-//   - IndexedDB в WebKitGTK у части пользователей молча не работает
-//     (0 записей, вечный onblocked) — чаты открывались пустыми;
-//   - localStorage ограничен ~5 МБ — длинная переписка не поместится.
-// Файл на диске: нет квот, нет зависимости от веб-хранилищ. localStorage
-// остаётся только быстрым кэшем (см. loadLocalHistory в App.vue).
+// Локальная история чатов: расшифрованные сообщения персистятся в SQLite
+// через Rust-бэкенд (db_history_save/db_history_load — таблица chat_history
+// в ~/.local/share/com.vault.vault/vault.db) — как Delta Chat хранит историю
+// в SQLite, а не в браузерных хранилищах. Причины (фикс 20.08, подтверждено
+// юзером): IndexedDB в WebKitGTK у части пользователей молча не работает
+// (0 записей, вечный onblocked); localStorage ограничен ~5 МБ (body-cache
+// уже 3–7 МБ, длинная переписка не поместится). SQLite — без квот и без
+// зависимости от веб-хранилищ. localStorage НЕ используется как источник
+// истины вообще.
 // Заметки для себя (__notes__) сюда НЕ пишутся — они живут в localStorage.
 
-import { invoke } from '@tauri-apps/api/core';
+import { db } from './api.js';
 
 export async function saveHistory(account, chatKey, messages) {
   if (!account || !chatKey || !Array.isArray(messages)) return;
   try {
-    await invoke('history_save', {
-      email: account,
-      chatKey,
-      messagesJson: JSON.stringify(messages),
-    });
+    await db.historySave(account, chatKey, JSON.stringify(messages));
   } catch (e) {
-    console.error('saveHistory (file) failed:', e);
+    console.error('saveHistory (sqlite) failed:', e);
   }
 }
 
 export async function loadHistory(account, chatKey) {
   if (!account || !chatKey) return null;
   try {
-    const json = await invoke('history_load', { email: account, chatKey });
+    const json = await db.historyLoad(account, chatKey);
     if (!json) return null;
     const arr = JSON.parse(json);
     return Array.isArray(arr) ? arr : null;
   } catch (e) {
-    console.error('loadHistory (file) failed:', e);
+    console.error('loadHistory (sqlite) failed:', e);
     return null;
   }
 }
 
 export async function clearHistory(account) {
   try {
-    await invoke('history_clear', { email: account });
+    await db.historyClear(account);
   } catch (e) {
     console.error('clearHistory failed:', e);
   }

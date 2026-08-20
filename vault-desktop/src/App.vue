@@ -659,6 +659,7 @@
 
 <script>
 import api from './api.js';
+import { db } from './api.js';
 import crypto from './crypto.js';
 // ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
@@ -998,6 +999,7 @@ export default {
           // отработали с пустым email (авто-вход ещё не восстановил его),
           // поэтому локальные имена контактов и свой аватар «пропадали»
           // после перезапуска.
+          await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
           this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || '';
           this.displayName = localStorage.getItem('vault-display-name') || this.email || '';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
@@ -1152,6 +1154,7 @@ export default {
         const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
         this.userId = data.user_id;
         this.isLoggedIn = true;
+        await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
@@ -2815,21 +2818,20 @@ export default {
         alert('Failed to add peer key: ' + error.message);
       }
     },
-    // Per-folder UID-курсоры для инкрементального фетча (vault-imap-cursors-<account>).
+    // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
+    // (initLocalDb загружает их в cursorsCache при входе) — localStorage
+    // больше не источник истины.
     imapCursorsKey(accountId) {
       return 'vault-imap-cursors-' + accountId;
     },
     loadCursors(accountId) {
-      try {
-        return JSON.parse(localStorage.getItem(this.imapCursorsKey(accountId)) || '{}');
-      } catch (e) {
-        return {};
-      }
+      return this.cursorsCache || {};
     },
     saveCursors(accountId, cursors) {
       try {
         if (cursors && Object.keys(cursors).length) {
-          localStorage.setItem(this.imapCursorsKey(accountId), JSON.stringify(cursors));
+          this.cursorsCache = cursors;
+          db.cursorsSave(accountId, JSON.stringify(cursors));
         }
       } catch (e) {
         console.error('saveCursors failed:', e);
@@ -3388,29 +3390,47 @@ export default {
     },
     // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
     // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится отдельно от истории,
-    // чтобы удаление переживало и её (DC-аналог: tombstone в receive_imf).
+    // поллинг «воскресил» бы удалённое. Хранится в sqlite (Delta Chat-style),
+    // с in-memory кэшем для синхронной фильтрации (filterDeleted).
+    // См. initLocalDb() — загрузка при входе.
+    tombstonesCache: [],
+    midTombstonesCache: [],
+    // IMAP-курсоры: in-memory кэш + sqlite персист.
+    cursorsCache: {},
+    // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
+    async initLocalDb() {
+      const acc = this.email || 'anon';
+      try {
+        const tombs = await db.tombstonesLoad(acc);
+        this.tombstonesCache = tombs.filter(t => t[0]).map(t => t[0]);
+        this.midTombstonesCache = tombs.filter(t => t[1]).map(t => t[1]);
+      } catch (e) {
+        console.warn('initLocalDb tombstones failed:', e);
+      }
+      try {
+        this.cursorsCache = await db.cursorsLoad(acc);
+      } catch (e) {
+        console.warn('initLocalDb cursors failed:', e);
+      }
+    },
     tombstonesKey() {
       return 'vault-tombstones-' + (this.email || 'anon');
     },
     loadTombstones() {
-      try {
-        return JSON.parse(localStorage.getItem(this.tombstonesKey()) || '[]');
-      } catch (e) {
-        return [];
-      }
+      return this.tombstonesCache || [];
     },
     addTombstone(msgId) {
       if (!msgId) return;
-      const list = this.loadTombstones();
+      const list = this.tombstonesCache;
       if (!list.includes(msgId)) {
         list.push(msgId);
-        try { localStorage.setItem(this.tombstonesKey(), JSON.stringify(list)); } catch (e) { /* ignore */ }
+        // sqlite persist (async, fire-and-forget)
+        db.tombstoneAdd(this.email || 'anon', msgId, '');
       }
     },
     isTombstoned(msgId) {
       if (!msgId) return false;
-      return this.loadTombstones().includes(msgId);
+      return (this.tombstonesCache || []).includes(msgId);
     },
     // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
     // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
@@ -3421,23 +3441,19 @@ export default {
       return 'vault-mid-tombstones-' + (this.email || 'anon');
     },
     loadMidTombstones() {
-      try {
-        return JSON.parse(localStorage.getItem(this.midTombstonesKey()) || '[]');
-      } catch (e) {
-        return [];
-      }
+      return this.midTombstonesCache || [];
     },
     addMidTombstone(mid) {
       if (!mid) return;
-      const list = this.loadMidTombstones();
+      const list = this.midTombstonesCache;
       if (!list.includes(mid)) {
         list.push(mid);
-        try { localStorage.setItem(this.midTombstonesKey(), JSON.stringify(list)); } catch (e) { /* ignore */ }
+        db.tombstoneAdd(this.email || 'anon', '', mid);
       }
     },
     isMidTombstoned(mid) {
       if (!mid) return false;
-      return this.loadMidTombstones().includes(mid);
+      return (this.midTombstonesCache || []).includes(mid);
     },
     applyEdits(list, chatKey, wireEdits) {
       const stored = this.loadStoredEdits();

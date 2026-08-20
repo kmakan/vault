@@ -131,7 +131,11 @@ export class CryptoClient {
 
   isEncrypted(text) {
     try {
-      const decoded = atob(text);
+      // SMTP folds base64 at 76 chars with \r\n (RFC 5322) — atob is strict,
+      // so strip ALL whitespace first (same lesson as decryptVault /
+      // decrypt_symmetric_cmd). Without this, group mails arriving via SMTP
+      // were silently dropped by isEncrypted before decryption.
+      const decoded = atob(String(text || '').replace(/\s+/g, ''));
       return decoded.length >= 25 && this.privateKey !== null;
     } catch {
       return false;

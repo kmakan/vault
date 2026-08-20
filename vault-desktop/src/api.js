@@ -17,6 +17,45 @@ const GMAIL_CONFIG = {
   smtp_port: 587,
 };
 
+export { db };
+
+// ── Local persistence: sqlite via Rust (Delta Chat-style disk DB) ─────────
+// Всё локальное состояние Vault (история, tombstones, курсоры, кэш тел,
+// kv) живёт в sqlite (~/.local/share/com.vault.vault/vault.db). localStorage
+// больше НЕ источник истины: квота ~5 МБ (body-cache уже 3–7 МБ) и он
+// ненадёжен в WebKitGTK. Все db_* методы — thin invoke-обёртки.
+
+const db = {
+  historySave: (account, chatKey, messagesJson) =>
+    invoke('db_history_save', { account, chatKey, messagesJson }),
+  historyLoad: (account, chatKey) =>
+    invoke('db_history_load', { account, chatKey }),
+  historyClear: (account) =>
+    invoke('db_history_clear', { account }),
+  tombstoneAdd: (account, msgId, mid) =>
+    invoke('db_tombstone_add', { account, msgId, mid }),
+  tombstonesLoad: (account) =>
+    invoke('db_tombstones_load', { account }),
+  tombstonesClear: (account) =>
+    invoke('db_tombstones_clear', { account }),
+  cursorsSave: (account, cursorsJson) =>
+    invoke('db_cursors_save', { account, cursorsJson }),
+  cursorsLoad: (account) =>
+    invoke('db_cursors_load', { account }),
+  bodyCacheSet: (account, cacheKey, body) =>
+    invoke('db_body_cache_set', { account, cacheKey, body }),
+  bodyCacheGet: (account, cacheKey) =>
+    invoke('db_body_cache_get', { account, cacheKey }),
+  bodyCacheClear: (account) =>
+    invoke('db_body_cache_clear', { account }),
+  kvSet: (account, key, value) =>
+    invoke('db_kv_set', { account, key, value }),
+  kvGet: (account, key) =>
+    invoke('db_kv_get', { account, key }),
+  kvDelete: (account, key) =>
+    invoke('db_kv_delete', { account, key }),
+};
+
 export class ApiClient {
   constructor() {
     const saved = localStorage.getItem('vault-token');
