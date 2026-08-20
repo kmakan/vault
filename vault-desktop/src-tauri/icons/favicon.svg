@@ -1,23 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <defs>
-    <linearGradient id="v-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#818cf8"/>
-      <stop offset="50%" stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#7c3aed"/>
-    </linearGradient>
-    <filter id="v-glow">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  </defs>
-  <!-- Rounded square background -->
-  <rect x="8" y="8" width="112" height="112" rx="24" fill="#1e1b4b"/>
-  <!-- V letter -->
-  <path d="M32 28 L56 100 L64 100 L72 100 L96 28 L80 28 L68 78 L56 28 Z"
-        fill="url(#v-grad)" filter="url(#v-glow)"/>
-  <!-- Dot accent -->
-  <circle cx="64" cy="108" r="4" fill="#6366f1"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="512" height="512">
+  <g transform="translate(0,192) scale(0.1,-0.1)">
+<!-- purple arc + dot (top) — логотип Vault #8b5cf6 -->
+    <path fill="#8b5cf6" d="M941 1734 c-154 -41 -305 -169 -372 -317 -28 -64 -26 -68 32 -46 28
+11 74 25 102 31 42 8 64 22 114 68 201 189 506 126 627 -129 28 -60 31 -75 31
+-166 0 -92 -3 -106 -32 -167 -37 -78 -109 -155 -177 -190 l-47 -24 -4 -60 c-1
+-32 -6 -73 -10 -91 l-7 -32 38 10 c185 50 353 227 399 420 19 82 19 186 0 268
+-48 203 -214 375 -412 426 -71 19 -211 18 -282 -1z"/>
+    <path fill="#8b5cf6" d="M1040 1323 c-64 -26 -102 -81 -102 -149 0 -116 126 -186 225 -126 86
+54 91 192 8 251 -30 22 -104 35 -131 24z"/>
+<!-- gold arc + dot (bottom) — цвет иконок Vault #f59e0b -->
+    <path fill="#f59e0b" d="M651 1290 c-85 -31 -157 -79 -226 -152 -167 -176 -203 -431 -93 -658
+41 -85 159 -205 244 -248 116 -58 251 -77 376 -51 130 27 275 126 352 243 36
+55 72 133 64 142 -3 2 -25 -4 -49 -15 -24 -10 -70 -24 -102 -31 -49 -10 -65
+-19 -99 -56 -25 -27 -70 -59 -116 -82 -70 -34 -83 -37 -161 -37 -103 0 -165
+19 -236 73 -104 79 -165 199 -165 326 0 152 86 295 214 358 l43 21 6 71 c4 39
+9 81 13 94 8 27 4 27 -65 2z"/>
+    <path fill="#f59e0b" d="M785 885 c-22 -8 -41 -15 -42 -15 -1 0 -14 -17 -28 -37 -53 -78 -25
+-186 58 -223 53 -24 71 -24 124 0 113 51 112 220 -1 271 -49 22 -59 22 -111 4z"/>
+  </g>
 </svg>
