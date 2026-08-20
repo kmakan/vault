@@ -1007,11 +1007,17 @@ export default {
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
-          // This throws "Not connected" if the IMAP session died on restart —
-          // then we must ask for the password again.
-          await this.loadEmails();
+          // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
+          // фетч почты идёт в фоне — вход не должен ждать IMAP (20.08).
           this.isLoggedIn = true;
           this.startPolling()
+          // Не блокируем вход: письма догружаются асинхронно (поллинг уже
+          // запущен — он подхватит). Ошибки IMAP не роняют вход.
+          this.loadEmails().catch(e => {
+            if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+              this.showRestoreFailure();
+            }
+          });
         } catch (e) {
           // Session died on restart and auto-login could not restore it —
           // просим ввести пароль снова
@@ -1159,8 +1165,13 @@ export default {
         this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
         await this.loadGroups();
-        await this.loadEmails();
+        // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
         this.startPolling()
+        this.loadEmails().catch(e => {
+          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+            this.loginError = e.message;
+          }
+        });
       } catch (error) {
         this.loginError = error.message;
       } finally {
@@ -2466,45 +2477,53 @@ export default {
         const members = (g.members || [])
           .map(m => String(m.email || '').toLowerCase())
           .filter(Boolean);
-        // Последнее по дате письмо от участника этой группы.
-        let latest = null;
-        for (const m of emails) {
-          const from = String(m.from || '').toLowerCase();
-          if (!members.some(e => from.includes(e))) continue;
-          if (!latest || new Date(m.date) >= new Date(latest.date)) latest = m;
-        }
-        if (!latest) continue;
-        // Уже применяли это письмо ранее — пропускаем (без повторного фетча тела).
-        // ВАЖНО: uid уникален только В ПРЕДЕЛАХ папки, а письма групп живут в
-        // разных папках (INBOX/Sent/Junk) — ключ включает folder, иначе
-        // «применено» фиксировалось бы по совпавшему uid из другой папки.
+        // Ищем meta-письмо среди ПОСЛЕДНИХ писем участников (не только
+        // самое последнее): после загрузки аватара могло прийти обычное
+        // сообщение, и `latest` перестал быть meta-письмом — участники
+        // навсегда оставались без аватара. Проверяем до 10 последних.
+        const memberMails = emails
+          .filter(m => {
+            const from = String(m.from || '').toLowerCase();
+            return members.some(e => from.includes(e));
+          })
+          .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+          .slice(0, 10);
         const appliedKey = 'vault-group-meta-applied-' + g.id;
-        const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
-        if (localStorage.getItem(appliedKey) === appliedSig) continue;
-        let groupKey = this.groupKeys[g.id];
-        if (!groupKey && this.cryptoReady) {
-          try {
-            const kd = await api.getMyGroupKey(g.id);
-            if (kd && kd.group_key) {
-              this.groupKeys[g.id] = kd.group_key;
-              groupKey = kd.group_key;
-            }
-          } catch (e) { /* ключ не загрузился — группу пропускаем */ }
-        }
-        if (!groupKey) continue;
-        try {
-          const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
-          if (!body || !crypto.isEncrypted(body)) continue;
-          const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
-          const obj = JSON.parse(plaintext);
-          if (obj && obj.meta === 1 && obj.avatar) {
-            if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
-              localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
-              this.groupAvatars[g.id] = obj.avatar;
-            }
-            localStorage.setItem(appliedKey, appliedSig);
+        const alreadyApplied = new Set(
+          (localStorage.getItem(appliedKey) || '').split(',').filter(Boolean)
+        );
+        let metaFound = false;
+        for (const latest of memberMails) {
+          const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
+          if (alreadyApplied.has(appliedSig)) continue;
+          let groupKey = this.groupKeys[g.id];
+          if (!groupKey && this.cryptoReady) {
+            try {
+              const kd = await api.getMyGroupKey(g.id);
+              if (kd && kd.group_key) {
+                this.groupKeys[g.id] = kd.group_key;
+                groupKey = kd.group_key;
+              }
+            } catch (e) { /* ключ не загрузился — группу пропускаем */ }
           }
-        } catch (e) { /* не meta или битое — не критично */ }
+          if (!groupKey) break;
+          try {
+            const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
+            if (!body || !crypto.isEncrypted(body)) continue;
+            const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
+            const obj = JSON.parse(plaintext);
+            if (obj && obj.meta === 1 && obj.avatar) {
+              if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
+                localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
+                this.groupAvatars[g.id] = obj.avatar;
+              }
+              metaFound = true;
+              alreadyApplied.add(appliedSig);
+              localStorage.setItem(appliedKey, [...alreadyApplied].join(','));
+              break; // аватар найден — хватит
+            }
+          } catch (e) { /* не meta или битое — не критично */ }
+        }
       }
     },
     onAvatarUpdate(dataUrl) {
