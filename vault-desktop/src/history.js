@@ -1,88 +1,45 @@
-// Локальная история чатов (M1, 19.08): декриптованные сообщения персистятся
-// в IndexedDB (лимит localStorage ~5МБ для вложений не годится). При открытии
-// чата история показывается мгновенно, затем живой фетч из IMAP дополняет её
-// новыми письмами и история обновляется. Хранилище:
-//   store 'chats', key = `${accountEmail}|${chatKey}`, value = массив
-//   полноценных message-объектов (как в this.messages: id, content, from,
-//   sender_id, time, created_at, attachment, status, reactions...).
+// Локальная история чатов (M1, 19.08 → 20.08): расшифрованные сообщения
+// персистятся в ФАЙЛ на диске через Rust-бэкенд (history_save/history_load,
+// JSON-файл на чат) — как Delta Chat хранит историю в SQLite-файле, а не в
+// браузерных хранилищах. Причины (фикс 20.08):
+//   - IndexedDB в WebKitGTK у части пользователей молча не работает
+//     (0 записей, вечный onblocked) — чаты открывались пустыми;
+//   - localStorage ограничен ~5 МБ — длинная переписка не поместится.
+// Файл на диске: нет квот, нет зависимости от веб-хранилищ. localStorage
+// остаётся только быстрым кэшем (см. loadLocalHistory в App.vue).
 // Заметки для себя (__notes__) сюда НЕ пишутся — они живут в localStorage.
 
-const DB_NAME = 'vault-history';
-const DB_VERSION = 1;
-const STORE = 'chats';
-
-let dbPromise = null;
-
-function openDB() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'chatKey' });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-    // onblocked не даёт ни onsuccess, ни onerror — промис висел бы вечно,
-    // а с ним и loadMessages/loadGroupMessages (чаты открывались пустыми,
-    // кэш не писался). Таймаут: история недоступна — работаем без неё,
-    // чат строится из писем IMAP (фикс 20.08).
-    setTimeout(() => reject(new Error('IndexedDB open timeout (blocked)')), 3000);
-  });
-  return dbPromise;
-}
-
-function storeKey(account, chatKey) {
-  return `${account}|${chatKey}`;
-}
+import { invoke } from '@tauri-apps/api/core';
 
 export async function saveHistory(account, chatKey, messages) {
   if (!account || !chatKey || !Array.isArray(messages)) return;
   try {
-    const db = await openDB();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ chatKey: storeKey(account, chatKey), messages, savedAt: Date.now() });
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
+    await invoke('history_save', {
+      email: account,
+      chatKey,
+      messagesJson: JSON.stringify(messages),
     });
   } catch (e) {
-    console.error('saveHistory failed:', e);
+    console.error('saveHistory (file) failed:', e);
   }
 }
 
 export async function loadHistory(account, chatKey) {
   if (!account || !chatKey) return null;
   try {
-    const db = await openDB();
-    return await new Promise((resolve) => {
-      const tx = db.transaction(STORE, 'readonly');
-      const req = tx.objectStore(STORE).get(storeKey(account, chatKey));
-      req.onsuccess = () => resolve(req.result ? req.result.messages : null);
-      req.onerror = () => resolve(null);
-    });
+    const json = await invoke('history_load', { email: account, chatKey });
+    if (!json) return null;
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : null;
   } catch (e) {
-    console.error('loadHistory failed:', e);
+    console.error('loadHistory (file) failed:', e);
     return null;
   }
 }
 
 export async function clearHistory(account) {
   try {
-    const db = await openDB();
-    const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-    // Чистим только записи текущего аккаунта (ключ начинается с `${account}|`).
-    const req = store.openCursor();
-    req.onsuccess = () => {
-      const cursor = req.result;
-      if (cursor) {
-        if (String(cursor.key).startsWith(`${account}|`)) cursor.delete();
-        cursor.continue();
-      }
-    };
+    await invoke('history_clear', { email: account });
   } catch (e) {
     console.error('clearHistory failed:', e);
   }

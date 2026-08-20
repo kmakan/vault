@@ -5,6 +5,7 @@ mod email;
 mod key_store;
 mod storage;
 mod groups;
+mod history_store;
 
 use credential_store::StoredCredentials;
 
@@ -450,6 +451,26 @@ fn groups_set_key(group_id: String, group_key: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// --- Chat history (local files, like Delta Chat's disk storage) ---
+// История чатов живёт на диске (JSON-файл на чат), а не в IndexedDB/
+// localStorage: нет квот, нет зависимости от WebKitGTK IndexedDB (у части
+// пользователей он молча не работает). localStorage остаётся только кэшем.
+
+#[tauri::command]
+fn history_save(email: String, chat_key: String, messages_json: String) -> Result<(), String> {
+    history_store::save_history(&email, &chat_key, &messages_json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn history_load(email: String, chat_key: String) -> Result<Option<String>, String> {
+    history_store::load_history(&email, &chat_key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn history_clear(email: String) -> Result<(), String> {
+    history_store::clear_history(&email).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -497,6 +518,9 @@ pub fn run() {
             groups_import,
             groups_set_key,
             groups_delete,
+            history_save,
+            history_load,
+            history_clear,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources
