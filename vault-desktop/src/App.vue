@@ -1272,6 +1272,8 @@ export default {
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
       // Мгновенное открытие: показываем кэш прошлой сессии, пока идёт
       // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
       const cachedChat = this.loadChatCache(email);
@@ -1590,6 +1592,8 @@ export default {
     },
     async selectGroup(group) {
       this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
       // Мгновенное открытие группы из кэша (как и 1-на-1 чаты).
       const cachedGroup = this.loadChatCache(`group:${group.id}`);
       if (cachedGroup && cachedGroup.length) this.messages = cachedGroup;
@@ -2649,6 +2653,11 @@ export default {
 
       try {
         this.sending = true;
+        // Watchdog (20.08): если отправка зависла (SMTP/IMAP не ответил в
+        // таймаут, JS-ошибка вне try), sending должен разблокироваться —
+        // иначе кнопка/Enter навсегда блокируются, сообщение «висит» в поле.
+        clearTimeout(this._sendingWatchdog);
+        this._sendingWatchdog = setTimeout(() => { this.sending = false; }, 60000);
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
         let payload = this.newMessage;
@@ -2695,7 +2704,17 @@ export default {
 
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
-          const groupKey = this.groupKeys[this.currentGroup.id];
+          let groupKey = this.groupKeys[this.currentGroup.id];
+          // Lazy-backfill: ключ мог не загрузиться (гонка cryptoReady/selectGroup).
+          if (!groupKey && this.cryptoReady) {
+            try {
+              const kd = await api.getMyGroupKey(this.currentGroup.id);
+              if (kd && kd.group_key) {
+                this.groupKeys[this.currentGroup.id] = kd.group_key;
+                groupKey = kd.group_key;
+              }
+            } catch (e) { /* не удалось — alert ниже */ }
+          }
           if (!groupKey) {
             alert('Групповой ключ не загружен — переоткройте группу');
             return;
