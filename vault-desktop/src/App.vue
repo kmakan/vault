@@ -3050,6 +3050,11 @@ export default {
         // только при открытии группы — иначе участник, не открывавший группу,
         // новый аватар админа не увидит никогда.
         await this.syncGroupAvatarsFromMeta();
+        // Квитанции «доставлено» (20.08): шлём {delivered:1} сразу при
+        // получении писем поллингом — отправитель видит зелёную точку через
+        // ~30с, а не когда получатель откроет чат (раньше delivered-квитанцию
+        // никто не слал — статус висел жёлтым до открытия чата).
+        await this.sendDeliveredReceipts(fetched);
       } catch (error) {
         // let "Not connected" propagate to the caller (app restart re-login)
         if (String(error && error.message || error).toLowerCase().includes('not connected')) {
@@ -3551,6 +3556,82 @@ export default {
           this.saveSentReads(sent);
         }
       })();
+    },
+    // Квитанции «доставлено» по новым входящим (поллинг): как только письмо
+    // получено и расшифровано как vault-сообщение — отправителю уходит
+    // {delivered:1, msg_ids:[...]} (stealth, пустая тема; тот же wire-формат,
+    // что у read-квитанций — отправитель уже умеет их разбирать, App.vue
+    // wireAcks). Раньше delivered-квитанцию никто не слал: отправитель видел
+    // жёлтую точку, пока получатель не откроет чат (тогда уходила read).
+    // Групповые письма здесь не обрабатываются (шифр групповым ключом —
+    // decryptVault с пир-ключом не пройдёт); для групп статусы — как прежде.
+    async sendDeliveredReceipts(fetched) {
+      if (!this.isLoggedIn || !this.cryptoReady || !fetched || !fetched.length) return;
+      const myEmail = (this.email || '').toLowerCase();
+      if (!myEmail) return;
+      const sentKey = 'vault-delivered-sent-' + myEmail;
+      let sentMap = {};
+      try { sentMap = JSON.parse(localStorage.getItem(sentKey) || '{}'); } catch (e) { sentMap = {}; }
+      // Кандидаты: входящие от известных пиров (есть ключ — можно расшифровать).
+      const candidates = fetched.filter(m => {
+        const sender = this.senderEmail(m.from);
+        if (!sender || sender.includes(myEmail)) return false;
+        return !!this.peerKeys[sender];
+      });
+      if (!candidates.length) return;
+      const byFolder = {};
+      for (const m of candidates.slice(0, 30)) {
+        const f = m.folder || 'INBOX';
+        (byFolder[f] = byFolder[f] || []).push(m);
+      }
+      const acks = {}; // sender -> [msg_id]
+      for (const [folder, msgs] of Object.entries(byFolder)) {
+        const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+        if (missing.length) {
+          try {
+            const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            for (const m of missing) {
+              const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
+              if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
+            }
+          } catch (e) { continue; }
+        }
+        for (const m of msgs) {
+          const body = this.emailBodyCache[`${folder}:${m.uid || m.id}`] || '';
+          if (!body || !crypto.isEncrypted(body)) continue;
+          const sender = this.senderEmail(m.from);
+          try {
+            crypto.setPeerPublicKey(this.peerKeys[sender]);
+            const text = await crypto.decryptVault(body);
+            const env = this.parseEnvelope(text);
+            // Только настоящие сообщения (envelope с id): квитанции/правки/
+            // реакции/legacy — не сообщения, на них квитанция не положена.
+            if (!env || !env.id) continue;
+            if (sentMap[env.id]) continue;
+            (acks[sender] = acks[sender] || []).push(env.id);
+            sentMap[env.id] = Date.now();
+          } catch (e) { /* не vault-письмо или чужой ключ — пропускаем */ }
+        }
+      }
+      if (!Object.keys(acks).length) return;
+      for (const [sender, ids] of Object.entries(acks)) {
+        try {
+          crypto.setPeerPublicKey(this.peerKeys[sender]);
+          const content = await crypto.encryptVault(JSON.stringify({ delivered: 1, msg_ids: ids }));
+          await api.sendReadReceipt(sender, content);
+        } catch (e) {
+          console.error('sendDeliveredReceipts failed for ' + sender + ':', e);
+          // SMTP упал — снимаем метки, чтобы квитанция повторилась позже.
+          for (const id of ids) delete sentMap[id];
+        }
+      }
+      // Разрастание карты: держим не более 500 самых свежих записей.
+      const entries = Object.entries(sentMap);
+      if (entries.length > 500) {
+        entries.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        sentMap = Object.fromEntries(entries.slice(0, 500));
+      }
+      try { localStorage.setItem(sentKey, JSON.stringify(sentMap)); } catch (e) { /* quota */ }
     },
     // Локальная (оптимистичная) запись правки — до доставки письма.
     recordLocalEdit(chatKey, msgId, text, action) {
