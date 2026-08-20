@@ -2675,6 +2675,7 @@ export default {
             from: 'me',
             sender_id: this.email,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            ts: Date.now(),
             encrypted: true,
             vault: true,
             status: 'sending',
@@ -2682,6 +2683,10 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending('group:' + this.currentGroup.id, pendingMsg);
+          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
+          // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
+          // пользователь может удалить. История = источник своих сообщений.
+          this.saveCurrentHistory('group:' + this.currentGroup.id);
           try {
             const res = await api.sendGroupMessage(this.currentGroup.id, content);
             // Частичный фейл (SMTP одного из участников): статус 'failed'
@@ -2724,6 +2729,7 @@ export default {
             content: payload,
             from: 'me',
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            ts: Date.now(),
             encrypted: true,
             vault: true,
             status: 'sending',
@@ -2731,6 +2737,10 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending(this.activeChat, pendingMsg);
+          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
+          // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
+          // пользователь может удалить. История = источник своих сообщений.
+          this.saveCurrentHistory(this.activeChat);
           try {
             await api.sendMessage(this.activeChat, content);
             // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
