@@ -2873,12 +2873,12 @@ export default {
             // последних писем + инициализация курсоров. Раньше каждые 30с
             // пересканировались последние 50-100 писем каждой папки — это
             // и лишний трафик, и триггер троттлинга Gmail.
-            // ВАЖНО (фикс 19.08): при НЕ тихом фетче (логин/авто-вход после
-            // перезапуска) всегда идём с ПУСТЫМИ курсорами — полный скан.
-            // Иначе курсоры из localStorage уже продвинуты вперёд, инкремент
-            // возвращает пусто, и все письма (чаты) «исчезали» после
-            // перезапуска приложения. Поллинг (silent) — лёгкий инкремент.
-            const cursors = silent ? this.loadCursors(account.id) : {};
+            // ВАЖНО (20.08): больше НЕ делаем полный скан при входе —
+            // курсоры в sqlite надёжны, история в sqlite — источник чатов.
+            // Принудительный полный скан с пустыми курсорами ломал INBOX
+            // на больших ящиках (icemaksim: 15624 писем, UID SEARCH ALL
+            // падал с «Unable to parse status response» в imap 2.4.1).
+            const cursors = this.loadCursors(account.id);
             const res = await api.fetchEmailsIncremental(account.id, cursors);
             fetched.push(...(res.messages || []));
             this.saveCursors(account.id, res.cursors);
