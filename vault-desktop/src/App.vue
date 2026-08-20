@@ -1928,7 +1928,13 @@ export default {
       });
     },
     saveCurrentHistory(chatKey) {
-      saveHistory(this.email, chatKey, this.messages);
+      // IndexedDB может молча падать/висеть (WebKitGTK onblocked) — его
+      // сбой не должен отменять localStorage-копию (источник чата).
+      try {
+        saveHistory(this.email, chatKey, this.messages);
+      } catch (e) {
+        console.warn('saveHistory (IndexedDB) failed:', e);
+      }
       // Копия в localStorage: IndexedDB может молча падать (WebKitGTK
       // onblocked) — без копии история терялась и чаты пустели.
       this.saveLocalHistory(chatKey, this.messages);
