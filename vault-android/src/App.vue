@@ -1478,6 +1478,8 @@ export default {
       const remaining = {};
       for (const [id, msg] of Object.entries(bucket)) {
         if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
+        // Удалённое сообщение не возвращается из pending (tombstone).
+        if (this.isTombstoned(id)) continue;
         // Страховка: не держим запись дольше 10 минут (если SMTP молча не
         // отправил письмо, сообщение не должно висеть «отправленным» вечно).
         // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
@@ -1499,6 +1501,13 @@ export default {
         return new Date(da) - new Date(db);
       });
       return out;
+    },
+    // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
+    // удалён навсегда) или deleted-метка из истории — фильтруются при
+    // каждом построении чата (история + письма + pending).
+    filterDeleted(list) {
+      const tombs = this.loadTombstones();
+      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)));
     },
     // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
     // из IndexedDB. История — источник истины: отправленные/полученные
@@ -1552,7 +1561,7 @@ export default {
       if (!extra.length) return hist;
       const merged = [...hist, ...extra];
       merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return merged;
+      return this.filterDeleted(merged);
     },
     // Машинная временная метка сообщения для сортировки чата.
     msgTs(m) {
@@ -1869,10 +1878,15 @@ export default {
       }
       const ok = await confirm(this.t('delete_message_confirm') || 'Удалить сообщение у всех?');
       if (!ok) return;
-      // Оптимистично помечаем удалённым локально + персистим (поллинг
-      // не «воскресит» сообщение, пока edit-письмо в пути).
+      // Оптимистично помечаем удалённым локально + tombstone (поллинг
+      // не «воскресит» сообщение: письмо-оригинал и история фильтруются).
+      this.addTombstone(msg.id);
       msg.deleted = true;
       msg.content = '';
+      // Мгновенно убираем из чата — удалённое сообщение исчезает у всех
+      // (у получателей — после доставки delete-письма).
+      const idx = this.messages.indexOf(msg);
+      if (idx !== -1) this.messages.splice(idx, 1);
       const chatKey = this.activeChatType === 'group' && this.currentGroup
         ? 'group:' + this.currentGroup.id
         : this.activeChat;
@@ -1883,7 +1897,11 @@ export default {
     // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
     // группа — encryptWithGroupKey, письма VaultGroupEdit: <id>.
     sendEditEmail(msgId, text, action) {
-      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action });
+      // Метки письма (аналог DC Chat-Edit/Chat-Delete + rfc724_mid, но в
+      // зашифрованном теле — стелс): msg_id (сопоставление с оригиналом),
+      // sender (проверка «автор оригинала» на стороне получателя), ts
+      // (последняя по времени правка авторитетна).
+      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action, sender: this.email, ts: Date.now() });
       (async () => {
         try {
           if (this.activeChatType === 'group' && this.currentGroup) {
@@ -2031,7 +2049,8 @@ export default {
                   (wireEdits[robj.msg_id] = wireEdits[robj.msg_id] || []).push({
                     text: robj.text || '',
                     action: robj.action === 'delete' ? 'delete' : 'edit',
-                    date: m.date || 0,
+                    date: robj.ts || m.date || 0,
+                    sender: robj.sender || (isOut ? email : (m.from || '')),
                   });
                   return null; // не сообщение
                 }
@@ -2129,9 +2148,8 @@ export default {
           if (ack.read) pmsg.status = 'read';
           else if (ack.delivered) pmsg.status = 'delivered';
         }
-        // История — основа чата, письма добавляют новое (mergeHistory).
-        // Статусы/реакции/правки применяем к ИТОГОВОМУ списку: в истории
-        // могли остаться старые статусы, а письмо принесло свежий.
+        // ИСТОРИЯ — основа чата, письма — дополнение; статусы/реакции/правки
+        // применяются к merged; pending — подмешиваются; удалённые фильтруются.
         const hadMessages = this.messages && this.messages.length > 0;
         const merged0 = await this.mergeHistory(chat, list);
         const statusById = new Map();
@@ -2142,7 +2160,7 @@ export default {
         }
         this.applyReactions(merged0, chat, wireReactions);
         this.applyEdits(merged0, chat, wireEdits);
-        const merged = this.mergePending(chat, merged0);
+        const merged = this.filterDeleted(this.mergePending(chat, merged0));
         if (!merged.length && hadMessages && !stale()) {
           // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
           // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
@@ -2289,7 +2307,8 @@ export default {
               (wireEdits[obj.msg_id] = wireEdits[obj.msg_id] || []).push({
                 text: obj.text || '',
                 action: obj.action === 'delete' ? 'delete' : 'edit',
-                date: msg.created_at || 0,
+                date: obj.ts || msg.created_at || 0,
+                sender: obj.sender || msg.sender_id || '',
               });
               continue; // правка не рендерится как сообщение
             }
@@ -2381,7 +2400,7 @@ export default {
           }
           this.applyReactions(merged0, chat, wireReactions);
           this.applyEdits(merged0, chat, wireEdits);
-          const merged = this.mergePending(chat, merged0);
+          const merged = this.filterDeleted(this.mergePending(chat, merged0));
           if (!merged.length && hadMessages && !stale()) {
             return;
           }
@@ -3339,20 +3358,49 @@ export default {
       const stored = this.loadStoredEdits();
       const chatEdits = stored[chatKey] || {};
       const cur = chatEdits[msgId] || [];
-      cur.push({ text: text || '', action, date: Date.now() });
+      cur.push({ text: text || '', action, date: Date.now(), sender: this.email });
       chatEdits[msgId] = cur;
       stored[chatKey] = chatEdits;
       this.saveStoredEdits(stored);
     },
+    // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
+    // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
+    // поллинг «воскресил» бы удалённое. Хранится отдельно от истории,
+    // чтобы удаление переживало и её (DC-аналог: tombstone в receive_imf).
+    tombstonesKey() {
+      return 'vault-tombstones-' + (this.email || 'anon');
+    },
+    loadTombstones() {
+      try {
+        return JSON.parse(localStorage.getItem(this.tombstonesKey()) || '[]');
+      } catch (e) {
+        return [];
+      }
+    },
+    addTombstone(msgId) {
+      if (!msgId) return;
+      const list = this.loadTombstones();
+      if (!list.includes(msgId)) {
+        list.push(msgId);
+        try { localStorage.setItem(this.tombstonesKey(), JSON.stringify(list)); } catch (e) { /* ignore */ }
+      }
+    },
+    isTombstoned(msgId) {
+      if (!msgId) return false;
+      return this.loadTombstones().includes(msgId);
+    },
     applyEdits(list, chatKey, wireEdits) {
       const stored = this.loadStoredEdits();
       const chatEdits = stored[chatKey] || {};
-      // Мерж правок из писем в хранилище (дедупликация по дате+тексту+действию).
+      // Мерж правок из писем в хранилище. Дедупликация по
+      // дате+тексту+действию+отправителю (один и тот же edit-конверт
+      // доходит в нескольких копиях — Sent отправителя + INBOX получателя).
       if (wireEdits && Object.keys(wireEdits).length) {
         for (const [msgId, edits] of Object.entries(wireEdits)) {
           const cur = chatEdits[msgId] || [];
           for (const e of edits) {
-            const dup = cur.some(x => x.text === e.text && x.action === e.action && String(x.date || 0) === String(e.date || 0));
+            const dup = cur.some(x => x.text === e.text && x.action === e.action
+              && String(x.date || 0) === String(e.date || 0) && (x.sender || '') === (e.sender || ''));
             if (!dup) cur.push(e);
           }
           chatEdits[msgId] = cur;
@@ -3360,12 +3408,26 @@ export default {
         stored[chatKey] = chatEdits;
         this.saveStoredEdits(stored);
       }
-      // Проставляем на сообщения.
+      // Проставляем на сообщения. Проверка отправителя (аналог Delta Chat
+      // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
+      // чужие правки игнорируются. Старые правки без sender — применяем
+      // (обратная совместимость).
       for (const msg of list) {
         const edits = chatEdits[msg.id];
         if (!edits || !edits.length) continue;
-        const latest = edits.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
+        const mine = edits.filter(e => {
+          if (!e.sender) return true;
+          if (msg.sender_id) return e.sender === msg.sender_id;
+          // 1:1 без sender_id: моё сообщение правит только мой email,
+          // чужое — только не мой (в 1:1 другой участник один).
+          if (msg.from === 'me') return e.sender === this.email;
+          return e.sender !== this.email;
+        });
+        if (!mine.length) continue;
+        const latest = mine.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
         if (latest.action === 'delete') {
+          // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
+          this.addTombstone(msg.id);
           msg.deleted = true;
           msg.content = '';
         } else if (latest.text) {
