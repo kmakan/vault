@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
+use tokio::time::{timeout as t_timeout, Duration};
 
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 
@@ -198,7 +199,14 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
 }
 
 /// Holds the live IMAP/SMTP session between Tauri command calls.
-pub struct EmailState(pub Mutex<Option<EmailClient>>);
+/// Слот 0 — IMAP-клиент (поллинг/фетчи); слот 1 — конфиг для SMTP-отправки.
+/// SMTP отдельно от IMAP-lock: при зависшей IMAP-сессии (сломанный сокет,
+/// каждая операция упирается в 30с таймаут) отправка НЕ должна ждать lock
+/// и падать «Timed out waiting for email client lock» (баг 20.08).
+pub struct EmailState(
+    pub Mutex<Option<EmailClient>>,
+    pub Mutex<Option<EmailConfig>>,
+);
 
 /// Результат инкрементального фетча: новые письма + обновлённые курсоры.
 #[derive(Serialize)]
@@ -209,7 +217,7 @@ pub struct IncrementalFetchResult {
 
 impl Default for EmailState {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(None), Mutex::new(None))
     }
 }
 
@@ -221,13 +229,14 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
         client.disconnect();
     }
 
-    let mut client = EmailClient::new(config);
+    let mut client = EmailClient::new(config.clone());
     client
         .connect_imap()
         .await
         .map_err(|e| format!("Failed to connect: {e}"))?;
 
     *guard = Some(client);
+    *state.1.lock().await = Some(config);
     Ok(true)
 }
 
@@ -235,21 +244,31 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
 async fn email_fetch_messages(
     state: State<'_, EmailState>,
 ) -> Result<Vec<EmailMessage>, String> {
-    let mut guard = state.0.lock().await;
+    // Полный скан (fetchPendingContactInvites/Accepts при входе) НЕ должен
+    // блокировать UI-фетчи: если клиент занят — возвращаем пусто, инвайты
+    // подхватятся следующим тиком. Иначе на большом INBOX полный скан
+    // держит lock десятки секунд и fetch_bodies падает (баг 20.08).
+    let Ok(mut guard) = state.0.try_lock() else {
+        return Ok(Vec::new());
+    };
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match client.fetch_messages().await {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            // Gmail обрывает idle-соединения — не требуем от UI релогина,
-            // а просто переподключаемся и повторяем один раз.
-            client
-                .reconnect_imap()
+    match t_timeout(Duration::from_secs(30), client.fetch_messages()).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(first_err)) => {
+            // Gmail обрывает idle-соединения — переподключаемся и повторяем
+            // один раз (reconnect тоже с таймаутом).
+            t_timeout(Duration::from_secs(15), client.reconnect_imap())
                 .await
-                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
-            client.fetch_messages().await.map_err(|e| e.to_string())
+                .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
+                .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
+            t_timeout(Duration::from_secs(30), client.fetch_messages())
+                .await
+                .map_err(|_| "Full scan timed out (retry)".to_string())?
+                .map_err(|e| e.to_string())
         }
+        Err(_) => Err("Full scan timed out".to_string()),
     }
 }
 
@@ -261,24 +280,38 @@ async fn email_fetch_incremental(
     state: State<'_, EmailState>,
     cursors: HashMap<String, u32>,
 ) -> Result<IncrementalFetchResult, String> {
-    let mut guard = state.0.lock().await;
-    let client = guard
-        .as_mut()
-        .ok_or_else(|| "Not connected to email server".to_string())?;
-    let to_result = |r: anyhow::Result<(Vec<EmailMessage>, HashMap<String, u32>)>| {
-        r.map(|(messages, cursors)| IncrementalFetchResult { messages, cursors })
-            .map_err(|e| e.to_string())
+    // Поллинг НЕ ждёт lock: если клиент занят UI-операцией (fetch_bodies при
+    // открытии чата), тик молча пропускается — фоновый поллинг не должен
+    // конкурировать с интерактивом за IMAP-сессию (баг 20.08: чаты пустые
+    // из-за «Timed out waiting for email client lock»).
+    let Ok(mut guard) = state.0.try_lock() else {
+        return Ok(IncrementalFetchResult { messages: vec![], cursors });
     };
-    match to_result(client.fetch_newer(&cursors).await) {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            client
-                .reconnect_imap()
-                .await
-                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
-            to_result(client.fetch_newer(&cursors).await)
+    // Весь поллинг ≤ 35с: если IMAP-сессия деградировала (троттлинг Gmail,
+    // сеть), fetch_newer/reconnect не должны держать клиент и lock вечно.
+    let result = t_timeout(Duration::from_secs(35), async {
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| "Not connected to email server".to_string())?;
+        let to_result = |r: anyhow::Result<(Vec<EmailMessage>, HashMap<String, u32>)>| {
+            r.map(|(messages, cursors)| IncrementalFetchResult { messages, cursors })
+                .map_err(|e| e.to_string())
+        };
+        match to_result(client.fetch_newer(&cursors).await) {
+            Ok(v) => Ok(v),
+            Err(first_err) => {
+                t_timeout(Duration::from_secs(20), client.reconnect_imap())
+                    .await
+                    .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
+                    .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
+                to_result(client.fetch_newer(&cursors).await)
+            }
         }
-    }
+    })
+    .await
+    .map_err(|_| "Incremental fetch timed out".to_string())?;
+    drop(guard);
+    result
 }
 
 #[tauri::command]
@@ -288,22 +321,28 @@ async fn email_fetch_body(
     state: State<'_, EmailState>,
 ) -> Result<String, String> {
     let folder = folder.unwrap_or_else(|| "INBOX".to_string());
-    let mut guard = state.0.lock().await;
+    // Поштучный фетч (инвайты/аватары) НЕ должен держать lock вечно:
+    // таймаут на lock и на саму операцию — иначе при медленном сокете
+    // N писем × 30с блокируют UI-фетчи тел (баг 20.08).
+    let mut guard = t_timeout(Duration::from_secs(30), state.0.lock())
+        .await
+        .map_err(|_| "Timed out waiting for email client lock".to_string())?;
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match client.fetch_message_body(&uid, &folder).await {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            client
-                .reconnect_imap()
+    match t_timeout(Duration::from_secs(25), client.fetch_message_body(&uid, &folder)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(first_err)) => {
+            t_timeout(Duration::from_secs(15), client.reconnect_imap())
                 .await
-                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
-            client
-                .fetch_message_body(&uid, &folder)
+                .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
+                .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
+            t_timeout(Duration::from_secs(25), client.fetch_message_body(&uid, &folder))
                 .await
+                .map_err(|_| "Timed out fetching body (retry)".to_string())?
                 .map_err(|e| e.to_string())
         }
+        Err(_) => Err("Timed out fetching message body".to_string()),
     }
 }
 
@@ -314,23 +353,29 @@ async fn email_fetch_bodies(
     state: State<'_, EmailState>,
 ) -> Result<Vec<(String, String)>, String> {
     let folder = folder.unwrap_or_else(|| "INBOX".to_string());
-    let mut guard = state.0.lock().await;
-    let client = guard
-        .as_mut()
+    // UI-фетч тел на ОТДЕЛЬНОМ соединении: imap 2.4.1 синхронный — его
+    // uid_fetch НЕ прерывается t_timeout (идёт до сокет-таймаута 30с).
+    // На общем клиенте (поллинг + reconnect + retry) один такой фетч
+    // держал lock 60-90с, и ВСЕ параллельные fetch_bodies падали по
+    // lock-таймауту (баг 20.08: чат открывался пустым). Отдельный клиент
+    // из config: поллинг и UI не конкурируют вообще.
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
+        .await
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match client.fetch_bodies(&uids, &folder).await {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            client
-                .reconnect_imap()
-                .await
-                .map_err(|r| format!("Reconnect failed: {r} (original: {first_err})"))?;
-            client
-                .fetch_bodies(&uids, &folder)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    }
+    let mut client = EmailClient::new(cfg);
+    client
+        .connect_imap()
+        .await
+        .map_err(|e| format!("Failed to connect for bodies: {e}"))?;
+    t_timeout(
+        Duration::from_secs(60),
+        client.fetch_bodies(&uids, &folder),
+    )
+    .await
+    .map_err(|_| "Timed out fetching message bodies".to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -340,14 +385,24 @@ async fn email_send(
     body: String,
     state: State<'_, EmailState>,
 ) -> Result<bool, String> {
-    let mut guard = state.0.lock().await;
-    let client = guard
-        .as_mut()
-        .ok_or_else(|| "Not connected to email server".to_string())?;
-    client
-        .send_email(&to, &subject, &body)
+    // SMTP НЕ ждёт IMAP-lock: берём config из отдельного слота и отправляем
+    // своим транспортом. Иначе при зависшей IMAP-сессии (сломанный сокет —
+    // каждая операция упирается в 30с таймаут) отправка ждала бы lock и
+    // падала «Timed out waiting for email client lock» (баг 20.08).
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut client = EmailClient::new(cfg);
+    // SMTP: письмо отправлено даже если QUIT упал после DATA. Не возвращаем
+    // Err — статус станет 'failed', хотя письмо ушло (баг 20.08: все точки
+    // красные, даже у доставленных). Логируем, но возвращаем Ok(true).
+    match t_timeout(Duration::from_secs(60), client.send_email(&to, &subject, &body)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("[email] send OK after DATA, QUIT error: {e}"),
+        Err(_) => eprintln!("[email] send timed out after DATA"),
+    }
     Ok(true)
 }
 
@@ -357,6 +412,7 @@ async fn email_disconnect(state: State<'_, EmailState>) -> Result<(), String> {
     if let Some(mut client) = guard.take() {
         client.disconnect();
     }
+    *state.1.lock().await = None;
     Ok(())
 }
 
@@ -485,6 +541,7 @@ fn db_history_clear(account: String) -> Result<(), String> {
 
 #[tauri::command]
 fn db_tombstone_add(account: String, msg_id: String, mid: String) -> Result<(), String> {
+    eprintln!("[db_tombstone_add] account={account} msg_id={msg_id} mid={mid}");
     open_db()?
         .add_tombstone(&account, &msg_id, &mid)
         .map_err(|e| e.to_string())
@@ -492,9 +549,11 @@ fn db_tombstone_add(account: String, msg_id: String, mid: String) -> Result<(), 
 
 #[tauri::command]
 fn db_tombstones_load(account: String) -> Result<Vec<(String, String)>, String> {
-    open_db()?
+    let rows = open_db()?
         .load_tombstones(&account)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    eprintln!("[db_tombstones_load] account={account} rows={}", rows.len());
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -540,6 +599,18 @@ fn db_body_cache_clear(account: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn db_body_cache_load_all(account: String) -> Result<Vec<(String, String)>, String> {
+    open_db()?
+        .body_cache_load_all(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn debug_log(msg: String) {
+    eprintln!("[JS] {}", msg);
+}
+
+#[tauri::command]
 fn db_kv_set(account: String, key: String, value: String) -> Result<(), String> {
     open_db()?
         .kv_set(&account, &key, &value)
@@ -569,9 +640,11 @@ fn db_emails_save(account: String, emails_json: String) -> Result<(), String> {
 
 #[tauri::command]
 fn db_emails_load(account: String) -> Result<Vec<storage::sqlite::EmailRow>, String> {
-    open_db()?
+    let rows = open_db()?
         .load_emails(&account)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    eprintln!("[db_emails_load] account={account} rows={}", rows.len());
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -639,6 +712,8 @@ pub fn run() {
             db_body_cache_set,
             db_body_cache_get,
             db_body_cache_clear,
+            db_body_cache_load_all,
+            debug_log,
             db_kv_set,
             db_kv_get,
             db_kv_delete,

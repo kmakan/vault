@@ -46,6 +46,8 @@ const db = {
     invoke('db_body_cache_set', { account, cacheKey, body }),
   bodyCacheGet: (account, cacheKey) =>
     invoke('db_body_cache_get', { account, cacheKey }),
+  bodyCacheLoadAll: (account) =>
+    invoke('db_body_cache_load_all', { account }),
   bodyCacheClear: (account) =>
     invoke('db_body_cache_clear', { account }),
   kvSet: (account, key, value) =>
@@ -467,14 +469,20 @@ export class ApiClient {
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
     const declined = this.getDeclinedContacts();
     const peers = await this.loadPeerKeyEmails();
+    // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
+    // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
+    // при десятке инвайтов UI-фетчи тел падали по lock-таймауту (20.08).
+    const bodies = await this.batchFetchBodies(invites);
     const out = [];
     for (const m of invites) {
       const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
       if (!sender || sender === this.email) continue; // себе не предлагаем
       if (declined.includes(`${sender}|${m.uid}`)) continue;
+      const body = bodies[String(m.uid || m.id)] || '';
+      if (!body) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
+        parsed = urlSafeB64Decode(body);
       } catch (e) {
         continue;
       }
@@ -495,6 +503,25 @@ export class ApiClient {
     }
     return out;
   }
+  // Батч-фетч тел писем по папкам (один IMAP-вызов на папку) — обёртка над
+  // fetchEmailBodies, возвращает {uid: body}. Пустые тела пропускаются.
+  async batchFetchBodies(list) {
+    const out = {};
+    const byFolder = {};
+    for (const m of list) {
+      const f = m.folder || 'INBOX';
+      (byFolder[f] = byFolder[f] || []).push(m);
+    }
+    for (const [folder, msgs] of Object.entries(byFolder)) {
+      try {
+        const bodies = await this.fetchEmailBodies(folder, msgs.map(m => m.uid || m.id));
+        Object.assign(out, bodies);
+      } catch (e) {
+        console.warn('[batchFetchBodies] failed folder=' + folder + ' n=' + msgs.length + ' err=' + (e && e.message || e));
+      }
+    }
+    return out;
+  }
   async sendContactAccept(email, publicKey) {
     const name = localStorage.getItem('vault-display-name') || this.email;
     const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
@@ -511,13 +538,18 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
     const peers = await this.loadPeerKeyEmails();
+    // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
+    // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
+    const bodies = await this.batchFetchBodies(accepts);
     const out = [];
     for (const m of accepts) {
       const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
+      const body = bodies[String(m.uid || m.id)] || '';
+      if (!body) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
+        parsed = urlSafeB64Decode(body);
       } catch (e) {
         continue;
       }

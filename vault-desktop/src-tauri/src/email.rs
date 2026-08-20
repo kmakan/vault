@@ -285,58 +285,40 @@ impl EmailClient {
         self.connect_imap().await
     }
 
-    /// Fetch recent messages. Folder strategy (user-confirmed 20.08): ALWAYS
-    /// INBOX + Junk + Sent. All Mail is NEVER read: Gmail keeps every
-    /// label-removed mail alive in All Mail, so a message the user deleted in
-    /// the web UI would "resurrect" on the next fetch. Sent is read
-    /// unconditionally so the sender sees their own copies.
-    pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
-        let folders = self.find_special_folders();
+    /// Fetch recent messages. Folder strategy (user-confirmed 20.08): ONLY
+        /// INBOX + Junk. Sent is NEVER read: the sender's copies are found in
+        /// Junk/INBOX (Gmail self-BCC behaviour) or not needed (outgoing messages
+        /// persist to local history immediately, Delta-Chat style).
+        pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
+            let folders = self.find_special_folders();
 
-        let mut messages = self.fetch_folder("INBOX", 250)?;
-        let mut seen: HashSet<String> = messages
-            .iter()
-            .filter(|m| !m.message_id.is_empty())
-            .map(|m| m.message_id.clone())
-            .collect();
+            let mut messages = self.fetch_folder("INBOX", 250)?;
+            let mut seen: HashSet<String> = messages
+                .iter()
+                .filter(|m| !m.message_id.is_empty())
+                .map(|m| m.message_id.clone())
+                .collect();
 
-        if let Some(junk) = &folders.junk {
-            match self.fetch_folder(junk, 150) {
-                Ok(junk_msgs) => {
-                    for m in junk_msgs {
-                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                            continue;
+            if let Some(junk) = &folders.junk {
+                match self.fetch_folder(junk, 150) {
+                    Ok(junk_msgs) => {
+                        for m in junk_msgs {
+                            if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                                continue;
+                            }
+                            messages.push(m);
                         }
-                        messages.push(m);
                     }
+                    // The Junk folder may be missing/unreachable — do not fail the
+                    // whole fetch, INBOX is already retrieved.
+                    Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
                 }
-                // The Junk folder may be missing/unreachable — do not fail the
-                // whole fetch, INBOX is already retrieved.
-                Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
             }
-        }
 
-        if let Some(sent) = &folders.sent {
-            // Copies of our outgoing mail live ONLY in Sent — without them the
-            // sender never sees their own messages and polling would wipe the
-            // optimistic display.
-            match self.fetch_folder(sent, 150) {
-                Ok(sent_msgs) => {
-                    for m in sent_msgs {
-                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                            continue;
-                        }
-                        messages.push(m);
-                    }
-                }
-                Err(e) => eprintln!("[email] Sent folder {sent} fetch failed: {e}"),
-            }
+            // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
+            let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
+            Ok(messages)
         }
-
-        // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
-        let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
-        Ok(messages)
-    }
 
     /// Fetch messages in one mailbox: either the most recent `limit`
     /// (first sync, no cursor) or everything with UID > `last_uid`
@@ -459,17 +441,6 @@ impl EmailClient {
             }
         }
 
-        // Sent — ALWAYS (same rule as fetch_messages: All Mail is never read,
-        // so the sender's own copies only live in Sent).
-        if let Some(sent) = &folders.sent {
-            match self
-                .fetch_folder_from(sent, cursors.get(sent).copied(), 50)
-            {
-                Ok((msgs, max)) => collect(sent, sent, msgs, max),
-                Err(e) => eprintln!("[email] Sent folder {sent} incremental fetch failed: {e}"),
-            }
-        }
-
         // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
         let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
         Ok((messages, new_cursors))
@@ -491,9 +462,8 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        if folder != "INBOX" {
-            let _ = session.select(folder);
-        }
+        // Всегда select (включая INBOX) — на новом соединении папка не выбрана.
+        let _ = session.select(folder);
 
         let mut body = String::new();
         let fetch_res = session.uid_fetch(uid, "(RFC822.TEXT)");
@@ -531,9 +501,10 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        if folder != "INBOX" {
-            let _ = session.select(folder);
-        }
+        // ВСЕГДА select(folder), включая INBOX: на новом соединении (теперь
+        // каждый fetch_bodies — отдельный клиент) папка не выбрана, uid_fetch
+        // без select возвращает пусто (баг 20.08: INBOX empty_uid).
+        let _ = session.select(folder);
 
         let mut out = Vec::with_capacity(uids.len());
         let mut empty_uid: Option<String> = None;
@@ -553,6 +524,12 @@ impl EmailClient {
             }
             out.push((uid.clone(), body));
         }
+        eprintln!(
+            "[fetch_bodies] folder={folder} requested={} returned={} empty_uid={:?}",
+            uids.len(),
+            out.len(),
+            empty_uid
+        );
 
         if folder != "INBOX" {
             let _ = session.select("INBOX");

@@ -494,6 +494,16 @@ pub fn body_cache_clear(&self, account: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn body_cache_load_all(&self, account: &str) -> Result<Vec<(String, String)>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT cache_key, body FROM body_cache WHERE account=?1")?;
+    let rows = stmt.query_map(params![account], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 // Generic per-account key/value store (edits, reactions, pinned, avatars...).
 pub fn kv_set(&self, account: &str, key: &str, value: &str) -> Result<()> {
     self.conn.execute(
