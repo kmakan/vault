@@ -560,6 +560,27 @@ fn db_kv_delete(account: String, key: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn db_emails_save(account: String, emails_json: String) -> Result<(), String> {
+    open_db()?
+        .save_emails(&account, &emails_json)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_emails_load(account: String) -> Result<Vec<storage::sqlite::EmailRow>, String> {
+    open_db()?
+        .load_emails(&account)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_emails_clear(account: String) -> Result<(), String> {
+    open_db()?
+        .clear_emails(&account)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -621,6 +642,9 @@ pub fn run() {
             db_kv_set,
             db_kv_get,
             db_kv_delete,
+            db_emails_save,
+            db_emails_load,
+            db_emails_clear,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources

@@ -2873,6 +2873,29 @@ export default {
         const accounts = await api.getEmailAccounts();
         // Не сбрасываем this.emails в начале: пока фетч идёт (или падает),
         // старый список остаётся в UI — клик по чату не видит пустоту.
+        // ПЕРСИСТ (20.08): this.emails восстанавливается из sqlite при входе
+        // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
+        // перезапуске и чаты без истории были пустыми (icemaksim).
+        if (!silent && this.emails.length === 0) {
+          try {
+            const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (this.email || 'anon'));
+            if (Array.isArray(stored) && stored.length) {
+              this.emails = stored.map(e => ({
+                uid: e.uid,
+                id: e.uid,
+                from: e.from,
+                to: e.to,
+                subject: e.subject,
+                date: e.date,
+                is_read: e.is_read,
+                folder: e.folder,
+                message_id: e.message_id || '',
+              }));
+            }
+          } catch (e) {
+            console.warn('loadEmails: sqlite restore failed:', e);
+          }
+        }
         const fetched = [];
         for (const account of accounts) {
           try {
@@ -2912,6 +2935,23 @@ export default {
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
         this.emails = merged;
+        // ПЕРСИСТ (20.08): envelope cache в sqlite — при перезапуске письма
+        // восстанавливаются без полного IMAP-скана (курсоры согласованы).
+        try {
+          const acc = accounts[0] ? accounts[0].id : (this.email || 'anon');
+          db.emailsSave(acc, JSON.stringify(this.emails.map(m => ({
+            uid: String(m.uid ?? m.id ?? ''),
+            folder: m.folder || 'INBOX',
+            from: m.from || '',
+            to: m.to || '',
+            subject: m.subject || '',
+            date: m.date || '',
+            is_read: !!m.is_read,
+            message_id: m.message_id || '',
+          }))));
+        } catch (e) {
+          console.warn('loadEmails: sqlite save failed:', e);
+        }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
         if (!silent && this.emails.length === 0 && !this.emailError) {
           this.emailError = 'INBOX пуст или письма не найдены';
