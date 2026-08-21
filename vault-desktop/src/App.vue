@@ -4106,6 +4106,22 @@ export default {
       } catch (e) {
         console.error('processInvites: contact deletes failed:', e);
       }
+      // Повторная отправка VaultContactDelete (21.08): письмо могло потеряться
+      // (спам-фильтр yandex/gmail, сбой SMTP) — пока контакт помечен «удалён
+      // МНОЙ», шлём уведомление снова каждый 3-й поллинг (~90 сек), чтобы
+      // получатель гарантированно узнал об удалении. Без этого контакт на
+      // другой стороне «воскресает» старыми accept-письмами и живёт вечно.
+      try {
+        const selfDeleted = await api.getSelfDeleted();
+        if (selfDeleted.length) {
+          this._deleteResendTick = (this._deleteResendTick || 0) + 1;
+          if (this._deleteResendTick % 3 === 0) {
+            for (const em of selfDeleted) {
+              api.sendContactDelete(em).catch(e => console.error('resendContactDelete failed:', e));
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
       // Собираем непрочитанные инвайты для попапа согласия.
       try {
         const invites = await api.fetchPendingInvites();
@@ -4311,9 +4327,8 @@ export default {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
         // Уведомляем удаляемую сторону (fire-and-forget: SMTP медленный,
-        // локальное удаление не должно ждать письма). Получатель при поллинге
-        // уберёт нас из своих контактов (VaultContactDelete).
-        api.sendContactDelete(email).catch(() => {});
+        // локальное удаление не должно ждать письма, но ошибка логируется).
+        api.sendContactDelete(email).catch(e => console.error('sendContactDelete failed:', e));
         await crypto.removePeerKey(email);
         // Помечаем «удалён МНОЙ»: старые VaultContactInvite/VaultContactAccept
         // письма не должны воскрешать контакт (попап/ключ снова).
