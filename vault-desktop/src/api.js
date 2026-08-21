@@ -462,6 +462,26 @@ export class ApiClient {
       return [];
     }
   }
+  getAcceptedContacts() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-accepted-contacts') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  // Вечная пометка «handshake-письмо обработано» (аналог vault-accepted-invites
+  // для групп). Без неё после удаления контакта старое письмо-инвайт/accept
+  // снова «активируется» (peers.has перестаёт фильтровать): попап приглашения
+  // или молчаливое воскрешение контакта со старым ключом.
+  markAcceptedContact(key) {
+    try {
+      const arr = this.getAcceptedContacts();
+      if (!arr.includes(key)) {
+        arr.push(key);
+        localStorage.setItem('vault-accepted-contacts', JSON.stringify(arr));
+      }
+    } catch (e) { /* ignore */ }
+  }
   async sendContactInvite(email, publicKey) {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
@@ -480,6 +500,7 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
     const declined = this.getDeclinedContacts();
+    const accepted = this.getAcceptedContacts();
     const peers = await this.loadPeerKeyEmails();
     // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
     // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
@@ -490,6 +511,7 @@ export class ApiClient {
       const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
       if (!sender || sender === this.email) continue; // себе не предлагаем
       if (declined.includes(`${sender}|${m.uid}`)) continue;
+      if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже принят когда-то
       const body = bodies[String(m.uid || m.id)] || '';
       if (!body) continue;
       let parsed;
@@ -550,6 +572,7 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
     const peers = await this.loadPeerKeyEmails();
+    const accepted = this.getAcceptedContacts();
     // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
     // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
     const bodies = await this.batchFetchBodies(accepts);
@@ -557,6 +580,7 @@ export class ApiClient {
     for (const m of accepts) {
       const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
+      if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже обработано когда-то
       const body = bodies[String(m.uid || m.id)] || '';
       if (!body) continue;
       let parsed;
@@ -572,6 +596,9 @@ export class ApiClient {
       if (peers.has(sender)) continue; // ключ уже сохранён — только профиль обновили
       try {
         await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
+        // Пометка вечная (как tombstones): без неё после удаления контакта
+        // это accept-письмо молча вернёт контакт со старым ключом.
+        this.markAcceptedContact(`${sender}|${m.uid}`);
       } catch (e) {
         continue;
       }

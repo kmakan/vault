@@ -4226,6 +4226,9 @@ export default {
       this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
         await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
+        // Вечная пометка «инвайт обработан» — иначе после удаления контакта
+        // старое письмо-инвайт снова покажет попап приглашения.
+        api.markAcceptedContact(key);
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
         // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
         this.peerKeys[c.sender] = c.public_key;
