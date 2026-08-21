@@ -55,7 +55,7 @@
       </div>
     </div>
     <!-- MAIN APP -->
-    <div v-else class="sidebar">
+    <div v-else class="sidebar" :class="{ 'mobile-hidden': isMobile && mobileChatOpen }">
       <div class="sidebar-header">
         <div class="app-logo" :title="t('app_name') || 'Vault'" @click="openAppSite">
           <img :src="appIconUrl" alt="Vault" class="app-logo-img" />
@@ -147,217 +147,14 @@
       </div>
     </div>
     
-    <div class="main-area">
-      <div v-if="showKeyManager" class="key-manager">
-        <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" />
-      </div>
-    
-      <div v-if="showQRCode" class="qr-code-overlay">
-        <QRCodePanel 
-          :publicKey="publicKey" 
-          :myEmail="email"
-          @close="showQRCode = false"
-          @key-scanned="addPeerKey"
-          @invite-by-id="inviteContactById"
-        />
-      </div>
-
-      <!-- CIPHER TOOL -->
-      <CipherTool v-if="showCipher" :peerKeys="peerKeys" :contacts="contacts" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
-
-      <!-- SETTINGS MODAL -->
-      <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
-        <div class="modal-settings">
-          <button class="modal-close" @click="showSettings = false">←</button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" />
-        </div>
-      </div>
-
-      <!-- INVITE POPUP (приглашение в группу с согласием) -->
-      <div v-if="showInvitePopup && pendingInvites.length" class="modal-overlay" @click.self="showInvitePopup = false">
-        <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showInvitePopup = false">←</button>
-          <template v-if="pendingInvites[invitePopupIndex]">
-            <h3 class="invite-popup-title">{{ t('invite_title') || 'Приглашение в группу' }}</h3>
-            <p class="invite-popup-text">{{ t('invite_text') }}</p>
-            <p class="invite-popup-name">{{ pendingInvites[invitePopupIndex].group_name }}</p>
-            <div class="invite-popup-sender">
-              <UserAvatar
-                :email="pendingInvites[invitePopupIndex].sender"
-                :avatarUrl="pendingInvites[invitePopupIndex].sender_avatar"
-                :size="28"
-              />
-              <span class="invite-popup-sender-name">
-                {{ pendingInvites[invitePopupIndex].sender_name || pendingInvites[invitePopupIndex].sender }}
-              </span>
-            </div>
-            <div class="invite-popup-actions">
-              <button class="btn btn-primary" @click="acceptInvite(pendingInvites[invitePopupIndex])">
-                {{ t('invite_accept') || 'Принять' }}
-              </button>
-              <button class="btn btn-secondary" @click="declineInvite(pendingInvites[invitePopupIndex])">
-                {{ t('invite_decline') || 'Отклонить' }}
-              </button>
-            </div>
-          </template>
-        </div>
-      </div>
-
-      <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
-      <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
-        <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showContactPopup = false">←</button>
-          <template v-if="pendingContacts[contactPopupIndex]">
-            <h3 class="invite-popup-title">{{ t('contact_request_title') || 'Запрос контакта' }}</h3>
-            <p class="invite-popup-text">{{ t('contact_request_text') || 'Примите запрос — и собеседник появится в ваших контактах.' }}</p>
-            <div class="invite-popup-sender">
-              <UserAvatar
-                :email="pendingContacts[contactPopupIndex].sender"
-                :avatarUrl="pendingContacts[contactPopupIndex].sender_avatar"
-                :size="28"
-              />
-              <span class="invite-popup-sender-name">
-                {{ pendingContacts[contactPopupIndex].sender_name || pendingContacts[contactPopupIndex].sender }}
-              </span>
-            </div>
-            <div class="invite-popup-actions">
-              <button class="btn btn-primary" @click="acceptContactInvite(pendingContacts[contactPopupIndex])">
-                {{ t('invite_accept') || 'Принять' }}
-              </button>
-              <button class="btn btn-secondary" @click="declineContactInvite(pendingContacts[contactPopupIndex])">
-                {{ t('invite_decline') || 'Отклонить' }}
-              </button>
-            </div>
-          </template>
-        </div>
-      </div>
-
-      <!-- ADD MEMBER POPUP (выбор контактов, мульти-выбор чекбоксами) -->
-      <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
-        <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showAddMemberPopup = false">←</button>
-          <h3 class="add-member-popup-title">{{ t('add_member_from_contacts') || 'Добавить участника из контактов' }}</h3>
-          <input
-            v-model="addMemberQuery"
-            type="text"
-            :placeholder="t('search_contacts') || 'Поиск контактов…'"
-            class="add-member-search"
-            @keyup.enter="addManualEmail"
-          />
-          <div class="add-member-contacts">
-            <div
-              v-for="c in filteredAddContacts"
-              :key="c.email"
-              class="add-member-contact"
-              :class="{ selected: addMemberSelected.includes(c.email) }"
-              @click="toggleAddMember(c.email)"
-            >
-              <span class="add-member-checkbox" :class="{ checked: addMemberSelected.includes(c.email) }">{{ addMemberSelected.includes(c.email) ? '✓' : '' }}</span>
-              <UserAvatar :email="c.email" :size="28" />
-              <span class="add-member-contact-name">{{ c.name || c.email }}</span>
-              <span class="add-member-contact-email">{{ c.email }}</span>
-            </div>
-            <div v-if="filteredAddContacts.length === 0" class="add-member-none">
-              {{ t('no_contacts') || 'Контакты не найдены' }}
-            </div>
-            <div v-if="addMemberQuery.includes('@')" class="add-member-manual" @click="addManualEmail">
-              ✏️ {{ t('enter_email_manual') || 'Ввести email вручную' }}
-              <span class="add-member-manual-email">— {{ addMemberQuery }}</span>
-            </div>
-          </div>
-          <div v-if="addMemberSelected.length" class="add-member-selected-chips">
-            <span
-              v-for="em in addMemberSelected"
-              :key="em"
-              class="add-member-chip"
-              :title="t('general_cancel') || 'Cancel'"
-              @click="toggleAddMember(em)"
-            >{{ em }} ✕</span>
-          </div>
-          <button
-            class="btn-primary add-member-invite-btn"
-            :disabled="addMemberSelected.length === 0"
-            @click="inviteSelectedMembers"
-          >
-            {{ t('add_member_invite_btn') || 'Пригласить' }}<template v-if="addMemberSelected.length"> ({{ addMemberSelected.length }})</template>
-          </button>
-        </div>
-      </div>
-
-      <!-- AVATAR UPLOAD MODAL -->
-      <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
-        <div class="modal-avatar">
-          <button class="modal-close" @click="showAvatarUpload = false">←</button>
-          <h3>Фото профиля</h3>
-          <div class="avatar-preview-circle">
-            <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
-            <span v-else class="avatar-initials avatar-preview-initials">{{ emailInitials }}</span>
-          </div>
-          <p class="avatar-hint">Формат: PNG, JPG, SVG. Рекомендуется 100×100 px.</p>
-          <label class="avatar-upload-btn">
-            <Icon name="camera" :size="14" /> Выбрать файл
-            <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="onAvatarFileSelect" hidden />
-          </label>
-        </div>
-      </div>
-
-      <!-- CONTACT EDIT MODAL: локальные имя/аватар контакта (видны только мне,
-           реальные имя/аватар собеседника не меняются) -->
-      <div v-if="showContactEdit && editingContact" class="modal-overlay" @click.self="showContactEdit = false">
-        <div class="modal-content contact-edit-panel">
-          <h3>{{ t('contact_edit_title') || 'Имя и аватар контакта' }}</h3>
-          <p class="contact-edit-email">{{ editingContact }}</p>
-          <p class="avatar-hint">{{ t('contact_edit_hint') || 'Видно только вам — реальные имя и аватар собеседника не меняются.' }}</p>
-          <div class="avatar-preview-circle">
-            <img v-if="editContactAvatar" :src="editContactAvatar" class="avatar-preview-img" />
-            <span v-else class="avatar-initials avatar-preview-initials">{{ (nameOf(editingContact) || '?').charAt(0).toUpperCase() }}</span>
-          </div>
-          <input
-            v-model="editContactName"
-            class="contact-edit-name-input"
-            :placeholder="t('contact_edit_name_placeholder') || 'Локальное имя (например: Мама, Босс)'"
-            maxlength="64"
-          />
-          <div class="contact-edit-actions">
-            <label class="avatar-upload-btn">
-              <Icon name="camera" :size="14" /> {{ t('contact_edit_avatar') || 'Аватар' }}
-              <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="handleContactAvatarSelect" hidden />
-            </label>
-            <button v-if="editContactAvatar" class="contact-edit-btn contact-edit-btn--ghost" @click="editContactAvatar = ''">✕ {{ t('contact_edit_remove_avatar') || 'Убрать аватар' }}</button>
-          </div>
-          <div class="contact-edit-footer">
-            <button class="contact-edit-btn contact-edit-btn--ghost" @click="resetContactEdit">{{ t('contact_edit_reset') || 'Сбросить' }}</button>
-            <div class="contact-edit-footer-right">
-              <button class="contact-edit-btn contact-edit-btn--ghost" @click="showContactEdit = false">{{ t('general_cancel') || 'Отмена' }}</button>
-              <button class="contact-edit-btn contact-edit-btn--primary" @click="saveContactEdit">{{ t('general_save') || 'Сохранить' }}</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <!-- GROUP SETTINGS MODAL (полноценный оверлей, не сжимает чат) -->
-      <div v-if="showGroupSettings && currentGroup" class="modal-overlay" @click.self="showGroupSettings = false">
-        <div class="group-settings-panel">
-          <GroupSettings
-            :group="currentGroup"
-            :currentUser="email"
-            :profiles="mergedProfiles"
-            @close="showGroupSettings = false"
-            @role-change="changeMemberRole"
-            @remove="removeMember"
-            @unblock="unblockUser"
-            @leave="leaveGroup"
-            @delete="deleteGroup"
-            @add-member="addMember"
-            @avatar-update="onGroupAvatarUpdate"
-          />
-        </div>
-      </div>
-
+    <div class="main-area" :class="{ 'mobile-hidden': isMobile && !mobileChatOpen }">
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
         <div class="chat-header" v-if="activeChat">
           <div class="chat-header-info">
+            <button v-if="isMobile" class="chat-back-btn" @click="closeMobileChat" :title="t('back') || 'Назад'">
+              <Icon name="chevron-left" :size="22" />
+            </button>
             <template v-if="activeChatType === 'group'">
               <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
               <div v-else class="group-avatar">
@@ -595,6 +392,215 @@
       </div>
     </div>
 
+      <div v-if="showKeyManager" class="key-manager">
+        <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" />
+      </div>
+    
+      <div v-if="showQRCode" class="qr-code-overlay">
+        <QRCodePanel 
+          :publicKey="publicKey" 
+          :myEmail="email"
+          @close="showQRCode = false"
+          @key-scanned="addPeerKey"
+          @invite-by-id="inviteContactById"
+        />
+      </div>
+
+      <!-- CIPHER TOOL -->
+      <CipherTool v-if="showCipher" :peerKeys="peerKeys" :contacts="contacts" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
+
+      <!-- SETTINGS MODAL -->
+      <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
+        <div class="modal-settings">
+          <button class="modal-close" @click="showSettings = false">←</button>
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" />
+        </div>
+      </div>
+
+      <!-- INVITE POPUP (приглашение в группу с согласием) -->
+      <div v-if="showInvitePopup && pendingInvites.length" class="modal-overlay" @click.self="showInvitePopup = false">
+        <div class="modal-settings invite-popup-panel">
+          <button class="modal-close" @click="showInvitePopup = false">←</button>
+          <template v-if="pendingInvites[invitePopupIndex]">
+            <h3 class="invite-popup-title">{{ t('invite_title') || 'Приглашение в группу' }}</h3>
+            <p class="invite-popup-text">{{ t('invite_text') }}</p>
+            <p class="invite-popup-name">{{ pendingInvites[invitePopupIndex].group_name }}</p>
+            <div class="invite-popup-sender">
+              <UserAvatar
+                :email="pendingInvites[invitePopupIndex].sender"
+                :avatarUrl="pendingInvites[invitePopupIndex].sender_avatar"
+                :size="28"
+              />
+              <span class="invite-popup-sender-name">
+                {{ pendingInvites[invitePopupIndex].sender_name || pendingInvites[invitePopupIndex].sender }}
+              </span>
+            </div>
+            <div class="invite-popup-actions">
+              <button class="btn btn-primary" @click="acceptInvite(pendingInvites[invitePopupIndex])">
+                {{ t('invite_accept') || 'Принять' }}
+              </button>
+              <button class="btn btn-secondary" @click="declineInvite(pendingInvites[invitePopupIndex])">
+                {{ t('invite_decline') || 'Отклонить' }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
+      <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
+        <div class="modal-settings invite-popup-panel">
+          <button class="modal-close" @click="showContactPopup = false">←</button>
+          <template v-if="pendingContacts[contactPopupIndex]">
+            <h3 class="invite-popup-title">{{ t('contact_request_title') || 'Запрос контакта' }}</h3>
+            <p class="invite-popup-text">{{ t('contact_request_text') || 'Примите запрос — и собеседник появится в ваших контактах.' }}</p>
+            <div class="invite-popup-sender">
+              <UserAvatar
+                :email="pendingContacts[contactPopupIndex].sender"
+                :avatarUrl="pendingContacts[contactPopupIndex].sender_avatar"
+                :size="28"
+              />
+              <span class="invite-popup-sender-name">
+                {{ pendingContacts[contactPopupIndex].sender_name || pendingContacts[contactPopupIndex].sender }}
+              </span>
+            </div>
+            <div class="invite-popup-actions">
+              <button class="btn btn-primary" @click="acceptContactInvite(pendingContacts[contactPopupIndex])">
+                {{ t('invite_accept') || 'Принять' }}
+              </button>
+              <button class="btn btn-secondary" @click="declineContactInvite(pendingContacts[contactPopupIndex])">
+                {{ t('invite_decline') || 'Отклонить' }}
+              </button>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- ADD MEMBER POPUP (выбор контактов, мульти-выбор чекбоксами) -->
+      <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
+        <div class="modal-settings invite-popup-panel">
+          <button class="modal-close" @click="showAddMemberPopup = false">←</button>
+          <h3 class="add-member-popup-title">{{ t('add_member_from_contacts') || 'Добавить участника из контактов' }}</h3>
+          <input
+            v-model="addMemberQuery"
+            type="text"
+            :placeholder="t('search_contacts') || 'Поиск контактов…'"
+            class="add-member-search"
+            @keyup.enter="addManualEmail"
+          />
+          <div class="add-member-contacts">
+            <div
+              v-for="c in filteredAddContacts"
+              :key="c.email"
+              class="add-member-contact"
+              :class="{ selected: addMemberSelected.includes(c.email) }"
+              @click="toggleAddMember(c.email)"
+            >
+              <span class="add-member-checkbox" :class="{ checked: addMemberSelected.includes(c.email) }">{{ addMemberSelected.includes(c.email) ? '✓' : '' }}</span>
+              <UserAvatar :email="c.email" :size="28" />
+              <span class="add-member-contact-name">{{ c.name || c.email }}</span>
+              <span class="add-member-contact-email">{{ c.email }}</span>
+            </div>
+            <div v-if="filteredAddContacts.length === 0" class="add-member-none">
+              {{ t('no_contacts') || 'Контакты не найдены' }}
+            </div>
+            <div v-if="addMemberQuery.includes('@')" class="add-member-manual" @click="addManualEmail">
+              ✏️ {{ t('enter_email_manual') || 'Ввести email вручную' }}
+              <span class="add-member-manual-email">— {{ addMemberQuery }}</span>
+            </div>
+          </div>
+          <div v-if="addMemberSelected.length" class="add-member-selected-chips">
+            <span
+              v-for="em in addMemberSelected"
+              :key="em"
+              class="add-member-chip"
+              :title="t('general_cancel') || 'Cancel'"
+              @click="toggleAddMember(em)"
+            >{{ em }} ✕</span>
+          </div>
+          <button
+            class="btn-primary add-member-invite-btn"
+            :disabled="addMemberSelected.length === 0"
+            @click="inviteSelectedMembers"
+          >
+            {{ t('add_member_invite_btn') || 'Пригласить' }}<template v-if="addMemberSelected.length"> ({{ addMemberSelected.length }})</template>
+          </button>
+        </div>
+      </div>
+
+      <!-- AVATAR UPLOAD MODAL -->
+      <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
+        <div class="modal-avatar">
+          <button class="modal-close" @click="showAvatarUpload = false">←</button>
+          <h3>Фото профиля</h3>
+          <div class="avatar-preview-circle">
+            <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
+            <span v-else class="avatar-initials avatar-preview-initials">{{ emailInitials }}</span>
+          </div>
+          <p class="avatar-hint">Формат: PNG, JPG, SVG. Рекомендуется 100×100 px.</p>
+          <label class="avatar-upload-btn">
+            <Icon name="camera" :size="14" /> Выбрать файл
+            <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="onAvatarFileSelect" hidden />
+          </label>
+        </div>
+      </div>
+
+      <!-- CONTACT EDIT MODAL: локальные имя/аватар контакта (видны только мне,
+           реальные имя/аватар собеседника не меняются) -->
+      <div v-if="showContactEdit && editingContact" class="modal-overlay" @click.self="showContactEdit = false">
+        <div class="modal-content contact-edit-panel">
+          <h3>{{ t('contact_edit_title') || 'Имя и аватар контакта' }}</h3>
+          <p class="contact-edit-email">{{ editingContact }}</p>
+          <p class="avatar-hint">{{ t('contact_edit_hint') || 'Видно только вам — реальные имя и аватар собеседника не меняются.' }}</p>
+          <div class="avatar-preview-circle">
+            <img v-if="editContactAvatar" :src="editContactAvatar" class="avatar-preview-img" />
+            <span v-else class="avatar-initials avatar-preview-initials">{{ (nameOf(editingContact) || '?').charAt(0).toUpperCase() }}</span>
+          </div>
+          <input
+            v-model="editContactName"
+            class="contact-edit-name-input"
+            :placeholder="t('contact_edit_name_placeholder') || 'Локальное имя (например: Мама, Босс)'"
+            maxlength="64"
+          />
+          <div class="contact-edit-actions">
+            <label class="avatar-upload-btn">
+              <Icon name="camera" :size="14" /> {{ t('contact_edit_avatar') || 'Аватар' }}
+              <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="handleContactAvatarSelect" hidden />
+            </label>
+            <button v-if="editContactAvatar" class="contact-edit-btn contact-edit-btn--ghost" @click="editContactAvatar = ''">✕ {{ t('contact_edit_remove_avatar') || 'Убрать аватар' }}</button>
+          </div>
+          <div class="contact-edit-footer">
+            <button class="contact-edit-btn contact-edit-btn--ghost" @click="resetContactEdit">{{ t('contact_edit_reset') || 'Сбросить' }}</button>
+            <div class="contact-edit-footer-right">
+              <button class="contact-edit-btn contact-edit-btn--ghost" @click="showContactEdit = false">{{ t('general_cancel') || 'Отмена' }}</button>
+              <button class="contact-edit-btn contact-edit-btn--primary" @click="saveContactEdit">{{ t('general_save') || 'Сохранить' }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- GROUP SETTINGS MODAL (полноценный оверлей, не сжимает чат) -->
+      <div v-if="showGroupSettings && currentGroup" class="modal-overlay" @click.self="showGroupSettings = false">
+        <div class="group-settings-panel">
+          <GroupSettings
+            :group="currentGroup"
+            :currentUser="email"
+            :profiles="mergedProfiles"
+            @close="showGroupSettings = false"
+            @role-change="changeMemberRole"
+            @remove="removeMember"
+            @unblock="unblockUser"
+            @leave="leaveGroup"
+            @delete="deleteGroup"
+            @add-member="addMember"
+            @avatar-update="onGroupAvatarUpdate"
+          />
+        </div>
+      </div>
+
+
+
+
     <!-- Image viewer (полноэкранный просмотр вложения-изображения) -->
     <div v-if="viewingImage" class="modal-overlay image-viewer-overlay" @click.self="closeImageViewer">
       <div class="image-viewer">
@@ -720,6 +726,12 @@ export default {
   data() {
     return {
       currentView: 'chats',
+      // Мобильная навигация (Telegram/Delta Chat паттерн): на узком экране
+      // видна ОДНА панель — список чатов ИЛИ открытый чат на весь экран.
+      // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
+      mobileChatOpen: false,
+      // Ширина окна — для определения мобильного режима (<768px).
+      windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
       contacts: [],
       activeChat: null,
@@ -863,6 +875,10 @@ export default {
     }
   },
   computed: {
+    // Мобильный режим: ширина экрана < 768px (портрет телефона).
+    isMobile() {
+      return this.windowWidth < 768;
+    },
     appIconUrl() {
       return `/icons/vault-${this.appIconId}.svg`;
     },
@@ -956,6 +972,14 @@ export default {
   async mounted() {
     applyTheme(loadSavedTheme())
     applyFont(loadSavedFont())
+    // Мобильная навигация: следим за шириной окна (поворот телефона),
+    // чтобы переключать одну-панель-за-раз.
+    this.onWindowResize = () => {
+      this.windowWidth = window.innerWidth;
+      // В ландшафте/на десктопе обе панели видны — чат всегда «открыт».
+      if (!this.isMobile) this.mobileChatOpen = false;
+    };
+    window.addEventListener('resize', this.onWindowResize);
     // Apply saved icon
     const savedIcon = localStorage.getItem('vault-icon') || 'letter'
     this.appIconId = savedIcon
@@ -1035,6 +1059,14 @@ export default {
     this.stopPolling()
   },
   methods: {
+    // Мобильная навигация: открыть чат на весь экран (портрет телефона).
+    openMobileChat() {
+      if (this.isMobile) this.mobileChatOpen = true;
+    },
+    // Вернуться к списку чатов (кнопка «назад» в шапке чата).
+    closeMobileChat() {
+      this.mobileChatOpen = false;
+    },
     // Плюрализация «участник/участника/участников» по текущей локали.
     // Вызывается из шаблона рядом со счётчиком участников.
     membersLabel(n) {
@@ -1287,6 +1319,7 @@ export default {
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
+      this.openMobileChat();
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
       }
@@ -1638,6 +1671,7 @@ export default {
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
       this.currentGroup = group;
+      this.openMobileChat();
 
       // Load group key if not already in memory
       if (!this.groupKeys[group.id] && this.cryptoReady) {
@@ -1697,6 +1731,7 @@ export default {
       this.activeChat = '__notes__';
       this.activeChatType = 'chat';
       this.currentGroup = null;
+      this.openMobileChat();
       this.scrollToBottom(true);
     },
     // --- Перетаскивание заметок (__notes__): ручной порядок ---
@@ -6639,16 +6674,49 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Responsive (for future use)
+   Responsive: мобильная навигация (Telegram/Delta Chat паттерн)
    ═══════════════════════════════════════════════════════════════ */
-/* REMOVED 19.08: @media (max-width: 768px) { .sidebar { width:100% }
-   .main-area { display:none } } — on Android (viewport 412px) the query
-   fired, .main-area got hidden, and ALL modals (QR add-contact, settings,
-   invite popups) render INSIDE .main-area → "add contact/settings not
-   responding" (modal opened but invisible). Desktop was unaffected only
-   because the window is usually maximized (>768px).
-   When mobile sidebar↔chat navigation is needed later — implement it
-   explicitly (tab switching), do NOT hide the modal container. */
+/* 19.08: @media (max-width:768px) скрывал .main-area display:none, и ВСЕ
+   модалки (QR add-contact, settings, invite popups) рендерились ВНУТРИ
+   .main-area → «add contact/settings not responding» (модалка открывалась
+   невидимой). Это лечится НЕ возвратом display:none на main-area, а
+   переносом оверлеев в корень app-container (сделано 21.08: showKeyManager,
+   showQRCode, showSettings, все popup'ы — теперь вне .main-area).
+   На мобильном (<768px): показывается ОДНА панель за раз через классы
+   .mobile-hidden (sidebar скрыт при открытом чате, main-area скрыт при
+   закрытом). В ландшафте/на десктопе — обе панели как раньше. */
+.mobile-hidden {
+  display: none !important;
+}
+
+@media (max-width: 767px) {
+  .sidebar {
+    width: 100%;
+  }
+  .main-area {
+    width: 100%;
+  }
+}
+
+/* Кнопка «назад» в шапке чата (только мобильный режим). */
+.chat-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-full, 999px);
+  color: var(--text-secondary, #94a3b8);
+  cursor: pointer;
+}
+.chat-back-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #e2e8f0);
+}
 
 /* Попапы инвайтов/контактов/добавления участника используют modal-settings,
    но им нужны внутренние отступы (у самого modal-settings их нет — туда
