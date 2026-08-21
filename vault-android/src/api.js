@@ -861,6 +861,12 @@ export class ApiClient {
         // Пометка вечная (как tombstones): без неё после удаления контакта
         // это accept-письмо молча вернёт контакт со старым ключом.
         this.markAcceptedContact(`${sender}|${m.uid}`);
+        // Симметрия с ручным принятием (acceptContactInvite): если мы ранее
+        // удалили этого контакта (или он удалял нас), свежее принятие снимает
+        // пометки — иначе обработанный чуть раньше VaultContactDelete скрывает
+        // контакт (deleted-senders/self-deleted/замок) навсегда (22.08).
+        await this.removeDeletedSender(sender);
+        await this.removeSelfDeleted(sender);
       } catch (e) {
         continue;
       }

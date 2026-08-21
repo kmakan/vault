@@ -4071,22 +4071,13 @@ export default {
       } catch (e) {
         console.error('processInvites: accepts failed:', e);
       }
-      // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
-      try {
-        const contactAccepts = await api.fetchPendingContactAccepts();
-        if (contactAccepts.length) {
-          // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
-          // но НЕ в this.peerKeys — перечитываем с диска, иначе selectChat
-          // не найдёт ключ и предложит «добавить контакт».
-          await this.loadStoredPeerKeys();
-          await this.loadContacts();
-        }
-      } catch (e) {
-        console.error('processInvites: contact accepts failed:', e);
-      }
       // Удаления контактов другой стороной (VaultContactDelete): убираем
       // контакт и ключ; участника группы loadGroups вернёт в список — он
       // останется с замком 🔒 и заблокированным 1:1.
+      // ВАЖНО (22.08): этот этап идёт ДО обработки accept-писем — хронологически
+      // delete обычно старше следующего accept (удалил → снова принял). Если
+      // обрабатывать accept первым, а потом delete — контакт «появляется и
+      // исчезает» навсегда (deleted-senders/замок), как было у kmakan.
       try {
         const dels = await api.fetchPendingContactDeletes();
         if (dels.length) {
@@ -4110,6 +4101,25 @@ export default {
         }
       } catch (e) {
         console.error('processInvites: contact deletes failed:', e);
+      }
+      // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
+      try {
+        const contactAccepts = await api.fetchPendingContactAccepts();
+        if (contactAccepts.length) {
+          // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
+          // но НЕ в this.peerKeys — перечитываем с диска, иначе selectChat
+          // не найдёт ключ и предложит «добавить контакт».
+          await this.loadStoredPeerKeys();
+          await this.loadContacts();
+          // Свежее принятие снимает «замок» от более раннего delete того же
+          // отправителя (fetchPendingContactAccepts уже снял kv-пометки).
+          for (const a of contactAccepts) {
+            delete this.deletedByPeer[a.sender];
+          }
+          await this.loadGroups();
+        }
+      } catch (e) {
+        console.error('processInvites: contact accepts failed:', e);
       }
       // Повторная отправка VaultContactDelete (21.08): письмо могло потеряться
       // (спам-фильтр yandex/gmail, сбой SMTP) — пока контакт помечен «удалён
