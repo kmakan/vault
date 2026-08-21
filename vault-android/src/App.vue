@@ -4289,6 +4289,9 @@ export default {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
         await crypto.removePeerKey(email);
+        // Чистим и in-memory stubs api.js — иначе контакт «не удаляется»
+        // до перезапуска (getContacts() мержит stubs с диском).
+        await api.removeContact(email);
         delete this.peerKeys[email];
         delete this.peerKeysLoaded[email];
         if (this.activeChat === email) {

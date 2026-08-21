@@ -438,6 +438,14 @@ export class ApiClient {
     return { ok: true, id: email, email };
   }
 
+  // Полное удаление контакта: диск (peer_keys) чистит crypto.removePeerKey,
+  // а здесь убираем in-memory stubs — иначе getContacts() вернёт удалённый
+  // контакт из this.contacts и он «не удалится» до перезапуска приложения.
+  async removeContact(email) {
+    this.contacts = this.contacts.filter(c => c.email !== email);
+    return { ok: true };
+  }
+
   // --- Контакты 1-на-1: приглашение по id участника (как Session: ID/QR → запрос → принятие) ---
   async loadPeerKeyEmails() {
     const set = new Set();
