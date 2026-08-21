@@ -905,11 +905,11 @@ export class ApiClient {
     // (оно всё ещё в ящике) и попап согласия всплывёт повторно, даже если
     // группа уже импортирована. Принятые инвайты больше не показываем.
     if (payload.uid != null) {
-      const accepted = this.getAcceptedInvites();
+      const accepted = await this.getAcceptedInvites();
       const akey = `${groupId}|${payload.uid}`;
       if (!accepted.includes(akey)) {
         accepted.push(akey);
-        localStorage.setItem('vault-accepted-invites', JSON.stringify(accepted));
+        await db.kvSet(this.email || 'anon', 'accepted-invites', JSON.stringify(accepted));
       }
     }
     // Добавляем СЕБЯ как участника (роль Member) — import_group добавляет
@@ -956,23 +956,23 @@ export class ApiClient {
     // Ничего не отправляем — просто помечаем инвайт как отклонённый, чтобы при
     // следующем поллинге он больше не предлагался.
     const key = `${groupId}|${msgUid}`;
-    const declined = this.getDeclinedInvites();
+    const declined = await this.getDeclinedInvites();
     if (!declined.includes(key)) {
       declined.push(key);
-      localStorage.setItem('vault-declined-invites', JSON.stringify(declined));
+      await db.kvSet(this.email || 'anon', 'declined-invites', JSON.stringify(declined));
     }
     return { ok: true };
   }
-  getDeclinedInvites() {
+  async getDeclinedInvites() {
     try {
-      return JSON.parse(localStorage.getItem('vault-declined-invites') || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'declined-invites')) || '[]');
     } catch (e) {
       return [];
     }
   }
-  getAcceptedInvites() {
+  async getAcceptedInvites() {
     try {
-      return JSON.parse(localStorage.getItem('vault-accepted-invites') || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'accepted-invites')) || '[]');
     } catch (e) {
       return [];
     }
@@ -1042,8 +1042,8 @@ export class ApiClient {
   async fetchPendingInvites() {
     const msgs = await this.fetchEmails('local');
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: '));
-    const declined = this.getDeclinedInvites();
-    const accepted = this.getAcceptedInvites();
+    const declined = await this.getDeclinedInvites();
+    const accepted = await this.getAcceptedInvites();
     const out = [];
     for (const m of invites) {
       let parsed;
