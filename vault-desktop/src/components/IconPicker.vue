@@ -26,6 +26,7 @@ const currentIcon = ref('letter')
 const emit = defineEmits(['icon-changed'])
 
 const icons = [
+  { id: 'logo', name: 'Vault', src: '/icons/vault-logo.svg' },
   { id: 'shield', name: 'Shield', src: '/icons/vault-shield.svg' },
   { id: 'door', name: 'Vault Door', src: '/icons/vault-door.svg' },
   { id: 'keyhole', name: 'Keyhole', src: '/icons/vault-keyhole.svg' },
