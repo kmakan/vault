@@ -3062,9 +3062,8 @@ export default {
           console.warn('loadEmails: sqlite save failed:', e);
         }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
-        if (!silent && this.emails.length === 0 && !this.emailError) {
-          this.emailError = 'INBOX пуст или письма не найдены';
-        }
+        // При пустом ящике НЕ показываем красную подсказку — пустой список
+        // и есть норма (пользователь, 21.08: никаких «INBOX пуст» в UI).
         // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
         await this.processInvites();
         // Аватары групп: meta-письма (VaultGroupMeta) разбираем здесь же, а не

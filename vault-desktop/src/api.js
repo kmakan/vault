@@ -687,6 +687,65 @@ export class ApiClient {
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true, invited: true, email };
   }
+  // Единый классификатор handshake-писем (стелс, 21.08): ВСЕ письма ходят с
+  // ПУСТОЙ темой, тип письма — метка kind внутри base64-тела. Классифицирует
+  // письма один раз за тик поллинга (кэш _handshakeCache сбрасывается в
+  // processInvites), чтобы 5 fetch-методов не делали 5 полных IMAP-сканов.
+  // Старые письма (до стелс-фикса) распознаются по legacy subject-маркерам.
+  // Возвращает { invites, accepts, deletes, groupInvites, groupAccepts } —
+  // массивы записей { uid, id, date, folder, subject, parsed|null }.
+  async fetchAllHandshake() {
+    if (this._handshakeCache) return this._handshakeCache;
+    const out = { invites: [], accepts: [], deletes: [], groupInvites: [], groupAccepts: [] };
+    try {
+      const msgs = await this.fetchEmails('local');
+      // Кандидаты: пустая тема (новый стелс-формат) ИЛИ legacy-маркер в теме.
+      const candidates = msgs.filter(m => {
+        const s = m.subject || '';
+        return !s
+          || s.startsWith('VaultContactInvite: ')
+          || s.startsWith('VaultContactAccept: ')
+          || s.startsWith('VaultContactDelete: ')
+          || s.startsWith('VaultGroupInvite: ')
+          || s.startsWith('VaultGroupAccept: ');
+      });
+      const bodies = await this.batchFetchBodies(candidates);
+      for (const m of candidates) {
+        const subject = m.subject || '';
+        const body = bodies[String(m.uid || m.id)] || '';
+        let parsed = null;
+        if (body) {
+          try { parsed = urlSafeB64Decode(body); } catch (e) { parsed = null; }
+        }
+        let kind = parsed && parsed.kind || null;
+        if (!kind) {
+          if (subject.startsWith('VaultContactInvite: ')) kind = 'invite';
+          else if (subject.startsWith('VaultContactAccept: ')) kind = 'accept';
+          else if (subject.startsWith('VaultContactDelete: ')) kind = 'delete';
+          else if (subject.startsWith('VaultGroupInvite: ')) kind = 'group-invite';
+          else if (subject.startsWith('VaultGroupAccept: ')) kind = 'group-accept';
+        }
+        if (!kind) continue;
+        const item = {
+          uid: m.uid || m.id,
+          id: m.uid || m.id,
+          date: m.date,
+          folder: m.folder || 'INBOX',
+          subject,
+          parsed,
+        };
+        if (kind === 'invite') out.invites.push(item);
+        else if (kind === 'accept') out.accepts.push(item);
+        else if (kind === 'delete') out.deletes.push(item);
+        else if (kind === 'group-invite') out.groupInvites.push(item);
+        else if (kind === 'group-accept') out.groupAccepts.push(item);
+      }
+    } catch (e) {
+      console.error('fetchAllHandshake failed:', e);
+    }
+    this._handshakeCache = out;
+    return out;
+  }
   async fetchPendingContactInvites() {
     const { invites } = await this.fetchAllHandshake();
     const declined = await this.getDeclinedContacts();
