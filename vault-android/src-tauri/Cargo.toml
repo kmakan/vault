@@ -34,13 +34,13 @@ chrono = { version = "0.4", features = ["serde"] }
 imap = { path = "../../vendor/imap" }
 lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
 native-tls = "0.2"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 # Android: openssl-sys не находит системный OpenSSL при кросс-компиляции —
 # собираем openssl из исходников (vendored) для android-таргета.
 [target.'cfg(target_os = "android")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
 
 # Local database
 rusqlite = { version = "0.31", features = ["bundled"] }

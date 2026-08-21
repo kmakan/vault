@@ -17,6 +17,53 @@ const GMAIL_CONFIG = {
   smtp_port: 587,
 };
 
+export { db };
+
+// ── Local persistence: sqlite via Rust (Delta Chat-style disk DB) ─────────
+// Всё локальное состояние Vault (история, tombstones, курсоры, кэш тел,
+// kv) живёт в sqlite (~/.local/share/com.vault.vault/vault.db). localStorage
+// больше НЕ источник истины: квота ~5 МБ (body-cache уже 3–7 МБ) и он
+// ненадёжен в WebKitGTK. Все db_* методы — thin invoke-обёртки.
+
+const db = {
+  historySave: (account, chatKey, messagesJson) =>
+    invoke('db_history_save', { account, chatKey, messagesJson }),
+  historyLoad: (account, chatKey) =>
+    invoke('db_history_load', { account, chatKey }),
+  historyClear: (account) =>
+    invoke('db_history_clear', { account }),
+  tombstoneAdd: (account, msgId, mid) =>
+    invoke('db_tombstone_add', { account, msgId, mid }),
+  tombstonesLoad: (account) =>
+    invoke('db_tombstones_load', { account }),
+  tombstonesClear: (account) =>
+    invoke('db_tombstones_clear', { account }),
+  cursorsSave: (account, cursorsJson) =>
+    invoke('db_cursors_save', { account, cursorsJson }),
+  cursorsLoad: (account) =>
+    invoke('db_cursors_load', { account }),
+  bodyCacheSet: (account, cacheKey, body) =>
+    invoke('db_body_cache_set', { account, cacheKey, body }),
+  bodyCacheGet: (account, cacheKey) =>
+    invoke('db_body_cache_get', { account, cacheKey }),
+  bodyCacheLoadAll: (account) =>
+    invoke('db_body_cache_load_all', { account }),
+  bodyCacheClear: (account) =>
+    invoke('db_body_cache_clear', { account }),
+  kvSet: (account, key, value) =>
+    invoke('db_kv_set', { account, key, value }),
+  kvGet: (account, key) =>
+    invoke('db_kv_get', { account, key }),
+  kvDelete: (account, key) =>
+    invoke('db_kv_delete', { account, key }),
+  emailsSave: (account, emailsJson) =>
+    invoke('db_emails_save', { account, emailsJson }),
+  emailsLoad: (account) =>
+    invoke('db_emails_load', { account }),
+  emailsClear: (account) =>
+    invoke('db_emails_clear', { account }),
+};
+
 export class ApiClient {
   constructor() {
     const saved = localStorage.getItem('vault-token');
@@ -174,7 +221,7 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send vault email');
     return { ok: true };
   }
-  async getGroupMessages(groupId) {
+  async getGroupMessages(groupId, emails) {
     // STEALTH-ГРУППЫ (18.08): темы у групповых писем ПУСТЫЕ (как в 1:1), так
     // что фильтрация по subject невозможна. Возвращаем ВСЕ письма, чей
     // отправитель — участник группы; классификация по содержимому после
@@ -191,7 +238,14 @@ export class ApiClient {
     const memberEmails = (g.members || [])
       .map(m => String(m.email || '').toLowerCase())
       .filter(Boolean);
-    const msgs = await this.fetchEmails('local');
+    // ФИКС 20.08: поллинг группы (каждые 30с) НЕ должен делать полный
+    // IMAP-скан (fetchEmails) — это был триггер Gmail-троттлинга: при
+    // открытой группе × несколько окон аккаунт упирался в rate limit,
+    // SMTP-отправки начинали падать («метка красная», письмо одному из
+    // участников не уходило). Поллинг передаёт актуальный this.emails
+    // (loadEmails обновляет его инкрементально); полный скан остаётся
+    // только как fallback, когда список ещё пуст (первый вход).
+    const msgs = emails && emails.length ? emails : await this.fetchEmails('local');
     const mine = msgs.filter(m => {
       const from = String(m.from || '').toLowerCase();
       return memberEmails.some(e => from.includes(e));
@@ -218,7 +272,7 @@ export class ApiClient {
       // Пропускаем письма без тела (батч упал/тело пустое) — они перефетчатся
       // в следующий поллинг; одно плохое письмо не роняет весь чат.
       if (!body) continue;
-      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false });
+      out.push({ id: m.uid, content: body, sender_id: m.from, created_at: new Date(m.date), is_read: m.is_read, is_sent: false, message_id: m.message_id || '' });
     }
     // Инвайт-письма (VaultGroupInvite) не попадают в список сообщений группы —
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
@@ -242,7 +296,11 @@ export class ApiClient {
       }
     }
     if (failed.length) {
-      throw new Error('Group message: SMTP failed for: ' + failed.join(', '));
+      // ФИКС 20.08: не бросаем целиком — письма успешным участникам уже
+      // ушли, а UI помечает сообщение 'failed' («не доставлено: ...»).
+      // Раньше throw оставлял статус 'sending' (красный) навсегда, а через
+      // 10 минут mergePending-страховка молча удаляла сообщение.
+      return { ok: false, failed };
     }
     return { ok: true };
   }
@@ -411,14 +469,20 @@ export class ApiClient {
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
     const declined = this.getDeclinedContacts();
     const peers = await this.loadPeerKeyEmails();
+    // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
+    // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
+    // при десятке инвайтов UI-фетчи тел падали по lock-таймауту (20.08).
+    const bodies = await this.batchFetchBodies(invites);
     const out = [];
     for (const m of invites) {
       const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
       if (!sender || sender === this.email) continue; // себе не предлагаем
       if (declined.includes(`${sender}|${m.uid}`)) continue;
+      const body = bodies[String(m.uid || m.id)] || '';
+      if (!body) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
+        parsed = urlSafeB64Decode(body);
       } catch (e) {
         continue;
       }
@@ -439,6 +503,25 @@ export class ApiClient {
     }
     return out;
   }
+  // Батч-фетч тел писем по папкам (один IMAP-вызов на папку) — обёртка над
+  // fetchEmailBodies, возвращает {uid: body}. Пустые тела пропускаются.
+  async batchFetchBodies(list) {
+    const out = {};
+    const byFolder = {};
+    for (const m of list) {
+      const f = m.folder || 'INBOX';
+      (byFolder[f] = byFolder[f] || []).push(m);
+    }
+    for (const [folder, msgs] of Object.entries(byFolder)) {
+      try {
+        const bodies = await this.fetchEmailBodies(folder, msgs.map(m => m.uid || m.id));
+        Object.assign(out, bodies);
+      } catch (e) {
+        console.warn('[batchFetchBodies] failed folder=' + folder + ' n=' + msgs.length + ' err=' + (e && e.message || e));
+      }
+    }
+    return out;
+  }
   async sendContactAccept(email, publicKey) {
     const name = localStorage.getItem('vault-display-name') || this.email;
     const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
@@ -455,13 +538,18 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
     const peers = await this.loadPeerKeyEmails();
+    // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
+    // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
+    const bodies = await this.batchFetchBodies(accepts);
     const out = [];
     for (const m of accepts) {
       const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
+      const body = bodies[String(m.uid || m.id)] || '';
+      if (!body) continue;
       let parsed;
       try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
+        parsed = urlSafeB64Decode(body);
       } catch (e) {
         continue;
       }

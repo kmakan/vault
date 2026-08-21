@@ -659,6 +659,7 @@
 
 <script>
 import api from './api.js';
+import { db } from './api.js';
 import crypto from './crypto.js';
 // ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
@@ -998,18 +999,25 @@ export default {
           // отработали с пустым email (авто-вход ещё не восстановил его),
           // поэтому локальные имена контактов и свой аватар «пропадали»
           // после перезапуска.
+          await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
           this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || '';
           this.displayName = localStorage.getItem('vault-display-name') || this.email || '';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
-          this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
+          await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
-          // This throws "Not connected" if the IMAP session died on restart —
-          // then we must ask for the password again.
-          await this.loadEmails();
+          // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
+          // фетч почты идёт в фоне — вход не должен ждать IMAP (20.08).
           this.isLoggedIn = true;
           this.startPolling()
+          // Не блокируем вход: письма догружаются асинхронно (поллинг уже
+          // запущен — он подхватит). Ошибки IMAP не роняют вход.
+          this.loadEmails().catch(e => {
+            if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+              this.showRestoreFailure();
+            }
+          });
         } catch (e) {
           // Session died on restart and auto-login could not restore it —
           // просим ввести пароль снова
@@ -1152,12 +1160,18 @@ export default {
         const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
         this.userId = data.user_id;
         this.isLoggedIn = true;
+        await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
-        this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
+        await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
         await this.loadGroups();
-        await this.loadEmails();
+        // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
         this.startPolling()
+        this.loadEmails().catch(e => {
+          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
+            this.loginError = e.message;
+          }
+        });
       } catch (error) {
         this.loginError = error.message;
       } finally {
@@ -1258,10 +1272,15 @@ export default {
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
       // Мгновенное открытие: показываем кэш прошлой сессии, пока идёт
       // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
-      const cachedChat = this.loadChatCache(email);
-      if (cachedChat && cachedChat.length) this.messages = cachedChat;
+      const cachedChat = await this.loadChatCache(email);
+      if (cachedChat && cachedChat.length) {
+        cachedChat.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+        this.messages = cachedChat;
+      }
       // Токен загрузки: незавершённый loadMessages прошлого чата увидит
       // новый seq и не применит свои результаты.
       this.loadSeq++;
@@ -1377,26 +1396,30 @@ export default {
       if (!t) { this.jumpToBottom(); return; }
       el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
     },
-    // --- Персистентный кэш (localStorage): мгновенное открытие чатов ---
-    // Ключи привязаны к email аккаунта — на одной машине может быть
-    // несколько ящиков, кэши не должны смешиваться.
+    // --- Персистентный кэш тел: SQLite (20.08 — localStorage запрещён) ---
     bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
     chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
-    // Загрузка кэша тел писем — вызывается после логина/восстановления сессии.
-    loadBodyCache() {
+    // Загрузка кэша тел писем из SQLite — вызывается после логина/восстановления
+    // сессии. localStorage НЕ источник истины (юзер, 20.08).
+    async loadBodyCache() {
       try {
-        const raw = localStorage.getItem(this.bodyCacheKey());
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        this.emailBodyCache = parsed.bodies || {};
-        this.bodyCacheOrder = parsed.order || Object.keys(this.emailBodyCache);
+        const rows = await db.bodyCacheLoadAll(this.email || 'anon');
+        const bodies = {};
+        const order = [];
+        for (const [key, body] of rows || []) {
+          bodies[key] = body;
+          order.push(key);
+        }
+        this.emailBodyCache = bodies;
+        this.bodyCacheOrder = order;
       } catch (e) {
+        console.warn('loadBodyCache (sqlite) failed:', JSON.stringify(e), String(e));
         this.emailBodyCache = {};
         this.bodyCacheOrder = [];
       }
     },
-    // Запись тела в кэш + отложенная персистенция (debounce 2 сек).
-    // Лимит ~400 тел: старые вытесняются (FIFO по bodyCacheOrder).
+    // Запись тела в кэш: SQLite (db_body_cache_set) + память. Лимит ~400 тел:
+    // старые вытесняются (FIFO по bodyCacheOrder).
     cacheBody(key, body) {
       this.emailBodyCache[key] = body;
       const i = this.bodyCacheOrder.indexOf(key);
@@ -1410,26 +1433,23 @@ export default {
       this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
     },
     persistBodyCache() {
+      // SQLite-персистенция (debounce сохранён в cacheBody): каждое тело — своя
+      // строка body_cache(account, cache_key, body). localStorage не используется.
+      const acc = this.email || 'anon';
       try {
-        const data = JSON.stringify({ bodies: this.emailBodyCache, order: this.bodyCacheOrder });
-        localStorage.setItem(this.bodyCacheKey(), data);
+        for (const k of Object.keys(this.emailBodyCache)) {
+          db.bodyCacheSet(acc, k, this.emailBodyCache[k]).catch(() => {});
+        }
       } catch (e) {
-        // QuotaExceeded: кэш слишком большой — режем вдвое и повторяем один раз.
-        try {
-          this.bodyCacheOrder = this.bodyCacheOrder.slice(-200);
-          const trimmed = {};
-          for (const k of this.bodyCacheOrder) trimmed[k] = this.emailBodyCache[k];
-          this.emailBodyCache = trimmed;
-          localStorage.setItem(this.bodyCacheKey(), JSON.stringify({ bodies: trimmed, order: this.bodyCacheOrder }));
-        } catch (e2) { /* кэш не критичен — молча пропускаем */ }
+        // Кэш не критичен — молча пропускаем.
       }
     },
     // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
-    loadChatCache(chat) {
+    // Хранится в SQLite kv_store (20.08 — localStorage запрещён как источник).
+    async loadChatCache(chat) {
       try {
-        const raw = localStorage.getItem(this.chatCacheKey(chat));
-        if (!raw) return null;
-        return JSON.parse(raw);
+        const raw = await db.kvGet(this.email || 'anon', 'chat-cache:' + chat);
+        return raw ? JSON.parse(raw) : null;
       } catch (e) {
         return null;
       }
@@ -1442,6 +1462,9 @@ export default {
         const slim = (list || []).map(m => ({
           id: m.id, content: m.content, from: m.from, time: m.time,
           encrypted: m.encrypted, vault: m.vault, status: m.status,
+          // ts нужен для сортировки кэша при мгновенном открытии чата
+          // (кэш в sqlite может быть в порядке вставки — 20.08).
+          ts: m.ts || this.msgTs(m) || undefined,
           reactions: m.reactions || undefined,
           deleted: m.deleted || undefined,
           edited: m.edited || undefined,
@@ -1451,7 +1474,7 @@ export default {
           sender_id: m.sender_id || undefined,
           attachment: m.attachment || undefined,
         }));
-        localStorage.setItem(this.chatCacheKey(chat), JSON.stringify(slim));
+        db.kvSet(this.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
       } catch (e) { /* quota — не критично */ }
     },
     // --- Оптимистичные исходящие (pendingOutgoing) ---
@@ -1495,19 +1518,21 @@ export default {
         delete copy[chatKey];
         this.pendingOutgoing = copy;
       }
-      out.sort((a, b) => {
-        const da = a.email?.date ? new Date(a.email.date) : (a._pendingAt || 0);
-        const db = b.email?.date ? new Date(b.email.date) : (b._pendingAt || 0);
-        return new Date(da) - new Date(db);
-      });
+      // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
+      // сообщений и вложений нет email-объекта, сортировка по email.date давала
+      // 0 и рвала хронологию (баг 20.08: «сообщения перестроились»).
+      out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
       return out;
     },
     // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
     // удалён навсегда) или deleted-метка из истории — фильтруются при
-    // каждом построении чата (история + письма + pending).
+    // каждом построении чата (история + письма + pending). Message-ID
+    // tombstones (mid) отсекают письма, вернувшиеся из другой папки/All
+    // Mail с новым uid (DC-аналог rfc724_mid).
     filterDeleted(list) {
       const tombs = this.loadTombstones();
-      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)));
+      const mids = this.loadMidTombstones();
+      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
     },
     // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
     // из IndexedDB. История — источник истины: отправленные/полученные
@@ -1519,18 +1544,36 @@ export default {
     // история живёт в localStorage-копии, и чаты всё равно открываются из
     // своих данных, а не из почты (фикс 20.08).
     async loadLocalHistory(chatKey) {
+      let hist = null;
       try {
-        const hist = await loadHistory(this.email, chatKey);
-        if (hist && hist.length) return hist;
+        hist = await loadHistory(this.email, chatKey);
       } catch (e) { /* fallback ниже */ }
-      try {
-        const raw = localStorage.getItem('vault-hist:' + this.email + ':' + chatKey);
-        if (raw) {
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr) && arr.length) return arr;
+      if (!hist || !hist.length) {
+        try {
+          const raw = localStorage.getItem('vault-hist:' + this.email + ':' + chatKey);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr) && arr.length) hist = arr;
+          }
+        } catch (e) { /* ignore */ }
+      }
+      return this.normalizeStaleSending(hist);
+    },
+    // 'sending' — переходный статус, он не должен долго жить в истории: его
+    // персистят оптимистично ДО отправки, а финальный пишут после. После
+    // перезапуска промис отправки мёртв, и запись со старым 'sending' (>60 с)
+    // вечно горела красным. Повышаем до 'sent' (письмо либо принято SMTP, либо
+    // умерло вместе с процессом — квитанции получателей уточнят статус позже).
+    normalizeStaleSending(hist) {
+      if (!hist || !hist.length) return hist;
+      const now = Date.now();
+      for (const m of hist) {
+        if (m && m.from === 'me' && m.status === 'sending') {
+          const t = this.msgTs(m);
+          if (t && now - t > 60 * 1000) m.status = 'sent';
         }
-      } catch (e) { /* ignore */ }
-      return null;
+      }
+      return hist;
     },
     saveLocalHistory(chatKey, messages) {
       try {
@@ -1558,7 +1601,14 @@ export default {
       for (const m of hist) if (m && m.id) ids.add(m.id);
       // Из писем добавляем только то, чего ещё нет в истории (новое).
       const extra = list.filter(m => m && m.id && !ids.has(m.id));
-      if (!extra.length) return hist;
+      // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
+      // вставки (старые баги mergePending записывали её не по времени), и
+      // возврат без сортировки показывал сообщения в порядке хранения (20.08:
+      // «16:37 20:31 18:06 18:07 20:38»).
+      if (!extra.length) {
+        hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+        return this.filterDeleted(hist);
+      }
       const merged = [...hist, ...extra];
       merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
       return this.filterDeleted(merged);
@@ -1569,13 +1619,21 @@ export default {
       if (m.ts) return m.ts;
       if (m.email && m.email.date) return new Date(m.email.date).getTime();
       if (m.created_at) return new Date(m.created_at).getTime();
+      // Оптимистичные исходящие (вложения/голос) персистились без ts —
+      // только _pendingAt; без этого фолбэка они сортировались в начало (20.08).
+      if (m._pendingAt) return m._pendingAt;
       return 0;
     },
     async selectGroup(group) {
       this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
       // Мгновенное открытие группы из кэша (как и 1-на-1 чаты).
-      const cachedGroup = this.loadChatCache(`group:${group.id}`);
-      if (cachedGroup && cachedGroup.length) this.messages = cachedGroup;
+      const cachedGroup = await this.loadChatCache(`group:${group.id}`);
+      if (cachedGroup && cachedGroup.length) {
+        cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+        this.messages = cachedGroup;
+      }
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
@@ -1881,6 +1939,7 @@ export default {
       // Оптимистично помечаем удалённым локально + tombstone (поллинг
       // не «воскресит» сообщение: письмо-оригинал и история фильтруются).
       this.addTombstone(msg.id);
+      this.addMidTombstone(msg.mid);
       msg.deleted = true;
       msg.content = '';
       // Мгновенно убираем из чата — удалённое сообщение исчезает у всех
@@ -1924,7 +1983,11 @@ export default {
     // в localStorage, см. loadLocalHistory).
     showHistoryFirst(chatKey, isStale) {
       return this.loadLocalHistory(chatKey).then(hist => {
-        if (hist && hist.length && !isStale()) this.messages = hist;
+        if (hist && hist.length && !isStale()) {
+          // История в sqlite — в порядке вставки; показываем сразу по времени.
+          hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+          this.messages = hist;
+        }
       });
     },
     saveCurrentHistory(chatKey) {
@@ -1947,7 +2010,10 @@ export default {
       const chat = email;
       const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
       // Мгновенный показ локальной истории (если есть) до живого фетча.
-      this.showHistoryFirst(chat, stale);
+      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // гонка с loadMessages: merged=[] без истории и saveCurrentHistory([])
+      // затирал сохранённую историю → сообщения «пропадали» (kmakan).
+      await this.showHistoryFirst(chat, stale);
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!this.peerKeys[email]) {
@@ -1983,6 +2049,7 @@ export default {
           const f = m.folder || 'INBOX';
           (byFolder[f] = byFolder[f] || []).push(m);
         }
+        console.log('[loadMessages] byFolder=' + JSON.stringify(Object.keys(byFolder)));
         for (const [folder, msgs] of Object.entries(byFolder)) {
           // Пустое тело = ошибка фетча (IMAP-сессия вернула пусто при рассинхроне),
           // а НЕ валидный кэш. Такие письма не кэшируем и перефетчиваем каждый
@@ -1992,6 +2059,7 @@ export default {
             const b = this.emailBodyCache[`${folder}:${m.uid || m.id}`];
             return b === undefined || b === '';
           });
+          console.log('[loadMessages] folder=' + folder + ' total=' + msgs.length + ' missing=' + missing.length);
           if (missing.length) {
             // Ошибка батча (IMAP-рассинхрон, одно пустое тело роняет весь
             // запрос в Rust) НЕ должна обнулять чат: без try/catch падал
@@ -2003,6 +2071,7 @@ export default {
             } catch (e) {
               console.log('[loadMessages] fetchEmailBodies failed folder=' + folder + ' n=' + missing.length + ' err=' + (e && e.message || e));
             }
+            console.log('[loadMessages] fetched bodies n=' + Object.keys(bodies).length);
             if (stale()) return;
             for (const m of missing) {
               const b = bodies[String(m.uid || m.id)];
@@ -2114,6 +2183,7 @@ export default {
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
               encrypted: true,
               vault: true,
+              mid: m.message_id || '',
               email: m,
             };
           } catch (e) {
@@ -2123,6 +2193,7 @@ export default {
               from: isOut ? 'them' : 'me',
               time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
               encrypted: false,
+              mid: m.message_id || '',
               email: m,
             };
           }
@@ -2163,6 +2234,15 @@ export default {
         for (const m of merged0) {
           const st = statusById.get(m.id);
           if (st) m.status = st;
+        }
+        // Квитанции получателя — к СВОИМ сообщениям в истории (Sent не
+        // читается, свои сообщения в `list` из IMAP не попадают; без этого
+        // шага их статус после перезапуска не обновлялся — 20.08).
+        for (const m of merged0) {
+          if (m.from !== 'me' || !m.id) continue;
+          const ack = wireAcks[m.id];
+          if (ack && ack.read) m.status = 'read';
+          else if (ack && ack.delivered) m.status = 'delivered';
         }
         this.applyReactions(merged0, chat, wireReactions);
         this.applyEdits(merged0, chat, wireEdits);
@@ -2256,6 +2336,11 @@ export default {
         this.pinnedMsgId = (pin && pin.msg_id) || null;
         this.pinnedPreview = (pin && pin.preview) || '';
       }
+      // Мгновенный показ локальной истории (если есть) до живого фетча.
+      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // гонка с loadGroupMessages: merged=[] без истории и saveCurrentHistory
+      // затирал сохранённую историю → сообщения «пропадали» (kmakan).
+      await this.showHistoryFirst(chat, stale);
       try {
         const raw = await api.getGroupMessages(groupId, this.emails);
         if (stale()) return;
@@ -2358,6 +2443,7 @@ export default {
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: true,
+              mid: msg.message_id || '',
               ...(env && env.id ? { id: env.id } : {}),
             });
           }
@@ -2403,6 +2489,16 @@ export default {
           for (const m of merged0) {
             const st = statusById.get(m.id);
             if (st) m.status = st;
+          }
+          // Квитанции «прочитано» от участников — к СВОИМ сообщениям в истории.
+          // У отправителя группы нет самокопии письма (Sent не читается), его
+          // сообщения живут только в истории и в `list` из IMAP не попадают,
+          // поэтому без этого шага их статус после перезапуска не обновлялся
+          // до 'read' (20.08: «красный, хотя дошло до всех»).
+          for (const m of merged0) {
+            if (m.from !== 'me' || !m.id) continue;
+            const acks = wireAcks[m.id];
+            if (acks && Object.keys(acks).length) m.status = 'read';
           }
           this.applyReactions(merged0, chat, wireReactions);
           this.applyEdits(merged0, chat, wireEdits);
@@ -2456,45 +2552,53 @@ export default {
         const members = (g.members || [])
           .map(m => String(m.email || '').toLowerCase())
           .filter(Boolean);
-        // Последнее по дате письмо от участника этой группы.
-        let latest = null;
-        for (const m of emails) {
-          const from = String(m.from || '').toLowerCase();
-          if (!members.some(e => from.includes(e))) continue;
-          if (!latest || new Date(m.date) >= new Date(latest.date)) latest = m;
-        }
-        if (!latest) continue;
-        // Уже применяли это письмо ранее — пропускаем (без повторного фетча тела).
-        // ВАЖНО: uid уникален только В ПРЕДЕЛАХ папки, а письма групп живут в
-        // разных папках (INBOX/Sent/Junk) — ключ включает folder, иначе
-        // «применено» фиксировалось бы по совпавшему uid из другой папки.
+        // Ищем meta-письмо среди ПОСЛЕДНИХ писем участников (не только
+        // самое последнее): после загрузки аватара могло прийти обычное
+        // сообщение, и `latest` перестал быть meta-письмом — участники
+        // навсегда оставались без аватара. Проверяем до 10 последних.
+        const memberMails = emails
+          .filter(m => {
+            const from = String(m.from || '').toLowerCase();
+            return members.some(e => from.includes(e));
+          })
+          .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+          .slice(0, 10);
         const appliedKey = 'vault-group-meta-applied-' + g.id;
-        const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
-        if (localStorage.getItem(appliedKey) === appliedSig) continue;
-        let groupKey = this.groupKeys[g.id];
-        if (!groupKey && this.cryptoReady) {
-          try {
-            const kd = await api.getMyGroupKey(g.id);
-            if (kd && kd.group_key) {
-              this.groupKeys[g.id] = kd.group_key;
-              groupKey = kd.group_key;
-            }
-          } catch (e) { /* ключ не загрузился — группу пропускаем */ }
-        }
-        if (!groupKey) continue;
-        try {
-          const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
-          if (!body || !crypto.isEncrypted(body)) continue;
-          const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
-          const obj = JSON.parse(plaintext);
-          if (obj && obj.meta === 1 && obj.avatar) {
-            if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
-              localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
-              this.groupAvatars[g.id] = obj.avatar;
-            }
-            localStorage.setItem(appliedKey, appliedSig);
+        const alreadyApplied = new Set(
+          (localStorage.getItem(appliedKey) || '').split(',').filter(Boolean)
+        );
+        let metaFound = false;
+        for (const latest of memberMails) {
+          const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
+          if (alreadyApplied.has(appliedSig)) continue;
+          let groupKey = this.groupKeys[g.id];
+          if (!groupKey && this.cryptoReady) {
+            try {
+              const kd = await api.getMyGroupKey(g.id);
+              if (kd && kd.group_key) {
+                this.groupKeys[g.id] = kd.group_key;
+                groupKey = kd.group_key;
+              }
+            } catch (e) { /* ключ не загрузился — группу пропускаем */ }
           }
-        } catch (e) { /* не meta или битое — не критично */ }
+          if (!groupKey) break;
+          try {
+            const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
+            if (!body || !crypto.isEncrypted(body)) continue;
+            const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
+            const obj = JSON.parse(plaintext);
+            if (obj && obj.meta === 1 && obj.avatar) {
+              if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
+                localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
+                this.groupAvatars[g.id] = obj.avatar;
+              }
+              metaFound = true;
+              alreadyApplied.add(appliedSig);
+              localStorage.setItem(appliedKey, [...alreadyApplied].join(','));
+              break; // аватар найден — хватит
+            }
+          } catch (e) { /* не meta или битое — не критично */ }
+        }
       }
     },
     onAvatarUpdate(dataUrl) {
@@ -2612,6 +2716,11 @@ export default {
 
       try {
         this.sending = true;
+        // Watchdog (20.08): если отправка зависла (SMTP/IMAP не ответил в
+        // таймаут, JS-ошибка вне try), sending должен разблокироваться —
+        // иначе кнопка/Enter навсегда блокируются, сообщение «висит» в поле.
+        clearTimeout(this._sendingWatchdog);
+        this._sendingWatchdog = setTimeout(() => { this.sending = false; }, 60000);
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
         let payload = this.newMessage;
@@ -2658,7 +2767,17 @@ export default {
 
         if (this.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
-          const groupKey = this.groupKeys[this.currentGroup.id];
+          let groupKey = this.groupKeys[this.currentGroup.id];
+          // Lazy-backfill: ключ мог не загрузиться (гонка cryptoReady/selectGroup).
+          if (!groupKey && this.cryptoReady) {
+            try {
+              const kd = await api.getMyGroupKey(this.currentGroup.id);
+              if (kd && kd.group_key) {
+                this.groupKeys[this.currentGroup.id] = kd.group_key;
+                groupKey = kd.group_key;
+              }
+            } catch (e) { /* не удалось — alert ниже */ }
+          }
           if (!groupKey) {
             alert('Групповой ключ не загружен — переоткройте группу');
             return;
@@ -2706,12 +2825,15 @@ export default {
             console.error('Failed to send group message:', e);
           }
           // Персистим обновлённый статус в pendingOutgoing (иначе поллинг
-          // подмешивал бы запись со старым 'sending').
+          // подмешивал бы запись со старым 'sending'). И в историю — иначе
+          // showHistoryFirst после перезапуска покажет 'sending' (20.08:
+          // у групп нет самокопии письма, которая заменила бы pending).
           const bucket = this.pendingOutgoing['group:' + this.currentGroup.id];
           if (bucket && bucket[pendingMsg.id]) {
             bucket[pendingMsg.id] = pendingMsg;
             this.pendingOutgoing = { ...this.pendingOutgoing, ['group:' + this.currentGroup.id]: bucket };
           }
+          this.saveCurrentHistory('group:' + this.currentGroup.id);
         } else {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
@@ -2759,6 +2881,9 @@ export default {
             bucket[pendingMsg.id] = pendingMsg;
             this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: bucket };
           }
+          // Персистим финальный статус в историю (иначе после перезапуска
+          // запись со старым 'sending' горела красным — 20.08).
+          this.saveCurrentHistory(this.activeChat);
         }
 
         // Своё сообщение — всегда прокручиваем вниз.
@@ -2808,21 +2933,20 @@ export default {
         alert('Failed to add peer key: ' + error.message);
       }
     },
-    // Per-folder UID-курсоры для инкрементального фетча (vault-imap-cursors-<account>).
+    // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
+    // (initLocalDb загружает их в cursorsCache при входе) — localStorage
+    // больше не источник истины.
     imapCursorsKey(accountId) {
       return 'vault-imap-cursors-' + accountId;
     },
     loadCursors(accountId) {
-      try {
-        return JSON.parse(localStorage.getItem(this.imapCursorsKey(accountId)) || '{}');
-      } catch (e) {
-        return {};
-      }
+      return this.cursorsCache || {};
     },
     saveCursors(accountId, cursors) {
       try {
         if (cursors && Object.keys(cursors).length) {
-          localStorage.setItem(this.imapCursorsKey(accountId), JSON.stringify(cursors));
+          this.cursorsCache = cursors;
+          db.cursorsSave(accountId, JSON.stringify(cursors));
         }
       } catch (e) {
         console.error('saveCursors failed:', e);
@@ -2837,6 +2961,29 @@ export default {
         const accounts = await api.getEmailAccounts();
         // Не сбрасываем this.emails в начале: пока фетч идёт (или падает),
         // старый список остаётся в UI — клик по чату не видит пустоту.
+        // ПЕРСИСТ (20.08): this.emails восстанавливается из sqlite при входе
+        // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
+        // перезапуске и чаты без истории были пустыми (icemaksim).
+        if (!silent && this.emails.length === 0) {
+          try {
+            const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (this.email || 'anon'));
+            if (Array.isArray(stored) && stored.length) {
+              this.emails = stored.map(e => ({
+                uid: e.uid,
+                id: e.uid,
+                from: e.from,
+                to: e.to,
+                subject: e.subject,
+                date: e.date,
+                is_read: e.is_read,
+                folder: e.folder,
+                message_id: e.message_id || '',
+              }));
+            }
+          } catch (e) {
+            console.warn('loadEmails: sqlite restore failed:', e);
+          }
+        }
         const fetched = [];
         for (const account of accounts) {
           try {
@@ -2845,12 +2992,12 @@ export default {
             // последних писем + инициализация курсоров. Раньше каждые 30с
             // пересканировались последние 50-100 писем каждой папки — это
             // и лишний трафик, и триггер троттлинга Gmail.
-            // ВАЖНО (фикс 19.08): при НЕ тихом фетче (логин/авто-вход после
-            // перезапуска) всегда идём с ПУСТЫМИ курсорами — полный скан.
-            // Иначе курсоры из localStorage уже продвинуты вперёд, инкремент
-            // возвращает пусто, и все письма (чаты) «исчезали» после
-            // перезапуска приложения. Поллинг (silent) — лёгкий инкремент.
-            const cursors = silent ? this.loadCursors(account.id) : {};
+            // ВАЖНО (20.08): больше НЕ делаем полный скан при входе —
+            // курсоры в sqlite надёжны, история в sqlite — источник чатов.
+            // Принудительный полный скан с пустыми курсорами ломал INBOX
+            // на больших ящиках (icemaksim: 15624 писем, UID SEARCH ALL
+            // падал с «Unable to parse status response» в imap 2.4.1).
+            const cursors = this.loadCursors(account.id);
             const res = await api.fetchEmailsIncremental(account.id, cursors);
             fetched.push(...(res.messages || []));
             this.saveCursors(account.id, res.cursors);
@@ -2876,6 +3023,23 @@ export default {
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
         this.emails = merged;
+        // ПЕРСИСТ (20.08): envelope cache в sqlite — при перезапуске письма
+        // восстанавливаются без полного IMAP-скана (курсоры согласованы).
+        try {
+          const acc = accounts[0] ? accounts[0].id : (this.email || 'anon');
+          db.emailsSave(acc, JSON.stringify(this.emails.map(m => ({
+            uid: String(m.uid ?? m.id ?? ''),
+            folder: m.folder || 'INBOX',
+            from: m.from || '',
+            to: m.to || '',
+            subject: m.subject || '',
+            date: m.date || '',
+            is_read: !!m.is_read,
+            message_id: m.message_id || '',
+          }))));
+        } catch (e) {
+          console.warn('loadEmails: sqlite save failed:', e);
+        }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
         if (!silent && this.emails.length === 0 && !this.emailError) {
           this.emailError = 'INBOX пуст или письма не найдены';
@@ -2886,6 +3050,11 @@ export default {
         // только при открытии группы — иначе участник, не открывавший группу,
         // новый аватар админа не увидит никогда.
         await this.syncGroupAvatarsFromMeta();
+        // Квитанции «доставлено» (20.08): шлём {delivered:1} сразу при
+        // получении писем поллингом — отправитель видит зелёную точку через
+        // ~30с, а не когда получатель откроет чат (раньше delivered-квитанцию
+        // никто не слал — статус висел жёлтым до открытия чата).
+        await this.sendDeliveredReceipts(fetched);
       } catch (error) {
         // let "Not connected" propagate to the caller (app restart re-login)
         if (String(error && error.message || error).toLowerCase().includes('not connected')) {
@@ -2900,7 +3069,14 @@ export default {
     startPolling(intervalMs = 30000) {
       if (this.pollTimer) return;
       this.pollTimer = setInterval(async () => {
-        if (!this.isLoggedIn) return;
+        // Анти-наложение (20.08): setInterval запускает новый тик каждые 30с,
+        // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
+        // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
+        // стартует поверх, lock занят почти всегда, и открытие чата падает с
+        // «Timed out waiting for email client lock» (чаты пустые). Пропускаем
+        // тик, пока предыдущий ещё выполняется.
+        if (!this.isLoggedIn || this._pollingActive) return;
+        this._pollingActive = true;
         try {
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
@@ -2935,6 +3111,8 @@ export default {
           } else {
             console.error('Polling loadEmails failed:', e);
           }
+        } finally {
+          this._pollingActive = false;
         }
       }, intervalMs);
     },
@@ -3023,6 +3201,7 @@ export default {
         content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
         from: 'me',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        ts: Date.now(),
         encrypted: this.cryptoReady,
         status: 'sending',
         _pendingAt: Date.now(),
@@ -3053,8 +3232,12 @@ export default {
           msg.status = 'sent';
         } catch (err) {
           console.error('Failed to send audio:', err);
+          msg.status = 'failed';
           alert('Failed to send voice message: ' + (err && err.message || err));
         }
+        // Персистим финальный статус в историю (иначе после перезапуска
+        // запись со старым 'sending' горела красным — 20.08).
+        this.saveCurrentHistory(chatKey);
       }
     },
     // File attachments
@@ -3176,6 +3359,7 @@ export default {
               content: displayContent,
               from: 'me',
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              ts: Date.now(),
               encrypted: this.cryptoReady,
               status: 'sending',
               _pendingAt: Date.now(),
@@ -3207,7 +3391,11 @@ export default {
                 msg.status = 'sent';
               } catch (err) {
                 console.error('Failed to send attachment:', err);
+                msg.status = 'failed';
               }
+              // Персистим финальный статус в историю (иначе после перезапуска
+              // запись со старым 'sending' горела красным — 20.08).
+              this.saveCurrentHistory(chatKey);
             }
           };
           reader.readAsDataURL(file);
@@ -3369,6 +3557,87 @@ export default {
         }
       })();
     },
+    // Квитанции «доставлено» по новым входящим (поллинг): как только письмо
+    // получено и расшифровано как vault-сообщение — отправителю уходит
+    // {delivered:1, msg_ids:[...]} (stealth, пустая тема; тот же wire-формат,
+    // что у read-квитанций — отправитель уже умеет их разбирать, App.vue
+    // wireAcks). Раньше delivered-квитанцию никто не слал: отправитель видел
+    // жёлтую точку, пока получатель не откроет чат (тогда уходила read).
+    // Групповые письма здесь не обрабатываются (шифр групповым ключом —
+    // decryptVault с пир-ключом не пройдёт); для групп статусы — как прежде.
+    async sendDeliveredReceipts(fetched) {
+      if (!this.isLoggedIn || !this.cryptoReady || !fetched || !fetched.length) return;
+      const myEmail = (this.email || '').toLowerCase();
+      if (!myEmail) return;
+      // Дедуп в sqlite kv_store (НЕ localStorage — он может переполниться;
+      // 20.08: localStorage запрещён как источник данных Vault).
+      const acc = this.email || 'anon';
+      let sentMap = {};
+      try {
+        const raw = await db.kvGet(acc, 'delivered-sent');
+        if (raw) sentMap = JSON.parse(raw);
+      } catch (e) { sentMap = {}; }
+      // Кандидаты: входящие от известных пиров (есть ключ — можно расшифровать).
+      const candidates = fetched.filter(m => {
+        const sender = this.senderEmail(m.from);
+        if (!sender || sender.includes(myEmail)) return false;
+        return !!this.peerKeys[sender];
+      });
+      if (!candidates.length) return;
+      const byFolder = {};
+      for (const m of candidates.slice(0, 30)) {
+        const f = m.folder || 'INBOX';
+        (byFolder[f] = byFolder[f] || []).push(m);
+      }
+      const acks = {}; // sender -> [msg_id]
+      for (const [folder, msgs] of Object.entries(byFolder)) {
+        const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+        if (missing.length) {
+          try {
+            const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            for (const m of missing) {
+              const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
+              if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
+            }
+          } catch (e) { continue; }
+        }
+        for (const m of msgs) {
+          const body = this.emailBodyCache[`${folder}:${m.uid || m.id}`] || '';
+          if (!body || !crypto.isEncrypted(body)) continue;
+          const sender = this.senderEmail(m.from);
+          try {
+            crypto.setPeerPublicKey(this.peerKeys[sender]);
+            const text = await crypto.decryptVault(body);
+            const env = this.parseEnvelope(text);
+            // Только настоящие сообщения (envelope с id): квитанции/правки/
+            // реакции/legacy — не сообщения, на них квитанция не положена.
+            if (!env || !env.id) continue;
+            if (sentMap[env.id]) continue;
+            (acks[sender] = acks[sender] || []).push(env.id);
+            sentMap[env.id] = Date.now();
+          } catch (e) { /* не vault-письмо или чужой ключ — пропускаем */ }
+        }
+      }
+      if (!Object.keys(acks).length) return;
+      for (const [sender, ids] of Object.entries(acks)) {
+        try {
+          crypto.setPeerPublicKey(this.peerKeys[sender]);
+          const content = await crypto.encryptVault(JSON.stringify({ delivered: 1, msg_ids: ids }));
+          await api.sendReadReceipt(sender, content);
+        } catch (e) {
+          console.error('sendDeliveredReceipts failed for ' + sender + ':', e);
+          // SMTP упал — снимаем метки, чтобы квитанция повторилась позже.
+          for (const id of ids) delete sentMap[id];
+        }
+      }
+      // Разрастание карты: держим не более 500 самых свежих записей.
+      const entries = Object.entries(sentMap);
+      if (entries.length > 500) {
+        entries.sort((a, b) => (b[1] || 0) - (a[1] || 0));
+        sentMap = Object.fromEntries(entries.slice(0, 500));
+      }
+      db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
+    },
     // Локальная (оптимистичная) запись правки — до доставки письма.
     recordLocalEdit(chatKey, msgId, text, action) {
       const stored = this.loadStoredEdits();
@@ -3381,29 +3650,71 @@ export default {
     },
     // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
     // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится отдельно от истории,
-    // чтобы удаление переживало и её (DC-аналог: tombstone в receive_imf).
+    // поллинг «воскресил» бы удалённое. Хранится в sqlite (Delta Chat-style),
+    // с in-memory кэшем для синхронной фильтрации (filterDeleted).
+    // См. initLocalDb() — загрузка при входе.
+    tombstonesCache: [],
+    midTombstonesCache: [],
+    // IMAP-курсоры: in-memory кэш + sqlite персист.
+    cursorsCache: {},
+    // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
+    async initLocalDb() {
+      const accEmail = this.email || 'anon';  // tombstones/body-cache: account = email
+      const accLocal = 'local';               // cursors/emails: account = 'local' (getEmailAccounts → id='local')
+      try {
+        const tombs = await db.tombstonesLoad(accEmail);
+        this.tombstonesCache = tombs.filter(t => t[0]).map(t => t[0]);
+        this.midTombstonesCache = tombs.filter(t => t[1]).map(t => t[1]);
+      } catch (e) {
+        console.warn('initLocalDb tombstones failed:', e);
+      }
+      try {
+        this.cursorsCache = await db.cursorsLoad(accLocal);
+      } catch (e) {
+        console.warn('initLocalDb cursors failed:', e);
+      }
+    },
     tombstonesKey() {
       return 'vault-tombstones-' + (this.email || 'anon');
     },
     loadTombstones() {
-      try {
-        return JSON.parse(localStorage.getItem(this.tombstonesKey()) || '[]');
-      } catch (e) {
-        return [];
-      }
+      return this.tombstonesCache || [];
     },
     addTombstone(msgId) {
       if (!msgId) return;
-      const list = this.loadTombstones();
+      const list = this.tombstonesCache;
       if (!list.includes(msgId)) {
         list.push(msgId);
-        try { localStorage.setItem(this.tombstonesKey(), JSON.stringify(list)); } catch (e) { /* ignore */ }
+        // sqlite persist (async, fire-and-forget)
+        db.tombstoneAdd(this.email || 'anon', msgId, '');
       }
     },
     isTombstoned(msgId) {
       if (!msgId) return false;
-      return this.loadTombstones().includes(msgId);
+      return (this.tombstonesCache || []).includes(msgId);
+    },
+    // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
+    // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
+    // или повторной доставке с новым UID. В отличие от msg_id-tombstones
+    // (которые привязаны к uid-папки), mid-tombstones работают ГЛОБАЛЬНО:
+    // письмо, вернувшееся из All Mail любого провайдера, будет отфильтровано.
+    midTombstonesKey() {
+      return 'vault-mid-tombstones-' + (this.email || 'anon');
+    },
+    loadMidTombstones() {
+      return this.midTombstonesCache || [];
+    },
+    addMidTombstone(mid) {
+      if (!mid) return;
+      const list = this.midTombstonesCache;
+      if (!list.includes(mid)) {
+        list.push(mid);
+        db.tombstoneAdd(this.email || 'anon', '', mid);
+      }
+    },
+    isMidTombstoned(mid) {
+      if (!mid) return false;
+      return (this.midTombstonesCache || []).includes(mid);
     },
     applyEdits(list, chatKey, wireEdits) {
       const stored = this.loadStoredEdits();
@@ -3444,6 +3755,7 @@ export default {
         if (latest.action === 'delete') {
           // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
           this.addTombstone(msg.id);
+          this.addMidTombstone(msg.mid);
           msg.deleted = true;
           msg.content = '';
         } else if (latest.text) {
@@ -3977,14 +4289,18 @@ export default {
     },
     loadLocalProfiles() {
       try {
-        this.localProfiles = JSON.parse(localStorage.getItem('vault-local-profiles-' + this.email) || '{}');
+        // SQLite kv_store (20.08 — localStorage запрещён как источник истины).
+        db.kvGet(this.email || 'anon', 'local-profiles').then(v => {
+          if (v) this.localProfiles = JSON.parse(v);
+        }).catch(() => {});
+        this.localProfiles = this.localProfiles || {};
       } catch (e) {
         this.localProfiles = {};
       }
     },
     saveLocalProfiles() {
       try {
-        localStorage.setItem('vault-local-profiles-' + this.email, JSON.stringify(this.localProfiles));
+        db.kvSet(this.email || 'anon', 'local-profiles', JSON.stringify(this.localProfiles)).catch(() => {});
       } catch (e) {
         console.error('Failed to save local profiles:', e);
       }

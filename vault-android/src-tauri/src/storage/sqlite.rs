@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct Storage {
@@ -14,7 +16,11 @@ impl Storage {
             None => {
                 let home =
                     dirs::data_local_dir().context("Cannot determine local data directory")?;
-                home.join("vault").join("vault.db")
+                // Same root as history_store: ~/.local/share/com.vault.vault/vault.db
+                // (NOT ~/.local/share/vault/ — that dir holds the keystore).
+                // Per-HOME isolation works because data_local_dir() resolves
+                // under the test HOME (vault-test/<acc>-home) too.
+                home.join("com.vault.vault").join("vault.db")
             }
         };
 
@@ -95,6 +101,68 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id);
             CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+
+            -- Vault local persistence (Delta Chat-style disk DB, replaces
+            -- localStorage/IndexedDB for durable state):
+            -- 1) chat history — the single source of truth for chats
+            CREATE TABLE IF NOT EXISTS chat_history (
+                account TEXT NOT NULL,
+                chat_key TEXT NOT NULL,
+                messages_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (account, chat_key)
+            );
+            -- 2) tombstones — deleted messages never resurrect. msg_id = local
+            --    message id (mid='' for pure Message-ID entries), mid = mail
+            --    Message-ID (rfc724_mid analog, msg_id='' for mid-only entries).
+            CREATE TABLE IF NOT EXISTS tombstones (
+                account TEXT NOT NULL,
+                msg_id TEXT NOT NULL DEFAULT '',
+                mid TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (account, msg_id, mid)
+            );
+            -- 3) IMAP UID cursors — per-account per-folder high-water marks
+            CREATE TABLE IF NOT EXISTS imap_cursors (
+                account TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                uid INTEGER NOT NULL,
+                PRIMARY KEY (account, folder)
+            );
+            -- 4) encrypted mail body cache (can reach several MB — must NOT
+            --    live in localStorage, which caps at ~5 MB)
+            CREATE TABLE IF NOT EXISTS body_cache (
+                account TEXT NOT NULL,
+                cache_key TEXT NOT NULL,
+                body TEXT NOT NULL,
+                PRIMARY KEY (account, cache_key)
+            );
+            -- 5) generic per-account key/value (edits, reactions, pinned,
+            --    avatars, profiles, accepted/declined invites, ...)
+            CREATE TABLE IF NOT EXISTS kv_store (
+                account TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (account, key)
+            );
+            -- 6) envelope cache (Delta Chat-style): the fetched mail list per
+            --    account. this.emails is in-memory only — on restart it was
+            --    empty while UID cursors were already advanced, so old mails
+            --    (below the cursor) never came back and chats looked empty
+            --    (20.08 icemaksim: «сообщение не появилось»). Persisting the
+            --    envelope list keeps cursors and mails consistent across
+            --    restarts without a full IMAP rescan.
+            CREATE TABLE IF NOT EXISTS emails (
+                account TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                folder TEXT NOT NULL,
+                from_addr TEXT NOT NULL DEFAULT '',
+                to_addr TEXT NOT NULL DEFAULT '',
+                subject TEXT NOT NULL DEFAULT '',
+                date TEXT NOT NULL DEFAULT '',
+                is_read INTEGER NOT NULL DEFAULT 0,
+                message_id TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (account, folder, uid)
+            );
             ",
         )?;
         Ok(())
@@ -325,11 +393,191 @@ impl Storage {
             unread,
         })
     }
+
+    // ─── Vault persistence (Delta Chat-style disk DB) ─────────────
+
+    // Chat history: full JSON dump per (account, chat_key). Atomic upsert.
+    pub fn save_history(&self, account: &str, chat_key: &str, messages_json: &str) -> Result<()> {
+    let ts = chrono::Utc::now().to_rfc3339();
+    self.conn.execute(
+        "INSERT INTO chat_history (account, chat_key, messages_json, updated_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(account, chat_key) DO UPDATE SET messages_json=excluded.messages_json, updated_at=excluded.updated_at",
+        params![account, chat_key, messages_json, ts],
+    )?;
+    Ok(())
+}
+
+pub fn load_history(&self, account: &str, chat_key: &str) -> Result<Option<String>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT messages_json FROM chat_history WHERE account=?1 AND chat_key=?2")?;
+    let mut rows = stmt.query_map(params![account, chat_key], |row| row.get(0))?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn clear_history(&self, account: &str) -> Result<()> {
+    self.conn
+        .execute("DELETE FROM chat_history WHERE account=?1", params![account])?;
+    Ok(())
+}
+
+// Tombstones: deleted messages must never resurrect (DC rfc724_mid analog).
+pub fn add_tombstone(&self, account: &str, msg_id: &str, mid: &str) -> Result<()> {
+    self.conn.execute(
+        "INSERT OR IGNORE INTO tombstones (account, msg_id, mid) VALUES (?1, ?2, ?3)",
+        params![account, msg_id, mid],
+    )?;
+    Ok(())
+}
+
+pub fn load_tombstones(&self, account: &str) -> Result<Vec<(String, String)>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT msg_id, mid FROM tombstones WHERE account=?1")?;
+    let rows = stmt.query_map(params![account], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+pub fn clear_tombstones(&self, account: &str) -> Result<()> {
+    self.conn
+        .execute("DELETE FROM tombstones WHERE account=?1", params![account])?;
+    Ok(())
+}
+
+// IMAP UID cursors: per-account high-water marks; an empty fetch must not
+// advance a cursor (throttling would poison the folder).
+pub fn save_cursors(&self, account: &str, cursors_json: &str) -> Result<()> {
+    let parsed: HashMap<String, u32> =
+        serde_json::from_str(cursors_json).unwrap_or_default();
+    for (folder, uid) in parsed {
+        self.conn.execute(
+            "INSERT INTO imap_cursors (account, folder, uid) VALUES (?1, ?2, ?3)
+             ON CONFLICT(account, folder) DO UPDATE SET uid=excluded.uid",
+            params![account, folder, uid],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn load_cursors(&self, account: &str) -> Result<HashMap<String, u32>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT folder, uid FROM imap_cursors WHERE account=?1")?;
+    let rows = stmt.query_map(params![account], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// Body cache: encrypted mail bodies by "folder:uid". Can grow to several MB,
+// must NOT live in localStorage (5 MB cap).
+pub fn body_cache_set(&self, account: &str, cache_key: &str, body: &str) -> Result<()> {
+    self.conn.execute(
+        "INSERT INTO body_cache (account, cache_key, body) VALUES (?1, ?2, ?3)
+         ON CONFLICT(account, cache_key) DO UPDATE SET body=excluded.body",
+        params![account, cache_key, body],
+    )?;
+    Ok(())
+}
+
+pub fn body_cache_get(&self, account: &str, cache_key: &str) -> Result<Option<String>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT body FROM body_cache WHERE account=?1 AND cache_key=?2")?;
+    let mut rows = stmt.query_map(params![account, cache_key], |row| row.get(0))?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn body_cache_clear(&self, account: &str) -> Result<()> {
+    self.conn
+        .execute("DELETE FROM body_cache WHERE account=?1", params![account])?;
+    Ok(())
+}
+
+pub fn body_cache_load_all(&self, account: &str) -> Result<Vec<(String, String)>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT cache_key, body FROM body_cache WHERE account=?1")?;
+    let rows = stmt.query_map(params![account], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// Generic per-account key/value store (edits, reactions, pinned, avatars...).
+pub fn kv_set(&self, account: &str, key: &str, value: &str) -> Result<()> {
+    self.conn.execute(
+        "INSERT INTO kv_store (account, key, value) VALUES (?1, ?2, ?3)
+         ON CONFLICT(account, key) DO UPDATE SET value=excluded.value",
+        params![account, key, value],
+    )?;
+    Ok(())
+}
+
+pub fn kv_get(&self, account: &str, key: &str) -> Result<Option<String>> {
+    let mut stmt = self
+        .conn
+        .prepare("SELECT value FROM kv_store WHERE account=?1 AND key=?2")?;
+    let mut rows = stmt.query_map(params![account, key], |row| row.get(0))?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn kv_delete(&self, account: &str, key: &str) -> Result<()> {
+    self.conn
+        .execute("DELETE FROM kv_store WHERE account=?1 AND key=?2", params![account, key])?;
+    Ok(())
+}
+
+// Email envelope cache: persists this.emails across restarts so UID cursors
+// and the mail list stay consistent (no full IMAP rescan needed).
+pub fn save_emails(&self, account: &str, emails_json: &str) -> Result<()> {
+    let parsed: Vec<EmailRow> = serde_json::from_str(emails_json).unwrap_or_default();
+    let mut stmt = self.conn.prepare(
+        "INSERT OR REPLACE INTO emails (account, uid, folder, from_addr, to_addr, subject, date, is_read, message_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+    )?;
+    for e in parsed {
+        stmt.execute(params![account, e.uid, e.folder, e.from, e.to, e.subject, e.date, e.is_read as i32, e.message_id])?;
+    }
+    Ok(())
+}
+
+pub fn load_emails(&self, account: &str) -> Result<Vec<EmailRow>> {
+    let mut stmt = self.conn.prepare(
+        "SELECT uid, folder, from_addr, to_addr, subject, date, is_read, message_id FROM emails WHERE account=?1 ORDER BY date DESC LIMIT 2000"
+    )?;
+    let rows = stmt.query_map(params![account], |row| Ok(EmailRow {
+        uid: row.get(0)?,
+        folder: row.get(1)?,
+        from: row.get(2)?,
+        to: row.get(3)?,
+        subject: row.get(4)?,
+        date: row.get(5)?,
+        is_read: row.get::<_, i32>(6)? != 0,
+        message_id: row.get(7)?,
+    }))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+pub fn clear_emails(&self, account: &str) -> Result<()> {
+    self.conn.execute("DELETE FROM emails WHERE account=?1", params![account])?;
+    Ok(())
+}
 }
 
 // ─── Data Types ──────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailRow {
+    pub uid: String,
+    pub folder: String,
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub date: String,
+    pub is_read: bool,
+    pub message_id: String,
+}
 pub struct UserRecord {
     pub id: String,
     pub email: String,
