@@ -81,8 +81,8 @@ async function onFileSelected(e) {
       ctx.drawImage(img, sx, sy, size, size, 0, 0, 256, 256)
       const dataUrl = canvas.toDataURL('image/png')
       
-      // Save to localStorage (fast local cache)
-      localStorage.setItem(`vault-avatar-${props.email}`, dataUrl)
+      // Save to sqlite kv_store (данные Vault — не localStorage)
+      await api.setAvatar(props.email, dataUrl)
       
       // Sync to backend
       try {
@@ -103,7 +103,7 @@ async function onFileSelected(e) {
 }
 
 async function removeAvatar() {
-  localStorage.removeItem(`vault-avatar-${props.email}`)
+  await api.removeAvatar(props.email)
   try {
     await api.deleteAvatar(props.email)
   } catch (err) {

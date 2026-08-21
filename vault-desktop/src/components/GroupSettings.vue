@@ -129,7 +129,7 @@ import { computed, ref, onMounted } from 'vue'
 import { useI18n } from '../i18n.js'
 import UserAvatar from './UserAvatar.vue'
 import Icon from './Icon.vue'
-import api from '../api.js'
+import api, { db } from '../api.js'
 
 const { t } = useI18n()
 
@@ -175,8 +175,9 @@ const isCreator = computed(() => props.group.created_by === props.currentUser)
 const groupAvatarInput = ref(null)
 const groupAvatarUrl = ref('')
 
-onMounted(() => {
-  const stored = localStorage.getItem(`vault-group-avatar-${props.group.id}`)
+onMounted(async () => {
+  // Аватар группы — данные: sqlite kv_store.
+  const stored = await db.kvGet('anon', 'group-avatar:' + props.group.id)
   if (stored) groupAvatarUrl.value = stored
 })
 
@@ -206,7 +207,7 @@ async function onGroupAvatarSelected(e) {
       const sy = (img.height - size) / 2
       ctx.drawImage(img, sx, sy, size, size, 0, 0, 128, 128)
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
-      localStorage.setItem(`vault-group-avatar-${props.group.id}`, dataUrl)
+      await db.kvSet('anon', 'group-avatar:' + props.group.id, dataUrl)
       groupAvatarUrl.value = dataUrl
       // Sync to backend
       try {

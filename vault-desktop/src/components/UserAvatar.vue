@@ -68,24 +68,14 @@ async function loadAvatar() {
     resolvedAvatar.value = props.avatarUrl
     return
   }
-  // Fast local cache
-  const stored = localStorage.getItem(`vault-avatar-${props.email}`)
+  // Fast local cache (sqlite kv_store + in-memory Map в api.js)
+  const stored = await api.getAvatar(props.email)
+  if (seq !== avatarSeq) return // устаревший запрос — email уже сменился
   if (stored) {
     resolvedAvatar.value = stored
     return
   }
-  // Fetch from server
-  try {
-    const url = await api.getAvatar(props.email)
-    if (seq !== avatarSeq) return // устаревший запрос — email уже сменился
-    if (url) {
-      resolvedAvatar.value = url
-      // Cache locally
-      localStorage.setItem(`vault-avatar-${props.email}`, url)
-    }
-  } catch {
-    // Ignore — will show initials fallback
-  }
+  // Backend-аватаров нет (serverless); getAvatar уже кэширует в памяти.
 }
 
 onMounted(loadAvatar)

@@ -82,6 +82,8 @@ export class ApiClient {
     this.emailConfig = null;
     // Local contact stubs added via addContact (serverless: no backend /contacts)
     this.contacts = [];
+    // In-memory кэш аватаров (данные — в sqlite kv_store, НЕ localStorage).
+    this._avatarCache = new Map();
   }
 
   // --- internal: connect the mailbox over IMAP/SMTP ---
@@ -537,7 +539,7 @@ export class ApiClient {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
     const name = localStorage.getItem('vault-display-name') || this.email;
-    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       sender: this.email,
       sender_name: name,
@@ -575,7 +577,7 @@ export class ApiClient {
       // Профиль/аватар сохраняем ВСЕГДА — даже если это уже контакт.
       // Иначе аватар из инвайта никогда не дойдёт до существующего контакта
       // (раньше здесь был continue до парсинга — корень асимметрии аватаров).
-      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
       if (peers.has(sender)) continue; // уже контакт — попап не показываем
       out.push({
         sender,
@@ -609,7 +611,7 @@ export class ApiClient {
   }
   async sendContactAccept(email, publicKey) {
     const name = localStorage.getItem('vault-display-name') || this.email;
-    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       sender: this.email,
       sender_name: name,
@@ -643,7 +645,7 @@ export class ApiClient {
       if (!parsed || !parsed.public_key) continue;
       // Профиль/аватар обновляем ВСЕГДА (даже если ключ уже сохранён) —
       // иначе аватар, загруженный после принятия контакта, никогда не дойдёт.
-      this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
       if (peers.has(sender)) continue; // ключ уже сохранён — только профиль обновили
       try {
         await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
@@ -820,10 +822,9 @@ export class ApiClient {
   async getKeys() { return []; } // TODO: surface crypto.js / key_store state
   async createKey(keyData) { return null; } // TODO: use generate_keypair / save_my_keypair
 
-  // --- Avatars (TODO: local file storage) ---
-  async uploadAvatar(email, dataUrl) { return null; }
-  async getAvatar(email) { return null; }
-  async deleteAvatar(email) { return true; }
+  // --- Avatars (данные — sqlite kv_store 'profiles', см. getAvatar ниже) ---
+  async uploadAvatar(email, dataUrl) { return this.setAvatar(email, dataUrl); }
+  async deleteAvatar(email) { return this.removeAvatar(email); }
   async uploadGroupAvatar(groupId, dataUrl) { return null; }
   async deleteGroupAvatar(groupId) { return true; }
 
@@ -853,7 +854,7 @@ export class ApiClient {
     const g = await invoke('groups_get', { groupId });
     if (!g || !g.group_key) throw new Error('Group not found');
     const name = localStorage.getItem('vault-display-name') || this.email;
-    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       group_id: g.id,
       group_name: g.name,
@@ -870,7 +871,7 @@ export class ApiClient {
         .filter(m => m && m.email)
         .map(m => ({ email: m.email, role: m.role || 'Member' })),
       // Аватар группы (если установлен админом) — новый участник увидит его сразу.
-      group_avatar: localStorage.getItem('vault-group-avatar-' + g.id) || '',
+      group_avatar: (await db.kvGet('anon', 'group-avatar:' + g.id)) || '',
     });
     await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
     return { ok: true, invited: true, email };
@@ -919,7 +920,7 @@ export class ApiClient {
     } catch (e) { /* уже участник или временная ошибка — не блокируем */ }
     // Отправляем пригласившему письмо VaultGroupAccept (подтверждение согласия).
     const name = localStorage.getItem('vault-display-name') || this.email;
-    const avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+    const avatar = (await this.getAvatar(this.email)) || '';
     const body = urlSafeB64({
       group_id: groupId,
       sender: this.email,
@@ -1001,41 +1002,65 @@ export class ApiClient {
     return (g && g.group_key) ? [g.group_key] : [];
   }
 
-  // --- Profile cache (имя/аватар из настроек, кэш для отображения в чатах) ---
-  saveProfile(email, name, avatar) {
-    if (!email) return;
-    let profiles = {};
+  // --- Profile cache (имя/аватар из настроек/инвайтов — sqlite kv_store) ---
+  // Один объект {email: {name, avatar}} в kv_store (namespace 'anon'):
+  // профиль контакта не зависит от аккаунта (email — ключ). In-memory Map
+  // для быстрых повторных чтений (UserAvatar/шапка рендерят часто).
+  async getProfilesAll() {
     try {
-      profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+      return JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
     } catch (e) {
-      profiles = {};
-    }
-    const p = profiles[email] || {};
-    if (name) p.name = name;
-    if (avatar) p.avatar = avatar;
-    if (name || avatar) profiles[email] = p;
-    localStorage.setItem('vault-profiles', JSON.stringify(profiles));
-    // Синхронизируем быстрый кэш UserAvatar (vault-avatar-<email>),
-    // чтобы 1-на-1 чат и список контактов видели аватар без getProfile.
-    if (avatar) {
-      localStorage.setItem('vault-avatar-' + email, avatar);
+      return {};
     }
   }
-  getProfile(email) {
+  async saveProfile(email, name, avatar) {
+    if (!email) return;
+    try {
+      const profiles = await this.getProfilesAll();
+      const p = profiles[email] || {};
+      if (name) p.name = name;
+      if (avatar) p.avatar = avatar;
+      if (name || avatar) profiles[email] = p;
+      await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
+      if (avatar) this._avatarCache.set(email, avatar);
+    } catch (e) { /* ignore */ }
+  }
+  async getProfile(email) {
     if (!email) return null;
-    // Для самого пользователя профиль = displayName + vault-avatar-<email>.
     if (email === this.email) {
+      // Свой профиль = displayName (UI-предпочтение) + аватар из kv.
       return {
         name: localStorage.getItem('vault-display-name') || this.email,
-        avatar: localStorage.getItem('vault-avatar-' + this.email) || '',
+        avatar: ((await this.getProfilesAll())[this.email] || {}).avatar || '',
       };
     }
+    const profiles = await this.getProfilesAll();
+    return profiles[email] || null;
+  }
+  async getAvatar(email) {
+    if (!email) return null;
+    if (this._avatarCache.has(email)) return this._avatarCache.get(email);
+    const profiles = await this.getProfilesAll();
+    const url = (profiles[email] || {}).avatar || null;
+    if (url) this._avatarCache.set(email, url);
+    return url;
+  }
+  async setAvatar(email, dataUrl) {
+    if (!email) return;
+    await this.saveProfile(email, null, dataUrl || undefined);
+    if (!dataUrl) this._avatarCache.delete(email);
+  }
+  async removeAvatar(email) {
+    if (!email) return;
     try {
-      const profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
-      return profiles[email] || null;
-    } catch (e) {
-      return null;
-    }
+      const profiles = await this.getProfilesAll();
+      if (profiles[email]) {
+        delete profiles[email].avatar;
+        if (!profiles[email].name) delete profiles[email];
+      }
+      await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
+      this._avatarCache.delete(email);
+    } catch (e) { /* ignore */ }
   }
 
   // --- Групповые инвайты: ожидающие подтверждения ---

@@ -998,13 +998,12 @@ export default {
     window.addEventListener('vault-icon-changed', (e) => {
       if (e && e.detail) this.onAppIconChanged(e.detail)
     })
-    // Load avatar from localStorage
-    if (this.email) {
-      this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || ''
-    }
     // Display name + кэш профилей (имя/аватар участников групп).
     this.displayName = localStorage.getItem('vault-display-name') || this.email || ''
-    this.loadProfiles()
+    await this.loadProfiles()
+    if (this.email) {
+      this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || ''
+    }
     this.loadLocalProfiles()
     // Validate saved token
     if (api.token) {
@@ -1029,7 +1028,8 @@ export default {
           // поэтому локальные имена контактов и свой аватар «пропадали»
           // после перезапуска.
           await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
-          this.userAvatarUrl = localStorage.getItem(`vault-avatar-${this.email}`) || '';
+          await this.loadProfiles(); // профили (имя/аватар) из kv_store
+          this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || '';
           this.displayName = localStorage.getItem('vault-display-name') || this.email || '';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
@@ -1271,11 +1271,11 @@ export default {
         // аккаунтом виден отправитель инвайта (icemaksim → koanmak и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));
         for (const g of this.groups) {
-          // Аватар/иконка группы: локальный кэш (localStorage) — аватар
-          // устанавливает админ, участникам он приходит письмами (см. конверт).
-          const av = localStorage.getItem('vault-group-avatar-' + g.id);
+          // Аватар/иконка группы: sqlite kv_store — аватар устанавливает
+          // админ, участникам он приходит письмами (см. конверт).
+          const av = await db.kvGet('anon', 'group-avatar:' + g.id);
           if (av) this.groupAvatars[g.id] = av;
-          const ic = localStorage.getItem('vault-group-icon-' + g.id);
+          const ic = await db.kvGet('anon', 'group-icon:' + g.id);
           if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
@@ -1378,43 +1378,43 @@ export default {
       this.showJumpToBottom = false;
     },
     // --- Закрепление сообщения в группе (только админ) ---
-    // Хранится в localStorage vault-pinned-<groupId> (последнее по дате —
-    // как meta-аватар) + бродкастится письмом {pin:1, msg_id, action,
-    // preview} под групповым ключом (stealth, пустая тема — единый проход
+    // Хранится в sqlite kv_store (pinned:<groupId>; последнее по дате — как
+    // meta-аватар) + бродкастится письмом {pin:1, msg_id, action, preview}
+    // под групповым ключом (stealth, пустая тема — единый проход
     // loadGroupMessages классифицирует по содержимому).
-    readPinned(groupId) {
+    async readPinned(groupId) {
       try {
-        const raw = localStorage.getItem('vault-pinned-' + groupId);
+        const raw = await db.kvGet('anon', 'pinned:' + groupId);
         return raw ? JSON.parse(raw) : null;
       } catch (e) {
         return null;
       }
     },
-    setPinnedState(groupId, pin) {
+    async setPinnedState(groupId, pin) {
       if (pin && pin.msg_id) {
-        localStorage.setItem('vault-pinned-' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
+        await db.kvSet('anon', 'pinned:' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
         this.pinnedMsgId = pin.msg_id;
         this.pinnedPreview = pin.preview || '';
       } else {
-        localStorage.removeItem('vault-pinned-' + groupId);
+        await db.kvDelete('anon', 'pinned:' + groupId);
         this.pinnedMsgId = null;
         this.pinnedPreview = '';
       }
     },
-    applyPinFromWire(groupId, pin) {
+    async applyPinFromWire(groupId, pin) {
       // Последний по дате pin-письмо авторитетно (unpin = пустой pin.msg_id).
-      const cur = this.readPinned(groupId);
+      const cur = await this.readPinned(groupId);
       if (pin.ts && cur && cur.ts && Number(pin.ts) < Number(cur.ts)) return;
       if (!pin.msg_id) {
-        this.setPinnedState(groupId, null);
+        await this.setPinnedState(groupId, null);
       } else {
-        this.setPinnedState(groupId, { msg_id: pin.msg_id, preview: pin.preview, ts: pin.ts });
+        await this.setPinnedState(groupId, { msg_id: pin.msg_id, preview: pin.preview, ts: pin.ts });
       }
     },
     async pinGroupMessage(msg) {
       if (!this.isGroupAdmin || !this.currentGroup || !msg || !msg.id) return;
       const gid = this.currentGroup.id;
-      const currentlyPinned = this.readPinned(gid);
+      const currentlyPinned = await this.readPinned(gid);
       const pinning = !(currentlyPinned && currentlyPinned.msg_id === msg.id);
       const pin = {
         msg_id: msg.id,
@@ -1423,7 +1423,7 @@ export default {
         ts: Date.now(),
       };
       // Оптимистично применяем локально (SMTP-круг займёт десятки секунд).
-      this.setPinnedState(gid, pinning ? pin : null);
+      await this.setPinnedState(gid, pinning ? pin : null);
       try {
         const groupKey = this.groupKeys[gid] || (await api.getMyGroupKey(gid))?.group_key;
         if (!groupKey) return;
@@ -1841,18 +1841,6 @@ export default {
       } catch (e) { /* fallback below */ }
       return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     },
-    // Временная диагностика аватаров: пишем в localStorage, чтобы читать
-    // эмпирически (консоль WebView не всегда доступна). Ключ vault-avatar-trace.
-    trace(msg) {
-      try {
-        const key = 'vault-avatar-trace';
-        const arr = JSON.parse(localStorage.getItem(key) || '[]');
-        arr.push(new Date().toISOString().slice(11, 19) + ' ' + msg);
-        while (arr.length > 40) arr.shift();
-        localStorage.setItem(key, JSON.stringify(arr));
-      } catch (e) { /* ignore */ }
-      console.log('[avatar-trace] ' + msg);
-    },
     // Уменьшить аватар до 64x64 JPEG, если dataURL слишком большой (чтобы не
     // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
@@ -1878,10 +1866,9 @@ export default {
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text) {
       const name = localStorage.getItem('vault-display-name') || this.email || '';
-      let avatar = localStorage.getItem('vault-avatar-' + this.email) || '';
+      let avatar = (this.profiles[this.email] || {}).avatar || '';
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
-      this.trace('send me=' + this.email + ' name=' + name + ' avatarRaw=' + rawLen + ' avatarFinal=' + avatar.length);
       return JSON.stringify({
         vault: 1,
         id: this.newMessageId(),
@@ -2382,7 +2369,7 @@ export default {
       // Закреплённое сообщение группы — баннер виден сразу (без ожидания
       // поллинга), потом pin-письма из цикла ниже обновят его по дате.
       if (!stale()) {
-        const pin = this.readPinned(groupId);
+        const pin = await this.readPinned(groupId);
         this.pinnedMsgId = (pin && pin.msg_id) || null;
         this.pinnedPreview = (pin && pin.preview) || '';
       }
@@ -2463,7 +2450,7 @@ export default {
             //     ts} — последнее по ts авторитетно; не рендерится.
             if (obj && obj.pin === 1 && obj.msg_id) {
               const ts = obj.ts || Date.parse(msg.created_at || 0) || 0;
-              this.applyPinFromWire(groupId, {
+              await this.applyPinFromWire(groupId, {
                 msg_id: obj.action === 'unpin' ? null : obj.msg_id,
                 preview: obj.preview || '',
                 ts,
@@ -2499,8 +2486,8 @@ export default {
           }
           if (stale()) return;
           // Мета-обновления группы (аватар): последнее по дате — авторитетно.
-          if (metaLatest && metaLatest.avatar !== localStorage.getItem('vault-group-avatar-' + groupId)) {
-            localStorage.setItem('vault-group-avatar-' + groupId, metaLatest.avatar);
+          if (metaLatest && metaLatest.avatar !== (await db.kvGet('anon', 'group-avatar:' + groupId))) {
+            await db.kvSet('anon', 'group-avatar:' + groupId, metaLatest.avatar);
             this.groupAvatars[groupId] = metaLatest.avatar;
           }
           this.loadProfiles();
@@ -2613,9 +2600,9 @@ export default {
           })
           .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
           .slice(0, 10);
-        const appliedKey = 'vault-group-meta-applied-' + g.id;
+        const appliedKey = 'group-meta-applied:' + g.id;
         const alreadyApplied = new Set(
-          (localStorage.getItem(appliedKey) || '').split(',').filter(Boolean)
+          ((await db.kvGet('anon', appliedKey)) || '').split(',').filter(Boolean)
         );
         let metaFound = false;
         for (const latest of memberMails) {
@@ -2638,31 +2625,32 @@ export default {
             const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
             const obj = JSON.parse(plaintext);
             if (obj && obj.meta === 1 && obj.avatar) {
-              if (localStorage.getItem('vault-group-avatar-' + g.id) !== obj.avatar) {
-                localStorage.setItem('vault-group-avatar-' + g.id, obj.avatar);
+              if ((await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
+                await db.kvSet('anon', 'group-avatar:' + g.id, obj.avatar);
                 this.groupAvatars[g.id] = obj.avatar;
               }
               metaFound = true;
               alreadyApplied.add(appliedSig);
-              localStorage.setItem(appliedKey, [...alreadyApplied].join(','));
+              await db.kvSet('anon', appliedKey, [...alreadyApplied].join(','));
               break; // аватар найден — хватит
             }
           } catch (e) { /* не meta или битое — не критично */ }
         }
       }
     },
-    onAvatarUpdate(dataUrl) {
+    async onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
-      // Сохраняем свой профиль в кэш, чтобы имя/аватар отображались и у других.
-      localStorage.setItem(`vault-avatar-${this.email}`, dataUrl || '')
-      api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
+      // Сохраняем свой профиль в kv_store, чтобы имя/аватар отображались и у других.
+      if (!this.profiles[this.email]) this.profiles[this.email] = {};
+      this.profiles[this.email].avatar = dataUrl || '';
+      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
       this.loadProfiles()
     },
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
     // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
     async onGroupAvatarUpdate({ groupId, avatar }) {
       this.groupAvatars[groupId] = avatar;
-      localStorage.setItem('vault-group-avatar-' + groupId, avatar || '');
+      await db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');
       if (!avatar) return;
       // Ключ группы мог быть ещё не загружен (настройки открыты без чата) —
       // тогда `if (!groupKey) return` выше МОЛЧА пропускал рассылку и у
@@ -2699,7 +2687,10 @@ export default {
       const reader = new FileReader();
       reader.onload = (ev) => {
         this.userAvatarUrl = ev.target.result;
-        localStorage.setItem(`vault-avatar-${this.email}`, ev.target.result);
+        // Аватар — данные: sqlite kv_store, не localStorage.
+        api.setAvatar(this.email, ev.target.result).catch(() => {});
+        if (!this.profiles[this.email]) this.profiles[this.email] = {};
+        this.profiles[this.email].avatar = ev.target.result;
         this.showAvatarUpload = false;
       };
       reader.readAsDataURL(file);
@@ -3951,10 +3942,10 @@ export default {
         const group = await api.createGroup(this.newGroupName.trim(), '');
         group.members = group.members || [];
         group.blocked = group.blocked || [];
-        // Выбранная эмодзи-иконка — сохраняется локально (показывается, пока
+        // Выбранная эмодзи-иконка — сохраняется в kv_store (показывается, пока
         // админ не загрузит полноценный аватар).
         if (this.newGroupIcon) {
-          localStorage.setItem('vault-group-icon-' + group.id, this.newGroupIcon);
+          await db.kvSet('anon', 'group-icon:' + group.id, this.newGroupIcon);
           this.groupIconMap[group.id] = this.newGroupIcon;
         }
         this.groups.push(group);
@@ -4204,9 +4195,9 @@ export default {
         }
         if (!groupKey) throw new Error('В приглашении нет ключа группы');
         await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
-        // Аватар группы из инвайта — сохраняем локально (как у админа).
+        // Аватар группы из инвайта — сохраняем в kv_store (как у админа).
         if (inv.group_avatar) {
-          localStorage.setItem('vault-group-avatar-' + inv.group_id, inv.group_avatar);
+          await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
           this.groupAvatars[inv.group_id] = inv.group_avatar;
         }
         await this.loadGroups();
@@ -4440,9 +4431,9 @@ export default {
       this.showContactEdit = false;
       this.editingContact = null;
     },
-    loadProfiles() {
+    async loadProfiles() {
       try {
-        this.profiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+        this.profiles = await api.getProfilesAll();
       } catch (e) {
         this.profiles = {};
       }
