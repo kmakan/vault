@@ -1250,7 +1250,7 @@ export default {
         // Контакты — общий peer-key store на машину; себя не показываем.
         this.contacts = (all || []).filter(c => c.email !== this.email);
         // Замки 🔒: sender'ы, чьё удаление мы получили (переживают рестарт).
-        const deleted = api.getDeletedSenders();
+        const deleted = await api.getDeletedSenders();
         this.deletedByPeer = {};
         for (const e of deleted) this.deletedByPeer[e] = true;
       } catch (error) {
@@ -4114,8 +4114,8 @@ export default {
         if (dels.length) {
           let changed = false;
           for (const d of dels) {
-            api.markContactDelete(`${d.sender}|${d.uid}`);
-            api.addDeletedSender(d.sender);
+            await api.markContactDelete(`${d.sender}|${d.uid}`);
+            await api.addDeletedSender(d.sender);
             this.deletedByPeer[d.sender] = true;
             if (this.peerKeys[d.sender]) {
               try { await crypto.removePeerKey(d.sender); } catch (e) { /* ignore */ }
@@ -4267,9 +4267,9 @@ export default {
         await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
         // Вечная пометка «инвайт обработан» — иначе после удаления контакта
         // старое письмо-инвайт снова покажет попап приглашения.
-        api.markAcceptedContact(key);
+        await api.markAcceptedContact(key);
         // Свежее добавление снимает замок 🔒 от прошлого удаления.
-        api.removeDeletedSender(c.sender);
+        await api.removeDeletedSender(c.sender);
         delete this.deletedByPeer[c.sender];
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
         // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
@@ -4295,9 +4295,8 @@ export default {
       if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key);
       this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
-        const declined = JSON.parse(localStorage.getItem('vault-declined-contacts') || '[]');
-        if (!declined.includes(key)) declined.push(key);
-        localStorage.setItem('vault-declined-contacts', JSON.stringify(declined));
+        // Помечаем отклонённым в sqlite kv_store (localStorage не источник).
+        await api.markDeclinedContact(key);
       } catch (e) { /* ignore */ }
       this.showNextContact();
     },

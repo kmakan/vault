@@ -455,75 +455,82 @@ export class ApiClient {
     } catch (e) { /* ignore */ }
     return set;
   }
-  getDeclinedContacts() {
+  // ── Handshake-пометки: sqlite kv_store (localStorage НЕ источник истины) ──
+  // Персистентные списки обработанных handshake-писем (invite/accept/delete).
+  // Ключ = `${sender}|${uid}` (как tombstones): письма навсегда остаются в
+  // ящике, и без пометки после удаления контакта снова «активируются».
+  async getDeclinedContacts() {
     try {
-      return JSON.parse(localStorage.getItem('vault-declined-contacts') || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'declined-contacts')) || '[]');
     } catch (e) {
       return [];
     }
   }
-  getAcceptedContacts() {
+  async markDeclinedContact(key) {
     try {
-      return JSON.parse(localStorage.getItem('vault-accepted-contacts') || '[]');
-    } catch (e) {
-      return [];
-    }
-  }
-  // Вечная пометка «handshake-письмо обработано» (аналог vault-accepted-invites
-  // для групп). Без неё после удаления контакта старое письмо-инвайт/accept
-  // снова «активируется» (peers.has перестаёт фильтровать): попап приглашения
-  // или молчаливое воскрешение контакта со старым ключом.
-  markAcceptedContact(key) {
-    try {
-      const arr = this.getAcceptedContacts();
+      const arr = await this.getDeclinedContacts();
       if (!arr.includes(key)) {
         arr.push(key);
-        localStorage.setItem('vault-accepted-contacts', JSON.stringify(arr));
+        await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(arr));
+      }
+    } catch (e) { /* ignore */ }
+  }
+  async getAcceptedContacts() {
+    try {
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'accepted-contacts')) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  async markAcceptedContact(key) {
+    try {
+      const arr = await this.getAcceptedContacts();
+      if (!arr.includes(key)) {
+        arr.push(key);
+        await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
   // --- Удаление контакта другой стороной (синхронизация между устройствами) ---
-  // Письмо VaultContactDelete: <myEmail> — «я удалил тебя из контактов».
-  // Не шифруется (как invite/accept): получатель фильтрует по subject.
-  getContactDeletes() {
+  async getContactDeletes() {
     try {
-      return JSON.parse(localStorage.getItem('vault-contact-deletes') || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'contact-deletes')) || '[]');
     } catch (e) {
       return [];
     }
   }
-  markContactDelete(key) {
+  async markContactDelete(key) {
     try {
-      const arr = this.getContactDeletes();
+      const arr = await this.getContactDeletes();
       if (!arr.includes(key)) {
         arr.push(key);
-        localStorage.setItem('vault-contact-deletes', JSON.stringify(arr));
+        await db.kvSet(this.email || 'anon', 'contact-deletes', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
-  // Sender'ы, чьё удаление получено — вечный список для замка 🔒
-  // (контакт-участник группы loadGroups вернёт в список; помечаем его).
-  getDeletedSenders() {
+  // Sender'ы, чьё удаление получено — для замка 🔒 (участник группы loadGroups
+  // вернёт в список; помечаем его). Переживает рестарт.
+  async getDeletedSenders() {
     try {
-      return JSON.parse(localStorage.getItem('vault-contact-deleted-senders') || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'deleted-senders')) || '[]');
     } catch (e) {
       return [];
     }
   }
-  addDeletedSender(email) {
+  async addDeletedSender(email) {
     try {
-      const arr = this.getDeletedSenders();
+      const arr = await this.getDeletedSenders();
       if (!arr.includes(email)) {
         arr.push(email);
-        localStorage.setItem('vault-contact-deleted-senders', JSON.stringify(arr));
+        await db.kvSet(this.email || 'anon', 'deleted-senders', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
   // Снимаем замок при НОВОМ добавлении контакта (приняли свежий инвайт).
-  removeDeletedSender(email) {
+  async removeDeletedSender(email) {
     try {
-      const arr = this.getDeletedSenders().filter(e => e !== email);
-      localStorage.setItem('vault-contact-deleted-senders', JSON.stringify(arr));
+      const arr = (await this.getDeletedSenders()).filter(e => e !== email);
+      await db.kvSet(this.email || 'anon', 'deleted-senders', JSON.stringify(arr));
     } catch (e) { /* ignore */ }
   }
   async sendContactInvite(email, publicKey) {
@@ -543,8 +550,8 @@ export class ApiClient {
   async fetchPendingContactInvites() {
     const msgs = await this.fetchEmails('local');
     const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
-    const declined = this.getDeclinedContacts();
-    const accepted = this.getAcceptedContacts();
+    const declined = await this.getDeclinedContacts();
+    const accepted = await this.getAcceptedContacts();
     const peers = await this.loadPeerKeyEmails();
     // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
     // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
@@ -616,7 +623,7 @@ export class ApiClient {
     const msgs = await this.fetchEmails('local');
     const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
     const peers = await this.loadPeerKeyEmails();
-    const accepted = this.getAcceptedContacts();
+    const accepted = await this.getAcceptedContacts();
     // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
     // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
     const bodies = await this.batchFetchBodies(accepts);
@@ -668,7 +675,7 @@ export class ApiClient {
   async fetchPendingContactDeletes() {
     const msgs = await this.fetchEmails('local');
     const deletes = msgs.filter(m => (m.subject || '').startsWith('VaultContactDelete: '));
-    const handled = this.getContactDeletes();
+    const handled = await this.getContactDeletes();
     const bodies = await this.batchFetchBodies(deletes);
     const out = [];
     for (const m of deletes) {
