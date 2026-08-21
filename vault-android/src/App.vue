@@ -4095,6 +4095,9 @@ export default {
           for (const d of dels) {
             await api.markContactDelete(`${d.sender}|${d.uid}`);
             await api.addDeletedSender(d.sender);
+            // Старые инвайты/accept от удалившего нас контакта — в declined/
+            // accepted по uid, чтобы не воскресали; новые приглашения проходят.
+            await api.markContactHandshakeDone(d.sender);
             this.deletedByPeer[d.sender] = true;
             if (this.peerKeys[d.sender]) {
               try { await crypto.removePeerKey(d.sender); } catch (e) { /* ignore */ }
@@ -4336,6 +4339,10 @@ export default {
         // Помечаем «удалён МНОЙ»: старые VaultContactInvite/VaultContactAccept
         // письма не должны воскрешать контакт (попап/ключ снова).
         await api.addSelfDeleted(email);
+        // Старые handshake-письма от удалённого контакта (invite/accept)
+        // помечаем обработанными — не воскрешат контакт. НОВЫЕ приглашения
+        // от него после удаления будут доходить (uid не помечен).
+        await api.markContactHandshakeDone(email);
         // Чистим и in-memory stubs api.js — иначе контакт «не удаляется»
         // до перезапуска (getContacts() мержит stubs с диском).
         await api.removeContact(email);

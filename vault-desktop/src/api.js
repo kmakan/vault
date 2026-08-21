@@ -692,20 +692,19 @@ export class ApiClient {
     const declined = await this.getDeclinedContacts();
     const accepted = await this.getAcceptedContacts();
     const peers = await this.loadPeerKeyEmails();
-    const selfDeleted = await this.getSelfDeleted();
-    const deletedSenders = await this.getDeletedSenders();
     const out = [];
     for (const m of invites) {
       const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
       if (!sender || sender === this.email) continue;
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
-      if (selfDeleted.includes(sender)) continue;
-      if (deletedSenders.includes(sender)) continue;
-      // У legacy-писем parsed может быть null — тело не распарсилось
+      // Примечание: фильтра «удалён МНОЙ/удалил меня» здесь НЕТ — новые
+      // приглашения от бывших контактов должны доходить (юзер, 21.08).
+      // Старые письма от удалённых контактов помечаются declined/accepted
+      // по uid в markContactHandshakeDone() при удалении.
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
-      if (!parsed.public_key) continue; // обязательное поле
+      if (!parsed.public_key) continue;
       await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
       if (peers.has(sender)) continue;
       out.push({
@@ -718,6 +717,37 @@ export class ApiClient {
       });
     }
     return out;
+  }
+  // Пометить ВСЕ старые handshake-письма от email как обработанные
+  // (invite → declined, accept → accepted по uid). Вызывается при удалении
+  // контакта (своём и чужом): старые письма не должны воскрешать контакт,
+  // а НОВЫЕ приглашения (после удаления) проходят — их uid ещё не помечен.
+  async markContactHandshakeDone(email) {
+    try {
+      const all = await this.fetchAllHandshake();
+      const declined = await this.getDeclinedContacts();
+      for (const m of all.invites) {
+        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
+        if (sender !== email) continue;
+        const key = `${sender}|${m.uid}`;
+        if (!declined.includes(key)) {
+          declined.push(key);
+          await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(declined));
+        }
+      }
+      const accepted = await this.getAcceptedContacts();
+      for (const m of all.accepts) {
+        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
+        if (sender !== email) continue;
+        const key = `${sender}|${m.uid}`;
+        if (!accepted.includes(key)) {
+          accepted.push(key);
+          await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(accepted));
+        }
+      }
+    } catch (e) {
+      console.warn('markContactHandshakeDone failed:', e);
+    }
   }
   // Батч-фетч тел писем по папкам (один IMAP-вызов на папку) — обёртка над
   // fetchEmailBodies, возвращает {uid: body}. Пустые тела пропускаются.
@@ -755,15 +785,11 @@ export class ApiClient {
     const { accepts } = await this.fetchAllHandshake();
     const peers = await this.loadPeerKeyEmails();
     const accepted = await this.getAcceptedContacts();
-    const selfDeleted = await this.getSelfDeleted();
-    const deletedSenders = await this.getDeletedSenders();
     const out = [];
     for (const m of accepts) {
       const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
-      if (selfDeleted.includes(sender)) continue;
-      if (deletedSenders.includes(sender)) continue;
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
       if (!parsed.public_key) continue;
