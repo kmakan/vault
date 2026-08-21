@@ -19,6 +19,11 @@ body {
    переопределяет свойство на :root при смене темы. */
 :root {
   color-scheme: dark;
+  /* Отступ под системную навигацию Android (жесты/кнопки). Требует
+     viewport-fit=cover в index.html + enableEdgeToEdge в MainActivity —
+     иначе контент (поле ввода чата, тосты) уходит под виртуальные кнопки. */
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
 }
 
 /* Выпадающие списки: явный фон/текст опций по переменным темы. В WebKitGTK
@@ -50,7 +55,7 @@ option {
 .vault-toast {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: calc(16px + var(--safe-bottom, 0px));
   max-width: 380px;
   padding: 10px 16px;
   background: #1c2333;

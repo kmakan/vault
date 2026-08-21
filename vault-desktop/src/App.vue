@@ -5175,6 +5175,8 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Android: последний контакт не прятался под системной навигацией */
+  padding-bottom: var(--safe-bottom, 0px);
 }
 
 .contacts-empty {
@@ -6472,6 +6474,8 @@ body {
      мессенджерах): не сжимается и не уходит за экран. */
   flex-shrink: 0;
   padding: 16px 24px;
+  /* Android: не уходить под системную навигацию (виртуальные кнопки/жесты) */
+  padding-bottom: calc(16px + var(--safe-bottom, 0px));
   border-top: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
