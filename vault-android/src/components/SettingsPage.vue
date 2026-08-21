@@ -381,4 +381,45 @@ export default {
 .help-links a { color: #58a6ff; text-decoration: none; font-size: 14px; }
 .help-links a:hover { text-decoration: underline; }
 .version { color: #484f58; font-size: 12px; margin-top: 16px; }
+
+/* Мобильный режим (портрет телефона): навигация — горизонтальная полоса
+   сверху, контент под ней. Иначе 260px sidebar + контент не помещаются
+   на 412px и приходится поворачивать телефон (фикс 21.08).
+   ВАЖНО: media query должен идти ПОСЛЕ базовых правил (.settings-sidebar
+   width:260px) — scoped-селекторы имеют одинаковую специфичность, и
+   побеждает последний. Раньше блок стоял в начале и не применялся. */
+@media (max-width: 767px) {
+  .settings-page {
+    flex-direction: column;
+  }
+  .settings-sidebar {
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    border-right: none;
+    border-bottom: 1px solid #30363d;
+  }
+  .settings-profile {
+    padding: 12px 16px;
+    border-bottom: none;
+    border-right: 1px solid #30363d;
+  }
+  .settings-nav {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+  .settings-nav-item {
+    flex-shrink: 0;
+    padding: 12px 14px;
+  }
+  .settings-content {
+    padding: 16px;
+    overflow-y: auto;
+  }
+}
 </style>
