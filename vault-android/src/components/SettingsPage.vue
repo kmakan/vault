@@ -169,7 +169,8 @@ export default {
       if (this.isMobile) this.mobileCategory = id;
     },
     saveDisplayName() {
-      localStorage.setItem('vault-display-name', this.localDisplayName);
+      // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
+      api.setDisplayName(this.localDisplayName).catch(e => console.error(e));
     },
     onIconChanged(id) {
       this.$emit('icon-changed', id);

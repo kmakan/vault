@@ -117,6 +117,7 @@ export class ApiClient {
     this.password = password; // memory only
     this.connected = true;
     this.token = `serverless-${email}`;
+    this._displayName = undefined; // кэш имени привязан к аккаунту
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', email);
     // Одноразовая миграция localStorage → kv_store (21.08): старые пометки/
@@ -192,6 +193,7 @@ export class ApiClient {
     this.password = creds.password; // memory only
     this.connected = true;
     this.token = `serverless-${creds.email}`;
+    this._displayName = undefined; // кэш имени привязан к аккаунту
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', creds.email);
     // Одноразовая миграция localStorage → kv_store (21.08).
@@ -208,6 +210,7 @@ export class ApiClient {
     this.connected = false;
     this.emailConfig = null;
     this.token = null;
+    this._displayName = undefined; // кэш имени привязан к аккаунту
     localStorage.removeItem('vault-token');
     localStorage.removeItem('vault-email');
   }
@@ -267,13 +270,23 @@ export class ApiClient {
         if (kv && kv !== '[]') continue; // в kv уже есть данные — не затираем
         await db.kvSet(acc, kvKey, ls);
       }
+      // 2b. Display-name (строка, не массив): vault-display-name → kv.
+      try {
+        const dn = localStorage.getItem('vault-display-name');
+        if (dn && !(await db.kvGet(acc, 'display-name'))) {
+          await db.kvSet(acc, 'display-name', dn);
+        }
+      } catch (e) { /* ignore */ }
       // 3. Чистим перенесённое и ставим маркер.
       localStorage.removeItem('vault-profiles');
+      localStorage.removeItem('vault-display-name');
       for (const [lsKey] of pairs) localStorage.removeItem(lsKey);
       const toRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('vault-avatar-')) toRemove.push(key);
+        // vault-avatar-* перенесены в kv; vault-hist:* — легаси-копия
+        // истории (источник — sqlite chat_history, копию больше не ведём).
+        if (key && (key.startsWith('vault-avatar-') || key.startsWith('vault-hist:'))) toRemove.push(key);
       }
       for (const k of toRemove) localStorage.removeItem(k);
       localStorage.setItem('vault-kv-migrated', '1');
@@ -281,6 +294,23 @@ export class ApiClient {
     } catch (e) {
       console.warn('migrateLegacyLocalStorage failed:', e);
     }
+  }
+
+  // --- Отображаемое имя (display-name) → kv_store (21.08) ---
+  // Раньше — localStorage 'vault-display-name'. Имя — настройка аккаунта,
+  // а не UI-предпочтение: хранится в kv (namespace = account), кэшируется.
+  async getDisplayName() {
+    if (this._displayName !== undefined) return this._displayName;
+    try {
+      this._displayName = (await db.kvGet(this.email || 'anon', 'display-name')) || null;
+    } catch (e) {
+      this._displayName = null;
+    }
+    return this._displayName;
+  }
+  async setDisplayName(name) {
+    this._displayName = name || null;
+    try { await db.kvSet(this.email || 'anon', 'display-name', name || ''); } catch (e) { /* ignore */ }
   }
 
   // --- Контакты, удалённые МНОЙ (self-deleted) ---
@@ -641,7 +671,7 @@ export class ApiClient {
   async sendContactInvite(email, publicKey) {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
-    const name = localStorage.getItem('vault-display-name') || this.email;
+    const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       sender: this.email,
@@ -721,7 +751,7 @@ export class ApiClient {
     return out;
   }
   async sendContactAccept(email, publicKey) {
-    const name = localStorage.getItem('vault-display-name') || this.email;
+    const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       sender: this.email,
@@ -786,7 +816,7 @@ export class ApiClient {
   async sendContactDelete(email) {
     const payload = urlSafeB64({
       sender: this.email,
-      sender_name: localStorage.getItem('vault-display-name') || this.email,
+      sender_name: (await this.getDisplayName()) || this.email,
       ts: Date.now(),
     });
     await this.sendEmail('local', { to: email, subject: 'VaultContactDelete: ' + this.email, body: payload });
@@ -971,7 +1001,7 @@ export class ApiClient {
     // расшифровать его невозможно без приватного ключа получателя.
     const g = await invoke('groups_get', { groupId });
     if (!g || !g.group_key) throw new Error('Group not found');
-    const name = localStorage.getItem('vault-display-name') || this.email;
+    const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
       group_id: g.id,
@@ -1037,7 +1067,7 @@ export class ApiClient {
       await invoke('groups_add_member', { groupId, email: this.email });
     } catch (e) { /* уже участник или временная ошибка — не блокируем */ }
     // Отправляем пригласившему письмо VaultGroupAccept (подтверждение согласия).
-    const name = localStorage.getItem('vault-display-name') || this.email;
+    const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const body = urlSafeB64({
       group_id: groupId,
@@ -1146,9 +1176,9 @@ export class ApiClient {
   async getProfile(email) {
     if (!email) return null;
     if (email === this.email) {
-      // Свой профиль = displayName (UI-предпочтение) + аватар из kv.
+      // Свой профиль = displayName (настройка аккаунта, kv) + аватар из kv.
       return {
-        name: localStorage.getItem('vault-display-name') || this.email,
+        name: (await this.getDisplayName()) || this.email,
         avatar: ((await this.getProfilesAll())[this.email] || {}).avatar || '',
       };
     }

@@ -999,7 +999,7 @@ export default {
       if (e && e.detail) this.onAppIconChanged(e.detail)
     })
     // Display name + кэш профилей (имя/аватар участников групп).
-    this.displayName = localStorage.getItem('vault-display-name') || this.email || ''
+    this.displayName = (await api.getDisplayName()) || this.email || ''
     await this.loadProfiles()
     if (this.email) {
       this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || ''
@@ -1030,7 +1030,7 @@ export default {
           await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
           await this.loadProfiles(); // профили (имя/аватар) из kv_store
           this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || '';
-          this.displayName = localStorage.getItem('vault-display-name') || this.email || '';
+          this.displayName = (await api.getDisplayName()) || this.email || '';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
           await api.getChats();
@@ -1242,7 +1242,6 @@ export default {
       this.profiles = {};
       this.userAvatarUrl = '';
       this.displayName = '';
-      localStorage.removeItem('vault-display-name');
     },
     async loadContacts() {
       try {
@@ -1594,24 +1593,15 @@ export default {
     // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
     // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
     // транспорт: приносит НОВЫЕ письма, уже показанное не затирает (20.08).
-    // Локальная история чата: IndexedDB (основной) + localStorage-копия.
-    // IndexedDB в WebKitGTK может молча не открываться (onblocked) — тогда
-    // история живёт в localStorage-копии, и чаты всё равно открываются из
-    // своих данных, а не из почты (фикс 20.08).
+    // Локальная история чата: SQLite (db.history_load) — единственный
+    // источник. localStorage-копии НЕТ: WebKitGTK-localStorage ограничен
+    // ~5 МБ (body-cache уже 3–7 МБ), история живёт в sqlite vault.db
+    // (таблица chat_history) с 20.08 (фикс юзера).
     async loadLocalHistory(chatKey) {
       let hist = null;
       try {
         hist = await loadHistory(this.email, chatKey);
-      } catch (e) { /* fallback ниже */ }
-      if (!hist || !hist.length) {
-        try {
-          const raw = localStorage.getItem('vault-hist:' + this.email + ':' + chatKey);
-          if (raw) {
-            const arr = JSON.parse(raw);
-            if (Array.isArray(arr) && arr.length) hist = arr;
-          }
-        } catch (e) { /* ignore */ }
-      }
+      } catch (e) { /* sqlite недоступен — чат откроется из писем */ }
       return this.normalizeStaleSending(hist);
     },
     // 'sending' — переходный статус, он не должен долго жить в истории: его
@@ -1629,20 +1619,6 @@ export default {
         }
       }
       return hist;
-    },
-    saveLocalHistory(chatKey, messages) {
-      try {
-        const slim = (messages || []).map(m => ({
-          id: m.id, content: m.content, from: m.from,
-          sender_id: m.sender_id, time: m.time,
-          ts: m.ts || this.msgTs(m), status: m.status,
-          attachment: m.attachment || undefined,
-          reactions: m.reactions || undefined,
-          deleted: m.deleted || undefined,
-          edited: m.edited || undefined,
-        }));
-        localStorage.setItem('vault-hist:' + this.email + ':' + chatKey, JSON.stringify(slim));
-      } catch (e) { /* quota — не критично */ }
     },
     // mergeHistory: ИСТОРИЯ — источник истины (сообщения, отправленные или
     // полученные когда-либо, остаются в чате навсегда, с датами), а письма
@@ -1872,7 +1848,7 @@ export default {
     },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text) {
-      const name = localStorage.getItem('vault-display-name') || this.email || '';
+      const name = (await api.getDisplayName()) || this.email || '';
       let avatar = (this.profiles[this.email] || {}).avatar || '';
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
@@ -2035,16 +2011,13 @@ export default {
       });
     },
     saveCurrentHistory(chatKey) {
-      // IndexedDB может молча падать/висеть (WebKitGTK onblocked) — его
-      // сбой не должен отменять localStorage-копию (источник чата).
+      // SQLite (db.history_save) — единственный источник истории. Сбои
+      // sqlite не критичны: чат пересоберётся из писем IMAP при поллинге.
       try {
         saveHistory(this.email, chatKey, this.messages);
       } catch (e) {
-        console.warn('saveHistory (IndexedDB) failed:', e);
+        console.warn('saveHistory (sqlite) failed:', e);
       }
-      // Копия в localStorage: IndexedDB может молча падать (WebKitGTK
-      // onblocked) — без копии история терялась и чаты пустели.
-      this.saveLocalHistory(chatKey, this.messages);
     },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,

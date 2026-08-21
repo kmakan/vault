@@ -142,8 +142,9 @@ export default {
     };
   },
   methods: {
-    saveDisplayName() {
-      localStorage.setItem('vault-display-name', this.localDisplayName);
+    async saveDisplayName() {
+      // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
+      try { await api.setDisplayName(this.localDisplayName); } catch (e) { console.error(e); }
     },
     onIconChanged(id) {
       // Forward to the app root so the visible header logo swaps live
