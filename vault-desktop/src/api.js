@@ -84,6 +84,8 @@ export class ApiClient {
     this.contacts = [];
     // In-memory кэш аватаров (данные — в sqlite kv_store, НЕ localStorage).
     this._avatarCache = new Map();
+    // Кэш handshake-писем на один тик поллинга (см. fetchAllHandshake).
+    this._handshakeCache = null;
   }
 
   // --- internal: connect the mailbox over IMAP/SMTP ---
@@ -671,55 +673,41 @@ export class ApiClient {
   async sendContactInvite(email, publicKey) {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
+    // СТЕЛС (21.08, правка юзера): тема ПУСТАЯ — никаких видимых Vault*
+    // маркеров в заголовках; тип письма — метка kind внутри base64-тела.
     const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
+      kind: 'invite',
       sender: this.email,
       sender_name: name,
       sender_avatar: avatar,
       public_key: publicKey,
     });
-    await this.sendEmail('local', { to: email, subject: 'VaultContactInvite: ' + this.email, body: payload });
+    await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true, invited: true, email };
   }
   async fetchPendingContactInvites() {
-    const msgs = await this.fetchEmails('local');
-    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultContactInvite: '));
+    const { invites } = await this.fetchAllHandshake();
     const declined = await this.getDeclinedContacts();
     const accepted = await this.getAcceptedContacts();
     const peers = await this.loadPeerKeyEmails();
-    // Мы сами удалили этого отправителя — его старые инвайты не показываем
-    // (иначе после удаления контакта попап «Принять» всплывает снова).
     const selfDeleted = await this.getSelfDeleted();
-    // И отправитель, который УДАЛИЛ НАС (VaultContactDelete) — его старые
-    // инвайты тоже не предлагаем (фантомные попапы после удаления).
     const deletedSenders = await this.getDeletedSenders();
-    // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
-    // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
-    // при десятке инвайтов UI-фетчи тел падали по lock-таймауту (20.08).
-    const bodies = await this.batchFetchBodies(invites);
     const out = [];
     for (const m of invites) {
-      const sender = (m.subject || '').slice('VaultContactInvite: '.length).trim();
-      if (!sender || sender === this.email) continue; // себе не предлагаем
+      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
+      if (!sender || sender === this.email) continue;
       if (declined.includes(`${sender}|${m.uid}`)) continue;
-      if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже принят когда-то
-      if (selfDeleted.includes(sender)) continue; // я сам его удалил
-      if (deletedSenders.includes(sender)) continue; // он удалил меня
-      const body = bodies[String(m.uid || m.id)] || '';
-      if (!body) continue;
-      let parsed;
-      try {
-        parsed = urlSafeB64Decode(body);
-      } catch (e) {
-        continue;
-      }
-      if (!parsed || !parsed.public_key) continue;
-      // Профиль/аватар сохраняем ВСЕГДА — даже если это уже контакт.
-      // Иначе аватар из инвайта никогда не дойдёт до существующего контакта
-      // (раньше здесь был continue до парсинга — корень асимметрии аватаров).
+      if (accepted.includes(`${sender}|${m.uid}`)) continue;
+      if (selfDeleted.includes(sender)) continue;
+      if (deletedSenders.includes(sender)) continue;
+      // У legacy-писем parsed может быть null — тело не распарсилось
+      const parsed = m.parsed || {};
+      if (!parsed.sender && !parsed.public_key) continue;
+      if (!parsed.public_key) continue; // обязательное поле
       await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
-      if (peers.has(sender)) continue; // уже контакт — попап не показываем
+      if (peers.has(sender)) continue;
       out.push({
         sender,
         sender_name: parsed.sender_name || sender,
@@ -754,43 +742,31 @@ export class ApiClient {
     const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
+      kind: 'accept',
       sender: this.email,
       sender_name: name,
       sender_avatar: avatar,
       public_key: publicKey,
     });
-    await this.sendEmail('local', { to: email, subject: 'VaultContactAccept: ' + this.email, body: payload });
+    await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true };
   }
   async fetchPendingContactAccepts() {
-    const msgs = await this.fetchEmails('local');
-    const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
+    const { accepts } = await this.fetchAllHandshake();
     const peers = await this.loadPeerKeyEmails();
     const accepted = await this.getAcceptedContacts();
-    // Я сам удалил этого отправителя — его старые accept-письма НЕ должны
-    // воскрешать контакт (иначе удаление контакта «откатывается» поллингом).
     const selfDeleted = await this.getSelfDeleted();
-    // И отправитель, удаливший НАС, тоже не должен воскрешаться.
     const deletedSenders = await this.getDeletedSenders();
-    // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
-    // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
-    const bodies = await this.batchFetchBodies(accepts);
     const out = [];
     for (const m of accepts) {
-      const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
+      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
-      if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже обработано когда-то
-      if (selfDeleted.includes(sender)) continue; // я сам его удалил
-      if (deletedSenders.includes(sender)) continue; // он удалил меня
-      const body = bodies[String(m.uid || m.id)] || '';
-      if (!body) continue;
-      let parsed;
-      try {
-        parsed = urlSafeB64Decode(body);
-      } catch (e) {
-        continue;
-      }
-      if (!parsed || !parsed.public_key) continue;
+      if (accepted.includes(`${sender}|${m.uid}`)) continue;
+      if (selfDeleted.includes(sender)) continue;
+      if (deletedSenders.includes(sender)) continue;
+      const parsed = m.parsed || {};
+      if (!parsed.sender && !parsed.public_key) continue;
+      if (!parsed.public_key) continue;
       // Профиль/аватар обновляем ВСЕГДА (даже если ключ уже сохранён) —
       // иначе аватар, загруженный после принятия контакта, никогда не дойдёт.
       await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
@@ -811,36 +787,27 @@ export class ApiClient {
     return out;
   }
   // «Я удалил тебя из контактов» — письмо-уведомление удаляемой стороне.
-  // Subject: VaultContactDelete: <myEmail> (как invite/accept — видимый
-  // handshake-маркер, допустимый по стелс-правилу).
+  // СТЕЛС: тема пустая, тип — kind:'delete' в base64-теле.
   async sendContactDelete(email) {
     const payload = urlSafeB64({
+      kind: 'delete',
       sender: this.email,
       sender_name: (await this.getDisplayName()) || this.email,
       ts: Date.now(),
     });
-    await this.sendEmail('local', { to: email, subject: 'VaultContactDelete: ' + this.email, body: payload });
+    await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true };
   }
   async fetchPendingContactDeletes() {
-    const msgs = await this.fetchEmails('local');
-    const deletes = msgs.filter(m => (m.subject || '').startsWith('VaultContactDelete: '));
+    const { deletes } = await this.fetchAllHandshake();
     const handled = await this.getContactDeletes();
-    const bodies = await this.batchFetchBodies(deletes);
     const out = [];
     for (const m of deletes) {
-      const sender = (m.subject || '').slice('VaultContactDelete: '.length).trim();
+      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactDelete: '.length).trim();
       if (!sender || sender === this.email) continue;
       if (handled.includes(`${sender}|${m.uid}`)) continue; // уже обработано
-      const body = bodies[String(m.uid || m.id)] || '';
-      if (!body) continue;
-      let parsed;
-      try {
-        parsed = urlSafeB64Decode(body);
-      } catch (e) {
-        continue;
-      }
-      if (!parsed || !parsed.sender) continue;
+      const parsed = m.parsed || {};
+      if (!parsed.sender) continue;
       out.push({ sender, uid: m.uid, date: m.date });
     }
     return out;
@@ -1004,6 +971,7 @@ export class ApiClient {
     const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const payload = urlSafeB64({
+      kind: 'group-invite',
       group_id: g.id,
       group_name: g.name,
       group_key_enc: groupKeyEnc || '',
@@ -1021,7 +989,7 @@ export class ApiClient {
       // Аватар группы (если установлен админом) — новый участник увидит его сразу.
       group_avatar: (await db.kvGet('anon', 'group-avatar:' + g.id)) || '',
     });
-    await this.sendEmail('local', { to: email, subject: 'VaultGroupInvite: ' + g.id, body: payload });
+    await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true, invited: true, email };
   }
   // Alias для обратной совместимости — не добавляет мгновенно, а шлёт инвайт.
@@ -1070,6 +1038,7 @@ export class ApiClient {
     const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
     const body = urlSafeB64({
+      kind: 'group-accept',
       group_id: groupId,
       sender: this.email,
       sender_name: name,
@@ -1090,7 +1059,7 @@ export class ApiClient {
     if (payload.sender && payload.sender !== this.email) roster.add(payload.sender);
     for (const to of roster) {
       try {
-        await this.sendEmail('local', { to, subject: 'VaultGroupAccept: ' + groupId, body });
+        await this.sendEmail('local', { to, subject: '', body });
       } catch (e) {
         console.error('accept mail failed for', to, e);
       }
@@ -1213,33 +1182,22 @@ export class ApiClient {
 
   // --- Групповые инвайты: ожидающие подтверждения ---
   async fetchPendingInvites() {
-    const msgs = await this.fetchEmails('local');
-    const invites = msgs.filter(m => (m.subject || '').startsWith('VaultGroupInvite: '));
+    const { groupInvites } = await this.fetchAllHandshake();
     const declined = await this.getDeclinedInvites();
     const accepted = await this.getAcceptedInvites();
     const out = [];
-    for (const m of invites) {
-      let parsed;
-      try {
-        parsed = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
-      } catch (e) {
-        // Раньше молчаливый continue — инвайт пропадал без следа.
-        console.warn('[invites] body fetch failed for uid', m.uid, 'folder', m.folder, e);
-        continue;
-      }
-      if (!parsed || !parsed.group_id) {
+    for (const m of groupInvites) {
+      const parsed = m.parsed || {};
+      // Legacy-письма без kind: пробуем распарсить тело (fetchAllHandshake
+      // уже сделал это; parsed может быть null, если тело не прочиталось).
+      if (!parsed.group_id) {
         console.warn('[invites] unparseable invite body, uid', m.uid);
         continue;
       }
       // Пропускаем, если уже отклонён.
       if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
       // Пропускаем, если уже принят (персистится в acceptGroupInvite).
-      // Без этого после перезапуска инвайт-письмо снова находится в ящике
-      // и попап согласия всплывает повторно.
       if (accepted.includes(`${parsed.group_id}|${m.uid}`)) continue;
-      // Группу пропускаем, только если МЫ уже участник/создатель.
-      // (groups.json общий на машину — сама по себе существующая группа не
-      // означает, что инвайт принят этим аккаунтом.)
       try {
         const g = await invoke('groups_get', { groupId: parsed.group_id });
         if (g && (g.created_by === this.email || (g.members || []).some(mm => mm.email === this.email))) {
@@ -1249,18 +1207,14 @@ export class ApiClient {
       out.push({
         group_id: parsed.group_id,
         group_name: parsed.group_name,
-        // Новый формат: group_key зашифрован на нашем публичном ключе.
         group_key_enc: parsed.group_key_enc || null,
         sender_public_key: parsed.sender_public_key || null,
-        // Legacy-инвайты (до шифрования ключей) — открытый group_key.
         group_key: parsed.group_key || null,
         sender: parsed.sender,
         sender_name: parsed.sender_name,
         sender_avatar: parsed.sender_avatar,
-        // Состав группы с ролями на момент инвайта (для groups_import).
         created_by: parsed.created_by || null,
         members: Array.isArray(parsed.members) ? parsed.members : null,
-        // Аватар группы на момент инвайта.
         group_avatar: parsed.group_avatar || null,
         uid: m.uid,
         date: m.date,
@@ -1271,17 +1225,11 @@ export class ApiClient {
 
   // --- Групповые accept-письма: добавить принявших участников ---
   async fetchPendingAccepts() {
-    const msgs = await this.fetchEmails('local');
-    const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultGroupAccept: '));
+    const { groupAccepts } = await this.fetchAllHandshake();
     const out = [];
-    for (const m of accepts) {
-      let payload;
-      try {
-        payload = urlSafeB64Decode(await this.fetchEmailBody('local', m.uid, m.folder));
-      } catch (e) {
-        continue;
-      }
-      if (!payload || !payload.group_id) continue;
+    for (const m of groupAccepts) {
+      const payload = m.parsed || {};
+      if (!payload.group_id) continue;
       // Идемпотентно добавляем принявшего участника (обёртка не падает, если уже участник).
       try {
         await invoke('groups_add_member', { groupId: payload.group_id, email: payload.sender });
