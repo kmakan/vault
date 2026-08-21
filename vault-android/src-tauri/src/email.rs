@@ -23,7 +23,7 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
 use serde::{Deserialize, Serialize};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -116,11 +116,21 @@ impl EmailClient {
         // рассинхрон сессии) вызов висит ВЕЧНО, окно перестаёт отвечать на
         // всё (это и была «поломка» 18.08). Таймаут read/write 30 с даёт
         // Err, который существующий reconnect-путь уже умеет обрабатывать.
-        let tcp: TcpStream = TcpStream::connect((
-            self.config.imap_server.as_str(),
-            self.config.imap_port,
-        ))
-        .context("Failed to connect to IMAP server")?;
+        //
+        // Сам TcpStream::connect тоже без таймаута: на мобильном интернете
+        // оператор часто молча дропает SYN на 993 (блокировка IMAP) — connect
+        // тогда висит по системному TCP-таймауту (минуты), кнопка входа
+        // показывает «…» и «вход не проходит». connect_timeout(15с) даёт
+        // пользователю понятную ошибку вместо бесконечного ожидания.
+        let host = self.config.imap_server.clone();
+        let port = self.config.imap_port;
+        let addr = (host.as_str(), port)
+            .to_socket_addrs()
+            .context("Failed to resolve IMAP host")?
+            .next()
+            .context("No addresses for IMAP host")?;
+        let tcp = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(15))
+            .context("Failed to connect to IMAP server (15s timeout)")?;
         let timeout = std::time::Duration::from_secs(30);
         tcp.set_read_timeout(Some(timeout))
             .context("Failed to set read timeout")?;
@@ -558,12 +568,22 @@ impl EmailClient {
 
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
 
-        let transport =
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
-                .credentials(creds)
+        // Яндекс SMTP — порт 465 (SMTPS: TLS сразу, без STARTTLS). Для порта
+        // 465 нужен relay() (TLS), для 587 — starttls_relay(). До 21.08 код
+        // всегда делал starttls_relay даже на 465 — Яндекс ждал TLS-рукопожатие,
+        // а клиент начинал с STARTTLS-команды → соединение рвалось, «Failed to
+        // send email».
+        let transport_builder = if self.config.smtp_port == 465 {
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_server)?
                 .port(self.config.smtp_port)
-                .timeout(Some(std::time::Duration::from_secs(30)))
-                .build();
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
+                .port(self.config.smtp_port)
+        };
+        let transport = transport_builder
+            .credentials(creds)
+            .timeout(Some(std::time::Duration::from_secs(30)))
+            .build();
 
         transport
             .send(email)

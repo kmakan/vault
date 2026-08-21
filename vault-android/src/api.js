@@ -100,7 +100,11 @@ export class ApiClient {
       this.emailConfig = config;
       return true;
     } catch (e) {
-      throw new Error((e && e.message) || 'Failed to connect to email');
+      // Tauri на Android бросает ошибки команд как строку (не Error) — тогда
+      // e.message === undefined и пользователь видит бесполезный фолбэк.
+      // Извлекаем реальный текст из любого вида ошибки.
+      const raw = (e && e.message) || (typeof e === 'string' ? e : (e && String(e)));
+      throw new Error(raw || 'Failed to connect to email');
     }
   }
 

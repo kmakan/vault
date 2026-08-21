@@ -65,7 +65,7 @@ export const MAIL_PROVIDERS = [
     smtp_server: 'smtp.office365.com',
     smtp_port: 587,
     max_attachment_mb: 20,
-    hint: '',
+    hint: 'При включённой 2FA нужен пароль приложения (account.microsoft.com → Security). Обычный пароль — только без 2FA.',
   },
   {
     id: 'icloud',
