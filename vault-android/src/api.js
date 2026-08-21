@@ -482,6 +482,50 @@ export class ApiClient {
       }
     } catch (e) { /* ignore */ }
   }
+  // --- Удаление контакта другой стороной (синхронизация между устройствами) ---
+  // Письмо VaultContactDelete: <myEmail> — «я удалил тебя из контактов».
+  // Не шифруется (как invite/accept): получатель фильтрует по subject.
+  getContactDeletes() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-contact-deletes') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  markContactDelete(key) {
+    try {
+      const arr = this.getContactDeletes();
+      if (!arr.includes(key)) {
+        arr.push(key);
+        localStorage.setItem('vault-contact-deletes', JSON.stringify(arr));
+      }
+    } catch (e) { /* ignore */ }
+  }
+  // Sender'ы, чьё удаление получено — вечный список для замка 🔒
+  // (контакт-участник группы loadGroups вернёт в список; помечаем его).
+  getDeletedSenders() {
+    try {
+      return JSON.parse(localStorage.getItem('vault-contact-deleted-senders') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  addDeletedSender(email) {
+    try {
+      const arr = this.getDeletedSenders();
+      if (!arr.includes(email)) {
+        arr.push(email);
+        localStorage.setItem('vault-contact-deleted-senders', JSON.stringify(arr));
+      }
+    } catch (e) { /* ignore */ }
+  }
+  // Снимаем замок при НОВОМ добавлении контакта (приняли свежий инвайт).
+  removeDeletedSender(email) {
+    try {
+      const arr = this.getDeletedSenders().filter(e => e !== email);
+      localStorage.setItem('vault-contact-deleted-senders', JSON.stringify(arr));
+    } catch (e) { /* ignore */ }
+  }
   async sendContactInvite(email, publicKey) {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
@@ -609,8 +653,41 @@ export class ApiClient {
     }
     return out;
   }
-
-  // --- Window/app icon (set the native window icon shown in waybar/dock) ---
+  // «Я удалил тебя из контактов» — письмо-уведомление удаляемой стороне.
+  // Subject: VaultContactDelete: <myEmail> (как invite/accept — видимый
+  // handshake-маркер, допустимый по стелс-правилу).
+  async sendContactDelete(email) {
+    const payload = urlSafeB64({
+      sender: this.email,
+      sender_name: localStorage.getItem('vault-display-name') || this.email,
+      ts: Date.now(),
+    });
+    await this.sendEmail('local', { to: email, subject: 'VaultContactDelete: ' + this.email, body: payload });
+    return { ok: true };
+  }
+  async fetchPendingContactDeletes() {
+    const msgs = await this.fetchEmails('local');
+    const deletes = msgs.filter(m => (m.subject || '').startsWith('VaultContactDelete: '));
+    const handled = this.getContactDeletes();
+    const bodies = await this.batchFetchBodies(deletes);
+    const out = [];
+    for (const m of deletes) {
+      const sender = (m.subject || '').slice('VaultContactDelete: '.length).trim();
+      if (!sender || sender === this.email) continue;
+      if (handled.includes(`${sender}|${m.uid}`)) continue; // уже обработано
+      const body = bodies[String(m.uid || m.id)] || '';
+      if (!body) continue;
+      let parsed;
+      try {
+        parsed = urlSafeB64Decode(body);
+      } catch (e) {
+        continue;
+      }
+      if (!parsed || !parsed.sender) continue;
+      out.push({ sender, uid: m.uid, date: m.date });
+    }
+    return out;
+  }
   async setAppIcon(iconId) {
     return invoke('set_app_icon', { iconId });
   }

@@ -226,6 +226,7 @@ export default {
   contact_no_key_hint: 'No peer key yet — exchange keys via 🔗 (participant ID or QR)',
   contact_delete: 'Delete contact',
   contact_delete_confirm: 'Delete this contact? Its encryption key will be removed.',
+  contact_deleted_by_peer: 'Contact was deleted on the other side. Re-add it via 🔗 to chat.',
   notes_self: 'Notes to Self',
   notes_self_hint: 'This device only',
   notes_self_status: 'Local · this device only',
