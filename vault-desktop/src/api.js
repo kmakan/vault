@@ -119,6 +119,9 @@ export class ApiClient {
     this.token = `serverless-${email}`;
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', email);
+    // Одноразовая миграция localStorage → kv_store (21.08): старые пометки/
+    // аватары живы в webview-localStorage, а код читает kv_store.
+    this.migrateLegacyLocalStorage().catch(() => {});
     // «Запомнить меня»: учётные данные шифруются device-ключом и пишутся в
     // ~/.vault/credentials/ — при следующем запуске вход автоматический.
     if (remember) {
@@ -191,6 +194,8 @@ export class ApiClient {
     this.token = `serverless-${creds.email}`;
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', creds.email);
+    // Одноразовая миграция localStorage → kv_store (21.08).
+    this.migrateLegacyLocalStorage().catch(() => {});
     return true;
   }
 
@@ -205,6 +210,104 @@ export class ApiClient {
     this.token = null;
     localStorage.removeItem('vault-token');
     localStorage.removeItem('vault-email');
+  }
+
+  // --- Одноразовая миграция localStorage → kv_store (21.08) ---
+  // Коммиты af77c15–c0a834b перенесли МЕСТО хранения handshake-пометок,
+  // профилей и аватаров из localStorage в sqlite kv_store, но НЕ перенесли
+  // сами данные: старые пометки остались в webview-localStorage, а код читает
+  // пустой kv_store. Отсюда фантомные инвайты, «воскресшие» удаления (замки)
+  // и пропавшие аватары. Метод вызывается при входе, переносит данные один
+  // раз (маркер vault-kv-migrated) и чистит localStorage (квота ~5МБ).
+  async migrateLegacyLocalStorage() {
+    const acc = this.email || 'anon';
+    try {
+      if (localStorage.getItem('vault-kv-migrated')) return;
+      // 1. Профили/аватары (namespace 'anon', как в getProfilesAll).
+      const kvProfiles = await this.getProfilesAll();
+      let migrated = false;
+      try {
+        const lsProfiles = JSON.parse(localStorage.getItem('vault-profiles') || '{}');
+        for (const [email, p] of Object.entries(lsProfiles || {})) {
+          if (!kvProfiles[email]) kvProfiles[email] = {};
+          if (p && p.name && !kvProfiles[email].name) kvProfiles[email].name = p.name;
+          if (p && p.avatar && !kvProfiles[email].avatar) kvProfiles[email].avatar = p.avatar;
+        }
+        if (Object.keys(lsProfiles || {}).length) migrated = true;
+      } catch (e) { /* ignore broken JSON */ }
+      // Отдельные ключи vault-avatar-<email> (старый формат до vault-profiles).
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('vault-avatar-')) {
+          const email = key.slice('vault-avatar-'.length);
+          const avatar = localStorage.getItem(key);
+          if (email && avatar) {
+            if (!kvProfiles[email]) kvProfiles[email] = {};
+            if (!kvProfiles[email].avatar) kvProfiles[email].avatar = avatar;
+            migrated = true;
+          }
+        }
+      }
+      if (migrated) await db.kvSet('anon', 'profiles', JSON.stringify(kvProfiles));
+      // 2. Handshake-пометки (per-account): переносим, только если в kv пусто
+      // (свежие данные в kv — авторитетнее старого localStorage).
+      const pairs = [
+        ['vault-accepted-contacts', 'accepted-contacts'],
+        ['vault-declined-contacts', 'declined-contacts'],
+        ['vault-contact-deletes', 'contact-deletes'],
+        ['vault-contact-deleted-senders', 'deleted-senders'],
+        ['vault-self-deleted', 'self-deleted'],
+        ['vault-accepted-invites', 'accepted-invites'],
+        ['vault-declined-invites', 'declined-invites'],
+      ];
+      for (const [lsKey, kvKey] of pairs) {
+        const ls = localStorage.getItem(lsKey);
+        if (!ls) continue;
+        const kv = await db.kvGet(acc, kvKey);
+        if (kv && kv !== '[]') continue; // в kv уже есть данные — не затираем
+        await db.kvSet(acc, kvKey, ls);
+      }
+      // 3. Чистим перенесённое и ставим маркер.
+      localStorage.removeItem('vault-profiles');
+      for (const [lsKey] of pairs) localStorage.removeItem(lsKey);
+      const toRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('vault-avatar-')) toRemove.push(key);
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+      localStorage.setItem('vault-kv-migrated', '1');
+      console.log('[migrate] localStorage → kv_store done');
+    } catch (e) {
+      console.warn('migrateLegacyLocalStorage failed:', e);
+    }
+  }
+
+  // --- Контакты, удалённые МНОЙ (self-deleted) ---
+  // Чтобы старые VaultContactInvite/VaultContactAccept письма не «воскрешали»
+  // контакт после собственного удаления (попап снова), храним список email'ов,
+  // которые мы удалили. Снимается при новом добавлении контакта.
+  async getSelfDeleted() {
+    try {
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'self-deleted')) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  async addSelfDeleted(email) {
+    try {
+      const arr = await this.getSelfDeleted();
+      if (!arr.includes(email)) {
+        arr.push(email);
+        await db.kvSet(this.email || 'anon', 'self-deleted', JSON.stringify(arr));
+      }
+    } catch (e) { /* ignore */ }
+  }
+  async removeSelfDeleted(email) {
+    try {
+      const arr = (await this.getSelfDeleted()).filter(e => e !== email);
+      await db.kvSet(this.email || 'anon', 'self-deleted', JSON.stringify(arr));
+    } catch (e) { /* ignore */ }
   }
 
   // --- Chats (TODO: serverless-chats via email) ---
@@ -555,6 +658,12 @@ export class ApiClient {
     const declined = await this.getDeclinedContacts();
     const accepted = await this.getAcceptedContacts();
     const peers = await this.loadPeerKeyEmails();
+    // Мы сами удалили этого отправителя — его старые инвайты не показываем
+    // (иначе после удаления контакта попап «Принять» всплывает снова).
+    const selfDeleted = await this.getSelfDeleted();
+    // И отправитель, который УДАЛИЛ НАС (VaultContactDelete) — его старые
+    // инвайты тоже не предлагаем (фантомные попапы после удаления).
+    const deletedSenders = await this.getDeletedSenders();
     // Тела фетчим БАТЧЕМ по папкам (fetchEmailBodies), а НЕ по одному:
     // поштучный fetchEmailBody на каждое письмо держал IMAP-lock секунды —
     // при десятке инвайтов UI-фетчи тел падали по lock-таймауту (20.08).
@@ -565,6 +674,8 @@ export class ApiClient {
       if (!sender || sender === this.email) continue; // себе не предлагаем
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже принят когда-то
+      if (selfDeleted.includes(sender)) continue; // я сам его удалил
+      if (deletedSenders.includes(sender)) continue; // он удалил меня
       const body = bodies[String(m.uid || m.id)] || '';
       if (!body) continue;
       let parsed;
@@ -626,6 +737,11 @@ export class ApiClient {
     const accepts = msgs.filter(m => (m.subject || '').startsWith('VaultContactAccept: '));
     const peers = await this.loadPeerKeyEmails();
     const accepted = await this.getAcceptedContacts();
+    // Я сам удалил этого отправителя — его старые accept-письма НЕ должны
+    // воскрешать контакт (иначе удаление контакта «откатывается» поллингом).
+    const selfDeleted = await this.getSelfDeleted();
+    // И отправитель, удаливший НАС, тоже не должен воскрешаться.
+    const deletedSenders = await this.getDeletedSenders();
     // Батч-фетч тел (как в invites) — поштучные fetchEmailBody держали
     // IMAP-lock секунды и роняли UI-фетчи тел (20.08).
     const bodies = await this.batchFetchBodies(accepts);
@@ -634,6 +750,8 @@ export class ApiClient {
       const sender = (m.subject || '').slice('VaultContactAccept: '.length).trim();
       if (!sender || sender === this.email) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue; // уже обработано когда-то
+      if (selfDeleted.includes(sender)) continue; // я сам его удалил
+      if (deletedSenders.includes(sender)) continue; // он удалил меня
       const body = bodies[String(m.uid || m.id)] || '';
       if (!body) continue;
       let parsed;

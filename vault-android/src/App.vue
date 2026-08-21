@@ -1279,10 +1279,17 @@ export default {
           if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
+            // Удалённый другой стороной участник (замок 🔒) в список контактов
+            // НЕ возвращаем: он остаётся участником группы, но из списка
+            // контактов исчезает (см. processInvites: deletedByPeer).
+            if (this.deletedByPeer[m.email]) continue;
             seen.add(m.email);
             this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
           }
         }
+        // Удалённые другой стороной (замок 🔒): в списке контактов их больше
+        // не держим — если не исчезли сразу, то после одного поллинга.
+        this.contacts = this.contacts.filter(c => !this.deletedByPeer[c.email]);
       } catch (error) {
         console.error('Failed to load groups:', error);
       }
@@ -3119,6 +3126,11 @@ export default {
         if (!this.isLoggedIn || this._pollingActive) return;
         this._pollingActive = true;
         try {
+          // Пересборка групп в НАЧАЛЕ тика: если в прошлом тике мы получили
+          // VaultContactDelete, участник группы с замком 🔒 был виден ровно
+          // один поллинг, а теперь loadGroups уберёт его из списка контактов
+          // (deletedByPeer фильтруется). Иначе замок висел бы вечно.
+          try { await this.loadGroups(); } catch (e) { /* тихо */ }
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
           await this.loadEmails(true);
@@ -4261,6 +4273,8 @@ export default {
         await api.markAcceptedContact(key);
         // Свежее добавление снимает замок 🔒 от прошлого удаления.
         await api.removeDeletedSender(c.sender);
+        // Снимаем и пометку «удалён МНОЙ» — контакт снова активен.
+        await api.removeSelfDeleted(c.sender);
         delete this.deletedByPeer[c.sender];
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
         // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
@@ -4328,6 +4342,9 @@ export default {
         // уберёт нас из своих контактов (VaultContactDelete).
         api.sendContactDelete(email).catch(() => {});
         await crypto.removePeerKey(email);
+        // Помечаем «удалён МНОЙ»: старые VaultContactInvite/VaultContactAccept
+        // письма не должны воскрешать контакт (попап/ключ снова).
+        await api.addSelfDeleted(email);
         // Чистим и in-memory stubs api.js — иначе контакт «не удаляется»
         // до перезапуска (getContacts() мержит stubs с диском).
         await api.removeContact(email);
