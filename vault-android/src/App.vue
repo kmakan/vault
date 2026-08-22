@@ -1112,6 +1112,7 @@ export default {
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.startPolling()
+          this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -1278,6 +1279,7 @@ export default {
         await this.loadGroups();
         // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
         this.startPolling()
+        this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
         this.loadEmails().catch(e => {
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
             this.loginError = e.message;
@@ -3491,31 +3493,31 @@ export default {
     // за ~1с вместо 3с ускоренного поллинга. Фолбэк: если IDLE недоступен
     // (провайдер не поддерживает / сеть) — старый ускоренный поллинг 3с.
     startFastPolling() {
-      this.stopPolling();
       this.idleLoop();
     },
     stopFastPolling() {
-      this._idleStop = true;   // просим IDLE-цикл выйти
-      this.stopPolling();
-      this.startPolling(30000);
+      // IDLE-цикл постоянный — не останавливаем (22.08).
     },
-    // IMAP IDLE-цикл: крутится, пока идёт звонок. Таймаут ожидания 2с;
-    // при событии «новое письмо» — сразу инкрементальный фетч (разбирает
-    // call_* сигналы). Страховочный фетч каждые ~10с: IDLE видит только
-    // INBOX, а сигнал мог упасть в Спам (Gmail кладёт шифрописьма в Junk).
+    // IMAP IDLE-цикл (Фаза 1.5 + 22.08): крутится ПОСТОЯННО, не только на
+    // время звонка. Таймаут ожидания 2с; при событии «новое письмо» — сразу
+    // инкрементальный фетч (разбирает call_* сигналы). Страховочный фетч
+    // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
+    // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
+    // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
       this._idleActive = true;
       let lastSafety = Date.now();
+      let idleFailed = false;
       try {
-        while (this.isLoggedIn && this.callState !== 'idle' && !this._idleStop) {
+        while (this.isLoggedIn && !this._idleStop) {
           let changed = false;
           try {
             const r = await api.idleWait(2000, 'INBOX');
             changed = !!(r && r.changed);
           } catch (e) {
-            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг 3с:', e && e.message || e);
-            this._idleStop = true;
+            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг:', e && e.message || e);
+            idleFailed = true;
             break;
           }
           const elapsed = Date.now() - lastSafety;
@@ -3528,9 +3530,14 @@ export default {
         this._idleActive = false;
         this._idleStop = false;
       }
-      // Цикл вышел: звонок закончился или IDLE умер. Если звонок ещё идёт —
-      // старый путь: ускоренный поллинг (hangup сам вернёт 30с-поллинг).
+      // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
+      // (hangup сам вернёт обычный 30с-поллинг).
       if (this.isLoggedIn && this.callState !== 'idle') this.startPolling(3000);
+      // IDLE умер (провайдер/сеть): обычный поллинг продолжает работать;
+      // пробуем вернуть IDLE через 60с (провайдер мог временно отключить).
+      if (this.isLoggedIn && idleFailed) {
+        setTimeout(() => { if (this.isLoggedIn) this.idleLoop(); }, 60000);
+      }
     },
     startPolling(intervalMs = 30000) {
       if (this.pollTimer) return;
