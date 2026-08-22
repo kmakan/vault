@@ -24,6 +24,7 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
 use serde::{Deserialize, Serialize};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -76,6 +77,15 @@ fn default_inbox() -> String {
     "INBOX".to_string()
 }
 
+/// Результат IMAP IDLE: в папке появилось письмо или истёк таймаут.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleOutcome {
+    /// Сервер прислал EXISTS/EXISTS-уведомление — в выбранной папке новое письмо.
+    Changed,
+    /// Таймаут истёк, новых писем нет.
+    TimedOut,
+}
+
 /// Специальные папки, найденные одним LIST-запросом.
 #[derive(Debug, Default)]
 struct SpecialFolders {
@@ -92,6 +102,9 @@ struct SpecialFolders {
 pub struct EmailClient {
     config: EmailConfig,
     imap_session: Option<Session<TlsStream<TcpStream>>>,
+    /// Папка, выбранная в текущей сессии (использует только IDLE-путь:
+    /// select делается один раз и переиспользуется, пока папка не сменилась).
+    selected_folder: Option<String>,
 }
 
 impl EmailClient {
@@ -99,6 +112,7 @@ impl EmailClient {
         Self {
             config,
             imap_session: None,
+            selected_folder: None,
         }
     }
 
@@ -607,6 +621,57 @@ impl EmailClient {
     pub fn disconnect(&mut self) {
         if let Some(mut session) = self.imap_session.take() {
             let _ = session.logout();
+        }
+        self.selected_folder = None;
+    }
+
+    // ── IMAP IDLE (Фаза 1.5 звонков) ────────────────────────────────────────
+    // Серверный push вместо поллинга: IDLE блокируется, пока в выбранной
+    // папке не появится письмо (или не истечёт таймаут). Сигналы call_*
+    // доходят за ~1с вместо 3с ускоренного поллинга.
+    //
+    // ВАЖНО: вызывать только на ОТДЕЛЬНОМ EmailClient (слот 2 в lib.rs) —
+    // IDLE держит сессию занятой, и пока идёт ожидание, команды поверх неё
+    // невозможны. Основной клиент (поллинг/UI) не должен об этом знать.
+    pub async fn idle_wait(&mut self, folder: &str, timeout: Duration) -> Result<IdleOutcome> {
+        match self.idle_wait_once(folder, timeout).await {
+            Ok(outcome) => Ok(outcome),
+            Err(first_err) => {
+                // Сервер оборвал IDLE-соединение (Gmail рвёт ~каждые 24-29 мин,
+                // сетевой сбой) — переподключаемся и пробуем ещё раз.
+                self.reconnect_imap().await?;
+                self.idle_wait_once(folder, timeout)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("IDLE retry failed after reconnect: {e} (original: {first_err})")
+                    })
+            }
+        }
+    }
+
+    async fn idle_wait_once(&mut self, folder: &str, timeout: Duration) -> Result<IdleOutcome> {
+        if self.imap_session.is_none() {
+            self.connect_imap().await?;
+            self.selected_folder = None;
+        }
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")?;
+        // SELECT делаем только при смене папки — это один round-trip.
+        if self.selected_folder.as_deref() != Some(folder) {
+            session.select(folder)?;
+            self.selected_folder = Some(folder.to_string());
+        }
+        let handle = session
+            .idle()
+            .map_err(|e| anyhow::anyhow!("IDLE command failed: {e}"))?;
+        match handle
+            .wait_with_timeout(timeout)
+            .map_err(|e| anyhow::anyhow!("IDLE wait failed: {e}"))?
+        {
+            imap::extensions::idle::WaitOutcome::MailboxChanged => Ok(IdleOutcome::Changed),
+            imap::extensions::idle::WaitOutcome::TimedOut => Ok(IdleOutcome::TimedOut),
         }
     }
 }

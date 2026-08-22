@@ -11,7 +11,7 @@ use credential_store::StoredCredentials;
 use storage::sqlite::Storage;
 
 use crypto::{CryptoState, KeyPair};
-use email::{EmailClient, EmailConfig, EmailMessage};
+use email::{EmailClient, EmailConfig, EmailMessage, IdleOutcome};
 use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -203,9 +203,12 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
 /// SMTP отдельно от IMAP-lock: при зависшей IMAP-сессии (сломанный сокет,
 /// каждая операция упирается в 30с таймаут) отправка НЕ должна ждать lock
 /// и падать «Timed out waiting for email client lock» (баг 20.08).
+/// Слот 2 — IMAP IDLE-клиент (Фаза 1.5 звонков): отдельная сессия, чтобы
+/// IDLE (блокирующее ожидание) не держал lock основной сессии поллинга/UI.
 pub struct EmailState(
     pub Mutex<Option<EmailClient>>,
     pub Mutex<Option<EmailConfig>>,
+    pub Mutex<Option<EmailClient>>,
 );
 
 /// Результат инкрементального фетча: новые письма + обновлённые курсоры.
@@ -217,7 +220,7 @@ pub struct IncrementalFetchResult {
 
 impl Default for EmailState {
     fn default() -> Self {
-        Self(Mutex::new(None), Mutex::new(None))
+        Self(Mutex::new(None), Mutex::new(None), Mutex::new(None))
     }
 }
 
@@ -412,8 +415,56 @@ async fn email_disconnect(state: State<'_, EmailState>) -> Result<(), String> {
     if let Some(mut client) = guard.take() {
         client.disconnect();
     }
+    // IDLE-клиент тоже закрываем — отдельная сессия (слот 2).
+    let mut idle = state.2.lock().await;
+    if let Some(mut client) = idle.take() {
+        client.disconnect();
+    }
     *state.1.lock().await = None;
     Ok(())
+}
+
+/// Результат IMAP IDLE (Фаза 1.5 звонков): появилось ли новое письмо.
+#[derive(Serialize)]
+struct IdleResult {
+    changed: bool,
+}
+
+/// IMAP IDLE: блокируется до появления нового письма в `folder` или до
+/// истечения `timeout_ms`. Сигнализация звонков call_* доходит за ~1с вместо
+/// 3с ускоренного поллинга. Использует ОТДЕЛЬНУЮ сессию (слот 2 EmailState) —
+/// основная (поллинг/UI) не блокируется. Фолбэк при ошибке/неподдержке IDLE —
+/// ускоренный поллинг во фронте.
+#[tauri::command]
+async fn email_idle_wait(
+    state: State<'_, EmailState>,
+    folder: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<IdleResult, String> {
+    let folder = folder.unwrap_or_else(|| "INBOX".to_string());
+    let timeout_ms = timeout_ms.unwrap_or(20_000).clamp(1000, 120_000);
+    // Конфиг из слота 1 (как email_fetch_bodies) — IDLE-клиент создаётся
+    // лениво при первом вызове и живёт до email_disconnect.
+    let cfg = state
+        .1
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut guard = state.2.lock().await;
+    if guard.is_none() {
+        *guard = Some(EmailClient::new(cfg));
+    }
+    let client = guard.as_mut().expect("just set");
+    // IDLE — синхронная IMAP-операция (как uid_fetch в imap 2.4.1);
+    // ограничивается самим wait_with_timeout, t_timeout её не прервёт.
+    client
+        .idle_wait(&folder, Duration::from_millis(timeout_ms))
+        .await
+        .map(|o| IdleResult {
+            changed: o == IdleOutcome::Changed,
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -690,6 +741,7 @@ pub fn run() {
             email_fetch_incremental,
             email_fetch_body,
             email_fetch_bodies,
+            email_idle_wait,
             email_send,
             email_disconnect,
             groups_load,

@@ -995,6 +995,12 @@ export class ApiClient {
     return { messages: mapped, cursors: (res && res.cursors) || {} };
   }
 
+  // IMAP IDLE (Фаза 1.5 звонков): серверный push — блокируется до появления
+  // нового письма в папке или таймаута. { changed: true } = есть новое.
+  async idleWait(timeoutMs = 2000, folder = 'INBOX') {
+    return await invoke('email_idle_wait', { folder, timeoutMs });
+  }
+
   async fetchEmailBody(accountId, uid, folder) {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }

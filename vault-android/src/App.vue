@@ -777,6 +777,9 @@ export default {
       callClockSec: 0,
       callClockTimer: null,
       callRingTimer: null,
+      // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
+      _idleActive: false,
+      _idleStop: false,
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
@@ -3432,13 +3435,51 @@ export default {
       clearInterval(this.callClockTimer);
       this.callClockTimer = null;
     },
-    // Быстрый поллинг на время звонка: сигналы accept/end доходят за ~3с
-    // (Фаза 1.5 — IMAP IDLE, ~1с, вендоренный imap умеет Session::idle).
+    // Быстрый путь сигнализации на время звонка (Фаза 1.5): IMAP IDLE —
+    // сервер сам шлёт EXISTS при новом письме, сигналы accept/end доходят
+    // за ~1с вместо 3с ускоренного поллинга. Фолбэк: если IDLE недоступен
+    // (провайдер не поддерживает / сеть) — старый ускоренный поллинг 3с.
     startFastPolling() {
-      if (this.pollTimer) { this.stopPolling(); this.startPolling(3000); }
+      this.stopPolling();
+      this.idleLoop();
     },
     stopFastPolling() {
-      if (this.pollTimer) { this.stopPolling(); this.startPolling(30000); }
+      this._idleStop = true;   // просим IDLE-цикл выйти
+      this.stopPolling();
+      this.startPolling(30000);
+    },
+    // IMAP IDLE-цикл: крутится, пока идёт звонок. Таймаут ожидания 2с;
+    // при событии «новое письмо» — сразу инкрементальный фетч (разбирает
+    // call_* сигналы). Страховочный фетч каждые ~10с: IDLE видит только
+    // INBOX, а сигнал мог упасть в Спам (Gmail кладёт шифрописьма в Junk).
+    async idleLoop() {
+      if (this._idleActive || !this.isLoggedIn) return;
+      this._idleActive = true;
+      let lastSafety = Date.now();
+      try {
+        while (this.isLoggedIn && this.callState !== 'idle' && !this._idleStop) {
+          let changed = false;
+          try {
+            const r = await api.idleWait(2000, 'INBOX');
+            changed = !!(r && r.changed);
+          } catch (e) {
+            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг 3с:', e && e.message || e);
+            this._idleStop = true;
+            break;
+          }
+          const elapsed = Date.now() - lastSafety;
+          if (changed || elapsed >= 10000) {
+            lastSafety = Date.now();
+            try { await this.loadEmails(true); } catch (e) { /* тихо */ }
+          }
+        }
+      } finally {
+        this._idleActive = false;
+        this._idleStop = false;
+      }
+      // Цикл вышел: звонок закончился или IDLE умер. Если звонок ещё идёт —
+      // старый путь: ускоренный поллинг (hangup сам вернёт 30с-поллинг).
+      if (this.isLoggedIn && this.callState !== 'idle') this.startPolling(3000);
     },
     startPolling(intervalMs = 30000) {
       if (this.pollTimer) return;
