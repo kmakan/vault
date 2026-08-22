@@ -423,6 +423,7 @@
         :peer-name="callPeerName"
         :avatar-url="avatarOf(currentCall.peer)"
         :muted="callMuted"
+        :recording="callRecording"
         :elapsed="callElapsedLabel"
         :texts="callTexts"
         @accept="acceptCall"
@@ -430,6 +431,7 @@
         @cancel="cancelCall"
         @end="endCall"
         @toggle-mute="toggleMute"
+        @toggle-record="toggleRecord"
       />
 
       <!-- CIPHER TOOL -->
@@ -771,6 +773,7 @@ export default {
       callState: 'idle',
       currentCall: null,   // { call_id, peer }
       callMuted: false,
+      callRecording: false,
       callClockSec: 0,
       callClockTimer: null,
       callRingTimer: null,
@@ -964,6 +967,10 @@ export default {
         end: this.t('call_end') || 'Завершить',
         mute: this.t('call_mute') || 'Выключить микрофон',
         unmute: this.t('call_unmute') || 'Включить микрофон',
+        acceptHint: this.t('call_accept_hint') || '',
+        rejectHint: this.t('call_reject_hint') || '',
+        startRecord: this.t('call_start_record') || 'Запись',
+        stopRecord: this.t('call_stop_record') || 'Стоп',
         noMedia: this.t('call_no_media') || '',
       };
     },
@@ -3486,6 +3493,9 @@ export default {
           break;
         case 'call_reject':
         case 'call_end':
+        case 'call_cancel':
+          // call_cancel — собеседник отменил/завершил звонок (или у него
+          // сработал таймаут): кладём трубку автоматически.
           if (this.currentCall && this.currentCall.call_id === call_id) {
             this.hangup('remote');
           }
@@ -3583,6 +3593,7 @@ export default {
       this.callState = 'idle';
       this.currentCall = null;
       this.callMuted = false;
+      this.callRecording = false;
       this.stopFastPolling();
       // Останавливаем рингтон (если играл).
       api.mediaRingtoneStop().catch(() => {});
@@ -3591,13 +3602,29 @@ export default {
         try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
       }
     },
-    cancelCall(reason) { this.hangup(reason || 'cancel'); },
+    async cancelCall(reason) {
+      const c = this.currentCall;
+      // Отмена/таймаут — ОБЯЗАТЕЛЬНО сообщаем собеседнику (call_cancel при
+      // ringing, call_end при active), чтобы у него трубка легла сама
+      // (требование пользователя: как во всех мессенджерах).
+      if (c) {
+        const type = this.callState === 'active' ? 'call_end' : 'call_cancel';
+        try { await this.sendCallEnvelope(c.peer, { type, call_id: c.call_id }); }
+        catch (e) { /* ignore */ }
+      }
+      this.hangup(reason || 'cancel');
+    },
     toggleMute() {
       this.callMuted = !this.callMuted;
       const c = this.currentCall;
       if (c) {
         api.mediaSetMuted(c.call_id, this.callMuted).catch((e) => console.error('[call] set muted failed:', e));
       }
+    },
+    // Запись разговора (M3): состояние на клиенте; реальная запись аудио —
+    // с медиа-пайплайном (Фаза 2.3). UI-переключатель уже есть.
+    toggleRecord() {
+      this.callRecording = !this.callRecording;
     },
     startCallClock() {
       this.callClockSec = 0;
