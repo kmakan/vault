@@ -86,10 +86,17 @@ export function notifyNewMessage({ title, body, id } = {}) {
     persistNotified();
   }
   try {
-    sendNotification({
-      title: title || 'Vault',
-      body: body || '',
-    });
+    // Android: системный small icon — белый силуэт логотипа Vault из
+    // res/drawable/ic_stat_vault.xml (без него Android показывает «!»).
+    // На десктопе иконку берёт плагин из окна приложения (auto_icon) —
+    // передавать имя drawable нельзя (notify-rust ищет файл по имени).
+    const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+    const opts = { title: title || 'Vault', body: body || '' };
+    if (isAndroid) {
+      opts.icon = 'ic_stat_vault';
+      opts.iconColor = '#8b5cf6';
+    }
+    sendNotification(opts);
     return true;
   } catch (e) {
     console.warn('[notify] sendNotification failed:', e);

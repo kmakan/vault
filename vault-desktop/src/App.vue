@@ -113,6 +113,7 @@
             <div class="contact-email">{{ contact.email }}</div>
           </div>
           <div class="contact-status">
+            <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span class="status-dot" :class="{ online: contact.online }"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
@@ -141,6 +142,9 @@
             <div class="contact-info">
               <div class="contact-name">{{ group.name }}</div>
               <div class="contact-email">{{ (group.members || []).length }} {{ membersLabel((group.members || []).length) }}</div>
+            </div>
+            <div class="contact-status" v-if="unreadOf('group:' + group.id)">
+              <span class="unread-badge">{{ unreadOf('group:' + group.id) }}</span>
             </div>
           </div>
         </div>
@@ -734,6 +738,10 @@ export default {
       // видна ОДНА панель — список чатов ИЛИ открытый чат на весь экран.
       // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
       mobileChatOpen: false,
+      // Счётчики непрочитанных по чатам (email | 'group:<id>' → число).
+      // Хранятся в sqlite kv_store (НЕ localStorage — он запрещён как
+      // источник данных Vault); сбрасываются при открытии чата.
+      unreadCounts: {},
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
@@ -1039,6 +1047,7 @@ export default {
           // фетч почты идёт в фоне — вход не должен ждать IMAP (20.08).
           this.isLoggedIn = true;
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
+          this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.startPolling()
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
@@ -1199,6 +1208,7 @@ export default {
         this.isLoggedIn = true;
         initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
+        this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
@@ -1326,6 +1336,7 @@ export default {
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
+      this.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
       this.openMobileChat();
       if (this.peerKeys[email]) {
         crypto.setPeerPublicKey(this.peerKeys[email]);
@@ -1656,6 +1667,7 @@ export default {
       this.activeChatType = 'group';
       this.currentGroup = group;
       this.openMobileChat();
+      this.resetUnread('group:' + group.id); // группа открыта — сбрасываем счётчик
 
       // Load group key if not already in memory
       if (!this.groupKeys[group.id] && this.cryptoReady) {
@@ -3047,11 +3059,12 @@ export default {
           console.warn('loadEmails: sqlite save failed:', e);
         }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // PUSH-уведомления (принцип поллинга, 22.08): новые ВХОДЯЩИЕ письма,
-        // найденные тихим поллингом, дают локальное системное уведомление.
-        // Только при silent=true (фоновый поллинг), НЕ при первом полном скане
-        // после входа — иначе уведомляли бы обо всей истории ящика сразу.
-        if (silent && fetched.length) this.notifyIncoming(fetched);
+        // Непрочитанные + PUSH-уведомления (22.08): каждый fetched-батч
+        // классифицируем (счётчики непрочитанных — всегда; уведомления —
+        // только при silent=true, НЕ при первом скане после входа, и только
+        // для свежих писем — иначе уведомляли бы обо всей истории ящика и
+        // о догоняющих старых письмах).
+        if (fetched.length) await this.processIncoming(fetched, { notify: silent });
         // При пустом ящике НЕ показываем красную подсказку — пустой список
         // и есть норма (пользователь, 21.08: никаких «INBOX пуст» в UI).
         // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
@@ -3076,26 +3089,121 @@ export default {
         if (!silent) this.emailsLoading = false;
       }
     },
-    // PUSH-уведомления (принцип поллинга, 22.08): для каждого нового ВХОДЯЩЕГО
-    // письма показываем локальное системное уведомление. Контент НЕ показываем
-    // (зашифровано + zero-metadata) — только имя отправителя.
-    notifyIncoming(fetched) {
+    // ── Непрочитанные + PUSH-уведомления (принцип поллинга, 22.08) ─────────
+    // processIncoming классифицирует КАЖДЫЙ fetched-батч (поллинг или вход):
+    // расшифровывает тела, отличает настоящие сообщения от квитанций/
+    // инвайтов/meta (parseEnvelope), ведёт счётчики непрочитанных и
+    // (при notify=true) шлёт системные уведомления. Контент НЕ показываем
+    // (зашифровано + zero-metadata) — только имя отправителя/группы.
+    async processIncoming(fetched, { notify = false } = {}) {
+      if (!fetched || !fetched.length || !this.cryptoReady) return;
       const myEmail = (this.email || '').toLowerCase();
-      for (const m of fetched) {
+      const pool = fetched.slice(0, 50);
+      // Тела: добираем недостающие батчем по папкам (как sendDeliveredReceipts).
+      const byFolder = {};
+      for (const m of pool) {
+        const f = m.folder || 'INBOX';
+        (byFolder[f] = byFolder[f] || []).push(m);
+      }
+      for (const [folder, msgs] of Object.entries(byFolder)) {
+        const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+        if (!missing.length) continue;
+        try {
+          const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+          for (const m of missing) {
+            const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
+            if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
+          }
+        } catch (e) { /* тела не обязательны — классификация тихо пропустит */ }
+      }
+      for (const m of pool) {
         const from = this.senderEmail(m.from);
         // Пропускаем исходящие (от себя) и пустые from.
         if (!from || from === myEmail) continue;
-        // Пропускаем письма в уже открытом чате — пользователь их и так видит.
-        if (this.activeChatType === 'chat' && this.activeChat === from) continue;
-        // Имя отправителя: локальный профиль → контакт → email.
-        const lp = this.localProfileOf(from);
-        const contact = this.contacts.find(c => c.email === from);
-        const name = (lp && lp.name) || (contact && contact.name) || from;
-        notifyNewMessage({
-          title: name,
-          body: this.t('notif_new_message') || 'New message',
-          id: m.uid + '|' + (m.folder || 'INBOX'),
-        });
+        const body = this.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
+        if (!body || !crypto.isEncrypted(body)) continue;
+        let chatKey = null; // email (1:1) или 'group:<id>'
+        let title = '';
+        // 1:1 — расшифровка пир-ключом.
+        if (this.peerKeys[from]) {
+          try {
+            crypto.setPeerPublicKey(this.peerKeys[from]);
+            const env = this.parseEnvelope(await crypto.decryptVault(body));
+            if (env) {
+              chatKey = from;
+              const lp = this.localProfileOf(from);
+              const contact = this.contacts.find(c => c.email === from);
+              title = (lp && lp.name) || (contact && contact.name) || from;
+            }
+          } catch (e) { /* не наше письмо */ }
+        }
+        // Группы — ключом группы, где отправитель участник (1:1-ключ не пройдёт).
+        if (!chatKey) {
+          for (const g of this.groups) {
+            const members = (g.members || []).map(x => String(x.email || '').toLowerCase());
+            if (!members.includes(from)) continue;
+            let gk = this.groupKeys[g.id];
+            if (!gk && this.cryptoReady) {
+              try {
+                const kd = await api.getMyGroupKey(g.id);
+                if (kd && kd.group_key) { this.groupKeys[g.id] = kd.group_key; gk = kd.group_key; }
+              } catch (e) { /* ключ недоступен */ }
+            }
+            if (!gk) continue;
+            try {
+              const env = this.parseEnvelope(await crypto.decryptWithGroupKey(body, gk));
+              if (env) { chatKey = 'group:' + g.id; title = g.name || ''; break; }
+            } catch (e) { /* не из этой группы */ }
+          }
+        }
+        // Квитанции/инвайты/meta/legacy — не сообщения, не считаем и не шлём.
+        if (!chatKey) continue;
+        const fresh = Date.now() - new Date(m.date || 0).getTime() < 15 * 60 * 1000;
+        // Счётчик непрочитанных: всегда, кроме видимого сейчас чата.
+        if (!this.chatVisible(chatKey)) {
+          this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
+          await this.saveUnreadCounts();
+        }
+        // Уведомление: только тихий поллинг, только свежие письма (старые
+        // задержанные/догоняющие письма спамом не считаем) и только когда
+        // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
+        // пользователь на списке контактов — иначе уведомление теряется).
+        if (notify && fresh && !this.chatVisible(chatKey)) {
+          notifyNewMessage({
+            title,
+            body: this.t('notif_new_message') || 'New message',
+            id: m.uid + '|' + (m.folder || 'INBOX'),
+          });
+        }
+      }
+    },
+    // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
+    // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
+    chatVisible(chatKey) {
+      if (chatKey.indexOf('group:') === 0) {
+        return this.activeChatType === 'group' && this.activeChat === chatKey;
+      }
+      return this.activeChatType === 'chat' && this.activeChat === chatKey &&
+        (!this.isMobile || this.mobileChatOpen);
+    },
+    unreadOf(chatKey) {
+      return this.unreadCounts[chatKey] || 0;
+    },
+    async loadUnreadCounts() {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'unread-counts');
+        this.unreadCounts = raw ? JSON.parse(raw) : {};
+      } catch (e) { this.unreadCounts = {}; }
+    },
+    async saveUnreadCounts() {
+      try {
+        await db.kvSet(this.email || 'anon', 'unread-counts', JSON.stringify(this.unreadCounts));
+      } catch (e) { /* kv недоступен — счётчики живут в памяти до перезапуска */ }
+    },
+    async resetUnread(chatKey) {
+      if ((this.unreadCounts[chatKey] || 0) > 0) {
+        this.unreadCounts[chatKey] = 0;
+        await this.saveUnreadCounts();
       }
     },
     startPolling(intervalMs = 30000) {
@@ -5255,6 +5363,23 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Бейдж непрочитанных сообщений на контакте/группе — оранжевый кружок
+   с белой цифрой. Появляется только когда есть >0. */
+.unread-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 /* Бейдж «нет ключа» — контакт виден (напр. из участников группы), но для
