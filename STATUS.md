@@ -182,6 +182,19 @@ kmakan@zoho.com — старое accept-письмо (21.08, без uid-поме
 - По просьбе пользователя возвращён вариант «два полукруга с точками»
   (версия 0.1.16). Версия поднята 0.1.18 → 0.1.19 (0.1.18 уже на устройстве).
 
+### 22.08 — v0.1.20: Android-паритет с desktop (Gmail-фиксы, универсальность)
+- Android `fetch_folder_from`: клиентский фильтр `uid > last_uid` после
+  `UID SEARCH X:*` — Gmail возвращает max UID на пустой диапазон (бейджи
+  росли, письма повторялись); запрос без лишнего префикса `"UID "`
+  (`uid_search()` сам добавляет `UID SEARCH`). Универсально для любого
+  провайдера (Gmail/Yandex/Zoho).
+- Android: ключ курсора Спама — стабильный `"JUNK"` вместо имени папки
+  (у Gmail modified UTF-7 имя меняется между сессиями → курсор терялся).
+- Android Cargo.toml: `rusqlite` перенесён из
+  `[target.'cfg(target_os = "android")'.dependencies]` в общий
+  `[dependencies]` (иначе `cargo check` на хосте не собирался никогда).
+- Версия 0.1.19 → 0.1.20 в desktop и android.
+
 ### 22.08 — Research: звонки (M3)
 - docs/research/calls-research-2026-08-22.md — сравнение реализаций (SimpleX X2TURN,
   Briar WebRTC-over-Tor, Delta Chat — звонков нет), решение: WebRTC (webrtc-rs) +
