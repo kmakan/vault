@@ -167,10 +167,13 @@
               </div>
             </template>
             <template v-else>
-              <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
+              <div class="chat-avatar-col">
+                <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
+                <div class="chat-avatar-email" :title="activeChat">{{ activeChat }}</div>
+              </div>
             </template>
-            <div>
-              <h3>{{ activeChatName }}</h3>
+            <div class="chat-header-text">
+              <h3 v-if="activeChatName !== activeChat">{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
                   <span class="members-count" @click="showMembersList = true">
@@ -5391,6 +5394,27 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Аватар + email мелким шрифтом под ним (email убран из центра шапки,
+   чтобы длинные адреса не прижимались к кнопкам действий). */
+.chat-avatar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  max-width: 96px;
+}
+
+.chat-avatar-email {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-header-info h3 {
