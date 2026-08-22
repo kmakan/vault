@@ -4554,6 +4554,10 @@ body {
 
 .sidebar-header {
   padding: 20px 24px;
+  /* Android edge-to-edge: контент рисуется под статус-бар. Добавляем
+     safe-area-inset-top, чтобы иконки не залезали под него и не прилипали.
+     На десктопе inset = 0 — правило ничего не меняет. */
+  padding-top: calc(20px + var(--safe-top, 0px));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -5355,6 +5359,9 @@ body {
 .chat-header {
   flex-shrink: 0;
   padding: 16px 24px;
+  /* Android edge-to-edge: на узких экранах чат занимает всю ширину и шапка
+     оказывается под статус-баром — отступ через safe-area-inset-top. */
+  padding-top: calc(16px + var(--safe-top, 0px));
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   justify-content: space-between;
@@ -6702,6 +6709,9 @@ body {
      остаются), отступы уменьшаются, имя чата обрезается многоточием. */
   .chat-header {
     padding: 10px 12px;
+    /* safe-area сохраняется и в узкоэкранном режиме (иначе шапка чата
+       залезает под статус-бар Android). */
+    padding-top: calc(10px + var(--safe-top, 0px));
     gap: 6px;
   }
   .chat-header-info {
