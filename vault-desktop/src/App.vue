@@ -742,6 +742,9 @@ export default {
       // Хранятся в sqlite kv_store (НЕ localStorage — он запрещён как
       // источник данных Vault); сбрасываются при открытии чата.
       unreadCounts: {},
+      // Идемпотентность счётчиков: uid|folder уже обработанных писем
+      // (персист в kv 'unread-seen') — каждое письмо считается один раз.
+      processedUnreadIds: new Set(),
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
@@ -3095,6 +3098,12 @@ export default {
     // инвайтов/meta (parseEnvelope), ведёт счётчики непрочитанных и
     // (при notify=true) шлёт системные уведомления. Контент НЕ показываем
     // (зашифровано + zero-metadata) — только имя отправителя/группы.
+    //
+    // ИДЕМПОТЕНТНОСТЬ (22.08): каждое письмо учитывается ровно ОДИН раз —
+    // processedUnreadIds (персист в kv 'unread-seen') хранит uid|folder уже
+    // обработанных сообщений. Без этого любой повторный фетч (сбой IMAP,
+    // сброс/коллизия курсоров, полный скан после перезапуска) инкрементил
+    // счётчик снова — бейдж рос 1→2→3 и возвращался после открытия чата.
     async processIncoming(fetched, { notify = false } = {}) {
       if (!fetched || !fetched.length || !this.cryptoReady) return;
       const myEmail = (this.email || '').toLowerCase();
@@ -3158,6 +3167,19 @@ export default {
         }
         // Квитанции/инвайты/meta/legacy — не сообщения, не считаем и не шлём.
         if (!chatKey) continue;
+        // Дедуп: письмо уже учтено ранее (повторный фетч) — пропускаем,
+        // иначе счётчик непрочитанных рос бы на каждом поллинге.
+        const mid = m.uid + '|' + (m.folder || 'INBOX');
+        if (this.processedUnreadIds.has(mid)) continue;
+        this.processedUnreadIds.add(mid);
+        if (this.processedUnreadIds.size > 600) {
+          // Держим хвост: выкидываем старые (Set в порядке вставки).
+          for (const old of this.processedUnreadIds) {
+            this.processedUnreadIds.delete(old);
+            if (this.processedUnreadIds.size <= 500) break;
+          }
+        }
+        await this.saveUnreadSeen();
         const fresh = Date.now() - new Date(m.date || 0).getTime() < 15 * 60 * 1000;
         // Счётчик непрочитанных: всегда, кроме видимого сейчас чата.
         if (!this.chatVisible(chatKey)) {
@@ -3172,7 +3194,7 @@ export default {
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
-            id: m.uid + '|' + (m.folder || 'INBOX'),
+            id: mid,
           });
         }
       }
@@ -3193,7 +3215,14 @@ export default {
       try {
         const raw = await db.kvGet(this.email || 'anon', 'unread-counts');
         this.unreadCounts = raw ? JSON.parse(raw) : {};
-      } catch (e) { this.unreadCounts = {}; }
+        const seenRaw = await db.kvGet(this.email || 'anon', 'unread-seen');
+        this.processedUnreadIds = new Set(seenRaw ? JSON.parse(seenRaw) : []);
+      } catch (e) { this.unreadCounts = {}; this.processedUnreadIds = new Set(); }
+    },
+    async saveUnreadSeen() {
+      try {
+        await db.kvSet(this.email || 'anon', 'unread-seen', JSON.stringify(Array.from(this.processedUnreadIds)));
+      } catch (e) { /* kv недоступен — дедуп живёт в памяти до перезапуска */ }
     },
     async saveUnreadCounts() {
       try {
