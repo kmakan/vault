@@ -3310,6 +3310,31 @@ export default {
         await this.saveUnreadCounts();
       }
     },
+    // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
+    // call_id обработанного звонка (request/accept/end/reject). После
+    // перезапуска не даёт старым конвертам снова дёргать state machine.
+    async isCallSeen(callId) {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
+        const set = raw ? new Set(JSON.parse(raw)) : new Set();
+        return set.has(callId);
+      } catch (e) { return false; }
+    },
+    async rememberCallSeen(callId) {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
+        const set = raw ? new Set(JSON.parse(raw)) : new Set();
+        set.add(callId);
+        // Храним последние 100 call_id (старые не нужны)
+        if (set.size > 100) {
+          const arr = Array.from(set);
+          arr.splice(0, arr.length - 100);
+          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(arr));
+        } else {
+          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(Array.from(set)));
+        }
+      } catch (e) { /* тихо */ }
+    },
     // ── Звонки (M3, feature/calls) — Фаза 1: сигнализация конвертами call_* ──
     // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
     // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
@@ -3343,6 +3368,25 @@ export default {
     async handleCallSignal(sig, from) {
       const { call_id, type } = sig;
       if (!call_id || !from) return;
+      // ЗАЩИТА ОТ УСТАРЕВШИХ КОНВЕРТОВ (22.08): после перезапуска приложение
+      // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
+      // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
+      // state machine в incoming_ringing, и НОВЫЙ звонок, пришедший в это
+      // время, молча отбрасывался (callState !== 'idle') — вызовы пропадали.
+      // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты: конверты
+      // старше 3 минут неактуальны — игнорируем (и запоминаем call_id).
+      if (sig.ts && Date.now() - sig.ts > 180000) {
+        console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
+        await this.rememberCallSeen(call_id);
+        return;
+      }
+      // ДЕДУП (22.08): call_id уже обработанного звонка (персист в kv
+      // 'call-seen') не должен снова дёргать state machine — например, тот
+      // же call_request из повторного фетча после рассинхрона курсоров.
+      if (type === 'call_request' && !(this.currentCall && this.currentCall.call_id === call_id)) {
+        if (await this.isCallSeen(call_id)) return;
+        await this.rememberCallSeen(call_id);
+      }
       // Чужой звонок во время активного — отвечаем занято (call_reject).
       if (this.callState !== 'idle' && this.currentCall
           && this.currentCall.call_id !== call_id && type === 'call_request') {

@@ -369,12 +369,28 @@ impl EmailClient {
             // Фильтруем на клиенте (ниже): отбрасываем uid ≤ last_uid.
             Some(last) => session.uid_search(&format!("{}:*", last + 1))?,
         };
+        let raw_uids: Vec<u32> = uid_list.iter().copied().collect();
+        let raw_max = raw_uids.iter().copied().max().unwrap_or(0);
+        // САМОВОССТАНОВЛЕНИЕ (22.08): Gmail периодически ПЕРЕСОЗДАЁТ папку
+        // Спама (автоочистка) — UIDVALIDITY меняется, UID'ы начинаются с 1.
+        // Старый курсор оказывается впереди реального max, и клиентский фильтр
+        // uid > last_uid навсегда отбрасывает всё — инкрементальный фетч
+        // слепнет. Признак сброса: search вернул непустой список, но его max
+        // < курсора. Если max == курсор — обычный «нет новых» (quirk Gmail).
+        if let Some(last) = last_uid {
+            if !raw_uids.is_empty() && raw_max < last {
+                eprintln!(
+                    "[email] folder {folder}: cursor {last} AHEAD of mailbox max {raw_max} \
+                     (UIDVALIDITY reset) — full re-scan, re-seeding cursor"
+                );
+                return self.fetch_folder_from(folder, None, limit);
+            }
+        }
         // Клиентский фильтр uid > last_uid — универсальная защита от
         // серверных quirk'ов: Gmail возвращает max UID на пустой диапазон,
         // Yandex/Zoho — пустой ответ. Работает для любого провайдера.
-        let mut uids: Vec<u32> = uid_list
-            .iter()
-            .copied()
+        let mut uids: Vec<u32> = raw_uids
+            .into_iter()
             .filter(|u| match last_uid {
                 None => true,
                 Some(last) => *u > last,
