@@ -3,6 +3,7 @@ mod credential_store;
 mod crypto;
 mod email;
 mod key_store;
+mod media;
 mod storage;
 mod groups;
 mod history_store;
@@ -712,6 +713,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(CryptoState::default())
         .manage(EmailState::default())
+        .manage(tokio::sync::Mutex::new(media::CallMediaManager::new()))
         .invoke_handler(tauri::generate_handler![
             generate_keypair,
             encrypt_message,
@@ -773,6 +775,11 @@ pub fn run() {
             db_emails_save,
             db_emails_load,
             db_emails_clear,
+            media::media_start_outgoing,
+            media::media_accept_incoming,
+            media::media_set_remote,
+            media::media_close,
+            media::media_set_ice_servers,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources

@@ -41,6 +41,14 @@ futures = "0.3"
 # Local database
 rusqlite = { version = "0.31", features = ["bundled"] }
 
+# Calls (M3, Phase 2): WebRTC media
+webrtc = "0.20"
+rtc = "0.20.3"
+async-trait = "0.1"
+bytes = "1"
+cpal = "0.18"
+audiopus = "0.2"
+
 # Linux: прямой доступ к WebKitGTK WebView для обработчика разрешений
 # (getUserMedia для голосовых сообщений). Версия совпадает с tauri-runtime-wry.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]

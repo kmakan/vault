@@ -1001,6 +1001,25 @@ export class ApiClient {
     return await invoke('email_idle_wait', { folder, timeoutMs });
   }
 
+  // ── Calls (M3, Фаза 2): WebRTC media backend (webrtc-rs) ────────────────
+  // startOutgoing → SDP offer (JSON RTCSessionDescription); acceptIncoming →
+  // SDP answer; setRemote — вторая половина рукопожатия; close — teardown.
+  async mediaStartOutgoing(callId) {
+    return await invoke('media_start_outgoing', { callId });
+  }
+  async mediaAcceptIncoming(callId, offerSdp) {
+    return await invoke('media_accept_incoming', { callId, offerSdp });
+  }
+  async mediaSetRemote(callId, sdp) {
+    return await invoke('media_set_remote', { callId, sdp });
+  }
+  async mediaClose(callId) {
+    return await invoke('media_close', { callId });
+  }
+  async mediaSetIceServers(urls) {
+    return await invoke('media_set_ice_servers', { urls });
+  }
+
   async fetchEmailBody(accountId, uid, folder) {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }

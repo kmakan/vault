@@ -3352,6 +3352,10 @@ export default {
               && this.callState === 'outgoing_ringing') {
             this.callState = 'active';
             this.startCallClock();
+            // Фаза 2: собеседник принял — поднимаем медиа-канал (webrtc-rs):
+            // создаём PeerConnection, получаем offer (JSON SDP) и шлём его
+            // конвертом call_sdp. Полный SDP (non-trickle) — после ICE.
+            this.startMediaOffer();
           }
           break;
         case 'call_reject':
@@ -3361,8 +3365,25 @@ export default {
           }
           break;
         case 'call_sdp':
-          // Фаза 2: sdp offer/answer → PeerConnection (webrtc-rs).
-          console.log('[call] sdp received for', call_id, 'role=' + sig.role);
+          // Фаза 2: SDP-обмен после call_accept. offer — сторона получателя
+          // (создаёт answer и шлёт обратно), answer — сторона звонящего
+          // (завершает handshake, DTLS-SRTP устанавливается).
+          if (!this.currentCall || this.currentCall.call_id !== call_id
+              || this.callState !== 'active') break;
+          if (sig.role === 'offer') {
+            try {
+              const r = await api.mediaAcceptIncoming(call_id, sig.sdp);
+              await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
+            } catch (e) {
+              console.error('[call] media accept failed:', e);
+            }
+          } else if (sig.role === 'answer') {
+            try {
+              await api.mediaSetRemote(call_id, sig.sdp);
+            } catch (e) {
+              console.error('[call] media set remote failed:', e);
+            }
+          }
           break;
         default:
           break;
@@ -3384,6 +3405,17 @@ export default {
       } catch (e) {
         console.error('call_request failed:', e);
         this.hangup('error');
+      }
+    },
+    // Фаза 2: после получения call_accept — поднимаем медиа (webrtc-rs).
+    async startMediaOffer() {
+      const c = this.currentCall;
+      if (!c) return;
+      try {
+        const r = await api.mediaStartOutgoing(c.call_id);
+        await this.sendCallEnvelope(c.peer, { type: 'call_sdp', call_id: c.call_id, sdp: r.sdp, role: 'offer' });
+      } catch (e) {
+        console.error('[call] media start failed:', e);
       }
     },
     async acceptCall() {
@@ -3411,7 +3443,9 @@ export default {
       this.hangup('end');
     },
     // Локальный сброс состояния (после сигнала, отмены или таймаута).
-    hangup(reason) {
+    async hangup(reason) {
+      const c = this.currentCall;
+      const callId = c ? c.call_id : null;
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
       this.stopCallClock();
@@ -3419,6 +3453,10 @@ export default {
       this.currentCall = null;
       this.callMuted = false;
       this.stopFastPolling();
+      // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
+      if (callId) {
+        try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
+      }
     },
     cancelCall(reason) { this.hangup(reason || 'cancel'); },
     toggleMute() { this.callMuted = !this.callMuted; },
