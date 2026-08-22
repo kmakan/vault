@@ -68,6 +68,7 @@ export default {
   status_sent: '已发送',
   status_delivered: '已送达',
   status_read: '已读',
+  notif_new_message: '新消息',
   copy_all: '复制全部',
   copied: '已复制',
   copy_failed: '复制失败',

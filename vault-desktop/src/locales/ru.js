@@ -68,6 +68,7 @@ export default {
   status_sent: 'Отправлено',
   status_delivered: 'Доставлено',
   status_read: 'Просмотрено',
+  notif_new_message: 'Новое сообщение',
   copy_all: 'Копировать всё',
   copied: 'Скопировано',
   copy_failed: 'Не удалось скопировать',

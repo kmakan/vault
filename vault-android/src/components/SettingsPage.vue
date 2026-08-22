@@ -60,6 +60,10 @@
       <div v-if="activeCategory === 'notifications'" class="settings-section">
         <h2 v-if="!isMobile">Уведомления</h2>
         <div class="setting-row">
+          <span>Системные уведомления</span>
+          <label class="toggle"><input type="checkbox" v-model="notifSystem" /><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
           <span>Звук уведомлений</span>
           <label class="toggle"><input type="checkbox" v-model="notifSound" /><span class="slider"></span></label>
         </div>
@@ -113,6 +117,7 @@
 <script>
 import api from '../api.js';
 import { useI18n } from '../i18n.js';
+import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
 import ThemeSelector from './ThemeSelector.vue';
 import IconPicker from './IconPicker.vue';
@@ -134,6 +139,7 @@ export default {
       localDisplayName: this.displayName || '',
       notifSound: true,
       notifTray: true,
+      notifSystem: notificationsEnabled(),
       hideLastSeen: false,
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       categories: [
@@ -155,6 +161,11 @@ export default {
       const c = this.categories.find(c => c.id === this.activeCategory);
       return c ? c.label : '';
     }
+  },
+  watch: {
+    // Персист переключателя «Системные уведомления» (notify.js читает его
+    // при каждом вызове notifyNewMessage).
+    notifSystem(on) { setNotificationsEnabled(on); },
   },
   mounted() {
     this._onResize = () => this.windowWidth = window.innerWidth;

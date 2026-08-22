@@ -658,6 +658,7 @@ fn db_emails_clear(account: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(CryptoState::default())
         .manage(EmailState::default())
         .invoke_handler(tauri::generate_handler![

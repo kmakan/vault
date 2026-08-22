@@ -674,6 +674,7 @@
 import api from './api.js';
 import { db } from './api.js';
 import crypto from './crypto.js';
+import { initNotifications, notifyNewMessage } from './notify.js';
 // ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
 import { useI18n } from './i18n.js';
@@ -1041,6 +1042,7 @@ export default {
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP (20.08).
           this.isLoggedIn = true;
+          initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.startPolling()
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
@@ -1199,6 +1201,7 @@ export default {
         const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
         this.userId = data.user_id;
         this.isLoggedIn = true;
+        initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
@@ -3048,6 +3051,11 @@ export default {
           console.warn('loadEmails: sqlite save failed:', e);
         }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
+        // PUSH-уведомления (принцип поллинга, 22.08): новые ВХОДЯЩИЕ письма,
+        // найденные тихим поллингом, дают локальное системное уведомление.
+        // Только при silent=true (фоновый поллинг), НЕ при первом полном скане
+        // после входа — иначе уведомляли бы обо всей истории ящика сразу.
+        if (silent && fetched.length) this.notifyIncoming(fetched);
         // При пустом ящике НЕ показываем красную подсказку — пустой список
         // и есть норма (пользователь, 21.08: никаких «INBOX пуст» в UI).
         // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
@@ -3070,6 +3078,28 @@ export default {
         if (!silent) this.emailError = 'load: ' + (error && error.message || error);
       } finally {
         if (!silent) this.emailsLoading = false;
+      }
+    },
+    // PUSH-уведомления (принцип поллинга, 22.08): для каждого нового ВХОДЯЩЕГО
+    // письма показываем локальное системное уведомление. Контент НЕ показываем
+    // (зашифровано + zero-metadata) — только имя отправителя.
+    notifyIncoming(fetched) {
+      const myEmail = (this.email || '').toLowerCase();
+      for (const m of fetched) {
+        const from = this.senderEmail(m.from);
+        // Пропускаем исходящие (от себя) и пустые from.
+        if (!from || from === myEmail) continue;
+        // Пропускаем письма в уже открытом чате — пользователь их и так видит.
+        if (this.activeChatType === 'chat' && this.activeChat === from) continue;
+        // Имя отправителя: локальный профиль → контакт → email.
+        const lp = this.localProfileOf(from);
+        const contact = this.contacts.find(c => c.email === from);
+        const name = (lp && lp.name) || (contact && contact.name) || from;
+        notifyNewMessage({
+          title: name,
+          body: this.t('notif_new_message') || 'New message',
+          id: m.uid + '|' + (m.folder || 'INBOX'),
+        });
       }
     },
     startPolling(intervalMs = 30000) {

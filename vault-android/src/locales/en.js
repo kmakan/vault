@@ -68,6 +68,7 @@ export default {
   status_sent: 'Sent',
   status_delivered: 'Delivered',
   status_read: 'Read',
+  notif_new_message: 'New message',
   copy_all: 'Copy all',
   copied: 'Copied',
   copy_failed: 'Copy failed',

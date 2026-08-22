@@ -54,6 +54,10 @@
       <div v-if="activeCategory === 'notifications'" class="settings-section">
         <h2>Уведомления</h2>
         <div class="setting-row">
+          <span>Системные уведомления</span>
+          <label class="toggle"><input type="checkbox" v-model="notifSystem" /><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
           <span>Звук уведомлений</span>
           <label class="toggle"><input type="checkbox" v-model="notifSound" /><span class="slider"></span></label>
         </div>
@@ -107,6 +111,7 @@
 <script>
 import api from '../api.js';
 import { useI18n } from '../i18n.js';
+import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
 import ThemeSelector from './ThemeSelector.vue';
 import IconPicker from './IconPicker.vue';
@@ -127,6 +132,7 @@ export default {
       localDisplayName: this.displayName || '',
       notifSound: true,
       notifTray: true,
+      notifSystem: notificationsEnabled(),
       hideLastSeen: false,
       categories: [
         { id: 'profile', icon: '👤', label: 'Профиль' },
@@ -140,6 +146,11 @@ export default {
         { id: 'clear', icon: '🗑️', label: 'Очистить данные' }
       ]
     };
+  },
+  watch: {
+    // Персист переключателя «Системные уведомления» (notify.js читает его
+    // при каждом вызове notifyNewMessage).
+    notifSystem(on) { setNotificationsEnabled(on); },
   },
   methods: {
     async saveDisplayName() {
