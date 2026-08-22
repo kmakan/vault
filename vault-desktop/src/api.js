@@ -995,7 +995,24 @@ export class ApiClient {
     return { messages: mapped, cursors: (res && res.cursors) || {} };
   }
 
-  // IMAP IDLE (Фаза 1.5 звонков): серверный push — блокируется до появления
+  // БЫСТРЫЙ фетч для звонков (22.08): отдельный IMAP-клиент в Rust, не
+  // конкурирует за lock основного клиента (который может быть занят
+  // зависшими операциями/троттлингом) — call_request доходит мгновенно.
+  async fetchEmailsIncrementalFast(accountId, cursors = {}) {
+    const res = await invoke('email_fetch_incremental_fast', { cursors });
+    const mapped = (res && res.messages || []).map(m => ({
+      uid: m.id,
+      id: m.id,
+      from: m.from,
+      to: m.to,
+      subject: m.subject,
+      date: m.date,
+      is_read: m.is_read,
+      folder: m.folder || 'INBOX',
+      message_id: m.message_id || '',
+    }));
+    return { messages: mapped, cursors: (res && res.cursors) || {} };
+  }
   // нового письма в папке или таймаута. { changed: true } = есть новое.
   async idleWait(timeoutMs = 2000, folder = 'INBOX') {
     return await invoke('email_idle_wait', { folder, timeoutMs });
@@ -1021,6 +1038,13 @@ export class ApiClient {
   }
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
+  }
+  // Рингтон входящего звонка (cpal-поток в Rust; см. media_ringtone_start).
+  async mediaRingtoneStart() {
+    return await invoke('media_ringtone_start');
+  }
+  async mediaRingtoneStop() {
+    return await invoke('media_ringtone_stop');
   }
 
   async fetchEmailBody(accountId, uid, folder) {

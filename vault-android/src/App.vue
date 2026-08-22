@@ -749,7 +749,8 @@ export default {
     AppBehavior,
     AvatarUpload,
     CipherTool,
-    QRCodePanel
+    QRCodePanel,
+    CallOverlay
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();

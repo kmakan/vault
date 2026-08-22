@@ -745,7 +745,8 @@ export default {
     AppBehavior,
     AvatarUpload,
     CipherTool,
-    QRCodePanel
+    QRCodePanel,
+    CallOverlay
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -776,6 +777,17 @@ export default {
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       _idleStop: false,
+      // ЗВУКОВОЙ СИГНАЛ (22.08, по запросу пользователя): входящий звонок
+      // должен быть слышен, даже если окно свёрнуто/не в фокусе. Web Audio
+      // API: прерывистый тон (гудки), цикл через gain-манипуляцию.
+      ringAudioCtx: null,
+      ringOsc: null,
+      ringGain: null,
+      ringBeepTimer: null,
+      ringBeepOn: false,
+      // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
+      // зависшего в ringing дольше разумного; см. handleCallSignal).
+      callStartedAt: 0,
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
@@ -3173,6 +3185,41 @@ export default {
     // обработанных сообщений. Без этого любой повторный фетч (сбой IMAP,
     // сброс/коллизия курсоров, полный скан после перезапуска) инкрементил
     // счётчик снова — бейдж рос 1→2→3 и возвращался после открытия чата.
+    // Быстрый фетч для звонков (22.08): отдельный IMAP-клиент в Rust — не
+    // конкурирует за lock основного клиента. Используется ИЗ IDLE-цикла:
+    // входящий call_request доходит, даже когда обычный поллинг пропускается
+    // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
+    async loadEmailsFast(silent = true) {
+      try {
+        const accounts = await api.getEmailAccounts();
+        const fetched = [];
+        for (const account of accounts) {
+          try {
+            const cursors = this.loadCursors(account.id);
+            const res = await api.fetchEmailsIncrementalFast(account.id, cursors);
+            fetched.push(...(res.messages || []));
+            this.saveCursors(account.id, res.cursors);
+          } catch (e) {
+            console.warn('[calls] fast fetch failed:', e);
+          }
+        }
+        if (!fetched.length) return;
+        const merged = [...this.emails];
+        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+        for (const m of fetched) {
+          const k = m.uid + '|' + (m.folder || 'INBOX');
+          if (!seen.has(k)) { seen.add(k); merged.push(m); }
+        }
+        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        if (merged.length > 2000) merged.length = 2000;
+        this.emails = merged;
+        console.log(`[Emails] fast loaded ${this.emails.length} messages (${fetched.length} new)`);
+        // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
+        await this.processIncoming(fetched, { notify: silent });
+      } catch (e) {
+        console.warn('[calls] fast load failed:', e);
+      }
+    },
     async processIncoming(fetched, { notify = false } = {}) {
       if (!fetched || !fetched.length || !this.cryptoReady) return;
       const myEmail = (this.email || '').toLowerCase();
@@ -3370,14 +3417,18 @@ export default {
     async handleCallSignal(sig, from) {
       const { call_id, type } = sig;
       if (!call_id || !from) return;
+      console.log('[call] signal', type, call_id, 'from', from, 'state=' + this.callState,
+        'current=' + (this.currentCall ? this.currentCall.call_id : 'null'));
       // ЗАЩИТА ОТ УСТАРЕВШИХ КОНВЕРТОВ (22.08): после перезапуска приложение
       // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
       // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
       // state machine в incoming_ringing, и НОВЫЙ звонок, пришедший в это
       // время, молча отбрасывался (callState !== 'idle') — вызовы пропадали.
-      // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты: конверты
-      // старше 3 минут неактуальны — игнорируем (и запоминаем call_id).
-      if (sig.ts && Date.now() - sig.ts > 180000) {
+      // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты и на вход
+      // в аккаунт после перезапуска окна (пользователь мог перезапустить
+      // окно, и icemaksim залогинился позже звонка) — конверты старше 10
+      // минут неактуальны — игнорируем (и запоминаем call_id).
+      if (sig.ts && Date.now() - sig.ts > 600000) {
         console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
         await this.rememberCallSeen(call_id);
         return;
@@ -3397,16 +3448,34 @@ export default {
       }
       switch (type) {
         case 'call_request':
+          // ГАРАНТИЯ ПОКАЗА (22.08): НОВЫЙ call_request ВСЕГДА вытесняет любое
+          // состояние, кроме реального разговора (active) — даже если state
+          // machine зависла в ringing от старого конверта без currentCall.
+          if (this.callState !== 'idle' && this.callState !== 'active') {
+            console.warn('[call] forcing reset before new request (state=' + this.callState + ')');
+            await this.hangup('preempt');
+          }
           if (this.callState !== 'idle') return;
           this.currentCall = { call_id, peer: from };
           this.callState = 'incoming_ringing';
           this.callMuted = false;
+          this.callStartedAt = Date.now();
+          console.log('[call] incoming_ringing SET for', call_id, 'from', from);
+          // Звуковой сигнал входящего (22.08, запрос пользователя): гудки
+          // через cpal в Rust — слышны даже при свёрнутом окне.
+          api.mediaRingtoneStart().then(
+            () => console.log('[call] ringtone started'),
+            e => console.warn('[call] ringtone start failed:', e)
+          );
           this.startFastPolling();
           this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 45000);
           break;
         case 'call_accept':
           if (this.currentCall && this.currentCall.call_id === call_id
               && this.callState === 'outgoing_ringing') {
+            // Собеседник принял — таймер отмены больше не нужен.
+            clearTimeout(this.callRingTimer);
+            this.callRingTimer = null;
             this.callState = 'active';
             this.startCallClock();
             // Фаза 2: собеседник принял — поднимаем медиа-канал (webrtc-rs):
@@ -3478,6 +3547,10 @@ export default {
     async acceptCall() {
       const c = this.currentCall;
       if (!c || this.callState !== 'incoming_ringing') return;
+      // Ответили — рингтон и таймер отмены в сторону.
+      clearTimeout(this.callRingTimer);
+      this.callRingTimer = null;
+      api.mediaRingtoneStop().catch(() => {});
       this.callState = 'active';
       this.startCallClock();
       try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
@@ -3503,6 +3576,7 @@ export default {
     async hangup(reason) {
       const c = this.currentCall;
       const callId = c ? c.call_id : null;
+      console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
       this.stopCallClock();
@@ -3510,6 +3584,8 @@ export default {
       this.currentCall = null;
       this.callMuted = false;
       this.stopFastPolling();
+      // Останавливаем рингтон (если играл).
+      api.mediaRingtoneStop().catch(() => {});
       // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
       if (callId) {
         try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
@@ -3566,7 +3642,12 @@ export default {
           const elapsed = Date.now() - lastSafety;
           if (changed || elapsed >= 10000) {
             lastSafety = Date.now();
-            try { await this.loadEmails(true); } catch (e) { /* тихо */ }
+            // Быстрый фетч для звонков (22.08): ОТДЕЛЬНЫЙ IMAP-клиент в Rust
+            // (email_fetch_incremental_fast) — основной клиент может быть занят
+            // зависшими операциями/троттлингом (lock busy → поллинг молча
+            // пропускается, call_request невидим часами). Звонки доходят
+            // всегда, независимо от состояния основного клиента.
+            try { await this.loadEmailsFast(true); } catch (e) { /* тихо */ }
           }
         }
       } finally {

@@ -290,6 +290,7 @@ async fn email_fetch_incremental(
     // конкурировать с интерактивом за IMAP-сессию (баг 20.08: чаты пустые
     // из-за «Timed out waiting for email client lock»).
     let Ok(mut guard) = state.0.try_lock() else {
+        eprintln!("[email] incremental SKIPPED: client lock busy");
         return Ok(IncrementalFetchResult { messages: vec![], cursors });
     };
     // Весь поллинг ≤ 35с: если IMAP-сессия деградировала (троттлинг Gmail,
@@ -316,6 +317,37 @@ async fn email_fetch_incremental(
     .await
     .map_err(|_| "Incremental fetch timed out".to_string())?;
     drop(guard);
+    result
+}
+
+#[tauri::command]
+async fn email_fetch_incremental_fast(
+    state: State<'_, EmailState>,
+    cursors: HashMap<String, u32>,
+) -> Result<IncrementalFetchResult, String> {
+    // БЫСТРЫЙ фетч для звонков (22.08): работает на ОТДЕЛЬНОМ клиенте (как
+    // email_fetch_bodies), НЕ конкурирует за основной lock (state.0), который
+    // может быть занят зависшими операциями (троттлинг Gmail) — при этом
+    // входящий call_request не виден часами (баг «звонок не доходит»).
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
+        .await
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut client = EmailClient::new(cfg);
+    client
+        .connect_imap()
+        .await
+        .map_err(|e| format!("Failed to connect for fast fetch: {e}"))?;
+    let result = t_timeout(
+        Duration::from_secs(30),
+        client.fetch_newer(&cursors),
+    )
+    .await
+    .map_err(|_| "Fast incremental fetch timed out".to_string())?
+    .map_err(|e| e.to_string())
+    .map(|(messages, cursors)| IncrementalFetchResult { messages, cursors });
+    let _ = client.disconnect();
     result
 }
 
@@ -742,6 +774,7 @@ pub fn run() {
             email_connect,
             email_fetch_messages,
             email_fetch_incremental,
+            email_fetch_incremental_fast,
             email_fetch_body,
             email_fetch_bodies,
             email_idle_wait,
@@ -782,6 +815,10 @@ pub fn run() {
             media::media_close,
             media::media_set_muted,
             media::media_set_ice_servers,
+            // Рингтон входящего звонка (cpal, не webview — работает и со
+            // свёрнутым окном; autoplay-политика WebKitGTK не мешает).
+            media::media_ringtone_start,
+            media::media_ringtone_stop,
         ])
         .setup(|app| {
             // Try to get the default window icon from bundled resources

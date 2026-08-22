@@ -141,10 +141,10 @@
 - [x] Call state machine (idle → ringing → in_call → ended), дедуп call_id, таймауты (45с)
 - [x] Быстрая доставка: IMAP IDLE для INBOX (+ ускорение поллинга 2-3с при активном звонке) — Фаза 1.5 (4e2d866): idle_wait (серверный push EXISTS), отдельная IDLE-сессия, фолбэк на поллинг 3с
 ### Фаза 2: Медиа (5-7 дней)
-- [ ] webrtc-rs в бэкенде: PeerConnection, аудио-трек
-- [ ] cpal: захват микрофона + воспроизведение (desktop; android — Oboe)
-- [ ] opus: 48kHz mono 20ms; jitter buffer (50-100ms)
-- [ ] DTLS-SRTP (из коробки webrtc-rs), nonce/seq в порядке SRTP
+- [x] webrtc-rs в бэкенде: PeerConnection, аудио-трек (a434378, c3bb931)
+- [x] cpal: захват микрофона + воспроизведение (desktop; android — Oboe)
+- [x] opus: 48kHz mono 20ms; jitter buffer (50-100ms)
+- [ ] DTLS-SRTP (из коробки webrtc-rs), nonce/seq в порядке SRTP — НЕ ДОВЕДЕНО (SDP-обмен не завершается, медиа не поднимается)
 ### Фаза 3: ICE/TURN (2-3 дня)
 - [ ] Сбор SDP (host+srflx), отправка `call_sdp` конвертом
 - [ ] Настройки ICE-серверов в SettingsPage (X2TURN, ротация) + проверка на реальных NAT
@@ -166,7 +166,42 @@
 4. **Google Play политики** (если будет в проде): микрофон/камера — runtime permissions (уже паттерн POST_NOTIFICATIONS).
 5. **Лицензии**: webrtc-rs MIT/BSD, opus BSD, cpal Apache-2.0 — совместимо.
 
-## 8. Источники
+## 8. Выводы из SimpleX (повторное изучение 22.08, вечер)
+
+Источник: simplex.chat/docs/guide/audio-video-calls.html (прочитано целиком).
+
+1. **Сигнализация живёт в НАТИВНОМ слое, не в JS.** У SimpleX входящий звонок доходит и на
+   lock screen (Android: 3 режима Disable/Show/Accept; iOS: CallKit). Наш IDLE-цикл — в JS
+   (App.vue): при свёрнутом WebView Android замораживает JS-таймеры → call_request не читается.
+   **Решение: перенести IMAP IDLE + обнаружение call_request в Rust-бэкенд** (emit во фронт).
+   Desktop при этом тоже перестаёт зависеть от JS-поллинга (мы ловили его деградацию: поллинг
+   молча пропускался при занятом lock — SKIPPED: client lock busy).
+2. **Нет жёсткого таймаута приглашения** («as long as the caller is still waiting»). У нас
+   ring-таймер 45с — ок для гудков, но timeout НЕ должен блокировать следующий звонок
+   (починено: новый call_request вытесняет зависшее состояние; clearTimeout при ответе).
+   Опция Ignore («принять позже из чата») — на потом.
+3. **TURN-релей по умолчанию** (скрывает IP), P2P опционально; «Always use relay»; ICE-серверы
+   настраиваются пользователем и хранятся на устройстве, не в БД. Наш план Фазы 3 (X2TURN,
+   coturn на 443, настройки в UI) — ровно эта модель. Публичные STUN — только dev.
+4. Групповые звонки не поддерживают — мы тоже не берём в MVP.
+
+### План-обновление (22.08, после вечерней отладки)
+
+- **Фаза 2.2: Rust-сигнализация (перенос IDLE во фронт-бэкенд)**
+  - [ ] Rust: постоянный IMAP IDLE-цикл (уже есть email_idle_wait; нужен ФОНОВЫЙ поток с
+    автопереподключением), при EXISTS → быстрый fetch_newer (уже есть email_fetch_incremental_fast,
+    отдельный клиент, не блокируется lock) → emit `call_request`/`new_messages` во фронт.
+  - [ ] Фронт: слушает emit вместо/в дополнение к JS-циклу; оверлей рендерится из события.
+  - [ ] Android: процесс жив → звонок доходит при свёрнутом WebView. Полное решение (система
+    может убить процесс в Doze) — foreground service (как у SimpleX нативный слой).
+  - [ ] Desktop: убирает зависимость от JS-поллинга (SKIPPED-проблема).
+- **Фаза 2.3: доделать медиа**
+  - [ ] Отладить SDP-обмен (сейчас call_sdp не доходит обратно за время до обрыва 45с;
+    clearTimeout уже починён, проверить DTLS-SRTP).
+  - [ ] Проверить, что после ответа не рвётся (таймер 45с чистится при accept).
+- **Фаза 4 UI**: история звонков, «Пропущенный», Ignore — как у SimpleX (принять позже из чата).
+
+## 9. Источники
 - SimpleX: Audio & video Calls — https://simplex.chat/docs/guide/audio-video-calls.html
 - SimpleX: Using custom WebRTC ICE servers (coturn, X2TURN) — https://simplex.chat/docs/webrtc.html
 - webrtc-rs (Rust WebRTC, примеры media/trickle-ice) — https://github.com/webrtc-rs/webrtc

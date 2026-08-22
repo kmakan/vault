@@ -391,3 +391,17 @@ pub async fn media_set_ice_servers(
     mgr.set_ice_servers(urls);
     Ok(())
 }
+
+/// Рингтон входящего звонка (22.08, запрос пользователя): включает гудки
+/// 440 Гц через cpal (независимо от webview/autoplay). Вызывается из фронта
+/// при call_request, отключается при accept/reject/timeout/hangup.
+#[tauri::command]
+pub async fn media_ringtone_start() -> Result<(), String> {
+    crate::audio::ringtone_start()
+}
+
+#[tauri::command]
+pub async fn media_ringtone_stop() -> Result<(), String> {
+    crate::audio::ringtone_stop();
+    Ok(())
+}

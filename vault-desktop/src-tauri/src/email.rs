@@ -450,6 +450,10 @@ impl EmailClient {
         cursors: &HashMap<String, u32>,
     ) -> Result<(Vec<EmailMessage>, HashMap<String, u32>)> {
         let folders = self.find_special_folders();
+        eprintln!(
+            "[email] fetch_newer: junk={:?} all={:?} cursors_junk={:?}",
+            folders.junk, folders.all, cursors.get("JUNK")
+        );
         let mut new_cursors = cursors.clone();
         let mut seen: HashSet<String> = HashSet::new();
         let mut messages: Vec<EmailMessage> = Vec::new();

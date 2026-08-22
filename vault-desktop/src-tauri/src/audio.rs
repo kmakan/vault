@@ -11,7 +11,7 @@
 //! (encode side) / from 48kHz mono (play side) happens in the callbacks with
 //! a linear resampler when the device rate differs.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -316,5 +316,65 @@ async fn read_remote_loop(
             }
             _ = stop_rx.changed() => break,
         }
+    }
+}
+
+// ── Рингтон входящего звонка (22.08, запрос пользователя) ─────────────────────
+// Проигрывается через cpal (напрямую из Rust, не webview) — не зависит от
+// autoplay-политики WebKitGTK. Гудки 440 Гц: 0.45с тон / 0.35с пауза.
+static RINGTONE: Mutex<Option<cpal::Stream>> = Mutex::new(None);
+
+macro_rules! build_ringtone {
+    ($device:expr, $cfg:expr, $fmt:ty) => {{
+        let mut tick: u64 = 0;
+        let mut phase: f64 = 0.0;
+        let sr = $cfg.sample_rate() as f64;
+        let stream = $device
+            .build_output_stream(
+                $cfg.clone().into(),
+                move |data: &mut [$fmt], _| {
+                    for out in data.iter_mut() {
+                        let t = tick as f64 / sr;
+                        let m = t % 0.8;
+                        let amp: f32 = if m < 0.45 { 0.6 } else { 0.0 };
+                        phase += 2.0 * std::f64::consts::PI * 440.0 / sr;
+                        let v = (phase.sin() as f32) * amp;
+                        *out = v.to_sample::<$fmt>();
+                        tick += 1;
+                    }
+                },
+                |e| eprintln!("[ringtone] stream error: {e}"),
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+        *RINGTONE.lock().unwrap() = Some(stream);
+        Ok(())
+    }};
+}
+
+pub fn ringtone_start() -> Result<(), String> {
+    let mut guard = RINGTONE.lock().unwrap();
+    if guard.is_some() {
+        return Ok(()); // уже играет
+    }
+    drop(guard);
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| "No output device for ringtone".to_string())?;
+    let cfg = device
+        .default_output_config()
+        .map_err(|e| e.to_string())?;
+    match cfg.sample_format() {
+        cpal::SampleFormat::F32 => build_ringtone!(device, cfg, f32),
+        cpal::SampleFormat::I16 => build_ringtone!(device, cfg, i16),
+        cpal::SampleFormat::U16 => build_ringtone!(device, cfg, u16),
+        _ => Err("unsupported sample format for ringtone".into()),
+    }
+}
+
+pub fn ringtone_stop() {
+    if let Some(s) = RINGTONE.lock().unwrap().take() {
+        drop(s);
     }
 }
