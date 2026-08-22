@@ -200,6 +200,7 @@
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
+              <button v-if="peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
             <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
@@ -412,6 +413,24 @@
           @invite-by-id="inviteContactById"
         />
       </div>
+
+      <!-- ЗВОНОК (M3, feature/calls): сигнализация call_* конвертами.
+           Медиа (webrtc-rs) — Фаза 2; сейчас состояние + таймер + 🔒. -->
+      <CallOverlay
+        v-if="callState !== 'idle' && currentCall"
+        :state="callState"
+        :peer="currentCall.peer"
+        :peer-name="callPeerName"
+        :avatar-url="avatarOf(currentCall.peer)"
+        :muted="callMuted"
+        :elapsed="callElapsedLabel"
+        :texts="callTexts"
+        @accept="acceptCall"
+        @reject="rejectCall"
+        @cancel="cancelCall"
+        @end="endCall"
+        @toggle-mute="toggleMute"
+      />
 
       <!-- CIPHER TOOL -->
       <CipherTool v-if="showCipher" :peerKeys="peerKeys" :contacts="contacts" @close="showCipher = false" @open-keys="showCipher = false; showKeyManager = true" />
@@ -679,6 +698,7 @@ import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
+import CallOverlay from './components/CallOverlay.vue';
 import EmailSettings from './components/EmailSettings.vue';
 import KeyManager from './components/KeyManager.vue';
 import LanguageSelector from './components/LanguageSelector.vue';
@@ -745,6 +765,14 @@ export default {
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
       processedUnreadIds: new Set(),
+      // ── Звонки (M3, feature/calls): сигнализация конвертами call_* ──
+      // callState: idle | outgoing_ringing | incoming_ringing | active
+      callState: 'idle',
+      currentCall: null,   // { call_id, peer }
+      callMuted: false,
+      callClockSec: 0,
+      callClockTimer: null,
+      callRingTimer: null,
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
@@ -909,6 +937,31 @@ export default {
         const localName = (lp && lp.name) || '';
         return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || localName.toLowerCase().includes(q);
       });
+    },
+    // ── Звонки (M3): строки и таймер для оверлея ──
+    callTexts() {
+      return {
+        incoming: this.t('call_incoming') || 'Входящий звонок…',
+        outgoing: this.t('call_outgoing') || 'Вызов…',
+        accept: this.t('call_accept') || 'Принять',
+        reject: this.t('call_reject') || 'Отклонить',
+        cancel: this.t('call_cancel') || 'Отменить',
+        end: this.t('call_end') || 'Завершить',
+        mute: this.t('call_mute') || 'Выключить микрофон',
+        unmute: this.t('call_unmute') || 'Включить микрофон',
+        noMedia: this.t('call_no_media') || '',
+      };
+    },
+    callElapsedLabel() {
+      const s = this.callClockSec;
+      return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    },
+    callPeerName() {
+      const c = this.currentCall;
+      if (!c) return '';
+      const lp = this.localProfileOf(c.peer);
+      const contact = this.contacts.find(x => x.email === c.peer);
+      return (lp && lp.name) || (contact && contact.name) || c.peer;
     },
     filteredMessages() {
       if (!this.chatSearchQuery) return this.messages;
@@ -3137,7 +3190,15 @@ export default {
         if (this.peerKeys[from]) {
           try {
             crypto.setPeerPublicKey(this.peerKeys[from]);
-            const env = this.parseEnvelope(await crypto.decryptVault(body));
+            const plain = await crypto.decryptVault(body);
+            // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
+            // бейджи, не в уведомления) — уходят в state machine звонка.
+            const callSig = this.parseCallSignal(plain);
+            if (callSig) {
+              this.handleCallSignal(callSig, from).catch(e => console.warn('[call] signal failed:', e));
+              continue;
+            }
+            const env = this.parseEnvelope(plain);
             if (env) {
               chatKey = from;
               const lp = this.localProfileOf(from);
@@ -3234,6 +3295,146 @@ export default {
         this.unreadCounts[chatKey] = 0;
         await this.saveUnreadCounts();
       }
+    },
+    // ── Звонки (M3, feature/calls) — Фаза 1: сигнализация конвертами call_* ──
+    // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
+    // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
+    // state machine звонка. Медиа (webrtc-rs) подключается в Фазе 2.
+    parseCallSignal(decrypted) {
+      if (!decrypted || typeof decrypted !== 'string') return null;
+      try {
+        const obj = JSON.parse(decrypted);
+        if (obj && obj.vault === 1 && typeof obj.type === 'string'
+            && obj.type.indexOf('call_') === 0 && obj.call_id) {
+          return obj;
+        }
+      } catch (e) { /* не сигнал */ }
+      return null;
+    },
+    // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
+    async sendCallEnvelope(peer, payload) {
+      const body = {
+        vault: 1,
+        id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
+        type: payload.type,
+        call_id: payload.call_id,
+        ts: Date.now(),
+        ...(payload.sdp ? { sdp: payload.sdp } : {}),
+        ...(payload.role ? { role: payload.role } : {}),
+      };
+      const content = await crypto.encryptVault(JSON.stringify(body));
+      await api.sendReadReceipt(peer, content); // stealth: пустая тема
+    },
+    // Входящий сигнал → state machine. MVP: один звонок одновременно.
+    async handleCallSignal(sig, from) {
+      const { call_id, type } = sig;
+      if (!call_id || !from) return;
+      // Чужой звонок во время активного — отвечаем занято (call_reject).
+      if (this.callState !== 'idle' && this.currentCall
+          && this.currentCall.call_id !== call_id && type === 'call_request') {
+        await this.sendCallEnvelope(from, { type: 'call_reject', call_id });
+        return;
+      }
+      switch (type) {
+        case 'call_request':
+          if (this.callState !== 'idle') return;
+          this.currentCall = { call_id, peer: from };
+          this.callState = 'incoming_ringing';
+          this.callMuted = false;
+          this.startFastPolling();
+          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 45000);
+          break;
+        case 'call_accept':
+          if (this.currentCall && this.currentCall.call_id === call_id
+              && this.callState === 'outgoing_ringing') {
+            this.callState = 'active';
+            this.startCallClock();
+          }
+          break;
+        case 'call_reject':
+        case 'call_end':
+          if (this.currentCall && this.currentCall.call_id === call_id) {
+            this.hangup('remote');
+          }
+          break;
+        case 'call_sdp':
+          // Фаза 2: sdp offer/answer → PeerConnection (webrtc-rs).
+          console.log('[call] sdp received for', call_id, 'role=' + sig.role);
+          break;
+        default:
+          break;
+      }
+    },
+    // Кнопка «Позвонить» в шапке чата (1:1, есть ключ собеседника).
+    async startCall() {
+      const peer = this.activeChat;
+      if (!peer || peer === '__notes__' || this.activeChatType !== 'chat') return;
+      if (this.callState !== 'idle' || !this.peerKeys[peer]) return;
+      const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      this.currentCall = { call_id, peer };
+      this.callState = 'outgoing_ringing';
+      this.callMuted = false;
+      this.startFastPolling();
+      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 45000);
+      try {
+        await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
+      } catch (e) {
+        console.error('call_request failed:', e);
+        this.hangup('error');
+      }
+    },
+    async acceptCall() {
+      const c = this.currentCall;
+      if (!c || this.callState !== 'incoming_ringing') return;
+      this.callState = 'active';
+      this.startCallClock();
+      try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
+      catch (e) { console.error('call_accept failed:', e); }
+    },
+    async rejectCall() {
+      const c = this.currentCall;
+      if (c) {
+        try { await this.sendCallEnvelope(c.peer, { type: 'call_reject', call_id: c.call_id }); }
+        catch (e) { /* ignore */ }
+      }
+      this.hangup('reject');
+    },
+    async endCall() {
+      const c = this.currentCall;
+      if (c && this.callState === 'active') {
+        try { await this.sendCallEnvelope(c.peer, { type: 'call_end', call_id: c.call_id }); }
+        catch (e) { /* ignore */ }
+      }
+      this.hangup('end');
+    },
+    // Локальный сброс состояния (после сигнала, отмены или таймаута).
+    hangup(reason) {
+      clearTimeout(this.callRingTimer);
+      this.callRingTimer = null;
+      this.stopCallClock();
+      this.callState = 'idle';
+      this.currentCall = null;
+      this.callMuted = false;
+      this.stopFastPolling();
+    },
+    cancelCall(reason) { this.hangup(reason || 'cancel'); },
+    toggleMute() { this.callMuted = !this.callMuted; },
+    startCallClock() {
+      this.callClockSec = 0;
+      clearInterval(this.callClockTimer);
+      this.callClockTimer = setInterval(() => { this.callClockSec++; }, 1000);
+    },
+    stopCallClock() {
+      clearInterval(this.callClockTimer);
+      this.callClockTimer = null;
+    },
+    // Быстрый поллинг на время звонка: сигналы accept/end доходят за ~3с
+    // (Фаза 1.5 — IMAP IDLE, ~1с, вендоренный imap умеет Session::idle).
+    startFastPolling() {
+      if (this.pollTimer) { this.stopPolling(); this.startPolling(3000); }
+    },
+    stopFastPolling() {
+      if (this.pollTimer) { this.stopPolling(); this.startPolling(30000); }
     },
     startPolling(intervalMs = 30000) {
       if (this.pollTimer) return;
