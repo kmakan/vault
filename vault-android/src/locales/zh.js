@@ -226,7 +226,6 @@ export default {
   contact_no_key_hint: '没有对方密钥——请通过 🔗（参与者 ID 或二维码）交换密钥',
   contact_delete: '删除联系人',
   contact_delete_confirm: '删除此联系人？其加密密钥将被移除。',
-  contact_deleted_by_peer: '联系人已在另一端被删除。请通过 🔗 重新添加后再聊天。',
   notes_self: '备忘录',
   notes_self_hint: '仅此设备',
   notes_self_status: '本地 · 仅此设备',

@@ -113,8 +113,7 @@
             <div class="contact-email">{{ contact.email }}</div>
           </div>
           <div class="contact-status">
-            <span v-if="deletedByPeer[contact.email]" class="contact-deleted" :title="t('contact_deleted_by_peer') || 'Контакт удалён на другой стороне'">🔒</span>
-            <span v-else-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
+            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span class="status-dot" :class="{ online: contact.online }"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
           </div>
@@ -802,10 +801,6 @@ export default {
       publicKey: null,
       fingerprint: null,
       peerKeys: {},
-      // Контакты, удалённые другой стороной (письмо VaultContactDelete) —
-      // показываем с замком 🔒 и блокируем 1:1, пока loadGroups не уберёт
-      // их из списка (участники групп остаются видимыми, но без 1:1).
-      deletedByPeer: {},
       peerKeyInput: '',
       showKeyManager: false,
       showQRCode: false,
@@ -1248,10 +1243,6 @@ export default {
         const all = await api.getContacts();
         // Контакты — общий peer-key store на машину; себя не показываем.
         this.contacts = (all || []).filter(c => c.email !== this.email);
-        // Замки 🔒: sender'ы, чьё удаление мы получили (переживают рестарт).
-        const deleted = await api.getDeletedSenders();
-        this.deletedByPeer = {};
-        for (const e of deleted) this.deletedByPeer[e] = true;
       } catch (error) {
         // /api/contacts may not exist yet
         this.contacts = [];
@@ -1278,17 +1269,12 @@ export default {
           if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
-            // Удалённый другой стороной участник (замок 🔒) в список контактов
-            // НЕ возвращаем: он остаётся участником группы, но из списка
-            // контактов исчезает (см. processInvites: deletedByPeer).
-            if (this.deletedByPeer[m.email]) continue;
+            // Модель Delta Chat: удаление контакта НЕ трогает группы —
+            // участник остаётся полноценным контактом в списке.
             seen.add(m.email);
             this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
           }
         }
-        // Удалённые другой стороной (замок 🔒): в списке контактов их больше
-        // не держим — если не исчезли сразу, то после одного поллинга.
-        this.contacts = this.contacts.filter(c => !this.deletedByPeer[c.email]);
       } catch (error) {
         console.error('Failed to load groups:', error);
       }
@@ -1306,12 +1292,6 @@ export default {
       this.peerKeyInput = '';
     },
     async selectChat(email) {
-      // Контакт удалён другой стороной (VaultContactDelete): 1:1 заблокирован,
-      // участник группы виден с замком, но переписка недоступна.
-      if (this.deletedByPeer[email]) {
-        alert(this.t('contact_deleted_by_peer') || 'Контакт удалён на другой стороне. Для переписки добавьте его заново через 🔗.');
-        return;
-      }
       // Vault chat requires a peer key — without it there is nothing (and nothing
       // encrypted) to show. Contacts without keys are already hidden from the list;
       // this is a hard guard on top.
@@ -3098,10 +3078,8 @@ export default {
         if (!this.isLoggedIn || this._pollingActive) return;
         this._pollingActive = true;
         try {
-          // Пересборка групп в НАЧАЛЕ тика: если в прошлом тике мы получили
-          // VaultContactDelete, участник группы с замком 🔒 был виден ровно
-          // один поллинг, а теперь loadGroups уберёт его из списка контактов
-          // (deletedByPeer фильтруется). Иначе замок висел бы вечно.
+          // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
+          // контактов (модель Delta Chat — группа тоже источник контактов).
           try { await this.loadGroups(); } catch (e) { /* тихо */ }
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
@@ -4054,10 +4032,9 @@ export default {
       // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
       // перечитывает письма заново — иначе новые инвайты/удаления не видны.
       api._handshakeCache = null;
-      // Каждый этап — в своём try/catch: раньше общий try означал, что
-      // падение fetchPendingAccepts (например «Not connected») блокировало
-      // показ попапа инвайтов. Этапы независимы — ошибка одного не должна
-      // ронять остальные.
+      // Одноразовый sweep (v0.1.9): помечаем ВСЕ старые непокрытые handshake-письма,
+      // чтобы «призрачные» инвайты/accept'ы не всплывали после удаления списков.
+      try { await api.sweepStaleHandshake(); } catch (e) { /* ignore */ }
       // Обрабатываем accept-письма (добавление принявших участников).
       try {
         const accepts = await api.fetchPendingAccepts();
@@ -4071,38 +4048,11 @@ export default {
       } catch (e) {
         console.error('processInvites: accepts failed:', e);
       }
-      // Удаления контактов другой стороной (VaultContactDelete): убираем
-      // контакт и ключ; участника группы loadGroups вернёт в список — он
-      // останется с замком 🔒 и заблокированным 1:1.
-      // ВАЖНО (22.08): этот этап идёт ДО обработки accept-писем — хронологически
-      // delete обычно старше следующего accept (удалил → снова принял). Если
-      // обрабатывать accept первым, а потом delete — контакт «появляется и
-      // исчезает» навсегда (deleted-senders/замок), как было у kmakan.
-      try {
-        const dels = await api.fetchPendingContactDeletes();
-        if (dels.length) {
-          let changed = false;
-          for (const d of dels) {
-            await api.markContactDelete(`${d.sender}|${d.uid}`);
-            await api.addDeletedSender(d.sender);
-            // Старые инвайты/accept от удалившего нас контакта — в declined/
-            // accepted по uid, чтобы не воскресали; новые приглашения проходят.
-            await api.markContactHandshakeDone(d.sender);
-            this.deletedByPeer[d.sender] = true;
-            if (this.peerKeys[d.sender]) {
-              try { await crypto.removePeerKey(d.sender); } catch (e) { /* ignore */ }
-              delete this.peerKeys[d.sender];
-              delete this.peerKeysLoaded[d.sender];
-              await api.removeContact(d.sender);
-              changed = true;
-            }
-          }
-          if (changed) await this.loadContacts();
-        }
-      } catch (e) {
-        console.error('processInvites: contact deletes failed:', e);
-      }
-      // Контакты 1-на-1 (Session-модель): accept-письма → добавляем ключи.
+      // Контакты 1-на-1 (модель Delta Chat): accept-письма → добавляем ключи
+      // ТОЛЬКО от отправителей, которых МЫ пригласили (invited-senders в api.js).
+      // Удаление контакта — строго локальное (deleteContact): никаких писем-
+      // уведомлений, никаких замков, никаких повторных отправок. Старые письма
+      // удалённого контакта помечаются tombstone по uid и не воскрешают его.
       try {
         const contactAccepts = await api.fetchPendingContactAccepts();
         if (contactAccepts.length) {
@@ -4111,32 +4061,11 @@ export default {
           // не найдёт ключ и предложит «добавить контакт».
           await this.loadStoredPeerKeys();
           await this.loadContacts();
-          // Свежее принятие снимает «замок» от более раннего delete того же
-          // отправителя (fetchPendingContactAccepts уже снял kv-пометки).
-          for (const a of contactAccepts) {
-            delete this.deletedByPeer[a.sender];
-          }
           await this.loadGroups();
         }
       } catch (e) {
         console.error('processInvites: contact accepts failed:', e);
       }
-      // Повторная отправка VaultContactDelete (21.08): письмо могло потеряться
-      // (спам-фильтр yandex/gmail, сбой SMTP) — пока контакт помечен «удалён
-      // МНОЙ», шлём уведомление снова каждый 3-й поллинг (~90 сек), чтобы
-      // получатель гарантированно узнал об удалении. Без этого контакт на
-      // другой стороне «воскресает» старыми accept-письмами и живёт вечно.
-      try {
-        const selfDeleted = await api.getSelfDeleted();
-        if (selfDeleted.length) {
-          this._deleteResendTick = (this._deleteResendTick || 0) + 1;
-          if (this._deleteResendTick % 3 === 0) {
-            for (const em of selfDeleted) {
-              api.sendContactDelete(em).catch(e => console.error('resendContactDelete failed:', e));
-            }
-          }
-        }
-      } catch (e) { /* ignore */ }
       // Собираем непрочитанные инвайты для попапа согласия.
       try {
         const invites = await api.fetchPendingInvites();
@@ -4275,11 +4204,6 @@ export default {
         // Вечная пометка «инвайт обработан» — иначе после удаления контакта
         // старое письмо-инвайт снова покажет попап приглашения.
         await api.markAcceptedContact(key);
-        // Свежее добавление снимает замок 🔒 от прошлого удаления.
-        await api.removeDeletedSender(c.sender);
-        // Снимаем и пометку «удалён МНОЙ» — контакт снова активен.
-        await api.removeSelfDeleted(c.sender);
-        delete this.deletedByPeer[c.sender];
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
         // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
         this.peerKeys[c.sender] = c.public_key;
@@ -4341,17 +4265,17 @@ export default {
     async deleteContact(email) {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
-        // Уведомляем удаляемую сторону (fire-and-forget: SMTP медленный,
-        // локальное удаление не должно ждать письма, но ошибка логируется).
-        api.sendContactDelete(email).catch(e => console.error('sendContactDelete failed:', e));
+        // МОДЕЛЬ DELTA CHAT (22.08): удаление СТРОГО ЛОКАЛЬНОЕ — никаких писем
+        // второй стороне (Contact::delete в deltachat-core тоже локальный).
         await crypto.removePeerKey(email);
-        // Помечаем «удалён МНОЙ»: старые VaultContactInvite/VaultContactAccept
-        // письма не должны воскрешать контакт (попап/ключ снова).
-        await api.addSelfDeleted(email);
         // Старые handshake-письма от удалённого контакта (invite/accept)
-        // помечаем обработанными — не воскрешат контакт. НОВЫЕ приглашения
-        // от него после удаления будут доходить (uid не помечен).
+        // помечаем обработанными по uid — не воскрешат контакт. НОВЫЕ
+        // приглашения от него после удаления доходят (uid не помечен) —
+        // повторное добавление тривиально, как Contact::create в DC.
         await api.markContactHandshakeDone(email);
+        // Если мы приглашали этого отправителя — снимаем, чтобы его старое
+        // accept-письмо не авто-добавило контакт заново.
+        await api.removeInvitedSender(email);
         // Чистим и in-memory stubs api.js — иначе контакт «не удаляется»
         // до перезапуска (getContacts() мержит stubs с диском).
         await api.removeContact(email);

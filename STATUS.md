@@ -137,6 +137,28 @@ Multi-relay / multi-path delivery, post-quantum (Kyber/hybrid), Forward Secrecy
   27 задач привязаны к вехам комментариями
 - Команда: `hermes kanban --board vault list`
 
+## Журнал версий (desktop + android)
+
+### 22.08 — v0.1.9/0.1.10: модель контактов Delta Chat
+Проблема: на android после обновления самопроизвольно появлялся контакт
+kmakan@zoho.com — старое accept-письмо (21.08, без uid-пометки) авто-добавляло
+контакт; плюс icemaksim заспамил ящик повторными delete-письмами.
+Решение (по образцу deltachat-core `Contact::delete`/`Contact::create`):
+- **Удаление контакта — строго локальное**: ключ удаляется, старые письма
+  помечаются tombstone по uid. Убраны полностью: письма VaultContactDelete,
+  повторная отправка каждые 90 сек (`_deleteResendTick`), списки
+  self-deleted/deleted-senders/contact-deletes, замки и блокировка 1:1.
+  Удаление не трогает группы (участник остаётся).
+- **Авто-принятие accept — только от приглашённых НАМИ** (kv `invited-senders`):
+  `sendContactInvite` записывает адресата; `fetchPendingContactAccepts`
+  авто-добавляет только из списка и снимает запись. Чужие/старые accept'ы
+  игнорируются (tombstone по uid) — закрыта дыра: раньше любой мог прислать
+  accept со своим ключом и попасть в контакты.
+- **Одноразовый sweep** (`sweepStaleHandshake`, 1 раз на аккаунт): все старые
+  handshake-письма без пометок помечаются как обработанные (invites → declined,
+  accepts → accepted), чтобы «призрачные» инвайты не всплывали.
+- Повторное добавление тривиально: новое приглашение (новый uid) проходит всегда.
+
 ## Директории проекта
 ```
 ~/whisper/

@@ -259,9 +259,6 @@ export class ApiClient {
       const pairs = [
         ['vault-accepted-contacts', 'accepted-contacts'],
         ['vault-declined-contacts', 'declined-contacts'],
-        ['vault-contact-deletes', 'contact-deletes'],
-        ['vault-contact-deleted-senders', 'deleted-senders'],
-        ['vault-self-deleted', 'self-deleted'],
         ['vault-accepted-invites', 'accepted-invites'],
         ['vault-declined-invites', 'declined-invites'],
       ];
@@ -315,32 +312,13 @@ export class ApiClient {
     try { await db.kvSet(this.email || 'anon', 'display-name', name || ''); } catch (e) { /* ignore */ }
   }
 
-  // --- Контакты, удалённые МНОЙ (self-deleted) ---
-  // Чтобы старые VaultContactInvite/VaultContactAccept письма не «воскрешали»
-  // контакт после собственного удаления (попап снова), храним список email'ов,
-  // которые мы удалили. Снимается при новом добавлении контакта.
-  async getSelfDeleted() {
-    try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'self-deleted')) || '[]');
-    } catch (e) {
-      return [];
-    }
-  }
-  async addSelfDeleted(email) {
-    try {
-      const arr = await this.getSelfDeleted();
-      if (!arr.includes(email)) {
-        arr.push(email);
-        await db.kvSet(this.email || 'anon', 'self-deleted', JSON.stringify(arr));
-      }
-    } catch (e) { /* ignore */ }
-  }
-  async removeSelfDeleted(email) {
-    try {
-      const arr = (await this.getSelfDeleted()).filter(e => e !== email);
-      await db.kvSet(this.email || 'anon', 'self-deleted', JSON.stringify(arr));
-    } catch (e) { /* ignore */ }
-  }
+  // --- Модель контактов Delta Chat (22.08) ---
+  // Удаление контакта — СТРОГО ЛОКАЛЬНОЕ (как Contact::delete в deltachat-core):
+  // удаляется ключ + старые handshake-письма помечаются tombstone по uid
+  // (markContactHandshakeDone). Никаких писем-уведомлений второй стороне,
+  // никаких списков «удалён мной»/«удалил меня» — они только создавали
+  // фантомные замки и спам повторными отправками. Повторное добавление
+  // тривиально: новое приглашение (новый uid) проходит всегда.
 
   // --- Chats (TODO: serverless-chats via email) ---
   async getChats() { return []; } // TODO serverless-chats via email
@@ -628,46 +606,67 @@ export class ApiClient {
       }
     } catch (e) { /* ignore */ }
   }
-  // --- Удаление контакта другой стороной (синхронизация между устройствами) ---
-  async getContactDeletes() {
+  // --- Отправленные НАМИ приглашения (invited-senders) ---
+  // Защита авто-принятия (модель Delta Chat, 22.08): accept-письмо добавляет
+  // контакт автоматически ТОЛЬКО если мы сами приглашали этого отправителя.
+  // Иначе любое стороннее accept-письмо со своим ключом молча попало бы в
+  // контакты без согласия, а СТАРЫЕ accept-письма (обработанные ещё до
+  // uid-пометок) «воскрешали» бы удалённый контакт (баг v0.1.8: kmakan на
+  // android появился без принятия — UID 278, legacy-accept без пометки).
+  async getInvitedSenders() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'contact-deletes')) || '[]');
+      return JSON.parse((await db.kvGet(this.email || 'anon', 'invited-senders')) || '[]');
     } catch (e) {
       return [];
     }
   }
-  async markContactDelete(key) {
+  async addInvitedSender(email) {
     try {
-      const arr = await this.getContactDeletes();
-      if (!arr.includes(key)) {
-        arr.push(key);
-        await db.kvSet(this.email || 'anon', 'contact-deletes', JSON.stringify(arr));
-      }
-    } catch (e) { /* ignore */ }
-  }
-  // Sender'ы, чьё удаление получено — для замка 🔒 (участник группы loadGroups
-  // вернёт в список; помечаем его). Переживает рестарт.
-  async getDeletedSenders() {
-    try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'deleted-senders')) || '[]');
-    } catch (e) {
-      return [];
-    }
-  }
-  async addDeletedSender(email) {
-    try {
-      const arr = await this.getDeletedSenders();
+      const arr = await this.getInvitedSenders();
       if (!arr.includes(email)) {
         arr.push(email);
-        await db.kvSet(this.email || 'anon', 'deleted-senders', JSON.stringify(arr));
+        await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
-  // Снимаем замок при НОВОМ добавлении контакта (приняли свежий инвайт).
-  async removeDeletedSender(email) {
+  async removeInvitedSender(email) {
     try {
-      const arr = (await this.getDeletedSenders()).filter(e => e !== email);
-      await db.kvSet(this.email || 'anon', 'deleted-senders', JSON.stringify(arr));
+      const arr = (await this.getInvitedSenders()).filter(e => e !== email);
+      await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
+    } catch (e) { /* ignore */ }
+  }
+  // --- Одноразовый sweep старых handshake-писем (v0.1.9, модель Delta Chat) ---
+  // Корень «призрачных» инвайтов: handshake-письма живут в ящике ВЕЧНО, а до
+  // v0.1.7 не было uid-пометок. В v0.1.8 их подавлял список deleted-senders,
+  // в v0.1.9 он удалён (удаление локально) — и СТАРЫЕ инвайты/accept'ы без
+  // пометки всплыли заново («пришёл инвайт от kmakan, хотя я не отправлял»).
+  // Фикс: ОДИН РАЗ на аккаунт помечаем ВСЕ текущие непокрытые handshake-письма
+  // (invites → declined, accepts → accepted), чтобы они больше не всплывали.
+  async sweepStaleHandshake() {
+    try {
+      const done = await db.kvGet(this.email || 'anon', 'handshake-sweep-done');
+      if (done) return; // уже сделано для этого аккаунта — не повторяем
+      const all = await this.fetchAllHandshake();
+      const declined = await this.getDeclinedContacts();
+      const accepted = await this.getAcceptedContacts();
+      let changed = false;
+      for (const m of all.invites) {
+        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
+        if (!sender || sender === this.email) continue;
+        const key = `${sender}|${m.uid}`;
+        if (!declined.includes(key)) { declined.push(key); changed = true; }
+      }
+      for (const m of all.accepts) {
+        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
+        if (!sender || sender === this.email) continue;
+        const key = `${sender}|${m.uid}`;
+        if (!accepted.includes(key)) { accepted.push(key); changed = true; }
+      }
+      if (changed) {
+        await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(declined));
+        await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(accepted));
+      }
+      await db.kvSet(this.email || 'anon', 'handshake-sweep-done', '1');
     } catch (e) { /* ignore */ }
   }
   async sendContactInvite(email, publicKey) {
@@ -685,15 +684,20 @@ export class ApiClient {
       public_key: publicKey,
     });
     await this.sendEmail('local', { to: email, subject: '', body: payload });
+    // Запоминаем, что МЫ пригласили этого отправителя: его accept-письмо
+    // будет авто-принято (fetchPendingContactAccepts). Модель Delta Chat.
+    await this.addInvitedSender(email);
     return { ok: true, invited: true, email };
   }
   // Единый классификатор handshake-писем (стелс, 21.08): ВСЕ письма ходят с
   // ПУСТОЙ темой, тип письма — метка kind внутри base64-тела. Классифицирует
   // письма один раз за тик поллинга (кэш _handshakeCache сбрасывается в
-  // processInvites), чтобы 5 fetch-методов не делали 5 полных IMAP-сканов.
+  // processInvites), чтобы fetch-методы не делали несколько полных IMAP-сканов.
   // Старые письма (до стелс-фикса) распознаются по legacy subject-маркерам.
   // Возвращает { invites, accepts, deletes, groupInvites, groupAccepts } —
   // массивы записей { uid, id, date, folder, subject, parsed|null }.
+  // Примечание (22.08): deletes классифицируются для полноты wire-формата,
+  // но НЕ обрабатываются — удаление контакта строго локальное (модель DC).
   async fetchAllHandshake() {
     if (this._handshakeCache) return this._handshakeCache;
     const out = { invites: [], accepts: [], deletes: [], groupInvites: [], groupAccepts: [] };
@@ -778,11 +782,14 @@ export class ApiClient {
     return out;
   }
   // Пометить ВСЕ старые handshake-письма от email как обработанные
-  // (invite → declined, accept → accepted по uid). Вызывается при удалении
-  // контакта (своём и чужом): старые письма не должны воскрешать контакт,
-  // а НОВЫЕ приглашения (после удаления) проходят — их uid ещё не помечен.
+  // (invite → declined, accept → accepted по uid). Вызывается при ЛОКАЛЬНОМ
+  // удалении контакта (модель Delta Chat): старые письма не должны воскрешать
+  // контакт, а НОВЫЕ приглашения (после удаления) проходят — их uid ещё не помечен.
   async markContactHandshakeDone(email) {
     try {
+      // Кэш сбрасываем: метод вызывается из deleteContact вне поллинга,
+      // кэш может быть устаревшим (письма пришли после последнего тика).
+      this._handshakeCache = null;
       const all = await this.fetchAllHandshake();
       const declined = await this.getDeclinedContacts();
       for (const m of all.invites) {
@@ -844,6 +851,7 @@ export class ApiClient {
     const { accepts } = await this.fetchAllHandshake();
     const peers = await this.loadPeerKeyEmails();
     const accepted = await this.getAcceptedContacts();
+    const invited = await this.getInvitedSenders();
     const out = [];
     for (const m of accepts) {
       const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
@@ -852,21 +860,33 @@ export class ApiClient {
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
       if (!parsed.public_key) continue;
+      // МОДЕЛЬ DELTA CHAT (22.08): авто-принятие ТОЛЬКО от отправителей, которых
+      // МЫ сами пригласили (invited-senders). Иначе ЛЮБОЕ accept-письмо со своим
+      // ключом молча попало бы в контакты без согласия, а СТАРЫЕ accept-письма,
+      // обработанные ещё до uid-пометок, «воскрешали» бы удалённый контакт.
+      // (Баг v0.1.8: на android появился kmakan без принятия — UID 278,
+      // legacy-accept от kmakan без пометки, авто-добавлен.)
+      if (!invited.includes(sender)) {
+        // Не наше приглашение — tombstone письмо, чтобы не обрабатывалось вечно.
+        this.markAcceptedContact(`${sender}|${m.uid}`);
+        continue;
+      }
       // Профиль/аватар обновляем ВСЕГДА (даже если ключ уже сохранён) —
       // иначе аватар, загруженный после принятия контакта, никогда не дойдёт.
       await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
-      if (peers.has(sender)) continue; // ключ уже сохранён — только профиль обновили
+      if (peers.has(sender)) {
+        // Ключ уже сохранён — обновили профиль, пометили письмо, приглашение исполнено.
+        this.markAcceptedContact(`${sender}|${m.uid}`);
+        await this.removeInvitedSender(sender);
+        continue;
+      }
       try {
         await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
         // Пометка вечная (как tombstones): без неё после удаления контакта
         // это accept-письмо молча вернёт контакт со старым ключом.
         this.markAcceptedContact(`${sender}|${m.uid}`);
-        // Симметрия с ручным принятием (acceptContactInvite): если мы ранее
-        // удалили этого контакта (или он удалял нас), свежее принятие снимает
-        // пометки — иначе обработанный чуть раньше VaultContactDelete скрывает
-        // контакт (deleted-senders/self-deleted/замок) навсегда (22.08).
-        await this.removeDeletedSender(sender);
-        await this.removeSelfDeleted(sender);
+        // Приглашение исполнено — снимаем отправителя из invited.
+        await this.removeInvitedSender(sender);
       } catch (e) {
         continue;
       }
@@ -874,32 +894,6 @@ export class ApiClient {
         this.contacts.push({ id: sender, email: sender, name: parsed.sender_name || sender, online: false });
       }
       out.push({ sender });
-    }
-    return out;
-  }
-  // «Я удалил тебя из контактов» — письмо-уведомление удаляемой стороне.
-  // СТЕЛС: тема пустая, тип — kind:'delete' в base64-теле.
-  async sendContactDelete(email) {
-    const payload = urlSafeB64({
-      kind: 'delete',
-      sender: this.email,
-      sender_name: (await this.getDisplayName()) || this.email,
-      ts: Date.now(),
-    });
-    await this.sendEmail('local', { to: email, subject: '', body: payload });
-    return { ok: true };
-  }
-  async fetchPendingContactDeletes() {
-    const { deletes } = await this.fetchAllHandshake();
-    const handled = await this.getContactDeletes();
-    const out = [];
-    for (const m of deletes) {
-      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactDelete: '.length).trim();
-      if (!sender || sender === this.email) continue;
-      if (handled.includes(`${sender}|${m.uid}`)) continue; // уже обработано
-      const parsed = m.parsed || {};
-      if (!parsed.sender) continue;
-      out.push({ sender, uid: m.uid, date: m.date });
     }
     return out;
   }
