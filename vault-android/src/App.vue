@@ -189,8 +189,8 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /> {{ t('add_member') || 'Добавить участника' }}</button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /> {{ t('group_settings') || 'Настройки' }}</button>
+              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
+              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
@@ -332,8 +332,12 @@
         <!-- Контекстное меню сообщения (правый клик): копирование -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
           <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
+            <button @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
             <button @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
             <button @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
+            <button v-if="activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
+            <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
+            <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
           </div>
         </div>
 
@@ -2157,7 +2161,6 @@ export default {
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
-                  this.trace('recv sender=' + sender + ' name=' + (env.name||'') + ' avatarLen=' + (env.avatar||'').length);
                   api.saveProfile(sender, env.name, env.avatar);
                 }
               } else {
@@ -5367,6 +5370,10 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* flex:1 + min-width:0 — без них имя чата не сжимается и выталкивает
+     кнопки действий за экран (узкие экраны android). */
+  flex: 1;
+  min-width: 0;
 }
 
 .chat-avatar {
@@ -5383,6 +5390,9 @@ body {
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-status {
@@ -5393,6 +5403,7 @@ body {
 .chat-actions {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .chat-actions button {
@@ -5710,16 +5721,17 @@ body {
   opacity: 0.7;
 }
 
-/* Touch-устройства (Android): hover нет, поэтому кнопки действий сообщения
-   (reply/copy/pin/edit/delete) должны быть видны постоянно — иначе они
-   недоступны. Десктопный hover этим не затрагивается. */
+/* Touch-устройства (Android): hover нет, а абсолютно позиционированные
+   кнопки (reply/copy/pin/edit/delete) ВИСЯТ поверх текста сообщения и
+   закрывают его. Поэтому на touch они полностью скрыты — все действия
+   доступны через long-press контекстное меню сообщения (message-menu). */
 @media (hover: none) and (pointer: coarse) {
   .reply-btn,
   .copy-btn,
   .pin-btn,
   .edit-btn,
   .delete-btn {
-    opacity: 1;
+    display: none;
   }
 }
 
@@ -6689,6 +6701,37 @@ body {
   }
   .main-area {
     width: 100%;
+  }
+  /* Шапка чата на узком экране: все кнопки обязаны умещаться.
+     Текстовые подписи групповых кнопок скрываются (иконка + title
+     остаются), отступы уменьшаются, имя чата обрезается многоточием. */
+  .chat-header {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .chat-header-info {
+    gap: 10px;
+  }
+  .chat-header-info h3 {
+    font-size: 15px;
+  }
+  .chat-status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chat-actions {
+    gap: 2px;
+  }
+  .chat-actions button {
+    padding: 6px;
+  }
+  .chat-actions button.chat-action-btn {
+    padding: 6px 8px;
+    border: none;
+  }
+  .chat-action-label {
+    display: none;
   }
 }
 

@@ -189,8 +189,8 @@
           </div>
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /> {{ t('add_member') || 'Добавить участника' }}</button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /> {{ t('group_settings') || 'Настройки' }}</button>
+              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
+              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
@@ -2157,7 +2157,6 @@ export default {
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
-                  this.trace('recv sender=' + sender + ' name=' + (env.name||'') + ' avatarLen=' + (env.avatar||'').length);
                   api.saveProfile(sender, env.name, env.avatar);
                 }
               } else {
@@ -5367,6 +5366,10 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* flex:1 + min-width:0 — без них имя чата не сжимается и выталкивает
+     кнопки действий за экран (узкие экраны android). */
+  flex: 1;
+  min-width: 0;
 }
 
 .chat-avatar {
@@ -5383,6 +5386,9 @@ body {
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-status {
@@ -5393,6 +5399,7 @@ body {
 .chat-actions {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .chat-actions button {
@@ -6689,6 +6696,37 @@ body {
   }
   .main-area {
     width: 100%;
+  }
+  /* Шапка чата на узком экране: все кнопки обязаны умещаться.
+     Текстовые подписи групповых кнопок скрываются (иконка + title
+     остаются), отступы уменьшаются, имя чата обрезается многоточием. */
+  .chat-header {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .chat-header-info {
+    gap: 10px;
+  }
+  .chat-header-info h3 {
+    font-size: 15px;
+  }
+  .chat-status {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chat-actions {
+    gap: 2px;
+  }
+  .chat-actions button {
+    padding: 6px;
+  }
+  .chat-actions button.chat-action-btn {
+    padding: 6px 8px;
+    border: none;
+  }
+  .chat-action-label {
+    display: none;
   }
 }
 
