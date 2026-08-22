@@ -17,11 +17,12 @@
 //! this module establishes and tears down the encrypted media channel.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio::time::timeout;
 
 use webrtc::media_stream::track_local::TrackLocal;
@@ -52,17 +53,13 @@ pub struct CallMediaManager {
     ice_servers: Vec<RTCIceServer>,
 }
 
-/// Active call session: PC handle + local opus track (remote track/audio
-/// pipeline attaches in the audio iteration).
+/// Active call session: PC handle + pipeline control.
 struct CallSession {
     pc: Arc<dyn PeerConnection>,
-    /// Written with Opus frames once mic capture is wired up (Phase 2.1).
-    #[allow(dead_code)]
-    track: Arc<TrackLocalStaticSample>,
-    /// Remote track notification (consumed when audio playback is wired up).
-    _remote_track_rx: Receiver<Arc<dyn TrackRemote>>,
-    /// Connection established notification.
-    _connected_rx: Receiver<()>,
+    /// Signal to stop the audio pipeline (watch fires on close).
+    stop_tx: watch::Sender<bool>,
+    /// Mic mute flag (checked by the capture callback).
+    muted: Arc<AtomicBool>,
 }
 
 /// SDP payload returned to the UI (JSON-encoded RTCSessionDescription).
@@ -199,13 +196,34 @@ impl CallMediaManager {
             .await
             .map_err(|e| e.to_string())?;
 
+        // Audio pipeline: wait for the connection to establish, then start
+        // mic capture / speaker playback (Phase 2.1). Aborted on close.
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let muted = Arc::new(AtomicBool::new(false));
+        {
+            let track = track.clone();
+            let mut stop_rx = stop_rx.clone();
+            let muted = muted.clone();
+            let mut connected_rx = connected_rx;
+            tauri::async_runtime::spawn(async move {
+                tokio::select! {
+                    _ = connected_rx.recv() => {}
+                    _ = stop_rx.changed() => return,
+                }
+                eprintln!("[media] connected — starting audio pipeline");
+                crate::audio::run_audio_pipeline(
+                    track, ssrc, OPUS_PAYLOAD_TYPE, track_rx, stop_rx, muted,
+                )
+                .await;
+            });
+        }
+
         self.calls.insert(
             call_id.to_owned(),
             CallSession {
                 pc: Arc::clone(&pc),
-                track: Arc::clone(&track),
-                _remote_track_rx: track_rx,
-                _connected_rx: connected_rx,
+                stop_tx,
+                muted,
             },
         );
 
@@ -284,9 +302,20 @@ impl CallMediaManager {
         Ok(())
     }
 
+    /// Mute/unmute the local mic for an active call.
+    pub async fn set_muted(&mut self, call_id: &str, muted: bool) -> Result<(), String> {
+        let session = self
+            .calls
+            .get(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        session.muted.store(muted, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Close a call session (graceful PeerConnection teardown).
     pub async fn close(&mut self, call_id: &str) -> Result<(), String> {
         if let Some(session) = self.calls.remove(call_id) {
+            let _ = session.stop_tx.send(true);
             session.pc.close().await.map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -341,6 +370,16 @@ pub async fn media_close(
 ) -> Result<(), String> {
     let mut mgr = state.lock().await;
     mgr.close(&call_id).await
+}
+
+#[tauri::command]
+pub async fn media_set_muted(
+    call_id: String,
+    muted: bool,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.set_muted(&call_id, muted).await
 }
 
 #[tauri::command]

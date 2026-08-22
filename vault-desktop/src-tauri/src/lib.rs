@@ -4,6 +4,7 @@ mod crypto;
 mod email;
 mod key_store;
 mod media;
+mod audio;
 mod storage;
 mod groups;
 mod history_store;
@@ -779,6 +780,7 @@ pub fn run() {
             media::media_accept_incoming,
             media::media_set_remote,
             media::media_close,
+            media::media_set_muted,
             media::media_set_ice_servers,
         ])
         .setup(|app| {
