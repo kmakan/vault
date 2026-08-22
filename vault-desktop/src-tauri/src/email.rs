@@ -348,9 +348,19 @@ impl EmailClient {
 
         let uid_list = match last_uid {
             None => session.uid_search("ALL")?,
-            Some(last) => session.uid_search(&format!("UID {}:*", last + 1))?,
+            // Gmail bug: UID SEARCH X:* (где X > max UID) не возвращает
+            // пусто — возвращает последний известный UID. Фильтруем на
+            // клиенте: отбрасываем uid ≤ last_uid.
+            Some(last) => session.uid_search(&format!("{}:*", last + 1))?,
         };
-        let mut uids: Vec<u32> = uid_list.iter().copied().collect();
+        let mut uids: Vec<u32> = uid_list
+            .iter()
+            .copied()
+            .filter(|u| match last_uid {
+                None => true,
+                Some(last) => *u > last,
+            })
+            .collect();
         let max_uid = uids.iter().copied().max().unwrap_or(0);
         uids.sort_by(|a, b| b.cmp(a));
         if last_uid.is_none() {
@@ -441,11 +451,14 @@ impl EmailClient {
         }
 
         // Спам — всегда: Gmail кладёт шифрописьма в Junk.
+        // Важно: имя папки Спама в IMAP (modified UTF-7) МЕНЯЕТСЯ между
+        // сессиями (Gmail encoding variance). Ключ курсора для Junk — всегда
+        // "JUNK" (не имя папки), чтобы курсор переживал перезапуск.
         if let Some(junk) = &folders.junk {
             match self
-                .fetch_folder_from(junk, cursors.get(junk).copied(), 50)
+                .fetch_folder_from(junk, cursors.get("JUNK").copied(), 50)
             {
-                Ok((msgs, max)) => collect(junk, junk, msgs, max),
+                Ok((msgs, max)) => collect(junk, "JUNK", msgs, max),
                 Err(e) => eprintln!("[email] Junk folder {junk} incremental fetch failed: {e}"),
             }
         }
