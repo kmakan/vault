@@ -2067,7 +2067,13 @@ export default {
         if (hist && hist.length && !isStale()) {
           // История в sqlite — в порядке вставки; показываем сразу по времени.
           hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-          this.messages = hist;
+          // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
+          // сырые сообщения (баг до фильтра в loadMessages) — сигналы не
+          // рендерятся ни в истории, ни в чате.
+          this.messages = hist.filter(m => {
+            const c = (m && m.content) || '';
+            return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
+          });
         }
       });
     },
@@ -2184,6 +2190,11 @@ export default {
                 console.log('[decrypt fail] uid=' + (m.uid || m.id) + ' folder=' + (m.folder || 'INBOX') + ' err=' + (de && de.message || de));
                 return null;
               }
+              // Звонки (M3): call_* конверты — сигналы, НЕ сообщения. В истории
+              // чата не рендерятся (как реакции/квитанции). Живая обработка —
+              // в processIncoming (handleCallSignal); здесь просто пропуск.
+              const callSig = this.parseCallSignal(text);
+              if (callSig) return null; // не сообщение
               // 1) Реакция: {react:1, msg_id, emoji, action} — в чат не
               //    показываем, накапливаем для applyReactions.
               try {
