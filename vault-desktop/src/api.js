@@ -1016,6 +1016,9 @@ export class ApiClient {
   async mediaClose(callId) {
     return await invoke('media_close', { callId });
   }
+  async mediaSetMuted(callId, muted) {
+    return await invoke('media_set_muted', { callId, muted });
+  }
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
   }

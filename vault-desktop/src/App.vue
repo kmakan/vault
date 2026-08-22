@@ -3459,7 +3459,13 @@ export default {
       }
     },
     cancelCall(reason) { this.hangup(reason || 'cancel'); },
-    toggleMute() { this.callMuted = !this.callMuted; },
+    toggleMute() {
+      this.callMuted = !this.callMuted;
+      const c = this.currentCall;
+      if (c) {
+        api.mediaSetMuted(c.call_id, this.callMuted).catch((e) => console.error('[call] set muted failed:', e));
+      }
+    },
     startCallClock() {
       this.callClockSec = 0;
       clearInterval(this.callClockTimer);
