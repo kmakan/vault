@@ -5,12 +5,11 @@
       <button
         v-for="(font, id) in fonts"
         :key="id"
-        :class="['font-card', { active: currentFont === id, pro: font.pro }]"
+        :class="['font-card', { active: currentFont === id }]"
         @click="selectFont(id)"
       >
         <span class="font-icon">{{ font.icon }}</span>
         <span class="font-name">{{ font.name }}</span>
-        <span v-if="font.pro" class="font-pro-badge">PRO</span>
         <span v-if="currentFont === id" class="font-check">✓</span>
       </button>
     </div>
@@ -91,16 +90,6 @@ function selectFont(id) {
 .font-card.active .font-name {
   color: var(--text-primary, #f1f5f9);
   font-weight: 500;
-}
-
-.font-pro-badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 5px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  color: white;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
 }
 
 .font-check {

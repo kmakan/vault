@@ -1,4 +1,5 @@
-// Font definitions — applied via CSS font-family
+// Font definitions — applied via CSS font-family.
+// All fonts are available to every user; there is no paid/Pro tier for fonts.
 export const fonts = {
   system: {
     name: 'System',
@@ -20,14 +21,12 @@ export const fonts = {
     mono: "'JetBrains Mono', monospace",
     url: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap',
   },
-  // Pro fonts
   manrope: {
     name: 'Manrope',
     icon: '✨',
     family: "'Manrope', sans-serif",
     mono: "'JetBrains Mono', monospace",
     url: 'https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap',
-    pro: true,
   },
   plusJakarta: {
     name: 'Plus Jakarta',
@@ -35,7 +34,6 @@ export const fonts = {
     family: "'Plus Jakarta Sans', sans-serif",
     mono: "'Fira Code', monospace",
     url: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap',
-    pro: true,
   },
   spaceGrotesk: {
     name: 'Space Grotesk',
@@ -43,7 +41,6 @@ export const fonts = {
     family: "'Space Grotesk', sans-serif",
     mono: "'Fira Code', monospace",
     url: 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap',
-    pro: true,
   },
   outfit: {
     name: 'Outfit',
@@ -51,7 +48,6 @@ export const fonts = {
     family: "'Outfit', sans-serif",
     mono: "'Fira Code', monospace",
     url: 'https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap',
-    pro: true,
   },
 }
 
