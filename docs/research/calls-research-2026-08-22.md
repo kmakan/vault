@@ -166,6 +166,48 @@
 4. **Google Play политики** (если будет в проде): микрофон/камера — runtime permissions (уже паттерн POST_NOTIFICATIONS).
 5. **Лицензии**: webrtc-rs MIT/BSD, opus BSD, cpal Apache-2.0 — совместимо.
 
+## 9. Delta Chat звонки: разбор исходников (23.08, утро)
+
+Клонированы deltachat-core-rust + desktop. **Подтверждено: у DC есть аудио- И
+ВИДЕО-звонки** (2.48+ март 2026, из экспериментальных стали основными в 2.51).
+
+### Архитектура DC (из src/calls.rs, 815 строк)
+1. **Сигнализация — обычные email-сообщения** (как у нас): Viewtype::Call
+   инициализирует звонок; Call ID = Message ID. Скрытые сообщения
+   `[Call accepted]` / `[Call ended]` (SystemMessage::CallAccepted/CallEnded,
+   msg.hidden=true) — это наши call_accept/call_end.
+2. **place_call_info / accept_call_info — строки в Param::WebrtcRoom /
+   WebrtcAccepted**: туда UI кладёт SDP-offer при place_outgoing_call() и
+   SDP-answer при accept_incoming_call(). Т.е. SDP едет ВНУТРИ тех же писем —
+   эквивалент нашего sig.sdp в конверте. ОДНО отличие: у DC offer шлёт
+   ЗВОНИЩИЙ в первом письме (мы перешли на схему SimpleX — offer от
+   принимающего внутри accept).
+3. **WebRTC-стек НЕ в core**: core только ретранслирует info через события
+   (IncomingCall{place_call_info}, OutgoingCallAccepted{accept_call_info}).
+   RTCPeerConnection живёт в UI (Electron/desktop, WebView на Android) —
+   стандартный браузерный WebRTC.
+4. **ice_servers() в core**: JSON с STUN/TURN для UI, резолвятся по IP заранее
+   (desktop не умеет DNS). Серверы берутся из metadata провайдеров чатмейла.
+5. **RINGING_SECONDS=120** (у нас 90с) + emit_end_call_if_unaccepted таймер;
+   is_stale() гасит устаревший звонок у получателя («missed call»).
+6. **WhoCanCallMe** (Everybody/Contacts/Nobody) — настройка приватности.
+
+### Видео
+Видео = тот же поток, has_video_initially флаг в первом письме + переключение
+камеры в UI. Отдельного протокола нет: WebRTC-медиа-поток с video track.
+
+### Что взять нам
+- ✅ Наша схема сигнализации эквивалентна DC (письма с info в параметрах);
+  расхождение только в направлении offer — у SimpleX/нас надёжнее против
+  гонок (offer от того, кто отвечает).
+- Взять: RINGING 120с? (у нас 90с — ок); is_stale-гашение «missed» у получателя
+  (у нас просто cancel — можно добавить статус «пропущенный»).
+- Взять: WhoCanCallMe-настройку в M4/M5 (приватность).
+- Видео: после звука добавить video track в media.rs (TrackLocalStaticSample
+  поддерживает H264/VP8) — дёшево поверх готового аудио-P2P.
+- Подтверждение выбора WebRTC: DC использует браузерный стек в UI, мы —
+  webrtc-rs в Rust. Оба подхода валидны; наш даёт единый код desktop+android.
+
 ## 8. Выводы из SimpleX (повторное изучение 22.08, вечер)
 
 Источник: simplex.chat/docs/guide/audio-video-calls.html (прочитано целиком).
