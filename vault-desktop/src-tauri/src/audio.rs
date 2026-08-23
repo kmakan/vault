@@ -347,6 +347,7 @@ macro_rules! build_ringtone {
                 None,
             )
             .map_err(|e| e.to_string())?;
+        stream.play().map_err(|e| e.to_string())?; // cpal 0.18: поток НЕ играет без play()
         *RINGTONE.lock().unwrap() = Some(stream);
         Ok(())
     }};
@@ -362,9 +363,11 @@ pub fn ringtone_start() -> Result<(), String> {
     let device = host
         .default_output_device()
         .ok_or_else(|| "No output device for ringtone".to_string())?;
+    eprintln!("[ringtone] device: {}", device.to_string());
     let cfg = device
         .default_output_config()
         .map_err(|e| e.to_string())?;
+    eprintln!("[ringtone] config: {:?} {:?}", cfg.sample_format(), cfg.sample_rate());
     match cfg.sample_format() {
         cpal::SampleFormat::F32 => build_ringtone!(device, cfg, f32),
         cpal::SampleFormat::I16 => build_ringtone!(device, cfg, i16),
