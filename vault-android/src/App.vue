@@ -3421,6 +3421,18 @@ export default {
             this.callRingTimer = null;
             this.callState = 'active';
             this.startCallClock();
+            // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER приходит ВНУТРИ
+            // call_accept (sig.sdp). Ставим remote, создаём ANSWER и шлём.
+            if (sig.sdp) {
+              try {
+                const r = await api.mediaAcceptIncoming(call_id, sig.sdp);
+                console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
+                await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
+                console.log('[call] answer sent OK — waiting for DTLS');
+              } catch (e) {
+                console.error('[call] media accept failed:', e && e.message || e);
+              }
+            }
           }
           break;
         case 'call_reject':
@@ -3433,8 +3445,17 @@ export default {
           }
           break;
         case 'call_sdp':
-          // Фаза 2: sdp offer/answer → PeerConnection (webrtc-rs).
-          console.log('[call] sdp received for', call_id, 'role=' + sig.role);
+          // Фаза 2.3: звонящий получает ANSWER от принимающего → set_remote
+          // (DTLS-SRTP). offer отдельным письмом больше не ходит.
+          console.log('[call] sdp received', call_id, 'role=' + sig.role, 'state=' + this.callState);
+          if (sig.role === 'answer' && this.currentCall && this.currentCall.call_id === call_id) {
+            try {
+              await api.mediaSetRemote(call_id, sig.sdp);
+              console.log('[call] remote answer set — DTLS handshake should follow');
+            } catch (e) {
+              console.error('[call] media set remote failed:', e && e.message || e);
+            }
+          }
           break;
         default:
           break;

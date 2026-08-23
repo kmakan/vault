@@ -3418,7 +3418,22 @@ export default {
         ...(payload.role ? { role: payload.role } : {}),
       };
       const content = await crypto.encryptVault(JSON.stringify(body));
-      await api.sendReadReceipt(peer, content); // stealth: пустая тема
+      // Ретрай ×3 (23.08): Gmail-троттлинг рвёт SMTP в момент звонка
+      // («media accept failed» = sendEmail упал, answer потерян навсегда).
+      // Сигнал звонка критичен — повторяем с паузой.
+      let lastErr;
+      for (let i = 0; i < 3; i++) {
+        try {
+          await api.sendReadReceipt(peer, content); // stealth: пустая тема
+          if (i > 0) console.log('[call] envelope sent on retry', i);
+          return;
+        } catch (e) {
+          lastErr = e;
+          console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+      throw lastErr;
     },
     // Входящий сигнал → state machine. MVP: один звонок одновременно.
     async handleCallSignal(sig, from) {
@@ -3475,7 +3490,7 @@ export default {
             e => console.warn('[call] ringtone start failed:', e)
           );
           this.startFastPolling();
-          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 45000);
+          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 90000);
           break;
         case 'call_accept':
           if (this.currentCall && this.currentCall.call_id === call_id
@@ -3485,10 +3500,20 @@ export default {
             this.callRingTimer = null;
             this.callState = 'active';
             this.startCallClock();
-            // Фаза 2: собеседник принял — поднимаем медиа-канал (webrtc-rs):
-            // создаём PeerConnection, получаем offer (JSON SDP) и шлём его
-            // конвертом call_sdp. Полный SDP (non-trickle) — после ICE.
-            this.startMediaOffer();
+            // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER приходит ВНУТРИ
+            // call_accept (sig.sdp). Ставим remote, создаём ANSWER и шлём.
+            // ВАЖНО: адресат = from (параметр сигнала); «c.peer» здесь не
+            // существует — было причиной «media accept failed: {}».
+            if (sig.sdp) {
+              try {
+                const r = await api.mediaAcceptIncoming(call_id, sig.sdp);
+                console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
+                await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
+                console.log('[call] answer sent OK — waiting for DTLS');
+              } catch (e) {
+                console.error('[call] media accept failed:', e && e.message || e);
+              }
+            }
           }
           break;
         case 'call_reject':
@@ -3504,18 +3529,19 @@ export default {
           // Фаза 2: SDP-обмен после call_accept. offer — сторона получателя
           // (создаёт answer и шлёт обратно), answer — сторона звонящего
           // (завершает handshake, DTLS-SRTP устанавливается).
+          console.log('[call] sdp received', call_id, 'role=' + sig.role, 'state=' + this.callState);
           if (!this.currentCall || this.currentCall.call_id !== call_id
-              || this.callState !== 'active') break;
-          if (sig.role === 'offer') {
-            try {
-              const r = await api.mediaAcceptIncoming(call_id, sig.sdp);
-              await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
-            } catch (e) {
-              console.error('[call] media accept failed:', e);
-            }
-          } else if (sig.role === 'answer') {
+              || this.callState !== 'active') {
+            console.warn('[call] sdp DROPPED by guard:', call_id, 'role=' + sig.role,
+                'state=' + this.callState, 'current=' + (this.currentCall && this.currentCall.call_id));
+            break;
+          }
+          if (sig.role === 'answer') {
+            // Фаза 2.3 (SimpleX-схема): звонящий получает ANSWER от принимающего
+            // и завершает handshake (DTLS-SRTP).
             try {
               await api.mediaSetRemote(call_id, sig.sdp);
+              console.log('[call] remote answer set — DTLS handshake should follow');
             } catch (e) {
               console.error('[call] media set remote failed:', e);
             }
@@ -3535,7 +3561,7 @@ export default {
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
       this.startFastPolling();
-      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 45000);
+      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 90000);
       try {
         await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
       } catch (e) {
@@ -3548,8 +3574,11 @@ export default {
       const c = this.currentCall;
       if (!c) return;
       try {
+        console.log('[call] creating media offer...');
         const r = await api.mediaStartOutgoing(c.call_id);
+        console.log('[call] offer created,', (r.sdp || '').length, 'bytes, sending');
         await this.sendCallEnvelope(c.peer, { type: 'call_sdp', call_id: c.call_id, sdp: r.sdp, role: 'offer' });
+        console.log('[call] offer sent OK');
       } catch (e) {
         console.error('[call] media start failed:', e);
       }
@@ -3563,8 +3592,20 @@ export default {
       api.mediaRingtoneStop().catch(() => {});
       this.callState = 'active';
       this.startCallClock();
-      try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
-      catch (e) { console.error('call_accept failed:', e); }
+      // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER создаёт ПРИНИМАЮЩИЙ
+      // и шлёт его ВНУТРИ call_accept — на один email-round-trip меньше,
+      // ICE-кандидаты не успевают устареть.
+      try {
+        const r = await api.mediaStartOutgoing(c.call_id);
+        console.log('[call] offer (callee) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
+        await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id, sdp: r.sdp });
+        console.log('[call] call_accept + offer sent OK');
+      } catch (e) {
+        console.error('[call] media start (callee) failed:', e);
+        // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
+        try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
+        catch (e2) { console.error('call_accept failed:', e2); }
+      }
     },
     async rejectCall() {
       const c = this.currentCall;
@@ -3667,7 +3708,10 @@ export default {
             break;
           }
           const elapsed = Date.now() - lastSafety;
-          if (changed || elapsed >= 10000) {
+          // Gmail кладёт call_* письма в СПАМ, а IDLE-push приходит только от
+          // INBOX: страховочный фетч JUNK делаем чаще (7с), чтобы answer/accept
+          // из Спама не ждали 10с и не опаздывали к 90с-таймауту.
+          if (changed || elapsed >= 7000) {
             lastSafety = Date.now();
             // Быстрый фетч для звонков (22.08): ОТДЕЛЬНЫЙ IMAP-клиент в Rust
             // (email_fetch_incremental_fast) — основной клиент может быть занят

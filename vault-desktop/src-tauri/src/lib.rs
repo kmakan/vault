@@ -432,15 +432,22 @@ async fn email_send(
         .clone()
         .ok_or_else(|| "Not connected to email server".to_string())?;
     let mut client = EmailClient::new(cfg);
-    // SMTP: письмо отправлено даже если QUIT упал после DATA. Не возвращаем
-    // Err — статус станет 'failed', хотя письмо ушло (баг 20.08: все точки
-    // красные, даже у доставленных). Логируем, но возвращаем Ok(true).
-    match t_timeout(Duration::from_secs(60), client.send_email(&to, &subject, &body)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => eprintln!("[email] send OK after DATA, QUIT error: {e}"),
-        Err(_) => eprintln!("[email] send timed out after DATA"),
+    // SMTP: lettre-транспорт с 30с таймаутом на операцию. ВАЖНО (23.08):
+    // раньше при зависании после DATA мы возвращали Ok(true) — фронт считал
+    // отправку успешной, ретрай не запускался, сигнал звонка терялся навсегда
+    // («send timed out after DATA», answer не дошёл, медиа не поднялось).
+    // Теперь возвращаем реальный статус: Err → JS-ретрай sendCallEnvelope ×3.
+    match t_timeout(Duration::from_secs(45), client.send_email(&to, &subject, &body)).await {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => {
+            eprintln!("[email] send error: {e}");
+            Err(format!("SMTP send failed: {e}"))
+        }
+        Err(_) => {
+            eprintln!("[email] send timed out (45s)");
+            Err("SMTP send timed out".to_string())
+        }
     }
-    Ok(true)
 }
 
 #[tauri::command]
@@ -741,6 +748,16 @@ fn db_emails_clear(account: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // RUST_LOG (23.08): без инициализации лога error!/debug! из webrtc/rtc
+    // не видны — ICE-gathering падал молча («ICE gathering timed out»).
+    let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    if std::env::var("VAULT_LOG_INIT").is_err() {
+        std::env::set_var("VAULT_LOG_INIT", "1");
+        let _ = env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Info)
+            .parse_filters(&rust_log)
+            .try_init();
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())

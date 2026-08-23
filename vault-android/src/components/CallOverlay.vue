@@ -1,19 +1,12 @@
 <template>
-  <div
-    class="call-overlay"
-    :class="'call-' + state"
-    @pointerdown="onPointerDown"
-    @pointermove="onPointerMove"
-    @pointerup="onPointerUp"
-    @pointercancel="onPointerUp"
-  >
+  <div class="call-overlay" :class="'call-' + state">
     <!-- Подсказка свайпа для входящего -->
-    <div v-if="state === 'incoming_ringing' && !swiping" class="call-swipe-hint">
+    <div v-if="state === 'incoming_ringing' && !dragging" class="call-swipe-hint">
       <span class="swipe-hint-l">{{ texts.rejectHint }}</span>
       <span class="swipe-hint-r">{{ texts.acceptHint }}</span>
     </div>
 
-    <div class="call-panel" :style="dragStyle">
+    <div class="call-panel" :style="panelShiftStyle">
       <div class="call-avatar">
         <UserAvatar :email="peer" :avatarUrl="avatarUrl" :size="88" />
       </div>
@@ -27,25 +20,48 @@
 
     <!-- Нижняя панель действий -->
     <div class="call-controls">
-      <!-- Входящий: свайп-трубка слева (отклонить) / справа (принять) -->
+      <!-- Входящий: золотая трубка + шевроны-подсказки в обе стороны.
+           Зажми и тяни вправо — зеленеет (принять), влево — краснеет
+           (отклонить). После отпускания трубка возвращается в ЦЕНТР,
+           но ОСТАЁТСЯ выбранного цвета до конца звонка/сброса состояния. -->
       <template v-if="state === 'incoming_ringing'">
-        <div class="call-control-row">
-          <button class="call-orb call-orb-reject" :title="texts.reject" @click="$emit('reject')">
-            <Icon name="phone-off" :size="26" />
+        <div class="call-drag-row">
+          <transition name="hintfade">
+            <span v-if="!dragging && orbX === 0 && !decision" class="drag-hint hint-left">
+              <Icon name="double-chevron-left" :size="20" color="#f87171" />
+              <Icon name="double-chevron-left" :size="14" color="#f87171" />
+            </span>
+          </transition>
+          <button
+            ref="orbEl"
+            class="call-orb"
+            :class="[decision ? 'decision-' + decision : 'call-orb-gold', dragClass]"
+            :style="{ transform: `translateX(${orbX}px)` }"
+            :title="texts.accept + ' / ' + texts.reject"
+            @pointerdown="onDragStart"
+            @pointermove="onDragMove"
+            @pointerup="onDragEnd"
+            @pointercancel="onDragEnd"
+          >
+            <Icon name="phone" :size="26" color="#ffffff" />
           </button>
-          <button class="call-orb call-orb-accept" :title="texts.accept" @click="$emit('accept')">
-            <Icon name="phone" :size="26" />
-          </button>
+          <transition name="hintfade">
+            <span v-if="!dragging && orbX === 0 && !decision" class="drag-hint hint-right">
+              <Icon name="double-chevron-right" :size="14" color="#4ade80" />
+              <Icon name="double-chevron-right" :size="20" color="#4ade80" />
+            </span>
+          </transition>
         </div>
       </template>
 
-      <!-- Исходящий: только отмена -->
+      <!-- Исходящий: золотая трубка (отмена) — как у входящего, единый стиль -->
       <template v-else-if="state === 'outgoing_ringing'">
         <div class="call-control-row">
-          <button class="call-orb call-orb-reject call-orb-single" :title="texts.cancel" @click="$emit('cancel')">
-            <Icon name="phone-off" :size="26" />
+          <button class="call-orb call-orb-gold" :title="texts.cancel" @click="$emit('cancel')">
+            <Icon name="phone-off" :size="26" color="#ffffff" />
           </button>
         </div>
+        <div class="call-waiting-hint">{{ texts.outgoing }}</div>
       </template>
 
       <!-- Активный: доп. кнопки + завершить -->
@@ -86,8 +102,11 @@
 import UserAvatar from './UserAvatar.vue';
 import Icon from './Icon.vue';
 
-// Оверлей звонка (M3, feature/calls). Современный дизайн в духе Android:
-// круглые кнопки-«орбы», свайп трубки вправо (принять) / влево (отклонить).
+// Оверлей звонка (M3, feature/calls). Дизайн в духе Android:
+// золотая трубка (#f59e0b). Свайп ТОЛЬКО при зажатой кнопке на самой трубке:
+// вправо — зеленеет (принять), влево — краснеет (отклонить).
+// Ход ограничен DRAG_LIMIT; на пределе цвет «залипает» (latched) — это и есть
+// визуальное подтверждение действия, которое отправляется в момент достижения.
 export default {
   name: 'CallOverlay',
   components: { UserAvatar, Icon },
@@ -104,37 +123,63 @@ export default {
   emits: ['accept', 'reject', 'cancel', 'end', 'toggle-mute', 'toggle-record'],
   data() {
     return {
+      dragging: false,
       startX: null,
-      currentX: null,
-      swiping: false,
+      dx: 0,
+      decision: null, // 'accept' | 'reject' | null — принятое решение (цвет держится)
     };
   },
   computed: {
-    dragStyle() {
-      if (!this.swiping || this.currentX === null) return {};
-      return { transform: `translateX(${this.currentX - this.startX}px)` };
+    DRAG_LIMIT() { return 110; }, // полный ход трубки, px
+    LATCH_AT() { return this.DRAG_LIMIT; }, // предел = заливка цвета + действие
+    orbX() {
+      if (!this.dragging) return 0;
+      return Math.max(-this.DRAG_LIMIT, Math.min(this.DRAG_LIMIT, this.dx));
+    },
+    dragClass() {
+      if (this.orbX > 24) return 'drag-accept';
+      if (this.orbX < -24) return 'drag-reject';
+      return '';
+    },
+    panelShiftStyle() {
+      // Панель слегка тянется за трубкой (0.25x), но НЕ двигается после отпускания.
+      if (!this.dragging) return {};
+      return { transform: `translateX(${this.orbX * 0.25}px)` };
+    },
+  },
+  watch: {
+    state(s) {
+      // Смена состояния (в т.ч. уход с incoming) — сброс драга.
+      this.reset();
     },
   },
   methods: {
-    onPointerDown(e) {
-      // Свайп работает только для входящего звонка
-      if (this.state !== 'incoming_ringing') return;
-      this.startX = e.clientX;
-      this.currentX = e.clientX;
-      this.swiping = true;
-    },
-    onPointerMove(e) {
-      if (!this.swiping) return;
-      this.currentX = e.clientX;
-    },
-    onPointerUp() {
-      if (!this.swiping) return;
-      this.swiping = false;
-      const dx = (this.currentX || 0) - (this.startX || 0);
-      if (dx > 80) this.$emit('accept');
-      else if (dx < -80) this.$emit('reject');
+    reset() {
+      this.dragging = false;
       this.startX = null;
-      this.currentX = null;
+      this.dx = 0;
+    },
+    onDragStart(e) {
+      if (this.state !== 'incoming_ringing') return;
+      if (this.decision) return; // решение уже принято
+      this.dragging = true;
+      this.startX = e.clientX - this.dx;
+      try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    },
+    onDragMove(e) {
+      if (!this.dragging || this.decision) return;
+      const prevX = this.orbX;
+      this.dx = e.clientX - this.startX;
+      // Достигли предела → фиксируем решение и ОТПРАВЛЯЕМ его один раз.
+      if (prevX > -this.LATCH_AT && prevX < this.LATCH_AT) {
+        if (this.orbX >= this.LATCH_AT) { this.decision = 'accept'; this.$emit('accept'); }
+        else if (this.orbX <= -this.LATCH_AT) { this.decision = 'reject'; this.$emit('reject'); }
+      }
+    },
+    onDragEnd() {
+      // Отпускание: трубка возвращается в центр, но цвет решения держится
+      // до конца звонка (сброс — при смене state из родителя).
+      this.reset();
     },
   },
 };
@@ -159,7 +204,7 @@ export default {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  transition: transform 0.08s linear;
+  transition: transform 0.12s ease-out;
 }
 .call-avatar {
   width: 88px;
@@ -201,6 +246,39 @@ export default {
   align-items: center;
   justify-content: center;
 }
+/* Ряд входящего: шевроны по бокам трубки */
+.call-drag-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  min-width: 340px;
+}
+.drag-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  animation: hintpulse 1.6s ease-in-out infinite;
+}
+.hint-left {
+  flex-direction: row-reverse;
+}
+@keyframes hintpulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+.hintfade-enter-active,
+.hintfade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.hintfade-enter-from,
+.hintfade-leave-to {
+  opacity: 0;
+}
+.call-waiting-hint {
+  font-size: 12px;
+  opacity: 0.55;
+}
 .call-extra-row {
   gap: 36px;
   margin-bottom: 6px;
@@ -217,19 +295,30 @@ export default {
   color: #fff;
   transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
-.call-orb:hover {
-  transform: scale(1.06);
+.call-orb-gold {
+  width: 76px;
+  height: 76px;
+  background: #f59e0b;
+  box-shadow: 0 8px 30px rgba(245, 158, 11, 0.45);
+  /* transform управляется inline-стилем; transition фона — быстрый */
+  transition: background 0.12s ease, box-shadow 0.12s ease;
 }
-.call-orb:active {
-  transform: scale(0.96);
-}
-.call-orb-accept {
+.call-orb-gold.drag-accept {
   background: #22c55e;
-  box-shadow: 0 8px 28px rgba(34, 197, 94, 0.45);
-}
-.call-orb-accept:hover {
-  background: #16a34a;
   box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65);
+}
+.call-orb-gold.drag-reject {
+  background: #ef4444;
+  box-shadow: 0 8px 34px rgba(239, 68, 68, 0.65);
+}
+/* Решение принято: цвет держится после возврата в центр до конца звонка */
+.decision-accept {
+  background: #22c55e;
+  box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65);
+}
+.decision-reject {
+  background: #ef4444;
+  box-shadow: 0 8px 34px rgba(239, 68, 68, 0.65);
 }
 .call-orb-reject,
 .call-orb-end {
