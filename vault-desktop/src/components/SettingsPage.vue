@@ -55,6 +55,19 @@
           <button @click="$emit('change-email')" class="change-email-btn">✉ {{ t('settings_change_email') || 'Сменить почту' }}</button>
           <p class="change-email-note">Контакты и группы останутся. Собеседники узнают новый адрес автоматически.</p>
         </div>
+        <!-- Резервная копия (24.08): ключи + профили + пометки. Как у DC
+             «Экспорт резервной копии» — файл можно хранить и восстановить
+             на другом устройстве / после переустановки. -->
+        <div class="change-email-block">
+          <h3 class="backup-title">🗄 Резервная копия</h3>
+          <button @click="exportBackup" :disabled="backupBusy" class="change-email-btn backup-btn">⬇ {{ backupBusy ? '…' : 'Экспорт резервной копии' }}</button>
+          <label class="backup-import-label">
+            <span class="change-email-btn backup-btn">⬆ Восстановить из копии</span>
+            <input type="file" accept=".json,application/json" class="backup-file-input" @change="importBackup" />
+          </label>
+          <p v-if="backupResult" class="change-email-note">{{ backupResult }}</p>
+          <p class="change-email-note">В копию входят: ключи E2E, контакты, профили, пометки, курсоры. Пароль почты — нет (введите при входе).</p>
+        </div>
       </div>
 
       <!-- УВЕДОМЛЕНИЯ -->
@@ -118,6 +131,7 @@
 <script>
 import api from '../api.js';
 import { useI18n } from '../i18n.js';
+import { invoke } from '@tauri-apps/api/core';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
 import ThemeSelector from './ThemeSelector.vue';
@@ -151,7 +165,9 @@ export default {
         { id: 'language', icon: '🌐', label: 'Язык' },
         { id: 'help', icon: '❓', label: 'Помощь' },
         { id: 'clear', icon: '🗑️', label: 'Очистить данные' }
-      ]
+      ],
+      backupBusy: false,
+      backupResult: '',
     };
   },
   watch: {
@@ -164,6 +180,49 @@ export default {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
       try { await api.setDisplayName(this.localDisplayName); } catch (e) { console.error(e); }
       this.$emit('name-update', this.localDisplayName);
+    },
+    // --- Резервная копия (24.08) ---
+    // Экспорт: ключи + kv_store (профили, пометки, курсоры) в JSON-файл.
+    async exportBackup() {
+      this.backupBusy = true;
+      this.backupResult = '';
+      try {
+        const json = await invoke('export_backup');
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `vault-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+        this.backupResult = '✅ Резервная копия сохранена. Храните файл в надёжном месте.';
+      } catch (e) {
+        this.backupResult = '❌ Экспорт не удался: ' + (e.message || e);
+      } finally {
+        this.backupBusy = false;
+      }
+    },
+    async importBackup(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      if (!(await confirm('Восстановить из резервной копии? Текущие локальные данные будут заменены.'))) {
+        event.target.value = '';
+        return;
+      }
+      this.backupBusy = true;
+      this.backupResult = '';
+      try {
+        const text = await file.text();
+        const result = await invoke('import_backup', { jsonData: text });
+        this.backupResult = '✅ Восстановлено: ' + result + '. Перезапустите приложение.';
+        this.$emit('keys-changed');
+      } catch (e) {
+        this.backupResult = '❌ Восстановление не удалось: ' + (e.message || e);
+      } finally {
+        this.backupBusy = false;
+        event.target.value = '';
+      }
     },
     onIconChanged(id) {
       // Forward to the app root so the visible header logo swaps live
@@ -410,6 +469,10 @@ export default {
 .change-email-btn:hover { background: rgba(31, 111, 235, 0.25); }
 .change-email-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
 .change-email-note { color: #8b949e; font-size: 12px; margin-top: 8px; }
+.backup-title { color: #e6edf3; font-size: 14px; margin: 0 0 10px; }
+.backup-btn { display: inline-block; margin-right: 8px; margin-bottom: 4px; }
+.backup-import-label { display: inline-block; cursor: pointer; }
+.backup-file-input { display: none; }
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }

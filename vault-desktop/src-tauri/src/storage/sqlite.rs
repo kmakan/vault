@@ -528,6 +528,31 @@ pub fn kv_delete(&self, account: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn kv_get_all(&self) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = self.conn.prepare("SELECT account, key, value FROM kv_store")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn kv_set_all(&self, entries: &[(String, String, String)]) -> Result<()> {
+    self.conn.execute("DELETE FROM kv_store", [])?;
+    self.conn.execute("BEGIN TRANSACTION", [])?;
+    for (account, key, value) in entries {
+        self.conn.execute(
+            "INSERT INTO kv_store (account, key, value) VALUES (?1, ?2, ?3)",
+            params![account, key, value],
+        )?;
+    }
+    self.conn.execute("COMMIT", [])?;
+    Ok(())
+}
+
 // Email envelope cache: persists this.emails across restarts so UID cursors
 // and the mail list stay consistent (no full IMAP rescan needed).
 pub fn save_emails(&self, account: &str, emails_json: &str) -> Result<()> {

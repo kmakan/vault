@@ -726,6 +726,59 @@ fn db_kv_delete(account: String, key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn db_kv_get_all() -> Result<Vec<(String, String, String)>, String> {
+    open_db()?.kv_get_all().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_kv_set_all(entries: Vec<(String, String, String)>) -> Result<(), String> {
+    open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())
+}
+
+// --- Backup (24.08): полный экспорт состояния — ключи + kv_store.
+// JSON можно сохранить в файл и восстановить на другом устройстве/после
+// переустановки (аналог «Экспорт резервной копии» у Delta Chat).
+#[tauri::command]
+fn export_backup() -> Result<String, String> {
+    let keys = key_store::export_keys().map_err(|e| e.to_string())?;
+    let kv = open_db()?.kv_get_all().map_err(|e| e.to_string())?;
+    let backup = serde_json::json!({
+        "version": 1,
+        "type": "vault-backup",
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "keys": serde_json::from_str::<serde_json::Value>(&keys).unwrap_or(serde_json::json!({})),
+        "kv_store": kv,
+    });
+    Ok(serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+fn import_backup(json_data: String) -> Result<String, String> {
+    let data: serde_json::Value = serde_json::from_str(&json_data).map_err(|e| e.to_string())?;
+    let mut restored = Vec::new();
+    // 1. Ключи (keypair + peer_keys) — через существующий import_keys.
+    if let Some(keys) = data.get("keys") {
+        let meta = key_store::import_keys(&keys.to_string()).map_err(|e| e.to_string())?;
+        restored.push(format!("keys: {}", meta.key_count));
+    }
+    // 2. kv_store — полная замена (профили, пометки, курсоры, кэши).
+    if let Some(kv) = data.get("kv_store").and_then(|v| v.as_array()) {
+        let entries: Vec<(String, String, String)> = kv
+            .iter()
+            .filter_map(|row| {
+                let a = row.get(0)?.as_str()?.to_string();
+                let k = row.get(1)?.as_str()?.to_string();
+                let v = row.get(2)?.as_str()?.to_string();
+                Some((a, k, v))
+            })
+            .collect();
+        open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())?;
+        restored.push(format!("kv_store: {}", entries.len()));
+    }
+    Ok(restored.join(", "))
+}
+
+#[tauri::command]
 fn db_emails_save(account: String, emails_json: String) -> Result<(), String> {
     open_db()?
         .save_emails(&account, &emails_json)
@@ -825,6 +878,10 @@ pub fn run() {
             db_kv_set,
             db_kv_get,
             db_kv_delete,
+            db_kv_get_all,
+            db_kv_set_all,
+            export_backup,
+            import_backup,
             db_emails_save,
             db_emails_load,
             db_emails_clear,
