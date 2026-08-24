@@ -1953,6 +1953,7 @@ export default {
         text: text,
         name: name,
         avatar: avatar,
+        key: crypto.publicKey || '',
         ts: Date.now(),
       });
     },
@@ -1962,7 +1963,7 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0 };
+          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '' };
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
@@ -2283,6 +2284,30 @@ export default {
                 // Раньше было наоборот — входящий аватар сохранялся под МОИМ email,
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
+                // FINGERPRINT-МАТЧИНГ (24.08, смена почты): конверт несёт
+                // публичный ключ отправителя. Если этот ключ уже известен
+                // под ДРУГИМ email — собеседник сменил почту: привязываем
+                // новый email к тому же контакту (копируем ключ), не требуя
+                // нового приглашения. Как у Delta Chat (contacts по fingerprint).
+                if (env.key && isOut) {
+                  const senderNorm = String(sender).toLowerCase();
+                  const knownByKey = Object.entries(this.peerKeys).find(
+                    ([k, v]) => v === env.key && String(k).toLowerCase() !== senderNorm
+                  );
+                  if (knownByKey) {
+                    const [oldEmail] = knownByKey;
+                    console.log('[identity] fingerprint match:', oldEmail, '→', sender, '— смена почты');
+                    // Копируем профиль старого адреса на новый (имя/аватар).
+                    const oldProf = this.profiles[oldEmail];
+                    if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);
+                    // Регистрируем ключ под новым email (peer_keys.json).
+                    this.setPeerKey(sender, env.key);
+                  } else if (!this.peerKeys[sender] && env.key !== crypto.publicKey) {
+                    // Незнакомый ключ с нового адреса: сохраняем как есть —
+                    // контакт появится после обмена ключами (инвайт/QR).
+                    this.setPeerKey(sender, env.key);
+                  }
+                }
                 if (env.name || env.avatar) {
                   // ts письма (отправки) — чтобы отставшее письмо не
                   // перезаписывало более свежий профиль (см. saveProfile).
@@ -2764,6 +2789,7 @@ export default {
         text: '',
         name,
         avatar,
+        key: crypto.publicKey || '',
         ts: Date.now(),
       };
       const content = await crypto.encryptVault(JSON.stringify(body));
