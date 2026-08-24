@@ -489,8 +489,8 @@
             </div>
             <div v-if="changeEmailError" class="login-error">{{ changeEmailError }}</div>
             <div class="change-email-actions">
-              <button type="button" @click="showChangeEmail = false" class="cancel-btn">Отмена</button>
-              <button type="submit" :disabled="changeEmailLoading" class="submit-btn">{{ changeEmailLoading ? 'Подключение…' : 'Сменить почту' }}</button>
+              <button type="button" @click="showChangeEmail = false" class="btn btn-ghost">Отмена</button>
+              <button type="submit" :disabled="changeEmailLoading" class="btn btn-primary">{{ changeEmailLoading ? 'Подключение…' : 'Сменить почту' }}</button>
             </div>
           </form>
         </div>
@@ -7348,6 +7348,44 @@ body {
   transform: none;
   box-shadow: none;
 }
+
+/* Единая система кнопок (24.08): базовый класс + модификаторы */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+  text-decoration: none;
+  line-height: 1.2;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+.btn-lg { padding: 12px 24px; font-size: 16px; }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary, #94a3b8);
+  border: none;
+  padding: 4px 8px;
+}
+.btn-ghost:hover { color: var(--text-primary, #f1f5f9); background: var(--bg-hover, rgba(255,255,255,0.05)); }
+.btn-danger {
+  padding: 8px 16px;
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.btn-danger:hover { background: rgba(248, 81, 73, 0.25); }
 
 .btn-secondary {
   padding: 8px 16px;

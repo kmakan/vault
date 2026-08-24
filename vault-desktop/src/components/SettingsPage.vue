@@ -26,8 +26,8 @@
           <label>Имя</label>
           <input v-model="localDisplayName" type="text" placeholder="Ваше имя" @change="saveDisplayName" @keyup.enter="saveDisplayName" />
         </div>
-        <button @click="saveDisplayName" class="save-btn">Сохранить</button>
-        <button @click="$emit('logout')" class="logout-btn">← {{ t('settings_logout') }}</button>
+        <button @click="saveDisplayName" class="btn btn-primary">Сохранить</button>
+        <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
       </div>
 
       <!-- ВНЕШНИЙ ВИД -->
@@ -52,7 +52,7 @@
              адрес, контакты и группы останутся. Контакты узнают новый адрес
              автоматически: broadcast-письмо несёт тот же fingerprint (ключ). -->
         <div class="change-email-block">
-          <button @click="$emit('change-email')" class="change-email-btn"><Icon name="mail" :size="14" /> {{ t('settings_change_email') || 'Сменить почту' }}</button>
+          <button @click="$emit('change-email')" class="btn btn-secondary"><Icon name="mail" :size="14" /> {{ t('settings_change_email') || 'Сменить почту' }}</button>
           <p class="change-email-note">Контакты и группы останутся. Собеседники узнают новый адрес автоматически.</p>
         </div>
         <!-- Резервная копия (24.08): ключи + профили + пометки. Как у DC
@@ -60,9 +60,9 @@
              на другом устройстве / после переустановки. -->
         <div class="change-email-block">
           <h3 class="backup-title">🗄 Резервная копия</h3>
-          <button @click="exportBackup" :disabled="backupBusy" class="change-email-btn backup-btn">⬇ {{ backupBusy ? '…' : 'Экспорт резервной копии' }}</button>
+          <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn">⬇ {{ backupBusy ? '…' : 'Экспорт резервной копии' }}</button>
           <label class="backup-import-label">
-            <span class="change-email-btn backup-btn">⬆ Восстановить из копии</span>
+            <span class="btn btn-secondary backup-btn">⬆ Восстановить из копии</span>
             <input type="file" accept=".json,application/json" class="backup-file-input" @change="importBackup" />
           </label>
           <p v-if="backupResult" class="change-email-note">{{ backupResult }}</p>
@@ -362,18 +362,10 @@ export default {
   color: #c9d1d9;
 }
 
-.save-btn {
-  padding: 10px 24px;
-  background: #238636;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.save-btn:hover { background: #2ea043; }
+/* Единая система кнопок (глобальная в App.vue): .btn, .btn-primary,
+   .btn-secondary, .btn-danger, .btn-ghost, .btn-sm, .btn-lg.
+   Здесь только локальные доводки. */
+.logout-btn { margin-top: 8px; }
 
 /* Toggle switch */
 .toggle {
@@ -456,24 +448,15 @@ export default {
 
 .logout-btn:hover { background: rgba(248, 81, 73, 0.15); }
 
-/* Смена почты (24.08) */
-.change-email-btn {
-  padding: 8px 16px;
-  background: rgba(31, 111, 235, 0.15);
-  color: #58a6ff;
-  border: 1px solid #1f6feb;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 14px;
-  margin-top: 8px;
-}
-.change-email-btn:hover { background: rgba(31, 111, 235, 0.25); }
+/* Блоки в секции «Почта»: смена почты + резервная копия */
 .change-email-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
 .change-email-note { color: #8b949e; font-size: 12px; margin-top: 8px; }
 .backup-title { color: #e6edf3; font-size: 14px; margin: 0 0 10px; }
 .backup-btn { display: inline-block; margin-right: 8px; margin-bottom: 4px; }
 .backup-import-label { display: inline-block; cursor: pointer; }
 .backup-file-input { display: none; }
+
+/* Help */
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }
