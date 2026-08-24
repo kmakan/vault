@@ -52,7 +52,7 @@
              адрес, контакты и группы останутся. Контакты узнают новый адрес
              автоматически: broadcast-письмо несёт тот же fingerprint (ключ). -->
         <div class="change-email-block">
-          <button @click="$emit('change-email')" class="change-email-btn">✉ {{ t('settings_change_email') || 'Сменить почту' }}</button>
+          <button @click="$emit('change-email')" class="change-email-btn"><Icon name="mail" :size="14" /> {{ t('settings_change_email') || 'Сменить почту' }}</button>
           <p class="change-email-note">Контакты и группы останутся. Собеседники узнают новый адрес автоматически.</p>
         </div>
         <!-- Резервная копия (24.08): ключи + профили + пометки. Как у DC

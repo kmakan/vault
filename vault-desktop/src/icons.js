@@ -136,4 +136,8 @@ export const icons = {
     { type: 'path', d: 'M19 10v2a7 7 0 0 1-14 0v-2' },
     { type: 'line', x1: 12, y1: 19, x2: 12, y2: 22 },
   ],
+  mail: [
+    { type: 'rect', x: 3, y: 5, w: 18, h: 14, rx: 2 },
+    { type: 'path', d: 'm3 7 9 6 9-6' },
+  ],
 };

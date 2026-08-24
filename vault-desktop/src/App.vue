@@ -22,7 +22,7 @@
           <!-- Настройки серверов почты: провайдер может сменить IMAP/SMTP,
                пользователь должен мочь исправить их вручную. -->
           <button type="button" class="server-toggle" @click="showServerSettings = !showServerSettings">
-            ⚙ {{ t('server_settings') || 'Настройки сервера' }}
+            <Icon name="settings" :size="14" /> {{ t('server_settings') || 'Настройки сервера' }}
             <span class="server-toggle-arrow">{{ showServerSettings ? '▾' : '▸' }}</span>
           </button>
           <div v-if="showServerSettings" class="server-settings">
@@ -76,7 +76,7 @@
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
 
-        <!-- Заметки для себя: локальный чат с собой (Session/Telegram pattern).
+        <!-- Заметки для себя: локальный чат с собой.
              Не зависит от peer_keys, почты и шифрования — хранится только
              в localStorage vault-notes-<email>. -->
         <div
@@ -467,13 +467,13 @@
       <div v-if="showChangeEmail" class="modal-overlay" @click.self="showChangeEmail = false">
         <div class="modal-settings change-email-panel">
           <button class="modal-close" @click="showChangeEmail = false">←</button>
-          <h3 class="invite-popup-title">✉ {{ t('settings_change_email') || 'Сменить почту' }}</h3>
+          <h3 class="invite-popup-title"><Icon name="mail" :size="18" /> {{ t('settings_change_email') || 'Сменить почту' }}</h3>
           <p class="change-email-hint">Контакты и группы останутся: ключи E2E не привязаны к адресу. После смены отправьте сообщение или профиль — собеседники узнают новый адрес автоматически.</p>
           <form @submit.prevent="changeEmail">
             <input v-model="newEmail" type="email" placeholder="Новый email" required class="change-email-input" />
             <input v-model="newPassword" type="password" placeholder="Пароль приложения / от внешних устройств" required class="change-email-input" />
             <div class="change-email-row">
-              <button type="button" class="server-toggle" @click="showChangeEmailServers = !showChangeEmailServers">⚙ {{ t('server_settings') || 'Настройки сервера' }}</button>
+              <button type="button" class="server-toggle" @click="showChangeEmailServers = !showChangeEmailServers"><Icon name="settings" :size="14" /> {{ t('server_settings') || 'Настройки сервера' }}</button>
             </div>
             <div v-if="showChangeEmailServers" class="server-settings">
               <div class="server-row">
@@ -7229,22 +7229,22 @@ body {
 
 /* Смена почты — модалка (24.08) */
 .change-email-panel { max-width: 480px; padding: 32px; }
-.change-email-hint { color: #8b949e; font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+.change-email-hint { color: var(--text-muted, #8b949e); font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
 .change-email-input {
-  width: 100%; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d;
-  border-radius: 6px; color: #e6edf3; font-size: 14px; box-sizing: border-box; margin-bottom: 8px;
+  width: 100%; padding: 10px 12px; background: var(--bg-primary, #0d1117); border: 1px solid var(--border-subtle, #30363d);
+  border-radius: 6px; color: var(--text-primary, #e6edf3); font-size: 14px; box-sizing: border-box; margin-bottom: 8px;
 }
-.change-email-input:focus { border-color: #58a6ff; outline: none; }
+.change-email-input:focus { border-color: var(--accent-primary, #58a6ff); outline: none; }
 .change-email-row { margin-bottom: 8px; }
-.change-email-panel .server-toggle { background: none; border: none; color: #58a6ff; cursor: pointer; font-size: 13px; padding: 4px 0; }
-.change-email-panel .server-settings { margin-top: 8px; padding: 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+.change-email-panel .server-toggle { background: none; border: none; color: var(--accent-primary, #58a6ff); cursor: pointer; font-size: 13px; padding: 4px 0; }
+.change-email-panel .server-settings { margin-top: 8px; padding: 12px; background: var(--bg-secondary, #161b22); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; }
 .change-email-panel .server-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.change-email-panel .server-row label { color: #8b949e; font-size: 12px; min-width: 40px; }
-.change-email-panel .server-row input { flex: 1; padding: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; font-size: 13px; }
+.change-email-panel .server-row label { color: var(--text-muted, #8b949e); font-size: 12px; min-width: 40px; }
+.change-email-panel .server-row input { flex: 1; padding: 8px; background: var(--bg-primary, #0d1117); border: 1px solid var(--border-subtle, #30363d); border-radius: 4px; color: var(--text-primary, #e6edf3); font-size: 13px; }
 .change-email-panel .server-port { max-width: 80px; }
 .change-email-actions { display: flex; gap: 8px; margin-top: 16px; }
-.change-email-panel .cancel-btn { padding: 8px 16px; background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; cursor: pointer; }
-.change-email-panel .submit-btn { padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
+.change-email-panel .cancel-btn { padding: 8px 16px; background: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; cursor: pointer; }
+.change-email-panel .submit-btn { padding: 8px 16px; background: var(--accent-primary, #238636); color: white; border: none; border-radius: 6px; cursor: pointer; }
 .change-email-panel .submit-btn:disabled { opacity: 0.5; }
 .change-email-panel .login-error { color: #f85149; font-size: 13px; margin-top: 8px; }
 
