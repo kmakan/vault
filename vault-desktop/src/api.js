@@ -1262,21 +1262,51 @@ export class ApiClient {
   // для быстрых повторных чтений (UserAvatar/шапка рендерят часто).
   async getProfilesAll() {
     try {
-      return JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
+      const raw = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
+      // Регистр (24.08): раньше ключи могли писаться с регистром из заголовка
+      // From («Koanmak@yandex.ru»), теперь — всегда lowercase. Сливаем дубли:
+      // приоритет — НЕпустым полям (старый аватар не должен стираться новым
+      // пустым профилем, пришедшим от старого клиента без аватара).
+      const merged = {};
+      for (const [email, p] of Object.entries(raw || {})) {
+        const key = String(email).trim().toLowerCase();
+        const cur = merged[key] || {};
+        if (p && p.name && !cur.name) cur.name = p.name;
+        if (p && p.avatar && !cur.avatar) cur.avatar = p.avatar;
+        if (p && p.local_name) cur.local_name = p.local_name;
+        merged[key] = cur;
+      }
+      return merged;
     } catch (e) {
       return {};
     }
   }
-  async saveProfile(email, name, avatar) {
+  async saveProfile(email, name, avatar, ts) {
     if (!email) return;
     try {
+      // Регистр: заголовки From бывают «Имя <Mail@X>» — ключ храним
+      // в нижнем регистре, чтобы nameOf/avatarOf находили профиль
+      // независимо от регистра в письме.
+      email = String(email).trim().toLowerCase();
       const profiles = await this.getProfilesAll();
       const p = profiles[email] || {};
-      if (name) p.name = name;
-      if (avatar) p.avatar = avatar;
-      if (name || avatar) profiles[email] = p;
+      // Непустые значения обновляют. Пустой avatar НЕ стирает существующий:
+      // старый клиент (без синхронизации профиля) шлёт пустой avatar и
+      // затирал бы аватар, который уже есть у получателя. Имя, равное
+      // email, — тоже не имя (fallback старых клиентов) — не сохраняем.
+      // ts: письма могут приходить НЕ в порядке отправки (Gmail-троттлинг
+      // задерживает старые письма) — более свежий профиль не должен
+      // перезаписываться отставшим письмом со старым ts.
+      const tsNum = ts || Date.now();
+      if (name && name !== email && tsNum >= (p._ts || 0)) p.name = name;
+      if (avatar && tsNum >= (p._ts || 0)) p.avatar = avatar;
+      if (name || avatar) {
+        if (tsNum >= (p._ts || 0)) p._ts = tsNum;
+        profiles[email] = p;
+        console.log('[profile] save', email, 'name=' + (name || '-'), 'avatar=' + (avatar ? avatar.slice(0, 40) + '...' : '-'), 'ts=' + tsNum);
+      }
       await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
-      if (avatar) this._avatarCache.set(email, avatar);
+      if (avatar && tsNum >= (p._ts || 0)) this._avatarCache.set(email, avatar);
     } catch (e) { /* ignore */ }
   }
   async getProfile(email) {

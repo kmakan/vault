@@ -24,7 +24,7 @@
         <h2>Профиль</h2>
         <div class="setting-group">
           <label>Имя</label>
-          <input v-model="localDisplayName" type="text" placeholder="Ваше имя" />
+          <input v-model="localDisplayName" type="text" placeholder="Ваше имя" @change="saveDisplayName" @keyup.enter="saveDisplayName" />
         </div>
         <button @click="saveDisplayName" class="save-btn">Сохранить</button>
         <button @click="$emit('logout')" class="logout-btn">← {{ t('settings_logout') }}</button>
@@ -156,6 +156,7 @@ export default {
     async saveDisplayName() {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
       try { await api.setDisplayName(this.localDisplayName); } catch (e) { console.error(e); }
+      this.$emit('name-update', this.localDisplayName);
     },
     onIconChanged(id) {
       // Forward to the app root so the visible header logo swaps live

@@ -109,7 +109,7 @@
         >
           <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
           <div class="contact-info">
-            <div class="contact-name">{{ localProfileOf(contact.email)?.name || contact.name }}</div>
+            <div class="contact-name">{{ nameOf(contact.email) }}</div>
             <div class="contact-email">{{ contact.email }}</div>
           </div>
           <div class="contact-status">
@@ -189,7 +189,7 @@
                   <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
                 </template>
                 <template v-else>
-                  {{ peerKeys[activeChat] ? '🔒 Encrypted' : '⚠️ No key' }}
+                  {{ peerKeys[activeChat] ? '🔒' : '⚠️' }}<span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
                 </template>
               </div>
             </div>
@@ -266,7 +266,7 @@
               </template>
               <template v-else>
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
-              <span>{{ replyBody(msg.content) }}</span>
+              <span v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
               <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
               <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
                 <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
@@ -348,6 +348,15 @@
             <button v-if="activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
+            <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
+            <template v-if="messageMenu.phones && messageMenu.phones.length">
+              <div class="message-menu-sep"></div>
+              <button v-for="(p, pi) in messageMenu.phones" :key="'ph' + pi" @click="copyText(p); messageMenu = null"><Icon name="phone" :size="14" /> {{ p }}</button>
+            </template>
+            <template v-if="messageMenu.urls && messageMenu.urls.length">
+              <div class="message-menu-sep"></div>
+              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openExternal(u).catch(() => {}); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
+            </template>
           </div>
         </div>
 
@@ -447,7 +456,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close" @click="showSettings = false">←</button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" />
         </div>
       </div>
 
@@ -957,9 +966,7 @@ export default {
       if (!this.searchQuery) return this.contacts;
       const q = this.searchQuery.toLowerCase();
       return this.contacts.filter(c => {
-        const lp = this.localProfileOf(c.email);
-        const localName = (lp && lp.name) || '';
-        return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || localName.toLowerCase().includes(q);
+        return c.email.toLowerCase().includes(q) || this.nameOf(c.email).toLowerCase().includes(q);
       });
     },
     // ── Звонки (M3): строки и таймер для оверлея ──
@@ -1933,7 +1940,10 @@ export default {
     },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text) {
-      const name = (await api.getDisplayName()) || this.email || '';
+      const dn = (await api.getDisplayName()) || '';
+      // Не слать email как имя: получатель считает name==email «нет имени»
+      // (см. nameOf) — иначе он перезаписывает настоящее имя почтой.
+      const name = dn && dn !== this.email ? dn : '';
       let avatar = (this.profiles[this.email] || {}).avatar || '';
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
@@ -1943,6 +1953,7 @@ export default {
         text: text,
         name: name,
         avatar: avatar,
+        ts: Date.now(),
       });
     },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
@@ -1951,7 +1962,7 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '' };
+          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0 };
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
@@ -2096,7 +2107,7 @@ export default {
           // рендерятся ни в истории, ни в чате.
           this.messages = hist.filter(m => {
             const c = (m && m.content) || '';
-            return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
+            return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type":"profile"') !== -1));
           });
         }
       });
@@ -2273,7 +2284,14 @@ export default {
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
-                  api.saveProfile(sender, env.name, env.avatar);
+                  // ts письма (отправки) — чтобы отставшее письмо не
+                  // перезаписывало более свежий профиль (см. saveProfile).
+                  api.saveProfile(sender, env.name, env.avatar, env.ts || 0);
+                }
+                // Профильное письмо (type:'profile'): name/avatar уже
+                // сохранены выше — как сообщение НЕ рендерим (системное).
+                if (env.type === 'profile') {
+                  return null;
                 }
               } else {
                 // 3) Legacy: простой текст (старые письма без конверта).
@@ -2720,6 +2738,39 @@ export default {
       this.profiles[this.email].avatar = dataUrl || '';
       await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
       this.loadProfiles()
+      // Синхронизация профиля (24.08): рассылаем stealth-письмо всем
+      // контактам с ключом — они обновят аватар/имя без нового сообщения.
+      this.broadcastProfile();
+    },
+    async onNameUpdate(name) {
+      // Смена имени в настройках: рассылаем профиль контактам (см.
+      // broadcastProfile) — без этого новое имя увидят только после
+      // следующего обычного сообщения.
+      this.displayName = name || this.email || '';
+      this.broadcastProfile();
+    },
+    // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
+    // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
+    // и не рендерит как сообщение (см. processIncoming).
+    async broadcastProfile() {
+      const peers = Object.keys(this.peerKeys || {});
+      if (!peers.length) return;
+      const name = this.displayName || this.email || '';
+      const avatar = (this.profiles[this.email] || {}).avatar || '';
+      const body = {
+        vault: 1,
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
+        type: 'profile',
+        text: '',
+        name,
+        avatar,
+        ts: Date.now(),
+      };
+      const content = await crypto.encryptVault(JSON.stringify(body));
+      for (const peer of peers) {
+        try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
+      }
+      console.log('[profile] broadcast to', peers.length, 'contacts');
     },
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
     // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
@@ -4516,8 +4567,36 @@ export default {
       }
     },
     // --- Копирование сообщений ---
+    linkify(text) {
+      // Безопасная автолинковка: текст → экранированный HTML → ссылки/телефоны.
+      // Телефоны заменяются через плейсхолдеры ДО URL, чтобы не пересекаться.
+      const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      const phones = [];
+      // Телефон: код (+7/8/международный до 3 цифр) опционален, разделители
+      // (пробел/скобки/дефисы) — в любом количестве и любом месте между
+      // группами: 8(999)123-45-67, +7 (999) 123 45 67, +380 67 123 45 67.
+      const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
+      let tmp = esc.replace(PHONE_RE, (m) => { phones.push(m.trim()); return `\u0000P${phones.length - 1}\u0000`; });
+      tmp = tmp.replace(/(https?:\/\/[^\s<"']+)/g, '<a href="$1" data-url="$1" class="msg-link">$1</a>');
+      tmp = tmp.replace(/\u0000P(\d+)\u0000/g, (_, i) => `<a href="tel:${phones[+i]}" data-phone="${phones[+i]}" class="msg-link msg-phone">${phones[+i]}</a>`);
+      return tmp;
+    },
+    onMessageTextClick(e) {
+      const urlEl = e.target.closest('a[data-url]');
+      if (urlEl) { e.preventDefault(); openExternal(urlEl.dataset.url).catch(() => {}); return; }
+      const phoneEl = e.target.closest('a[data-phone]');
+      if (phoneEl) { e.preventDefault(); this.copyText(phoneEl.dataset.phone); }
+    },
     openMessageMenu(event, msg) {
-      this.messageMenu = { x: event.clientX, y: event.clientY, msg };
+      const content = msg.content || '';
+      const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
+      const phones = [...content.matchAll(PHONE_RE)]
+        .map(m => m[0].trim())
+        .filter((v, i, a) => a.indexOf(v) === i);
+      const urls = [...content.matchAll(/https?:\/\/[^\s\]\)"']{2,}/g)]
+        .map(m => m[0])
+        .filter((v, i, a) => a.indexOf(v) === i);
+      this.messageMenu = { x: event.clientX, y: event.clientY, msg, phones, urls };
     },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
@@ -4979,13 +5058,27 @@ export default {
       const lp = this.localProfileOf(email);
       if (lp && lp.name) return lp.name;
       const p = this.profileOf(email);
-      return (p && p.name) || email;
+      // name == email — это НЕ имя, а fallback старых клиентов (они слали
+      // email как name). Не показываем его как имя.
+      if (p && p.name && p.name !== email) return p.name;
+      // Регистр email может отличаться (заголовки From: «Имя <Mail@X>» vs
+      // ключ в kv_store lowercase). Ищем по нижнему регистру.
+      const e = String(email || '').toLowerCase();
+      for (const [k, v] of Object.entries(this.profiles || {})) {
+        if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
+      }
+      return email;
     },
     avatarOf(email) {
       const lp = this.localProfileOf(email);
       if (lp && lp.avatar) return lp.avatar;
       const p = this.profileOf(email);
-      return (p && p.avatar) || '';
+      if (p && p.avatar) return p.avatar;
+      const e = String(email || '').toLowerCase();
+      for (const [k, v] of Object.entries(this.profiles || {})) {
+        if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
+      }
+      return '';
     },
     loadLocalProfiles() {
       try {
@@ -6450,8 +6543,46 @@ body {
   .delete-btn {
     display: none;
   }
+  /* Android WebView: долгое нажатие одновременно открывает НАШЕ меню
+     (contextmenu) и запускает НАТИВНОЕ выделение слова. Ползунки
+     выделения попадают на оверлей меню — всё исчезает. Отключаем
+     нативное выделение на touch: копирование доступно через наше меню
+     (copyMessageText/copyMessageAll). */
+  .message-content,
+  .message-sender,
+  .chat-header-text,
+  .message-menu button {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* Шапка чата: на узких экранах « Encrypted» не влезает рядом с кнопками
+     (телефон/карандаш/поиск) — оставляем только 🔒. На десктопе слово
+     показывается (места достаточно). */
+  .chat-enc-text {
+    display: none;
+  }
 }
 
+.message-content .msg-link {
+  color: var(--accent-primary, #6366f1);
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+.message-content .msg-link:hover {
+  text-decoration: none;
+  opacity: 0.85;
+}
+.message-content .msg-phone {
+  color: var(--accent-secondary, #8b5cf6);
+  white-space: nowrap;
+}
+.message-menu-sep {
+  height: 1px;
+  background: var(--border-subtle, rgba(255,255,255,0.08));
+  margin: 4px 8px;
+}
 /* Бейдж «отредактировано» */
 .message-edited-badge {
   color: var(--text-secondary, #94a3b8);
