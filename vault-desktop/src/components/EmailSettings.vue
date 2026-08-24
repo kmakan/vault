@@ -4,7 +4,7 @@
     <div v-if="!loading && accounts.length === 0 && !showForm">
       <div class="empty-state">
         <p>📧 {{ t('settings_email_accounts') }}. {{ t('settings_add_account') }}.</p>
-        <button @click="startAdd" class="add-btn">+ {{ t('settings_add_account') }}</button>
+        <button @click="startAdd" class="btn btn-primary btn-sm">+ {{ t('settings_add_account') }}</button>
       </div>
     </div>
 
@@ -86,8 +86,8 @@
           </label>
         </div>
         <div class="form-actions">
-          <button type="button" @click="cancelForm" class="cancel-btn">{{ t('settings_cancel') }}</button>
-          <button type="submit" :disabled="submitting" class="submit-btn">
+          <button type="button" @click="cancelForm" class="btn btn-ghost">{{ t('settings_cancel') }}</button>
+          <button type="submit" :disabled="submitting" class="btn btn-primary">
             {{ submitting ? t('general_loading') : (editingAccount ? 'Сохранить' : t('settings_add_account')) }}
           </button>
         </div>
@@ -197,27 +197,26 @@ export default {
 
 <style scoped>
 .email-settings { padding: 20px; }
-.empty-state { text-align: center; padding: 40px 20px; color: #8b949e; }
-.add-btn { padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
-.account-card { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 8px; }
-.account-email { color: #e6edf3; font-weight: 600; font-size: 15px; }
+.empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted, #8b949e); }
+.account-card { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: var(--bg-secondary, #161b22); border: 1px solid var(--border-subtle, #30363d); border-radius: 8px; margin-bottom: 8px; }
+.account-email { color: var(--text-primary, #e6edf3); font-weight: 600; font-size: 15px; }
 .account-details { display: flex; gap: 12px; margin-top: 4px; }
-.detail { color: #8b949e; font-size: 12px; }
+.detail { color: var(--text-muted, #8b949e); font-size: 12px; }
 .account-actions { display: flex; gap: 8px; }
-.edit-btn, .delete-btn { background: none; border: none; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; }
-.edit-btn:hover { background: #21262d; }
+.edit-btn, .delete-btn { background: none; border: none; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: var(--text-secondary, #8b949e); }
+.edit-btn:hover { background: var(--bg-hover, #21262d); }
 .delete-btn:hover { background: #da3633; color: white; }
-.hint { color: #8b949e; font-size: 12px; margin-top: 8px; }
-.edit-form h3 { margin: 0 0 16px; color: white; }
+.hint { color: var(--text-muted, #8b949e); font-size: 12px; margin-top: 8px; }
+.edit-form h3 { margin: 0 0 16px; color: var(--text-primary, white); }
 .form-group { margin-bottom: 12px; }
-.form-group label { display: block; margin-bottom: 4px; color: #8b949e; font-size: 13px; }
-.form-group input, .form-group select { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-size: 14px; box-sizing: border-box; }
+.form-group label { display: block; margin-bottom: 4px; color: var(--text-muted, #8b949e); font-size: 13px; }
+.form-group input, .form-group select { width: 100%; padding: 8px 12px; background: var(--bg-primary, #0d1117); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; color: var(--text-primary, #e6edf3); font-size: 14px; box-sizing: border-box; }
 .form-group input:disabled { opacity: 0.5; }
 .form-row { display: flex; gap: 12px; }
 .form-row .form-group { flex: 1; }
-.checkbox-label { display: flex; align-items: center; gap: 6px; color: #8b949e; font-size: 13px; cursor: pointer; }
+.checkbox-label { display: flex; align-items: center; gap: 6px; color: var(--text-muted, #8b949e); font-size: 13px; cursor: pointer; }
 .form-actions { display: flex; gap: 8px; margin-top: 16px; }
-.cancel-btn { padding: 8px 16px; background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; cursor: pointer; }
+.cancel-btn { padding: 8px 16px; background: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; cursor: pointer; }
 .submit-btn { padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
 .submit-btn:disabled { opacity: 0.5; }
 </style>
