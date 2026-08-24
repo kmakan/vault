@@ -491,6 +491,10 @@ export default {
     height: 100%;
     overflow-y: auto;
     border-right: none;
+    /* Android edge-to-edge: нижние пункты («Очистить данные») не должны
+       уходить под системную навигацию (жесты/кнопки). */
+    padding-bottom: var(--safe-bottom, 0px);
+    box-sizing: border-box;
   }
   .settings-profile {
     padding: 20px 16px 16px;
@@ -509,7 +513,8 @@ export default {
   .settings-content {
     height: 100%;
     overflow-y: auto;
-    padding: 0 16px 24px;
+    padding: 0 16px calc(24px + var(--safe-bottom, 0px));
+    box-sizing: border-box;
   }
 }
 

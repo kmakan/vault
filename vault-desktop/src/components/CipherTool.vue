@@ -476,33 +476,7 @@ export default {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
-/* Мобильный (25.08): фуллскрин — панель 600px не влезает в телефон,
-   уезжала за край; safe-top не даёт заголовку прилипнуть к статус-бару.
-   Вкладкам меньше паддинг — три кнопки («Зашифровать/Расшифровать/Файл»)
-   иначе не помещаются в ряд и «Файл» уходит за край экрана. */
-@media (max-width: 767px) {
-  .cipher-overlay {
-    padding: 0;
-  }
-  .cipher-panel {
-    width: 100%;
-    max-width: 100%;
-    height: 100%;
-    max-height: 100%;
-    border-radius: 0;
-    padding-top: calc(12px + var(--safe-top, 0px));
-  }
-  .panel-body {
-    padding: 16px;
-  }
-  .tab-buttons {
-    gap: 6px;
-  }
-  .tab-btn {
-    padding: 9px 6px;
-    font-size: 13px;
-  }
-}
+
 
 .panel-header {
   display: flex;
@@ -750,4 +724,59 @@ export default {
   to { opacity: 0; }
 }
 
+
+/* Мобильный (25.08): фуллскрин — панель 600px не влезает в телефон,
+   уезжала за край; safe-top не даёт заголовку прилипнуть к статус-бару.
+   Блок стоит В КОНЦЕ файла: базовые .panel-body/.tab-btn объявлены выше,
+   при равной специфичности побеждает последний — раньше блок стоял до них
+   и не применялся (из-за этого «Файл» уходил за край).
+   Горизонтальные отступы панели 16→10px: контент центрируется шире и
+   вкладки гарантированно помещаются в ряд. */
+@media (max-width: 767px) {
+  .cipher-overlay {
+    padding: 0;
+  }
+  .cipher-panel {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: calc(12px + var(--safe-top, 0px));
+  }
+  .panel-header,
+  .panel-body {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .panel-body {
+    display: block;
+    width: 100%;
+  }
+  .cipher-tabs,
+  .tab-content {
+    width: 100%;
+  }
+  .form-group {
+    width: 100%;
+  }
+  .form-group select.form-control,
+  .form-group textarea.cipher-textarea {
+    width: 100%;
+    max-width: 100%;
+  }
+  .tab-buttons {
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+  .tab-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 9px 4px;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+}
 </style>
