@@ -7807,6 +7807,19 @@ body {
   padding: 20px 24px 24px;
 }
 
+/* Android edge-to-edge (24.08): фуллскрин-модалки на мобильном начинаются от
+   top:0 — стрелка «←» и заголовки уезжали под статус-бар. Отступ сверху через
+   safe-area-inset-top (на десктопе inset=0, правило ничего не меняет).
+   Правило стоит ПОСЛЕ .invite-popup-panel, чтобы перебить его padding-шортхэнд.
+   box-sizing обязателен: глобального border-box нет, иначе padding раздует
+   высоту модалки и контент выпадет за экран. */
+@media (max-width: 767px) {
+  .modal-settings {
+    box-sizing: border-box;
+    padding-top: calc(16px + var(--safe-top, 0px));
+  }
+}
+
 /* ── Invite popup (приглашение в группу) ── */
 .invite-popup-title {
   margin: 0 0 12px;
