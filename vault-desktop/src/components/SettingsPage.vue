@@ -491,10 +491,6 @@ export default {
     height: 100%;
     overflow-y: auto;
     border-right: none;
-    /* Android edge-to-edge: нижние пункты («Очистить данные») не должны
-       уходить под системную навигацию (жесты/кнопки). */
-    padding-bottom: var(--safe-bottom, 0px);
-    box-sizing: border-box;
   }
   .settings-profile {
     padding: 20px 16px 16px;
@@ -505,6 +501,11 @@ export default {
     flex-direction: column;
     overflow: visible;
     padding: 4px 0;
+    /* Android: env(safe-area-inset-bottom) в WebView часто = 0, поэтому
+       запас ФИКСИРОВАННЫЙ — иначе последний пункт («Очистить данные»)
+       при полной прокрутке остаётся под панелью жестов/кнопок и на него
+       невозможно нажать. */
+    padding-bottom: calc(48px + var(--safe-bottom, 0px));
   }
   .settings-nav-item {
     width: 100%;
@@ -513,7 +514,7 @@ export default {
   .settings-content {
     height: 100%;
     overflow-y: auto;
-    padding: 0 16px calc(24px + var(--safe-bottom, 0px));
+    padding: 0 16px calc(72px + var(--safe-bottom, 0px));
     box-sizing: border-box;
   }
 }
