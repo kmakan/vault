@@ -10,8 +10,8 @@
         <button v-for="cat in categories" :key="cat.id"
           :class="['settings-nav-item', { active: activeCategory === cat.id }]"
           @click="activeCategory = cat.id">
-          <span class="nav-icon"><Icon :name="cat.icon" :size="16" /></span>
-          <span class="nav-label">{{ t(cat.labelKey) }}</span>
+          <span class="nav-icon">{{ cat.icon }}</span>
+          <span class="nav-label">{{ cat.label }}</span>
           <span class="nav-arrow">›</span>
         </button>
       </nav>
@@ -144,7 +144,7 @@ import EmailSettings from './EmailSettings.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings },
+  components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String },
   emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email'],
   setup() { const { t } = useI18n(); return { t }; },
@@ -157,15 +157,15 @@ export default {
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
       categories: [
-        { id: 'profile', icon: 'users', labelKey: 'settings_profile' },
-        { id: 'appearance', icon: 'palette', labelKey: 'settings_appearance' },
-        { id: 'chats', icon: 'chat', labelKey: 'settings_chats' },
-        { id: 'email', icon: 'mail', labelKey: 'settings_email' },
-        { id: 'notifications', icon: 'bell', labelKey: 'settings_notifications' },
-        { id: 'privacy', icon: 'lock', labelKey: 'settings_privacy' },
-        { id: 'language', icon: 'globe', labelKey: 'settings_language' },
-        { id: 'help', icon: 'help', labelKey: 'settings_help' },
-        { id: 'clear', icon: 'trash', labelKey: 'settings_clear' }
+        { id: 'profile', icon: '👤', label: 'Профиль' },
+        { id: 'appearance', icon: '🎨', label: 'Внешний вид' },
+        { id: 'chats', icon: '💬', label: 'Чаты' },
+        { id: 'email', icon: '📧', label: 'Почта' },
+        { id: 'notifications', icon: '🔔', label: 'Уведомления' },
+        { id: 'privacy', icon: '🔒', label: 'Приватность' },
+        { id: 'language', icon: '🌐', label: 'Язык' },
+        { id: 'help', icon: '❓', label: 'Помощь' },
+        { id: 'clear', icon: '🗑️', label: 'Очистить данные' }
       ],
       backupBusy: false,
       backupResult: '',

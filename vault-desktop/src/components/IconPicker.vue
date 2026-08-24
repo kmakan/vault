@@ -73,6 +73,20 @@ function selectIcon(id) {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 8px;
+  /* На узких экранах (Android): сетка не должна вылезать за границы —
+     переключаемся на 4 колонки и позволяем перенос. */
+  grid-auto-rows: minmax(0, auto);
+  min-width: 0;
+}
+
+@media (max-width: 400px) {
+  .icon-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .icon-card {
+    padding: 8px 4px;
+  }
 }
 
 .icon-card {
