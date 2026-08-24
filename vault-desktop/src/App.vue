@@ -6723,6 +6723,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: 2000;
+  animation: fadeIn 0.12s ease;
 }
 
 .message-menu {
@@ -7619,7 +7620,7 @@ body {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   z-index: 100;
-  background: #0d1117;
+  background: var(--bg-primary, #0d1117);
 }
 
 .settings-panel h3 {
