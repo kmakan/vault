@@ -196,7 +196,7 @@ export default {
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
       categories: [
-        { id: 'profile', icon: 'users', label: 'Профиль' },
+        { id: 'profile', icon: 'user', label: 'Профиль' },
         { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
         { id: 'chats', icon: 'chat', label: 'Чаты' },
         { id: 'experiments', icon: 'help', label: 'Экспериментальные функции' },

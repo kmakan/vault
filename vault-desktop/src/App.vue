@@ -237,12 +237,14 @@
               <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
-            <!-- Исчезающие сообщения (25.08): таймер для этого чата -->
+            <!-- Исчезающие сообщения (25.08): таймер для этого чата.
+                 Единый стиль с chat-action-btn; состояние — цвет иконки
+                 (серый выкл / янтарный вкл) и заливка кнопки. -->
             <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
-              <button class="export-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
-                :title="'Исчезающие сообщения' + (currentEphemeralTtl ? ': ' + ephemeralLabel(currentEphemeralTtl) : '')"
+              <button class="chat-action-btn ephemeral-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
+                :title="'Исчезающие сообщения' + (currentEphemeralTtl ? ': вкл (' + ephemeralLabel(currentEphemeralTtl) + '), новые сообщения будут исчезать' : ' — выключены')"
                 @click="showEphemeralMenu = !showEphemeralMenu">
-                <Icon name="lock" :size="16" />
+                <Icon name="lock" :size="17" :color="currentEphemeralTtl > 0 ? '#f59e0b' : '#8b949e'" />
               </button>
               <div v-if="showEphemeralMenu" class="export-menu ephemeral-dropdown">
                 <button v-for="opt in ephemeralOptions" :key="opt.v"
@@ -1905,6 +1907,17 @@ export default {
       if (!hist || !hist.length) return list;
       const ids = new Set();
       for (const m of hist) if (m && m.id) ids.add(m.id);
+      // Исчезающие (25.08): старые записи истории могли быть сохранены БЕЗ
+      // ttl/expireAt (до включения фичи или до фикса парсинга). Письмо то же —
+      // обновляем таймер из свежераспарсенного env.
+      for (const h of hist) {
+        if (!h || !h.id) continue;
+        const fresh = list.find((x) => x && x.id === h.id && x.expireAt);
+        if (fresh && !h.expireAt) {
+          h.ttl = fresh.ttl;
+          h.expireAt = fresh.expireAt;
+        }
+      }
       // Из писем добавляем только то, чего ещё нет в истории (новое).
       const extra = list.filter(m => m && m.id && !ids.has(m.id));
       // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
@@ -2459,6 +2472,16 @@ export default {
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
               const env = this.parseEnvelope(text);
+              // Исчезающие (25.08): фикс области видимости — env объявлена здесь
+              // (внутри try), а return ниже был ВНЕ неё → ReferenceError молча
+              // ловился catch'ем и сообщение шло без ttl. Выносим в msgTtl.
+              var msgTtl = 0;
+              var msgExpireAt = 0;
+              if (env && env.ttl) {
+                const _mailTs = new Date(m.date || Date.now()).getTime() || Date.now();
+                msgTtl = env.ttl;
+                msgExpireAt = _mailTs + env.ttl * 1000;
+              }
               if (env) {
                 content = env.text;
                 if (env.id) msgId = env.id;
@@ -2530,6 +2553,8 @@ export default {
               encrypted: true,
               vault: true,
               mid: m.message_id || '',
+              ttl: msgTtl,
+              expireAt: msgExpireAt,
               email: m,
             };
           } catch (e) {
@@ -2593,6 +2618,7 @@ export default {
         this.applyReactions(merged0, chat, wireReactions);
         this.applyEdits(merged0, chat, wireEdits);
         const merged = this.filterDeleted(this.mergePending(chat, merged0));
+        for (const m of merged) if (m.expireAt) this.scheduleEphemeral(m, chat);
         if (!merged.length && hadMessages && !stale()) {
           // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
           // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
@@ -2645,7 +2671,10 @@ export default {
                     // Исчезающие: отсчёт у получателя — от момента доставки
                     // (created_at письма). Точный «от просмотра» потребовал бы
                     // read-receipt-синхронизации; доставка — честный компромисс.
-                    const expireAt = env.ttl ? new Date(msg.created_at).getTime() + env.ttl * 1000 : 0;
+                    // 25.08 фикс: у писем IMAP нет created_at — есть date.
+                    // new Date(undefined) давал NaN и таймер не взводился.
+                    const mailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
+                    const expireAt = env.ttl ? mailTs + env.ttl * 1000 : 0;
                     return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expireAt };
                   }
                   const parsed = this.parseMessageContent(text);
@@ -2793,7 +2822,8 @@ export default {
             if (env && !this.isOwnSender(msg.sender_id)) {
               this.noteSeen(msg.sender_id, new Date(msg.created_at).getTime());
             }
-            const gExpireAt = env && env.ttl ? new Date(msg.created_at).getTime() + env.ttl * 1000 : 0;
+            const gMailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
+            const gExpireAt = env && env.ttl ? gMailTs + env.ttl * 1000 : 0;
             decrypted.push({
               ...msg,
               content: text,
@@ -3170,8 +3200,13 @@ export default {
       const chatId = this.activeChatType === 'group' && this.currentGroup
         ? 'group:' + this.currentGroup.id
         : this.activeChat;
-      if (!chatId) return;
-      await this.setEphemeralTtl(chatId, seconds);
+      if (!chatId || chatId === '__notes__') return;
+      try {
+        await this.setEphemeralTtl(chatId, seconds);
+        console.log('[ephemeral] set ttl=' + seconds + ' for ' + chatId);
+      } catch (e) {
+        console.error('[ephemeral] save failed:', e);
+      }
       this.currentEphemeralTtl = Number(seconds) || 0;
       this.showToast(
         seconds > 0
@@ -3193,18 +3228,26 @@ export default {
       if (!msg || !msg.expireAt) return;
       const key = chatId + ':' + msg.id;
       if (this.ephemeralTimers[key]) return;
-      const delay = Math.max(0, msg.expireAt - Date.now());
-      this.ephemeralTimers[key] = setTimeout(() => {
-        this.expireEphemeral(chatId, msg.id);
-        delete this.ephemeralTimers[key];
-      }, delay);
-    },
-    expireEphemeral(chatId, msgId) {
-      const bucket = this.messages.filter((m) => m.id !== msgId);
-      if (bucket.length !== this.messages.length) {
-        this.messages = [...bucket];
-        this.saveCurrentHistory(chatId);
+      console.log('[ephemeral] arm timer id=' + msg.id + ' chat=' + chatId + ' in ' + Math.round((msg.expireAt - Date.now()) / 1000) + 's');
+      // Истёкшие пока приложение было закрыто: удаляем сразу.
+      if (Date.now() >= msg.expireAt) {
+        this.expireEphemeral(chatId, msg.id, msg.mid);
+        return;
       }
+      this.ephemeralTimers[key] = setTimeout(() => {
+        this.expireEphemeral(chatId, msg.id, msg.mid);
+        delete this.ephemeralTimers[key];
+      }, msg.expireAt - Date.now());
+    },
+    expireEphemeral(chatId, msgId, mid) {
+      // Тот же механизм, что «Удалить у всех» (deleteMessage): tombstone
+      // персистентен → сообщение не воскреснет из истории/письма после
+      // перезапуска или поллинга.
+      this.addTombstone(msgId);
+      if (mid) this.addMidTombstone(mid);
+      const idx = this.messages.findIndex((m) => m.id === msgId);
+      if (idx !== -1) this.messages.splice(idx, 1);
+      this.saveCurrentHistory(chatId);
     },
 
     // --- Key Recovery (25.08) ---
@@ -3468,7 +3511,12 @@ export default {
         // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
         // (имя/аватар) и стабильный id сообщения внутри шифра.
         // ttl — исчезающие сообщения для этого чата (0 = выкл).
-        const ttl = this.ephemeralTtlOf(chatId);
+        let ttl = await this.ephemeralTtlOf(chatId);
+        if (!ttl && Number(this.currentEphemeralTtl) > 0) {
+          // Fallback: kv мог не сохраниться — используем состояние UI.
+          ttl = Number(this.currentEphemeralTtl);
+        }
+        if (ttl) console.log('[sendMessage] ephemeral ttl=' + ttl + ' chat=' + chatId);
         const envelope = await this.buildEnvelope(payload, ttl);
         const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
 
@@ -6815,7 +6863,8 @@ body {
   font-size: 13px;
   font-weight: 500;
   padding: 6px 10px;
-  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border: none; /* 25.08: без обводки — ровный ряд иконок (замечение пользователя) */
+  background: transparent;
   border-radius: var(--radius-sm, 8px);
   color: var(--text-secondary, #aaa);
   white-space: nowrap;
@@ -7936,11 +7985,15 @@ body {
   min-width: 120px;
 }
 
-/* Исчезающие сообщения (25.08): кнопка-таймер в шапке чата */
+/* Исчезающие сообщения (25.08): кнопка-таймер в шапке чата.
+   Неактивный — как остальные (без обводки, серый замок).
+   Активный — янтарный замок + янтарные обводка и заливка кнопки. */
 .ephemeral-menu { position: relative; }
-.ephemeral-menu .export-btn.ephemeral-on {
-  color: var(--accent-warn, #f59e0b);
+.chat-actions button.chat-action-btn.ephemeral-on {
+  border: 1px solid rgba(245, 158, 11, 0.65);
+  background: rgba(245, 158, 11, 0.12);
 }
+.export-menu.ephemeral-dropdown { min-width: 150px; }
 .export-menu.ephemeral-dropdown button {
   display: block; width: 100%; text-align: left;
   padding: 9px 14px; background: none; border: none;
