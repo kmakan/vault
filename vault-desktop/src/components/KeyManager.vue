@@ -215,13 +215,13 @@ export default {
 }
 
 .key-manager-panel {
-  background: #1a1a2e;
+  background: var(--bg-secondary, #1a1a2e);
   border-radius: 12px;
   width: 520px;
   max-height: 80vh;
   overflow-y: auto;
-  border: 1px solid #16213e;
-  color: white;
+  border: 1px solid var(--border-subtle, #16213e);
+  color: var(--text-primary, white);
 }
 
 .panel-header {
