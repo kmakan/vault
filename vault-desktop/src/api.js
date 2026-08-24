@@ -19,7 +19,7 @@ const GMAIL_CONFIG = {
 
 export { db };
 
-// ── Local persistence: sqlite via Rust (Delta Chat-style disk DB) ─────────
+// ── Local persistence: sqlite via Rust (почтовый мессенджер-style disk DB) ─────────
 // Всё локальное состояние Vault (история, tombstones, курсоры, кэш тел,
 // kv) живёт в sqlite (~/.local/share/com.vault.vault/vault.db). localStorage
 // больше НЕ источник истины: квота ~5 МБ (body-cache уже 3–7 МБ) и он
@@ -312,8 +312,8 @@ export class ApiClient {
     try { await db.kvSet(this.email || 'anon', 'display-name', name || ''); } catch (e) { /* ignore */ }
   }
 
-  // --- Модель контактов Delta Chat (22.08) ---
-  // Удаление контакта — СТРОГО ЛОКАЛЬНОЕ (как Contact::delete в deltachat-core):
+  // --- Модель контактов почтовый мессенджер (22.08) ---
+  // Удаление контакта — СТРОГО ЛОКАЛЬНОЕ (как Contact::delete в почтовый мессенджер):
   // удаляется ключ + старые handshake-письма помечаются tombstone по uid
   // (markContactHandshakeDone). Никаких писем-уведомлений второй стороне,
   // никаких списков «удалён мной»/«удалил меня» — они только создавали
@@ -561,7 +561,7 @@ export class ApiClient {
     return { ok: true };
   }
 
-  // --- Контакты 1-на-1: приглашение по id участника (как Session: ID/QR → запрос → принятие) ---
+  // --- Контакты 1-на-1: приглашение по id участника (ID/QR → запрос → принятие) ---
   async loadPeerKeyEmails() {
     const set = new Set();
     try {
@@ -607,7 +607,7 @@ export class ApiClient {
     } catch (e) { /* ignore */ }
   }
   // --- Отправленные НАМИ приглашения (invited-senders) ---
-  // Защита авто-принятия (модель Delta Chat, 22.08): accept-письмо добавляет
+  // Защита авто-принятия (модель почтовый мессенджер, 22.08): accept-письмо добавляет
   // контакт автоматически ТОЛЬКО если мы сами приглашали этого отправителя.
   // Иначе любое стороннее accept-письмо со своим ключом молча попало бы в
   // контакты без согласия, а СТАРЫЕ accept-письма (обработанные ещё до
@@ -635,7 +635,7 @@ export class ApiClient {
       await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
     } catch (e) { /* ignore */ }
   }
-  // --- Одноразовый sweep старых handshake-писем (v0.1.9, модель Delta Chat) ---
+  // --- Одноразовый sweep старых handshake-писем (v0.1.9, модель почтовый мессенджер) ---
   // Корень «призрачных» инвайтов: handshake-письма живут в ящике ВЕЧНО, а до
   // v0.1.7 не было uid-пометок. В v0.1.8 их подавлял список deleted-senders,
   // в v0.1.9 он удалён (удаление локально) — и СТАРЫЕ инвайты/accept'ы без
@@ -685,7 +685,7 @@ export class ApiClient {
     });
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     // Запоминаем, что МЫ пригласили этого отправителя: его accept-письмо
-    // будет авто-принято (fetchPendingContactAccepts). Модель Delta Chat.
+    // будет авто-принято (fetchPendingContactAccepts). Модель почтовый мессенджер.
     await this.addInvitedSender(email);
     return { ok: true, invited: true, email };
   }
@@ -783,7 +783,7 @@ export class ApiClient {
   }
   // Пометить ВСЕ старые handshake-письма от email как обработанные
   // (invite → declined, accept → accepted по uid). Вызывается при ЛОКАЛЬНОМ
-  // удалении контакта (модель Delta Chat): старые письма не должны воскрешать
+  // удалении контакта (модель почтовый мессенджер): старые письма не должны воскрешать
   // контакт, а НОВЫЕ приглашения (после удаления) проходят — их uid ещё не помечен.
   async markContactHandshakeDone(email) {
     try {

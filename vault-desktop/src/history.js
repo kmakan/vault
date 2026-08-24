@@ -1,6 +1,6 @@
 // Локальная история чатов: расшифрованные сообщения персистятся в SQLite
 // через Rust-бэкенд (db_history_save/db_history_load — таблица chat_history
-// в ~/.local/share/com.vault.vault/vault.db) — как Delta Chat хранит историю
+// в ~/.local/share/com.vault.vault/vault.db) — как почтовый мессенджер хранит историю
 // в SQLite, а не в браузерных хранилищах. Причины (фикс 20.08, подтверждено
 // юзером): IndexedDB в WebKitGTK у части пользователей молча не работает
 // (0 записей, вечный onblocked); localStorage ограничен ~5 МБ (body-cache

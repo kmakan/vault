@@ -808,7 +808,7 @@ export default {
   data() {
     return {
       currentView: 'chats',
-      // Мобильная навигация (Telegram/Delta Chat паттерн): на узком экране
+      // Мобильная навигация (Telegram/почтовый мессенджер паттерн): на узком экране
       // видна ОДНА панель — список чатов ИЛИ открытый чат на весь экран.
       // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
       mobileChatOpen: false,
@@ -1475,7 +1475,7 @@ export default {
           if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
-            // Модель Delta Chat: удаление контакта НЕ трогает группы —
+            // Модель почтовый мессенджер: удаление контакта НЕ трогает группы —
             // участник остаётся полноценным контактом в списке.
             seen.add(m.email);
             this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
@@ -2384,7 +2384,7 @@ export default {
                 // публичный ключ отправителя. Если этот ключ уже известен
                 // под ДРУГИМ email — собеседник сменил почту: привязываем
                 // новый email к тому же контакту (копируем ключ), не требуя
-                // нового приглашения. Как у Delta Chat (contacts по fingerprint).
+                // нового приглашения. Как у почтовый мессенджер (contacts по fingerprint).
                 if (env.key && isOut) {
                   const senderNorm = String(sender).toLowerCase();
                   const knownByKey = Object.entries(this.peerKeys).find(
@@ -3091,7 +3091,7 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending('group:' + this.currentGroup.id, pendingMsg);
-          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
+          // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory('group:' + this.currentGroup.id);
@@ -3148,7 +3148,7 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending(this.activeChat, pendingMsg);
-          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
+          // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory(this.activeChat);
@@ -3680,7 +3680,7 @@ export default {
             this.callRingTimer = null;
             this.callState = 'active';
             this.startCallClock();
-            // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER приходит ВНУТРИ
+            // Фаза 2.3 (схема: offer от принимающего): OFFER приходит ВНУТРИ
             // call_accept (sig.sdp). Ставим remote, создаём ANSWER и шлём.
             // ВАЖНО: адресат = from (параметр сигнала); «c.peer» здесь не
             // существует — было причиной «media accept failed: {}».
@@ -3717,7 +3717,7 @@ export default {
             break;
           }
           if (sig.role === 'answer') {
-            // Фаза 2.3 (SimpleX-схема): звонящий получает ANSWER от принимающего
+            // Фаза 2.3 (схема: offer от принимающего): звонящий получает ANSWER от принимающего
             // и завершает handshake (DTLS-SRTP).
             try {
               await api.mediaSetRemote(call_id, sig.sdp);
@@ -3772,7 +3772,7 @@ export default {
       api.mediaRingtoneStop().catch(() => {});
       this.callState = 'active';
       this.startCallClock();
-      // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER создаёт ПРИНИМАЮЩИЙ
+      // Фаза 2.3 (схема: offer от принимающего): OFFER создаёт ПРИНИМАЮЩИЙ
       // и шлёт его ВНУТРИ call_accept — на один email-round-trip меньше,
       // ICE-кандидаты не успевают устареть.
       try {
@@ -3927,7 +3927,7 @@ export default {
         this._pollingActive = true;
         try {
           // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
-          // контактов (модель Delta Chat — группа тоже источник контактов).
+          // контактов (модель почтовый мессенджер — группа тоже источник контактов).
           try { await this.loadGroups(); } catch (e) { /* тихо */ }
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
@@ -4501,7 +4501,7 @@ export default {
     },
     // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
     // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится в sqlite (Delta Chat-style),
+    // поллинг «воскресил» бы удалённое. Хранится в sqlite (почтовый мессенджер-style),
     // с in-memory кэшем для синхронной фильтрации (filterDeleted).
     // См. initLocalDb() — загрузка при входе.
     tombstonesCache: [],
@@ -4586,7 +4586,7 @@ export default {
         stored[chatKey] = chatEdits;
         this.saveStoredEdits(stored);
       }
-      // Проставляем на сообщения. Проверка отправителя (аналог Delta Chat
+      // Проставляем на сообщения. Проверка отправителя (аналог почтовый мессенджер
       // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
       // чужие правки игнорируются. Старые правки без sender — применяем
       // (обратная совместимость).
@@ -4924,7 +4924,7 @@ export default {
       } catch (e) {
         console.error('processInvites: accepts failed:', e);
       }
-      // Контакты 1-на-1 (модель Delta Chat): accept-письма → добавляем ключи
+      // Контакты 1-на-1 (модель почтовый мессенджер): accept-письма → добавляем ключи
       // ТОЛЬКО от отправителей, которых МЫ пригласили (invited-senders в api.js).
       // Удаление контакта — строго локальное (deleteContact): никаких писем-
       // уведомлений, никаких замков, никаких повторных отправок. Старые письма
@@ -5142,7 +5142,7 @@ export default {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
         // МОДЕЛЬ DELTA CHAT (22.08): удаление СТРОГО ЛОКАЛЬНОЕ — никаких писем
-        // второй стороне (Contact::delete в deltachat-core тоже локальный).
+        // второй стороне (Contact::delete в почтовый мессенджер тоже локальный).
         await crypto.removePeerKey(email);
         // Старые handshake-письма от удалённого контакта (invite/accept)
         // помечаем обработанными по uid — не воскрешат контакт. НОВЫЕ
@@ -7671,7 +7671,7 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Responsive: мобильная навигация (Telegram/Delta Chat паттерн)
+   Responsive: мобильная навигация (Telegram/почтовый мессенджер паттерн)
    ═══════════════════════════════════════════════════════════════ */
 /* 19.08: @media (max-width:768px) скрывал .main-area display:none, и ВСЕ
    модалки (QR add-contact, settings, invite popups) рендерились ВНУТРИ
