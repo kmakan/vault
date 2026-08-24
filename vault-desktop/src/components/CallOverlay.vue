@@ -64,8 +64,20 @@
         <div class="call-waiting-hint">{{ texts.outgoing }}</div>
       </template>
 
-      <!-- Активный: доп. кнопки + завершить -->
+      <!-- Активный: зелёная трубка (принято) + завершить + доп. кнопки.
+           23.08 фикс: раньше трубка-слайдер исчезала и на её месте появлялась
+           красная кнопка «Завершить» — пользователь путал её с «отклонённой»
+           трубкой и рвал звонок. Теперь трубка остаётся ЗЕЛЁНОЙ (индикатор
+           принятия), красная кнопка завершения — отдельно справа. -->
       <template v-else-if="state === 'active'">
+        <div class="call-control-row call-main-row">
+          <button class="call-orb decision-accept" :title="texts.accepted" disabled>
+            <Icon name="phone" :size="26" color="#ffffff" />
+          </button>
+          <button class="call-orb call-orb-end" :title="texts.end" @click="$emit('end')">
+            <Icon name="phone-off" :size="26" />
+          </button>
+        </div>
         <div class="call-control-row call-extra-row">
           <button
             class="call-orb call-orb-extra"
@@ -84,11 +96,6 @@
           >
             <Icon name="record" :size="22" />
             <span class="orb-label">{{ recording ? texts.stopRecord : texts.startRecord }}</span>
-          </button>
-        </div>
-        <div class="call-control-row">
-          <button class="call-orb call-orb-end" :title="texts.end" @click="$emit('end')">
-            <Icon name="phone-off" :size="26" />
           </button>
         </div>
       </template>

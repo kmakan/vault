@@ -971,6 +971,7 @@ export default {
         reject: this.t('call_reject') || 'Отклонить',
         cancel: this.t('call_cancel') || 'Отменить',
         end: this.t('call_end') || 'Завершить',
+        accepted: this.t('call_accepted') || 'Соединено',
         mute: this.t('call_mute') || 'Выключить микрофон',
         unmute: this.t('call_unmute') || 'Включить микрофон',
         acceptHint: this.t('call_accept_hint') || '',

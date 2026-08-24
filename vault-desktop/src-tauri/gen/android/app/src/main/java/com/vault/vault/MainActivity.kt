@@ -1,4 +1,4 @@
-package com.vault.mailcipher
+package com.vault.vault
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

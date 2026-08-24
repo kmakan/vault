@@ -59,6 +59,16 @@ macro_rules! build_mic {
                             buf.push(avg);
                             if buf.len() >= FRAME_SAMPLES {
                                 let frame: Vec<f32> = buf.drain(..FRAME_SAMPLES).collect();
+                                // RMS микрофона (диагностика 23.08): каждые
+                                // ~0.4с — реальный уровень захвата. Если mic
+                                // тихий (rms < 0.01) — проблема устройства,
+                                // а не кодека.
+                                static MIC_CNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                                let mc = MIC_CNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if mc % 20 == 0 {
+                                    let mic_rms: f32 = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+                                    eprintln!("[audio] mic rms={mic_rms:.4}");
+                                }
                                 let mut out = [0u8; 4000];
                                 if let Ok(n) = encoder.encode_float(&frame, &mut out) {
                                     let _ = $opus_tx.try_send(out[..n].to_vec());
@@ -167,12 +177,14 @@ pub async fn run_audio_pipeline(
     mut stop_rx: watch::Receiver<bool>,
     muted: Arc<AtomicBool>,
 ) {
-    let remote_track = tokio::select! {
-        t = remote_track_rx.recv() => match t { Some(t) => t, None => return },
-        _ = stop_rx.changed() => return,
-    };
+    // ВАЖНО (23.08): rtc вызывает on_track ТОЛЬКО на ПЕРВОМ RTP-пакете пира
+    // (rtc-0.20 handler/endpoint.rs: «Fire OnOpen when received the first RTP
+    // packet»). Раньше мы ждали remote-трек ДО старта микрофона → обе стороны
+    // ждали друг друга и никто не слал RTP: вечный deadlock, звука нет.
+    // Теперь микрофон + writer стартуют СРАЗУ (RTP идёт, on_track срабатывает
+    // у пира), а remote-трек ждём параллельно в отдельной таске.
 
-    // Mic → local track.
+    // Mic → local track (стартует немедленно).
     let (opus_tx, opus_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
     let mic_stream = match start_mic_capture(opus_tx, muted.clone()) {
         Ok(s) => Some(s),
@@ -185,7 +197,7 @@ pub async fn run_audio_pipeline(
         track.clone(), ssrc, payload_type, opus_rx, stop_rx.clone(),
     ));
 
-    // Remote track → speaker.
+    // Remote track → speaker (появляется после первого RTP от пира).
     let (pcm_tx, pcm_rx) = channel::<Vec<f32>>();
     let speaker_stream = match start_speaker(pcm_rx) {
         Ok(s) => Some(s),
@@ -194,7 +206,14 @@ pub async fn run_audio_pipeline(
             None
         }
     };
-    let reader = tokio::spawn(read_remote_loop(remote_track, pcm_tx, stop_rx));
+    let reader = tokio::spawn(async move {
+        let remote_track = tokio::select! {
+            t = remote_track_rx.recv() => match t { Some(t) => t, None => return },
+            _ = stop_rx.changed() => return,
+        };
+        eprintln!("[audio] remote track received — playing");
+        read_remote_loop(remote_track, pcm_tx, stop_rx).await;
+    });
 
     // Keep streams alive; the loops exit when the PC is closed.
     let _ = writer.await;
@@ -307,6 +326,15 @@ async fn read_remote_loop(
                         let mut out = vec![0f32; DECODE_BUF];
                         if let Ok(n) = decoder.decode_float(Some(&pkt.payload[..]), &mut out[..], false) {
                             out.truncate(n);
+                            // RMS (диагностика шума 23.08): уровень принятого
+                            // аудио — каждые 20-й пакет. Если rms > 0.05, это
+                            // реальный звук, не тишина.
+                            static PKT_CNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            let c = PKT_CNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if c % 20 == 0 && !out.is_empty() {
+                                let rms: f32 = (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
+                                eprintln!("[audio] remote rms={rms:.4}  pkt_bytes={}  decoded={n}", pkt.payload.len());
+                            }
                             let _ = pcm_tx.send(out);
                         }
                     }

@@ -14,14 +14,13 @@ val tauriProperties = Properties().apply {
 }
 
 android {
-    compileSdk = 35
-    buildToolsVersion = "34.0.0"
-    namespace = "com.vault.mailcipher"
+    compileSdk = 36
+    namespace = "com.vault.vault"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = "com.vault.mailcipher"
+        applicationId = "com.vault.vault"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }

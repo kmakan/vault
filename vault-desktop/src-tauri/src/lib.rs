@@ -81,8 +81,10 @@ fn set_app_icon(app: tauri::AppHandle, icon_id: String) -> Result<(), String> {
     };
 
     let image = tauri::image::Image::from_bytes(png).map_err(|e| e.to_string())?;
-    let win = app.get_webview_window("main").ok_or("no window")?;
-    win.set_icon(image).map_err(|e| e.to_string())?;
+    #[cfg(desktop)]
+    if let Some(win) = app.get_webview_window("main") {
+        win.set_icon(image).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -838,6 +840,18 @@ pub fn run() {
             media::media_ringtone_stop,
         ])
         .setup(|app| {
+            // Mobile (Android/iOS): dirs::home_dir() returns None without a
+            // $HOME env var, so all ~/.vault storage (keys, groups,
+            // credentials) would fail with "Cannot determine home directory".
+            // Point HOME at the app-private data dir once, before any command
+            // (commands run after setup).
+            #[cfg(mobile)]
+            {
+                if let Ok(dir) = app.path().app_data_dir() {
+                    std::env::set_var("HOME", dir);
+                }
+            }
+
             // Try to get the default window icon from bundled resources
             let icon = if let Some(default_icon) = app.default_window_icon() {
                 default_icon.clone()
@@ -856,7 +870,8 @@ pub fn run() {
                 }
             }
 
-            // Set up system tray
+            // Set up system tray (desktop only — нет tray на Android/iOS)
+            #[cfg(desktop)]
             let _tray_icon = tauri::tray::TrayIconBuilder::new()
                 .tooltip("Vault - E2E Encrypted Messenger")
                 .icon(icon)

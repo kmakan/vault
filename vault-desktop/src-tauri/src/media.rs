@@ -132,7 +132,9 @@ impl CallMediaManager {
         let audio_codec = RTCRtpCodec {
             mime_type: MIME_TYPE_OPUS.to_owned(),
             clock_rate: 48000,
-            channels: 2,
+            // MONO: энкодер/декодер audiopus используют OpusChannels::Mono
+            // (audio.rs) — SDP обязан совпадать, иначе рассинхрон каналов.
+            channels: 1,
             sdp_fmtp_line: String::new(),
             rtcp_feedback: vec![],
         };
