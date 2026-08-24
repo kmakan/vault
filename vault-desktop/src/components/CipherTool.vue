@@ -477,7 +477,9 @@ export default {
 }
 
 /* Мобильный (25.08): фуллскрин — панель 600px не влезает в телефон,
-   уезжала за край; safe-top не даёт заголовку прилипнуть к статус-бару. */
+   уезжала за край; safe-top не даёт заголовку прилипнуть к статус-бару.
+   Вкладкам меньше паддинг — три кнопки («Зашифровать/Расшифровать/Файл»)
+   иначе не помещаются в ряд и «Файл» уходит за край экрана. */
 @media (max-width: 767px) {
   .cipher-overlay {
     padding: 0;
@@ -489,6 +491,16 @@ export default {
     max-height: 100%;
     border-radius: 0;
     padding-top: calc(12px + var(--safe-top, 0px));
+  }
+  .panel-body {
+    padding: 16px;
+  }
+  .tab-buttons {
+    gap: 6px;
+  }
+  .tab-btn {
+    padding: 9px 6px;
+    font-size: 13px;
   }
 }
 

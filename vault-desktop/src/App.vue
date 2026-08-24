@@ -726,9 +726,14 @@
             class="modal-input"
             @keyup.enter="createGroupAndClose"
           />
-          <label>Icon</label>
-          <div class="icon-picker">
-            <button v-for="ic in groupIcons" :key="ic" :class="['icon-btn', { active: newGroupIcon === ic }]" @click="newGroupIcon = ic">{{ ic }}</button>
+          <label>Аватар группы</label>
+          <div class="new-group-avatar-row">
+            <div class="new-group-avatar" @click="$refs.groupAvatarInput.click()">
+              <img v-if="newGroupAvatar" :src="newGroupAvatar" alt="" />
+              <div v-else class="new-group-avatar__placeholder"><Icon name="camera" :size="22" /></div>
+            </div>
+            <span class="new-group-avatar__hint">Нажмите, чтобы загрузить фото</span>
+            <input ref="groupAvatarInput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" @change="onNewGroupAvatarSelected" />
           </div>
         </div>
         <div class="modal-footer">
@@ -934,7 +939,8 @@ export default {
       currentGroup: null,
       activeChatType: 'chat', // 'chat' or 'group'
       newGroupName: '',
-      newGroupIcon: '📁',
+      // Аватар новой группы (dataUrl) — как в аккаунте: фото вместо эмодзи-иконок.
+      newGroupAvatar: '',
       // Group Settings
       showGroupSettings: false,
       // Invite popup (приглашение в группу с согласием)
@@ -969,7 +975,6 @@ export default {
       // Create group modal
       showCreateGroup: false,
       inviteEmail: '',
-      groupIcons: ['📁', '👥', '💬', '🔐', '💼', '🎮', '📚', '🎵', '🔬', '🌐', '🚀', '⭐', '🎯', '💡'],
       // Audio
       showAudioRecorder: false,
       // Export
@@ -2894,6 +2899,33 @@ export default {
       }
       console.log('[profile] broadcast to', peers.length, 'contacts');
     },
+    // Выбор аватара в диалоге «Новая группа»: центр-кроп 128×128 JPEG
+    // (те же параметры, что у аватара группы в GroupSettings).
+    onNewGroupAvatarSelected(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      if (file.size > 500 * 1024) {
+        alert('Файл слишком большой (макс 500KB)');
+        e.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = 128;
+          canvas.height = 128;
+          const ctx = canvas.getContext('2d');
+          const size = Math.min(img.width, img.height);
+          ctx.drawImage(img, (img.width - size) / 2, (img.height - size) / 2, size, size, 0, 0, 128, 128);
+          this.newGroupAvatar = canvas.toDataURL('image/jpeg', 0.8);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    },
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
     // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
     async onGroupAvatarUpdate({ groupId, avatar }) {
@@ -4780,11 +4812,11 @@ export default {
         const group = await api.createGroup(this.newGroupName.trim(), '');
         group.members = group.members || [];
         group.blocked = group.blocked || [];
-        // Выбранная эмодзи-иконка — сохраняется в kv_store (показывается, пока
-        // админ не загрузит полноценный аватар).
-        if (this.newGroupIcon) {
-          await db.kvSet('anon', 'group-icon:' + group.id, this.newGroupIcon);
-          this.groupIconMap[group.id] = this.newGroupIcon;
+        // Аватар группы (если загружен в диалоге создания): sqlite kv_store,
+        // тот же ключ, что использует GroupSettings/рассылка meta-письма.
+        if (this.newGroupAvatar) {
+          await db.kvSet('anon', 'group-avatar:' + group.id, this.newGroupAvatar);
+          this.groupAvatars[group.id] = this.newGroupAvatar;
         }
         this.groups.push(group);
         this.currentGroup = group;
@@ -4793,8 +4825,20 @@ export default {
         if (this.cryptoReady) {
           const groupKey = await crypto.generateGroupKey();
           this.groupKeys[group.id] = groupKey;
-          console.log('Generated group key for', group.id);
+          // Аватар, заданный при создании, сразу уходит участникам (meta-письмо),
+          // как если бы админ поменял его в настройках группы.
+          if (this.newGroupAvatar) {
+            try {
+              const payload = JSON.stringify({ meta: 1, avatar: this.newGroupAvatar });
+              const content = await crypto.encryptWithGroupKey(payload, groupKey);
+              await api.sendGroupMeta(group.id, content);
+            } catch (e) {
+              console.warn('Group avatar broadcast failed:', e);
+            }
+          }
         }
+        // Одноразовый аватар диалога больше не нужен.
+        this.newGroupAvatar = '';
 
         this.showGroupSettings = true;
         this.newGroupName = '';
@@ -7296,6 +7340,42 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* Аватар в диалоге «Новая группа» (25.08): фото вместо эмодзи-иконок,
+   единый стиль с аватаром аккаунта (круг, оверлей камеры при наведении). */
+.new-group-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 4px;
+}
+.new-group-avatar {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+.new-group-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.new-group-avatar__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #64748b);
+}
+.new-group-avatar__hint {
+  color: var(--text-muted, #64748b);
+  font-size: 12px;
 }
 
 .icon-btn {
