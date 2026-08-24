@@ -5,7 +5,7 @@
       <UserAvatar v-if="avatarUrl" :email="email" :avatarUrl="avatarUrl" :size="96" />
       <UserAvatar v-else :email="email" :size="96" :showPattern="true" />
       <div class="avatar-upload__overlay">
-        <span class="avatar-upload__camera">📷</span>
+        <span class="avatar-upload__camera"><Icon name="camera" :size="24" /></span>
       </div>
     </div>
     <input
@@ -32,6 +32,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import UserAvatar from './UserAvatar.vue'
+import Icon from './Icon.vue'
 import { useI18n } from '../i18n.js'
 import api from '../api.js'
 
