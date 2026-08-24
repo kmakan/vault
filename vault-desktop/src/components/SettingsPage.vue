@@ -48,6 +48,13 @@
       <div v-if="activeCategory === 'email'" class="settings-section">
         <h2>Почтовые аккаунты</h2>
         <EmailSettings />
+        <!-- Смена почты (24.08): ключи E2E не зависят от email — можно сменить
+             адрес, контакты и группы останутся. Контакты узнают новый адрес
+             автоматически: broadcast-письмо несёт тот же fingerprint (ключ). -->
+        <div class="change-email-block">
+          <button @click="$emit('change-email')" class="change-email-btn">✉ {{ t('settings_change_email') || 'Сменить почту' }}</button>
+          <p class="change-email-note">Контакты и группы останутся. Собеседники узнают новый адрес автоматически.</p>
+        </div>
       </div>
 
       <!-- УВЕДОМЛЕНИЯ -->
@@ -124,7 +131,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings },
   props: { email: String, userAvatarUrl: String, displayName: String },
-  emits: ['avatar-update', 'logout', 'icon-changed'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -388,6 +395,21 @@ export default {
 }
 
 .logout-btn:hover { background: rgba(248, 81, 73, 0.15); }
+
+/* Смена почты (24.08) */
+.change-email-btn {
+  padding: 8px 16px;
+  background: rgba(31, 111, 235, 0.15);
+  color: #58a6ff;
+  border: 1px solid #1f6feb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 8px;
+}
+.change-email-btn:hover { background: rgba(31, 111, 235, 0.25); }
+.change-email-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.08); }
+.change-email-note { color: #8b949e; font-size: 12px; margin-top: 8px; }
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }

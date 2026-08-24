@@ -456,7 +456,43 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close" @click="showSettings = false">←</button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" />
+        </div>
+      </div>
+
+      <!-- CHANGE EMAIL MODAL (24.08): смена почты без потери контактов/групп.
+           Поля как при входе: email + пароль (+ серверы при необходимости).
+           Ключи E2E не трогаются — контакты узнают новый адрес по тому же
+           fingerprint (см. broadcastProfile + fingerprint-матчинг). -->
+      <div v-if="showChangeEmail" class="modal-overlay" @click.self="showChangeEmail = false">
+        <div class="modal-settings change-email-panel">
+          <button class="modal-close" @click="showChangeEmail = false">←</button>
+          <h3 class="invite-popup-title">✉ {{ t('settings_change_email') || 'Сменить почту' }}</h3>
+          <p class="change-email-hint">Контакты и группы останутся: ключи E2E не привязаны к адресу. После смены отправьте сообщение или профиль — собеседники узнают новый адрес автоматически.</p>
+          <form @submit.prevent="changeEmail">
+            <input v-model="newEmail" type="email" placeholder="Новый email" required class="change-email-input" />
+            <input v-model="newPassword" type="password" placeholder="Пароль приложения / от внешних устройств" required class="change-email-input" />
+            <div class="change-email-row">
+              <button type="button" class="server-toggle" @click="showChangeEmailServers = !showChangeEmailServers">⚙ {{ t('server_settings') || 'Настройки сервера' }}</button>
+            </div>
+            <div v-if="showChangeEmailServers" class="server-settings">
+              <div class="server-row">
+                <label>IMAP</label>
+                <input v-model="imapServer" type="text" placeholder="imap.gmail.com" />
+                <input v-model="imapPort" type="text" placeholder="993" class="server-port" />
+              </div>
+              <div class="server-row">
+                <label>SMTP</label>
+                <input v-model="smtpServer" type="text" placeholder="smtp.gmail.com" />
+                <input v-model="smtpPort" type="text" placeholder="587" class="server-port" />
+              </div>
+            </div>
+            <div v-if="changeEmailError" class="login-error">{{ changeEmailError }}</div>
+            <div class="change-email-actions">
+              <button type="button" @click="showChangeEmail = false" class="cancel-btn">Отмена</button>
+              <button type="submit" :disabled="changeEmailLoading" class="submit-btn">{{ changeEmailLoading ? 'Подключение…' : 'Сменить почту' }}</button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -809,6 +845,13 @@ export default {
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       appIconId: 'letter',
+      // Смена почты (24.08): форма как при входе, ключи не трогаются.
+      showChangeEmail: false,
+      showChangeEmailServers: false,
+      newEmail: '',
+      newPassword: '',
+      changeEmailLoading: false,
+      changeEmailError: '',
       contacts: [],
       activeChat: null,
       messages: [],
@@ -1347,6 +1390,59 @@ export default {
       this.profiles = {};
       this.userAvatarUrl = '';
       this.displayName = '';
+    },
+    // --- Смена почты (24.08) ---
+    // Ключи E2E (keypair.json) не привязаны к email: меняем только транспорт.
+    // Контакты/группы остаются в peer_keys.json/kv_store. Новый адрес уходит
+    // контактам broadcast-письмом с тем же fingerprint — они обновят адрес
+    // без новых приглашений (fingerprint-матчинг в processIncoming).
+    openChangeEmail() {
+      this.newEmail = '';
+      this.newPassword = '';
+      this.changeEmailError = '';
+      this.showChangeEmailServers = false;
+      this.showChangeEmail = true;
+    },
+    async changeEmail() {
+      this.changeEmailLoading = true;
+      this.changeEmailError = '';
+      const oldEmail = this.email;
+      try {
+        const config = {};
+        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
+        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
+        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
+        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
+        // Входим на новый ящик (сохраняем креды для автовхода). Ключ E2E не
+        // перегенерируется — api.login только подключает почту.
+        await api.login(this.newEmail.trim(), this.newPassword, { remember: true, config });
+        this.stopPolling();
+        // Переключаем сессию на новый email, не сбрасывая ключи/контакты/группы.
+        this.email = this.newEmail.trim();
+        this.password = this.newPassword;
+        this.userId = this.email;
+        this.isLoggedIn = true;
+        this.connected = true;
+        // Кэш имени привязан к аккаунту (namespace = email) — сбрасываем.
+        api._displayName = undefined;
+        await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
+        await this.loadContacts(); // peer_keys общие — контакты остаются
+        await this.loadGroups();
+        this.startPolling();
+        this.idleLoop();
+        this.loadEmails().catch(() => {});
+        // Сообщаем контактам новый адрес: broadcast-письмо несёт name/avatar
+        // и key (тот же fingerprint) — получатели обновят адрес контакта.
+        try { await this.broadcastProfile(); } catch (e) { console.error('[change-email] broadcast failed:', e); }
+        console.log('[identity] email changed:', oldEmail, '→', this.email);
+        this.showChangeEmail = false;
+        this.showSettings = false;
+        this.loadUnreadCounts();
+      } catch (error) {
+        this.changeEmailError = (error && error.message) || String(error);
+      } finally {
+        this.changeEmailLoading = false;
+      }
     },
     async loadContacts() {
       try {
@@ -7130,6 +7226,27 @@ body {
 .modal-close:hover {
   color: var(--text-primary, #f1f5f9);
 }
+
+/* Смена почты — модалка (24.08) */
+.change-email-panel { max-width: 480px; padding: 32px; }
+.change-email-hint { color: #8b949e; font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+.change-email-input {
+  width: 100%; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d;
+  border-radius: 6px; color: #e6edf3; font-size: 14px; box-sizing: border-box; margin-bottom: 8px;
+}
+.change-email-input:focus { border-color: #58a6ff; outline: none; }
+.change-email-row { margin-bottom: 8px; }
+.change-email-panel .server-toggle { background: none; border: none; color: #58a6ff; cursor: pointer; font-size: 13px; padding: 4px 0; }
+.change-email-panel .server-settings { margin-top: 8px; padding: 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+.change-email-panel .server-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.change-email-panel .server-row label { color: #8b949e; font-size: 12px; min-width: 40px; }
+.change-email-panel .server-row input { flex: 1; padding: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; font-size: 13px; }
+.change-email-panel .server-port { max-width: 80px; }
+.change-email-actions { display: flex; gap: 8px; margin-top: 16px; }
+.change-email-panel .cancel-btn { padding: 8px 16px; background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; cursor: pointer; }
+.change-email-panel .submit-btn { padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
+.change-email-panel .submit-btn:disabled { opacity: 0.5; }
+.change-email-panel .login-error { color: #f85149; font-size: 13px; margin-top: 8px; }
 
 .modal-body {
   padding: 20px 24px;
