@@ -229,7 +229,7 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #16213e;
+  border-bottom: 1px solid var(--border-subtle, #16213e);
 }
 
 .panel-header h3 {
@@ -267,7 +267,7 @@ export default {
 }
 
 .status-active {
-  color: #4ade80;
+  color: var(--status-online, #4ade80);
   font-size: 13px;
 }
 
@@ -279,7 +279,7 @@ export default {
 .key-info label {
   display: block;
   font-size: 12px;
-  color: #888;
+  color: var(--text-muted, #888);
   margin-bottom: 4px;
   margin-top: 8px;
 }
@@ -287,11 +287,11 @@ export default {
 .fingerprint-display {
   display: block;
   padding: 8px 12px;
-  background: #0f0f23;
+  background: var(--bg-primary, #0f0f23);
   border-radius: 6px;
   font-family: monospace;
   font-size: 14px;
-  color: #4ade80;
+  color: var(--status-online, #4ade80);
 }
 
 .key-display {
@@ -302,10 +302,10 @@ export default {
 .key-display textarea {
   flex: 1;
   padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
+  background: var(--bg-primary, #0f0f23);
+  border: 1px solid var(--border-subtle, #16213e);
   border-radius: 6px;
-  color: white;
+  color: var(--text-primary, white);
   font-family: monospace;
   font-size: 11px;
   resize: none;
@@ -313,11 +313,12 @@ export default {
 
 .copy-btn {
   padding: 8px 12px;
-  background: #16213e;
+  background: var(--bg-tertiary, #16213e);
   border: none;
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+  color: var(--text-primary, white);
 }
 
 .key-actions {
@@ -326,56 +327,13 @@ export default {
   margin-top: 16px;
 }
 
-.btn-primary {
-  padding: 8px 16px;
-  background: #0f3460;
-  border: none;
-  border-radius: 6px;
-  color: white;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-primary:hover {
-  background: #1a5276;
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary {
-  padding: 8px 16px;
-  background: #16213e;
-  border: none;
-  border-radius: 6px;
-  color: white;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-danger {
-  padding: 8px 16px;
-  background: #7f1d1d;
-  border: none;
-  border-radius: 6px;
-  color: white;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-danger:hover {
-  background: #991b1b;
-}
-
 .import-area textarea {
   width: 100%;
   padding: 8px;
-  background: #0f0f23;
-  border: 1px solid #16213e;
+  background: var(--bg-primary, #0f0f23);
+  border: 1px solid var(--border-subtle, #16213e);
   border-radius: 6px;
-  color: white;
+  color: var(--text-primary, white);
   font-family: monospace;
   font-size: 11px;
   resize: vertical;
@@ -391,20 +349,20 @@ export default {
 }
 
 .import-result.success {
-  background: #064e3b;
-  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  color: var(--status-online, #4ade80);
 }
 
 .import-result.error {
-  background: #7f1d1d;
+  background: rgba(248, 81, 73, 0.12);
   color: #fca5a5;
 }
 
 .empty-state {
-  color: #666;
+  color: var(--text-muted, #666);
   font-size: 13px;
   padding: 12px;
-  background: #0f0f23;
+  background: var(--bg-primary, #0f0f23);
   border-radius: 6px;
   text-align: center;
 }
@@ -420,9 +378,9 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 10px 12px;
-  background: #0f0f23;
+  background: var(--bg-primary, #0f0f23);
   border-radius: 6px;
-  border: 1px solid #16213e;
+  border: 1px solid var(--border-subtle, #16213e);
 }
 
 .peer-key-info {
@@ -463,10 +421,10 @@ export default {
 }
 
 .icon-btn:hover {
-  background: #16213e;
+  background: var(--bg-tertiary, #16213e);
 }
 
 .icon-btn.danger:hover {
-  background: #7f1d1d;
+  background: rgba(248, 81, 73, 0.25);
 }
 </style>

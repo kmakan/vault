@@ -203,27 +203,27 @@ export default {
 }
 
 .qr-panel-card {
-  background: #141a26;
-  border: 1px solid #2e3a52;
+  background: var(--bg-secondary, #141a26);
+  border: 1px solid var(--border-subtle, #2e3a52);
   border-radius: 12px;
   padding: 24px 28px;
   width: 460px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
   overflow-y: auto;
-  color: #e6edf3;
+  color: var(--text-primary, #e6edf3);
 }
 
 .qr-panel-card h3 {
   margin: 0 0 4px;
   font-size: 18px;
-  color: #f3f4f6;
+  color: var(--text-primary, #f3f4f6);
 }
 
 .panel-subtitle {
   margin: 0 0 18px;
   font-size: 13px;
-  color: #8b949e;
+  color: var(--text-muted, #8b949e);
 }
 
 .step {
@@ -236,7 +236,7 @@ export default {
   flex: 0 0 24px;
   height: 24px;
   border-radius: 50%;
-  background: #0f3460;
+  background: var(--accent-primary, #0f3460);
   color: #fff;
   font-size: 13px;
   font-weight: 600;
