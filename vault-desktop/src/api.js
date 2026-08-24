@@ -1281,7 +1281,7 @@ export class ApiClient {
       return {};
     }
   }
-  async saveProfile(email, name, avatar, ts) {
+  async saveProfile(email, name, avatar, ts, bio) {
     if (!email) return;
     try {
       // Регистр: заголовки From бывают «Имя <Mail@X>» — ключ храним
@@ -1300,7 +1300,11 @@ export class ApiClient {
       const tsNum = ts || Date.now();
       if (name && name !== email && tsNum >= (p._ts || 0)) p.name = name;
       if (avatar && tsNum >= (p._ts || 0)) p.avatar = avatar;
-      if (name || avatar) {
+      if (bio !== undefined && bio !== null && tsNum >= (p._ts || 0)) {
+        // Статус «О себе» (25.08): пустая строка = осознанно очистить.
+        p.bio = String(bio).slice(0, 200);
+      }
+      if (name || avatar || bio !== undefined) {
         if (tsNum >= (p._ts || 0)) p._ts = tsNum;
         profiles[email] = p;
         console.log('[profile] save', email, 'name=' + (name || '-'), 'avatar=' + (avatar ? avatar.slice(0, 40) + '...' : '-'), 'ts=' + tsNum);

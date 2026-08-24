@@ -31,7 +31,12 @@
           <label>Имя</label>
           <input v-model="localDisplayName" type="text" placeholder="Ваше имя" @change="saveDisplayName" @keyup.enter="saveDisplayName" />
         </div>
-        <button @click="saveDisplayName" class="btn btn-primary">Сохранить</button>
+        <div class="setting-group">
+          <label>О себе (видят контакты)</label>
+          <textarea v-model="localBio" rows="2" maxlength="200" placeholder="Пара слов о себе…" class="bio-input"></textarea>
+          <span class="bio-counter">{{ localBio.length }}/200</span>
+        </div>
+        <button @click="saveProfileFields" class="btn btn-primary">Сохранить</button>
         <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
       </div>
 
@@ -46,7 +51,29 @@
       <!-- ЧАТЫ -->
       <div v-if="activeCategory === 'chats'" class="settings-section">
         <h2>Чаты</h2>
+        <div class="setting-group">
+          <label>Качество отправляемых медиафайлов</label>
+          <select v-model="localMediaQuality" @change="saveMediaQuality" class="media-quality-select">
+            <option value="high">Высокое — сжатие для быстрой доставки</option>
+            <option value="low">Низкое — для плохой связи</option>
+            <option value="original">Оригинал — без сжатия (большой трафик)</option>
+          </select>
+          <p class="setting-hint">Изображения больше выбранного размера сжимаются автоматически. Файлы всегда отправляются как есть.</p>
+        </div>
         <AppBehavior />
+      </div>
+
+      <!-- ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ (25.08, по модели Delta Chat) -->
+      <div v-if="activeCategory === 'experiments'" class="settings-section">
+        <h2>Экспериментальные функции</h2>
+        <p class="setting-hint" style="margin-bottom:16px">
+          Эти функции могут быть нестабильными и могут быть изменены или удалены.
+        </p>
+        <div class="setting-row">
+          <span>Звонки (бета){{ experimentsCalls ? ' — включены' : '' }}</span>
+          <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
+        </div>
+        <p v-if="experimentsCalls" class="setting-hint">Кнопка вызова появится в шапке чатов с ключом собеседника. Аудио-звонки P2P, шифрование DTLS-SRTP.</p>
       </div>
 
       <!-- ПОЧТА -->
@@ -134,7 +161,7 @@
 </template>
 
 <script>
-import api from '../api.js';
+import api, { db } from '../api.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
@@ -150,8 +177,8 @@ import EmailSettings from './EmailSettings.vue';
 export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
-  props: { email: String, userAvatarUrl: String, displayName: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email'],
+  props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -161,6 +188,9 @@ export default {
       // На мобильном стартуем со списка разделов, на десктопе — «Профиль».
       activeCategory: window.matchMedia('(max-width: 767px)').matches ? '' : 'profile',
       localDisplayName: this.displayName || '',
+      localBio: this.bio || '',
+      localMediaQuality: 'high',
+      experimentsCalls: false,
       notifSound: true,
       notifTray: true,
       notifSystem: notificationsEnabled(),
@@ -169,6 +199,7 @@ export default {
         { id: 'profile', icon: 'users', label: 'Профиль' },
         { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
         { id: 'chats', icon: 'chat', label: 'Чаты' },
+        { id: 'experiments', icon: 'help', label: 'Экспериментальные функции' },
         { id: 'email', icon: 'mail', label: 'Почта' },
         { id: 'notifications', icon: 'bell', label: 'Уведомления' },
         { id: 'privacy', icon: 'lock', label: 'Приватность' },
@@ -185,11 +216,28 @@ export default {
     // при каждом вызове notifyNewMessage).
     notifSystem(on) { setNotificationsEnabled(on); },
   },
+  async mounted() {
+    // Настройки чатов/экспериментов (kv_store)
+    try {
+      this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
+      this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+    } catch (e) { /* ignore */ }
+  },
   methods: {
     async saveDisplayName() {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
       try { await api.setDisplayName(this.localDisplayName); } catch (e) { console.error(e); }
       this.$emit('name-update', this.localDisplayName);
+    },
+    async saveMediaQuality() {
+      try {
+        await db.kvSet('anon', 'media-quality', this.localMediaQuality);
+      } catch (e) { /* ignore */ }
+    },
+    // Имя + статус «О себе» одной кнопкой; bio уходит контактам broadcast-письмом.
+    async saveProfileFields() {
+      await this.saveDisplayName();
+      this.$emit('bio-save', this.localBio);
     },
     // --- Резервная копия (24.08) ---
     // Экспорт: ключи + kv_store (профили, пометки, курсоры) в JSON-файл.
@@ -539,4 +587,13 @@ export default {
   text-align: left;
 }
 .settings-back-btn:hover { background: #161b22; }
+
+/* Статус «О себе» (25.08) */
+.bio-input {
+  width: 100%; max-width: 320px;
+  padding: 10px 14px;
+  background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+  color: #e6edf3; font-size: 14px; box-sizing: border-box; resize: vertical;
+}
+.bio-counter { display: block; margin-top: 4px; color: #8b949e; font-size: 11px; text-align: right; max-width: 320px; }
 </style>

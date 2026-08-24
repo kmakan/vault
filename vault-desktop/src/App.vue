@@ -149,7 +149,7 @@
           <div class="contact-status">
             <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
-            <span class="status-dot" :class="{ online: contact.online }"></span>
+            <span v-if="isRecentlySeen(contact.email)" class="status-dot online" title="Недавно видели"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
           </div>
         </div>
@@ -234,9 +234,24 @@
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <button v-if="peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
+              <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
+            <!-- Исчезающие сообщения (25.08): таймер для этого чата -->
+            <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
+              <button class="export-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
+                :title="'Исчезающие сообщения' + (currentEphemeralTtl ? ': ' + ephemeralLabel(currentEphemeralTtl) : '')"
+                @click="showEphemeralMenu = !showEphemeralMenu">
+                <Icon name="lock" :size="16" />
+              </button>
+              <div v-if="showEphemeralMenu" class="export-menu ephemeral-dropdown">
+                <button v-for="opt in ephemeralOptions" :key="opt.v"
+                  :class="{ active: currentEphemeralTtl === opt.v }"
+                  @click="applyEphemeral(opt.v)">
+                  {{ opt.label }}
+                </button>
+              </div>
+            </div>
             <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
             <div class="export-dropdown" v-if="activeChat">
               <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
@@ -490,7 +505,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @experiments-calls="onExperimentsCalls" />
         </div>
       </div>
 
@@ -983,6 +998,25 @@ export default {
       // Тост-уведомление внизу экрана (Key Recovery и пр.)
       toastMessage: '',
       toastTimer: null,
+      // Исчезающие сообщения (25.08): активные таймеры удаления
+      // { msgKey: timeoutId }, msgKey = chatId + ':' + msgId
+      ephemeralTimers: {},
+      ephemeralTick: 0,
+      showEphemeralMenu: false,
+      currentEphemeralTtl: 0,
+      myBio: '',
+      // Зелёная точка (25.08): email → ts последней активности контакта
+      // (входящее письмо/квитанция). Не онлайн-статус: «видели за 10 мин».
+      lastSeenMap: {},
+      // Экспериментальные функции (25.08): флаг звонков
+      expCalls: false,
+      ephemeralOptions: [
+        { v: 0, label: 'Выкл' },
+        { v: 300, label: '5 мин' },
+        { v: 3600, label: '1 час' },
+        { v: 86400, label: '1 день' },
+        { v: 604800, label: '1 неделя' },
+      ],
       // Восстановление аккаунта на экране входа (Key Recovery)
       showRecovery: false,
       recoveryWordsInput: '',
@@ -1225,6 +1259,8 @@ export default {
           await this.loadProfiles(); // профили (имя/аватар) из kv_store
           this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || '';
           this.displayName = (await api.getDisplayName()) || this.email || '';
+          this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
+          this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
           await api.getChats();
@@ -1907,6 +1943,8 @@ export default {
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
+      this.showEphemeralMenu = false;
+      this.currentEphemeralTtl = await this.ephemeralTtlOf('group:' + group.id);
       this.currentGroup = group;
       this.openMobileChat();
       this.resetUnread('group:' + group.id); // группа открыта — сбрасываем счётчик
@@ -2087,7 +2125,7 @@ export default {
       }
     },
     // Обернуть текст в конверт перед шифрованием.
-    async buildEnvelope(text) {
+    async buildEnvelope(text, ttl = 0) {
       const dn = (await api.getDisplayName()) || '';
       // Не слать email как имя: получатель считает name==email «нет имени»
       // (см. nameOf) — иначе он перезаписывает настоящее имя почтой.
@@ -2095,7 +2133,7 @@ export default {
       let avatar = (this.profiles[this.email] || {}).avatar || '';
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
-      return JSON.stringify({
+      const env = {
         vault: 1,
         id: this.newMessageId(),
         text: text,
@@ -2103,7 +2141,12 @@ export default {
         avatar: avatar,
         key: crypto.publicKey || '',
         ts: Date.now(),
-      });
+      };
+      // Исчезающие сообщения (25.08): ttl в секундах от момента ПРОСМОТРА
+      // получателем. 0 = обычное сообщение. Получатель ставит локальный
+      // таймер удаления после показа (expireEphemeral).
+      if (ttl && Number(ttl) > 0) env.ttl = Number(ttl);
+      return JSON.stringify(env);
     },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
     parseEnvelope(decrypted) {
@@ -2111,7 +2154,7 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '' };
+          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
@@ -2459,7 +2502,7 @@ export default {
                 if (env.name || env.avatar) {
                   // ts письма (отправки) — чтобы отставшее письмо не
                   // перезаписывало более свежий профиль (см. saveProfile).
-                  api.saveProfile(sender, env.name, env.avatar, env.ts || 0);
+                  api.saveProfile(sender, env.name, env.avatar, env.ts || 0, typeof env.bio === 'string' ? env.bio : undefined);
                 }
                 // Профильное письмо (type:'profile'): name/avatar уже
                 // сохранены выше — как сообщение НЕ рендерим (системное).
@@ -2594,8 +2637,16 @@ export default {
                   const text = await crypto.decryptVault(msg.content);
                   const env = this.parseEnvelope(text);
                   if (env) {
+                    // Зелёная точка: письмо от контакта = активность сейчас
+                    if (!this.isOwnSender(msg.sender_id)) {
+                      this.noteSeen(this.activeChat, new Date(msg.created_at).getTime());
+                    }
                     const parsed = this.parseMessageContent(env.text);
-                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true };
+                    // Исчезающие: отсчёт у получателя — от момента доставки
+                    // (created_at письма). Точный «от просмотра» потребовал бы
+                    // read-receipt-синхронизации; доставка — честный компромисс.
+                    const expireAt = env.ttl ? new Date(msg.created_at).getTime() + env.ttl * 1000 : 0;
+                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expireAt };
                   }
                   const parsed = this.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
@@ -2608,6 +2659,7 @@ export default {
           );
           if (stale()) return;
           this.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          for (const m of this.messages) if (m.expireAt) this.scheduleEphemeral(m, this.activeChat);
         } else {
           this.messages = raw.map(msg => {
             const { text, attachment } = this.parseMessageContent(msg.content);
@@ -2738,6 +2790,10 @@ export default {
               plaintext = env.text; // содержимое конверта
             }
             const { text, attachment } = this.parseMessageContent(plaintext);
+            if (env && !this.isOwnSender(msg.sender_id)) {
+              this.noteSeen(msg.sender_id, new Date(msg.created_at).getTime());
+            }
+            const gExpireAt = env && env.ttl ? new Date(msg.created_at).getTime() + env.ttl * 1000 : 0;
             decrypted.push({
               ...msg,
               content: text,
@@ -2748,6 +2804,8 @@ export default {
               encrypted: true,
               mid: msg.message_id || '',
               ...(env && env.id ? { id: env.id } : {}),
+              ttl: (env && env.ttl) || 0,
+              expireAt: gExpireAt,
             });
           }
           if (stale()) return;
@@ -2810,6 +2868,7 @@ export default {
             return;
           }
           this.messages = merged;
+          for (const m of this.messages) if (m.expireAt) this.scheduleEphemeral(m, chat);
           this.saveChatCache(chat, this.messages);
           // Локальная история (IndexedDB) — полный архив группы.
           this.saveCurrentHistory(chat);
@@ -2930,6 +2989,7 @@ export default {
       if (!peers.length) return;
       const name = this.displayName || this.email || '';
       const avatar = (this.profiles[this.email] || {}).avatar || '';
+      const bio = await this.getBio();
       const body = {
         vault: 1,
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
@@ -2937,6 +2997,7 @@ export default {
         text: '',
         name,
         avatar,
+        bio: (bio || '').slice(0, 200),
         key: crypto.publicKey || '',
         ts: Date.now(),
       };
@@ -3038,6 +3099,114 @@ export default {
         this.loginLoading = false;
       }
     },
+    // --- Зелёная точка (25.08, по модели Delta Chat) ---
+    // Отмечаем активность контакта: входящее письмо от него.
+    noteSeen(email, ts) {
+      if (!email || typeof email !== 'string' || !email.includes('@')) return;
+      const t = Number(ts) || Date.now();
+      if ((this.lastSeenMap[email] || 0) < t) {
+        this.lastSeenMap = { ...this.lastSeenMap, [email]: t };
+      }
+    },
+    isRecentlySeen(email) {
+      const t = this.lastSeenMap[email];
+      if (!t) return false;
+      return Date.now() - t < 10 * 60 * 1000; // 10 минут
+    },
+
+    // --- Качество медиа (25.08): 'high' (по умолч.) / 'low' / 'original' ---
+    async mediaQuality() {
+      try { return (await db.kvGet('anon', 'media-quality')) || 'high'; } catch { return 'high'; }
+    },
+    // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
+    compressImage(dataUrl, maxSide, quality) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const side = Math.max(img.width, img.height);
+          if (side <= maxSide) { resolve(null); return; } // сжатие не нужно
+          const scale = maxSide / side;
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => reject(new Error('image decode failed'));
+        img.src = dataUrl;
+      });
+    },
+
+    // --- Статус «О себе» (25.08): свой bio в kv_store, уходит в profile-конверте ---
+    async getBio() {
+      try { return (await db.kvGet(this.email || 'anon', 'bio')) || ''; } catch { return ''; }
+    },
+    async onExperimentsCalls(on) {
+      this.expCalls = !!on;
+      try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
+    },
+    async onBioSave(text) {
+      await this.setBio(text);
+      this.showToast('Профиль сохранён — статус уйдёт контактам');
+    },
+    async setBio(text) {
+      const v = String(text || '').slice(0, 200);
+      await db.kvSet(this.email || 'anon', 'bio', v);
+      this.myBio = v;
+      this.broadcastProfile().catch(() => {}); // контакты узнают новый статус
+      return v;
+    },
+
+    // --- Исчезающие сообщения (25.08, по модели Delta Chat) ---
+    // TTL хранится per-chat в kv_store ('ephemeral:<chatId>'), уходит в
+    // конверте (env.ttl, секунды). У получателя таймер стартует при ПОКАЗЕ
+    // сообщения; у отправителя — сразу после отправки.
+    ephemeralLabel(sec) {
+      const opt = this.ephemeralOptions.find((o) => o.v === Number(sec));
+      return opt ? opt.label : sec + ' c';
+    },
+    async applyEphemeral(seconds) {
+      this.showEphemeralMenu = false;
+      const chatId = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      if (!chatId) return;
+      await this.setEphemeralTtl(chatId, seconds);
+      this.currentEphemeralTtl = Number(seconds) || 0;
+      this.showToast(
+        seconds > 0
+          ? 'Исчезающие сообщения: ' + this.ephemeralLabel(seconds) + ' (новые сообщения в этом чате)'
+          : 'Исчезающие сообщения выключены',
+      );
+    },
+    async ephemeralTtlOf(chatId) {
+      try {
+        const v = await db.kvGet('anon', 'ephemeral:' + chatId);
+        return Number(v) || 0;
+      } catch { return 0; }
+    },
+    async setEphemeralTtl(chatId, seconds) {
+      await db.kvSet('anon', 'ephemeral:' + chatId, String(seconds || 0));
+      this.ephemeralTick += 1; // перерисовать индикатор в шапке
+    },
+    scheduleEphemeral(msg, chatId) {
+      if (!msg || !msg.expireAt) return;
+      const key = chatId + ':' + msg.id;
+      if (this.ephemeralTimers[key]) return;
+      const delay = Math.max(0, msg.expireAt - Date.now());
+      this.ephemeralTimers[key] = setTimeout(() => {
+        this.expireEphemeral(chatId, msg.id);
+        delete this.ephemeralTimers[key];
+      }, delay);
+    },
+    expireEphemeral(chatId, msgId) {
+      const bucket = this.messages.filter((m) => m.id !== msgId);
+      if (bucket.length !== this.messages.length) {
+        this.messages = [...bucket];
+        this.saveCurrentHistory(chatId);
+      }
+    },
+
     // --- Key Recovery (25.08) ---
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
     showToast(message, ms = 5000) {
@@ -3298,7 +3467,9 @@ export default {
 
         // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
         // (имя/аватар) и стабильный id сообщения внутри шифра.
-        const envelope = await this.buildEnvelope(payload);
+        // ttl — исчезающие сообщения для этого чата (0 = выкл).
+        const ttl = this.ephemeralTtlOf(chatId);
+        const envelope = await this.buildEnvelope(payload, ttl);
         const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
 
         if (this.activeChatType === 'group') {
@@ -3392,9 +3563,12 @@ export default {
             vault: true,
             status: 'sending',
             _pendingAt: Date.now(),
+            ttl: ttl || 0,
+            expireAt: ttl ? Date.now() + ttl * 1000 : 0,
           };
           this.messages.push(pendingMsg);
           this.markPending(this.activeChat, pendingMsg);
+          if (ttl) this.scheduleEphemeral(pendingMsg, this.activeChat);
           // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.
@@ -4367,10 +4541,31 @@ export default {
           }
           const reader = new FileReader();
           reader.onload = async (e) => {
-            const base64 = e.target.result.split(',')[1];
-            const isImage = file.type.startsWith('image/');
-            const isAudio = file.type.startsWith('audio/');
-            const isText = !isImage && !isAudio && this.isTextMime(file.type, file.name);
+            let base64 = e.target.result.split(',')[1];
+            let fileName = file.name;
+            let fileSize = file.size;
+            let fileType = file.type;
+            // Качество медиа (25.08): изображения сжимаются по настройке
+            // «Качество отправляемых медиафайлов» (kv media-quality).
+            // original = без сжатия; high = макс. сторона 1920; low = 1280.
+            if (fileType.startsWith('image/') && fileType !== 'image/gif') {
+              try {
+                const quality = await this.mediaQuality();
+                if (quality !== 'original') {
+                  const maxSide = quality === 'low' ? 1280 : 1920;
+                  const compressed = await this.compressImage(e.target.result, maxSide, 0.82);
+                  if (compressed && compressed.length < e.target.result.length) {
+                    base64 = compressed.split(',')[1];
+                    fileType = 'image/jpeg';
+                    if (!/\.jpe?g$/i.test(fileName)) fileName = fileName.replace(/\.\w+$/, '') + '.jpg';
+                    fileSize = Math.floor(base64.length * 0.75);
+                  }
+                }
+              } catch (err) { console.warn('image compress failed:', err); }
+            }
+            const isImage = fileType.startsWith('image/');
+            const isAudio = fileType.startsWith('audio/');
+            const isText = !isImage && !isAudio && this.isTextMime(fileType, fileName);
             let textContent = '';
             if (isText) {
               try {
@@ -4383,15 +4578,15 @@ export default {
             // Encode attachment as structured JSON for server storage
             const attachmentPayload = JSON.stringify({
               vault_attachment: true,
-              name: file.name,
-              type: file.type,
-              size: file.size,
+              name: fileName,
+              type: fileType,
+              size: fileSize,
               data: base64,
             });
 
             const displayContent = isImage
-              ? `📎 ${file.name}`
-              : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
+              ? `📎 ${fileName}`
+              : `📎 ${fileName} (${(fileSize / 1024).toFixed(1)}KB)`;
 
             // Заметки для себя: файл хранится ЛОКАЛЬНО (localStorage), без
             // шифрования и почты — так же, как текст заметок.
@@ -7740,6 +7935,19 @@ body {
   z-index: 50;
   min-width: 120px;
 }
+
+/* Исчезающие сообщения (25.08): кнопка-таймер в шапке чата */
+.ephemeral-menu { position: relative; }
+.ephemeral-menu .export-btn.ephemeral-on {
+  color: var(--accent-warn, #f59e0b);
+}
+.export-menu.ephemeral-dropdown button {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 14px; background: none; border: none;
+  color: var(--text-primary, #e6edf3); font-size: 13px; cursor: pointer;
+}
+.export-menu.ephemeral-dropdown button:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+.export-menu.ephemeral-dropdown button.active { color: var(--accent-warn, #f59e0b); }
 
 .export-menu button {
   display: block;
