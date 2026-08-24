@@ -11,7 +11,7 @@
           :class="['settings-nav-item', { active: activeCategory === cat.id }]"
           @click="activeCategory = cat.id">
           <span class="nav-icon"><Icon :name="cat.icon" :size="16" /></span>
-          <span class="nav-label">{{ cat.label }}</span>
+          <span class="nav-label">{{ t(cat.labelKey) }}</span>
           <span class="nav-arrow">›</span>
         </button>
       </nav>
@@ -157,15 +157,15 @@ export default {
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
       categories: [
-        { id: 'profile', icon: 'users', label: 'Профиль' },
-        { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
-        { id: 'chats', icon: 'chat', label: 'Чаты' },
-        { id: 'email', icon: 'mail', label: 'Почта' },
-        { id: 'notifications', icon: 'bell', label: 'Уведомления' },
-        { id: 'privacy', icon: 'lock', label: 'Приватность' },
-        { id: 'language', icon: 'globe', label: 'Язык' },
-        { id: 'help', icon: 'help', label: 'Помощь' },
-        { id: 'clear', icon: 'trash', label: 'Очистить данные' }
+        { id: 'profile', icon: 'users', labelKey: 'settings_profile' },
+        { id: 'appearance', icon: 'palette', labelKey: 'settings_appearance' },
+        { id: 'chats', icon: 'chat', labelKey: 'settings_chats' },
+        { id: 'email', icon: 'mail', labelKey: 'settings_email' },
+        { id: 'notifications', icon: 'bell', labelKey: 'settings_notifications' },
+        { id: 'privacy', icon: 'lock', labelKey: 'settings_privacy' },
+        { id: 'language', icon: 'globe', labelKey: 'settings_language' },
+        { id: 'help', icon: 'help', labelKey: 'settings_help' },
+        { id: 'clear', icon: 'trash', labelKey: 'settings_clear' }
       ],
       backupBusy: false,
       backupResult: '',

@@ -224,6 +224,7 @@ export default {
   background: var(--bg-secondary, #1a1a2e);
   border-radius: 12px;
   width: 520px;
+  max-width: calc(100vw - 32px);
   max-height: 80vh;
   overflow-y: auto;
   border: 1px solid var(--border-subtle, #16213e);
