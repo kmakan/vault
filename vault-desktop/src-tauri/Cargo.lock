@@ -6241,6 +6241,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
+ "hmac",
  "imap",
  "lettre",
  "log",
