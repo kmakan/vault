@@ -1,7 +1,8 @@
 <template>
   <div class="settings-page">
-    <!-- Left: category list -->
-    <div class="settings-sidebar">
+    <!-- Left: category list (на мобильном: отдельный «экран списка» —
+         скрывается, когда открыт раздел; кнопка «←» возвращает к списку) -->
+    <div class="settings-sidebar" v-show="!activeCategory || !isMobile">
       <div class="settings-profile">
         <AvatarUpload :email="email" :avatarUrl="userAvatarUrl" @update="$emit('avatar-update', $event)" />
         <div class="profile-name">{{ displayName || email }}</div>
@@ -17,8 +18,12 @@
       </nav>
     </div>
 
-    <!-- Right: category content -->
-    <div class="settings-content">
+    <!-- Right: category content (на мобильном показываем только когда
+         раздел выбран; сверху — единая шапка с кнопкой «← Назад») -->
+    <div class="settings-content" v-show="activeCategory || !isMobile">
+      <button v-if="isMobile" class="settings-back-btn" @click="activeCategory = ''">
+        <Icon name="back" :size="20" /><span>Назад</span>
+      </button>
       <!-- ПРОФИЛЬ -->
       <div v-if="activeCategory === 'profile'" class="settings-section">
         <h2>Профиль</h2>
@@ -150,7 +155,11 @@ export default {
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
-      activeCategory: 'appearance',
+      // Мобильный режим (25.08): на телефоне список разделов и контент —
+      // отдельные «экраны» (v-show), на десктопе оба видны всегда.
+      isMobile: window.matchMedia('(max-width: 767px)').matches,
+      // На мобильном стартуем со списка разделов, на десктопе — «Профиль».
+      activeCategory: window.matchMedia('(max-width: 767px)').matches ? '' : 'profile',
       localDisplayName: this.displayName || '',
       notifSound: true,
       notifTray: true,
@@ -464,44 +473,64 @@ export default {
 .help-links a:hover { text-decoration: underline; }
 .version { color: #484f58; font-size: 12px; margin-top: 16px; }
 
-/* Мобильный режим (портрет телефона): навигация — горизонтальная полоса
-   сверху, контент под ней. Иначе 260px sidebar + контент не помещаются
-   на 412px и приходится поворачивать телефон (фикс 21.08).
-   ВАЖНО: media query должен идти ПОСЛЕ базовых правил (.settings-sidebar
-   width:260px) — scoped-селекторы имеют одинаковую специфичность, и
-   побеждает последний. Раньше блок стоял в начале и не применялся. */
+/* Мобильный режим (25.08): список разделов и контент — два «экрана»,
+   переключаются v-show (см. шаблон): экран списка (профиль + вертикальный
+   список) → тап по разделу → экран раздела с кнопкой «← Назад» сверху.
+   Прежний вариант (горизонтальная полоса вкладок) терял разделы:
+   пункты с width:100% уезжали в скролл и полоса выглядела пустой.
+   ВАЖНО: media query после базовых правил — scoped-специфичность равная,
+   побеждает последний. */
 @media (max-width: 767px) {
   .settings-page {
-    flex-direction: column;
+    display: block;
+    height: 100%;
   }
   .settings-sidebar {
     width: 100%;
     min-width: 0;
-    flex-direction: row;
-    align-items: center;
+    height: 100%;
+    overflow-y: auto;
     border-right: none;
-    border-bottom: 1px solid #30363d;
   }
   .settings-profile {
-    padding: 12px 16px;
-    border-bottom: none;
-    border-right: 1px solid #30363d;
+    padding: 20px 16px 16px;
+    border-bottom: 1px solid #30363d;
   }
   .settings-nav {
-    flex: 1;
     display: flex;
-    flex-direction: row;
-    overflow-x: auto;
-    padding: 0;
-    -webkit-overflow-scrolling: touch;
+    flex-direction: column;
+    overflow: visible;
+    padding: 4px 0;
   }
   .settings-nav-item {
-    flex-shrink: 0;
-    padding: 12px 14px;
+    width: 100%;
+    padding: 14px 20px;
   }
   .settings-content {
-    padding: 16px;
+    height: 100%;
     overflow-y: auto;
+    padding: 0 16px 24px;
   }
 }
+
+/* Кнопка «← Назад» (мобильный, экран раздела): липкая шапка, фирменная
+   янтарная иконка back — единый стиль иконок Vault. На десктопе кнопка
+   не рендерится (v-if), правило ни на что не влияет. */
+.settings-back-btn {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -16px 8px;
+  padding: 12px 16px;
+  background: #0d1117;
+  border: none;
+  color: #e6edf3;
+  font-size: 15px;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-back-btn:hover { background: #161b22; }
 </style>

@@ -1,7 +1,10 @@
 <template>
   <div class="qr-code-panel">
     <div class="qr-panel-card">
-      <h3>Добавить контакт</h3>
+      <div class="qr-header-row">
+        <h3>Добавить контакт</h3>
+        <button class="modal-close-x" @click="$emit('close')"><Icon name="x" :size="20" /></button>
+      </div>
       <p class="panel-subtitle">Обменяйтесь ключами, чтобы начать защищённый чат</p>
 
       <div class="step">
@@ -70,17 +73,17 @@
           <p class="hint">Подходит, если собеседник прислал вам свой QR-код или ключ.</p>
         </div>
       </div>
-
-      <button class="close-btn" @click="$emit('close')">Закрыть</button>
     </div>
   </div>
 </template>
 
 <script>
 import QRCode from 'qrcode';
+import Icon from './Icon.vue';
 
 export default {
   name: 'QRCodePanel',
+  components: { Icon },
   props: {
     publicKey: {
       type: String,
@@ -374,19 +377,26 @@ export default {
   margin: 8px 0 0;
 }
 
-.close-btn {
-  width: 100%;
-  margin-top: 6px;
-  padding: 10px;
-  background: #232b3d;
-  border: none;
-  border-radius: 8px;
-  color: #c8d1e0;
-  cursor: pointer;
-  font-size: 14px;
+/* Шапка карточки: заголовок + единый крестик закрытия (25.08). */
+.qr-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.qr-header-row h3 {
+  margin: 0;
 }
 
-.close-btn:hover {
-  background: #2e3a52;
+/* Мобильный (25.08): фуллскрин + safe-top, единый вид с остальными окнами. */
+@media (max-width: 767px) {
+  .qr-panel-card {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    padding-top: calc(16px + var(--safe-top, 0px));
+  }
 }
 </style>

@@ -455,7 +455,7 @@
       <!-- SETTINGS MODAL -->
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
-          <button class="modal-close" @click="showSettings = false">←</button>
+          <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
           <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" />
         </div>
       </div>
@@ -466,7 +466,7 @@
            fingerprint (см. broadcastProfile + fingerprint-матчинг). -->
       <div v-if="showChangeEmail" class="modal-overlay" @click.self="showChangeEmail = false">
         <div class="modal-settings change-email-panel">
-          <button class="modal-close" @click="showChangeEmail = false">←</button>
+          <button class="modal-close-x" @click="showChangeEmail = false"><Icon name="x" :size="20" /></button>
           <h3 class="invite-popup-title"><Icon name="mail" :size="18" /> {{ t('settings_change_email') || 'Сменить почту' }}</h3>
           <p class="change-email-hint">Контакты и группы останутся: ключи E2E не привязаны к адресу. После смены отправьте сообщение или профиль — собеседники узнают новый адрес автоматически.</p>
           <form @submit.prevent="changeEmail">
@@ -499,7 +499,7 @@
       <!-- INVITE POPUP (приглашение в группу с согласием) -->
       <div v-if="showInvitePopup && pendingInvites.length" class="modal-overlay" @click.self="showInvitePopup = false">
         <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showInvitePopup = false">←</button>
+          <button class="modal-close-x" @click="showInvitePopup = false"><Icon name="x" :size="20" /></button>
           <template v-if="pendingInvites[invitePopupIndex]">
             <h3 class="invite-popup-title">{{ t('invite_title') || 'Приглашение в группу' }}</h3>
             <p class="invite-popup-text">{{ t('invite_text') }}</p>
@@ -529,7 +529,7 @@
       <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
       <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
         <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showContactPopup = false">←</button>
+          <button class="modal-close-x" @click="showContactPopup = false"><Icon name="x" :size="20" /></button>
           <template v-if="pendingContacts[contactPopupIndex]">
             <h3 class="invite-popup-title">{{ t('contact_request_title') || 'Запрос контакта' }}</h3>
             <p class="invite-popup-text">{{ t('contact_request_text') || 'Примите запрос — и собеседник появится в ваших контактах.' }}</p>
@@ -558,7 +558,7 @@
       <!-- ADD MEMBER POPUP (выбор контактов, мульти-выбор чекбоксами) -->
       <div v-if="showAddMemberPopup" class="modal-overlay" @click.self="showAddMemberPopup = false">
         <div class="modal-settings invite-popup-panel">
-          <button class="modal-close" @click="showAddMemberPopup = false">←</button>
+          <button class="modal-close-x" @click="showAddMemberPopup = false"><Icon name="x" :size="20" /></button>
           <h3 class="add-member-popup-title">{{ t('add_member_from_contacts') || 'Добавить участника из контактов' }}</h3>
           <input
             v-model="addMemberQuery"
@@ -610,7 +610,7 @@
       <!-- AVATAR UPLOAD MODAL -->
       <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
         <div class="modal-avatar">
-          <button class="modal-close" @click="showAvatarUpload = false">←</button>
+          <button class="modal-close-x" @click="showAvatarUpload = false"><Icon name="x" :size="20" /></button>
           <h3>Фото профиля</h3>
           <div class="avatar-preview-circle">
             <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
@@ -683,7 +683,7 @@
     <!-- Image viewer (полноэкранный просмотр вложения-изображения) -->
     <div v-if="viewingImage" class="modal-overlay image-viewer-overlay" @click.self="closeImageViewer">
       <div class="image-viewer">
-        <button class="modal-close" @click="closeImageViewer">←</button>
+        <button class="modal-close-x" @click="closeImageViewer"><Icon name="x" :size="20" /></button>
         <img :src="'data:' + viewingImage.type + ';base64,' + viewingImage.data"
              :alt="viewingImage.name" class="image-viewer-img" />
         <div class="image-viewer-actions">
@@ -696,7 +696,7 @@
     <!-- Members list (список участников группы по клику на счётчик) -->
     <div v-if="showMembersList && currentGroup" class="modal-overlay" @click.self="showMembersList = false">
       <div class="modal-settings">
-        <button class="modal-close" @click="showMembersList = false">←</button>
+        <button class="modal-close-x" @click="showMembersList = false"><Icon name="x" :size="20" /></button>
         <h3 class="invite-popup-title">{{ (currentGroup.members || []).length }} {{ membersLabel((currentGroup.members || []).length) }}</h3>
         <div class="member-list">
           <div v-for="member in (currentGroup.members || [])" :key="member.email" class="member-item">
@@ -716,7 +716,7 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3>{{ t('group_create_title') || 'New Group' }}</h3>
-          <button class="modal-close" @click="showCreateGroup = false">←</button>
+          <button class="modal-close-x" @click="showCreateGroup = false"><Icon name="x" :size="20" /></button>
         </div>
         <div class="modal-body">
           <label>{{ t('group_name') || 'Group Name' }}</label>
@@ -7212,20 +7212,33 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-.modal-close {
-  background: none;
+/* ── Единая кнопка закрытия окон (25.08) ──
+   Один стиль для ВСЕХ модалок: настройки, смена почты, инвайты, участники,
+   просмотр фото, шифратор, ключи, QR. Крестик = Icon x (фирменный янтарный),
+   круглая зона нажатия 40px (достаточно для тача), полупрозрачный фон при
+   наведении. Стиль глобальный (не scoped) — применяется и внутри компонентов
+   (CipherTool/KeyManager/QRCodePanel). Стрелка «←» остаётся ТОЛЬКО для
+   внутренней навигации (раздел настроек → назад к списку), не для закрытия. */
+.modal-close-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  background: transparent;
   border: none;
-  color: var(--text-muted, #64748b);
+  border-radius: var(--radius-full, 999px);
+  color: var(--text-secondary, #94a3b8);
   cursor: pointer;
-  font-size: 22px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  transition: color 0.15s;
-  line-height: 1;
+  transition: background 0.15s, color 0.15s;
 }
-
-.modal-close:hover {
-  color: var(--text-primary, #f1f5f9);
+.modal-close-x:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #e2e8f0);
+}
+.modal-close-x:active {
+  background: var(--bg-active, rgba(255, 255, 255, 0.1));
 }
 
 /* Смена почты — модалка (24.08) */

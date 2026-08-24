@@ -114,6 +114,7 @@ const PROVIDER_PRESETS = {
 
 export default {
   name: 'EmailSettings',
+  components: { Icon },
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {

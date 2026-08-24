@@ -3,7 +3,7 @@
     <div class="key-manager-panel">
       <div class="panel-header">
         <h3>{{ t('keys_title') }}</h3>
-        <button class="close-btn" @click="$emit('close')">&times;</button>
+        <button class="modal-close-x" @click="$emit('close')"><Icon name="x" :size="20" /></button>
       </div>
 
       <div class="panel-body">
@@ -88,10 +88,12 @@
 
 <script>
 import crypto from '../crypto.js';
+import Icon from './Icon.vue';
 import { useI18n } from '../i18n.js';
 
 export default {
   name: 'KeyManager',
+  components: { Icon },
   emits: ['close', 'keys-changed'],
   setup() {
     const { t } = useI18n();
@@ -229,6 +231,22 @@ export default {
   overflow-y: auto;
   border: 1px solid var(--border-subtle, #16213e);
   color: var(--text-primary, white);
+}
+
+/* Мобильный (25.08): фуллскрин + safe-top, единый вид с настройками/шифром. */
+@media (max-width: 767px) {
+  .key-manager-overlay {
+    align-items: stretch;
+  }
+  .key-manager-panel {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    border: none;
+    padding-top: calc(12px + var(--safe-top, 0px));
+  }
 }
 
 .panel-header {

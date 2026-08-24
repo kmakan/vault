@@ -3,7 +3,7 @@
     <div class="cipher-panel">
       <div class="panel-header">
         <h3>{{ t('cipher_title') }}</h3>
-        <button class="close-btn" @click="$emit('close')" title="Close">&times;</button>
+        <button class="modal-close-x" @click="$emit('close')" title="Close"><Icon name="x" :size="20" /></button>
       </div>
 
       <div class="panel-body">
@@ -206,6 +206,7 @@ import { downloadBase64 } from '../chatExport.js';
 
 export default {
   name: 'CipherTool',
+  components: { Icon },
   emits: ['close', 'open-keys'],
   setup() {
     const { t } = useI18n();
@@ -473,6 +474,22 @@ export default {
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Мобильный (25.08): фуллскрин — панель 600px не влезает в телефон,
+   уезжала за край; safe-top не даёт заголовку прилипнуть к статус-бару. */
+@media (max-width: 767px) {
+  .cipher-overlay {
+    padding: 0;
+  }
+  .cipher-panel {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    padding-top: calc(12px + var(--safe-top, 0px));
+  }
 }
 
 .panel-header {

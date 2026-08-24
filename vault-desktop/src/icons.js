@@ -48,6 +48,10 @@ export const icons = {
     { type: 'path', d: 'M18 6 6 18' },
     { type: 'path', d: 'M6 6l12 12' },
   ],
+  back: [
+    { type: 'path', d: 'M19 12H5' },
+    { type: 'path', d: 'M12 19l-7-7 7-7' },
+  ],
   camera: [
     { type: 'path', d: 'M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z' },
     { type: 'circle', cx: 12, cy: 13, r: 4 },
