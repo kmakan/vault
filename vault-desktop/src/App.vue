@@ -337,11 +337,17 @@
              вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
         <button v-if="showJumpToBottom" class="jump-to-bottom" :title="t('jump_to_bottom') || 'К последним сообщениям'" @click="jumpToBottom"><Icon name="arrow-down" :size="18" /></button>
 
-        <!-- Контекстное меню сообщения (правый клик): копирование -->
+        <!-- Контекстное меню сообщения (правый клик / долгое нажатие):
+           reply/copy/pin/edit/delete. На touch hover-кнопки скрыты
+           (см. media (hover: none)), всё доступно отсюда. -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
           <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
+            <button @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
             <button @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
             <button @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
+            <button v-if="activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
+            <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
+            <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
           </div>
         </div>
 
@@ -6431,16 +6437,17 @@ body {
   opacity: 0.7;
 }
 
-/* Touch-устройства (Android): hover нет, поэтому кнопки действий сообщения
-   (reply/copy/pin/edit/delete) должны быть видны постоянно — иначе они
-   недоступны. Десктопный hover этим не затрагивается. */
+/* Touch-устройства (Android): hover нет, а абсолютно позиционированные
+   кнопки (reply/copy/pin/edit/delete) ВИСЯТ поверх текста сообщения и
+   закрывают его. Поэтому на touch они полностью скрыты — все действия
+   доступны через long-press контекстное меню сообщения (message-menu). */
 @media (hover: none) and (pointer: coarse) {
   .reply-btn,
   .copy-btn,
   .pin-btn,
   .edit-btn,
   .delete-btn {
-    opacity: 1;
+    display: none;
   }
 }
 
