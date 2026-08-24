@@ -1,5 +1,8 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
 mod credential_store;
+mod key_escrow;
+#[cfg(test)]
+mod key_escrow_smoke;
 mod crypto;
 mod email;
 mod key_store;
@@ -778,6 +781,74 @@ fn import_backup(json_data: String) -> Result<String, String> {
     Ok(restored.join(", "))
 }
 
+// --- Key Recovery (25.08): мнемоника 12 слов обёртывает backup. ---
+// Генерация мнемоники (показывается пользователю один раз).
+#[tauri::command]
+fn recovery_generate_mnemonic() -> Result<String, String> {
+    key_escrow::generate_mnemonic()
+}
+
+// Проверка введённых слов (валидация контрольной суммы, до расшифровки).
+#[tauri::command]
+fn recovery_validate_mnemonic(mnemonic: String) -> Result<bool, String> {
+    key_escrow::validate_mnemonic(&mnemonic).map(|_| true)
+}
+
+// Обернуть ТЕКУЩИЙ backup словами → JSON WrappedBackup (уходит в эскроу-письмо).
+#[tauri::command]
+fn recovery_wrap_backup(mnemonic: String) -> Result<String, String> {
+    let backup = export_backup()?;
+    let wrapped = key_escrow::wrap_backup(&backup, &mnemonic)?;
+    serde_json::to_string(&wrapped).map_err(|e| e.to_string())
+}
+
+// Распаковать WrappedBackup словами → строка backup-JSON (для import_backup).
+#[tauri::command]
+fn recovery_unwrap_backup(wrapped_json: String, mnemonic: String) -> Result<String, String> {
+    let wrapped: key_escrow::WrappedBackup =
+        serde_json::from_str(&wrapped_json).map_err(|e| e.to_string())?;
+    key_escrow::unwrap_backup(&wrapped, &mnemonic)
+}
+
+/// Эскроу-письмо: сохранить/прочитать локальную «метку» о том, что эскроу
+/// отправлен (kv_store), и сформировать тело письма.
+#[tauri::command]
+fn recovery_build_escrow_email(wrapped_json: String) -> Result<String, String> {
+    // Тело письма — сам wrapped JSON. Пустая тема, без X-Vault-* заголовков:
+    // письмо ищется по содержимому (парс конверта), стелс соблюдён.
+    let w: serde_json::Value = serde_json::from_str(&wrapped_json).map_err(|e| e.to_string())?;
+    let envelope = serde_json::json!({
+        "vault": 1,
+        "type": "key_escrow",
+        "ts": chrono::Utc::now().timestamp(),
+        "payload": w,
+    });
+    serde_json::to_string(&envelope).map_err(|e| e.to_string())
+}
+
+/// Разобрать тело письма в WrappedBackup, если это эскроу-конверт.
+#[tauri::command]
+fn recovery_parse_escrow_email(body: String) -> Result<Option<String>, String> {
+    // Тело могло пройти через fold_lines/quoted-printable — нормализуем пробелы
+    // не нужно: JSON парсится как есть; ищем маркер конверта.
+    let trimmed = body.trim();
+    if !trimmed.contains("\"key_escrow\"") {
+        return Ok(None);
+    }
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => {
+            if v.get("vault").and_then(|x| x.as_i64()) == Some(1)
+                && v.get("type").and_then(|x| x.as_str()) == Some("key_escrow")
+            {
+                let payload = v.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+                return Ok(Some(serde_json::to_string(&payload).map_err(|e| e.to_string())?));
+            }
+            Ok(None)
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 #[tauri::command]
 fn db_emails_save(account: String, emails_json: String) -> Result<(), String> {
     open_db()?
@@ -851,6 +922,12 @@ pub fn run() {
             email_fetch_bodies,
             email_idle_wait,
             email_send,
+            recovery_generate_mnemonic,
+            recovery_validate_mnemonic,
+            recovery_wrap_backup,
+            recovery_unwrap_backup,
+            recovery_build_escrow_email,
+            recovery_parse_escrow_email,
             email_disconnect,
             groups_load,
             groups_create,

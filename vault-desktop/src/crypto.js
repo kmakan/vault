@@ -79,6 +79,30 @@ export class CryptoClient {
     return await invoke('get_key_store_metadata');
   }
 
+  // --- Key Recovery (25.08): мнемоника 12 слов обёртывает backup ---
+  async recoveryGenerateMnemonic() {
+    return await invoke('recovery_generate_mnemonic');
+  }
+  async recoveryValidateMnemonic(mnemonic) {
+    return await invoke('recovery_validate_mnemonic', { mnemonic });
+  }
+  // Обернуть текущий backup словами → JSON WrappedBackup
+  async recoveryWrapBackup(mnemonic) {
+    return await invoke('recovery_wrap_backup', { mnemonic });
+  }
+  // Распаковать WrappedBackup словами → строка backup-JSON
+  async recoveryUnwrapBackup(wrappedJson, mnemonic) {
+    return await invoke('recovery_unwrap_backup', { wrappedJson, mnemonic });
+  }
+  // Тело эскроу-письма (стелс-конверт с payload)
+  async recoveryBuildEscrowEmail(wrappedJson) {
+    return await invoke('recovery_build_escrow_email', { wrappedJson });
+  }
+  // Разобрать тело письма → WrappedBackup-строка или null
+  async recoveryParseEscrowEmail(body) {
+    return await invoke('recovery_parse_escrow_email', { body });
+  }
+
   async deleteAllKeys() {
     await invoke('delete_all_keys');
     this.privateKey = null;

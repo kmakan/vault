@@ -41,6 +41,43 @@
           </div>
         </div>
 
+        <!-- Ключ восстановления (25.08): мнемоника 12 слов, Session-style.
+             Обёртывает backup и отправляет эскроу-письмо себе. -->
+        <div class="section recovery-section">
+          <h4>🔑 Ключ восстановления</h4>
+          <p class="recovery-hint">
+            12 слов восстанавливают аккаунт на новом устройстве или после
+            переустановки. Запишите их на бумаге — это единственный способ
+            вернуть доступ к контактам.
+          </p>
+
+          <div v-if="!recoveryCreated" class="recovery-actions">
+            <button @click="createRecoveryKey" :disabled="recoveryBusy || !hasKeys" class="btn-primary">
+              {{ recoveryBusy ? '…' : 'Создать ключ восстановления' }}
+            </button>
+            <span v-if="!hasKeys" class="recovery-note">Сначала создайте пару ключей</span>
+          </div>
+
+          <div v-else class="recovery-words-box">
+            <p class="recovery-warning">⚠️ Запишите эти 12 слов по порядку. Они показываются один раз:</p>
+            <div class="recovery-grid">
+              <div v-for="(w, i) in recoveryWords" :key="i" class="recovery-word">
+                <span class="word-num">{{ i + 1 }}</span>{{ w }}
+              </div>
+            </div>
+            <button @click="copyToClipboard(recoveryWords.join(' '))" class="btn-secondary">
+              {{ copiedField === 'recovery' ? '✓ Скопировано' : 'Скопировать слова' }}
+            </button>
+            <button @click="confirmRecoverySaved" class="btn-primary">
+              Я записал(а) слова
+            </button>
+          </div>
+
+          <p v-if="recoveryStatus" :class="['import-result', recoveryStatus.ok ? 'success' : 'error']">
+            {{ recoveryStatus.message }}
+          </p>
+        </div>
+
         <div class="section">
           <h4>{{ t('keys_export') }}</h4>
           <div class="import-area">
@@ -94,7 +131,7 @@ import { useI18n } from '../i18n.js';
 export default {
   name: 'KeyManager',
   components: { Icon },
-  emits: ['close', 'keys-changed'],
+  emits: ['close', 'keys-changed', 'recovery-created'],
   setup() {
     const { t } = useI18n();
     return { t };
@@ -109,6 +146,11 @@ export default {
       importData: '',
       importResult: null,
       copiedField: null,
+      // Key Recovery (25.08)
+      recoveryBusy: false,
+      recoveryCreated: false,   // слова показаны, ждём подтверждения записи
+      recoveryWords: [],
+      recoveryStatus: null,
     };
   },
   async mounted() {
@@ -190,7 +232,10 @@ export default {
     async copyToClipboard(text) {
       try {
         await navigator.clipboard.writeText(text);
-        this.copiedField = text === this.publicKey ? 'public' : 'other';
+        if (text === this.publicKey) this.copiedField = 'public';
+        else if (Array.isArray(this.recoveryWords) && text === this.recoveryWords.join(' '))
+          this.copiedField = 'recovery';
+        else this.copiedField = 'other';
         setTimeout(() => { this.copiedField = null; }, 2000);
       } catch {
         const ta = document.createElement('textarea');
@@ -200,6 +245,34 @@ export default {
         document.execCommand('copy');
         document.body.removeChild(ta);
       }
+    },
+
+    // --- Key Recovery: создание мнемоники + эскроу-письмо ---
+    // 1) генерируем слова и оборачиваем backup; 2) показываем слова один раз;
+    // 3) по подтверждению App.vue отправляет эскроу-письмо себе (@recovery-created).
+    async createRecoveryKey() {
+      this.recoveryBusy = true;
+      this.recoveryStatus = null;
+      try {
+        const mnemonic = await crypto.recoveryGenerateMnemonic();
+        // Сразу проверяем валидность и готовим wrapped — если что-то не так,
+        // лучше узнать до показа слов.
+        await crypto.recoveryWrapBackup(mnemonic);
+        this.recoveryWords = mnemonic.split(/\s+/);
+        this.recoveryCreated = true;
+      } catch (e) {
+        this.recoveryStatus = { ok: false, message: 'Не удалось создать ключ: ' + (e.message || e) };
+      } finally {
+        this.recoveryBusy = false;
+      }
+    },
+    confirmRecoverySaved() {
+      const mnemonic = this.recoveryWords.join(' ');
+      this.$emit('recovery-created', { mnemonic });
+      this.recoveryCreated = false;
+      this.recoveryWords = [];
+      this.recoveryStatus = { ok: true, message: 'Ключ восстановления сохранён. Эскроу-письмо отправлено в ваш ящик.' };
+      setTimeout(() => { this.recoveryStatus = null; }, 6000);
     },
   },
 };
@@ -451,5 +524,41 @@ export default {
 
 .icon-btn.danger:hover {
   background: rgba(248, 81, 73, 0.25);
+}
+
+/* --- Key Recovery (25.08) --- */
+.recovery-section .recovery-hint {
+  margin: 4px 0 10px;
+  color: var(--text-muted, #8b949e);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.recovery-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.recovery-note { color: var(--text-muted, #8b949e); font-size: 12px; }
+.recovery-warning {
+  margin: 0 0 8px; font-size: 13px; color: #f85149; font-weight: 600;
+}
+.recovery-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+  margin-bottom: 10px;
+}
+@media (max-width: 767px) {
+  .recovery-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.recovery-word {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 10px;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border-subtle, #30363d);
+  border-radius: 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 14px;
+  color: var(--text-primary, #e6edf3);
+}
+.recovery-word .word-num {
+  color: var(--accent, #58a6ff);
+  font-size: 11px;
+  min-width: 16px;
+  text-align: right;
 }
 </style>

@@ -49,6 +49,38 @@
           <button type="submit" :disabled="loginLoading">
             {{ loginLoading ? '...' : t('login') || 'Login' }}
           </button>
+
+          <!-- Восстановление аккаунта (Key Recovery, 25.08): для тех, кто уже
+               пользовался Vault и потерял ключи (новое устройство/переустановка).
+               Раскрывается по клику — не мешает новому пользователю. -->
+          <button type="button" class="server-toggle" @click="showRecovery = !showRecovery">
+            <Icon name="shield" :size="14" /> У меня был Vault — восстановить аккаунт
+            <span class="server-toggle-arrow">{{ showRecovery ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="showRecovery" class="server-settings recovery-login">
+            <p class="server-hint">
+              Введите данные ящика выше и ваш ключ восстановления (12 слов) —
+              контакты и группы вернутся. Либо загрузите файл резервной копии.
+            </p>
+            <textarea
+              v-model="recoveryWordsInput"
+              class="recovery-input"
+              placeholder="12 слов ключа восстановления через пробел"
+              rows="2"
+            ></textarea>
+            <div class="recovery-file-row">
+              <label class="btn-secondary recovery-file-label">
+                Файл резервной копии…
+                <input type="file" accept=".json,application/json" style="display:none" @change="onRecoveryFilePicked" />
+              </label>
+              <span v-if="recoveryFileName" class="recovery-filename">{{ recoveryFileName }}</span>
+              <span v-else class="recovery-filename muted">необязательно</span>
+            </div>
+            <button type="button" class="btn-primary" :disabled="loginLoading || !recoveryWordsInput.trim()" @click="loginWithRecovery">
+              {{ loginLoading ? '...' : 'Восстановить' }}
+            </button>
+          </div>
+
           <p v-if="loginError" class="login-error">{{ loginError }}</p>
         </form>
         <p class="login-hint">{{ t('login_hint') || 'Регистрация не нужна: у Vault нет сервера — приложение работает поверх вашей почты. Войдите под своим email, ключи создадутся автоматически. Добавляйте собеседников по id участника или QR-коду (🔗 вверху).' }}</p>
@@ -416,7 +448,7 @@
     </div>
 
       <div v-if="showKeyManager" class="key-manager">
-        <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" />
+        <KeyManager @close="showKeyManager = false" @keys-changed="onKeysChanged" @recovery-created="onRecoveryCreated" />
       </div>
     
       <div v-if="showQRCode" class="qr-code-overlay">
@@ -744,10 +776,15 @@
         </div>
       </div>
     </div>
+    <!-- Тост-уведомление (Key Recovery и пр.) -->
+    <transition name="fade">
+      <div v-if="toastMessage" class="app-toast">{{ toastMessage }}</div>
+    </transition>
   </div>
 </template>
 
 <script>
+import { invoke } from '@tauri-apps/api/core';
 import api from './api.js';
 import { db } from './api.js';
 import crypto from './crypto.js';
@@ -941,6 +978,14 @@ export default {
       newGroupName: '',
       // Аватар новой группы (dataUrl) — как в аккаунте: фото вместо эмодзи-иконок.
       newGroupAvatar: '',
+      // Тост-уведомление внизу экрана (Key Recovery и пр.)
+      toastMessage: '',
+      toastTimer: null,
+      // Восстановление аккаунта на экране входа (Key Recovery)
+      showRecovery: false,
+      recoveryWordsInput: '',
+      recoveryFileJson: '',
+      recoveryFileName: '',
       // Group Settings
       showGroupSettings: false,
       // Invite popup (приглашение в группу с согласием)
@@ -2926,6 +2971,127 @@ export default {
       reader.readAsDataURL(file);
       e.target.value = '';
     },
+    // Файл резервной копии выбран — держим его в памяти до нажатия «Восстановить».
+    async onRecoveryFilePicked(e) {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      this.recoveryFileJson = await file.text();
+      this.recoveryFileName = file.name;
+    },
+    // Восстановление: логин обязателен (доступ к ящику для эскроу-письма),
+    // слова — обязательны; файл — опционален. Порядок:
+    // 1) логин; 2) если файл → расшифровать словами и импорт;
+    // 3) иначе поиск эскроу-письма в ящике и расшифровка словами;
+    // 4) initCrypto подхватит восстановленную пару.
+    async loginWithRecovery() {
+      this.loginLoading = true;
+      this.loginError = '';
+      try {
+        const words = this.recoveryWordsInput.trim();
+        if (!(await crypto.recoveryValidateMnemonic(words))) {
+          throw new Error('Неверный ключ восстановления: нужно 12 слов из списка');
+        }
+        const config = {};
+        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
+        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
+        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
+        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
+        const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
+        this.userId = data.user_id;
+
+        let restored = false;
+        if (this.recoveryFileJson.trim()) {
+          // Файл «Резервной копии» — открытый export_backup() (без слов).
+          try {
+            JSON.parse(this.recoveryFileJson);
+            await invoke('import_backup', { jsonData: this.recoveryFileJson });
+            restored = true;
+          } catch (fileErr) {
+            console.warn('backup file import failed:', fileErr);
+          }
+        }
+        if (!restored) {
+          // Основной путь: эскроу-письмо в ящике + 12 слов.
+          restored = await this.recoverFromEscrow(words);
+        }
+        if (!restored) {
+          throw new Error('Эскроу-письмо не найдено в ящике или слова не подходят');
+        }
+
+        this.isLoggedIn = true;
+        initNotifications().catch(() => {});
+        await this.initLocalDb();
+        this.loadUnreadCounts();
+        this.loadLocalProfiles();
+        await this.loadBodyCache();
+        await this.loadContacts();
+        await this.loadGroups();
+        this.startPolling();
+        this.idleLoop();
+        this.loadEmails().catch(() => {});
+        this.showToast('Аккаунт восстановлен: контакты и группы на месте');
+      } catch (error) {
+        this.loginError = error.message || String(error);
+      } finally {
+        this.loginLoading = false;
+      }
+    },
+    // --- Key Recovery (25.08) ---
+    // Минимальный тост: сообщение внизу, автоскрытие 5с.
+    showToast(message) {
+      this.toastMessage = message;
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, 5000);
+    },
+    // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
+    async onRecoveryCreated({ mnemonic }) {
+      try {
+        const wrappedJson = await crypto.recoveryWrapBackup(mnemonic);
+        const body = await crypto.recoveryBuildEscrowEmail(wrappedJson);
+        const res = await api.sendEmail(this.email, {
+          to: this.email,
+          subject: '',
+          body,
+        });
+        if (res && res.ok === false) throw new Error('SMTP refused');
+        this.showToast('Ключ восстановления сохранён в вашем ящике');
+      } catch (e) {
+        console.error('escrow send failed:', e);
+        this.showToast('Не удалось отправить эскроу-письмо: ' + (e.message || e));
+      }
+    },
+    // Поиск эскроу-письма в последних письмах + восстановление по словам.
+    // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
+    async recoverFromEscrow(mnemonic) {
+      if (!(await crypto.recoveryValidateMnemonic(mnemonic))) {
+        throw new Error('Неверный формат ключа (нужно 12 слов)');
+      }
+      const msgs = await api.fetchEmails(this.email);
+      const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
+      // Батч-фетч тел одной папки — быстрее, чем по одному.
+      const byFolder = {};
+      for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
+      for (const [folder, list] of Object.entries(byFolder)) {
+        const uids = list.map((m) => m.uid);
+        let bodies = [];
+        try {
+          bodies = await invoke('email_fetch_bodies', { uids: uids.map(String), folder });
+        } catch (e) {
+          console.warn('escrow fetch_bodies failed:', e);
+          continue;
+        }
+        for (const [, body] of bodies || []) {
+          const wrappedJson = await crypto.recoveryParseEscrowEmail(body);
+          if (!wrappedJson) continue;
+          const backupJson = await crypto.recoveryUnwrapBackup(wrappedJson, mnemonic);
+          // Импорт ключей+kv. После этого initCrypto() подхватит старую пару.
+          await invoke('import_backup', { jsonData: backupJson });
+          return true;
+        }
+      }
+      return false;
+    },
+
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
     // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
     async onGroupAvatarUpdate({ groupId, avatar }) {
@@ -8065,4 +8231,45 @@ body {
   font-weight: 600;
   color: var(--text-muted, #aaa);
 }
+
+/* Восстановление аккаунта на входе (Key Recovery, 25.08) */
+.recovery-login { display: flex; flex-direction: column; gap: 8px; }
+.recovery-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-primary, #0d1117);
+  border: 1px solid var(--border-subtle, #30363d);
+  border-radius: 8px;
+  color: var(--text-primary, #e6edf3);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.recovery-file-row { display: flex; align-items: center; gap: 10px; }
+.recovery-file-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; cursor: pointer;
+}
+.recovery-filename { font-size: 12px; color: var(--text-secondary, #9ca3af); }
+.recovery-filename.muted { color: var(--text-muted, #64748b); }
+
+/* Тост внизу экрана (25.08) */
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + var(--safe-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 3000;
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 12px 18px;
+  background: var(--bg-secondary, #161b22);
+  color: var(--text-primary, #e6edf3);
+  border: 1px solid var(--border-subtle, #30363d);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  font-size: 14px;
+}
+.fade-enter-active, .fade-leave-active { transition: opacity .2s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
