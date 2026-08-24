@@ -61,6 +61,8 @@
             <p class="server-hint">
               Введите данные ящика выше и ваш ключ восстановления (12 слов) —
               контакты и группы вернутся. Либо загрузите файл резервной копии.
+              Письмо-копия ищется и в «Спаме», но если провайдер уже удалил
+              его — поможет только файл резервной копии.
             </p>
             <textarea
               v-model="recoveryWordsInput"
@@ -3037,11 +3039,11 @@ export default {
       }
     },
     // --- Key Recovery (25.08) ---
-    // Минимальный тост: сообщение внизу, автоскрытие 5с.
-    showToast(message) {
+    // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
+    showToast(message, ms = 5000) {
       this.toastMessage = message;
       if (this.toastTimer) clearTimeout(this.toastTimer);
-      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, 5000);
+      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, ms);
     },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
     async onRecoveryCreated({ mnemonic }) {
@@ -3054,11 +3056,58 @@ export default {
           body,
         });
         if (res && res.ok === false) throw new Error('SMTP refused');
-        this.showToast('Ключ восстановления сохранён в вашем ящике');
+        // Провайдеры кладут служебные письма в Спам, а Gmail удаляет спам
+        // через ~30 дней — тогда эскроу пропадёт. Сразу объясняем пользователю.
+        this.showToast(
+          'Ключ сохранён в ящик. ПРОВЕРЬТЕ СПАМ: если письмо от Vault попало туда — переложите его во «Входящие», иначе оно будет удалено',
+          10000,
+        );
+        // Фоново определяем фактическую папку письма и предупреждаем точечно.
+        this.locateEscrow(wrappedJson);
       } catch (e) {
         console.error('escrow send failed:', e);
         this.showToast('Не удалось отправить эскроу-письмо: ' + (e.message || e));
       }
+    },
+    // Ищем только что отправленное эскроу-письмо (совпадение salt+nonce+wrapped)
+    // и сообщаем, где оно лежит. IMAP-доставка не мгновенна — до 4 попыток.
+    async locateEscrow(wrappedJson, attempt = 0) {
+      if (attempt >= 4) return;
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        let local = null;
+        try { local = JSON.parse(wrappedJson); } catch { return; }
+        const msgs = await api.fetchEmails(this.email);
+        const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
+        const byFolder = {};
+        for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
+        for (const [folder, list] of Object.entries(byFolder)) {
+          const bodies = await invoke('email_fetch_bodies', {
+            uids: list.map((m) => String(m.uid)),
+            folder,
+          }).catch(() => []);
+          for (const [, body] of bodies || []) {
+            const w = await crypto.recoveryParseEscrowEmail(body);
+            if (!w) continue;
+            let p = null;
+            try { p = JSON.parse(w); } catch { continue; }
+            if (p && p.salt === local.salt && p.nonce === local.nonce && p.wrapped === local.wrapped) {
+              if (folder !== 'INBOX') {
+                this.showToast(
+                  '⚠️ Эскроу-письмо лежит в папке «' + folder + '». Переложите его во «Входящие»: спам удаляется автоматически (~30 дней у Gmail)',
+                  12000,
+                );
+              } else {
+                this.showToast('Эскроу-письмо лежит во «Входящих» ✓', 6000);
+              }
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('escrow locate failed:', e);
+      }
+      this.locateEscrow(wrappedJson, attempt + 1);
     },
     // Поиск эскроу-письма в последних письмах + восстановление по словам.
     // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
