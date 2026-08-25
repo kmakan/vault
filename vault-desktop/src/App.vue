@@ -3085,8 +3085,16 @@ export default {
         key: crypto.publicKey || '',
         ts: Date.now(),
       };
-      const content = await crypto.encryptVault(JSON.stringify(body));
+      // Шифруем для КАЖДОГО получателя его ключом (25.08). Без этого
+      // encryptVault использует глобальный peerPublicKey (последний открытый
+      // чат) — письмо расшифровывает только один из всех контактов, остальные
+      // получают «AAD auth failed». Это была причина нестабильности: «с третьего
+      // раза сработало» — потому что последний открытый чат менялся случайно.
       for (const peer of peers) {
+        const peerKey = this.peerKeys[peer];
+        if (!peerKey) continue;
+        crypto.setPeerPublicKey(peerKey);
+        const content = await crypto.encryptVault(JSON.stringify(body));
         try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
       }
       console.log('[profile] broadcast to', peers.length, 'contacts');
