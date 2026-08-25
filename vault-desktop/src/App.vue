@@ -3976,6 +3976,13 @@ export default {
               const lp = this.localProfileOf(from);
               const contact = this.contacts.find(c => c.email === from);
               title = (lp && lp.name) || (contact && contact.name) || from;
+              // Профиль отправителя (25.08): имя/аватар/«О себе» — сохраняем
+              // СРАЗУ при поллинге, не дожидаясь открытия чата.
+              if (env.type === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
+                api.saveProfile(from, env.name, env.avatar, env.ts || 0,
+                  typeof env.bio === 'string' ? env.bio : undefined);
+                if (env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
+              }
             }
           } catch (e) { /* не наше письмо */ }
         }
