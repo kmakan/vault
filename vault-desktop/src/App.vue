@@ -823,8 +823,7 @@
 
 <script>
 import { invoke } from '@tauri-apps/api/core';
-import api from './api.js';
-import { db } from './api.js';
+import api, { db } from './api.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
@@ -933,6 +932,7 @@ export default {
       changeEmailLoading: false,
       changeEmailError: '',
       contacts: [],
+      contactAliases: {},
       activeChat: null,
       messages: [],
       newMessage: '',
@@ -1548,6 +1548,10 @@ export default {
         this.connected = true;
         // Кэш имени привязан к аккаунту (namespace = email) — сбрасываем.
         api._displayName = undefined;
+        // Смена почты (24.08): переносим локальные данные (история чатов,
+        // счётчики, пометки) из namespace старого адреса в новый — иначе
+        // переписка «исчезает» после смены (vault_msg@mail.ru → bk.ru).
+        await this.migrateAccountData(oldEmail, this.email);
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
         await this.loadGroups();
@@ -1571,10 +1575,97 @@ export default {
       try {
         const all = await api.getContacts();
         // Контакты — общий peer-key store на машину; себя не показываем.
-        this.contacts = (all || []).filter(c => c.email !== this.email);
+        let list = (all || []).filter(c => c.email !== this.email);
+        // Смена почты (24.08): один ключ может быть привязан к НЕСКОЛЬКИМ
+        // адресам (старый + новый). Показываем только ПОСЛЕДНИЙ адрес —
+        // старый становится псевдонимом (история чата переносится на новый).
+        // Алиасы запоминаем для переноса истории (chat-cache).
+        const byKey = new Map(); // key -> {contact, added_at}
+        const aliasOf = {};      // newEmail -> [oldEmails]
+        for (const c of list) {
+          const k = c.public_key;
+          if (!k) { byKey.set(c.email, { contact: c, added_at: c.added_at || '' }); continue; }
+          const prev = byKey.get(k);
+          if (!prev) { byKey.set(k, { contact: c, added_at: c.added_at || '' }); continue; }
+          // Тот же ключ — выбираем более новый адрес (по added_at), старый — алиас.
+          if ((c.added_at || '') >= (prev.added_at || '')) {
+            (aliasOf[c.email] = aliasOf[c.email] || []).push(prev.contact.email);
+            byKey.set(k, { contact: c, added_at: c.added_at || '' });
+          } else {
+            (aliasOf[prev.contact.email] = aliasOf[prev.contact.email] || []).push(c.email);
+          }
+        }
+        list = [...byKey.values()].map(x => x.contact);
+        this.contactAliases = aliasOf;
+        this.contacts = list;
       } catch (error) {
         // /api/contacts may not exist yet
         this.contacts = [];
+      }
+    },
+    // Смена почты (24.08): перенос всех локальных данных аккаунта из старого
+    // namespace в новый (история чатов, счётчики, пометки, курсоры).
+    async migrateAccountData(oldEmail, newEmail) {
+      try {
+        if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+        // Все строки kv: [account, key, value] — переносим принадлежащие
+        // старому аккаунту (префиксные ключи истории/пометок).
+        const all = await invoke('db_kv_get_all');
+        if (!all || !all.length) return;
+        let moved = 0;
+        for (const [acc, k, v] of all) {
+          if (acc !== oldEmail) continue;
+          const relevant = k.startsWith('chat-cache:') || k.startsWith('unread-') ||
+            k.startsWith('accepted-') || k.startsWith('declined-') ||
+            k.startsWith('invited-') || k.startsWith('tombstone') ||
+            k.startsWith('cursor-') || k.startsWith('processed-');
+          if (!relevant) continue;
+          const exists = await db.kvGet(newEmail, k);
+          if (!exists) { await db.kvSet(newEmail, k, v); moved++; }
+        }
+        console.log('[identity] account data migrated:', oldEmail, '→', newEmail, 'moved', moved);
+      } catch (e) {
+        console.warn('[identity] migrateAccountData failed:', e);
+      }
+    },
+    // Все адреса, привязанные к тому же ключу, что и email (алиасы).
+    // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
+    // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
+    aliasesOf(email) {
+      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
+      if (!key) return [String(email || '').toLowerCase()];
+      const out = new Set([String(email || '').toLowerCase()]);
+      for (const [k, v] of Object.entries(this.peerKeys)) {
+        if (v === key) out.add(String(k).toLowerCase());
+      }
+      return [...out];
+    },
+    // Канонический адрес: какой контакт показывается для этого ключа
+    // (после дедупликации в loadContacts). Если email — алиас, возвращаем
+    // показываемый адрес (самый новый по added_at).
+    canonicalOf(email) {
+      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
+      if (!key) return email;
+      const shown = this.contacts.find(c => c.public_key === key);
+      return shown ? shown.email : email;
+    },
+    // Смена почты (24.08): переносим историю чата со старого адреса на новый.
+    // Вызывается при fingerprint-матчинге у ПОЛУЧАТЕЛЯ (поллинг/loadMessages).
+    async migrateChatHistory(oldEmail, newEmail) {
+      try {
+        const ns = this.email || 'anon';
+        const oldKey = 'chat-cache:' + oldEmail;
+        const newKey = 'chat-cache:' + newEmail;
+        const oldCache = await db.kvGet(ns, oldKey);
+        if (oldCache) {
+          const existing = await db.kvGet(ns, newKey);
+          if (!existing) {
+            await db.kvSet(ns, newKey, oldCache);
+            console.log('[identity] chat history migrated:', oldEmail, '→', newEmail);
+          }
+        }
+      } catch (e) {
+        console.warn('[identity] migrateChatHistory failed:', e);
       }
     },
     async loadGroups() {
@@ -1648,6 +1739,10 @@ export default {
       this.loadSeq++;
       this.activeChat = email;
       this.activeChatType = 'chat';
+      // TTL исчезающих для 1-на-1 — из kv (как selectGroup для групп): иначе
+      // currentEphemeralTtl остаётся от ПРЕДЫДУЩЕГО чата, иконка замка врёт,
+      // а старый fallback применял чужой TTL к сообщениям (баг 25.08).
+      this.currentEphemeralTtl = await this.ephemeralTtlOf(email);
       this.currentView = 'chats';
       this.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
       this.openMobileChat();
@@ -2393,11 +2488,15 @@ export default {
         this.messages = [];
         return;
       }
+      // Смена почты (24.08): контакт мог сменить адрес — ищем письма по
+      // ВСЕМ адресам с его ключом (алиасы), иначе история старого адреса
+      // не видна в чате нового (vault_msg@mail.ru → bk.ru).
+      const aliases = this.aliasesOf(email);
       const relatedAll = this.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
-          return f.includes(email.toLowerCase()) || t.includes(email.toLowerCase());
+          return aliases.some(a => f.includes(a) || t.includes(a));
         })
         // Свежие сверху. Расшифровываем только последние 30: фетч тела идёт
         // по одному письму (с переключением папки) — на всю переписку это
@@ -2460,7 +2559,7 @@ export default {
         // меток статуса наших сообщений (🟢 доставлено / 🔵 просмотрено).
         const wireAcks = {}; // msg_id -> {delivered: bool, read: bool}
         const rendered = await Promise.all(related.map(async (m) => {
-          const isOut = (m.from || '').toLowerCase().includes(email.toLowerCase());
+          const isOut = aliases.some(a => (m.from || '').toLowerCase().includes(a));
           let content = m.subject || '(no subject)';
           let msgId = m.uid || m.id;
           let attachment = null;
@@ -2560,6 +2659,8 @@ export default {
                   if (knownByKey) {
                     const [oldEmail] = knownByKey;
                     console.log('[identity] fingerprint match:', oldEmail, '→', sender, '— смена почты');
+                    // Переносим историю чата со старого адреса на новый.
+                    await this.migrateChatHistory(oldEmail, sender);
                     // Копируем профиль старого адреса на новый (имя/аватар).
                     const oldProf = this.profiles[oldEmail];
                     if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);
@@ -3588,11 +3689,11 @@ export default {
         // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
         // (имя/аватар) и стабильный id сообщения внутри шифра.
         // ttl — исчезающие сообщения для этого чата (0 = выкл).
-        let ttl = await this.ephemeralTtlOf(chatId);
-        if (!ttl && Number(this.currentEphemeralTtl) > 0) {
-          // Fallback: kv мог не сохраниться — используем состояние UI.
-          ttl = Number(this.currentEphemeralTtl);
-        }
+        // kv — ЕДИНСТВЕННЫЙ источник ttl при отправке. Fallback на
+        // currentEphemeralTtl (UI-переменную) УБРАН: он применял чужой TTL,
+        // когда selectChat не загрузил его для 1-на-1 — сообщение-ответ
+        // уходило исчезающим без включения пользователем (баг 25.08).
+        const ttl = await this.ephemeralTtlOf(chatId);
         if (ttl) console.log('[sendMessage] ephemeral ttl=' + ttl + ' chat=' + chatId);
         const envelope = await this.buildEnvelope(payload, ttl);
         const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
@@ -3996,7 +4097,9 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
-              chatKey = from;
+              // Смена почты (24.08): письмо могло прийти со старого адреса
+              // контакта (алиаса) — чат ведём по каноническому (показываемому).
+              chatKey = this.canonicalOf(from) || from;
               const lp = this.localProfileOf(from);
               const contact = this.contacts.find(c => c.email === from);
               title = (lp && lp.name) || (contact && contact.name) || from;
@@ -4026,6 +4129,8 @@ export default {
             }
             if (matched) {
               console.log('[identity] fingerprint match:', matched.knownEmail, '→', from, '— смена почты (poll)');
+              // Переносим историю чата со старого адреса на новый.
+              await this.migrateChatHistory(matched.knownEmail, from);
               this.setPeerKey(from, matched.env.key);
               // Профиль со старого адреса переносим на новый.
               const oldProf = this.profiles[matched.knownEmail];
@@ -4034,7 +4139,7 @@ export default {
                 api.saveProfile(from, matched.env.name, matched.env.avatar, matched.env.ts || 0,
                   typeof matched.env.bio === 'string' ? matched.env.bio : undefined);
               }
-              chatKey = from;
+              chatKey = this.canonicalOf(from) || from;
               const lp = this.localProfileOf(from);
               title = (lp && lp.name) || from;
               if (matched.env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
@@ -5975,7 +6080,8 @@ export default {
 }
 .login-box button {
   width: 100%; padding: 10px; border-radius: 8px; border: none; cursor: pointer;
-  background: #238636; color: white; font-size: 14px; font-weight: 600;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  color: white; font-size: 14px; font-weight: 600;
 }
 .login-box button:disabled { opacity: 0.5; cursor: not-allowed; }
 .login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
@@ -7935,7 +8041,7 @@ body {
 .change-email-panel .server-port { max-width: 80px; }
 .change-email-actions { display: flex; gap: 8px; margin-top: 16px; }
 .change-email-panel .cancel-btn { padding: 8px 16px; background: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; cursor: pointer; }
-.change-email-panel .submit-btn { padding: 8px 16px; background: var(--accent-primary, #238636); color: white; border: none; border-radius: 6px; cursor: pointer; }
+.change-email-panel .submit-btn { padding: 8px 16px; background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5); color: white; border: none; border-radius: 6px; cursor: pointer; }
 .change-email-panel .submit-btn:disabled { opacity: 0.5; }
 .change-email-panel .login-error { color: #f85149; font-size: 13px; margin-top: 8px; }
 
