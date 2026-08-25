@@ -218,6 +218,6 @@ export default {
 .checkbox-label { display: flex; align-items: center; gap: 6px; color: var(--text-muted, #8b949e); font-size: 13px; cursor: pointer; }
 .form-actions { display: flex; gap: 8px; margin-top: 16px; }
 .cancel-btn { padding: 8px 16px; background: var(--bg-tertiary, #21262d); color: var(--text-primary, #e6edf3); border: 1px solid var(--border-subtle, #30363d); border-radius: 6px; cursor: pointer; }
-.submit-btn { padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 6px; cursor: pointer; }
+.submit-btn { padding: 8px 16px; background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5); color: white; border: none; border-radius: 6px; cursor: pointer; }
 .submit-btn:disabled { opacity: 0.5; }
 </style>

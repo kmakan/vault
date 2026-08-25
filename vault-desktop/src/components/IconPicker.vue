@@ -30,7 +30,7 @@ const icons = [
   { id: 'shield', name: 'Shield', src: '/icons/vault-shield.svg' },
   { id: 'door', name: 'Vault Door', src: '/icons/vault-door.svg' },
   { id: 'keyhole', name: 'Keyhole', src: '/icons/vault-keyhole.svg' },
-  { id: 'letter', name: 'Letter V', src: '/icons/vault-letter.svg' },
+  { id: 'letter', name: 'Vault msg', src: '/icons/vault-letter.svg' },
   { id: 'envelope', name: 'Envelope', src: '/icons/vault-envelope.svg' },
 ]
 
