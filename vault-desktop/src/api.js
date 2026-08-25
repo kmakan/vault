@@ -66,6 +66,9 @@ const db = {
 
 export class ApiClient {
   constructor() {
+    // Сериализация saveProfile (25.08): Gmail доставляет письма НЕ по порядку —
+    // параллельные вызовы гонялись за kv и затирали свежий профиль старым.
+    this._profileChain = Promise.resolve();
     const saved = localStorage.getItem('vault-token');
     this.token = saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
     const savedEmail = localStorage.getItem('vault-email');
@@ -1274,6 +1277,10 @@ export class ApiClient {
         if (p && p.name && !cur.name) cur.name = p.name;
         if (p && p.avatar && !cur.avatar) cur.avatar = p.avatar;
         if (p && p.local_name) cur.local_name = p.local_name;
+        // «О себе» (25.08): bio и _ts тоже сохраняем — иначе каждый
+        // getProfilesAll выбрасывал их, и следующий saveProfile затирал.
+        if (p && p.bio !== undefined && cur.bio === undefined) cur.bio = p.bio;
+        if (p && p._ts !== undefined && cur._ts === undefined) cur._ts = p._ts;
         merged[key] = cur;
       }
       return merged;
@@ -1281,7 +1288,13 @@ export class ApiClient {
       return {};
     }
   }
-  async saveProfile(email, name, avatar, ts, bio) {
+  saveProfile(email, name, avatar, ts, bio) {
+    // Каждый вызов выполняется строго ПОСЛЕ предыдущего (очередь).
+    const run = () => this._saveProfileImpl(email, name, avatar, ts, bio);
+    this._profileChain = this._profileChain.then(run, run);
+    return this._profileChain;
+  }
+  async _saveProfileImpl(email, name, avatar, ts, bio) {
     if (!email) return;
     try {
       // Регистр: заголовки From бывают «Имя <Mail@X>» — ключ храним
@@ -1304,14 +1317,14 @@ export class ApiClient {
         // Статус «О себе» (25.08): пустая строка = осознанно очистить.
         p.bio = String(bio).slice(0, 200);
       }
-      if (name || avatar || bio !== undefined) {
+      if (name !== undefined || avatar !== undefined || bio !== undefined) {
         if (tsNum >= (p._ts || 0)) p._ts = tsNum;
         profiles[email] = p;
-        console.log('[profile] save', email, 'name=' + (name || '-'), 'avatar=' + (avatar ? avatar.slice(0, 40) + '...' : '-'), 'ts=' + tsNum);
+        console.log('[profile] save', email, 'name=' + (name || '-'), 'avatar=' + (avatar ? avatar.slice(0, 40) + '...' : '-'), 'ts=' + tsNum, 'bio=' + (bio !== undefined ? JSON.stringify(bio) : 'undefined'));
       }
       await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
       if (avatar && tsNum >= (p._ts || 0)) this._avatarCache.set(email, avatar);
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.error('[profile] save FAILED:', e && e.message || e); }
   }
   async getProfile(email) {
     if (!email) return null;
