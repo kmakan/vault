@@ -44,35 +44,28 @@
         <!-- Ключ восстановления (25.08): мнемоника 12 слов, Session-style.
              Обёртывает backup и отправляет эскроу-письмо себе. -->
         <div class="section recovery-section">
-          <h4>🔑 Ключ восстановления</h4>
-          <p class="recovery-hint">
-            12 слов восстанавливают аккаунт на новом устройстве или после
-            переустановки. Запишите их на бумаге — это единственный способ
-            вернуть доступ к контактам.
-            После создания Vault отправит письмо-копию вам же: если оно попало
-            в папку «Спам», переложите его во «Входящие» — провайдеры удаляют
-            спам (Gmail через ~30 дней).
-          </p>
+          <h4>🔑 {{ t('recovery_title') }}</h4>
+          <p class="recovery-hint">{{ t('recovery_hint') }}</p>
 
           <div v-if="!recoveryCreated" class="recovery-actions">
             <button @click="createRecoveryKey" :disabled="recoveryBusy || !hasKeys" class="btn-primary">
-              {{ recoveryBusy ? '…' : 'Создать ключ восстановления' }}
+              {{ recoveryBusy ? '…' : t('recovery_create') }}
             </button>
-            <span v-if="!hasKeys" class="recovery-note">Сначала создайте пару ключей</span>
+            <span v-if="!hasKeys" class="recovery-note">{{ t('recovery_first_keys') }}</span>
           </div>
 
           <div v-else class="recovery-words-box">
-            <p class="recovery-warning">⚠️ Запишите эти 12 слов по порядку. Они показываются один раз:</p>
+            <p class="recovery-warning">{{ t('recovery_write_warning') }}</p>
             <div class="recovery-grid">
               <div v-for="(w, i) in recoveryWords" :key="i" class="recovery-word">
                 <span class="word-num">{{ i + 1 }}</span>{{ w }}
               </div>
             </div>
             <button @click="copyToClipboard(recoveryWords.join(' '))" class="btn-secondary">
-              {{ copiedField === 'recovery' ? '✓ Скопировано' : 'Скопировать слова' }}
+              {{ copiedField === 'recovery' ? t('recovery_copied') : t('recovery_copy') }}
             </button>
             <button @click="confirmRecoverySaved" class="btn-primary">
-              Я записал(а) слова
+              {{ t('recovery_saved_confirm') }}
             </button>
           </div>
 
@@ -82,7 +75,7 @@
         </div>
 
         <div class="section">
-          <h4>{{ t('keys_export') }}</h4>
+          <h4>{{ t('keys_import') }}</h4>
           <div class="import-area">
             <textarea
               v-model="importData"

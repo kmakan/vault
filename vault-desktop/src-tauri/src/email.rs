@@ -97,6 +97,11 @@ struct SpecialFolders {
     /// только там лежат копии наших исходящих писем (отправитель должен
     /// видеть свои сообщения в чате).
     sent: Option<String>,
+    /// «Письма себе» (mail.ru: INBOX/ToMyself) — провайдеры с автосортировкой
+    /// раскладывают письма From==To (эскроу-письмо Key Recovery!) в подпапку
+    /// INBOX, и письмо «самому себе» не видно в INBOX. Без сканирования
+    /// этой папки восстановление аккаунта молча не работает (25.08, mail.ru).
+    self_letters: Option<String>,
 }
 
 pub struct EmailClient {
@@ -223,6 +228,21 @@ impl EmailClient {
             {
                 out.sent = Some(name.to_string());
             }
+            // «Письма себе» (mail.ru: INBOX/ToMyself, локаль «Письма себе»).
+            // Автосортировка провайдера прячет From==To из INBOX — эскроу-письмо
+            // восстановления аккаунта было бы невидимо (25.08).
+            if out.self_letters.is_none()
+                && (name_l.ends_with("/tomyself")
+                    || name_l == "tomyself"
+                    || name_l == "myself"
+                    || name_l.ends_with("/myself")
+                    || name_l == "письма себе"
+                    || name_l.ends_with("/письма себе")
+                    || name_l.ends_with("/letters to myself")
+                    || name_l == "letters to myself")
+            {
+                out.self_letters = Some(name.to_string());
+            }
         }
         out
     }
@@ -335,6 +355,22 @@ impl EmailClient {
                     // The Junk folder may be missing/unreachable — do not fail the
                     // whole fetch, INBOX is already retrieved.
                     Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
+                }
+            }
+
+            // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
+            // прячется туда автосортировкой провайдера (From==To). Читаем и её.
+            if let Some(selfl) = &folders.self_letters {
+                match self.fetch_folder(selfl, 100) {
+                    Ok(self_msgs) => {
+                        for m in self_msgs {
+                            if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                                continue;
+                            }
+                            messages.push(m);
+                        }
+                    }
+                    Err(e) => eprintln!("[email] self-letters folder {selfl} fetch failed: {e}"),
                 }
             }
 
@@ -497,6 +533,17 @@ impl EmailClient {
             {
                 Ok((msgs, max)) => collect(junk, "JUNK", msgs, max),
                 Err(e) => eprintln!("[email] Junk folder {junk} incremental fetch failed: {e}"),
+            }
+        }
+
+        // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
+        // автосортировкой провайдера уезжает туда, минуя INBOX. Курсор "SELF".
+        if let Some(selfl) = &folders.self_letters {
+            match self
+                .fetch_folder_from(selfl, cursors.get("SELF").copied(), 50)
+            {
+                Ok((msgs, max)) => collect(selfl, "SELF", msgs, max),
+                Err(e) => eprintln!("[email] self-letters {selfl} incremental fetch failed: {e}"),
             }
         }
 

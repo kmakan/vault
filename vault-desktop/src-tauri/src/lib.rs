@@ -829,9 +829,15 @@ fn recovery_build_escrow_email(wrapped_json: String) -> Result<String, String> {
 /// Разобрать тело письма в WrappedBackup, если это эскроу-конверт.
 #[tauri::command]
 fn recovery_parse_escrow_email(body: String) -> Result<Option<String>, String> {
-    // Тело могло пройти через fold_lines/quoted-printable — нормализуем пробелы
-    // не нужно: JSON парсится как есть; ищем маркер конверта.
-    let trimmed = body.trim();
+    // fold_lines при отправке рвёт длинные строки на ~76 символов ЖЁСТКИМИ
+    // переносами ВНУТРИ JSON (base64 wrapped разорван). decode_quoted_printable
+    // восстанавливает только мягкие переносы (=). Поэтому перед парсингом
+    // убираем ВСЕ CR/LF — JSON соберётся обратно в одну строку (25.08, mail.ru).
+    let cleaned: String = body
+        .chars()
+        .filter(|c| *c != '\n' && *c != '\r')
+        .collect();
+    let trimmed = cleaned.trim();
     if !trimmed.contains("\"key_escrow\"") {
         return Ok(None);
     }

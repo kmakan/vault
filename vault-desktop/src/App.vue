@@ -54,32 +54,27 @@
                пользовался Vault и потерял ключи (новое устройство/переустановка).
                Раскрывается по клику — не мешает новому пользователю. -->
           <button type="button" class="server-toggle" @click="showRecovery = !showRecovery">
-            <Icon name="shield" :size="14" /> У меня был Vault — восстановить аккаунт
+            <Icon name="shield" :size="14" /> {{ t('recovery_toggle') }}
             <span class="server-toggle-arrow">{{ showRecovery ? '▾' : '▸' }}</span>
           </button>
           <div v-if="showRecovery" class="server-settings recovery-login">
-            <p class="server-hint">
-              Введите данные ящика выше и ваш ключ восстановления (12 слов) —
-              контакты и группы вернутся. Либо загрузите файл резервной копии.
-              Письмо-копия ищется и в «Спаме», но если провайдер уже удалил
-              его — поможет только файл резервной копии.
-            </p>
+            <p class="server-hint">{{ t('recovery_hint') }}</p>
             <textarea
               v-model="recoveryWordsInput"
               class="recovery-input"
-              placeholder="12 слов ключа восстановления через пробел"
+              :placeholder="t('recovery_words_ph')"
               rows="2"
             ></textarea>
             <div class="recovery-file-row">
               <label class="btn-secondary recovery-file-label">
-                Файл резервной копии…
+                {{ t('recovery_file_label') }}
                 <input type="file" accept=".json,application/json" style="display:none" @change="onRecoveryFilePicked" />
               </label>
               <span v-if="recoveryFileName" class="recovery-filename">{{ recoveryFileName }}</span>
-              <span v-else class="recovery-filename muted">необязательно</span>
+              <span v-else class="recovery-filename muted">{{ t('recovery_file_optional') }}</span>
             </div>
             <button type="button" class="btn-primary" :disabled="loginLoading || !recoveryWordsInput.trim()" @click="loginWithRecovery">
-              {{ loginLoading ? '...' : 'Восстановить' }}
+              {{ loginLoading ? '...' : t('recovery_btn') }}
             </button>
           </div>
 
@@ -3184,7 +3179,7 @@ export default {
         this.startPolling();
         this.idleLoop();
         this.loadEmails().catch(() => {});
-        this.showToast('Аккаунт восстановлен: контакты и группы на месте');
+        this.showToast(t('recovery_ok'));
       } catch (error) {
         this.loginError = error.message || String(error);
       } finally {
@@ -3321,14 +3316,17 @@ export default {
     },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
     async onRecoveryCreated({ mnemonic }) {
+      console.log('[recovery] onRecoveryCreated, words len =', mnemonic ? mnemonic.split(/\s+/).length : 0);
       try {
         const wrappedJson = await crypto.recoveryWrapBackup(mnemonic);
         const body = await crypto.recoveryBuildEscrowEmail(wrappedJson);
+        console.log('[recovery] escrow body =', body.slice(0, 120));
         const res = await api.sendEmail(this.email, {
           to: this.email,
           subject: '',
           body,
         });
+        console.log('[recovery] sendEmail res =', JSON.stringify(res));
         if (res && res.ok === false) throw new Error('SMTP refused');
         // Провайдеры кладут служебные письма в Спам, а Gmail удаляет спам
         // через ~30 дней — тогда эскроу пропадёт. Сразу объясняем пользователю.
@@ -3386,32 +3384,42 @@ export default {
     // Поиск эскроу-письма в последних письмах + восстановление по словам.
     // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
     async recoverFromEscrow(mnemonic) {
+      console.log('[recovery] step 1: validate mnemonic');
       if (!(await crypto.recoveryValidateMnemonic(mnemonic))) {
         throw new Error('Неверный формат ключа (нужно 12 слов)');
       }
+      console.log('[recovery] step 2: fetch emails');
       const msgs = await api.fetchEmails(this.email);
+      console.log('[recovery] step 3: got', msgs.length, 'msgs, filtering empty subject');
       const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
-      // Батч-фетч тел одной папки — быстрее, чем по одному.
+      console.log('[recovery] step 4: candidates', candidates.length, 'byFolder');
       const byFolder = {};
       for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
       for (const [folder, list] of Object.entries(byFolder)) {
+        console.log('[recovery] step 5: fetch bodies from', folder, list.length, 'msgs');
         const uids = list.map((m) => m.uid);
         let bodies = [];
         try {
           bodies = await invoke('email_fetch_bodies', { uids: uids.map(String), folder });
         } catch (e) {
-          console.warn('escrow fetch_bodies failed:', e);
+          console.warn('[recovery] fetch_bodies failed:', e);
           continue;
         }
+        console.log('[recovery] step 6: got', bodies.length, 'bodies, parsing');
         for (const [, body] of bodies || []) {
           const wrappedJson = await crypto.recoveryParseEscrowEmail(body);
-          if (!wrappedJson) continue;
+          if (!wrappedJson) {
+            console.log('[recovery]   parseEscrowEmail returned null');
+            continue;
+          }
+          console.log('[recovery] step 7: unwrapping…');
           const backupJson = await crypto.recoveryUnwrapBackup(wrappedJson, mnemonic);
-          // Импорт ключей+kv. После этого initCrypto() подхватит старую пару.
+          console.log('[recovery] step 8: import_backup');
           await invoke('import_backup', { jsonData: backupJson });
           return true;
         }
       }
+      console.log('[recovery] no escrow found');
       return false;
     },
 
