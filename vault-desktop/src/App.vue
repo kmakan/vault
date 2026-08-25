@@ -205,8 +205,10 @@
               </div>
             </template>
             <template v-else>
-              <div class="chat-avatar-col">
+              <button class="chat-avatar-btn" :title="'Профиль ' + (nameOf(activeChat) || activeChat)" @click="openContactCard(activeChat)">
                 <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
+              </button>
+              <div class="chat-avatar-col">
                 <div class="chat-avatar-email" :title="activeChat">{{ activeChat }}</div>
               </div>
             </template>
@@ -677,12 +679,31 @@
 
       <!-- CONTACT EDIT MODAL: локальные имя/аватар контакта (видны только мне,
            реальные имя/аватар собеседника не меняются) -->
+      <!-- Карточка контакта (25.08): тап по аватару в шапке чата -->
+      <div v-if="showContactCard && contactCardEmail" class="modal-overlay" @click.self="showContactCard = false">
+        <div class="modal-content contact-card-panel">
+          <button class="modal-close-x" @click="showContactCard = false"><Icon name="x" :size="20" /></button>
+          <div class="contact-card-head">
+            <UserAvatar :email="contactCardEmail" :avatarUrl="avatarOf(contactCardEmail)" :size="72" />
+            <div class="contact-card-id">
+              <h3>{{ nameOf(contactCardEmail) }}</h3>
+              <p class="contact-card-email">{{ contactCardEmail }}</p>
+            </div>
+          </div>
+          <div v-if="contactCardBio" class="contact-bio-view">«{{ contactCardBio }}»</div>
+          <p v-else class="contact-bio-empty">{{ contactCardEmail === email ? 'Добавьте статус в Настройки → Профиль' : 'Контакт ещё не добавил статус «О себе»' }}</p>
+          <div class="contact-card-footer">
+            <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) }">
+              {{ isRecentlySeen(contactCardEmail) ? 'Недавно видели' : 'Не в сети' }}
+            </span>
+            <button class="btn btn-primary btn-sm" @click="startEditFromCard">Изменить локально</button>
+          </div>
+        </div>
+      </div>
       <div v-if="showContactEdit && editingContact" class="modal-overlay" @click.self="showContactEdit = false">
         <div class="modal-content contact-edit-panel">
           <h3>{{ t('contact_edit_title') || 'Имя и аватар контакта' }}</h3>
           <p class="contact-edit-email">{{ editingContact }}</p>
-          <!-- Статус «О себе» контакта (25.08): приходит в profile-конверте -->
-          <p v-if="editingContactBio" class="contact-bio-view">«{{ editingContactBio }}»</p>
           <p class="avatar-hint">{{ t('contact_edit_hint') || 'Видно только вам — реальные имя и аватар собеседника не меняются.' }}</p>
           <div class="avatar-preview-circle">
             <img v-if="editContactAvatar" :src="editContactAvatar" class="avatar-preview-img" />
@@ -1074,6 +1095,8 @@ export default {
       localProfiles: {},
       showContactEdit: false,
       editingContact: null,
+      showContactCard: false,
+      contactCardEmail: '',
       editContactName: '',
       editContactAvatar: '',
       // User identity
@@ -1093,6 +1116,12 @@ export default {
     // Мобильный режим: ширина экрана < 768px (портрет телефона).
     isMobile() {
       return this.windowWidth < 768;
+    },
+    // Карточка контакта (тап по аватару в шапке)
+    contactCardBio() {
+      if (!this.contactCardEmail) return '';
+      const p = this.profiles[this.contactCardEmail];
+      return (p && p.bio) || '';
     },
     appIconUrl() {
       return `/icons/vault-${this.appIconId}.svg`;
@@ -5747,6 +5776,18 @@ export default {
       }
     },
     // Модалка редактирования контакта (локальные имя/аватар).
+    // Карточка контакта: тап по аватару в шапке чата (25.08).
+    openContactCard(email) {
+      if (!email || email === '__notes__') return;
+      this.contactCardEmail = email;
+      this.showContactCard = true;
+    },
+    // Из карточки → локальная правка имени/аватара (старый попап).
+    startEditFromCard() {
+      const email = this.contactCardEmail;
+      this.showContactCard = false;
+      this.openContactEdit(email);
+    },
     openContactEdit(email) {
       if (!email) return;
       this.editingContact = email;
@@ -6390,6 +6431,37 @@ body {
   word-break: break-all;
   margin: 0;
 }
+
+/* Карточка контакта (25.08): тап по аватару в шапке */
+.contact-card-panel {
+  position: relative;
+  width: min(360px, calc(100vw - 40px));
+  padding: 24px;
+}
+.contact-card-head {
+  display: flex; align-items: center; gap: 16px; margin-bottom: 14px;
+}
+.contact-card-id h3 { margin: 0 0 4px; font-size: 18px; }
+.contact-card-email { margin: 0; color: var(--text-secondary, #9ca3af); font-size: 13px; }
+.contact-card-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 18px; gap: 10px;
+}
+.contact-card-seen {
+  font-size: 12px; color: var(--text-muted, #6b7280);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.contact-card-seen::before {
+  content: ''; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-muted, #6b7280); opacity: .5;
+}
+.contact-card-seen.online { color: #22c55e; }
+.contact-card-seen.online::before { background: #22c55e; opacity: 1; }
+.chat-avatar-btn {
+  padding: 0; border: none; background: none; cursor: pointer;
+  border-radius: 50%; flex-shrink: 0;
+}
+.chat-avatar-btn:hover { box-shadow: 0 0 0 2px rgba(245,158,11,.5); }
 
 /* Статус «О себе» контакта (25.08) */
 .contact-bio-view {
