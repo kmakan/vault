@@ -681,6 +681,8 @@
         <div class="modal-content contact-edit-panel">
           <h3>{{ t('contact_edit_title') || 'Имя и аватар контакта' }}</h3>
           <p class="contact-edit-email">{{ editingContact }}</p>
+          <!-- Статус «О себе» контакта (25.08): приходит в profile-конверте -->
+          <p v-if="editingContactBio" class="contact-bio-view">«{{ editingContactBio }}»</p>
           <p class="avatar-hint">{{ t('contact_edit_hint') || 'Видно только вам — реальные имя и аватар собеседника не меняются.' }}</p>
           <div class="avatar-preview-circle">
             <img v-if="editContactAvatar" :src="editContactAvatar" class="avatar-preview-img" />
@@ -1082,6 +1084,12 @@ export default {
     }
   },
   computed: {
+    // Статус «О себе» редактируемого контакта (из profile-конверта)
+    editingContactBio() {
+      if (!this.editingContact) return '';
+      const p = this.profiles[this.editingContact];
+      return (p && p.bio) || '';
+    },
     // Мобильный режим: ширина экрана < 768px (портрет телефона).
     isMobile() {
       return this.windowWidth < 768;
@@ -6365,6 +6373,19 @@ body {
   color: var(--text-secondary, #888);
   word-break: break-all;
   margin: 0;
+}
+
+/* Статус «О себе» контакта (25.08) */
+.contact-bio-view {
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.07);
+  border-left: 3px solid rgba(245, 158, 11, 0.55);
+  border-radius: 6px;
+  color: var(--text-primary, #e6edf3);
+  font-size: 13px;
+  font-style: italic;
+  text-align: left;
 }
 .contact-edit-name-input {
   width: 100%;
