@@ -36,8 +36,10 @@
           <textarea v-model="localBio" rows="2" maxlength="200" placeholder="Пара слов о себе…" class="bio-input"></textarea>
           <span class="bio-counter">{{ localBio.length }}/200</span>
         </div>
-        <button @click="saveProfileFields" class="btn btn-primary">Сохранить</button>
-        <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
+        <div class="profile-actions">
+          <button @click="saveProfileFields" class="btn btn-primary">Сохранить</button>
+          <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
+        </div>
       </div>
 
       <!-- ВНЕШНИЙ ВИД -->
@@ -596,4 +598,14 @@ export default {
   color: #e6edf3; font-size: 14px; box-sizing: border-box; resize: vertical;
 }
 .bio-counter { display: block; margin-top: 4px; color: #8b949e; font-size: 11px; text-align: right; max-width: 320px; }
+
+/* Кнопки профиля: столбик с зазором (25.08 — на мобильном были прижаты) */
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+.profile-actions .btn { width: 100%; max-width: 320px; }
+.profile-actions .logout-btn { margin-top: 0; }
 </style>
