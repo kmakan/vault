@@ -1299,7 +1299,11 @@ export class ApiClient {
       // ts: письма могут приходить НЕ в порядке отправки (Gmail-троттлинг
       // задерживает старые письма) — более свежий профиль не должен
       // перезаписываться отставшим письмом со старым ts.
-      const tsNum = ts || Date.now();
+      const tsNum = ts || 0;
+      // Без ts (ts=0) — не трогаем профиль: это вызов без даты
+      // (fetchPendingAccepts и др.); он не должен ни затирать свежие данные,
+      // ни блокировать их (письмо с реальным ts обязано пройти).
+      if (!tsNum) return;
       if (name && name !== email && tsNum >= (p._ts || 0)) p.name = name;
       if (avatar && tsNum >= (p._ts || 0)) p.avatar = avatar;
       if (bio !== undefined && bio !== null && tsNum >= (p._ts || 0)) {

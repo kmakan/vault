@@ -236,12 +236,7 @@
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <!-- Замок-индикатор (НЕ кнопка), только на мобильном: показывает,
-                   что чат защищён (ключ собеседника есть). Десктоп не трогаем —
-                   там уже есть надпись Encrypted в статусе чата. -->
-              <span v-if="isMobile" class="chat-sec-lock" :title="peerKeys[activeChat] ? 'Соединение зашифровано' : 'Нет ключа собеседника'">
-                <Icon name="lock" :size="16" :color="peerKeys[activeChat] ? '#f59e0b' : '#8b949e'" />
-              </span>
+              <!-- Замок-индикатор был убран по просьбе пользователя (25.08). -->
               <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
@@ -6973,13 +6968,6 @@ body {
   padding: 8px;
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
-}
-.chat-actions .chat-sec-lock {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  cursor: default;
 }
 
 .chat-actions button:hover {
