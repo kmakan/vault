@@ -30,7 +30,7 @@
         <div class="group-settings__name">
           <input v-if="isAdmin && editingGroupName" v-model="groupNameInput" class="group-name-input" placeholder="{{ group.name }}" @keyup.enter="saveGroupName" />
           <span v-else class="group-name">{{ group.name }}</span>
-          <button v-if="isAdmin && !editingGroupName" class="btn-icon rename-btn" @click="startRenameGroup" title="{{ t('group_rename') || 'Rename' }}"><Icon name="edit" :size="14" /></button>
+          <button v-if="isAdmin && !editingGroupName" class="btn-icon rename-btn" @click="startRenameGroup" title="{{ t('group_rename') || 'Rename' }}"><Icon name="pencil" :size="14" /></button>
           <span class="group-id">ID: {{ group.id }}</span>
           <div class="group-settings__meta">
             {{ group.members.length }} {{ t('members') || 'members' }}
