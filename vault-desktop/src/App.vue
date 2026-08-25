@@ -2979,7 +2979,7 @@ export default {
             const env = this.parseEnvelope(plaintext);
             if (env) {
               if ((env.name || env.avatar) && msg.sender_id) {
-                api.saveProfile(msg.sender_id, env.name, env.avatar);
+                api.saveProfile(msg.sender_id, env.name, env.avatar, env.ts || 0);
               }
               plaintext = env.text; // содержимое конверта
             }
@@ -3162,9 +3162,11 @@ export default {
       this.userAvatarUrl = dataUrl
       // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
       // контакты узнают ТОЛЬКО по «Сохранить» (единое письмо имя+аватар+статус).
+      // ts = Date.now() — СВОЁ действие (иначе guard tsNum=0 блокирует запись
+      // в kv и аватар исчезает после перезапуска; баг 25.08, Android).
       if (!this.profiles[this.email]) this.profiles[this.email] = {};
       this.profiles[this.email].avatar = dataUrl || '';
-      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '');
+      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '', Date.now());
     },
     async onNameUpdate(name) {
       // Только локально; контакты узнают по «Сохранить» (единое письмо).
