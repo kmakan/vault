@@ -12,7 +12,7 @@
           :class="['settings-nav-item', { active: activeCategory === cat.id }]"
           @click="activeCategory = cat.id">
           <span class="nav-icon"><Icon :name="cat.icon" :size="18" /></span>
-          <span class="nav-label">{{ cat.label }}</span>
+          <span class="nav-label">{{ t('settings_' + cat.id) }}</span>
           <span class="nav-arrow">›</span>
         </button>
       </nav>
@@ -22,29 +22,29 @@
          раздел выбран; сверху — единая шапка с кнопкой «← Назад») -->
     <div class="settings-content" v-show="activeCategory || !isMobile">
       <button v-if="isMobile" class="settings-back-btn" @click="activeCategory = ''">
-        <Icon name="back" :size="20" /><span>Назад</span>
+        <Icon name="back" :size="20" /><span>{{ t('settings_back') }}</span>
       </button>
       <!-- ПРОФИЛЬ -->
       <div v-if="activeCategory === 'profile'" class="settings-section">
-        <h2>Профиль</h2>
+        <h2>{{ t('settings_profile') }}</h2>
         <div class="setting-group">
-          <label>Имя</label>
-          <input v-model="localDisplayName" type="text" placeholder="Ваше имя" @change="saveDisplayName" @keyup.enter="saveDisplayName" />
+          <label>{{ t('settings_name') }}</label>
+          <input v-model="localDisplayName" type="text" :placeholder="t('settings_name_ph')" @change="saveDisplayName" @keyup.enter="saveDisplayName" />
         </div>
         <div class="setting-group">
-          <label>О себе (видят контакты)</label>
-          <textarea v-model="localBio" rows="2" maxlength="200" placeholder="Пара слов о себе…" class="bio-input"></textarea>
+          <label>{{ t('settings_bio') }}</label>
+          <textarea v-model="localBio" rows="2" maxlength="200" :placeholder="t('settings_bio_ph')" class="bio-input"></textarea>
           <span class="bio-counter">{{ localBio.length }}/200</span>
         </div>
         <div class="profile-actions">
-          <button @click="saveProfileFields" class="btn btn-primary">Сохранить</button>
+          <button @click="saveProfileFields" class="btn btn-primary">{{ t('settings_save_profile') }}</button>
           <button @click="$emit('logout')" class="btn btn-danger logout-btn">← {{ t('settings_logout') }}</button>
         </div>
       </div>
 
       <!-- ВНЕШНИЙ ВИД -->
       <div v-if="activeCategory === 'appearance'" class="settings-section">
-        <h2>Внешний вид</h2>
+        <h2>{{ t('settings_appearance') }}</h2>
         <ThemeSelector />
         <IconPicker @icon-changed="onIconChanged" />
         <FontSelector />
@@ -52,110 +52,110 @@
 
       <!-- ЧАТЫ -->
       <div v-if="activeCategory === 'chats'" class="settings-section">
-        <h2>Чаты</h2>
+        <h2>{{ t('settings_chats') }}</h2>
         <div class="setting-group">
-          <label>Качество отправляемых медиафайлов</label>
+          <label>{{ t('settings_media_quality') }}</label>
           <select v-model="localMediaQuality" @change="saveMediaQuality" class="media-quality-select">
-            <option value="high">Высокое — сжатие для быстрой доставки</option>
-            <option value="low">Низкое — для плохой связи</option>
-            <option value="original">Оригинал — без сжатия (большой трафик)</option>
+            <option value="high">{{ t('media_high') }}</option>
+            <option value="low">{{ t('media_low') }}</option>
+            <option value="original">{{ t('media_original') }}</option>
           </select>
-          <p class="setting-hint">Изображения больше выбранного размера сжимаются автоматически. Файлы всегда отправляются как есть.</p>
+          <p class="setting-hint">{{ t('settings_media_hint') }}</p>
         </div>
         <AppBehavior />
       </div>
 
       <!-- ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ (25.08, по модели Delta Chat) -->
       <div v-if="activeCategory === 'experiments'" class="settings-section">
-        <h2>Экспериментальные функции</h2>
+        <h2>{{ t('settings_experiments') }}</h2>
         <p class="setting-hint" style="margin-bottom:16px">
-          Эти функции могут быть нестабильными и могут быть изменены или удалены.
+          {{ t('experiments_warning') }}
         </p>
         <div class="setting-row">
-          <span>Звонки (бета){{ experimentsCalls ? ' — включены' : '' }}</span>
+          <span>{{ t('experiments_calls') }}{{ experimentsCalls ? t('experiments_calls_on') : '' }}</span>
           <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
         </div>
-        <p v-if="experimentsCalls" class="setting-hint">Кнопка вызова появится в шапке чатов с ключом собеседника. Аудио-звонки P2P, шифрование DTLS-SRTP.</p>
+        <p v-if="experimentsCalls" class="setting-hint">{{ t('experiments_calls_hint') }}</p>
       </div>
 
       <!-- ПОЧТА -->
       <div v-if="activeCategory === 'email'" class="settings-section">
-        <h2>Почтовые аккаунты</h2>
+        <h2>{{ t('settings_email_accounts') }}</h2>
         <EmailSettings />
         <!-- Смена почты (24.08): ключи E2E не зависят от email — можно сменить
              адрес, контакты и группы останутся. Контакты узнают новый адрес
              автоматически: broadcast-письмо несёт тот же fingerprint (ключ). -->
         <div class="change-email-block">
           <button @click="$emit('change-email')" class="btn btn-secondary"><Icon name="mail" :size="14" /> {{ t('settings_change_email') || 'Сменить почту' }}</button>
-          <p class="change-email-note">Контакты и группы останутся. Собеседники узнают новый адрес автоматически.</p>
+          <p class="change-email-note">{{ t('settings_change_email_note') }}</p>
         </div>
         <!-- Резервная копия (24.08): ключи + профили + пометки. Как у DC
              «Экспорт резервной копии» — файл можно хранить и восстановить
              на другом устройстве / после переустановки. -->
         <div class="change-email-block">
-          <h3 class="backup-title">🗄 Резервная копия</h3>
-          <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn">⬇ {{ backupBusy ? '…' : 'Экспорт резервной копии' }}</button>
+          <h3 class="backup-title">{{ t('settings_backup_title') }}</h3>
+          <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn">⬇ {{ backupBusy ? '…' : t('settings_backup_export') }}</button>
           <label class="backup-import-label">
-            <span class="btn btn-secondary backup-btn">⬆ Восстановить из копии</span>
+            <span class="btn btn-secondary backup-btn">⬆ {{ t('settings_backup_import') }}</span>
             <input type="file" accept=".json,application/json" class="backup-file-input" @change="importBackup" />
           </label>
           <p v-if="backupResult" class="change-email-note">{{ backupResult }}</p>
-          <p class="change-email-note">В копию входят: ключи E2E, контакты, профили, пометки, курсоры. Пароль почты — нет (введите при входе).</p>
+          <p class="change-email-note">{{ t('settings_backup_note') }}</p>
         </div>
       </div>
 
       <!-- УВЕДОМЛЕНИЯ -->
       <div v-if="activeCategory === 'notifications'" class="settings-section">
-        <h2>Уведомления</h2>
+        <h2>{{ t('settings_notifications') }}</h2>
         <div class="setting-row">
-          <span>Системные уведомления</span>
+          <span>{{ t('settings_notif_system') }}</span>
           <label class="toggle"><input type="checkbox" v-model="notifSystem" /><span class="slider"></span></label>
         </div>
         <div class="setting-row">
-          <span>Звук уведомлений</span>
+          <span>{{ t('settings_notif_sound') }}</span>
           <label class="toggle"><input type="checkbox" v-model="notifSound" /><span class="slider"></span></label>
         </div>
         <div class="setting-row">
-          <span>Показывать в трее</span>
+          <span>{{ t('settings_notif_tray') }}</span>
           <label class="toggle"><input type="checkbox" v-model="notifTray" /><span class="slider"></span></label>
         </div>
       </div>
 
       <!-- ПРИВАТНОСТЬ -->
       <div v-if="activeCategory === 'privacy'" class="settings-section">
-        <h2>Приватность</h2>
+        <h2>{{ t('settings_privacy') }}</h2>
         <div class="setting-row">
-          <span>E2E шифрование</span>
-          <span class="badge badge-green">Включено</span>
+          <span>{{ t('settings_e2e') }}</span>
+          <span class="badge badge-green">{{ t('settings_e2e_on') }}</span>
         </div>
         <div class="setting-row">
-          <span>Скрыть последний вход</span>
+          <span>{{ t('settings_hide_last_seen') }}</span>
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
       </div>
 
       <!-- ЯЗЫК -->
       <div v-if="activeCategory === 'language'" class="settings-section">
-        <h2>Язык</h2>
+        <h2>{{ t('settings_language') }}</h2>
         <LanguageSelector />
       </div>
 
       <!-- ПОМОЩЬ -->
       <div v-if="activeCategory === 'help'" class="settings-section">
-        <h2>Помощь</h2>
+        <h2>{{ t('settings_help') }}</h2>
         <div class="help-links">
-          <a href="https://github.com/nousresearch/vault" target="_blank">📖 Документация</a>
-          <a href="https://github.com/nousresearch/vault/issues" target="_blank">🐛 Сообщить об ошибке</a>
+          <a href="https://github.com/nousresearch/vault" target="_blank">📖 {{ t('settings_docs').replace('📖 ', '') }}</a>
+          <a href="https://github.com/nousresearch/vault/issues" target="_blank">🐛 {{ t('settings_report_bug').replace('🐛 ', '') }}</a>
           <div class="version">Vault v0.1.0</div>
         </div>
       </div>
 
       <!-- ОЧИСТИТЬ ДАННЫЕ -->
       <div v-if="activeCategory === 'clear'" class="settings-section">
-        <h2>Очистить данные</h2>
+        <h2>{{ t('settings_clear') }}</h2>
         <div class="danger-zone">
-          <p>⚠️ Это удалит все локальные данные: ключи, чаты, настройки.</p>
-          <button @click="clearLocalData" class="danger-btn">Очистить все данные</button>
+          <p>{{ t('settings_clear_warning') }}</p>
+          <button @click="clearLocalData" class="danger-btn">{{ t('settings_clear_btn') }}</button>
         </div>
       </div>
     </div>
@@ -256,9 +256,9 @@ export default {
         document.body.appendChild(a);
         a.click();
         setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-        this.backupResult = '✅ Резервная копия сохранена. Храните файл в надёжном месте.';
+        this.backupResult = t('settings_backup_ok');
       } catch (e) {
-        this.backupResult = '❌ Экспорт не удался: ' + (e.message || e);
+        this.backupResult = t('settings_backup_fail') + (e.message || e);
       } finally {
         this.backupBusy = false;
       }
@@ -266,7 +266,7 @@ export default {
     async importBackup(event) {
       const file = event.target.files && event.target.files[0];
       if (!file) return;
-      if (!(await confirm('Восстановить из резервной копии? Текущие локальные данные будут заменены.'))) {
+      if (!(await confirm(t('settings_restore_confirm')))) {
         event.target.value = '';
         return;
       }
@@ -275,10 +275,10 @@ export default {
       try {
         const text = await file.text();
         const result = await invoke('import_backup', { jsonData: text });
-        this.backupResult = '✅ Восстановлено: ' + result + '. Перезапустите приложение.';
+        this.backupResult = t('settings_restore_ok') + result + t('settings_restart_hint');
         this.$emit('keys-changed');
       } catch (e) {
-        this.backupResult = '❌ Восстановление не удалось: ' + (e.message || e);
+        this.backupResult = t('settings_restore_fail') + (e.message || e);
       } finally {
         this.backupBusy = false;
         event.target.value = '';
@@ -289,8 +289,8 @@ export default {
       this.$emit('icon-changed', id);
     },
     async clearLocalData() {
-      if (!(await confirm('Вы уверены? Все данные будут удалены навсегда.'))) return;
-      if (!(await confirm('Точно удалить?'))) return;
+      if (!(await confirm(t('settings_clear_confirm1')))) return;
+      if (!(await confirm(t('settings_clear_confirm2')))) return;
       localStorage.clear();
       indexedDB.deleteDatabase('vault');
       location.reload();

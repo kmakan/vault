@@ -3365,12 +3365,19 @@ export default {
             try { p = JSON.parse(w); } catch { continue; }
             if (p && p.salt === local.salt && p.nonce === local.nonce && p.wrapped === local.wrapped) {
               if (folder !== 'INBOX') {
-                this.showToast(
-                  '⚠️ Эскроу-письмо лежит в папке «' + folder + '». Переложите его во «Входящие»: спам удаляется автоматически (~30 дней у Gmail)',
-                  12000,
-                );
+                // Вариант A (25.08): автоматически копируем письмо во INBOX,
+                // чтобы провайдер не удалил его из спама. Если не вышло —
+                // просим пользователя переложить вручную. В любом случае
+                // предупреждаем, что письмо удалять нельзя.
+                try {
+                  await invoke('email_copy_to_inbox', { uid: String(m.uid), folder });
+                  this.showToast(t('recovery_moved_toast'), 12000);
+                } catch (e) {
+                  console.warn('escrow copy to inbox failed:', e);
+                  this.showToast('⚠️ ' + t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
+                }
               } else {
-                this.showToast('Эскроу-письмо лежит во «Входящих» ✓', 6000);
+                this.showToast(t('recovery_keep'), 8000);
               }
               return;
             }
