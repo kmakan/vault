@@ -2552,7 +2552,7 @@ export default {
                 // под ДРУГИМ email — собеседник сменил почту: привязываем
                 // новый email к тому же контакту (копируем ключ), не требуя
                 // нового приглашения. Как у почтовый мессенджер (contacts по fingerprint).
-                if (env.key && isOut) {
+                if (env.key && !isOut) {
                   const senderNorm = String(sender).toLowerCase();
                   const knownByKey = Object.entries(this.peerKeys).find(
                     ([k, v]) => v === env.key && String(k).toLowerCase() !== senderNorm
@@ -4007,6 +4007,37 @@ export default {
                   typeof env.bio === 'string' ? env.bio : undefined);
                 if (env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
               }
+            }
+          } catch (e) { /* не наше письмо */ }
+        } else if (crypto.isEncrypted(body)) {
+          // Смена почты (24.08): отправитель сменил адрес, но ключ тот же.
+          // Ключ под НОВЫМ email ещё не зарегистрирован — ищем его среди
+          // известных peerKeys (fingerprint-матчинг) и привязываем новый адрес.
+          try {
+            let matched = null;
+            for (const [knownEmail, knownKey] of Object.entries(this.peerKeys)) {
+              if (String(knownEmail).toLowerCase() === from) continue;
+              crypto.setPeerPublicKey(knownKey);
+              try {
+                const plain = await crypto.decryptVault(body);
+                const env = this.parseEnvelope(plain);
+                if (env && env.key === knownKey) { matched = { knownEmail, plain, env }; break; }
+              } catch (e) { /* не этим ключом */ }
+            }
+            if (matched) {
+              console.log('[identity] fingerprint match:', matched.knownEmail, '→', from, '— смена почты (poll)');
+              this.setPeerKey(from, matched.env.key);
+              // Профиль со старого адреса переносим на новый.
+              const oldProf = this.profiles[matched.knownEmail];
+              if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);
+              if (matched.env.type === 'profile' || matched.env.name || matched.env.avatar || typeof matched.env.bio === 'string') {
+                api.saveProfile(from, matched.env.name, matched.env.avatar, matched.env.ts || 0,
+                  typeof matched.env.bio === 'string' ? matched.env.bio : undefined);
+              }
+              chatKey = from;
+              const lp = this.localProfileOf(from);
+              title = (lp && lp.name) || from;
+              if (matched.env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
             }
           } catch (e) { /* не наше письмо */ }
         }
