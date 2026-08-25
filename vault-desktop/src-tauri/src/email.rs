@@ -593,6 +593,24 @@ impl EmailClient {
         Ok(body)
     }
 
+    /// Скопировать письмо из его папки (Спам/«Письма себе»/др.) во INBOX.
+    /// Безопасный COPY: оригинал НЕ удаляется (нет риска потерять письмо при
+    /// сбое). Эскроу-письмо восстановления должно лежать в папке, которую
+    /// провайдер не чистит, — иначе через ~30 дней восстановление станет
+    /// невозможным (25.08, вариант A).
+    pub async fn copy_to_inbox(&mut self, folder: &str, uid: &str) -> Result<(), String> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .ok_or_else(|| "Not connected to IMAP server".to_string())?;
+        session
+            .select(folder)
+            .map_err(|e| format!("select {folder} failed: {e}"))?;
+        let _ = session.uid_copy(uid, "INBOX");
+        let _ = session.select("INBOX");
+        Ok(())
+    }
+
     /// Fetch bodies of many messages from one mailbox in a batch: select the
     /// folder once, then UID FETCH each id. The UI previously fetched bodies
     /// one-by-one (each call re-selecting the folder) — dozens of round-trips

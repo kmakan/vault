@@ -420,6 +420,30 @@ async fn email_fetch_bodies(
     .map_err(|e| e.to_string())
 }
 
+/// Скопировать эскроу-письмо из спама/ToMyself во INBOX.
+/// Вызывается из locateEscrow при нахождении письма не в INBOX.
+#[tauri::command]
+async fn email_copy_to_inbox(
+    uid: String,
+    folder: String,
+    state: State<'_, EmailState>,
+) -> Result<(), String> {
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
+        .await
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut client = EmailClient::new(cfg);
+    client
+        .connect_imap()
+        .await
+        .map_err(|e| format!("Failed to connect: {e}"))?;
+    t_timeout(Duration::from_secs(30), client.copy_to_inbox(&folder, &uid))
+        .await
+        .map_err(|_| "Timed out copying to inbox".to_string())?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn email_send(
     to: String,
@@ -926,6 +950,7 @@ pub fn run() {
             email_fetch_incremental_fast,
             email_fetch_body,
             email_fetch_bodies,
+            email_copy_to_inbox,
             email_idle_wait,
             email_send,
             recovery_generate_mnemonic,
