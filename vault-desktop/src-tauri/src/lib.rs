@@ -597,6 +597,11 @@ fn groups_delete(group_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, String> {
+    groups::rename_group(&group_id, &new_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn groups_get(group_id: String) -> Result<Option<groups::Group>, String> {
     groups::load_groups()
         .map(|g| g.get(&group_id).cloned())
@@ -970,6 +975,7 @@ pub fn run() {
             groups_import,
             groups_set_key,
             groups_delete,
+            groups_rename,
             db_history_save,
             db_history_load,
             db_history_clear,

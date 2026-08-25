@@ -28,7 +28,9 @@
           @change="onGroupAvatarSelected"
         />
         <div class="group-settings__name">
-          <span class="group-name">{{ group.name }}</span>
+          <input v-if="isAdmin && editingGroupName" v-model="groupNameInput" class="group-name-input" placeholder="{{ group.name }}" @keyup.enter="saveGroupName" />
+          <span v-else class="group-name">{{ group.name }}</span>
+          <button v-if="isAdmin && !editingGroupName" class="btn-icon rename-btn" @click="startRenameGroup" title="{{ t('group_rename') || 'Rename' }}"><Icon name="edit" :size="14" /></button>
           <span class="group-id">ID: {{ group.id }}</span>
           <div class="group-settings__meta">
             {{ group.members.length }} {{ t('members') || 'members' }}
@@ -129,6 +131,7 @@ import { computed, ref, onMounted } from 'vue'
 import { useI18n } from '../i18n.js'
 import UserAvatar from './UserAvatar.vue'
 import Icon from './Icon.vue'
+import { invoke } from '@tauri-apps/api/core'
 import api, { db } from '../api.js'
 
 const { t } = useI18n()
@@ -139,7 +142,7 @@ const props = defineProps({
   profiles: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change'])
+const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change', 'rename-group'])
 
 function addMember() {
   // Открываем попап выбора контактов (основной UX добавления участника).
@@ -170,6 +173,21 @@ function canRemove(member) {
 }
 
 const isCreator = computed(() => props.group.created_by === props.currentUser)
+
+// Rename group
+const editingGroupName = ref(false)
+const groupNameInput = ref('')
+function startRenameGroup() {
+  groupNameInput.value = props.group.name
+  editingGroupName.value = true
+}
+async function saveGroupName() {
+  const name = groupNameInput.value.trim()
+  if (!name || name === props.group.name) { editingGroupName.value = false; return }
+  await invoke('groups_rename', { groupId: props.group.id, newName: name })
+  emit('rename-group', { groupId: props.group.id, name })
+  editingGroupName.value = false
+}
 
 // Group avatar
 const groupAvatarInput = ref(null)
@@ -477,4 +495,11 @@ async function onGroupAvatarSelected(e) {
 .group-avatar-input {
   display: none;
 }
+.group-name-input {
+  background: var(--bg-primary, #0d1117); border: 1px solid var(--border, #30363d);
+  border-radius: 6px; padding: 6px 10px; color: var(--text-primary, #e6edf3);
+  font-size: 15px; font-weight: 600; width: 100%; margin-bottom: 4px;
+}
+.rename-btn { background: none; border: none; color: var(--text-muted, #8b949e); cursor: pointer; margin-left: 8px; vertical-align: middle; }
+.rename-btn:hover { color: var(--text-primary, #e6edf3); }
 </style>

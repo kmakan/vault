@@ -144,6 +144,8 @@ export default {
   // Groups
   group_settings: '群组设置',
   group_name: '群组名称',
+
+  group_rename: '重命名',
   group_create: '创建群组',
   group_create_title: '新建群组',
   members: '成员',

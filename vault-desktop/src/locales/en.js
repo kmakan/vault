@@ -144,6 +144,8 @@ export default {
   // Groups
   group_settings: 'Group Settings',
   group_name: 'Group Name',
+
+  group_rename: 'Rename',
   group_create: 'Create Group',
   group_create_title: 'New Group',
   members: 'members',

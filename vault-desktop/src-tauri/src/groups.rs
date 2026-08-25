@@ -267,6 +267,21 @@ pub fn set_member_role(group_id: &str, email: &str, role: GroupRole) -> Result<(
     Ok(())
 }
 
+pub fn rename_group(group_id: &str, new_name: &str) -> Result<Group> {
+    let mut groups = load_groups()?;
+    let trimmed = new_name.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Group name cannot be empty");
+    }
+    let grp = groups
+        .get_mut(group_id)
+        .ok_or_else(|| anyhow::anyhow!("Group not found: {group_id}"))?;
+    grp.name = trimmed.to_string();
+    let cloned = grp.clone();
+    save_groups(&groups)?;
+    Ok(cloned)
+}
+
 pub fn delete_group(group_id: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if groups.remove(group_id).is_some() {

@@ -144,6 +144,8 @@ export default {
   // Groups
   group_settings: 'Настройки группы',
   group_name: 'Название группы',
+
+  group_rename: 'Переименовать',
   group_create: 'Создать группу',
   group_create_title: 'Новая группа',
   members: 'участников',

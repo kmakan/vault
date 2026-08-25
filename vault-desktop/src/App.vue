@@ -743,6 +743,7 @@
             @delete="deleteGroup"
             @add-member="addMember"
             @avatar-update="onGroupAvatarUpdate"
+            @rename-group="onGroupRename"
           />
         </div>
       </div>
@@ -3144,15 +3145,24 @@ export default {
             if (!body || !crypto.isEncrypted(body)) continue;
             const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
             const obj = JSON.parse(plaintext);
-            if (obj && obj.meta === 1 && obj.avatar) {
-              if ((await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
+            if (obj && obj.meta === 1 && (obj.avatar || obj.name)) {
+              // Аватар группы — отдельный kv (как раньше).
+              if (obj.avatar && (await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
                 await db.kvSet('anon', 'group-avatar:' + g.id, obj.avatar);
                 this.groupAvatars[g.id] = obj.avatar;
+              }
+              // Имя группы (переименование, 25.08): применяем если пришло.
+              if (obj.name && g.name !== obj.name) {
+                try {
+                  await invoke('groups_rename', { groupId: g.id, newName: obj.name });
+                  g.name = obj.name;
+                  console.log('[group] name applied:', g.id, '→', obj.name);
+                } catch (e) { /* локально не обновилось — не критично */ }
               }
               metaFound = true;
               alreadyApplied.add(appliedSig);
               await db.kvSet('anon', appliedKey, [...alreadyApplied].join(','));
-              break; // аватар найден — хватит
+              break; // meta найден — хватит
             }
           } catch (e) { /* не meta или битое — не критично */ }
         }
@@ -3563,6 +3573,23 @@ export default {
 
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
     // рассылаем участникам meta-письмо (шифр групповым ключом) — как реакции.
+    // Переименование группы (25.08): создатель/админ меняет имя. Обновляем
+    // локально + рассылаем meta-письмо {meta:1, name} участникам — они
+    // применяют при syncGroupMeta (как аватар).
+    async onGroupRename({ groupId, name }) {
+      const g = this.groups.find(x => x.id === groupId);
+      if (g) g.name = name;
+      if (this.currentGroup && this.currentGroup.id === groupId) this.currentGroup.name = name;
+      try {
+        const groupKey = this.groupKeys[groupId];
+        if (!groupKey) return;
+        const content = await crypto.encryptWithGroupKey(JSON.stringify({ meta: 1, name, ts: Date.now() }), groupKey);
+        await api.sendGroupMeta(groupId, content);
+        console.log('[group] renamed', groupId, '→', name);
+      } catch (e) {
+        console.warn('[group] rename broadcast failed:', e);
+      }
+    },
     async onGroupAvatarUpdate({ groupId, avatar }) {
       this.groupAvatars[groupId] = avatar;
       await db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');
