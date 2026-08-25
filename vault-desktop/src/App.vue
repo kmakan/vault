@@ -236,6 +236,12 @@
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
+              <!-- Замок-индикатор (НЕ кнопка), только на мобильном: показывает,
+                   что чат защищён (ключ собеседника есть). Десктоп не трогаем —
+                   там уже есть надпись Encrypted в статусе чата. -->
+              <span v-if="isMobile" class="chat-sec-lock" :title="peerKeys[activeChat] ? 'Соединение зашифровано' : 'Нет ключа собеседника'">
+                <Icon name="lock" :size="16" :color="peerKeys[activeChat] ? '#f59e0b' : '#8b949e'" />
+              </span>
               <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
               <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
             </template>
@@ -1653,7 +1659,6 @@ export default {
       this.activeChat = email;
       this.activeChatType = 'chat';
       this.currentView = 'chats';
-      this.currentEphemeralTtl = await this.ephemeralTtlOf(email); // замок в шапке = реальное состояние
       this.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
       this.openMobileChat();
       if (this.peerKeys[email]) {
@@ -2200,8 +2205,6 @@ export default {
       let avatar = (this.profiles[this.email] || {}).avatar || '';
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
-      // Статус «О себе» НЕ едет в каждом сообщении — он передаётся отдельным
-      // profile-письмом при изменении профиля (broadcastProfile), как имя/аватар.
       const env = {
         vault: 1,
         id: this.newMessageId(),
@@ -2578,8 +2581,9 @@ export default {
                     this.setPeerKey(sender, env.key);
                   }
                 }
-                // 25.08: bio сохраняется даже если name='' (равен email) и avatar=''.
-                if (env.name || env.avatar || typeof env.bio === 'string') {
+                if (env.name || env.avatar) {
+                  // ts письма (отправки) — чтобы отставшее письмо не
+                  // перезаписывало более свежий профиль (см. saveProfile).
                   api.saveProfile(sender, env.name, env.avatar, env.ts || 0, typeof env.bio === 'string' ? env.bio : undefined);
                 }
                 // Профильное письмо (type:'profile'): name/avatar уже
@@ -2869,7 +2873,7 @@ export default {
             const env = this.parseEnvelope(plaintext);
             if (env) {
               if ((env.name || env.avatar) && msg.sender_id) {
-                api.saveProfile(msg.sender_id, env.name, env.avatar, undefined, typeof env.bio === 'string' ? env.bio : undefined);
+                api.saveProfile(msg.sender_id, env.name, env.avatar);
               }
               plaintext = env.text; // содержимое конверта
             }
@@ -3566,10 +3570,11 @@ export default {
         // Конверт {vault:1,id,text,name,avatar} — метаданные отправителя
         // (имя/аватар) и стабильный id сообщения внутри шифра.
         // ttl — исчезающие сообщения для этого чата (0 = выкл).
-        // kv — единственный источник правды. UI-состояние (currentEphemeralTtl)
-        // НЕ должно влиять на отправку: оно может устареть при смене чата
-        // (25.08, фикс: «ответ на сообщение неожиданно исчезал»).
         let ttl = await this.ephemeralTtlOf(chatId);
+        if (!ttl && Number(this.currentEphemeralTtl) > 0) {
+          // Fallback: kv мог не сохраниться — используем состояние UI.
+          ttl = Number(this.currentEphemeralTtl);
+        }
         if (ttl) console.log('[sendMessage] ephemeral ttl=' + ttl + ' chat=' + chatId);
         const envelope = await this.buildEnvelope(payload, ttl);
         const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
@@ -3980,11 +3985,8 @@ export default {
               // Профиль отправителя (25.08): имя/аватар/«О себе» — сохраняем
               // СРАЗУ при поллинге, не дожидаясь открытия чата.
               if (env.type === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
-                await api.saveProfile(from, env.name, env.avatar, env.ts || 0,
+                api.saveProfile(from, env.name, env.avatar, env.ts || 0,
                   typeof env.bio === 'string' ? env.bio : undefined);
-                // Реактивность (25.08): this.profiles — vue-данные; без
-                // перезагрузки UI показывал бы старое (пустое) bio.
-                this.loadProfiles().catch(() => {});
                 if (env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
               }
             }
@@ -5788,8 +5790,11 @@ export default {
     },
     // Модалка редактирования контакта (локальные имя/аватар).
     // Карточка контакта: тап по аватару в шапке чата (25.08).
-    openContactCard(email) {
+    async openContactCard(email) {
       if (!email || email === '__notes__') return;
+      // Перечитываем профили из kv — иначе карточка покажет устаревшие
+      // вью-данные (bio мог прийти поллингом, но this.profiles не обновился).
+      await this.loadProfiles().catch(() => {});
       this.contactCardEmail = email;
       this.showContactCard = true;
     },
@@ -6968,6 +6973,13 @@ body {
   padding: 8px;
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
+}
+.chat-actions .chat-sec-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  cursor: default;
 }
 
 .chat-actions button:hover {
@@ -8436,6 +8448,10 @@ body {
   }
   .chat-header-info h3 {
     font-size: 15px;
+  }
+  /* Android: email под аватаром не помещается и перекрывает элементы — скрыт. */
+  .chat-avatar-email {
+    display: none;
   }
   .chat-status {
     white-space: nowrap;
