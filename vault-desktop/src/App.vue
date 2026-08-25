@@ -1887,7 +1887,16 @@ export default {
       try {
         hist = await loadHistory(this.email, chatKey);
       } catch (e) { /* sqlite недоступен — чат откроется из писем */ }
-      return this.normalizeStaleSending(hist);
+      hist = this.normalizeStaleSending(hist);
+      // Сигнальные call_*-конверты (25.08): старые сборки сохраняли их в
+      // историю как сырой JSON — не рендерим нигде.
+      if (hist && hist.length) {
+        hist = hist.filter(m => {
+          const c = (m && m.content) || '';
+          return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
+        });
+      }
+      return hist;
     },
     // 'sending' — переходный статус, он не должен долго жить в истории: его
     // персистят оптимистично ДО отправки, а финальный пишут после. После
@@ -1911,8 +1920,15 @@ export default {
     // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
     // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами (20.08).
     async mergeHistory(chatKey, list) {
-      const hist = await this.loadLocalHistory(chatKey);
+      let hist = await this.loadLocalHistory(chatKey); // let: фильтр call_* ниже
       if (!hist || !hist.length) return list;
+      // Звонки (25.08): сигнальные call_*-конверты, попавшие в историю
+      // старыми сборками (до фильтра в loadMessages), не рендерим — они
+      // «застревали» в чате как сырой JSON и не удалялись.
+      hist = hist.filter(m => {
+        const c = (m && m.content) || '';
+        return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type": "call_') !== -1));
+      });
       const ids = new Set();
       for (const m of hist) if (m && m.id) ids.add(m.id);
       // Исчезающие (25.08): старые записи истории могли быть сохранены БЕЗ
