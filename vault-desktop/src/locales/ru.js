@@ -40,6 +40,8 @@ export default {
   settings_username: 'Имя пользователя',
   settings_password: 'Пароль',
   settings_save: 'Сохранить',
+
+  settings_profile_saved: 'Профиль сохранён — контакты обновят его',
   settings_cancel: 'Отмена',
   settings_delete: 'Удалить',
   settings_delete_account_confirm: 'Удалить этот почтовый аккаунт?',

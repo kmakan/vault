@@ -40,6 +40,8 @@ export default {
   settings_username: '用户名',
   settings_password: '密码',
   settings_save: '保存',
+
+  settings_profile_saved: '个人资料已保存 — 联系人将更新',
   settings_cancel: '取消',
   settings_delete: '删除',
   settings_delete_account_confirm: '删除此邮箱账户？',

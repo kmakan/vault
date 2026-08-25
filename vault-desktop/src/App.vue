@@ -505,7 +505,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @experiments-calls="onExperimentsCalls" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" />
         </div>
       </div>
 
@@ -2283,11 +2283,19 @@ export default {
     },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text, ttl = 0) {
-      const dn = (await api.getDisplayName()) || '';
+      const dn = this.displayName || (await api.getDisplayName()) || '';
       // Не слать email как имя: получатель считает name==email «нет имени»
       // (см. nameOf) — иначе он перезаписывает настоящее имя почтой.
       const name = dn && dn !== this.email ? dn : '';
+      // Актуальный аватар из kv (как в broadcastProfile) — this.profiles
+      // в памяти может отставать; иначе сообщение уходит со СТАРЫМ аватаром
+      // и получатель перезаписывает новый (чехарда, 25.08).
       let avatar = (this.profiles[this.email] || {}).avatar || '';
+      try {
+        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
+        const kp = kvProfiles[String(this.email).toLowerCase()];
+        if (kp && kp.avatar) avatar = kp.avatar;
+      } catch (e) { /* ignore */ }
       const rawLen = avatar.length;
       avatar = await this.shrinkAvatar(avatar);
       const env = {
@@ -2646,6 +2654,13 @@ export default {
                 // Раньше было наоборот — входящий аватар сохранялся под МОИМ email,
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
+                // ЭХО-ЗАЩИТА (25.08): письмо с МОИМ ключом — от меня самого
+                // (старый адрес после смены почты / копия в свой ящик). Не
+                // матчим как «смену почты», не сохраняем профиль — иначе
+                // свой же аватар перезаписывается старым из своего письма.
+                if (env.key && crypto.publicKey && env.key === crypto.publicKey) {
+                  return null;
+                }
                 // FINGERPRINT-МАТЧИНГ (24.08, смена почты): конверт несёт
                 // публичный ключ отправителя. Если этот ключ уже известен
                 // под ДРУГИМ email — собеседник сменил почту: привязываем
@@ -3145,21 +3160,15 @@ export default {
     },
     async onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
-      // Сохраняем свой профиль в kv_store, чтобы имя/аватар отображались и у других.
+      // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
+      // контакты узнают ТОЛЬКО по «Сохранить» (единое письмо имя+аватар+статус).
       if (!this.profiles[this.email]) this.profiles[this.email] = {};
       this.profiles[this.email].avatar = dataUrl || '';
-      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '')
-      this.loadProfiles()
-      // Синхронизация профиля (24.08): рассылаем stealth-письмо всем
-      // контактам с ключом — они обновят аватар/имя без нового сообщения.
-      this.broadcastProfile();
+      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '');
     },
     async onNameUpdate(name) {
-      // Смена имени в настройках: рассылаем профиль контактам (см.
-      // broadcastProfile) — без этого новое имя увидят только после
-      // следующего обычного сообщения.
+      // Только локально; контакты узнают по «Сохранить» (единое письмо).
       this.displayName = name || this.email || '';
-      this.broadcastProfile();
     },
     // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
     // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
@@ -3168,7 +3177,14 @@ export default {
       const peers = Object.keys(this.peerKeys || {});
       if (!peers.length) return;
       const name = this.displayName || this.email || '';
-      const avatar = (this.profiles[this.email] || {}).avatar || '';
+      // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,
+      // this.profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
+      let avatar = (this.profiles[this.email] || {}).avatar || '';
+      try {
+        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
+        const kp = kvProfiles[String(this.email).toLowerCase()];
+        if (kp && kp.avatar) avatar = kp.avatar;
+      } catch (e) { /* ignore */ }
       const bio = await this.getBio();
       const body = {
         vault: 1,
@@ -3341,8 +3357,20 @@ export default {
       const v = String(text || '').slice(0, 200);
       await db.kvSet(this.email || 'anon', 'bio', v);
       this.myBio = v;
-      this.broadcastProfile().catch(() => {}); // контакты узнают новый статус
       return v;
+    },
+    // «Сохранить профиль» (25.08): ОДНО письмо с именем+аватаром+статусом и
+    // одним ts. Раньше каждый emit слал отдельное письмо с разными ts —
+    // на приёме более позднее письмо с неполным набором перетирало _ts и
+    // блокировало/возвращало старые значения (чехарда имени/аватара).
+    async onProfileSave() {
+      try {
+        await this.broadcastProfile();
+        this.showToast(t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
+      } catch (e) {
+        console.error('[profile] broadcast on save failed:', e);
+        this.showToast(t('settings_profile_saved') || 'Профиль сохранён');
+      }
     },
 
     // --- Исчезающие сообщения (25.08, по модели Delta Chat) ---
@@ -4097,6 +4125,14 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
+              // ЭХО-ЗАЩИТА (25.08): письмо с МОИМ ключом — это я сам
+              // (старый адрес после смены почты / копия в свой ящик).
+              // Не профиль, не сообщение, не «смена почты» — иначе свой же
+              // аватар перезаписывается старым из собственного письма.
+              if (env.key && crypto.publicKey && env.key === crypto.publicKey) {
+                this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX'));
+                continue;
+              }
               // Смена почты (24.08): письмо могло прийти со старого адреса
               // контакта (алиаса) — чат ведём по каноническому (показываемому).
               chatKey = this.canonicalOf(from) || from;
@@ -4124,7 +4160,11 @@ export default {
               try {
                 const plain = await crypto.decryptVault(body);
                 const env = this.parseEnvelope(plain);
-                if (env && env.key === knownKey) { matched = { knownEmail, plain, env }; break; }
+                // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
+                // НЕ «смена почты» собеседника.
+                if (env && env.key === knownKey && !(crypto.publicKey && env.key === crypto.publicKey)) {
+                  matched = { knownEmail, plain, env }; break;
+                }
               } catch (e) { /* не этим ключом */ }
             }
             if (matched) {

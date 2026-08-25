@@ -40,6 +40,8 @@ export default {
   settings_username: 'Username',
   settings_password: 'Password',
   settings_save: 'Save',
+
+  settings_profile_saved: 'Profile saved — contacts will update it',
   settings_cancel: 'Cancel',
   settings_delete: 'Delete',
   settings_delete_account_confirm: 'Delete this email account?',
