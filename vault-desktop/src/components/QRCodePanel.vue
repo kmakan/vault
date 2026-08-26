@@ -198,13 +198,22 @@ export default {
           }
         }
         // Запускаем нативный сканер (полноэкранный, как в Session).
-        const result = await scan({ windowed: true, formats: [Format.QRCode] });
+        // windowed:false — камера показывается ПОВЕРХ webview (как отдельный
+        // экран). windowed:true делает webview прозрачным, а наш оверлей
+        // .qr-code-panel непрозрачный → камера скрыта, scan() зависает.
+        const result = await scan({ windowed: false, formats: [Format.QRCode] });
         this.scanning = false;
         if (result && result.content) {
           this.scanInput = result.content;
           await this.addScannedKey();
         }
       } catch (e) {
+        this.scanning = false;
+        // Пользователь отменил сканер — просто закрываем.
+        const msg = String(e && e.message ? e.message : e).toLowerCase();
+        if (msg.includes('cancel') || msg.includes('cancelled') || msg.includes('пользователь')) {
+          return;
+        }
         // Плагин не поддерживается (Linux desktop) — fallback на input file.
         console.warn('[QR] native scan unavailable, fallback to file:', e);
         const el = this.$refs.scanFile;
