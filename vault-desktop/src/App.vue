@@ -903,7 +903,8 @@ export default {
       // ── Звонки (M3, feature/calls): сигнализация конвертами call_* ──
       // callState: idle | outgoing_ringing | incoming_ringing | active
       callState: 'idle',
-      currentCall: null,   // { call_id, peer }
+      currentCall: null,
+      lastCallId: null,   // { call_id, peer }
       callMuted: false,
       callRecording: false,
       callClockSec: 0,
@@ -1114,6 +1115,33 @@ export default {
     // Мобильный режим: ширина экрана < 768px (портрет телефона).
     isMobile() {
       return this.windowWidth < 768;
+    },
+    // На Android WebView userAgent содержит 'Android' — надёжнее, чем ширина.
+    isAndroid() {
+      return /android/i.test(navigator.userAgent || '');
+    },
+    // Гудок входящего через Web Audio (Android — без cpal, 26.08).
+    playRingtoneWeb() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const dur = 0.45, pause = 0.35;
+        const playTone = (start) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = 440;
+          gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(ctx.currentTime + start);
+          osc.stop(ctx.currentTime + start + dur);
+        };
+        let t = 0;
+        for (let i = 0; i < 10; i++) { playTone(t); t += dur + pause; }
+        console.log('[call] web ringtone playing');
+      } catch (e) {
+        console.warn('[call] web ringtone failed:', e);
+      }
     },
     // Карточка контакта (тап по аватару в шапке)
     contactCardBio() {
@@ -4433,16 +4461,26 @@ export default {
           }
           if (this.callState !== 'idle') return;
           this.currentCall = { call_id, peer: from };
+          this.lastCallId = call_id;
           this.callState = 'incoming_ringing';
           this.callMuted = false;
           this.callStartedAt = Date.now();
           console.log('[call] incoming_ringing SET for', call_id, 'from', from);
           // Звуковой сигнал входящего (22.08, запрос пользователя): гудки
           // через cpal в Rust — слышны даже при свёрнутом окне.
-          api.mediaRingtoneStart().then(
-            () => console.log('[call] ringtone started'),
-            e => console.warn('[call] ringtone start failed:', e)
-          );
+          // Рингтон. НА ANDROID НЕ используем cpal (Rust): AAudio-стрим
+          // паникует/крашит WebView при входящем звонке (panic=abort →
+          // приложение сворачивается). На Android играем гудок через Web
+          // Audio API (JS), на desktop — через cpal (слышен при свёрнутом
+          // окне). (26.08)
+          if (this.isAndroid()) {
+            this.playRingtoneWeb();
+          } else {
+            api.mediaRingtoneStart().then(
+              () => console.log('[call] ringtone started'),
+              e => console.warn('[call] ringtone start failed:', e)
+            );
+          }
           this.startFastPolling();
           this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 90000);
           break;
@@ -4475,9 +4513,17 @@ export default {
         case 'call_cancel':
           // call_cancel — собеседник отменил/завершил звонок (или у него
           // сработал таймаут): кладём трубку автоматически.
+          // Гонка (26.08): пользователь мог уже повесить трубку вручную
+          // (state=idle) до того, как call_end дошёл — проверяем и по
+          // lastCallId, чтобы не оставить трубку у собеседника.
           if (this.currentCall && this.currentCall.call_id === call_id) {
             this.hangup('remote');
+          } else if (this.lastCallId === call_id && this.callState === 'idle') {
+            console.log('[call] remote end after local hangup — ensuring cleanup');
+            this.hangup('remote_late');
           }
+          // Запоминаем call_id на случай, если call_end придёт ПОСЛЕ сброса.
+          if (this.lastCallId !== call_id) this.lastCallId = call_id;
           break;
         case 'call_sdp':
           // Фаза 2: SDP-обмен после call_accept. offer — сторона получателя
@@ -4512,6 +4558,7 @@ export default {
       if (this.callState !== 'idle' || !this.peerKeys[peer]) return;
       const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
       this.currentCall = { call_id, peer };
+      this.lastCallId = call_id;
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
       this.startFastPolling();
