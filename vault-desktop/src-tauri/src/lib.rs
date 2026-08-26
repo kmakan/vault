@@ -918,6 +918,13 @@ pub fn run() {
             .filter_level(log::LevelFilter::Info)
             .parse_filters(&rust_log)
             .try_init();
+        // Android Rust-логи → logcat (26.08, диагностика звонков).
+        #[cfg(target_os = "android")]
+        let _ = android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Debug)
+                .with_tag("VaultRust"),
+        );
     }
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

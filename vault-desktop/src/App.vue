@@ -4604,6 +4604,9 @@ export default {
       } catch (e) {
         console.error('[call] media start (callee) failed:', e);
         // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
+        // ДИАГНОСТИКА (26.08): показываем ошибку в UI — на Android иначе не
+        // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
+        this.showToast('⚠️ media start failed: ' + (e && e.message || e), 10000);
         try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
         catch (e2) { console.error('call_accept failed:', e2); }
       }
