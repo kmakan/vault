@@ -471,7 +471,8 @@
       <div v-if="showQRCode" class="qr-code-overlay">
         <QRCodePanel 
           :publicKey="publicKey" 
-          :myEmail="email"
+          :myEmail="email" 
+          :myFingerprint="fingerprint"
           @close="showQRCode = false"
           @key-scanned="addPeerKey"
           @invite-by-id="inviteContactById"

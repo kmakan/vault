@@ -12,9 +12,10 @@
         <div class="step-body">
           <h4>Сообщите собеседнику ваш ID</h4>
           <div class="id-row">
-            <code class="my-id">{{ myEmail }}</code>
+            <code class="my-id">{{ myFingerprint || myEmail }}</code>
             <button @click="copyMyId">Копировать</button>
           </div>
+          <p class="hint" v-if="myFingerprint">ID — ваш fingerprint. Он не меняется при смене почты (в отличие от email).</p>
           <details class="qr-collapse" v-if="publicKey">
             <summary>Показать QR-код (для Android / другого устройства)</summary>
             <div class="qr-display">
@@ -39,11 +40,11 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <h4>Введите ID собеседника</h4>
+          <h4>Введите email собеседника</h4>
           <div class="scan-input">
             <input
               v-model="inviteEmail"
-              placeholder="ID собеседника (email)"
+              placeholder="Email собеседника"
               @keyup.enter="sendInviteById"
             />
             <button @click="sendInviteById" :disabled="!inviteEmail">
@@ -71,6 +72,13 @@
             </button>
           </div>
           <p class="hint">Подходит, если собеседник прислал вам свой QR-код или ключ.</p>
+          <div class="scan-qr-row">
+            <button class="scan-qr-btn" @click="triggerScan" :disabled="scanning">
+              <Icon name="camera" :size="15" /> {{ scanning ? 'Сканирую…' : 'Сканировать QR с экрана собеседника' }}
+            </button>
+            <input ref="scanFile" type="file" accept="image/*" capture="environment" style="display:none" @change="onScanFilePicked" />
+          </div>
+          <p class="hint">Наведите камеру на QR-код собеседника (или выберите фото с QR) — ключ добавится автоматически.</p>
         </div>
       </div>
     </div>
@@ -79,6 +87,7 @@
 
 <script>
 import QRCode from 'qrcode';
+import jsQR from 'jsqr';
 import Icon from './Icon.vue';
 
 export default {
@@ -92,12 +101,17 @@ export default {
     myEmail: {
       type: String,
       default: ''
+    },
+    myFingerprint: {
+      type: String,
+      default: ''
     }
   },
   data() {
     return {
       scanInput: '',
-      inviteEmail: ''
+      inviteEmail: '',
+      scanning: false
     };
   },
   computed: {
@@ -167,8 +181,62 @@ export default {
         alert('Ошибка при обработке QR-кода: ' + error.message);
       }
     },
+    triggerScan() {
+      this.scanning = false;
+      const el = this.$refs.scanFile;
+      if (el) { el.value = ''; el.click(); }
+    },
+    async onScanFilePicked(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      this.scanning = true;
+      try {
+        const dataUrl = await this.fileToDataUrl(file);
+        const decoded = await this.decodeQrFromImage(dataUrl);
+        if (!decoded) {
+          alert('QR-код не найден на изображении. Попробуйте ближе/чётче.');
+          return;
+        }
+        this.scanInput = decoded;
+        await this.addScannedKey();
+      } catch (e) {
+        alert('Ошибка сканирования: ' + e.message);
+      } finally {
+        this.scanning = false;
+      }
+    },
+    fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(fr.error || new Error('read failed'));
+        fr.readAsDataURL(file);
+      });
+    },
+    decodeQrFromImage(dataUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            // Ограничим размер — jsQR быстрее на малых изображениях.
+            const maxSide = 800;
+            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(data.data, data.width, data.height, { inversionAttempts: 'dontInvert' });
+            resolve(code ? code.data : null);
+          } catch (e) { reject(e); }
+        };
+        img.onerror = () => reject(new Error('не удалось загрузить изображение'));
+        img.src = dataUrl;
+      });
+    },
     copyMyId() {
-      navigator.clipboard.writeText(this.myEmail);
+      navigator.clipboard.writeText(this.myFingerprint || this.myEmail);
       alert('Ваш ID скопирован — отправьте его собеседнику');
     },
     copyMyKey() {
@@ -399,4 +467,12 @@ export default {
     padding-top: calc(16px + var(--safe-top, 0px));
   }
 }
+.scan-qr-row { margin-top: 12px; }
+.scan-qr-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; background: #0f3460; border: none; border-radius: 6px;
+  color: #fff; cursor: pointer; font-size: 13px;
+}
+.scan-qr-btn:hover { background: #16487f; }
+.scan-qr-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 </style>
