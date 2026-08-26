@@ -45,7 +45,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 /// Opus dynamic payload type (both ends are our app; registered in MediaEngine).
 const OPUS_PAYLOAD_TYPE: u8 = 120;
 /// Max time to wait for ICE gathering before giving up (non-trickle).
-const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(8);
+const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// App-wide media manager: one entry per active call.
 pub struct CallMediaManager {
@@ -99,8 +99,17 @@ impl PeerConnectionEventHandler for CallHandler {
 impl CallMediaManager {
     pub fn new() -> Self {
         // Dev fallback: public STUN (roadmap: dev-only; X2TURN comes in Phase 3).
+        // Множество серверов: stun.l.google.com из РФ может быть недоступен
+        // (замедление/блокировка) → gathering таймаутил на Android. Добавили
+        // запасные публичные STUN, доступные из России (26.08).
         let dev_ice = RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            urls: vec![
+                "stun:stun.l.google.com:19302".to_owned(),
+                "stun:stun1.l.google.com:19302".to_owned(),
+                "stun:stun.sipnet.ru:3478".to_owned(),
+                "stun:stun.2connect.ru:3478".to_owned(),
+                "stun:stun.miwifi.com:3478".to_owned(),
+            ],
             ..Default::default()
         };
         Self {
@@ -239,14 +248,32 @@ impl CallMediaManager {
         pc: &Arc<dyn PeerConnection>,
         gather_rx: &mut Receiver<()>,
     ) -> Result<String, String> {
-        timeout(ICE_GATHER_TIMEOUT, gather_rx.recv())
-            .await
-            .map_err(|_| "ICE gathering timed out".to_string())?;
+        // На Android (26.08) gathering НЕ завершается (Complete не приходит)
+        // за 15с даже с несколькими STUN — Google STUN недоступен из РФ,
+        // российские STUN тоже могут быть нестабильны на мобильном. НО:
+        // host-кандидаты собираются почти сразу (локальная сеть), и для
+        // desktop↔android в одной Wi-Fi их достаточно. Поэтому: ждём
+        // Complete с таймаутом, а на таймауте НЕ падаем — отдаём SDP с тем,
+        // что уже есть. Если кандидатов вообще нет — тогда ошибка.
+        match timeout(ICE_GATHER_TIMEOUT, gather_rx.recv()).await {
+            Ok(_) => {}
+            Err(_) => {
+                eprintln!(
+                    "[media] ICE gathering not Complete in {:.0}s — using partial candidates",
+                    ICE_GATHER_TIMEOUT.as_secs_f64()
+                );
+            }
+        }
         let desc = pc
             .local_description()
             .await
             .ok_or_else(|| "no local description".to_string())?;
-        serde_json::to_string(&desc).map_err(|e| e.to_string())
+        let sdp_json = serde_json::to_string(&desc).map_err(|e| e.to_string())?;
+        // Диагностика (26.08): сколько кандидатов реально в SDP — если 0,
+        // соединение не поднимется даже с partial-подходом.
+        let cand_count = desc.sdp.matches("a=candidate:").count();
+        eprintln!("[media] local SDP: candidates={cand_count}, len={}", sdp_json.len());
+        Ok(sdp_json)
     }
 
     /// Start an outgoing call: build PC + track, create offer, gather ICE,
