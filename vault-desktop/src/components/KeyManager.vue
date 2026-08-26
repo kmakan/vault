@@ -96,8 +96,8 @@
           <div v-if="peerKeys.length === 0" class="empty-state">
             No peer keys stored yet.
           </div>
-          <div v-else class="peer-keys-list">
-            <div v-for="pk in peerKeys" :key="pk.email" class="peer-key-item">
+          <TransitionGroup v-else name="peer-key" tag="div" class="peer-keys-list">
+            <div v-for="pk in peerKeys" :key="pk.email" class="peer-key-item" :class="{ 'peer-key-removing': removingEmail === pk.email }">
               <div class="peer-key-info">
                 <div class="peer-email">{{ pk.email }}</div>
                 <div class="peer-key-hex">{{ pk.public_key.substring(0, 24) }}...</div>
@@ -112,7 +112,7 @@
                 </button>
               </div>
             </div>
-          </div>
+          </TransitionGroup>
         </div>
       </div>
     </div>
@@ -138,6 +138,7 @@ export default {
       publicKey: '',
       fingerprint: '',
       peerKeys: [],
+      removingEmail: null,
       generating: false,
       importData: '',
       importResult: null,
@@ -206,12 +207,18 @@ export default {
     },
     async removePeerKey(email) {
       if (!(await confirm(`Remove peer key for ${email}?`))) return;
+      // Реактивность (26.08): сначала плавно убираем из списка, потом
+      // удаляем в хранилище — иначе элемент дёргается/висит до перезагрузки.
+      this.removingEmail = email;
       try {
+        await new Promise(r => setTimeout(r, 300)); // время на fade-out
         await crypto.removePeerKey(email);
         this.peerKeys = await crypto.loadPeerKeys();
         this.$emit('keys-changed');
       } catch (error) {
         alert('Failed to remove key: ' + error.message);
+      } finally {
+        this.removingEmail = null;
       }
     },
     async confirmDelete() {
@@ -557,5 +564,18 @@ export default {
   font-size: 11px;
   min-width: 16px;
   text-align: right;
+}
+/* Плавное исчезновение при удалении ключа контакта (26.08). */
+.peer-key-removing {
+  opacity: 0 !important;
+  transform: translateX(24px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.peer-key-enter-active, .peer-key-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.peer-key-enter-from, .peer-key-leave-to {
+  opacity: 0;
+  transform: translateX(24px);
 }
 </style>

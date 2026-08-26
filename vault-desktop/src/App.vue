@@ -1394,6 +1394,10 @@ export default {
     },
     async loadStoredPeerKeys() {
       try {
+        // Сбрасываем перед загрузкой: удалённые в Rust ключи должны
+        // пропасть из памяти (реактивно, 26.08).
+        this.peerKeys = {};
+        this.peerKeysLoaded = {};
         const stored = await crypto.loadPeerKeys();
         for (const pk of stored) {
           this.peerKeys[pk.email] = pk.public_key;
