@@ -88,6 +88,7 @@
 <script>
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
+import { scan, Format, cancel, checkPermissions, requestPermissions } from '@tauri-apps/plugin-barcode-scanner';
 import Icon from './Icon.vue';
 
 export default {
@@ -181,10 +182,34 @@ export default {
         alert('Ошибка при обработке QR-кода: ' + error.message);
       }
     },
-    triggerScan() {
-      this.scanning = false;
-      const el = this.$refs.scanFile;
-      if (el) { el.value = ''; el.click(); }
+    // Нативный сканер QR (Android: tauri-plugin-barcode-scanner, Session-like).
+    // Desktop (Linux) — плагин не поддерживается, fallback на input file + jsQR.
+    async triggerScan() {
+      this.scanning = true;
+      // Сначала проверяем, доступен ли нативный плагин (Android).
+      try {
+        const perm = await checkPermissions();
+        if (perm !== 'granted') {
+          const granted = await requestPermissions();
+          if (granted !== 'granted') {
+            alert('Нет разрешения на камеру. Включите в настройках.');
+            this.scanning = false;
+            return;
+          }
+        }
+        // Запускаем нативный сканер (полноэкранный, как в Session).
+        const result = await scan({ windowed: true, formats: [Format.QRCode] });
+        this.scanning = false;
+        if (result && result.content) {
+          this.scanInput = result.content;
+          await this.addScannedKey();
+        }
+      } catch (e) {
+        // Плагин не поддерживается (Linux desktop) — fallback на input file.
+        console.warn('[QR] native scan unavailable, fallback to file:', e);
+        const el = this.$refs.scanFile;
+        if (el) { el.value = ''; el.click(); }
+      }
     },
     async onScanFilePicked(ev) {
       const file = ev.target.files && ev.target.files[0];
@@ -219,7 +244,6 @@ export default {
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            // Ограничим размер — jsQR быстрее на малых изображениях.
             const maxSide = 800;
             const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
             canvas.width = Math.max(1, Math.round(img.width * scale));

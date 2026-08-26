@@ -919,9 +919,14 @@ pub fn run() {
             .parse_filters(&rust_log)
             .try_init();
     }
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    #[cfg(feature = "barcode-scanner")]
+    {
+        builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    }
+    builder
         .manage(CryptoState::default())
         .manage(EmailState::default())
         .manage(tokio::sync::Mutex::new(media::CallMediaManager::new()))

@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capability for the main window","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","notification:default"]}}
+{"android":{"identifier":"android","description":"Android-only capabilities (QR scanner)","local":true,"windows":["main"],"permissions":["barcode-scanner:default"],"platforms":["android"]},"default":{"identifier":"default","description":"Default capability for the main window","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","notification:default"]}}

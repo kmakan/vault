@@ -34,6 +34,7 @@ dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Email transport (serverless IMAP/SMTP)
+tauri-plugin-barcode-scanner = { version = "2", optional = true }
 # imap: вендоренная копия 2.4.1 — патч client.rs:1369 (assert_eq! тегов →
 # ошибка вместо паники; zoho присылает ответы со сдвинутыми тегами, и с
 # panic=abort оригинальный assert убивал приложение при sign-in).
@@ -65,6 +66,7 @@ webkit2gtk = { version = "2", features = ["v2_40"] }
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+barcode-scanner = ["tauri-plugin-barcode-scanner"]
 
 [profile.release]
 strip = true
