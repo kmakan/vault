@@ -176,6 +176,7 @@ pub async fn run_audio_pipeline(
     mut remote_track_rx: webrtc::runtime::Receiver<Arc<dyn TrackRemote>>,
     mut stop_rx: watch::Receiver<bool>,
     muted: Arc<AtomicBool>,
+    media_key: Option<[u8; 32]>,
 ) {
     // ВАЖНО (23.08): rtc вызывает on_track ТОЛЬКО на ПЕРВОМ RTP-пакете пира
     // (rtc-0.20 handler/endpoint.rs: «Fire OnOpen when received the first RTP
@@ -194,7 +195,7 @@ pub async fn run_audio_pipeline(
         }
     };
     let writer = tokio::spawn(write_opus_loop(
-        track.clone(), ssrc, payload_type, opus_rx, stop_rx.clone(),
+        track.clone(), ssrc, payload_type, opus_rx, stop_rx.clone(), media_key,
     ));
 
     // Remote track → speaker (появляется после первого RTP от пира).
@@ -212,7 +213,7 @@ pub async fn run_audio_pipeline(
             _ = stop_rx.changed() => return,
         };
         eprintln!("[audio] remote track received — playing");
-        read_remote_loop(remote_track, pcm_tx, stop_rx).await;
+        read_remote_loop(remote_track, pcm_tx, stop_rx, media_key).await;
     });
 
     // Keep streams alive; the loops exit when the PC is closed.
@@ -226,6 +227,21 @@ pub async fn run_audio_pipeline(
 // ── Mic capture ────────────────────────────────────────────────────────────
 
 fn start_mic_capture(
+    opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    muted: Arc<AtomicBool>,
+) -> Result<cpal::Stream, String> {
+    // panic=abort: cpal на Android может паниковать — ловим (26.08).
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        start_mic_capture_inner(opus_tx, muted)
+    })) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("[audio] panic in mic capture — caught");
+            Err("panic in mic init".into())
+        }
+    }
+}
+fn start_mic_capture_inner(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
@@ -258,11 +274,21 @@ async fn write_opus_loop(
     payload_type: u8,
     mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     mut stop_rx: watch::Receiver<bool>,
+    media_key: Option<[u8; 32]>,
 ) {
     loop {
         tokio::select! {
             frame = rx.recv() => {
                 let Some(frame) = frame else { break };
+                // E2E-шифрование медиа (26.08, как SimpleX): каждый Opus-фрейм
+                // XChaCha20-Poly1305 поверх DTLS-SRTP — defence in depth.
+                let frame = match &media_key {
+                    Some(k) => match crate::crypto::media_encrypt_frame(k, &frame) {
+                        Ok(f) => f,
+                        Err(e) => { eprintln!("[audio] media encrypt: {e}"); continue; }
+                    },
+                    None => frame,
+                };
                 let sample = Sample {
                     data: Bytes::from(frame),
                     timestamp: SystemInstant::now(),
@@ -282,6 +308,18 @@ async fn write_opus_loop(
 // ── Speaker playback ────────────────────────────────────────────────────────
 
 fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
+    // panic=abort: cpal на Android может паниковать — ловим (26.08).
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        start_speaker_inner(pcm_rx)
+    })) {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("[audio] panic in speaker init — caught");
+            Err("panic in speaker init".into())
+        }
+    }
+}
+fn start_speaker_inner(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -309,6 +347,7 @@ async fn read_remote_loop(
     track: Arc<dyn TrackRemote>,
     pcm_tx: Sender<Vec<f32>>,
     mut stop_rx: watch::Receiver<bool>,
+    media_key: Option<[u8; 32]>,
 ) {
     let mut decoder = match Decoder::new(SampleRate::Hz48000, OpusChannels::Mono) {
         Ok(d) => d,
@@ -323,8 +362,16 @@ async fn read_remote_loop(
                 let Some(ev) = ev else { break };
                 match ev {
                     TrackRemoteEvent::OnRtpPacket(pkt) => {
+                        // E2E-расшифровка медиа (26.08): обратная операция.
+                        let payload = match &media_key {
+                            Some(k) => match crate::crypto::media_decrypt_frame(k, &pkt.payload) {
+                                Ok(p) => p,
+                                Err(e) => { eprintln!("[audio] media decrypt: {e}"); continue; }
+                            },
+                            None => pkt.payload.to_vec(),
+                        };
                         let mut out = vec![0f32; DECODE_BUF];
-                        if let Ok(n) = decoder.decode_float(Some(&pkt.payload[..]), &mut out[..], false) {
+                        if let Ok(n) = decoder.decode_float(Some(&payload[..]), &mut out[..], false) {
                             out.truncate(n);
                             // RMS (диагностика шума 23.08): уровень принятого
                             // аудио — каждые 20-й пакет. Если rms > 0.05, это
@@ -382,6 +429,20 @@ macro_rules! build_ringtone {
 }
 
 pub fn ringtone_start() -> Result<(), String> {
+    // panic=abort + cpal на Android может паниковать (AAudio/JNI) — ловим
+    // и возвращаем Err вместо мгновенного убийства процесса (26.08).
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    _ringtone_start_inner()
+    }));
+    match result {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("[ringtone] panic in cpal — caught (panic=abort)");
+            Err("panic in audio init".into())
+        }
+    }
+}
+fn _ringtone_start_inner() -> Result<(), String> {
     let mut guard = RINGTONE.lock().unwrap();
     if guard.is_some() {
         return Ok(()); // уже играет

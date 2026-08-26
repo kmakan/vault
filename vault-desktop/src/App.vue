@@ -4460,7 +4460,7 @@ export default {
             // существует — было причиной «media accept failed: {}».
             if (sig.sdp) {
               try {
-                const r = await api.mediaAcceptIncoming(call_id, sig.sdp);
+                const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '');
                 console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
                 await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
                 console.log('[call] answer sent OK — waiting for DTLS');
@@ -4529,7 +4529,7 @@ export default {
       if (!c) return;
       try {
         console.log('[call] creating media offer...');
-        const r = await api.mediaStartOutgoing(c.call_id);
+        const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
         console.log('[call] offer created,', (r.sdp || '').length, 'bytes, sending');
         await this.sendCallEnvelope(c.peer, { type: 'call_sdp', call_id: c.call_id, sdp: r.sdp, role: 'offer' });
         console.log('[call] offer sent OK');
@@ -4550,7 +4550,7 @@ export default {
       // и шлёт его ВНУТРИ call_accept — на один email-round-trip меньше,
       // ICE-кандидаты не успевают устареть.
       try {
-        const r = await api.mediaStartOutgoing(c.call_id);
+        const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
         console.log('[call] offer (callee) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
         await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id, sdp: r.sdp });
         console.log('[call] call_accept + offer sent OK');

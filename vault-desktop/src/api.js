@@ -1021,11 +1021,11 @@ export class ApiClient {
   // ── Calls (M3, Фаза 2): WebRTC media backend (webrtc-rs) ────────────────
   // startOutgoing → SDP offer (JSON RTCSessionDescription); acceptIncoming →
   // SDP answer; setRemote — вторая половина рукопожатия; close — teardown.
-  async mediaStartOutgoing(callId) {
-    return await invoke('media_start_outgoing', { callId });
+  async mediaStartOutgoing(callId, peerPublicKey) {
+    return await invoke('media_start_outgoing', { callId, peerPublicKey });
   }
-  async mediaAcceptIncoming(callId, offerSdp) {
-    return await invoke('media_accept_incoming', { callId, offerSdp });
+  async mediaAcceptIncoming(callId, offerSdp, peerPublicKey) {
+    return await invoke('media_accept_incoming', { callId, offerSdp, peerPublicKey });
   }
   async mediaSetRemote(callId, sdp) {
     return await invoke('media_set_remote', { callId, sdp });

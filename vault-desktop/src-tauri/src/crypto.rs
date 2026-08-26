@@ -44,7 +44,7 @@ fn derive_key(public_key: &PublicKey) -> [u8; 32] {
 }
 
 #[allow(dead_code)]
-fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u8; 32]> {
+pub fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u8; 32]> {
     let priv_bytes = hex::decode(private_hex)
         .map_err(|e| anyhow::anyhow!("Invalid private key hex: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
@@ -61,6 +61,34 @@ fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u8; 3
 
     let shared = private.diffie_hellman(&peer);
     Ok(*shared.as_bytes())
+}
+
+
+/// Шифрование медиа-фрейма (звонки, defence in depth как SimpleX, но XChaCha20).
+/// Каждый Opus-фрейм шифруется перед отправкой в SRTP — nonce(24) + ciphertext.
+pub fn media_encrypt_frame(key: &[u8], frame: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use chacha20poly1305::XChaCha20Poly1305;
+    let key_arr: [u8; 32] = key.try_into().map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key_arr).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let nonce_bytes: [u8; 24] = rand::random();
+    let ciphertext = cipher.encrypt(&nonce_bytes.into(), frame).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut out = Vec::with_capacity(24 + ciphertext.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Расшифровка медиа-фрейма. На входе: nonce(24) + ciphertext.
+pub fn media_decrypt_frame(key: &[u8], data: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use chacha20poly1305::XChaCha20Poly1305;
+    let key_arr: [u8; 32] = key.try_into().map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
+    let cipher = XChaCha20Poly1305::new_from_slice(&key_arr).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if data.len() < 24 { anyhow::bail!("frame too short"); }
+    let (nonce_bytes, ct) = data.split_at(24);
+    let plain = cipher.decrypt(nonce_bytes.into(), ct).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(plain)
 }
 
 pub fn generate_keypair_cmd() -> KeyPair {

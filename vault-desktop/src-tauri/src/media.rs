@@ -127,6 +127,7 @@ impl CallMediaManager {
     async fn build_pc(
         &mut self,
         call_id: &str,
+        media_key: Option<[u8; 32]>,
     ) -> Result<(Arc<dyn PeerConnection>, Arc<TrackLocalStaticSample>, Receiver<()>), String> {
         let mut media_engine = MediaEngine::default();
         let audio_codec = RTCRtpCodec {
@@ -214,7 +215,7 @@ impl CallMediaManager {
                 }
                 eprintln!("[media] connected — starting audio pipeline");
                 crate::audio::run_audio_pipeline(
-                    track, ssrc, OPUS_PAYLOAD_TYPE, track_rx, stop_rx, muted,
+                    track, ssrc, OPUS_PAYLOAD_TYPE, track_rx, stop_rx, muted, media_key,
                 )
                 .await;
             });
@@ -250,8 +251,8 @@ impl CallMediaManager {
 
     /// Start an outgoing call: build PC + track, create offer, gather ICE,
     /// return the full SDP (JSON).
-    pub async fn start_outgoing(&mut self, call_id: &str) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(call_id).await?;
+    pub async fn start_outgoing(&mut self, call_id: &str, media_key: Option<[u8; 32]>) -> Result<SdpResult, String> {
+        let (pc, _track, mut gather_rx) = self.build_pc(call_id, media_key).await?;
 
         let offer = pc.create_offer(None).await.map_err(|e| e.to_string())?;
         pc.set_local_description(offer).await.map_err(|e| e.to_string())?;
@@ -270,8 +271,9 @@ impl CallMediaManager {
         &mut self,
         call_id: &str,
         offer_sdp: &str,
+        media_key: Option<[u8; 32]>,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(call_id).await?;
+        let (pc, _track, mut gather_rx) = self.build_pc(call_id, media_key).await?;
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
@@ -339,20 +341,37 @@ impl CallMediaManager {
 #[tauri::command]
 pub async fn media_start_outgoing(
     call_id: String,
+    peer_public_key: String,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
-    mgr.start_outgoing(&call_id).await
+    // Вычисляем общий ключ (X25519 DH) для E2E-шифрования медиа.
+    let media_key = match crate::key_store::load_keypair() {
+        Ok(Some(kp)) => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+            Ok(k) => Some(k),
+            Err(e) => { eprintln!("[media] DH failed: {e}"); None }
+        },
+        _ => None,
+    };
+    mgr.start_outgoing(&call_id, media_key).await
 }
 
 #[tauri::command]
 pub async fn media_accept_incoming(
     call_id: String,
     offer_sdp: String,
+    peer_public_key: String,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
-    mgr.accept_incoming(&call_id, &offer_sdp).await
+    let media_key = match crate::key_store::load_keypair() {
+        Ok(Some(kp)) => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+            Ok(k) => Some(k),
+            Err(e) => { eprintln!("[media] DH failed: {e}"); None }
+        },
+        _ => None,
+    };
+    mgr.accept_incoming(&call_id, &offer_sdp, media_key).await
 }
 
 #[tauri::command]
