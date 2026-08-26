@@ -3921,6 +3921,17 @@ export default {
         await crypto.savePeerKey(normalized, publicKeyHex, null);
         this.peerKeys[normalized] = publicKeyHex;
         this.peerKeysLoaded[normalized] = true;
+        // ВЗАИМНОСТЬ (26.08): после QR-сканирования/вставки ключа отправляем
+        // приглашение обратно — иначе у собеседника контакт не появится
+        // (мы сохранили его ключ, а он наш — нет). Как в Delta Chat.
+        if (normalized !== String(this.email || '').toLowerCase()) {
+          try {
+            await api.sendContactInvite(normalized, this.publicKey);
+            console.log('[contact] mutual invite sent to', normalized);
+          } catch (e) {
+            console.warn('[contact] mutual invite failed:', e);
+          }
+        }
         await this.loadContacts(); // список чатов обновится из load_peer_keys
         this.showQRCode = false;
       } catch (error) {

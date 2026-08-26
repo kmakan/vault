@@ -23,7 +23,7 @@
             <div class="key-display">
               <textarea readonly :value="publicKey" rows="2"></textarea>
               <button class="copy-btn" @click="copyToClipboard(publicKey)" :title="t('keys_copy')">
-                {{ copiedField === 'public' ? '✓' : '📋' }}
+                <Icon name="copy" :size="15" /> {{ copiedField === 'public' ? '✓' : '' }}
               </button>
             </div>
           </div>
@@ -104,11 +104,11 @@
                 <div class="peer-meta" v-if="pk.label">Label: {{ pk.label }}</div>
               </div>
               <div class="peer-key-actions">
-                <button @click="copyToClipboard(pk.public_key)" class="icon-btn" title="Copy key">
-                  {{ copiedField === pk.email ? '✓' : '📋' }}
+                <button @click="copyToClipboard(pk.public_key, pk.email)" class="icon-btn" title="Copy key">
+                  <Icon name="copy" :size="15" /> {{ copiedField === pk.email ? '✓' : '' }}
                 </button>
                 <button @click="removePeerKey(pk.email)" class="icon-btn danger" title="Remove">
-                  🗑
+                  <Icon name="trash" :size="15" />
                 </button>
               </div>
             </div>
@@ -225,10 +225,11 @@ export default {
         alert('Failed to delete keys: ' + error.message);
       }
     },
-    async copyToClipboard(text) {
+    async copyToClipboard(text, field) {
       try {
         await navigator.clipboard.writeText(text);
-        if (text === this.publicKey) this.copiedField = 'public';
+        if (field) this.copiedField = field;
+        else if (text === this.publicKey) this.copiedField = 'public';
         else if (Array.isArray(this.recoveryWords) && text === this.recoveryWords.join(' '))
           this.copiedField = 'recovery';
         else this.copiedField = 'other';
