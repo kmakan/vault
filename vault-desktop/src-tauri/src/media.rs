@@ -486,3 +486,18 @@ pub async fn media_ringtone_stop() -> Result<(), String> {
     crate::audio::ringtone_stop();
     Ok(())
 }
+
+/// Звуки звонка (27.08, редизайн): WAV-ассеты через cpal. name:
+/// incoming | outgoing | connect | end | missed. looped=true — крутить
+/// до media_sound_stop (для incoming/outgoing). На Android — no-op
+/// (фронт играет HTML5 Audio из public/sounds).
+#[tauri::command]
+pub async fn media_sound_play(name: String, looped: bool) -> Result<(), String> {
+    crate::audio::sound_play(&name, looped)
+}
+
+#[tauri::command]
+pub async fn media_sound_stop() -> Result<(), String> {
+    crate::audio::sound_stop();
+    Ok(())
+}

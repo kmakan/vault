@@ -913,14 +913,9 @@ export default {
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       _idleStop: false,
-      // ЗВУКОВОЙ СИГНАЛ (22.08, по запросу пользователя): входящий звонок
-      // должен быть слышен, даже если окно свёрнуто/не в фокусе. Web Audio
-      // API: прерывистый тон (гудки), цикл через gain-манипуляцию.
-      ringAudioCtx: null,
-      ringOsc: null,
-      ringGain: null,
-      ringBeepTimer: null,
-      ringBeepOn: false,
+      // ЗВУКИ ЗВОНКА (27.08, редизайн): WAV-ассеты. Desktop — cpal в Rust
+      // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
+      callSoundEl: null,
       // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
       // зависшего в ringing дольше разумного; см. handleCallSignal).
       callStartedAt: 0,
@@ -1120,27 +1115,38 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
-    // Гудок входящего через Web Audio (Android — без cpal, 26.08).
-    playRingtoneWeb() {
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const dur = 0.45, pause = 0.35;
-        const playTone = (start) => {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.value = 440;
-          gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
-          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + dur);
-          osc.connect(gain).connect(ctx.destination);
-          osc.start(ctx.currentTime + start);
-          osc.stop(ctx.currentTime + start + dur);
-        };
-        let t = 0;
-        for (let i = 0; i < 10; i++) { playTone(t); t += dur + pause; }
-        console.log('[call] web ringtone playing');
-      } catch (e) {
-        console.warn('[call] web ringtone failed:', e);
+    // ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора ──
+    // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
+    // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
+    // /sounds/*.wav (cpal там паникует; WebView разрешает autoplay —
+    // wry ставит mediaPlaybackRequiresUserGesture=false).
+    playCallSound(name, looped) {
+      if (this.isAndroid()) {
+        try {
+          this.stopCallSound();
+          const el = new Audio('/sounds/ring_' + name + '.wav');
+          el.loop = !!looped;
+          el.volume = 0.85;
+          el.play().catch(e => console.warn('[call] sound play failed:', e));
+          this.callSoundEl = el;
+          // Одноразовые звуки: освобождаем элемент по окончании.
+          if (!looped) {
+            el.onended = () => { if (this.callSoundEl === el) this.callSoundEl = null; };
+          }
+        } catch (e) {
+          console.warn('[call] sound failed:', e);
+        }
+      } else {
+        api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
+      }
+    },
+    stopCallSound() {
+      if (this.callSoundEl) {
+        try { this.callSoundEl.pause(); } catch (_) {}
+        this.callSoundEl = null;
+      }
+      if (!this.isAndroid()) {
+        api.mediaSoundStop().catch(() => {});
       }
     },
     // Карточка контакта (тап по аватару в шапке)
@@ -4466,21 +4472,10 @@ export default {
           this.callMuted = false;
           this.callStartedAt = Date.now();
           console.log('[call] incoming_ringing SET for', call_id, 'from', from);
-          // Звуковой сигнал входящего (22.08, запрос пользователя): гудки
-          // через cpal в Rust — слышны даже при свёрнутом окне.
-          // Рингтон. НА ANDROID НЕ используем cpal (Rust): AAudio-стрим
-          // паникует/крашит WebView при входящем звонке (panic=abort →
-          // приложение сворачивается). На Android играем гудок через Web
-          // Audio API (JS), на desktop — через cpal (слышен при свёрнутом
-          // окне). (26.08)
-          if (this.isAndroid()) {
-            this.playRingtoneWeb();
-          } else {
-            api.mediaRingtoneStart().then(
-              () => console.log('[call] ringtone started'),
-              e => console.warn('[call] ringtone start failed:', e)
-            );
-          }
+          // Звук входящего (27.08, редизайн): WAV-рингтон «кристальный чайм».
+          // Desktop — cpal в Rust (слышен при свёрнутом окне), Android —
+          // HTML5 Audio (cpal там паникует, 26.08).
+          this.playCallSound('incoming', true);
           this.startFastPolling();
           // Таймер гудка 180с (27.08): было 90с, но call_accept/answer по
           // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
@@ -4493,6 +4488,9 @@ export default {
             // Собеседник принял — таймер отмены больше не нужен.
             clearTimeout(this.callRingTimer);
             this.callRingTimer = null;
+            // Гудки исходящего → чайм соединения (27.08). stop не нужен:
+            // play сам останавливает предыдущий звук (Rust/HTML5).
+            this.playCallSound('connect', false);
             this.callState = 'active';
             this.startCallClock();
             // Фаза 2.3 (схема: offer от принимающего): OFFER приходит ВНУТРИ
@@ -4564,6 +4562,9 @@ export default {
       this.lastCallId = call_id;
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
+      // Гудки исходящего (27.08): тёплый мажорный ringback, цикл до
+      // accept/cancel/timeout.
+      this.playCallSound('outgoing', true);
       this.startFastPolling();
       // Таймер гудка: у ЗВОНЯЩЕГО 300с (27.08: было 180с — email round-trip
       // для call_accept может превысить 180с, и звонок сгорал до ответа;
@@ -4593,10 +4594,11 @@ export default {
     async acceptCall() {
       const c = this.currentCall;
       if (!c || this.callState !== 'incoming_ringing') return;
-      // Ответили — рингтон и таймер отмены в сторону.
+      // Ответили — рингтон и таймер отмены в сторону, чайм соединения (27.08).
+      // stop не нужен: play сам останавливает предыдущий звук.
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
-      api.mediaRingtoneStop().catch(() => {});
+      this.playCallSound('connect', false);
       this.callState = 'active';
       this.startCallClock();
       // Фаза 2.3 (схема: offer от принимающего): OFFER создаёт ПРИНИМАЮЩИЙ
@@ -4637,6 +4639,9 @@ export default {
     async hangup(reason) {
       const c = this.currentCall;
       const callId = c ? c.call_id : null;
+      const wasActive = this.callState === 'active';
+      const wasIncoming = this.callState === 'incoming_ringing';
+      const wasOutgoing = this.callState === 'outgoing_ringing';
       console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
@@ -4646,8 +4651,20 @@ export default {
       this.callMuted = false;
       this.callRecording = false;
       this.stopFastPolling();
-      // Останавливаем рингтон (если играл).
-      api.mediaRingtoneStop().catch(() => {});
+      // Финальный звук (27.08): play сам останавливает предыдущий поток
+      // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
+      // только если звука не будет вовсе.
+      if (wasActive) {
+        this.playCallSound('end', false);
+      } else if (wasIncoming && (reason === 'timeout' || reason === 'reject'
+          || reason === 'cancel' || reason === 'remote' || reason === 'preempt')) {
+        this.playCallSound('missed', false);
+      } else if (wasOutgoing && (reason === 'remote' || reason === 'timeout')) {
+        // Звонящий: собеседник отклонил/отменил или гудки сгорели — отбой.
+        this.playCallSound('end', false);
+      } else {
+        this.stopCallSound();
+      }
       // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
       if (callId) {
         try { await api.mediaClose(callId); } catch (e) { /* ignore */ }

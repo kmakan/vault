@@ -1021,6 +1021,10 @@ pub fn run() {
             // свёрнутым окном; autoplay-политика WebKitGTK не мешает).
             media::media_ringtone_start,
             media::media_ringtone_stop,
+            // Звуки звонка (27.08): WAV-ассеты через cpal (desktop) /
+            // HTML5 Audio (Android, фронт сам).
+            media::media_sound_play,
+            media::media_sound_stop,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

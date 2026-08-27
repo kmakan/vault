@@ -551,36 +551,129 @@ async fn read_remote_loop(
     }
 }
 
-// ── Рингтон входящего звонка (22.08, запрос пользователя) ─────────────────────
-// Desktop: проигрывается через cpal (напрямую из Rust, не webview) — не зависит
-// от autoplay-политики WebKitGTK. Гудки 440 Гц: 0.45с тон / 0.35с пауза.
-// Android (26.08): НЕ используем cpal (AAudio через JNI паникует) — гудок
-// играет фронт через Web Audio (playRingtoneWeb в App.vue), здесь no-op.
+// ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора 440 Гц ─────
+// Desktop: проигрываются через cpal (напрямую из Rust, не webview) — не зависят
+// от autoplay-политики WebKitGTK, слышны при свёрнутом окне. WAV вшиты в бинарь
+// (include_bytes!), ресемплятся под устройство линейной интерполяцией.
+// Android (26.08): cpal НЕ используется (AAudio через JNI паникует) — звуки
+// играет фронт через HTML5 Audio (public/sounds/*.wav), здесь no-op.
+//
+// ring_incoming / ring_outgoing — зацикленные (loop=true), останавливаются
+// ringtone_stop / sound_stop. connect / end / missed — одноразовые.
 
 #[cfg(not(target_os = "android"))]
 static RINGTONE: Mutex<Option<cpal::Stream>> = Mutex::new(None);
 
 #[cfg(not(target_os = "android"))]
-macro_rules! build_ringtone {
-    ($device:expr, $cfg:expr, $fmt:ty) => {{
-        let mut tick: u64 = 0;
-        let mut phase: f64 = 0.0;
-        let sr = $cfg.sample_rate() as f64;
+const SND_INCOMING: &[u8] = include_bytes!("../sounds/ring_incoming.wav");
+#[cfg(not(target_os = "android"))]
+const SND_OUTGOING: &[u8] = include_bytes!("../sounds/ring_outgoing.wav");
+#[cfg(not(target_os = "android"))]
+const SND_CONNECT: &[u8] = include_bytes!("../sounds/ring_connect.wav");
+#[cfg(not(target_os = "android"))]
+const SND_END: &[u8] = include_bytes!("../sounds/ring_end.wav");
+#[cfg(not(target_os = "android"))]
+const SND_MISSED: &[u8] = include_bytes!("../sounds/ring_missed.wav");
+
+/// Минимальный парсер WAV: PCM 16-bit mono (наши ассеты генерируются именно
+/// так). Возвращает (samples_f32, sample_rate).
+#[cfg(not(target_os = "android"))]
+fn parse_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32), String> {
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("not a RIFF/WAVE file".into());
+    }
+    let mut pos = 12usize;
+    let (mut rate, mut bits, mut channels) = (0u32, 0u16, 0u16);
+    let mut data: Option<&[u8]> = None;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let body = pos + 8;
+        if body + size > bytes.len() {
+            break;
+        }
+        if id == b"fmt " {
+            channels = u16::from_le_bytes(bytes[body + 2..body + 4].try_into().unwrap());
+            rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into().unwrap());
+            bits = u16::from_le_bytes(bytes[body + 14..body + 16].try_into().unwrap());
+        } else if id == b"data" {
+            data = Some(&bytes[body..body + size]);
+        }
+        pos = body + size + (size & 1); // чанки выравниваются по 2 байта
+    }
+    let data = data.ok_or("no data chunk")?;
+    if bits != 16 {
+        return Err(format!("unsupported bit depth {bits}"));
+    }
+    let mut samples: Vec<f32> = Vec::with_capacity(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        let v = i16::from_le_bytes([chunk[0], chunk[1]]);
+        samples.push(v as f32 / 32768.0);
+    }
+    // Стерео → моно (наши ассеты моно, но на всякий случай).
+    if channels == 2 {
+        let mut mono = Vec::with_capacity(samples.len() / 2);
+        for pair in samples.chunks_exact(2) {
+            mono.push((pair[0] + pair[1]) * 0.5);
+        }
+        samples = mono;
+    } else if channels != 1 {
+        return Err(format!("unsupported channel count {channels}"));
+    }
+    if rate == 0 {
+        return Err("bad sample rate".into());
+    }
+    Ok((samples, rate))
+}
+
+/// Линейный ресемпл моно f32 из src_rate в dst_rate.
+#[cfg(not(target_os = "android"))]
+fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    if src_rate == dst_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = src_rate as f64 / dst_rate as f64;
+    let out_len = ((samples.len() as f64) / ratio) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let idx = src_pos as usize;
+        let frac = (src_pos - idx as f64) as f32;
+        let a = samples[idx.min(samples.len() - 1)];
+        let b = samples[(idx + 1).min(samples.len() - 1)];
+        out.push(a + (b - a) * frac);
+    }
+    out
+}
+
+#[cfg(not(target_os = "android"))]
+macro_rules! build_sound_stream {
+    ($device:expr, $cfg:expr, $fmt:ty, $pcm:expr, $looped:expr) => {{
+        let pcm: Arc<Vec<f32>> = Arc::new($pcm);
+        let looped = $looped;
+        let mut pos: usize = 0;
         let stream = $device
             .build_output_stream(
                 $cfg.clone().into(),
                 move |data: &mut [$fmt], _| {
+                    let n = pcm.len();
                     for out in data.iter_mut() {
-                        let t = tick as f64 / sr;
-                        let m = t % 0.8;
-                        let amp: f32 = if m < 0.45 { 0.6 } else { 0.0 };
-                        phase += 2.0 * std::f64::consts::PI * 440.0 / sr;
-                        let v = (phase.sin() as f32) * amp;
-                        *out = v.to_sample::<$fmt>();
-                        tick += 1;
+                        let v: f32 = if n == 0 {
+                            0.0
+                        } else if pos < n {
+                            let s = pcm[pos];
+                            pos += 1;
+                            s
+                        } else if looped {
+                            pos = 1;
+                            pcm[0]
+                        } else {
+                            0.0 // одноразовый: тишина после конца
+                        };
+                        *out = (v * 0.9).to_sample::<$fmt>();
                     }
                 },
-                |e| eprintln!("[ringtone] stream error: {e}"),
+                |e| eprintln!("[sound] stream error: {e}"),
                 None,
             )
             .map_err(|e| e.to_string())?;
@@ -590,57 +683,92 @@ macro_rules! build_ringtone {
     }};
 }
 
+/// Общий запуск звука по имени ассета. looped=true — крутить до stop.
 #[cfg(not(target_os = "android"))]
-pub fn ringtone_start() -> Result<(), String> {
+pub fn sound_play(name: &str, looped: bool) -> Result<(), String> {
+    let bytes: &[u8] = match name {
+        "incoming" => SND_INCOMING,
+        "outgoing" => SND_OUTGOING,
+        "connect" => SND_CONNECT,
+        "end" => SND_END,
+        "missed" => SND_MISSED,
+        other => return Err(format!("unknown sound: {other}")),
+    };
     // panic=abort + cpal может паниковать — ловим и возвращаем Err вместо
     // мгновенного убийства процесса (26.08).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        _ringtone_start_inner()
+        _sound_play_inner(bytes, looped)
     }));
     match result {
         Ok(r) => r,
         Err(_) => {
-            eprintln!("[ringtone] panic in cpal — caught (panic=abort)");
+            eprintln!("[sound] panic in cpal — caught (panic=abort)");
             Err("panic in audio init".into())
         }
     }
 }
+
 #[cfg(not(target_os = "android"))]
-fn _ringtone_start_inner() -> Result<(), String> {
-    let mut guard = RINGTONE.lock().unwrap();
-    if guard.is_some() {
-        return Ok(()); // уже играет
+fn _sound_play_inner(bytes: &[u8], looped: bool) -> Result<(), String> {
+    // Останавливаем предыдущий звук (если играл).
+    if let Some(s) = RINGTONE.lock().unwrap().take() {
+        drop(s);
     }
-    drop(guard);
+    let (samples, rate) = parse_wav(bytes)?;
     let host = cpal::default_host();
     let device = host
         .default_output_device()
-        .ok_or_else(|| "No output device for ringtone".to_string())?;
-    eprintln!("[ringtone] device: {}", device.to_string());
+        .ok_or_else(|| "No output device for sound".to_string())?;
     let cfg = device
         .default_output_config()
         .map_err(|e| e.to_string())?;
-    eprintln!("[ringtone] config: {:?} {:?}", cfg.sample_format(), cfg.sample_rate());
+    let device_rate = cfg.sample_rate();
+    let pcm = resample(&samples, rate, device_rate);
+    eprintln!(
+        "[sound] play {} ({} samples @{} -> {}Hz, looped={})",
+        if looped { "loop" } else { "once" },
+        pcm.len(),
+        rate,
+        device_rate,
+        looped
+    );
     match cfg.sample_format() {
-        cpal::SampleFormat::F32 => build_ringtone!(device, cfg, f32),
-        cpal::SampleFormat::I16 => build_ringtone!(device, cfg, i16),
-        cpal::SampleFormat::U16 => build_ringtone!(device, cfg, u16),
-        _ => Err("unsupported sample format for ringtone".into()),
+        cpal::SampleFormat::F32 => build_sound_stream!(device, cfg, f32, pcm, looped),
+        cpal::SampleFormat::I16 => build_sound_stream!(device, cfg, i16, pcm, looped),
+        cpal::SampleFormat::U16 => build_sound_stream!(device, cfg, u16, pcm, looped),
+        cpal::SampleFormat::I32 => build_sound_stream!(device, cfg, i32, pcm, looped),
+        cpal::SampleFormat::F64 => build_sound_stream!(device, cfg, f64, pcm, looped),
+        other => Err(format!("unsupported sample format {other:?}")),
     }
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn ringtone_stop() {
+pub fn sound_stop() {
     if let Some(s) = RINGTONE.lock().unwrap().take() {
         drop(s);
     }
 }
 
-// Android: рингтон играет фронт через Web Audio (не cpal) — no-op заглушки.
+// Совместимость: старый API рингтона = звук incoming (loop).
+#[cfg(not(target_os = "android"))]
+pub fn ringtone_start() -> Result<(), String> {
+    sound_play("incoming", true)
+}
+#[cfg(not(target_os = "android"))]
+pub fn ringtone_stop() {
+    sound_stop();
+}
+
+// Android: звуки играет фронт через HTML5 Audio (не cpal) — no-op заглушки.
+#[cfg(target_os = "android")]
+pub fn sound_play(_name: &str, _looped: bool) -> Result<(), String> {
+    Ok(())
+}
+#[cfg(target_os = "android")]
+pub fn sound_stop() {}
 #[cfg(target_os = "android")]
 pub fn ringtone_start() -> Result<(), String> {
     Ok(())
 }
-
 #[cfg(target_os = "android")]
 pub fn ringtone_stop() {}

@@ -1,5 +1,8 @@
 <template>
   <div class="call-overlay" :class="'call-' + state">
+    <!-- Фоновое свечение (индиго Vault) -->
+    <div class="call-glow" aria-hidden="true"></div>
+
     <!-- Подсказка свайпа для входящего -->
     <div v-if="state === 'incoming_ringing' && !dragging" class="call-swipe-hint">
       <span class="swipe-hint-l">{{ texts.rejectHint }}</span>
@@ -7,14 +10,32 @@
     </div>
 
     <div class="call-panel" :style="panelShiftStyle">
-      <div class="call-avatar">
-        <UserAvatar :email="peer" :avatarUrl="avatarUrl" :size="88" />
+      <!-- Аватар + пульсирующие кольца при дозвоне -->
+      <div class="call-avatar-wrap">
+        <template v-if="state === 'incoming_ringing' || state === 'outgoing_ringing'">
+          <span class="pulse-ring pr-1" :class="state === 'incoming_ringing' ? 'pr-in' : 'pr-out'"></span>
+          <span class="pulse-ring pr-2" :class="state === 'incoming_ringing' ? 'pr-in' : 'pr-out'"></span>
+          <span class="pulse-ring pr-3" :class="state === 'incoming_ringing' ? 'pr-in' : 'pr-out'"></span>
+        </template>
+        <div class="call-avatar" :class="{ 'avatar-active': state === 'active' }">
+          <UserAvatar :email="peer" :avatarUrl="avatarUrl" :size="96" />
+        </div>
       </div>
+
       <div class="call-name">{{ peerName }}</div>
+
       <div class="call-status">
         <template v-if="state === 'incoming_ringing'">{{ texts.incoming }}</template>
         <template v-else-if="state === 'outgoing_ringing'">{{ texts.outgoing }}</template>
-        <template v-else-if="state === 'active'">{{ elapsed }} · 🔒</template>
+        <template v-else-if="state === 'active'">
+          <span class="call-timer">{{ elapsed }}</span>
+          <span class="call-secure"><Icon name="lock" :size="11" color="#4ade80" />&nbsp;E2E</span>
+        </template>
+      </div>
+
+      <!-- Голосовая волна в активном разговоре -->
+      <div v-if="state === 'active'" class="call-wave" aria-hidden="true">
+        <span v-for="i in 5" :key="i" class="wave-bar" :style="{ animationDelay: (i * 0.12) + 's' }"></span>
       </div>
     </div>
 
@@ -109,9 +130,10 @@
 import UserAvatar from './UserAvatar.vue';
 import Icon from './Icon.vue';
 
-// Оверлей звонка (M3, feature/calls). Дизайн в духе Android:
-// золотая трубка (#f59e0b). Свайп ТОЛЬКО при зажатой кнопке на самой трубке:
-// вправо — зеленеет (принять), влево — краснеет (отклонить).
+// Оверлей звонка (M3, feature/calls). Редизайн 27.08: пульсирующие кольца
+// дозвона, glassmorphism, голосовая волна, бейдж E2E — в стиле Vault
+// (индиго #6366f1 + янтарные акценты). Свайп ТОЛЬКО при зажатой кнопке на
+// самой трубке: вправо — зеленеет (принять), влево — краснеет (отклонить).
 // Ход ограничен DRAG_LIMIT; на пределе цвет «залипает» (latched) — это и есть
 // визуальное подтверждение действия, которое отправляется в момент достижения.
 export default {
@@ -197,7 +219,9 @@ export default {
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(10, 10, 20, 0.94);
+  background: radial-gradient(ellipse 90% 55% at 50% 26%, rgba(99, 102, 241, 0.16), transparent 62%),
+              radial-gradient(ellipse 70% 40% at 50% 100%, rgba(245, 158, 11, 0.07), transparent 60%),
+              rgba(8, 8, 18, 0.96);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -206,22 +230,77 @@ export default {
   touch-action: none;
   overflow: hidden;
 }
+.call-glow {
+  position: absolute;
+  top: 12%;
+  left: 50%;
+  width: 420px;
+  height: 420px;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.14), transparent 65%);
+  pointer-events: none;
+  animation: glowbreathe 4s ease-in-out infinite;
+}
+@keyframes glowbreathe {
+  0%, 100% { opacity: 0.7; transform: translateX(-50%) scale(1); }
+  50% { opacity: 1; transform: translateX(-50%) scale(1.08); }
+}
 .call-panel {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
+  padding: 36px 44px 30px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
   transition: transform 0.12s ease-out;
 }
+/* ── Аватар + пульсирующие кольца дозвона ─────────────────────── */
+.call-avatar-wrap {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(99, 102, 241, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  animation: pulsering 2.4s ease-out infinite;
+}
+.pulse-ring.pr-out {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+.pr-2 { animation-delay: 0.8s; }
+.pr-3 { animation-delay: 1.6s; }
+@keyframes pulsering {
+  0% { transform: scale(1); opacity: 0.75; }
+  70% { transform: scale(1.75); opacity: 0; }
+  100% { transform: scale(1.75); opacity: 0; }
+}
 .call-avatar {
-  width: 88px;
-  height: 88px;
+  width: 96px;
+  height: 96px;
   border-radius: 50%;
   background: var(--bg-secondary, #1c1c2e);
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  position: relative;
+  z-index: 1;
+}
+.call-avatar.avatar-active {
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.35), 0 8px 30px rgba(0, 0, 0, 0.45);
 }
 .call-name {
   font-size: 24px;
@@ -232,9 +311,47 @@ export default {
   white-space: nowrap;
 }
 .call-status {
-  opacity: 0.75;
-  min-height: 20px;
+  opacity: 0.8;
+  min-height: 22px;
   font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.call-timer {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+.call-secure {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 999px;
+  padding: 2px 8px;
+  letter-spacing: 0.4px;
+}
+/* ── Голосовая волна (активный разговор) ──────────────────────── */
+.call-wave {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  margin-top: 2px;
+}
+.wave-bar {
+  width: 4px;
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent-secondary, #818cf8), var(--accent-primary, #6366f1));
+  animation: wavebounce 1.1s ease-in-out infinite;
+}
+@keyframes wavebounce {
+  0%, 100% { height: 8px; opacity: 0.55; }
+  50% { height: 24px; opacity: 1; }
 }
 /* ── Нижняя панель ─────────────────────────────────────────────── */
 .call-controls {
@@ -305,31 +422,31 @@ export default {
 .call-orb-gold {
   width: 76px;
   height: 76px;
-  background: #f59e0b;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
   box-shadow: 0 8px 30px rgba(245, 158, 11, 0.45);
   /* transform управляется inline-стилем; transition фона — быстрый */
   transition: background 0.12s ease, box-shadow 0.12s ease;
 }
 .call-orb-gold.drag-accept {
-  background: #22c55e;
+  background: linear-gradient(135deg, #4ade80, #22c55e);
   box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65);
 }
 .call-orb-gold.drag-reject {
-  background: #ef4444;
+  background: linear-gradient(135deg, #f87171, #ef4444);
   box-shadow: 0 8px 34px rgba(239, 68, 68, 0.65);
 }
 /* Решение принято: цвет держится после возврата в центр до конца звонка */
 .decision-accept {
-  background: #22c55e;
+  background: linear-gradient(135deg, #4ade80, #22c55e);
   box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65);
 }
 .decision-reject {
-  background: #ef4444;
+  background: linear-gradient(135deg, #f87171, #ef4444);
   box-shadow: 0 8px 34px rgba(239, 68, 68, 0.65);
 }
 .call-orb-reject,
 .call-orb-end {
-  background: #ef4444;
+  background: linear-gradient(135deg, #f87171, #ef4444);
   box-shadow: 0 8px 28px rgba(239, 68, 68, 0.45);
 }
 .call-orb-reject:hover,
@@ -344,17 +461,21 @@ export default {
 .call-orb-extra {
   width: 58px;
   height: 58px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   box-shadow: none;
   flex-direction: column;
   gap: 4px;
   font-size: 10px;
 }
 .call-orb-extra:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
 }
 .call-orb-extra.orb-active {
-  background: #ef4444;
+  background: linear-gradient(135deg, #f87171, #ef4444);
+  border-color: transparent;
   box-shadow: 0 4px 18px rgba(239, 68, 68, 0.5);
 }
 .orb-label {

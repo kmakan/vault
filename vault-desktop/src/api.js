@@ -1046,6 +1046,14 @@ export class ApiClient {
   async mediaRingtoneStop() {
     return await invoke('media_ringtone_stop');
   }
+  // Звуки звонка (27.08): WAV-ассеты. name: incoming|outgoing|connect|end|missed.
+  // Desktop — cpal (Rust), Android — no-op (фронт играет HTML5 Audio сам).
+  async mediaSoundPlay(name, looped) {
+    return await invoke('media_sound_play', { name, looped });
+  }
+  async mediaSoundStop() {
+    return await invoke('media_sound_stop');
+  }
 
   async fetchEmailBody(accountId, uid, folder) {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
