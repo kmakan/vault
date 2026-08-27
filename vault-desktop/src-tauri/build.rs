@@ -10,6 +10,10 @@ fn main() {
     // ВАЖНО: build.rs компилируется для ХОСТА, поэтому #[cfg(target_os =
     // "android")] здесь НИКОГДА не срабатывает — таргет берём из env TARGET.
     let target = std::env::var("TARGET").unwrap_or_default();
+    // Перезапускать build-скрипт при смене NDK-путей (28.08): без этого
+    // cargo кэширует вывод с пустым путём и линковка c++_static падает.
+    println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
+    println!("cargo:rerun-if-env-changed=NDK_HOME");
     match target.as_str() {
         "aarch64-linux-android" | "armv7-linux-androideabi" | "i686-linux-android" | "x86_64-linux-android" => {
             let ndk = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();

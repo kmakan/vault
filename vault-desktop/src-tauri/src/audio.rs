@@ -17,7 +17,7 @@
 //! общие, меняется только захват/воспроизведение.
 
 #[cfg(target_os = "android")]
-mod audio_android;
+pub(crate) mod audio_android;
 
 use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
