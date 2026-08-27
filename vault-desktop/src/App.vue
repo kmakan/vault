@@ -294,7 +294,7 @@
             v-for="msg in filteredMessages"
             :key="msg.id"
             :data-msg-id="msg.id"
-            :class="['message', { own: msg.from === 'me', 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
+            :class="['message', { own: msg.from === 'me', 'call-event': !!msg.callEvent, 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
             :draggable="activeChat === '__notes__'"
             @dragstart="onNoteDragStart($event, msg)"
             @dragover="onNoteDragOver($event, msg)"
@@ -304,6 +304,17 @@
             @click.stop="toggleReactionPicker(msg.id)"
             @contextmenu.prevent="openMessageMenu($event, msg)"
           >
+            <!-- Звонки (27.08): «пилюля» пропущенного/завершённого вызова —
+                 центрированная, в стиле Telegram. Текст только через t(). -->
+            <div v-if="msg.callEvent" class="call-pill" :class="'call-pill--' + msg.callEvent.kind">
+              <Icon :name="callPillIcon(msg)" :size="13" color="currentColor" />
+              <span class="call-pill-label">{{ callEventLabel(msg) }}</span>
+              <span class="call-pill-time">{{ msg.time }}</span>
+              <button v-if="canCallBack(msg)" class="call-back-btn" :title="t('call_back')" @click.stop="callBack()">
+                <Icon name="phone" :size="12" color="currentColor" />{{ t('call_back') }}
+              </button>
+            </div>
+            <template v-else>
             <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
             <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
               <UserAvatar :email="senderEmail(msg.sender_id)" :avatarUrl="avatarOf(senderEmail(msg.sender_id))" :size="26" />
@@ -379,6 +390,7 @@
             >
               <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
             </div>
+            </template>
           </div>
         </div>
 
@@ -910,6 +922,7 @@ export default {
       callClockSec: 0,
       callClockTimer: null,
       callRingTimer: null,
+      callResendTimer: null,
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       _idleStop: false,
@@ -1195,9 +1208,11 @@ export default {
     callPeerName() {
       const c = this.currentCall;
       if (!c) return '';
-      const lp = this.localProfileOf(c.peer);
-      const contact = this.contacts.find(x => x.email === c.peer);
-      return (lp && lp.name) || (contact && contact.name) || c.peer;
+      // nameOf() — единый резолвер имени (localProfile → свежий профиль →
+      // email). Раньше здесь был contact.name — сырое поле из БД контактов,
+      // оно НЕ обновляется при смене профиля собеседником, и оверлей звонка
+      // показывал устаревшее имя, хотя список контактов — новое.
+      return this.nameOf(c.peer);
     },
     filteredMessages() {
       if (!this.chatSearchQuery) return this.messages;
@@ -1972,6 +1987,9 @@ export default {
           // хотя при свежем фетче появлялся («аватарки то есть, то нет»).
           sender_id: m.sender_id || undefined,
           attachment: m.attachment || undefined,
+          // Пилюли звонков (27.08): без этого поля из кэша пропадают
+          // «Пропущенный звонок» и т.п.
+          callEvent: m.callEvent || undefined,
         }));
         db.kvSet(this.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
       } catch (e) { /* quota — не критично */ }
@@ -2836,7 +2854,7 @@ export default {
         // Локальная история (IndexedDB) — полный архив чата.
         this.saveCurrentHistory(chat);
         // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
-        const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
+        const incoming = this.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
         this.sendReadReceipts(incoming);
         return;
       }
@@ -3108,7 +3126,7 @@ export default {
           // Локальная история (IndexedDB) — полный архив группы.
           this.saveCurrentHistory(chat);
           // Открыли группу — шлём участникам квитанции «просмотрено» по входящим.
-          const incoming = this.messages.filter(m => m.from === 'them' && m.id).map(m => m.id);
+          const incoming = this.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
           this.sendReadReceipts(incoming);
         } else {
           // No group key — show as-is (unencrypted)
@@ -4215,9 +4233,13 @@ export default {
               // Смена почты (24.08): письмо могло прийти со старого адреса
               // контакта (алиаса) — чат ведём по каноническому (показываемому).
               chatKey = this.canonicalOf(from) || from;
-              const lp = this.localProfileOf(from);
-              const contact = this.contacts.find(c => c.email === from);
-              title = (lp && lp.name) || (contact && contact.name) || from;
+              // Имя для заголовка: локальное переопределение пользователя →
+              // свежее из профиля письма (env.name) → nameOf(). НЕ contact.name —
+              // это устаревшее поле БД контактов.
+              {
+                const lpn = this.localProfileOf(from);
+                title = (lpn && lpn.name) || env.name || this.nameOf(from);
+              }
               // Профиль отправителя (25.08): имя/аватар/«О себе» — сохраняем
               // СРАЗУ при поллинге, не дожидаясь открытия чата.
               if (env.type === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
@@ -4440,7 +4462,15 @@ export default {
       // минут неактуальны — игнорируем (и запоминаем call_id).
       if (sig.ts && Date.now() - sig.ts > 600000) {
         console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
+        const alreadySeen = await this.isCallSeen(call_id);
         await this.rememberCallSeen(call_id);
+        // Пропущенные вызовы (27.08): звонок пришёл, пока нас не было
+        // (офлайн/перезапуск) — записываем «Пропущенный звонок» в историю
+        // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
+        // иначе повторный фетч Спада после рестарта плодил дубли пилюль.
+        if (type === 'call_request' && !alreadySeen) {
+          await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
+        }
         return;
       }
       // ДЕДУП (22.08): call_id уже обработанного звонка (персист в kv
@@ -4454,6 +4484,9 @@ export default {
       if (this.callState !== 'idle' && this.currentCall
           && this.currentCall.call_id !== call_id && type === 'call_request') {
         await this.sendCallEnvelope(from, { type: 'call_reject', call_id });
+        // Пропущенные вызовы (27.08): мы говорили по другому звонку —
+        // фиксируем пропущенный в истории чата с этим собеседником.
+        await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
         return;
       }
       switch (type) {
@@ -4488,6 +4521,10 @@ export default {
             // Собеседник принял — таймер отмены больше не нужен.
             clearTimeout(this.callRingTimer);
             this.callRingTimer = null;
+            if (this.callResendTimer) {
+              clearInterval(this.callResendTimer);
+              this.callResendTimer = null;
+            }
             // Гудки исходящего → чайм соединения (27.08). stop не нужен:
             // play сам останавливает предыдущий звук (Rust/HTML5).
             this.playCallSound('connect', false);
@@ -4518,7 +4555,9 @@ export default {
           // (state=idle) до того, как call_end дошёл — проверяем и по
           // lastCallId, чтобы не оставить трубку у собеседника.
           if (this.currentCall && this.currentCall.call_id === call_id) {
-            this.hangup('remote');
+            // remote_reject (27.08) — отдельно от remote: звонящий увидит
+            // «Вызов отклонён», а не «Нет ответа».
+            this.hangup(type === 'call_reject' ? 'remote_reject' : 'remote');
           } else if (this.lastCallId === call_id && this.callState === 'idle') {
             console.log('[call] remote end after local hangup — ensuring cleanup');
             this.hangup('remote_late');
@@ -4575,7 +4614,27 @@ export default {
       } catch (e) {
         console.error('call_request failed:', e);
         this.hangup('error');
+        return;
       }
+      // РЕТРАНСЛЯЦИЯ (27.08): email-сигнал может потеряться в транзите
+      // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
+      // 27.08: call_request пропал, call_cancel через минуту дошёл).
+      // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
+      // call_id (isCallSeen), дубликаты безопасны. Останавливается в hangup.
+      this.callResendTimer = setInterval(async () => {
+        if (this.callState !== 'outgoing_ringing' || !this.currentCall
+            || this.currentCall.call_id !== call_id) {
+          clearInterval(this.callResendTimer);
+          this.callResendTimer = null;
+          return;
+        }
+        try {
+          await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
+          console.log('[call] call_request retransmitted', call_id);
+        } catch (e) {
+          console.warn('[call] call_request retransmit failed:', e && e.message || e);
+        }
+      }, 15000);
     },
     // Фаза 2: после получения call_accept — поднимаем медиа (webrtc-rs).
     async startMediaOffer() {
@@ -4643,8 +4702,34 @@ export default {
       const wasIncoming = this.callState === 'incoming_ringing';
       const wasOutgoing = this.callState === 'outgoing_ringing';
       console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
+      // Пропущенные вызовы (27.08): фиксируем исход звонка в истории чата
+      // «пилюлей» (Пропущенный звонок / Нет ответа / Звонок завершён · 03:24).
+      // fire-and-forget: hangup не ждёт sqlite.
+      if (c && callId) {
+        const dur = wasActive ? this.callClockSec : 0;
+        let kind = null;
+        if (wasActive) {
+          kind = 'ended';
+        } else if (wasIncoming) {
+          if (reason === 'reject') kind = 'declined';
+          else if (reason === 'timeout' || reason === 'remote'
+              || reason === 'remote_late' || reason === 'preempt') kind = 'missed';
+        } else if (wasOutgoing) {
+          if (reason === 'timeout') kind = 'no_answer';
+          else if (reason === 'remote_reject') kind = 'declined';
+          // call_cancel от собеседника = у него сгорел таймер гудка → нет ответа.
+          else if (reason === 'remote' || reason === 'remote_late') kind = 'no_answer';
+          else if (reason === 'cancel') kind = 'canceled';
+        }
+        if (kind) this.recordCallEvent(c.peer, kind, Date.now(), dur, callId);
+      }
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
+      // Ретрансляция call_request (27.08) — тоже останавливаем.
+      if (this.callResendTimer) {
+        clearInterval(this.callResendTimer);
+        this.callResendTimer = null;
+      }
       this.stopCallClock();
       this.callState = 'idle';
       this.currentCall = null;
@@ -4669,6 +4754,86 @@ export default {
       if (callId) {
         try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
       }
+    },
+    // ── Пропущенные вызовы (27.08) ──
+    // Исход звонка фиксируется «пилюлей» в истории чата (как в Telegram):
+    // пропущенный/нет ответа/отклонён/завершён + время + кнопка «Перезвонить».
+    // Пилюля — обычное сообщение с полем callEvent; персистится в sqlite
+    // вместе с историей (saveCurrentHistory) и в chat-cache (slim-маппер
+    // сохраняет callEvent). Текст рендерится через t() — язык из настроек.
+    async recordCallEvent(peer, kind, ts, durationSec, callId) {
+      if (!peer || !callId) return;
+      const chatKey = this.canonicalOf(peer) || peer;
+      const tsNum = Number(ts) || Date.now();
+      const msg = {
+        id: 'call-' + callId,
+        content: '',
+        from: 'them',
+        time: new Date(tsNum).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        ts: tsNum,
+        encrypted: true,
+        vault: true,
+        callEvent: { kind, duration: Number(durationSec) || 0, call_id: callId },
+      };
+      // Дедуп: один call_id — одна пилюля (повторный фетч/ретрансляция).
+      const exists = (this.messages || []).some(m => m && m.id === msg.id);
+      if (!exists && this.activeChat === chatKey && this.activeChatType === 'chat') {
+        this.messages.push(msg);
+        this.messages.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+        this.saveCurrentHistory(chatKey);
+        this.saveChatCache(chatKey, this.messages);
+        this.scrollToBottom(true);
+      } else if (!exists) {
+        // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,
+        // чтобы она появилась при следующем открытии чата.
+        try {
+          const hist = await loadHistory(this.email, chatKey);
+          if (Array.isArray(hist) && !hist.some(m => m && m.id === msg.id)) {
+            hist.push(msg);
+            hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
+            await saveHistory(this.email, chatKey, hist);
+          }
+        } catch (e) { /* sqlite недоступен — не критично */ }
+      }
+      // Бейдж непрочитанных: пропущенный входящий — как непрочитанное
+      // сообщение, если чат сейчас не виден.
+      if (kind === 'missed' && !this.chatVisible(chatKey)) {
+        this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
+        await this.saveUnreadCounts();
+      }
+    },
+    callEventLabel(msg) {
+      const ev = msg && msg.callEvent;
+      if (!ev) return '';
+      const key = {
+        missed: 'call_missed',
+        no_answer: 'call_no_answer',
+        declined: 'call_declined',
+        canceled: 'call_canceled',
+        ended: 'call_ended',
+      }[ev.kind] || 'call_missed';
+      let label = this.t(key);
+      if (ev.kind === 'ended' && ev.duration > 0) {
+        const m = Math.floor(ev.duration / 60);
+        const s = ev.duration % 60;
+        label += ' · ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      }
+      return label;
+    },
+    callPillIcon(msg) {
+      const kind = msg && msg.callEvent && msg.callEvent.kind;
+      if (kind === 'ended') return 'phone';
+      return 'phone-off';
+    },
+    canCallBack(msg) {
+      // Перезвонить можно, если звонок не активен и у собеседника есть ключ.
+      return !!(msg && msg.callEvent && this.expCalls
+          && this.callState === 'idle'
+          && this.activeChatType === 'chat'
+          && this.peerKeys[this.activeChat]);
+    },
+    callBack() {
+      this.startCall();
     },
     async cancelCall(reason) {
       const c = this.currentCall;
@@ -5513,6 +5678,9 @@ export default {
       })();
     },
     toggleReactionPicker(msgId) {
+      // Пилюли звонков (27.08) — не сообщения: реакции на них не нужны.
+      const m = (this.messages || []).find(x => x && x.id === msgId);
+      if (m && m.callEvent) return;
       // Если пользователь выделял текст (копирование) — клик не должен
       // открывать пикер реакций.
       try {
@@ -5587,6 +5755,8 @@ export default {
       if (phoneEl) { e.preventDefault(); this.copyText(phoneEl.dataset.phone); }
     },
     openMessageMenu(event, msg) {
+      // Пилюли звонков (27.08) — не сообщения: контекстное меню не нужно.
+      if (msg && msg.callEvent) return;
       const content = msg.content || '';
       const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
       const phones = [...content.matchAll(PHONE_RE)]
@@ -7954,6 +8124,69 @@ body {
 .message-status-dot.sent { background: #eab308; }
 .message-status-dot.delivered { background: #22c55e; }
 .message-status-dot.read { background: #3b82f6; }
+
+/* ── Звонки (27.08): «пилюля» исхода звонка в истории чата ──
+   Центрированная, полупрозрачная, в общей стилистике Vault (тёмные темы).
+   Пропущенный/нет ответа/отклонён — красный акцент; завершён — нейтральный. */
+.message.call-event {
+  max-width: 100%;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin: 6px 0;
+}
+.call-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-secondary, #8b949e);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  box-shadow: var(--shadow-sm);
+  user-select: none;
+}
+.call-pill--missed,
+.call-pill--no_answer,
+.call-pill--declined {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.08);
+}
+.call-pill--canceled {
+  color: var(--text-secondary, #8b949e);
+}
+.call-pill--ended {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.22);
+  background: rgba(74, 222, 128, 0.07);
+}
+.call-pill-label { font-weight: 500; }
+.call-pill-time {
+  opacity: 0.75;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.call-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 2px 9px;
+  border: none;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-primary, #6366f1), #4f46e5);
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.call-back-btn:hover { filter: brightness(1.12); }
+.call-back-btn:active { transform: scale(0.96); }
 
 /* Typing indicator */
 .typing-indicator {
