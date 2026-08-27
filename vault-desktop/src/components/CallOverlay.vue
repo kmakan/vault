@@ -155,6 +155,11 @@ export default {
       dragging: false,
       startX: null,
       dx: 0,
+      // Флик-детект (27.08): быстрый свайп должен принимать звонок так же,
+      // как полное дотягивание. Трекинг скорости в px/ms со сглаживанием.
+      lastX: 0,
+      lastT: 0,
+      velocity: 0,
       decision: null, // 'accept' | 'reject' | null — принятое решение (цвет держится)
     };
   },
@@ -187,18 +192,33 @@ export default {
       this.dragging = false;
       this.startX = null;
       this.dx = 0;
+      this.lastX = 0;
+      this.lastT = 0;
+      this.velocity = 0;
     },
     onDragStart(e) {
       if (this.state !== 'incoming_ringing') return;
       if (this.decision) return; // решение уже принято
       this.dragging = true;
       this.startX = e.clientX - this.dx;
+      this.lastX = e.clientX;
+      this.lastT = performance.now();
+      this.velocity = 0;
       try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
     },
     onDragMove(e) {
       if (!this.dragging || this.decision) return;
       const prevX = this.orbX;
       this.dx = e.clientX - this.startX;
+      // Скорость свайпа (px/ms), экспоненциальное сглаживание.
+      const now = performance.now();
+      const dt = now - this.lastT;
+      if (dt > 0) {
+        const v = (e.clientX - this.lastX) / dt;
+        this.velocity = this.velocity * 0.4 + v * 0.6;
+        this.lastX = e.clientX;
+        this.lastT = now;
+      }
       // Достигли предела → фиксируем решение и ОТПРАВЛЯЕМ его один раз.
       if (prevX > -this.LATCH_AT && prevX < this.LATCH_AT) {
         if (this.orbX >= this.LATCH_AT) { this.decision = 'accept'; this.$emit('accept'); }
@@ -206,6 +226,19 @@ export default {
       }
     },
     onDragEnd() {
+      // Флик (27.08): быстрый короткий свайп тоже принимает/отклоняет звонок.
+      // Пороги: скорость ≥ 0.55 px/ms И смещение ≥ 30px в нужную сторону.
+      // Без этого пользователь обязан дотянуть трубку до упора — неочевидно.
+      if (!this.decision && this.state === 'incoming_ringing') {
+        const FLICK_V = 0.55, FLICK_DX = 30;
+        if (this.velocity >= FLICK_V && this.dx >= FLICK_DX) {
+          this.decision = 'accept';
+          this.$emit('accept');
+        } else if (this.velocity <= -FLICK_V && this.dx <= -FLICK_DX) {
+          this.decision = 'reject';
+          this.$emit('reject');
+        }
+      }
       // Отпускание: трубка возвращается в центр, но цвет решения держится
       // до конца звонка (сброс — при смене state из родителя).
       this.reset();
