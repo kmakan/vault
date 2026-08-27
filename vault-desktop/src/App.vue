@@ -1128,40 +1128,6 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
-    // ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора ──
-    // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
-    // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
-    // /sounds/*.wav (cpal там паникует; WebView разрешает autoplay —
-    // wry ставит mediaPlaybackRequiresUserGesture=false).
-    playCallSound(name, looped) {
-      if (this.isAndroid()) {
-        try {
-          this.stopCallSound();
-          const el = new Audio('/sounds/ring_' + name + '.wav');
-          el.loop = !!looped;
-          el.volume = 0.85;
-          el.play().catch(e => console.warn('[call] sound play failed:', e));
-          this.callSoundEl = el;
-          // Одноразовые звуки: освобождаем элемент по окончании.
-          if (!looped) {
-            el.onended = () => { if (this.callSoundEl === el) this.callSoundEl = null; };
-          }
-        } catch (e) {
-          console.warn('[call] sound failed:', e);
-        }
-      } else {
-        api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
-      }
-    },
-    stopCallSound() {
-      if (this.callSoundEl) {
-        try { this.callSoundEl.pause(); } catch (_) {}
-        this.callSoundEl = null;
-      }
-      if (!this.isAndroid()) {
-        api.mediaSoundStop().catch(() => {});
-      }
-    },
     // Карточка контакта (тап по аватару в шапке)
     contactCardBio() {
       if (!this.contactCardEmail) return '';
@@ -1389,6 +1355,54 @@ export default {
     this.stopPolling()
   },
   methods: {
+    // ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора ──
+    // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
+    // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
+    // /sounds/*.wav (cpal там паникует; WebView разрешает autoplay —
+    // wry ставит mediaPlaybackRequiresUserGesture=false).
+    //
+    // КРИТИЧНО (27.08, корень бага «call_accept не ушёл»): эти функции
+    // ДОЛЖНЫ быть в methods, НЕ в computed. В computed Vue 3 превращает
+    // их в геттеры: this.playCallSound(...) вызывает тело БЕЗ аргументов,
+    // и this.isAndroid() бросает TypeError (computed возвращает false,
+    // false() — не функция). Синхронный бросок рвал acceptCall ДО
+    // отправки call_accept, incoming_ringing — ДО рингтона и таймера,
+    // startCall — ДО гудков и ретрансляции. Плюс: функция НИКОГДА не
+    // должна бросать — звук вторичен, сигнализация звонка важнее.
+    playCallSound(name, looped) {
+      try {
+        if (this.isAndroid) {
+          this.stopCallSound();
+          const el = new Audio('/sounds/ring_' + name + '.wav');
+          el.loop = !!looped;
+          el.volume = 0.85;
+          el.play().catch(e => console.warn('[call] sound play failed:', e));
+          this.callSoundEl = el;
+          // Одноразовые звуки: освобождаем элемент по окончании.
+          if (!looped) {
+            el.onended = () => { if (this.callSoundEl === el) this.callSoundEl = null; };
+          }
+        } else {
+          api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
+        }
+      } catch (e) {
+        // Звук не критичен — глотаем, чтобы не рвать state machine звонка.
+        console.warn('[call] sound failed:', e && e.message || e);
+      }
+    },
+    stopCallSound() {
+      try {
+        if (this.callSoundEl) {
+          try { this.callSoundEl.pause(); } catch (_) {}
+          this.callSoundEl = null;
+        }
+        if (!this.isAndroid) {
+          api.mediaSoundStop().catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[call] sound stop failed:', e && e.message || e);
+      }
+    },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
     openMobileChat() {
       if (this.isMobile) this.mobileChatOpen = true;
