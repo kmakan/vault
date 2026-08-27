@@ -1,0 +1,182 @@
+//! Нативный аудио-путь Android (27.08): Oboe/AAudio вместо cpal — как SimpleX.
+//!
+//! cpal на Android идёт через JNI (JavaVM/AAudio через Java) — паникует при
+//! старте аудио (panic=abort → приложение «сворачивается»). Oboe — чистый
+//! C++ через NDK, без JNI: тот же механизм, что у SimpleX (libwebrtc → Oboe).
+//!
+//! Микрофон: Oboe-колбэк (высокоприоритетный аудио-поток) → 20мс-фреймы →
+//! Opus encode → канал на writer (в точности как cpal-макрос build_mic,
+//! но без JNI). Динамик: декодированные PCM-чанки → Oboe-колбэк (cpal
+//! build_speaker). Формат end-to-end — 48кГц моно f32 (как у Opus).
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+
+use audiopus::coder::Encoder;
+use audiopus::{Application, Channels as OpusChannels, SampleRate as OpusRate};
+// ВАЖНО: НЕ `use oboe::*` — oboe экспортирует свой `Result` (type alias
+// `Result<T> = Result<T, Error>`), который затенял бы std::result::Result
+// и ломал сигнатуры с `Result<_, String>`.
+use oboe::{
+    AudioInputCallback, AudioInputStreamSafe, AudioOutputCallback, AudioOutputStreamSafe,
+    AudioStream, AudioStreamAsync, AudioStreamBase, AudioStreamBuilder, AudioStreamSafe,
+    DataCallbackResult, Error, Input, InputPreset, Mono, Output, PerformanceMode, Usage,
+};
+
+use super::{FRAME_SAMPLES, ResamplerIn, ResamplerOut};
+
+/// Oboe-микрофон: тип стрима, который держим до конца звонка (drop = close).
+pub(crate) type MicStream = AudioStreamAsync<Input, MicCallback>;
+/// Oboe-динамик.
+pub(crate) type SpeakerStream = AudioStreamAsync<Output, SpeakerCallback>;
+
+/// Микрофонный колбэк: кадры устройства → 20мс фреймы → Opus → канал.
+pub(crate) struct MicCallback {
+    opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    muted: Arc<AtomicBool>,
+    encoder: Encoder,
+    buf: Vec<f32>,
+    resampler: ResamplerIn,
+    frame_cnt: u32,
+}
+
+impl AudioInputCallback for MicCallback {
+    type FrameType = (f32, Mono);
+
+    fn on_audio_ready(
+        &mut self,
+        _stream: &mut dyn AudioInputStreamSafe,
+        data: &[f32],
+    ) -> DataCallbackResult {
+        if !self.muted.load(Ordering::Relaxed) {
+            for &s in data {
+                if self.resampler.push() {
+                    self.buf.push(s);
+                    if self.buf.len() >= FRAME_SAMPLES {
+                        let frame: Vec<f32> = self.buf.drain(..FRAME_SAMPLES).collect();
+                        // RMS микрофона (диагностика): реальный уровень захвата.
+                        self.frame_cnt += 1;
+                        if self.frame_cnt % 20 == 0 {
+                            let rms: f32 = (frame.iter().map(|s| s * s).sum::<f32>()
+                                / frame.len() as f32)
+                                .sqrt();
+                            eprintln!("[audio] oboe mic rms={rms:.4}");
+                        }
+                        let mut out = [0u8; 4000];
+                        if let Ok(n) = self.encoder.encode_float(&frame, &mut out) {
+                            let _ = self.opus_tx.try_send(out[..n].to_vec());
+                        }
+                    }
+                }
+            }
+        }
+        DataCallbackResult::Continue
+    }
+
+    fn on_error_before_close(
+        &mut self,
+        _stream: &mut dyn AudioInputStreamSafe,
+        error: Error,
+    ) {
+        eprintln!("[audio] oboe mic error: {error}");
+    }
+}
+
+/// Динамик: PCM-чанки из канала → буфер → Oboe-колбэк.
+pub(crate) struct SpeakerCallback {
+    pcm_rx: Receiver<Vec<f32>>,
+    pending: Vec<f32>,
+    resampler: ResamplerOut,
+    last: f32,
+}
+
+impl AudioOutputCallback for SpeakerCallback {
+    type FrameType = (f32, Mono);
+
+    fn on_audio_ready(
+        &mut self,
+        _stream: &mut dyn AudioOutputStreamSafe,
+        data: &mut [f32],
+    ) -> DataCallbackResult {
+        for out in data.iter_mut() {
+            if self.resampler.tick() {
+                if self.pending.is_empty() {
+                    if let Ok(chunk) = self.pcm_rx.try_recv() {
+                        self.pending = chunk;
+                    }
+                }
+                if !self.pending.is_empty() {
+                    self.last = self.pending.remove(0);
+                }
+            }
+            *out = self.last;
+        }
+        DataCallbackResult::Continue
+    }
+
+    fn on_error_before_close(
+        &mut self,
+        _stream: &mut dyn AudioOutputStreamSafe,
+        error: Error,
+    ) {
+        eprintln!("[audio] oboe speaker error: {error}");
+    }
+}
+
+/// Открыть Oboe-микрофон: 48кГц моно f32, LowLatency, VoiceCommunication.
+/// Возвращает стрим — держим до конца звонка, drop = close (остановка).
+pub(crate) fn start_mic_capture_oboe(
+    opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    muted: Arc<AtomicBool>,
+) -> Result<MicStream, String> {
+    let encoder = Encoder::new(OpusRate::Hz48000, OpusChannels::Mono, Application::Voip)
+        .map_err(|e| format!("opus encoder: {e}"))?;
+    let cb = MicCallback {
+        opus_tx,
+        muted,
+        encoder,
+        buf: Vec::with_capacity(FRAME_SAMPLES * 2),
+        resampler: ResamplerIn::new(48000, 48000),
+        frame_cnt: 0,
+    };
+    let mut stream = AudioStreamBuilder::default()
+        .set_input()
+        .set_mono()
+        .set_f32()
+        .set_sample_rate(48000)
+        .set_performance_mode(PerformanceMode::LowLatency)
+        .set_input_preset(InputPreset::VoiceCommunication)
+        .set_callback(cb)
+        .open_stream()
+        .map_err(|e| format!("oboe input open: {e}"))?;
+    stream.request_start().map_err(|e| format!("oboe input start: {e}"))?;
+    let rate = stream.get_sample_rate();
+    let api = stream.get_audio_api();
+    eprintln!("[audio] oboe mic open: {rate} Hz, api={api:?}");
+    Ok(stream)
+}
+
+/// Открыть Oboe-динамик: 48кГц моно f32, LowLatency, VoiceCommunication.
+pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerStream, String> {
+    let cb = SpeakerCallback {
+        pcm_rx,
+        pending: Vec::new(),
+        resampler: ResamplerOut::new(48000, 48000),
+        last: 0.0,
+    };
+    let mut stream = AudioStreamBuilder::default()
+        .set_output()
+        .set_mono()
+        .set_f32()
+        .set_sample_rate(48000)
+        .set_performance_mode(PerformanceMode::LowLatency)
+        .set_usage(Usage::VoiceCommunication)
+        .set_callback(cb)
+        .open_stream()
+        .map_err(|e| format!("oboe output open: {e}"))?;
+    stream.request_start().map_err(|e| format!("oboe output start: {e}"))?;
+    let rate = stream.get_sample_rate();
+    eprintln!("[audio] oboe speaker open: {rate} Hz");
+    Ok(stream)
+}

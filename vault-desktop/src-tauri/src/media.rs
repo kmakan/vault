@@ -102,14 +102,19 @@ impl CallMediaManager {
         // Множество серверов: stun.l.google.com из РФ может быть недоступен
         // (замедление/блокировка) → gathering таймаутил на Android. Добавили
         // запасные публичные STUN, доступные из России (26.08).
+        // STUN для host/srflx + TURN (openrelay.metered.ca) как fallback для
+        // NAT/VPN: amnezia на desktop ломает srflx-кандидаты (STUN уходит в
+        // туннель warp) → ICE не мог соединиться даже в одной Wi-Fi. TURN
+        // релеит медиа через публичный сервер, обходя NAT/VPN (27.08).
         let dev_ice = RTCIceServer {
             urls: vec![
                 "stun:stun.l.google.com:19302".to_owned(),
                 "stun:stun1.l.google.com:19302".to_owned(),
-                "stun:stun.sipnet.ru:3478".to_owned(),
-                "stun:stun.2connect.ru:3478".to_owned(),
-                "stun:stun.miwifi.com:3478".to_owned(),
+                "turn:openrelay.metered.ca:443?transport=tcp".to_owned(),
+                "turn:openrelay.metered.ca:443?transport=udp".to_owned(),
             ],
+            username: "openrelayproject".to_owned(),
+            credential: "openrelayproject".to_owned(),
             ..Default::default()
         };
         Self {

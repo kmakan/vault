@@ -10,16 +10,34 @@
 //! Devices are opened with their DEFAULT config; conversion to 48kHz mono
 //! (encode side) / from 48kHz mono (play side) happens in the callbacks with
 //! a linear resampler when the device rate differs.
+//!
+//! Platform audio I/O (27.08): desktop — cpal; Android — oboe/AAudio
+//! (`audio_android`), т.к. cpal на Android идёт через JNI и паникует при
+//! старте (panic=abort → приложение сворачивается). Opus/шифрование/RTP —
+//! общие, меняется только захват/воспроизведение.
 
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "android")]
+mod audio_android;
+
+use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+#[cfg(not(target_os = "android"))]
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
-use audiopus::coder::{Decoder, Encoder};
-use audiopus::{Application, Channels as OpusChannels, SampleRate};
+use audiopus::coder::Decoder;
+#[cfg(not(target_os = "android"))]
+use audiopus::coder::Encoder;
+use audiopus::{Channels as OpusChannels, SampleRate};
+#[cfg(not(target_os = "android"))]
+use audiopus::Application;
 use bytes::Bytes;
+#[cfg(not(target_os = "android"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(not(target_os = "android"))]
 use cpal::Sample as _;
 use tokio::sync::watch;
 
@@ -30,13 +48,14 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 
 /// 20ms frame @ 48kHz mono — the Opus frame size we use end-to-end.
-const FRAME_SAMPLES: usize = 960;
+pub(crate) const FRAME_SAMPLES: usize = 960;
 const FRAME_DURATION: Duration = Duration::from_millis(20);
 /// Max opus frame buffer (120ms @48k mono = 5760 samples).
 const DECODE_BUF: usize = 5760;
 
 /// Mic stream for a concrete sample format: device samples → mono f32 →
 /// resample → 20ms frames → Opus encode (float) → channel to the writer.
+#[cfg(not(target_os = "android"))]
 macro_rules! build_mic {
     ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $opus_tx:expr, $muted:expr, $fmt:ty) => {{
         let mut encoder =
@@ -88,6 +107,7 @@ macro_rules! build_mic {
 /// Speaker stream for a concrete sample format: fills the device buffer from
 /// decoded PCM chunks (48kHz mono), resampling to the device rate; silence
 /// when no data yet.
+#[cfg(not(target_os = "android"))]
 macro_rules! build_speaker {
     ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $pcm_rx:expr, $fmt:ty) => {{
         let mut pending: Vec<f32> = Vec::new();
@@ -123,13 +143,13 @@ macro_rules! build_speaker {
 
 /// Input resampler (device rate → 48kHz): emits the current input sample
 /// every `to/from` inputs.
-struct ResamplerIn {
+pub(crate) struct ResamplerIn {
     step: f64,
     pos: f64,
 }
 
 impl ResamplerIn {
-    fn new(from: u32, to: u32) -> Self {
+    pub(crate) fn new(from: u32, to: u32) -> Self {
         Self { step: to as f64 / from as f64, pos: 0.0 }
     }
     /// Returns true when this input should be emitted (kept as output).
@@ -146,13 +166,13 @@ impl ResamplerIn {
 
 /// Output resampler (48kHz → device rate): tells the callback when an output
 /// slot consumes a NEW input sample (otherwise repeats the last one).
-struct ResamplerOut {
+pub(crate) struct ResamplerOut {
     step: f64,
     pos: f64,
 }
 
 impl ResamplerOut {
-    fn new(from: u32, to: u32) -> Self {
+    pub(crate) fn new(from: u32, to: u32) -> Self {
         Self { step: from as f64 / to as f64, pos: 1.0 }
     }
     fn tick(&mut self) -> bool {
@@ -226,11 +246,39 @@ pub async fn run_audio_pipeline(
 
 // ── Mic capture ────────────────────────────────────────────────────────────
 
+/// Живой дескриптор аудио-устройства: держим до конца звонка, drop = stop.
+/// Desktop — cpal::Stream, Android — oboe AudioStreamAsync (drop = close).
+enum AudioStreamHandle {
+    #[cfg(not(target_os = "android"))]
+    Cpal(cpal::Stream),
+    #[cfg(target_os = "android")]
+    OboeInput(audio_android::MicStream),
+    #[cfg(target_os = "android")]
+    OboeOutput(audio_android::SpeakerStream),
+}
+
+#[cfg(not(target_os = "android"))]
 fn start_mic_capture(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
+) -> Result<AudioStreamHandle, String> {
+    start_mic_capture_cpal(opus_tx, muted).map(AudioStreamHandle::Cpal)
+}
+
+#[cfg(target_os = "android")]
+fn start_mic_capture(
+    opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    muted: Arc<AtomicBool>,
+) -> Result<AudioStreamHandle, String> {
+    audio_android::start_mic_capture_oboe(opus_tx, muted).map(AudioStreamHandle::OboeInput)
+}
+
+#[cfg(not(target_os = "android"))]
+fn start_mic_capture_cpal(
+    opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    muted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
-    // panic=abort: cpal на Android может паниковать — ловим (26.08).
+    // panic=abort: cpal может паниковать — ловим (26.08).
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         start_mic_capture_inner(opus_tx, muted)
     })) {
@@ -241,6 +289,7 @@ fn start_mic_capture(
         }
     }
 }
+#[cfg(not(target_os = "android"))]
 fn start_mic_capture_inner(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
@@ -307,8 +356,19 @@ async fn write_opus_loop(
 
 // ── Speaker playback ────────────────────────────────────────────────────────
 
-fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
-    // panic=abort: cpal на Android может паниковать — ловим (26.08).
+#[cfg(not(target_os = "android"))]
+fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<AudioStreamHandle, String> {
+    start_speaker_cpal(pcm_rx).map(AudioStreamHandle::Cpal)
+}
+
+#[cfg(target_os = "android")]
+fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<AudioStreamHandle, String> {
+    audio_android::start_speaker_oboe(pcm_rx).map(AudioStreamHandle::OboeOutput)
+}
+
+#[cfg(not(target_os = "android"))]
+fn start_speaker_cpal(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
+    // panic=abort: cpal может паниковать — ловим (26.08).
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         start_speaker_inner(pcm_rx)
     })) {
@@ -319,6 +379,7 @@ fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
         }
     }
 }
+#[cfg(not(target_os = "android"))]
 fn start_speaker_inner(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
@@ -395,10 +456,15 @@ async fn read_remote_loop(
 }
 
 // ── Рингтон входящего звонка (22.08, запрос пользователя) ─────────────────────
-// Проигрывается через cpal (напрямую из Rust, не webview) — не зависит от
-// autoplay-политики WebKitGTK. Гудки 440 Гц: 0.45с тон / 0.35с пауза.
+// Desktop: проигрывается через cpal (напрямую из Rust, не webview) — не зависит
+// от autoplay-политики WebKitGTK. Гудки 440 Гц: 0.45с тон / 0.35с пауза.
+// Android (26.08): НЕ используем cpal (AAudio через JNI паникует) — гудок
+// играет фронт через Web Audio (playRingtoneWeb в App.vue), здесь no-op.
+
+#[cfg(not(target_os = "android"))]
 static RINGTONE: Mutex<Option<cpal::Stream>> = Mutex::new(None);
 
+#[cfg(not(target_os = "android"))]
 macro_rules! build_ringtone {
     ($device:expr, $cfg:expr, $fmt:ty) => {{
         let mut tick: u64 = 0;
@@ -428,11 +494,12 @@ macro_rules! build_ringtone {
     }};
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn ringtone_start() -> Result<(), String> {
-    // panic=abort + cpal на Android может паниковать (AAudio/JNI) — ловим
-    // и возвращаем Err вместо мгновенного убийства процесса (26.08).
+    // panic=abort + cpal может паниковать — ловим и возвращаем Err вместо
+    // мгновенного убийства процесса (26.08).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    _ringtone_start_inner()
+        _ringtone_start_inner()
     }));
     match result {
         Ok(r) => r,
@@ -442,6 +509,7 @@ pub fn ringtone_start() -> Result<(), String> {
         }
     }
 }
+#[cfg(not(target_os = "android"))]
 fn _ringtone_start_inner() -> Result<(), String> {
     let mut guard = RINGTONE.lock().unwrap();
     if guard.is_some() {
@@ -465,8 +533,18 @@ fn _ringtone_start_inner() -> Result<(), String> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn ringtone_stop() {
     if let Some(s) = RINGTONE.lock().unwrap().take() {
         drop(s);
     }
 }
+
+// Android: рингтон играет фронт через Web Audio (не cpal) — no-op заглушки.
+#[cfg(target_os = "android")]
+pub fn ringtone_start() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+pub fn ringtone_stop() {}

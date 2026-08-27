@@ -64,6 +64,13 @@ audiopus = "0.2"
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 webkit2gtk = { version = "2", features = ["v2_40"] }
 
+# Android (27.08): нативный аудио-путь SimpleX — Oboe/AAudio вместо cpal.
+# cpal на Android идёт через JNI/Java (AAudio через JavaVM) — паникует при
+# старте аудио (panic=abort → приложение «сворачивается»). oboe-rs дёргает
+# C++ Oboe напрямую через NDK — без JNI, как у SimpleX (libwebrtc → Oboe).
+[target.'cfg(target_os = "android")'.dependencies]
+oboe = "0.6"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
