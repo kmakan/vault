@@ -45,7 +45,11 @@ use rtc::rtp_transceiver::rtp_sender::{
 /// Opus dynamic payload type (both ends are our app; registered in MediaEngine).
 const OPUS_PAYLOAD_TYPE: u8 = 120;
 /// Max time to wait for ICE gathering before giving up (non-trickle).
-const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(15);
+/// 4с (27.08): было 15с — ответ (SDP) создавался слишком долго, звонок
+/// успевал сгореть по таймеру гудка. Host-кандидаты собираются <1с;
+/// STUN/srflx за 4с успевают, иначе отдаём то, что есть (wait_for_local_sdp
+/// на таймауте не падает, а отдаёт частичные кандидаты).
+const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// App-wide media manager: one entry per active call.
 pub struct CallMediaManager {
@@ -102,19 +106,16 @@ impl CallMediaManager {
         // Множество серверов: stun.l.google.com из РФ может быть недоступен
         // (замедление/блокировка) → gathering таймаутил на Android. Добавили
         // запасные публичные STUN, доступные из России (26.08).
-        // STUN для host/srflx + TURN (openrelay.metered.ca) как fallback для
-        // NAT/VPN: amnezia на desktop ломает srflx-кандидаты (STUN уходит в
-        // туннель warp) → ICE не мог соединиться даже в одной Wi-Fi. TURN
-        // релеит медиа через публичный сервер, обходя NAT/VPN (27.08).
+        // STUN для host/srflx. TURN (openrelay.metered.ca) убран (27.08):
+        // отдаёт 400 Bad Request на все allocate → 15с ожидания gathering и
+        // шум в логах. Для desktop↔desktop в одной сети host-кандидатов
+        // достаточно; TURN вернём, когда поднимем свой (coturn, как у
+        // SimpleX turn.simplex.im:443).
         let dev_ice = RTCIceServer {
             urls: vec![
                 "stun:stun.l.google.com:19302".to_owned(),
                 "stun:stun1.l.google.com:19302".to_owned(),
-                "turn:openrelay.metered.ca:443?transport=tcp".to_owned(),
-                "turn:openrelay.metered.ca:443?transport=udp".to_owned(),
             ],
-            username: "openrelayproject".to_owned(),
-            credential: "openrelayproject".to_owned(),
             ..Default::default()
         };
         Self {

@@ -4565,8 +4565,10 @@ export default {
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
       this.startFastPolling();
-      // Таймер гудка 180с (27.08): было 90с — не хватало на почтовый round-trip.
-      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 180000);
+      // Таймер гудка: у ЗВОНЯЩЕГО 300с (27.08: было 180с — email round-trip
+      // для call_accept может превысить 180с, и звонок сгорал до ответа;
+      // окончательно решает call_reject/call_cancel от собеседника).
+      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 300000);
       try {
         await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
       } catch (e) {
@@ -4654,21 +4656,21 @@ export default {
     async cancelCall(reason) {
       const c = this.currentCall;
       // ЗАЩИТА ОТ УСТАРЕВШЕГО ТАЙМЕРА (27.08): таймер гудка (ringing)
-      // взводится на 90с, но call_accept по почте может дойти ПОЗЖЕ (SMTP с
-      // Android + доставка + IMAP-фетч ≈ 90-120с). Если к моменту срабатывания
-      // таймера звонок УЖЕ стал active — это устаревший тик: НЕ рвём живой
-      // звонок (иначе «сигнал дошёл и десктоп сразу отключился»).
+      // может сработать ПОЗЖЕ, чем call_accept дошёл по почте (SMTP с
+      // Android + доставка + IMAP ≈ 90-180с). Если звонок уже active —
+      // это устаревший тик: НЕ рвём живой звонок.
       if (reason === 'timeout' && this.callState === 'active') {
         console.warn('[call] stale ring timeout ignored — call is active');
         return;
       }
-      // Отмена/таймаут — ОБЯЗАТЕЛЬНО сообщаем собеседнику (call_cancel при
-      // ringing, call_end при active), чтобы у него трубка легла сама
-      // (требование пользователя: как во всех мессенджерах).
+      // Отмена/таймаут — сообщаем собеседнику (call_cancel при ringing,
+      // call_end при active), чтобы у него трубка легла сама.
+      // ВАЖНО: fire-and-forget (НЕ await!) — между await-отправкой и
+      // hangup есть окно гонки: обработка call_accept успевает сменить
+      // state на active, и hangup рвёт живой звонок (27.08).
       if (c) {
         const type = this.callState === 'active' ? 'call_end' : 'call_cancel';
-        try { await this.sendCallEnvelope(c.peer, { type, call_id: c.call_id }); }
-        catch (e) { /* ignore */ }
+        this.sendCallEnvelope(c.peer, { type, call_id: c.call_id }).catch(() => {});
       }
       this.hangup(reason || 'cancel');
     },
