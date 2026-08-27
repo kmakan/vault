@@ -493,11 +493,47 @@ pub async fn media_ringtone_stop() -> Result<(), String> {
 /// (фронт играет HTML5 Audio из public/sounds).
 #[tauri::command]
 pub async fn media_sound_play(name: String, looped: bool) -> Result<(), String> {
-    crate::audio::sound_play(&name, looped)
+    // cpal может НАМЕРТВО зависнуть на enum/конфиге аудио-устройства
+    // (глючный Bluetooth: default_output_device() блокирует поток). Раньше
+    // это выполнялось прямо в async-команде на tokio-воркере → воркер
+    // занимался навсегда, и следующий invoke (email_send с call_request)
+    // не получал воркера — сигнал звонка не отправлялся (баг 27.08:
+    // call_request не долетал до Gmail, call_cancel при hangup проходил).
+    // Решение: cpal — в blocking-пул tokio (отдельные потоки, не воркеры)
+    // + таймаут 3с, чтобы зависший cpal не блокировал рантайм.
+    match timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(move || crate::audio::sound_play(&name, looped)),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(format!("sound task join failed: {e}")),
+        Err(_) => {
+            eprintln!("[sound] play timed out (cpal hung on audio device) — continuing without ringtone");
+            Err("sound play timed out (audio device hung)".into())
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn media_sound_stop() -> Result<(), String> {
-    crate::audio::sound_stop();
-    Ok(())
+    // Аналогично: sound_stop дропает cpal::Stream, что тоже может
+    // заблокироваться на больном устройстве — в blocking-пул + таймаут.
+    match timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(|| crate::audio::sound_stop()),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            eprintln!("[sound] stop task join failed: {e} — continuing");
+            Ok(())
+        }
+        Err(_) => {
+            eprintln!("[sound] stop timed out (cpal hung) — continuing");
+            Ok(()) // остановка звука не критична — не роняем вызов
+        }
+    }
 }

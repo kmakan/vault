@@ -4607,14 +4607,17 @@ export default {
       this.lastCallId = call_id;
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
-      // Гудки исходящего (27.08): тёплый мажорный ringback, цикл до
-      // accept/cancel/timeout.
-      this.playCallSound('outgoing', true);
       this.startFastPolling();
       // Таймер гудка: у ЗВОНЯЩЕГО 300с (27.08: было 180с — email round-trip
       // для call_accept может превысить 180с, и звонок сгорал до ответа;
       // окончательно решает call_reject/call_cancel от собеседника).
       this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 300000);
+      // ВАЖНО (27.08): сигнал call_request отправляем ДО гудков. cpal-гудок
+      // может зависнуть на enum аудио-устройства (глючный Bluetooth) и
+      // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
+      // уходил (наблюдали 27.08: call_request не долетал до Gmail, а
+      // call_cancel при hangup проходил). Сначала сигнал, потом звук
+      // (запустится на ~1с позже — некритично).
       try {
         await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
       } catch (e) {
@@ -4622,6 +4625,9 @@ export default {
         this.hangup('error');
         return;
       }
+      // Гудки исходящего (27.08): тёплый мажорный ringback, цикл до
+      // accept/cancel/timeout. Запускаем ПОСЛЕ успешной отправки сигнала.
+      this.playCallSound('outgoing', true);
       // РЕТРАНСЛЯЦИЯ (27.08): email-сигнал может потеряться в транзите
       // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
       // 27.08: call_request пропал, call_cancel через минуту дошёл).
