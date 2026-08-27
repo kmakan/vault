@@ -28,13 +28,20 @@
         <template v-if="state === 'incoming_ringing'">{{ texts.incoming }}</template>
         <template v-else-if="state === 'outgoing_ringing'">{{ texts.outgoing }}</template>
         <template v-else-if="state === 'active'">
-          <span class="call-timer">{{ elapsed }}</span>
-          <span class="call-secure"><Icon name="lock" :size="11" color="#4ade80" />&nbsp;E2E</span>
+          <!-- 27.08: таймер — только когда реально пошёл звук (событие
+               call-media-connected из Rust). До этого — «Соединение…»:
+               SDP идёт по почте до минуты, и пользователь раньше видел
+               работающий таймер при полной тишине. -->
+          <template v-if="mediaConnected">
+            <span class="call-timer">{{ elapsed }}</span>
+            <span class="call-secure"><Icon name="lock" :size="11" color="#4ade80" />&nbsp;E2E</span>
+          </template>
+          <span v-else class="call-connecting">{{ texts.connecting }}</span>
         </template>
       </div>
 
-      <!-- Голосовая волна в активном разговоре -->
-      <div v-if="state === 'active'" class="call-wave" aria-hidden="true">
+      <!-- Голосовая волна в активном разговоре (только когда звук идёт) -->
+      <div v-if="state === 'active' && mediaConnected" class="call-wave" aria-hidden="true">
         <span v-for="i in 5" :key="i" class="wave-bar" :style="{ animationDelay: (i * 0.12) + 's' }"></span>
       </div>
     </div>
@@ -75,31 +82,39 @@
         </div>
       </template>
 
-      <!-- Исходящий: золотая трубка (отмена) — как у входящего, единый стиль -->
+      <!-- Исходящий (28.08): КРАСНАЯ пилюля отмены с обычной трубкой —
+           как у активного звонка, единый стиль. Раньше была жёлтая
+           кнопка с перечёркнутой трубкой (phone-off) — пользователь
+           просил убрать перечёркивание. -->
       <template v-else-if="state === 'outgoing_ringing'">
         <div class="call-control-row">
-          <button class="call-orb call-orb-gold" :title="texts.cancel" @click="$emit('cancel')">
-            <Icon name="phone-off" :size="26" color="#ffffff" />
+          <button class="call-end-pill" :title="texts.cancel" @click="$emit('cancel')">
+            <Icon name="phone" :size="26" />
           </button>
         </div>
         <div class="call-waiting-hint">{{ texts.outgoing }}</div>
       </template>
 
-      <!-- Активный: зелёная трубка (принято) + завершить + доп. кнопки.
-           23.08 фикс: раньше трубка-слайдер исчезала и на её месте появлялась
-           красная кнопка «Завершить» — пользователь путал её с «отклонённой»
-           трубкой и рвал звонок. Теперь трубка остаётся ЗЕЛЁНОЙ (индикатор
-           принятия), красная кнопка завершения — отдельно справа. -->
+      <!-- Активный (27.08, редизайн): ОДИН ряд — микрофон | большая красная
+           «завершить» | динамик. Раньше были зелёная трубка-индикатор +
+           красная + нижний ряд mute/record — пользователь жаловался на
+           «некрасивые кнопки» и отсутствие динамика. Запись убрана из
+           оверлея (не реализована в пайплайне). -->
       <template v-else-if="state === 'active'">
-        <div class="call-control-row call-main-row">
-          <button class="call-orb decision-accept" :title="texts.accepted" disabled>
-            <Icon name="phone" :size="26" color="#ffffff" />
-          </button>
-          <button class="call-orb call-orb-end" :title="texts.end" @click="$emit('end')">
-            <Icon name="phone-off" :size="26" />
-          </button>
-        </div>
-        <div class="call-control-row call-extra-row">
+        <!-- Соединение (28.08): статус «Соединение…» показывается ТЕКСТОМ
+             сверху (call-status), поэтому отдельная зелёная трубка не нужна —
+             она только дублировала и путала («зачем зелёная кнопка над
+             красной?»). Оставляем одну красную пилюлю завершения. -->
+        <template v-if="!mediaConnected">
+          <div class="call-control-row">
+            <button class="call-end-pill" :title="texts.end" @click="$emit('end')">
+              <Icon name="phone" :size="22" />
+            </button>
+          </div>
+        </template>
+        <!-- Разговор установлен (27.08, редизайн): ОДИН ряд — микрофон |
+             красная «пилюля» завершения | динамик. -->
+        <div v-else class="call-control-row call-active-row">
           <button
             class="call-orb call-orb-extra"
             :class="{ 'orb-active': muted }"
@@ -107,16 +122,17 @@
             @click="$emit('toggle-mute')"
           >
             <Icon :name="muted ? 'mic-off' : 'mic'" :size="22" />
-            <span class="orb-label">{{ muted ? texts.unmute : texts.mute }}</span>
+          </button>
+          <button class="call-end-pill" :title="texts.end" @click="$emit('end')">
+            <Icon name="phone" :size="26" />
           </button>
           <button
             class="call-orb call-orb-extra"
-            :class="{ 'orb-active': recording }"
-            :title="recording ? texts.stopRecord : texts.startRecord"
-            @click="$emit('toggle-record')"
+            :class="{ 'orb-active': speaker }"
+            :title="texts.speaker"
+            @click="$emit('toggle-speaker')"
           >
-            <Icon name="record" :size="22" />
-            <span class="orb-label">{{ recording ? texts.stopRecord : texts.startRecord }}</span>
+            <Icon name="volume" :size="22" />
           </button>
         </div>
       </template>
@@ -145,11 +161,13 @@ export default {
     peerName: { type: String, default: '' },
     avatarUrl: { type: String, default: '' },
     muted: { type: Boolean, default: false },
-    recording: { type: Boolean, default: false },
+    speaker: { type: Boolean, default: false },
+    // Реально ли пошёл звук (событие call-media-connected из Rust, 27.08).
+    mediaConnected: { type: Boolean, default: false },
     elapsed: { type: String, default: '00:00' },
     texts: { type: Object, default: () => ({}) },
   },
-  emits: ['accept', 'reject', 'cancel', 'end', 'toggle-mute', 'toggle-record'],
+  emits: ['accept', 'reject', 'cancel', 'end', 'toggle-mute', 'toggle-speaker'],
   data() {
     return {
       dragging: false,
@@ -165,7 +183,10 @@ export default {
   },
   computed: {
     DRAG_LIMIT() { return 110; }, // полный ход трубки, px
-    LATCH_AT() { return this.DRAG_LIMIT; }, // предел = заливка цвета + действие
+    // Лёгкий свайп (28.08): latch на 70px вместо 110 — не нужно тянуть до
+    // упора. Пользователь жаловался «тяну в зелёную сторону, зеленеет,
+    // но возвращается в центр» — не дотягивал 110px.
+    LATCH_AT() { return 70; },
     orbX() {
       if (!this.dragging) return 0;
       return Math.max(-this.DRAG_LIMIT, Math.min(this.DRAG_LIMIT, this.dx));
@@ -183,8 +204,13 @@ export default {
   },
   watch: {
     state(s) {
-      // Смена состояния (в т.ч. уход с incoming) — сброс драга.
+      // Смена состояния (в т.ч. уход с incoming) — сброс драга И решения.
+      // ВАЖНО (28.08): decision тоже сбрасываем — иначе после первого
+      // принятого звонка decision='accept' остаётся навсегда, и при
+      // следующем входящем onDragStart сразу делает return («решение уже
+      // принято») → свайп не работает (жалоба «свайп не принял звонок»).
       this.reset();
+      this.decision = null;
     },
   },
   methods: {
@@ -226,17 +252,22 @@ export default {
       }
     },
     onDragEnd() {
-      // Флик (27.08): быстрый короткий свайп тоже принимает/отклоняет звонок.
-      // Пороги: скорость ≥ 0.55 px/ms И смещение ≥ 30px в нужную сторону.
-      // Без этого пользователь обязан дотянуть трубку до упора — неочевидно.
+      // Флик (27.08, облегчён 28.08): быстрый короткий свайп тоже
+      // принимает/отклоняет звонок. Пороги снижены: скорость ≥ 0.35 px/ms
+      // И смещение ≥ 20px (было 0.55/30 — обычный свайп не проходил).
       if (!this.decision && this.state === 'incoming_ringing') {
-        const FLICK_V = 0.55, FLICK_DX = 30;
+        const FLICK_V = 0.35, FLICK_DX = 20;
+        console.log('[call] swipe end: dx=' + Math.round(this.dx) + ' v=' + this.velocity.toFixed(2));
         if (this.velocity >= FLICK_V && this.dx >= FLICK_DX) {
           this.decision = 'accept';
+          console.log('[call] swipe ACCEPT (flick)');
           this.$emit('accept');
         } else if (this.velocity <= -FLICK_V && this.dx <= -FLICK_DX) {
           this.decision = 'reject';
+          console.log('[call] swipe REJECT (flick)');
           this.$emit('reject');
+        } else {
+          console.log('[call] swipe NO-OP (below thresholds)');
         }
       }
       // Отпускание: трубка возвращается в центр, но цвет решения держится
@@ -515,6 +546,49 @@ export default {
   font-size: 10px;
   opacity: 0.9;
   line-height: 1;
+}
+/* ── Активный разговор (редизайн 27.08) ───────────────────────── */
+.call-active-row {
+  gap: 32px;
+}
+/* Красная «пилюля» завершения (28.08): широкая капсула в стиле iOS/Telegram
+   вместо уродливого круга. Глубокий спокойный красный #e5484d (28.08:
+   был #ef4444 — слишком кричащий), мягкая тень, hover — чуть темнее.
+   Иконка: обычная трубка БЕЗ перечёркивания — красный цвет сам говорит
+   «завершить» (перечёркнутая трубка выглядела как «отклонить»). */
+.call-end-pill {
+  width: 72px;
+  height: 56px;
+  border-radius: 28px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: #e5484d;
+  box-shadow: 0 6px 24px rgba(229, 72, 77, 0.38);
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.call-end-pill:hover {
+  background: #d63b40;
+  box-shadow: 0 6px 28px rgba(229, 72, 77, 0.52);
+}
+.call-end-pill:active {
+  transform: scale(0.94);
+}
+.call-orb-small {
+  width: 58px;
+  height: 58px;
+}
+.call-connecting {
+  font-size: 14px;
+  opacity: 0.75;
+  animation: connectpulse 1.4s ease-in-out infinite;
+}
+@keyframes connectpulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.95; }
 }
 /* ── Подсказка свайпа ──────────────────────────────────────────── */
 .call-swipe-hint {

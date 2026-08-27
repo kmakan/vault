@@ -121,6 +121,38 @@
         </div>
       </div>
 
+      <!-- ЗВОНКИ (27.08): рингтон входящего, сигнал ожидания, превью -->
+      <div v-if="activeCategory === 'calls'" class="settings-section">
+        <h2>{{ t('settings_calls') }}</h2>
+        <div class="setting-group">
+          <label>{{ t('calls_ringtone_incoming') }}</label>
+          <div class="ringtone-row">
+            <select v-model="ringtoneIncoming" @change="saveRingtoneIncoming" class="media-quality-select">
+              <option value="incoming">{{ t('calls_ring_vault') }}</option>
+              <option value="incoming_classic">{{ t('calls_ring_classic') }}</option>
+              <option value="incoming_pulse">{{ t('calls_ring_pulse') }}</option>
+            </select>
+            <button class="btn btn-secondary ringtone-preview" @click="previewSound(ringtoneIncoming, true)" :title="t('calls_preview')">
+              <Icon name="volume" :size="16" />
+            </button>
+          </div>
+        </div>
+        <div class="setting-group">
+          <label>{{ t('calls_ringtone_outgoing') }}</label>
+          <div class="ringtone-row">
+            <select v-model="ringtoneOutgoing" @change="saveRingtoneOutgoing" class="media-quality-select">
+              <option value="outgoing">{{ t('calls_ring_vault') }}</option>
+              <option value="outgoing_classic">{{ t('calls_ring_classic') }}</option>
+            </select>
+            <button class="btn btn-secondary ringtone-preview" @click="previewSound(ringtoneOutgoing, true)" :title="t('calls_preview')">
+              <Icon name="volume" :size="16" />
+            </button>
+          </div>
+        </div>
+        <button v-if="previewPlaying" class="btn btn-secondary" @click="stopPreview">■ {{ t('calls_stop_preview') }}</button>
+        <p class="setting-hint">{{ t('calls_settings_hint') }}</p>
+      </div>
+
       <!-- ПРИВАТНОСТЬ -->
       <div v-if="activeCategory === 'privacy'" class="settings-section">
         <h2>{{ t('settings_privacy') }}</h2>
@@ -201,6 +233,7 @@ export default {
         { id: 'profile', icon: 'user', label: 'Профиль' },
         { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
         { id: 'chats', icon: 'chat', label: 'Чаты' },
+        { id: 'calls', icon: 'phone', label: 'Звонки' },
         { id: 'experiments', icon: 'help', label: 'Экспериментальные функции' },
         { id: 'email', icon: 'mail', label: 'Почта' },
         { id: 'notifications', icon: 'bell', label: 'Уведомления' },
@@ -209,6 +242,11 @@ export default {
         { id: 'help', icon: 'help', label: 'Помощь' },
         { id: 'clear', icon: 'trash', label: 'Очистить данные' }
       ],
+      // Звонки (27.08): выбранные рингтоны (имена WAV без ring_/.wav).
+      ringtoneIncoming: 'incoming',
+      ringtoneOutgoing: 'outgoing',
+      previewPlaying: false,
+      _previewEl: null,
       backupBusy: false,
       backupResult: '',
     };
@@ -223,6 +261,9 @@ export default {
     try {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+      // Звонки (27.08): выбранные рингтоны.
+      this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
+      this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
     } catch (e) { /* ignore */ }
   },
   methods: {
@@ -235,6 +276,40 @@ export default {
       try {
         await db.kvSet('anon', 'media-quality', this.localMediaQuality);
       } catch (e) { /* ignore */ }
+    },
+    // ── Звонки (27.08): сохранение + превью рингтонов ──────────────────
+    async saveRingtoneIncoming() {
+      try { await db.kvSet('anon', 'call-ringtone-incoming', this.ringtoneIncoming); } catch (e) { /* ignore */ }
+    },
+    async saveRingtoneOutgoing() {
+      try { await db.kvSet('anon', 'call-ringtone-outgoing', this.ringtoneOutgoing); } catch (e) { /* ignore */ }
+    },
+    // Превью: desktop — cpal в Rust (media_sound_play), Android — HTML5
+    // Audio (как в App.vue playCallSound). Зацикленный звук — стоп кнопкой.
+    previewSound(name, looped) {
+      this.stopPreview();
+      try {
+        if (/android/i.test(navigator.userAgent || '')) {
+          const el = new Audio('/sounds/ring_' + name + '.wav');
+          el.loop = !!looped;
+          el.volume = 0.85;
+          el.play().catch(e => console.warn('[calls] preview failed:', e));
+          this._previewEl = el;
+          if (!looped) el.onended = () => { if (this._previewEl === el) { this._previewEl = null; this.previewPlaying = false; } };
+        } else {
+          api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[calls] preview failed:', e));
+        }
+        this.previewPlaying = !!looped;
+      } catch (e) {
+        console.warn('[calls] preview failed:', e && e.message || e);
+      }
+    },
+    stopPreview() {
+      try {
+        if (this._previewEl) { try { this._previewEl.pause(); } catch (_) {} this._previewEl = null; }
+        if (!/android/i.test(navigator.userAgent || '')) api.mediaSoundStop().catch(() => {});
+      } catch (_) {}
+      this.previewPlaying = false;
     },
     // Имя + статус «О себе» одной кнопкой; bio уходит контактам broadcast-письмом.
     async saveProfileFields() {
@@ -394,6 +469,45 @@ export default {
 
 .setting-group {
   margin-bottom: 16px;
+}
+
+/* Селект настроек (качество медиа, рингтоны — 27.08) */
+.media-quality-select {
+  width: 100%;
+  max-width: 320px;
+  padding: 10px 14px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  color: #e6edf3;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+/* Ряд «селект + кнопка превью» (рингтоны, 27.08) */
+.ringtone-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ringtone-row .media-quality-select {
+  flex: 1;
+}
+.ringtone-preview {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.setting-hint {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.5;
 }
 
 .setting-group label {

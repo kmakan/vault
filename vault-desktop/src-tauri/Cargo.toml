@@ -77,6 +77,10 @@ webkit2gtk = { version = "2", features = ["v2_40"] }
 # C++ Oboe напрямую через NDK — без JNI, как у SimpleX (libwebrtc → Oboe).
 [target.'cfg(target_os = "android")'.dependencies]
 oboe = "0.6"
+# Динамик (speakerphone) на Android (27.08): AudioManager.setSpeakerphoneOn
+# через JNI. Обе версии уже в lock-файле (jni 0.21 — зависимость tauri).
+jni = "0.21"
+ndk-context = "0.1"
 
 [features]
 default = ["custom-protocol"]

@@ -130,8 +130,15 @@ pub(crate) fn start_mic_capture_oboe(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
 ) -> Result<MicStream, String> {
-    let encoder = Encoder::new(OpusRate::Hz48000, OpusChannels::Mono, Application::Voip)
+    let mut encoder = Encoder::new(OpusRate::Hz48000, OpusChannels::Mono, Application::Voip)
         .map_err(|e| format!("opus encoder: {e}"))?;
+    // Тюнинг Opus (27.08, шум в голосе) — как в desktop build_mic!:
+    // 48 кбит/с + FEC + PLC-готовность + Voice + complexity 10.
+    encoder.set_bitrate(audiopus::Bitrate::BitsPerSecond(48000)).ok();
+    encoder.set_inband_fec(true).ok();
+    encoder.set_packet_loss_perc(10).ok();
+    encoder.set_complexity(10).ok();
+    encoder.set_signal(audiopus::Signal::Voice).ok();
     let cb = MicCallback {
         opus_tx,
         muted,
@@ -179,4 +186,46 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
     let rate = stream.get_sample_rate();
     eprintln!("[audio] oboe speaker open: {rate} Hz");
     Ok(stream)
+}
+
+/// Динамик вкл/выкл (27.08): AudioManager.setSpeakerphoneOn через JNI.
+/// Вызывается из media_set_speaker. Без AAudio-стримов — только маршрутизация
+/// вывода (earpiece ↔ speaker). Ошибки логируем, не роняем звонок.
+pub(crate) fn set_speakerphone(on: bool) {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        // Context.AUDIO_SERVICE = "audio"
+        let svc_name = env
+            .new_string("audio")
+            .map_err(|e| format!("new_string: {e}"))?;
+        let am = env
+            .call_method(
+                &activity,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[(&svc_name).into()],
+            )
+            .map_err(|e| format!("getSystemService: {e}"))?
+            .l()
+            .map_err(|e| format!("getSystemService cast: {e}"))?;
+        env.call_method(
+            &am,
+            "setSpeakerphoneOn",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(on.into())],
+        )
+        .map_err(|e| format!("setSpeakerphoneOn: {e}"))?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => eprintln!("[audio] speakerphone on={on}"),
+        Ok(Err(e)) => eprintln!("[audio] setSpeakerphoneOn failed: {e}"),
+        Err(_) => eprintln!("[audio] setSpeakerphoneOn panicked (JNI)"),
+    }
 }

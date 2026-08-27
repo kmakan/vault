@@ -135,6 +135,15 @@ macro_rules! build_mic {
         let mut encoder =
             Encoder::new(SampleRate::Hz48000, OpusChannels::Mono, Application::Voip)
                 .map_err(|e| e.to_string())?;
+        // Тюнинг Opus (27.08, шум в голосе): дефолтный Auto-битрейт даёт
+        // ~12-16 кбит/с на тихой речи — «каша» и шум квантования. 48 кбит/с
+        // + FEC (восстановление потерянных пакетов) + PLC-готовность 10% +
+        // Voice-сигнал + максимальная complexity.
+        encoder.set_bitrate(audiopus::Bitrate::BitsPerSecond(48000)).ok();
+        encoder.set_inband_fec(true).ok();
+        encoder.set_packet_loss_perc(10).ok();
+        encoder.set_complexity(10).ok();
+        encoder.set_signal(audiopus::Signal::Voice).ok();
         let mut resampler = ResamplerIn::new($device_rate, 48000);
         let mut buf: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
         let stream = $device
@@ -274,6 +283,10 @@ pub async fn run_audio_pipeline(
     mut stop_rx: watch::Receiver<bool>,
     muted: Arc<AtomicBool>,
     media_key: Option<[u8; 32]>,
+    // Динамик вкл/выкл (27.08): реальный эффект — на Android
+    // (AudioManager.setSpeakerphoneOn через media_set_speaker); здесь
+    // канал принимается для единой сигнатуры и будущего использования.
+    _speaker_rx: watch::Receiver<bool>,
 ) {
     // ВАЖНО (23.08): rtc вызывает on_track ТОЛЬКО на ПЕРВОМ RTP-пакете пира
     // (rtc-0.20 handler/endpoint.rs: «Fire OnOpen when received the first RTP
@@ -574,6 +587,19 @@ const SND_CONNECT: &[u8] = include_bytes!("../sounds/ring_connect.wav");
 const SND_END: &[u8] = include_bytes!("../sounds/ring_end.wav");
 #[cfg(not(target_os = "android"))]
 const SND_MISSED: &[u8] = include_bytes!("../sounds/ring_missed.wav");
+// Варианты рингтонов (27.08, настройки звонков): пользователь выбирает в
+// Настройки → Звонки. Имена = суффикс файла: incoming_classic / incoming_pulse
+// / outgoing_classic. Дефолт — ring_incoming/ring_outgoing («кристальный чайм»).
+#[cfg(not(target_os = "android"))]
+const SND_INCOMING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_incoming_classic.wav");
+#[cfg(not(target_os = "android"))]
+const SND_INCOMING_PULSE: &[u8] = include_bytes!("../sounds/ring_incoming_pulse.wav");
+#[cfg(not(target_os = "android"))]
+const SND_OUTGOING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_outgoing_classic.wav");
+// «Можно говорить» (28.08): яркий восходящий двухтональный сигнал в момент
+// реального соединения медиа (событие call-media-connected) — играет у ОБОИХ.
+#[cfg(not(target_os = "android"))]
+const SND_CONNECTED: &[u8] = include_bytes!("../sounds/ring_connected.wav");
 
 /// Минимальный парсер WAV: PCM 16-bit mono (наши ассеты генерируются именно
 /// так). Возвращает (samples_f32, sample_rate).
@@ -692,6 +718,12 @@ pub fn sound_play(name: &str, looped: bool) -> Result<(), String> {
         "connect" => SND_CONNECT,
         "end" => SND_END,
         "missed" => SND_MISSED,
+        // Варианты рингтонов (27.08, настройки звонков).
+        "incoming_classic" => SND_INCOMING_CLASSIC,
+        "incoming_pulse" => SND_INCOMING_PULSE,
+        "outgoing_classic" => SND_OUTGOING_CLASSIC,
+        // «Можно говорить» (28.08) — реальное соединение медиа.
+        "connected" => SND_CONNECTED,
         other => return Err(format!("unknown sound: {other}")),
     };
     // panic=abort + cpal может паниковать — ловим и возвращаем Err вместо

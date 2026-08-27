@@ -500,7 +500,8 @@
         :peer-name="callPeerName"
         :avatar-url="avatarOf(currentCall.peer)"
         :muted="callMuted"
-        :recording="callRecording"
+        :speaker="callSpeaker"
+        :media-connected="callMediaConnected"
         :elapsed="callElapsedLabel"
         :texts="callTexts"
         @accept="acceptCall"
@@ -508,7 +509,7 @@
         @cancel="cancelCall"
         @end="endCall"
         @toggle-mute="toggleMute"
-        @toggle-record="toggleRecord"
+        @toggle-speaker="toggleSpeaker"
       />
 
       <!-- CIPHER TOOL -->
@@ -837,6 +838,7 @@
 
 <script>
 import { invoke } from '@tauri-apps/api/core';
+import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -918,7 +920,10 @@ export default {
       currentCall: null,
       lastCallId: null,   // { call_id, peer }
       callMuted: false,
-      callRecording: false,
+      callSpeaker: false,
+      // Реально ли пошёл звук (событие call-media-connected из Rust, 27.08).
+      // До этого оверлей показывает «Соединение…» вместо таймера.
+      callMediaConnected: false,
       callClockSec: 0,
       callClockTimer: null,
       callRingTimer: null,
@@ -929,6 +934,10 @@ export default {
       // ЗВУКИ ЗВОНКА (27.08, редизайн): WAV-ассеты. Desktop — cpal в Rust
       // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
       callSoundEl: null,
+      // Настройки рингтонов (27.08, Настройки → Звонки): имена WAV-вариантов
+      // без префикса ring_ и суффикса .wav. Загружаются из kv_store.
+      callRingtoneIncoming: 'incoming',
+      callRingtoneOutgoing: 'outgoing',
       // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
       // зависшего в ringing дольше разумного; см. handleCallSignal).
       callStartedAt: 0,
@@ -1158,12 +1167,12 @@ export default {
         cancel: this.t('call_cancel') || 'Отменить',
         end: this.t('call_end') || 'Завершить',
         accepted: this.t('call_accepted') || 'Соединено',
+        connecting: this.t('call_connecting') || 'Соединение…',
         mute: this.t('call_mute') || 'Выключить микрофон',
         unmute: this.t('call_unmute') || 'Включить микрофон',
+        speaker: this.t('call_speaker') || 'Динамик',
         acceptHint: this.t('call_accept_hint') || '',
         rejectHint: this.t('call_reject_hint') || '',
-        startRecord: this.t('call_start_record') || 'Запись',
-        stopRecord: this.t('call_stop_record') || 'Стоп',
         noMedia: this.t('call_no_media') || '',
       };
     },
@@ -1263,6 +1272,41 @@ export default {
   async mounted() {
     applyTheme(loadSavedTheme())
     applyFont(loadSavedFont())
+    // Событие «медиа подключено» из Rust (27.08): ICE/DTLS установлены и
+    // аудио-пайплайн стартовал — только теперь показываем таймер разговора.
+    // Раньше таймер шёл с момента accept, а SDP шёл по почте до 54с —
+    // пользователь видел «минуту тишины» при работающем таймере.
+    this._unlistenMediaConnected = tauriListen('call-media-connected', (ev) => {
+      const cid = ev && ev.payload && ev.payload.callId;
+      if (cid && this.currentCall && this.currentCall.call_id === cid) {
+        this.callMediaConnected = true;
+        // Медиа установлено — ретрансляция accept/answer больше не нужна.
+        this.stopSignalResend();
+        // «Можно говорить» (28.08): яркий сигнал в момент РЕАЛЬНОГО
+        // соединения медиа — играет у ОБОИХ абонентов (событие приходит
+        // на каждой стороне при ICE Connected + старте пайплайна).
+        this.playCallSound('connected', false);
+        // Таймер разговора — с момента реального звука, не с момента accept.
+        this.startCallClock();
+      }
+    }).catch(e => console.warn('[call] listen media-connected failed:', e));
+    // МГНОВЕННЫЙ HANGUP (28.08): собеседник положил трубку — «hangup»
+    // пришёл по WebRTC DataChannel за миллисекунды (не ждём call_end
+    // по email 30-60с). Завершаем локально.
+    this._unlistenRemoteHangup = tauriListen('call-remote-hangup', (ev) => {
+      const cid = ev && ev.payload && ev.payload.callId;
+      console.log('[call] DC remote hangup received, call_id=' + cid);
+      if (cid && this.currentCall && this.currentCall.call_id === cid) {
+        this.hangup('remote');
+      }
+    }).catch(e => console.warn('[call] listen remote-hangup failed:', e));
+    // Настройки рингтонов (27.08, Настройки → Звонки) — из kv_store.
+    try {
+      const ri = await db.kvGet('anon', 'call-ringtone-incoming');
+      const ro = await db.kvGet('anon', 'call-ringtone-outgoing');
+      if (ri) this.callRingtoneIncoming = ri;
+      if (ro) this.callRingtoneOutgoing = ro;
+    } catch (e) { /* тихо — дефолтные рингтоны */ }
     // Мобильная навигация: следим за шириной окна (поворот телефона),
     // чтобы переключать одну-панель-за-раз.
     this.onWindowResize = () => {
@@ -1353,6 +1397,9 @@ export default {
   },
   beforeUnmount() {
     this.stopPolling()
+    // Слушатели Tauri-событий звонка (27-28.08).
+    if (this._unlistenMediaConnected) { this._unlistenMediaConnected(); this._unlistenMediaConnected = null; }
+    if (this._unlistenRemoteHangup) { this._unlistenRemoteHangup(); this._unlistenRemoteHangup = null; }
   },
   methods: {
     // ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора ──
@@ -1371,6 +1418,12 @@ export default {
     // должна бросать — звук вторичен, сигнализация звонка важнее.
     playCallSound(name, looped) {
       try {
+        // Настройки звонков (27.08): пользователь мог выбрать другой рингтон
+        // (Настройки → Звонки). Маппим incoming/outgoing на выбранный вариант.
+        const ringIn = this.callRingtoneIncoming || 'incoming';
+        const ringOut = this.callRingtoneOutgoing || 'outgoing';
+        if (name === 'incoming') name = ringIn;
+        else if (name === 'outgoing') name = ringOut;
         if (this.isAndroid) {
           this.stopCallSound();
           const el = new Audio('/sounds/ring_' + name + '.wav');
@@ -4511,6 +4564,13 @@ export default {
       }
       switch (type) {
         case 'call_request':
+          // РЕТРАНСЛЯЦИЯ (27.08): звонящий повторяет call_request каждые 15с
+          // (письма теряются в транзите). Если тот же call_id УЖЕ звонит у
+          // нас — это дубль: игнорируем. РАНЬШЕ дубль попадал в «forcing
+          // reset» ниже → hangup('preempt') → повторный SET incoming_ringing:
+          // рингтон перезапускался, а драг-жест свайпа сбрасывался посреди
+          // движения (пользователь видел «трубка вернулась в центр»).
+          if (this.currentCall && this.currentCall.call_id === call_id) return;
           // ГАРАНТИЯ ПОКАЗА (22.08): НОВЫЙ call_request ВСЕГДА вытесняет любое
           // состояние, кроме реального разговора (active) — даже если state
           // machine зависла в ringing от старого конверта без currentCall.
@@ -4519,7 +4579,11 @@ export default {
             await this.hangup('preempt');
           }
           if (this.callState !== 'idle') return;
-          this.currentCall = { call_id, peer: from };
+          // OFFER В call_request (28.08): звонящий создаёт offer ДО набора —
+          // он едет в первом письме. Сохраняем: при accept сразу создадим
+          // answer (1 hop вместо 2). Если sdp нет (старая версия/fallback) —
+          // acceptCall создаст offer сам (старая схема).
+          this.currentCall = { call_id, peer: from, offerSdp: sig.sdp || null };
           this.lastCallId = call_id;
           this.callState = 'incoming_ringing';
           this.callMuted = false;
@@ -4549,19 +4613,37 @@ export default {
             // play сам останавливает предыдущий звук (Rust/HTML5).
             this.playCallSound('connect', false);
             this.callState = 'active';
-            this.startCallClock();
-            // Фаза 2.3 (схема: offer от принимающего): OFFER приходит ВНУТРИ
-            // call_accept (sig.sdp). Ставим remote, создаём ANSWER и шлём.
-            // ВАЖНО: адресат = from (параметр сигнала); «c.peer» здесь не
-            // существует — было причиной «media accept failed: {}».
+            // Таймер НЕ запускаем (27.08): ждём событие call-media-connected
+            // из Rust (реальный звук). Предохранитель 120с — если событие
+            // потерялось, показываем таймер хоть когда-нибудь.
+            this.callMediaConnected = false;
+            this.armMediaFallback();
+            // OFFER В call_request (28.08): если мы создали offer при наборе
+            // (hasLocalOffer) — sdp в call_accept это ANSWER: ставим remote,
+            // DTLS-SRTP устанавливается. Fallback (старая схема): sdp это
+            // offer принимающего — принимаем его и шлём answer.
             if (sig.sdp) {
-              try {
-                const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '');
-                console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
-                await this.sendCallEnvelope(from, { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' });
-                console.log('[call] answer sent OK — waiting for DTLS');
-              } catch (e) {
-                console.error('[call] media accept failed:', e && e.message || e);
+              if (this.currentCall && this.currentCall.hasLocalOffer) {
+                try {
+                  await api.mediaSetRemote(call_id, sig.sdp);
+                  console.log('[call] remote answer set — DTLS handshake should follow');
+                } catch (e) {
+                  console.error('[call] media set remote (answer) failed:', e && e.message || e);
+                }
+              } else {
+                try {
+                  const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '');
+                  console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
+                  const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
+                  await this.sendCallEnvelope(from, answerPayload);
+                  console.log('[call] answer sent OK — waiting for DTLS');
+                  // Ретрансляция answer (27.08): если письмо потеряется,
+                  // принимающий зависнет в «Соединение…». Повторяем каждые
+                  // 10с до соединения медиа.
+                  this.startSignalResend(from, answerPayload, call_id);
+                } catch (e) {
+                  console.error('[call] media accept failed:', e && e.message || e);
+                }
               }
             }
           }
@@ -4627,13 +4709,32 @@ export default {
       // окончательно решает call_reject/call_cancel от собеседника).
       this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 300000);
       // ВАЖНО (27.08): сигнал call_request отправляем ДО гудков. cpal-гудок
-      // может зависнуть на enum аудио-устройства (глючный Bluetooth) и
+      // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
       // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
       // уходил (наблюдали 27.08: call_request не долетал до Gmail, а
       // call_cancel при hangup проходил). Сначала сигнал, потом звук
       // (запустится на ~1с позже — некритично).
+      //
+      // OFFER В call_request (28.08, фикс «тишина ~30с»): классическая схема
+      // WebRTC — offer звонящего едет в ПЕРВОМ письме. Раньше SDP делал 3
+      // почтовых hops (call_request → accept+offer → answer), после свайпа
+      // принять до звука проходило 2 hops (20-60с). Теперь после accept
+      // остаётся 1 hop (answer) — звук на 15-30с раньше. Offer создаётся
+      // ДО отправки (ICE gathering ~4с); если не получится — fallback на
+      // старую схему (offer принимающего внутри call_accept).
+      let offerSdp = null;
       try {
-        await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
+        const r = await api.mediaStartOutgoing(call_id, this.peerKeys[peer] || '');
+        offerSdp = r.sdp;
+        console.log('[call] offer created at dial time,', (offerSdp || '').length, 'bytes');
+      } catch (e) {
+        console.error('[call] offer at dial failed (fallback callee-offer):', e);
+      }
+      // Флаг для обработки call_accept (28.08): если offer создан здесь —
+      // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
+      this.currentCall.hasLocalOffer = !!offerSdp;
+      try {
+        await this.sendCallEnvelope(peer, { type: 'call_request', call_id, sdp: offerSdp });
       } catch (e) {
         console.error('call_request failed:', e);
         this.hangup('error');
@@ -4655,26 +4756,13 @@ export default {
           return;
         }
         try {
-          await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
+          // Offer внутри (28.08) — ретрансляция несёт и его.
+          await this.sendCallEnvelope(peer, { type: 'call_request', call_id, sdp: offerSdp });
           console.log('[call] call_request retransmitted', call_id);
         } catch (e) {
           console.warn('[call] call_request retransmit failed:', e && e.message || e);
         }
       }, 15000);
-    },
-    // Фаза 2: после получения call_accept — поднимаем медиа (webrtc-rs).
-    async startMediaOffer() {
-      const c = this.currentCall;
-      if (!c) return;
-      try {
-        console.log('[call] creating media offer...');
-        const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
-        console.log('[call] offer created,', (r.sdp || '').length, 'bytes, sending');
-        await this.sendCallEnvelope(c.peer, { type: 'call_sdp', call_id: c.call_id, sdp: r.sdp, role: 'offer' });
-        console.log('[call] offer sent OK');
-      } catch (e) {
-        console.error('[call] media start failed:', e);
-      }
     },
     async acceptCall() {
       const c = this.currentCall;
@@ -4685,15 +4773,32 @@ export default {
       this.callRingTimer = null;
       this.playCallSound('connect', false);
       this.callState = 'active';
-      this.startCallClock();
-      // Фаза 2.3 (схема: offer от принимающего): OFFER создаёт ПРИНИМАЮЩИЙ
-      // и шлёт его ВНУТРИ call_accept — на один email-round-trip меньше,
-      // ICE-кандидаты не успевают устареть.
+      // Таймер НЕ запускаем (27.08): ждём событие call-media-connected
+      // из Rust (реальный звук). Предохранитель 120с — см. armMediaFallback.
+      this.callMediaConnected = false;
+      this.armMediaFallback();
+      // OFFER В call_request (28.08): если offer звонящего пришёл в первом
+      // письме — сразу создаём ANSWER и шлём его внутри call_accept. После
+      // свайпа принять до звука остаётся ОДИН почтовый hop (раньше два:
+      // accept+offer → answer). Fallback (старая версия звонящего без
+      // offer): создаём offer сами внутри call_accept.
       try {
-        const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
-        console.log('[call] offer (callee) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
-        await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id, sdp: r.sdp });
-        console.log('[call] call_accept + offer sent OK');
+        let acceptPayload;
+        if (c.offerSdp) {
+          const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, this.peerKeys[c.peer] || '');
+          console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
+          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
+        } else {
+          const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
+          console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
+          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
+        }
+        await this.sendCallEnvelope(c.peer, acceptPayload);
+        console.log('[call] call_accept + sdp sent OK');
+        // Ретрансляция call_accept (27.08): письмо может потеряться —
+        // тогда звонящий будет гудеть вечно. Повторяем каждые 10с, пока
+        // медиа не соединится (stopSignalResend в media-connected/hangup).
+        this.startSignalResend(c.peer, acceptPayload, c.call_id);
       } catch (e) {
         console.error('[call] media start (callee) failed:', e);
         // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
@@ -4707,16 +4812,21 @@ export default {
     async rejectCall() {
       const c = this.currentCall;
       if (c) {
-        try { await this.sendCallEnvelope(c.peer, { type: 'call_reject', call_id: c.call_id }); }
-        catch (e) { /* ignore */ }
+        // Повтор call_reject (27.08) — см. sendTerminalRepeat.
+        this.sendTerminalRepeat(c.peer, 'call_reject', c.call_id);
       }
       this.hangup('reject');
     },
     async endCall() {
       const c = this.currentCall;
       if (c && this.callState === 'active') {
-        try { await this.sendCallEnvelope(c.peer, { type: 'call_end', call_id: c.call_id }); }
-        catch (e) { /* ignore */ }
+        // МГНОВЕННЫЙ HANGUP (28.08): «hangup» по WebRTC DataChannel —
+        // собеседник получает за миллисекунды. Раньше call_end шёл по
+        // email 30-60с, и собеседник сидел с «активным» звонком.
+        api.mediaSendHangup(c.call_id);
+        // Email-сигнал остаётся как fallback (DC мог не открыться):
+        // 3 попытки: сразу, +3с, +7с.
+        this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
       }
       this.hangup('end');
     },
@@ -4756,11 +4866,16 @@ export default {
         clearInterval(this.callResendTimer);
         this.callResendTimer = null;
       }
+      // Ретрансляция call_accept/answer (27.08).
+      this.stopSignalResend();
+      // Предохранитель «Соединение…» (27.08).
+      clearTimeout(this._mediaFallbackTimer);
       this.stopCallClock();
       this.callState = 'idle';
       this.currentCall = null;
       this.callMuted = false;
-      this.callRecording = false;
+      this.callSpeaker = false;
+      this.callMediaConnected = false;
       this.stopFastPolling();
       // Финальный звук (27.08): play сам останавливает предыдущий поток
       // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
@@ -4876,9 +4991,10 @@ export default {
       // ВАЖНО: fire-and-forget (НЕ await!) — между await-отправкой и
       // hangup есть окно гонки: обработка call_accept успевает сменить
       // state на active, и hangup рвёт живой звонок (27.08).
+      // Повтор сигнала (27.08): 3 попытки — см. sendTerminalRepeat.
       if (c) {
         const type = this.callState === 'active' ? 'call_end' : 'call_cancel';
-        this.sendCallEnvelope(c.peer, { type, call_id: c.call_id }).catch(() => {});
+        this.sendTerminalRepeat(c.peer, type, c.call_id);
       }
       this.hangup(reason || 'cancel');
     },
@@ -4889,10 +5005,71 @@ export default {
         api.mediaSetMuted(c.call_id, this.callMuted).catch((e) => console.error('[call] set muted failed:', e));
       }
     },
-    // Запись разговора (M3): состояние на клиенте; реальная запись аудио —
-    // с медиа-пайплайном (Фаза 2.3). UI-переключатель уже есть.
-    toggleRecord() {
-      this.callRecording = !this.callRecording;
+    // Динамик (27.08): Android — speakerphone (earpiece ↔ динамик);
+    // desktop — no-op в Rust (вывод и так на динамики).
+    toggleSpeaker() {
+      this.callSpeaker = !this.callSpeaker;
+      const c = this.currentCall;
+      if (c) {
+        api.mediaSetSpeaker(c.call_id, this.callSpeaker).catch((e) => console.error('[call] set speaker failed:', e));
+      }
+    },
+    // РЕТРАНСЛЯЦИЯ КРИТИЧНЫХ СИГНАЛОВ (27.08): call_accept и SDP-answer
+    // повторяются каждые 10с, пока медиа не соединится или звонок не
+    // завершится. Email-письма теряются в транзите (наблюдали: call_accept
+    // не дошёл до звонящего — тот гудел вечно, «у вызывающего не
+    // сбрасывается»). Дубликаты безопасны: приёмник игнорирует их по
+    // состоянию (call_accept — только в outgoing_ringing, call_sdp —
+    // только в active с тем же call_id).
+    startSignalResend(peer, payload, call_id) {
+      this.stopSignalResend();
+      this._signalResendTimer = setInterval(async () => {
+        if (this.callState !== 'active' || !this.currentCall
+            || this.currentCall.call_id !== call_id || this.callMediaConnected) {
+          this.stopSignalResend();
+          return;
+        }
+        try {
+          await this.sendCallEnvelope(peer, payload);
+          console.log('[call] signal retransmitted:', payload.type, call_id);
+        } catch (e) {
+          console.warn('[call] signal retransmit failed:', e && e.message || e);
+        }
+      }, 10000);
+    },
+    stopSignalResend() {
+      if (this._signalResendTimer) {
+        clearInterval(this._signalResendTimer);
+        this._signalResendTimer = null;
+      }
+    },
+    // Повтор терминального сигнала (call_end/call_cancel/call_reject):
+    // если письмо потеряется, собеседник останется с поднятой трубкой
+    // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
+    // у приёмника безопасны (ветка remote_late / guard по state).
+    sendTerminalRepeat(peer, type, call_id) {
+      this.sendCallEnvelope(peer, { type, call_id }).catch(() => {});
+      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 3000);
+      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 7000);
+    },
+    // Watchdog «Соединение…» (28.08): если через 90с после accept медиа
+    // не соединилось (событие call-media-connected не пришло) — звонок не
+    // состоялся: accept/answer потерялись в почте или собеседник уже ушёл.
+    // Раньше предохранитель через 120с просто форсил таймер — и экран с
+    // красной кнопкой висел вечно (жалоба 28.08). Теперь кладём трубку сами.
+    armMediaFallback() {
+      clearTimeout(this._mediaFallbackTimer);
+      this._mediaFallbackTimer = setTimeout(() => {
+        if (this.callState === 'active' && !this.callMediaConnected) {
+          console.warn('[call] media not connected in 90s — auto hangup');
+          this.showToast(this.t('call_connect_failed'), 4000);
+          // Сообщаем собеседнику, чтобы у него тоже легла трубка
+          // (он может висеть в таком же «Соединение…»).
+          const c = this.currentCall;
+          if (c) this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
+          this.hangup('connect_timeout');
+        }
+      }, 90000);
     },
     startCallClock() {
       this.callClockSec = 0;

@@ -22,9 +22,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
+use tauri::Emitter;
 use tokio::sync::{Mutex, watch};
 use tokio::time::timeout;
 
+use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_remote::TrackRemote;
@@ -64,6 +66,13 @@ struct CallSession {
     stop_tx: watch::Sender<bool>,
     /// Mic mute flag (checked by the capture callback).
     muted: Arc<AtomicBool>,
+    /// Динамик вкл/выкл (27.08): desktop — смена устройства вывода,
+    /// Android — speakerphone через JNI (audio_android::set_speakerphone).
+    speaker_tx: watch::Sender<bool>,
+    /// Мгновенный hangup поверх WebRTC (28.08): DataChannel «vault-ctrl».
+    /// call_end по email идёт 30-60с — собеседник сидит с трубкой. DC
+    /// доставляет «hangup» за миллисекунды после DTLS. None до открытия.
+    dc: Option<Arc<dyn DataChannel>>,
 }
 
 /// SDP payload returned to the UI (JSON-encoded RTCSessionDescription).
@@ -79,6 +88,9 @@ struct CallHandler {
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     track_tx: Sender<Arc<dyn TrackRemote>>,
+    /// Мгновенный hangup (28.08): входящий DataChannel от пира (callee
+    /// получает канал, созданный caller'ом, через DCEP-негосиацию).
+    dc_tx: Sender<Arc<dyn DataChannel>>,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +109,10 @@ impl PeerConnectionEventHandler for CallHandler {
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
         let _ = self.track_tx.try_send(track);
+    }
+
+    async fn on_data_channel(&self, dc: Arc<dyn DataChannel>) {
+        let _ = self.dc_tx.try_send(dc);
     }
 }
 
@@ -150,6 +166,7 @@ impl CallMediaManager {
     /// gathering-complete receiver.
     async fn build_pc(
         &mut self,
+        app: tauri::AppHandle,
         call_id: &str,
         media_key: Option<[u8; 32]>,
     ) -> Result<(Arc<dyn PeerConnection>, Arc<TrackLocalStaticSample>, Receiver<()>), String> {
@@ -198,11 +215,13 @@ impl CallMediaManager {
         let (gather_tx, gather_rx) = channel::<()>(1);
         let (connected_tx, connected_rx) = channel::<()>(1);
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
+        let (dc_tx, mut dc_rx) = channel::<Arc<dyn DataChannel>>(1);
 
         let handler = Arc::new(CallHandler {
             gather_complete_tx: gather_tx,
             connected_tx,
             track_tx,
+            dc_tx,
         });
 
         let pc: Arc<dyn PeerConnection> = Arc::new(
@@ -216,6 +235,19 @@ impl CallMediaManager {
                 .await
                 .map_err(|e| e.to_string())?,
         );
+
+        // МГНОВЕННЫЙ HANGUP (28.08): DataChannel «vault-ctrl» поверх
+        // DTLS-SCTP. call_end по email идёт 30-60с — собеседник сидит с
+        // трубкой. DC доставляет «hangup» за миллисекунды. Канал создаётся
+        // ДО offer/answer, чтобы DCEP-негосиация попала в SDP; у пира он
+        // придёт через on_data_channel (dc_rx).
+        let dc: Option<Arc<dyn DataChannel>> = match pc.create_data_channel("vault-ctrl", None).await {
+            Ok(dc) => Some(dc),
+            Err(e) => {
+                eprintln!("[media] create_data_channel failed (hangup fallback = email): {e}");
+                None
+            }
+        };
 
         // Local Opus track (SSRC random; the library packetizes samples).
         let ssrc = rand::random::<u32>();
@@ -245,21 +277,64 @@ impl CallMediaManager {
         // mic capture / speaker playback (Phase 2.1). Aborted on close.
         let (stop_tx, stop_rx) = watch::channel(false);
         let muted = Arc::new(AtomicBool::new(false));
+        let (speaker_tx, speaker_rx) = watch::channel(false);
         {
             let track = track.clone();
             let mut stop_rx = stop_rx.clone();
             let muted = muted.clone();
             let mut connected_rx = connected_rx;
+            let cid = call_id.to_owned();
+            let app1 = app.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::select! {
                     _ = connected_rx.recv() => {}
                     _ = stop_rx.changed() => return,
                 }
                 eprintln!("[media] connected — starting audio pipeline");
+                // Событие в UI (27.08): оверлей показывает «Соединение…» до
+                // этого момента, таймер разговора — только после. Раньше
+                // таймер шёл с момента accept, а SDP шёл по почте до 54с —
+                // пользователь видел «минуту тишины» при работающем таймере.
+                if let Err(e) = app1.emit(
+                    "call-media-connected",
+                    serde_json::json!({ "callId": cid }),
+                ) {
+                    eprintln!("[media] emit call-media-connected failed: {e}");
+                }
                 crate::audio::run_audio_pipeline(
                     track, ssrc, OPUS_PAYLOAD_TYPE, track_rx, stop_rx, muted, media_key,
+                    speaker_rx,
                 )
                 .await;
+            });
+        }
+
+        // Слушаем ВХОДЯЩИЙ DataChannel от пира (28.08): пир создаёт свой
+        // «vault-ctrl», он приходит нам через on_data_channel (dc_rx).
+        // Сообщение «hangup» → событие в UI → мгновенное завершение без
+        // ожидания call_end по email (30-60с).
+        {
+            let app2 = app.clone();
+            let cid2 = call_id.to_owned();
+            tauri::async_runtime::spawn(async move {
+                let dc = match dc_rx.recv().await {
+                    Some(dc) => dc,
+                    None => return,
+                };
+                eprintln!("[media] remote data channel received");
+                while let Some(ev) = dc.poll().await {
+                    if let DataChannelEvent::OnMessage(msg) = ev {
+                        let text = String::from_utf8_lossy(&msg.data);
+                        if text.trim() == "hangup" {
+                            eprintln!("[media] DC hangup received from peer");
+                            let _ = app2.emit(
+                                "call-remote-hangup",
+                                serde_json::json!({ "callId": cid2 }),
+                            );
+                            break;
+                        }
+                    }
+                }
             });
         }
 
@@ -269,6 +344,8 @@ impl CallMediaManager {
                 pc: Arc::clone(&pc),
                 stop_tx,
                 muted,
+                speaker_tx,
+                dc,
             },
         );
 
@@ -311,8 +388,13 @@ impl CallMediaManager {
 
     /// Start an outgoing call: build PC + track, create offer, gather ICE,
     /// return the full SDP (JSON).
-    pub async fn start_outgoing(&mut self, call_id: &str, media_key: Option<[u8; 32]>) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(call_id, media_key).await?;
+    pub async fn start_outgoing(
+        &mut self,
+        app: tauri::AppHandle,
+        call_id: &str,
+        media_key: Option<[u8; 32]>,
+    ) -> Result<SdpResult, String> {
+        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key).await?;
 
         let offer = pc.create_offer(None).await.map_err(|e| e.to_string())?;
         pc.set_local_description(offer).await.map_err(|e| e.to_string())?;
@@ -329,11 +411,12 @@ impl CallMediaManager {
     /// answer, gather ICE, return answer SDP (JSON).
     pub async fn accept_incoming(
         &mut self,
+        app: tauri::AppHandle,
         call_id: &str,
         offer_sdp: &str,
         media_key: Option<[u8; 32]>,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(call_id, media_key).await?;
+        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key).await?;
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
@@ -376,6 +459,46 @@ impl CallMediaManager {
         Ok(())
     }
 
+    /// Динамик вкл/выкл (27.08): Android — speakerphone через AudioManager
+    /// (JNI в audio_android); desktop — no-op (вывод всегда на динамики,
+    /// переключение устройств — задача ОС).
+    pub async fn set_speaker(&mut self, call_id: &str, on: bool) -> Result<(), String> {
+        let session = self
+            .calls
+            .get(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        let _ = session.speaker_tx.send(on);
+        #[cfg(target_os = "android")]
+        crate::audio::audio_android::set_speakerphone(on);
+        Ok(())
+    }
+
+    /// Мгновенный hangup поверх WebRTC (28.08): шлёт «hangup» по
+    /// DataChannel «vault-ctrl» — собеседник получает за миллисекунды,
+    /// не ждёт call_end по email (30-60с). Email-сигнал остаётся как
+    /// fallback (фронт шлёт его отдельно). Ok(false) если канала нет
+    /// (SDP ещё не обменялись) — тогда работает только email.
+    pub async fn send_hangup(&mut self, call_id: &str) -> Result<bool, String> {
+        let session = self
+            .calls
+            .get(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        let dc = match &session.dc {
+            Some(dc) => Arc::clone(dc),
+            None => return Ok(false),
+        };
+        match dc.send_text("hangup").await {
+            Ok(()) => {
+                eprintln!("[media] DC hangup sent");
+                Ok(true)
+            }
+            Err(e) => {
+                eprintln!("[media] DC hangup send failed (email fallback): {e}");
+                Ok(false)
+            }
+        }
+    }
+
     /// Close a call session (graceful PeerConnection teardown).
     pub async fn close(&mut self, call_id: &str) -> Result<(), String> {
         if let Some(session) = self.calls.remove(call_id) {
@@ -400,6 +523,7 @@ impl CallMediaManager {
 
 #[tauri::command]
 pub async fn media_start_outgoing(
+    app: tauri::AppHandle,
     call_id: String,
     peer_public_key: String,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
@@ -413,11 +537,12 @@ pub async fn media_start_outgoing(
         },
         _ => None,
     };
-    mgr.start_outgoing(&call_id, media_key).await
+    mgr.start_outgoing(app, &call_id, media_key).await
 }
 
 #[tauri::command]
 pub async fn media_accept_incoming(
+    app: tauri::AppHandle,
     call_id: String,
     offer_sdp: String,
     peer_public_key: String,
@@ -431,7 +556,7 @@ pub async fn media_accept_incoming(
         },
         _ => None,
     };
-    mgr.accept_incoming(&call_id, &offer_sdp, media_key).await
+    mgr.accept_incoming(app, &call_id, &offer_sdp, media_key).await
 }
 
 #[tauri::command]
@@ -461,6 +586,29 @@ pub async fn media_set_muted(
 ) -> Result<(), String> {
     let mut mgr = state.lock().await;
     mgr.set_muted(&call_id, muted).await
+}
+
+/// Динамик (27.08): Android — speakerphone вкл/выкл; desktop — no-op.
+#[tauri::command]
+pub async fn media_set_speaker(
+    call_id: String,
+    on: bool,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.set_speaker(&call_id, on).await
+}
+
+/// Мгновенный hangup поверх WebRTC (28.08): «hangup» по DataChannel —
+/// собеседник получает за миллисекунды вместо 30-60с по email.
+/// Возвращает true если отправлено по DC, false — канала нет (email fallback).
+#[tauri::command]
+pub async fn media_send_hangup(
+    call_id: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<bool, String> {
+    let mut mgr = state.lock().await;
+    mgr.send_hangup(&call_id).await
 }
 
 #[tauri::command]

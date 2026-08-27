@@ -696,7 +696,10 @@ impl EmailClient {
         };
         let transport = transport_builder
             .credentials(creds)
-            .timeout(Some(std::time::Duration::from_secs(30)))
+            // 10с вместо 30с (28.08): при зависании SMTP сигнал звонка
+            // (call_accept/answer) ждал 30с до ретрая — собеседник висел
+            // в «Соединение…». 10с достаточно для штатной отправки.
+            .timeout(Some(std::time::Duration::from_secs(10)))
             .build();
 
         transport

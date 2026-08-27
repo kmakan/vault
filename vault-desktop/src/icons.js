@@ -144,6 +144,12 @@ export const icons = {
     { type: 'path', d: 'M19 10v2a7 7 0 0 1-14 0v-2' },
     { type: 'line', x1: 12, y1: 19, x2: 12, y2: 22 },
   ],
+  // Динамик/громкость (27.08, кнопка в оверлее звонка).
+  volume: [
+    { type: 'path', d: 'M11 5 6 9H2v6h4l5 4V5z' },
+    { type: 'path', d: 'M15.54 8.46a5 5 0 0 1 0 7.07' },
+    { type: 'path', d: 'M19.07 4.93a10 10 0 0 1 0 14.14' },
+  ],
   mail: [
     { type: 'rect', x: 3, y: 5, w: 18, h: 14, rx: 2 },
     { type: 'path', d: 'm3 7 9 6 9-6' },

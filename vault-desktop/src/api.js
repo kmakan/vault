@@ -1036,6 +1036,21 @@ export class ApiClient {
   async mediaSetMuted(callId, muted) {
     return await invoke('media_set_muted', { callId, muted });
   }
+  // Динамик (27.08): Android — speakerphone вкл/выкл; desktop — no-op.
+  async mediaSetSpeaker(callId, on) {
+    return await invoke('media_set_speaker', { callId, on });
+  }
+  // Мгновенный hangup поверх WebRTC DataChannel (28.08): «hangup» доходит
+  // до собеседника за миллисекунды, не ждёт call_end по email (30-60с).
+  // Возвращает false, если канала ещё нет — тогда работает email-fallback.
+  async mediaSendHangup(callId) {
+    try {
+      return await invoke('media_send_hangup', { callId });
+    } catch (e) {
+      console.warn('[call] mediaSendHangup failed:', e);
+      return false;
+    }
+  }
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
   }
