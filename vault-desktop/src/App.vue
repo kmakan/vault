@@ -1245,6 +1245,12 @@ export default {
       // Локальное имя контакта (если задано) — выше реального.
       const lp = this.localProfileOf(this.activeChat);
       if (lp && lp.name) return lp.name;
+      // Единый резолвер (27.08): свежий профиль из писем важнее кэша
+      // contacts[].name (label peer-ключа устаревает — шапка показывала
+      // старое имя, хотя в списке контактов уже новое). Fallback на label,
+      // если профиля с именем нет.
+      const n = this.nameOf(this.activeChat);
+      if (n && n !== this.activeChat) return n;
       const c = this.contacts.find(c => c.email === this.activeChat);
       return c ? c.name : this.activeChat;
     },
