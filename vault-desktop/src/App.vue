@@ -4482,7 +4482,10 @@ export default {
             );
           }
           this.startFastPolling();
-          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 90000);
+          // Таймер гудка 180с (27.08): было 90с, но call_accept/answer по
+          // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
+          // того, как собеседник успевал ответить.
+          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 180000);
           break;
         case 'call_accept':
           if (this.currentCall && this.currentCall.call_id === call_id
@@ -4562,7 +4565,8 @@ export default {
       this.callState = 'outgoing_ringing';
       this.callMuted = false;
       this.startFastPolling();
-      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 90000);
+      // Таймер гудка 180с (27.08): было 90с — не хватало на почтовый round-trip.
+      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 180000);
       try {
         await this.sendCallEnvelope(peer, { type: 'call_request', call_id });
       } catch (e) {
@@ -4649,6 +4653,15 @@ export default {
     },
     async cancelCall(reason) {
       const c = this.currentCall;
+      // ЗАЩИТА ОТ УСТАРЕВШЕГО ТАЙМЕРА (27.08): таймер гудка (ringing)
+      // взводится на 90с, но call_accept по почте может дойти ПОЗЖЕ (SMTP с
+      // Android + доставка + IMAP-фетч ≈ 90-120с). Если к моменту срабатывания
+      // таймера звонок УЖЕ стал active — это устаревший тик: НЕ рвём живой
+      // звонок (иначе «сигнал дошёл и десктоп сразу отключился»).
+      if (reason === 'timeout' && this.callState === 'active') {
+        console.warn('[call] stale ring timeout ignored — call is active');
+        return;
+      }
       // Отмена/таймаут — ОБЯЗАТЕЛЬНО сообщаем собеседнику (call_cancel при
       // ringing, call_end при active), чтобы у него трубка легла сама
       // (требование пользователя: как во всех мессенджерах).
