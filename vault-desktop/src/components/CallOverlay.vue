@@ -101,14 +101,19 @@
            «некрасивые кнопки» и отсутствие динамика. Запись убрана из
            оверлея (не реализована в пайплайне). -->
       <template v-else-if="state === 'active'">
-        <!-- Соединение (28.08): статус «Соединение…» показывается ТЕКСТОМ
-             сверху (call-status), поэтому отдельная зелёная трубка не нужна —
-             она только дублировала и путала («зачем зелёная кнопка над
-             красной?»). Оставляем одну красную пилюлю завершения. -->
+        <!-- Соединение (28.08): ЗЕЛЁНЫЙ орб «принято» — визуальное
+             продолжение свайпа (золотой → зелёный = звонок принят, идёт
+             соединение). Раньше здесь сразу появлялась КРАСНАЯ пилюля —
+             пользователь воспринимал это как «свайп не прошёл, вернулась
+             красная кнопка» и жал её, разрывая звонок. Маленькая красная
+             пилюля ниже — на случай, если нужно отменить. -->
         <template v-if="!mediaConnected">
-          <div class="call-control-row">
-            <button class="call-end-pill" :title="texts.end" @click="$emit('end')">
-              <Icon name="phone" :size="22" />
+          <div class="call-connecting-wrap">
+            <div class="call-orb call-orb-accepted">
+              <Icon name="phone" :size="26" color="#ffffff" />
+            </div>
+            <button class="call-end-pill call-end-pill-small" :title="texts.end" @click="$emit('end')">
+              <Icon name="phone" :size="18" />
             </button>
           </div>
         </template>
@@ -507,6 +512,31 @@ export default {
 .decision-reject {
   background: linear-gradient(135deg, #f87171, #ef4444);
   box-shadow: 0 8px 34px rgba(239, 68, 68, 0.65);
+}
+/* Фаза «Соединение…» (28.08): зелёный орб «принято» + маленькая красная
+   пилюля ниже. Визуальное продолжение свайпа — пользователь видит, что
+   звонок ПРИНЯТ (зелёный), а не «вернулась красная кнопка». */
+.call-connecting-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.call-orb-accepted {
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65);
+  animation: acceptpulse 1.6s ease-in-out infinite;
+  cursor: default;
+}
+@keyframes acceptpulse {
+  0%, 100% { box-shadow: 0 8px 34px rgba(34, 197, 94, 0.65); }
+  50% { box-shadow: 0 8px 44px rgba(34, 197, 94, 0.9); }
+}
+.call-end-pill-small {
+  width: 52px;
+  height: 40px;
+  border-radius: 20px;
+  opacity: 0.85;
 }
 .call-orb-reject,
 .call-orb-end {
