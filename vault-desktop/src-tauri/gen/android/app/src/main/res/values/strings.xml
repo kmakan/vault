@@ -1,4 +1,10 @@
 <resources>
     <string name="app_name">"Vault"</string>
     <string name="main_activity_title">"Vault"</string>
+
+    <!-- Foreground-сервис (27.08): фоновый приём звонков. -->
+    <string name="fg_channel_name">Vault в фоне</string>
+    <string name="fg_channel_desc">Держит Vault запущенным для приёма звонков</string>
+    <string name="fg_notif_title">Vault работает</string>
+    <string name="fg_notif_text">Готов принимать звонки</string>
 </resources>

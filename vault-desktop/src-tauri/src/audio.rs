@@ -47,6 +47,80 @@ use rtc::shared::time::SystemInstant;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 
+// Desktop (27.08): программный AEC/NS/AGC — WebRTC AudioProcessingModule.
+// Убирает акустическую петлю (динамики → микрофон) и клиппинг. Android не
+// нужен: там аппаратный AEC через InputPreset::VoiceCommunication (oboe).
+#[cfg(not(target_os = "android"))]
+use webrtc_audio_processing::Processor;
+#[cfg(not(target_os = "android"))]
+use webrtc_audio_processing::config::{
+    Config as ApmConfig, EchoCanceller, GainController, GainController1, GainControllerMode,
+    HighPassFilter, NoiseSuppression, NoiseSuppressionLevel,
+};
+
+/// Дескриптор APM для пайплайна. Desktop — WebRTC-процессор (общий для mic и
+/// speaker через Arc); Android — `()` (аппаратный AEC, софт не участвует).
+#[cfg(not(target_os = "android"))]
+pub(crate) type Apm = Option<Arc<Processor>>;
+#[cfg(target_os = "android")]
+pub(crate) type Apm = ();
+
+/// 10мс-фрейм APM @ 48kHz (WebRTC фиксирован на 10мс). 20мс Opus-фрейм (960)
+/// обрабатывается двумя такими кусками.
+#[cfg(not(target_os = "android"))]
+const APM_FRAME: usize = 480;
+
+/// Создать APM: AEC3 (полный) + шумодав High + AGC (AdaptiveDigital, без
+/// аналогового гейта — мы не управляем OS-миксером) + high-pass.
+#[cfg(not(target_os = "android"))]
+fn create_apm() -> Result<Arc<Processor>, String> {
+    let ap = Processor::new(48000).map_err(|e| format!("APM new: {e}"))?;
+    let config = ApmConfig {
+        echo_canceller: Some(EchoCanceller::Full { stream_delay_ms: None }),
+        noise_suppression: Some(NoiseSuppression {
+            level: NoiseSuppressionLevel::High,
+            analyze_linear_aec_output: false,
+        }),
+        gain_controller: Some(GainController::GainController1(GainController1 {
+            mode: GainControllerMode::AdaptiveDigital,
+            target_level_dbfs: 3,
+            compression_gain_db: 9,
+            enable_limiter: true,
+            analog_gain_controller: None,
+        })),
+        high_pass_filter: Some(HighPassFilter::default()),
+        ..Default::default()
+    };
+    ap.set_config(config);
+    Ok(Arc::new(ap))
+}
+
+/// Обработать 20мс capture-фрейм (960 сэмплов @48k mono) через APM двумя
+/// 10мс-кусками (WebRTC фиксирован на 10мс). No-op без APM.
+#[cfg(not(target_os = "android"))]
+fn apm_capture(apm: &Apm, frame: &mut [f32]) {
+    if let Some(ap) = apm {
+        for chunk in frame.chunks_exact_mut(APM_FRAME) {
+            let _ = ap.process_capture_frame(std::iter::once(chunk));
+        }
+    }
+}
+#[cfg(target_os = "android")]
+fn apm_capture(_apm: &Apm, _frame: &mut [f32]) {}
+
+/// Скормить APM reference-сигнал (far-end, то что играет в динамиках) для AEC.
+/// 48kHz mono, куски по 10мс. No-op без APM.
+#[cfg(not(target_os = "android"))]
+fn apm_render(apm: &Apm, frame: &[f32]) {
+    if let Some(ap) = apm {
+        for chunk in frame.chunks_exact(APM_FRAME) {
+            let _ = ap.analyze_render_frame(std::iter::once(chunk));
+        }
+    }
+}
+#[cfg(target_os = "android")]
+fn apm_render(_apm: &Apm, _frame: &[f32]) {}
+
 /// 20ms frame @ 48kHz mono — the Opus frame size we use end-to-end.
 pub(crate) const FRAME_SAMPLES: usize = 960;
 const FRAME_DURATION: Duration = Duration::from_millis(20);
@@ -57,7 +131,7 @@ const DECODE_BUF: usize = 5760;
 /// resample → 20ms frames → Opus encode (float) → channel to the writer.
 #[cfg(not(target_os = "android"))]
 macro_rules! build_mic {
-    ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $opus_tx:expr, $muted:expr, $fmt:ty) => {{
+    ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $opus_tx:expr, $muted:expr, $apm:expr, $fmt:ty) => {{
         let mut encoder =
             Encoder::new(SampleRate::Hz48000, OpusChannels::Mono, Application::Voip)
                 .map_err(|e| e.to_string())?;
@@ -77,7 +151,10 @@ macro_rules! build_mic {
                         if resampler.push() {
                             buf.push(avg);
                             if buf.len() >= FRAME_SAMPLES {
-                                let frame: Vec<f32> = buf.drain(..FRAME_SAMPLES).collect();
+                                let mut frame: Vec<f32> = buf.drain(..FRAME_SAMPLES).collect();
+                                // AEC/NS/AGC (27.08): обрабатываем capture-фрейм
+                                // ДО кодирования — убираем петлю и клиппинг.
+                                apm_capture(&$apm, &mut frame);
                                 // RMS микрофона (диагностика 23.08): каждые
                                 // ~0.4с — реальный уровень захвата. Если mic
                                 // тихий (rms < 0.01) — проблема устройства,
@@ -205,9 +282,19 @@ pub async fn run_audio_pipeline(
     // Теперь микрофон + writer стартуют СРАЗУ (RTP идёт, on_track срабатывает
     // у пира), а remote-трек ждём параллельно в отдельной таске.
 
+    // APM (27.08): общий для mic (capture) и speaker (render/reference).
+    // Desktop — WebRTC AEC3+NS+AGC; Android — () (аппаратный AEC).
+    #[cfg(not(target_os = "android"))]
+    let apm: Apm = match create_apm() {
+        Ok(a) => { eprintln!("[audio] APM ready (AEC3+NS+AGC)"); Some(a) }
+        Err(e) => { eprintln!("[audio] APM unavailable, raw capture: {e}"); None }
+    };
+    #[cfg(target_os = "android")]
+    let apm: Apm = ();
+
     // Mic → local track (стартует немедленно).
     let (opus_tx, opus_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
-    let mic_stream = match start_mic_capture(opus_tx, muted.clone()) {
+    let mic_stream = match start_mic_capture(opus_tx, muted.clone(), apm.clone()) {
         Ok(s) => Some(s),
         Err(e) => {
             eprintln!("[audio] mic capture unavailable: {e}");
@@ -233,7 +320,7 @@ pub async fn run_audio_pipeline(
             _ = stop_rx.changed() => return,
         };
         eprintln!("[audio] remote track received — playing");
-        read_remote_loop(remote_track, pcm_tx, stop_rx, media_key).await;
+        read_remote_loop(remote_track, pcm_tx, stop_rx, media_key, apm).await;
     });
 
     // Keep streams alive; the loops exit when the PC is closed.
@@ -261,14 +348,16 @@ enum AudioStreamHandle {
 fn start_mic_capture(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
+    apm: Apm,
 ) -> Result<AudioStreamHandle, String> {
-    start_mic_capture_cpal(opus_tx, muted).map(AudioStreamHandle::Cpal)
+    start_mic_capture_cpal(opus_tx, muted, apm).map(AudioStreamHandle::Cpal)
 }
 
 #[cfg(target_os = "android")]
 fn start_mic_capture(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
+    _apm: Apm,
 ) -> Result<AudioStreamHandle, String> {
     audio_android::start_mic_capture_oboe(opus_tx, muted).map(AudioStreamHandle::OboeInput)
 }
@@ -277,10 +366,11 @@ fn start_mic_capture(
 fn start_mic_capture_cpal(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
+    apm: Apm,
 ) -> Result<cpal::Stream, String> {
     // panic=abort: cpal может паниковать — ловим (26.08).
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        start_mic_capture_inner(opus_tx, muted)
+        start_mic_capture_inner(opus_tx, muted, apm)
     })) {
         Ok(r) => r,
         Err(_) => {
@@ -293,6 +383,7 @@ fn start_mic_capture_cpal(
 fn start_mic_capture_inner(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
+    apm: Apm,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host
@@ -303,11 +394,11 @@ fn start_mic_capture_inner(
     let ch = cfg.channels() as usize;
 
     let stream_result: Result<cpal::Stream, String> = match cfg.sample_format() {
-        cpal::SampleFormat::F32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, f32),
-        cpal::SampleFormat::I16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, i16),
-        cpal::SampleFormat::U16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, u16),
-        cpal::SampleFormat::I32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, i32),
-        cpal::SampleFormat::F64 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, f64),
+        cpal::SampleFormat::F32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f32),
+        cpal::SampleFormat::I16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i16),
+        cpal::SampleFormat::U16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, u16),
+        cpal::SampleFormat::I32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i32),
+        cpal::SampleFormat::F64 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f64),
         other => return Err(format!("unsupported input format {other:?}")),
     };
     let stream = stream_result?;
@@ -409,6 +500,7 @@ async fn read_remote_loop(
     pcm_tx: Sender<Vec<f32>>,
     mut stop_rx: watch::Receiver<bool>,
     media_key: Option<[u8; 32]>,
+    apm: Apm,
 ) {
     let mut decoder = match Decoder::new(SampleRate::Hz48000, OpusChannels::Mono) {
         Ok(d) => d,
@@ -434,6 +526,10 @@ async fn read_remote_loop(
                         let mut out = vec![0f32; DECODE_BUF];
                         if let Ok(n) = decoder.decode_float(Some(&payload[..]), &mut out[..], false) {
                             out.truncate(n);
+                            // AEC reference (27.08): скормить APM far-end сигнал
+                            // (то, что сейчас играет в динамиках) — без этого
+                            // эхоподавление не знает, что вычитать из микрофона.
+                            apm_render(&apm, &out);
                             // RMS (диагностика шума 23.08): уровень принятого
                             // аудио — каждые 20-й пакет. Если rms > 0.05, это
                             // реальный звук, не тишина.

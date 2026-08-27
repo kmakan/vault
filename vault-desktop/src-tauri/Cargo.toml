@@ -59,6 +59,13 @@ bytes = "1"
 cpal = "0.18"
 audiopus = "0.2"
 
+# Desktop (27.08): программный AEC/NS/AGC (WebRTC AudioProcessingModule).
+# Android не нужен — там аппаратный AEC через InputPreset::VoiceCommunication.
+# bundled: системной webrtc-audio-processing-2 нет (в системе 1.3 от PipeWire) —
+# собираем из исходников крейта, статическая линковка, нет runtime-зависимости.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+webrtc-audio-processing = { version = "2", features = ["bundled"] }
+
 # Linux: прямой доступ к WebKitGTK WebView для обработчика разрешений
 # (getUserMedia для голосовых сообщений). Версия совпадает с tauri-runtime-wry.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
