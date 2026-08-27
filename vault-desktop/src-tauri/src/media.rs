@@ -31,7 +31,7 @@ use webrtc::media_stream::track_remote::TrackRemote;
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
     RTCConfigurationBuilder, RTCIceServer, RTCSessionDescription, RTCIceGatheringState,
-    RTCPeerConnectionState,
+    RTCPeerConnectionState, SettingEngine,
 };
 use webrtc::runtime::{Receiver, Sender, channel};
 
@@ -103,9 +103,14 @@ impl PeerConnectionEventHandler for CallHandler {
 impl CallMediaManager {
     pub fn new() -> Self {
         // Dev fallback: public STUN (roadmap: dev-only; X2TURN comes in Phase 3).
-        // Множество серверов: stun.l.google.com из РФ может быть недоступен
-        // (замедление/блокировка) → gathering таймаутил на Android. Добавили
-        // запасные публичные STUN, доступные из России (26.08).
+        // Множество серверов: stun.l.google.com из РФ/с мобильного интернета может
+        // быть недоступен (замедление/блокировка) → gathering таймаутил на Android
+        // (27.08: answer создавался 22с, пока Google STUN не отвечал). Запросы ко
+        // всем серверам идут ПАРАЛЛЕЛЬНО (stun_gatherer.rs), поэтому несколько
+        // серверов не замедляют gathering — самый быстрый ответ даёт srflx.
+        // Проверены с сети 27.08 (мс): google 36, sipgate 56, zadarma 60,
+        // sipnet.ru 73, 1und1.de 60. МЁРТВЫЕ (не добавлять): stunprotocol.org
+        // (DNS), stun.yandex.ru и stun.mts.ru (таймаут).
         // STUN для host/srflx. TURN (openrelay.metered.ca) убран (27.08):
         // отдаёт 400 Bad Request на все allocate → 15с ожидания gathering и
         // шум в логах. Для desktop↔desktop в одной сети host-кандидатов
@@ -115,6 +120,10 @@ impl CallMediaManager {
             urls: vec![
                 "stun:stun.l.google.com:19302".to_owned(),
                 "stun:stun1.l.google.com:19302".to_owned(),
+                "stun:stun.sipgate.net:3478".to_owned(),
+                "stun:stun.zadarma.com:3478".to_owned(),
+                "stun:stun.sipnet.ru:3478".to_owned(),
+                "stun:stun.1und1.de:3478".to_owned(),
             ],
             ..Default::default()
         };
@@ -169,6 +178,23 @@ impl CallMediaManager {
             .with_ice_servers(self.ice_servers.clone())
             .build();
 
+        // ICE-таймауты под email-сигнализацию (27.08, корень ICE Failed):
+        // дефолты disconnected 5с + failed 25с = 30с. Answerer (звонящий)
+        // начинает проверки сразу после set_remote(offer), а offerer
+        // (принимающий) физически не может отвечать, пока не получит answer
+        // по почте — письмо шло 36с. Answerer сгорал в Failed ЗА 6с до
+        // этого, а при Failed агент стирает ВСЕ локальные кандидаты
+        // (delete_all_candidates) — входящие пинги отбрасывались как
+        // "not a valid local candidate", и вторая сторона тоже сгорала.
+        // 60с disconnected + 120с failed = 180с окна: покрывает любую
+        // задержку почты (caller-таймер звонка 300с).
+        let mut setting_engine = SettingEngine::default();
+        setting_engine.set_ice_timeouts(
+            Some(Duration::from_secs(60)),  // disconnected
+            Some(Duration::from_secs(120)), // failed
+            None,                           // keepalive (дефолт 2с)
+        );
+
         let (gather_tx, gather_rx) = channel::<()>(1);
         let (connected_tx, connected_rx) = channel::<()>(1);
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
@@ -183,6 +209,7 @@ impl CallMediaManager {
             PeerConnectionBuilder::new()
                 .with_configuration(config)
                 .with_media_engine(media_engine)
+                .with_setting_engine(setting_engine)
                 .with_handler(handler)
                 .with_udp_addrs(vec!["0.0.0.0:0".to_owned()])
                 .build()
