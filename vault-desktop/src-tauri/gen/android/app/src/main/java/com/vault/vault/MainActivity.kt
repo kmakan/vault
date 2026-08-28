@@ -70,6 +70,26 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "battery-optimization request failed: " + e.message)
     }
 
+    // Full-screen уведомления звонков (28.08): на Android 14+ (API 34)
+    // USE_FULL_SCREEN_INTENT стало СПЕЦИАЛЬНЫМ разрешением — оно НЕ
+    // выдаётся автоматически, и без него setFullScreenIntent молча
+    // деградирует в heads-up («маленькое окно» вместо экрана звонка).
+    // Открываем системную страницу, чтобы пользователь включил его.
+    try {
+      if (Build.VERSION.SDK_INT >= 34) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (!nm.canUseFullScreenIntent()) {
+          val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+            data = android.net.Uri.parse("package:$packageName")
+          }
+          startActivity(intent)
+          Log.i("VaultRust", "opened full-screen-intent settings page")
+        }
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "full-screen-intent permission request failed: " + e.message)
+    }
+
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
     try {
       val svc = Intent(this, VaultForegroundService::class.java)

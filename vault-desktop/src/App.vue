@@ -4590,9 +4590,14 @@ export default {
           this.callStartedAt = Date.now();
           console.log('[call] incoming_ringing SET for', call_id, 'from', from);
           // Звук входящего (27.08, редизайн): WAV-рингтон «кристальный чайм».
-          // Desktop — cpal в Rust (слышен при свёрнутом окне), Android —
-          // HTML5 Audio (cpal там паникует, 26.08).
-          this.playCallSound('incoming', true);
+          // Desktop — cpal в Rust (слышен при свёрнутом окне).
+          // Android (28.08): рингтон играет НАТИВНЫЙ MediaPlayer в сервисе
+          // (запускается в mediaShowIncomingCall) — HTML5 Audio в WebView
+          // глохнет в фоне и играл ОДИН раз. Поэтому HTML5-луп входящего
+          // на Android пропускаем, чтобы не было двойного звука.
+          if (!this.isAndroid) {
+            this.playCallSound('incoming', true);
+          }
           // Full-screen уведомление (28.08): Android — системный звонок
           // поверх локскрина (рингтон+вибрация канала уведомлений).
           // Desktop — no-op. Снимается в hangup().

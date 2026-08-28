@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -140,8 +141,53 @@ class VaultForegroundService : Service() {
         // Входящий звонок (28.08): отдельный high-importance канал +
         // full-screen intent — звонок поверх локскрина как в обычной
         // звонилке. Вызывается из Rust через JNI (audio_android.rs).
-        const val CALL_CHANNEL_ID = "vault_incoming_call"
+        // ВАЖНО (28.08): ID канала v2 — старый канал (0.1.70/0.1.71) уже
+        // создан на устройствах со звуком, а createNotificationChannel НЕ
+        // обновляет существующий канал. Новый ID гарантирует применение
+        // тихого канала: рингтон теперь играет нативный MediaPlayer.
+        const val CALL_CHANNEL_ID = "vault_incoming_call_v2"
         const val CALL_NOTIF_ID = 9002
+
+        // Нативный зацикленный рингтон (28.08): HTML5 Audio в WebView
+        // глохнет при троттлинге фона, а звук канала уведомления играет
+        // ОДИН раз — пользователь слышал «сигнал прозвучал и оборвался».
+        // MediaPlayer в сервисе крутится надёжно до dismissIncomingCall.
+        @Volatile
+        private var ringtonePlayer: MediaPlayer? = null
+
+        private fun startRingtone(context: Context) {
+            try {
+                stopRingtone()
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val mp = MediaPlayer().apply {
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    setDataSource(context, uri)
+                    isLooping = true
+                    prepare()
+                    start()
+                }
+                ringtonePlayer = mp
+                Log.i("VaultRust", "ringtone started (native loop)")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "startRingtone failed: " + e.message)
+            }
+        }
+
+        private fun stopRingtone() {
+            try {
+                ringtonePlayer?.let {
+                    if (it.isPlaying) it.stop()
+                    it.release()
+                }
+            } catch (_: Throwable) {}
+            ringtonePlayer = null
+        }
 
         /**
          * Перевести FGS в режим phoneCall (28.08). На Android 14+ FGS-тип
@@ -199,13 +245,10 @@ class VaultForegroundService : Service() {
                         NotificationManager.IMPORTANCE_HIGH
                     ).apply {
                         description = context.getString(R.string.call_channel_desc)
-                        // Звук канала: системный рингтон + вибрация.
-                        setSound(
-                            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                            android.media.AudioAttributes.Builder()
-                                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                                .build()
-                        )
+                        // Звук канала ОТКЛЮЧЁН (28.08): рингтон играет
+                        // нативный зацикленный MediaPlayer (startRingtone).
+                        // Звук канала играл ОДИН раз и дублировал MediaPlayer.
+                        setSound(null, null)
                         enableVibration(true)
                         vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
                         setShowBadge(true)
@@ -236,24 +279,41 @@ class VaultForegroundService : Service() {
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
 
+                // 3) Нативный зацикленный рингтон (28.08): звук канала
+                //    уведомления играет ОДИН раз, а HTML5 Audio в WebView
+                //    глохнет в фоне. MediaPlayer в сервисе крутится надёжно
+                //    до dismissIncomingCall — «сигнал не обрывается».
+                startRingtone(context)
+
                 // 2) Явно поднять activity (28.08): full-screen intent
                 //    срабатывает только при ЗАБЛОКИРОВАННОМ экране; при
                 //    разблокированном Android показывает лишь heads-up и
                 //    приложение остаётся свёрнутым. Поэтому сами стартуем
                 //    MainActivity (BAL-исключение даёт phoneCall-FGS).
+                //    ВАЖНО: startForeground(phoneCall) АСИНХРОННЫЙ — если
+                //    startActivity вызвать сразу, система ещё не видит
+                //    phoneCall-FGS и блокирует запуск (BAL). Даём 400мс
+                //    на применение типа сервиса.
                 try {
-                    val openIntent = context.packageManager
-                        .getLaunchIntentForPackage(context.packageName)
-                    if (openIntent != null) {
-                        openIntent.addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        )
-                        context.startActivity(openIntent)
-                        Log.i("VaultRust", "activity launched for incoming call")
-                    }
+                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                    handler.postDelayed({
+                        try {
+                            val openIntent = context.packageManager
+                                .getLaunchIntentForPackage(context.packageName)
+                            if (openIntent != null) {
+                                openIntent.addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                )
+                                context.startActivity(openIntent)
+                                Log.i("VaultRust", "activity launched for incoming call")
+                            }
+                        } catch (e: Throwable) {
+                            Log.w("VaultRust", "launch activity failed: " + e.message)
+                        }
+                    }, 400)
                 } catch (e: Throwable) {
-                    Log.w("VaultRust", "launch activity failed: " + e.message)
+                    Log.w("VaultRust", "schedule activity launch failed: " + e.message)
                 }
             } catch (e: Throwable) {
                 Log.w("VaultRust", "showIncomingCall failed: " + e.message)
@@ -266,6 +326,8 @@ class VaultForegroundService : Service() {
             try {
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 nm.cancel(CALL_NOTIF_ID)
+                // Остановить нативный рингтон (28.08).
+                stopRingtone()
                 // Вернуть FGS из phoneCall обратно в dataSync (28.08).
                 instance?.let { exitCallMode(it) }
             } catch (e: Throwable) {
