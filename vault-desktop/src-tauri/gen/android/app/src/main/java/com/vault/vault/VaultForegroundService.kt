@@ -67,7 +67,19 @@ class VaultForegroundService : Service() {
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         wakeLock = null
         wifiLock = null
+        // Защита от убийства (28.08): OEM-оптимизация батареи (Xiaomi/Huawei/
+        // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
+        // перезапуск через AlarmManager, чтобы сервис воскрес.
+        scheduleRestart(this)
         super.onDestroy()
+    }
+
+    // Пользователь смахнул приложение из recents (28.08): система вызывает
+    // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
+        scheduleRestart(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -132,6 +144,29 @@ class VaultForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
+
+        // Перезапуск сервиса после убийства (28.08): OEM-оптимизация батареи
+        // (Xiaomi/Huawei/Samsung/Oppo на Android 11) убивает foreground-сервис.
+        // AlarmManager будит PendingIntent через 3с и стартует сервис заново.
+        // PendingIntent живёт в системе даже когда процесс убит.
+        private fun scheduleRestart(context: Context) {
+            try {
+                val intent = Intent(context, VaultForegroundService::class.java)
+                val pi = PendingIntent.getService(
+                    context, 0, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val am = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                am.set(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    android.os.SystemClock.elapsedRealtime() + 3000,
+                    pi
+                )
+                Log.i("VaultRust", "service restart scheduled in 3s")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "scheduleRestart failed: " + e.message)
+            }
+        }
 
         // Живой экземпляр сервиса (28.08): нужен, чтобы из статического
         // JNI-метода переключить FGS в режим phoneCall (BAL-исключение).
