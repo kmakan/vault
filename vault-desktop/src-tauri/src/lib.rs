@@ -1018,6 +1018,8 @@ pub fn run() {
             media::media_set_muted,
             media::media_set_speaker,
             media::media_send_hangup,
+            media::media_show_incoming_call,
+            media::media_dismiss_incoming_call,
             media::media_set_ice_servers,
             // Рингтон входящего звонка (cpal, не webview — работает и со
             // свёрнутым окном; autoplay-политика WebKitGTK не мешает).

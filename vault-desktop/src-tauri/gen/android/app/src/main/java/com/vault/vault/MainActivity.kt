@@ -53,6 +53,23 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "POST_NOTIFICATIONS request failed: " + e.message)
     }
 
+    // Исключение из оптимизации батареи (28.08): без него Doze замораживает
+    // foreground-сервис и IMAP IDLE-цикл — входящие звонки не доходят при
+    // выключенном экране. Запрашиваем системный диалог «Не ограничивать».
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+          val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = android.net.Uri.parse("package:$packageName")
+          }
+          startActivity(intent)
+        }
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "battery-optimization request failed: " + e.message)
+    }
+
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
     try {
       val svc = Intent(this, VaultForegroundService::class.java)

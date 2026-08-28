@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.RingtoneManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -127,5 +129,78 @@ class VaultForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
+
+        // Входящий звонок (28.08): отдельный high-importance канал +
+        // full-screen intent — звонок поверх локскрина как в обычной
+        // звонилке. Вызывается из Rust через JNI (audio_android.rs).
+        const val CALL_CHANNEL_ID = "vault_incoming_call"
+        const val CALL_NOTIF_ID = 9002
+
+        /**
+         * Показать full-screen уведомление входящего звонка.
+         * Вызывается из Rust (JNI) в момент incoming_ringing.
+         */
+        @JvmStatic
+        fun showIncomingCall(context: Context, callerName: String) {
+            try {
+                val nm = context.getSystemService(NotificationManager::class.java) ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = NotificationChannel(
+                        CALL_CHANNEL_ID,
+                        context.getString(R.string.call_channel_name),
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = context.getString(R.string.call_channel_desc)
+                        // Звук канала: системный рингтон + вибрация.
+                        setSound(
+                            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                            android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                .build()
+                        )
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
+                        setShowBadge(true)
+                        // Не гасить heads-up сразу — это звонок.
+                        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+                val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                val pi: PendingIntent? = launchIntent?.let {
+                    PendingIntent.getActivity(
+                        context, 1, it,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                }
+                val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
+                    .setContentTitle(callerName)
+                    .setContentText(context.getString(R.string.call_notif_text))
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentIntent(pi)
+                    .setFullScreenIntent(pi, true) // поверх локскрина
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setOngoing(true)
+                    .setAutoCancel(false)
+                    .setTimeoutAfter(180_000) // гудок 180с = таймауту звонка
+                    .build()
+                nm.notify(CALL_NOTIF_ID, notif)
+                Log.i("VaultRust", "incoming-call notification shown for $callerName")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "showIncomingCall failed: " + e.message)
+            }
+        }
+
+        /** Убрать уведомление звонка (принят/отклонён/завершён/таймаут). */
+        @JvmStatic
+        fun dismissIncomingCall(context: Context) {
+            try {
+                val nm = context.getSystemService(NotificationManager::class.java) ?: return
+                nm.cancel(CALL_NOTIF_ID)
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "dismissIncomingCall failed: " + e.message)
+            }
+        }
     }
 }

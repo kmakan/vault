@@ -229,3 +229,68 @@ pub(crate) fn set_speakerphone(on: bool) {
         Err(_) => eprintln!("[audio] setSpeakerphoneOn panicked (JNI)"),
     }
 }
+
+/// Full-screen уведомление входящего звонка (28.08): вызывает статический
+/// VaultForegroundService.showIncomingCall(context, callerName) через JNI.
+/// Работает при свёрнутом/заблокированном приложении — звонок поверх
+/// локскрина как в обычной звонилке. Desktop — no-op (см. audio.rs).
+pub(crate) fn show_incoming_call_notification(caller_name: &str) {
+    let name = caller_name.to_owned();
+    let result = std::panic::catch_unwind(move || {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let jname = env
+            .new_string(&name)
+            .map_err(|e| format!("new_string: {e}"))?;
+        let cls = env
+            .find_class("com/vault/vault/VaultForegroundService")
+            .map_err(|e| format!("find_class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "showIncomingCall",
+            "(Landroid/content/Context;Ljava/lang/String;)V",
+            &[(&activity).into(), (&jname).into()],
+        )
+        .map_err(|e| format!("showIncomingCall: {e}"))?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => eprintln!("[audio] incoming-call notification: {caller_name}"),
+        Ok(Err(e)) => eprintln!("[audio] showIncomingCall failed: {e}"),
+        Err(_) => eprintln!("[audio] showIncomingCall panicked (JNI)"),
+    }
+}
+
+/// Убрать уведомление входящего звонка (принят/отклонён/завершён/таймаут).
+pub(crate) fn dismiss_incoming_call_notification() {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = env
+            .find_class("com/vault/vault/VaultForegroundService")
+            .map_err(|e| format!("find_class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "dismissIncomingCall",
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        )
+        .map_err(|e| format!("dismissIncomingCall: {e}"))?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => eprintln!("[audio] incoming-call notification dismissed"),
+        Ok(Err(e)) => eprintln!("[audio] dismissIncomingCall failed: {e}"),
+        Err(_) => eprintln!("[audio] dismissIncomingCall panicked (JNI)"),
+    }
+}

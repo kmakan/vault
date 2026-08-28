@@ -1051,6 +1051,23 @@ export class ApiClient {
       return false;
     }
   }
+  // Full-screen уведомление входящего звонка (28.08): Android — системное
+  // уведомление поверх локскрина (рингтон+вибрация канала); desktop — no-op.
+  async mediaShowIncomingCall(callerName) {
+    try {
+      return await invoke('media_show_incoming_call', { callerName });
+    } catch (e) {
+      console.warn('[call] mediaShowIncomingCall failed:', e);
+    }
+  }
+  // Убрать уведомление входящего звонка (принят/отклонён/завершён/таймаут).
+  async mediaDismissIncomingCall() {
+    try {
+      return await invoke('media_dismiss_incoming_call');
+    } catch (e) {
+      console.warn('[call] mediaDismissIncomingCall failed:', e);
+    }
+  }
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
   }

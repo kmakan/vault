@@ -4593,6 +4593,10 @@ export default {
           // Desktop — cpal в Rust (слышен при свёрнутом окне), Android —
           // HTML5 Audio (cpal там паникует, 26.08).
           this.playCallSound('incoming', true);
+          // Full-screen уведомление (28.08): Android — системный звонок
+          // поверх локскрина (рингтон+вибрация канала уведомлений).
+          // Desktop — no-op. Снимается в hangup().
+          api.mediaShowIncomingCall(this.callPeerName || from);
           this.startFastPolling();
           // Таймер гудка 180с (27.08): было 90с, но call_accept/answer по
           // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
@@ -4838,6 +4842,9 @@ export default {
       const wasIncoming = this.callState === 'incoming_ringing';
       const wasOutgoing = this.callState === 'outgoing_ringing';
       console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
+      // Снять full-screen уведомление входящего (28.08): любой исход
+      // (принят/отклонён/таймаут/завершён) гасит системный звонок.
+      api.mediaDismissIncomingCall();
       // Пропущенные вызовы (27.08): фиксируем исход звонка в истории чата
       // «пилюлей» (Пропущенный звонок / Нет ответа / Звонок завершён · 03:24).
       // fire-and-forget: hangup не ждёт sqlite.

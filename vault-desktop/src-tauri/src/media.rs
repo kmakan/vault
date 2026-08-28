@@ -599,6 +599,28 @@ pub async fn media_set_speaker(
     mgr.set_speaker(&call_id, on).await
 }
 
+/// Full-screen уведомление входящего звонка (28.08): Android — системное
+/// уведомление поверх локскрина (JNI → VaultForegroundService.showIncomingCall);
+/// desktop — no-op (окно и так видно). Вызывается из JS при incoming_ringing.
+#[tauri::command]
+pub async fn media_show_incoming_call(caller_name: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    crate::audio::audio_android::show_incoming_call_notification(&caller_name);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = caller_name;
+    }
+    Ok(())
+}
+
+/// Убрать уведомление входящего звонка (принят/отклонён/завершён/таймаут).
+#[tauri::command]
+pub async fn media_dismiss_incoming_call() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    crate::audio::audio_android::dismiss_incoming_call_notification();
+    Ok(())
+}
+
 /// Мгновенный hangup поверх WebRTC (28.08): «hangup» по DataChannel —
 /// собеседник получает за миллисекунды вместо 30-60с по email.
 /// Возвращает true если отправлено по DC, false — канала нет (email fallback).

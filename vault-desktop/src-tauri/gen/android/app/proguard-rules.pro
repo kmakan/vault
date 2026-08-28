@@ -19,3 +19,12 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# ── Vault: JNI-мост звонков (28.08) ──────────────────────────────────────
+# Rust (audio_android.rs) вызывает эти методы по имени через JNI
+# (find_class + call_static_method). R8/minify переименовывает их
+# (showIncomingCall → U) → NoSuchMethodError в рантайме. Сохраняем.
+-keep class com.vault.vault.VaultForegroundService {
+    public static void showIncomingCall(android.content.Context, java.lang.String);
+    public static void dismissIncomingCall(android.content.Context);
+}
+-keep class com.vault.vault.MainActivity { *; }

@@ -10,6 +10,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Входящий звонок (28.08): full-screen intent поверх локскрина.
+         На Android 14+ без этого разрешения setFullScreenIntent молча
+         деградирует в обычный heads-up. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Вибрация при входящем звонке. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Исключение из оптимизации батареи (запрашивается в runtime). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
