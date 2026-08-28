@@ -78,9 +78,10 @@ export async function initNotifications() {
 //   зашифрованных сообщений, чтобы не утекал контент), id — uid письма для
 //   дедупликации. Возвращает true, если уведомление показано.
 export function notifyNewMessage({ title, body, id } = {}) {
-  if (!notificationsEnabled()) return false;
-  if (!permissionReady) return false;
-  if (id != null && notifiedIds.has(String(id))) return false;
+  // ДИАГНОСТИКА (29.08): молчаливые отказы — главная причина «пуша нет».
+  if (!notificationsEnabled()) { console.log('[notify] SKIP: disabled by setting'); return false; }
+  if (!permissionReady) { console.log('[notify] SKIP: permission not ready'); return false; }
+  if (id != null && notifiedIds.has(String(id))) { console.log('[notify] SKIP: already notified id=' + id); return false; }
   if (id != null) {
     notifiedIds.add(String(id));
     persistNotified();

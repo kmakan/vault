@@ -1389,6 +1389,8 @@ export default {
       if (p.cursors) { try { this.saveCursors(this.email, p.cursors); } catch (e) { /* kv */ } }
       const msgs = p.messages || [];
       if (!msgs.length) return;
+      // ДИАГНОСТИКА (29.08): видно ли вообще, что монитор что-то принёс.
+      console.log('[idle-monitor] mail-changed msgs=' + msgs.length);
       const merged = [...this.emails];
       const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
       for (const m of msgs) {
@@ -4518,11 +4520,15 @@ export default {
         // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
         // пользователь на списке контактов — иначе уведомление теряется).
         if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
+          // ДИАГНОСТИКА (29.08): пуш должен был быть.
+          console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
             id: mid,
           });
+        } else if (notify) {
+          console.log('[notify] SKIP fresh=' + fresh + ' visible=' + this.chatVisible(chatKey) + ' muted=' + this.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');
         }
       }
     },

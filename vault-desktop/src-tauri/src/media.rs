@@ -72,7 +72,9 @@ struct CallSession {
     /// Мгновенный hangup поверх WebRTC (28.08): DataChannel «vault-ctrl».
     /// call_end по email идёт 30-60с — собеседник сидит с трубкой. DC
     /// доставляет «hangup» за миллисекунды после DTLS. None до открытия.
-    dc: Option<Arc<dyn DataChannel>>,
+    /// Слот общий (29.08): у звонящего в нём его собственный канал, у
+    /// принимающего — канал, пришедший через on_data_channel.
+    dc: Arc<Mutex<Option<Arc<dyn DataChannel>>>>,
 }
 
 /// SDP payload returned to the UI (JSON-encoded RTCSessionDescription).
@@ -177,6 +179,7 @@ impl CallMediaManager {
         app: tauri::AppHandle,
         call_id: &str,
         media_key: Option<[u8; 32]>,
+        is_caller: bool,
     ) -> Result<(Arc<dyn PeerConnection>, Arc<TrackLocalStaticSample>, Receiver<()>), String> {
         let mut media_engine = MediaEngine::default();
         let audio_codec = RTCRtpCodec {
@@ -250,16 +253,50 @@ impl CallMediaManager {
 
         // МГНОВЕННЫЙ HANGUP (28.08): DataChannel «vault-ctrl» поверх
         // DTLS-SCTP. call_end по email идёт 30-60с — собеседник сидит с
-        // трубкой. DC доставляет «hangup» за миллисекунды. Канал создаётся
-        // ДО offer/answer, чтобы DCEP-негосиация попала в SDP; у пира он
-        // придёт через on_data_channel (dc_rx).
-        let dc: Option<Arc<dyn DataChannel>> = match pc.create_data_channel("vault-ctrl", None).await {
-            Ok(dc) => Some(dc),
-            Err(e) => {
-                eprintln!("[media] create_data_channel failed (hangup fallback = email): {e}");
-                None
+        // трубкой. DC доставляет «hangup» за миллисекунды.
+        // КОРЕНЬ БАГА (29.08, «трубка ложится только по почте»): обе
+        // стороны создавали СВОЙ канал с одинаковым label — SCTP-ассоциация
+        // склеивала их в один stream, DCEP-негосиация входящего канала не
+        // происходила (ни у кого не срабатывал on_data_channel), и
+        // «hangup» уходил в мёртвый локальный канал. Теперь канал создаёт
+        // ТОЛЬКО звонящий (до offer — DCEP попадает в SDP); принимающий
+        // получает его через on_data_channel. Слот общий (Arc<Mutex<..>>):
+        // слушатель принимающего пишет туда пришедший канал, send_hangup
+        // читает — обе стороны шлют по ОДНОМУ каналу (от caller к callee
+        // и обратно по тому же stream, SCTP дуплексный).
+        let dc_slot: Arc<Mutex<Option<Arc<dyn DataChannel>>>> = Arc::new(Mutex::new(None));
+        if is_caller {
+            match pc.create_data_channel("vault-ctrl", None).await {
+                Ok(dc) => {
+                    eprintln!("[media] caller: vault-ctrl created");
+                    // Звонящий получает «hangup» от пира на СОБСТВЕННОМ
+                    // канале (тот же stream, дуплекс) — polл здесь; у
+                    // принимающего поллит dc_rx-слушатель ниже.
+                    let appc = app.clone();
+                    let cidc = call_id.to_owned();
+                    let dcp = Arc::clone(&dc);
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(ev) = dcp.poll().await {
+                            if let DataChannelEvent::OnMessage(msg) = ev {
+                                let text = String::from_utf8_lossy(&msg.data);
+                                if text.trim() == "hangup" {
+                                    eprintln!("[media] DC hangup received from peer");
+                                    let _ = appc.emit(
+                                        "call-remote-hangup",
+                                        serde_json::json!({ "callId": cidc }),
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                    *dc_slot.lock().await = Some(dc);
+                }
+                Err(e) => {
+                    eprintln!("[media] create_data_channel failed (hangup fallback = email): {e}");
+                }
             }
-        };
+        }
 
         // Local Opus track (SSRC random; the library packetizes samples).
         let ssrc = rand::random::<u32>();
@@ -324,16 +361,19 @@ impl CallMediaManager {
         // Слушаем ВХОДЯЩИЙ DataChannel от пира (28.08): пир создаёт свой
         // «vault-ctrl», он приходит нам через on_data_channel (dc_rx).
         // Сообщение «hangup» → событие в UI → мгновенное завершение без
-        // ожидания call_end по email (30-60с).
+        // ожидания call_end по email (30-60с). Пришедший канал пишем в
+        // общий слот (29.08) — принимающий шлёт свой «hangup» по нему.
         {
             let app2 = app.clone();
             let cid2 = call_id.to_owned();
+            let slot2 = Arc::clone(&dc_slot);
             tauri::async_runtime::spawn(async move {
                 let dc = match dc_rx.recv().await {
                     Some(dc) => dc,
                     None => return,
                 };
                 eprintln!("[media] remote data channel received");
+                *slot2.lock().await = Some(Arc::clone(&dc));
                 while let Some(ev) = dc.poll().await {
                     if let DataChannelEvent::OnMessage(msg) = ev {
                         let text = String::from_utf8_lossy(&msg.data);
@@ -386,7 +426,7 @@ impl CallMediaManager {
                 stop_tx,
                 muted,
                 speaker_tx,
-                dc,
+                dc: Arc::clone(&dc_slot),
             },
         );
 
@@ -435,7 +475,7 @@ impl CallMediaManager {
         call_id: &str,
         media_key: Option<[u8; 32]>,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key).await?;
+        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key, true).await?;
 
         let offer = pc.create_offer(None).await.map_err(|e| e.to_string())?;
         pc.set_local_description(offer).await.map_err(|e| e.to_string())?;
@@ -457,7 +497,7 @@ impl CallMediaManager {
         offer_sdp: &str,
         media_key: Option<[u8; 32]>,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key).await?;
+        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key, false).await?;
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
@@ -524,8 +564,10 @@ impl CallMediaManager {
             .calls
             .get(call_id)
             .ok_or_else(|| "call not found".to_string())?;
-        let dc = match &session.dc {
-            Some(dc) => Arc::clone(dc),
+        // Слот общий: у звонящего там свой канал, у принимающего —
+        // пришедший от пира (пишется в dc_rx-слушателе).
+        let dc = match session.dc.lock().await.clone() {
+            Some(dc) => dc,
             None => return Ok(false),
         };
         match dc.send_text("hangup").await {
