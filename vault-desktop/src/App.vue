@@ -182,7 +182,10 @@
           </div>
         </div>
         <!-- N5: переключатель архива (виден, когда есть архивные чаты) -->
-        <div v-if="hasArchivedChats" class="archive-toggle" @click="showArchived = !showArchived">
+        <!-- v-if: показываем и когда showArchived=true, даже если архив
+             опустел — иначе после «из архива» последнего чата переключатель
+             исчезал и выйти из режима архива было нельзя (баг 28.08) -->
+        <div v-if="hasArchivedChats || showArchived" class="archive-toggle" @click="showArchived = !showArchived">
           <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
           <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
         </div>
@@ -843,7 +846,7 @@
          Корневой уровень (28.08): раньше лежал в .main-area, который на
          мобильном скрыт при экране списка — меню открывалось «за экраном». -->
     <div v-if="chatMenu.show" class="message-menu-overlay" @click="closeChatMenu" @contextmenu.prevent="closeChatMenu">
-      <div class="message-menu chat-menu" @click.stop>
+      <div class="message-menu chat-menu" :style="{ left: chatMenu.x + 'px', top: chatMenu.y + 'px' }" @click.stop>
         <button @click="toggleArchive()">
           <Icon name="archive" :size="14" />
           {{ chatFlagOf(flagKey(chatMenu.target)).archived ? (t('chat_unarchive') || 'Из архива') : (t('chat_archive') || 'В архив') }}
@@ -4617,7 +4620,18 @@ export default {
     openChatMenu(target, e) {
       e.preventDefault();
       e.stopPropagation();
-      this.chatMenu = { show: true, target };
+      // 28.08: меню позиционируется по точке долгого нажатия.
+      const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
+      let y = Math.max(8, Math.min(e.clientY, window.innerHeight - 130));
+      // На Android WebView долгое нажатие часто присылает contextmenu с
+      // clientX/Y=0 — берём координаты элемента, иначе меню липнет к верху
+      // экрана и прячется под статус-бар.
+      if (!e.clientX && !e.clientY && e.target && e.target.getBoundingClientRect) {
+        const r = e.target.closest('.contact-item') || e.target;
+        const rr = r.getBoundingClientRect();
+        y = Math.max(8, Math.min(rr.bottom + 4, window.innerHeight - 130));
+      }
+      this.chatMenu = { show: true, target, x, y };
     },
     closeChatMenu() {
       this.chatMenu = { show: false, target: null };
