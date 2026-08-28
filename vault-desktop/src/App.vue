@@ -430,20 +430,6 @@
           </div>
         </div>
 
-        <!-- N5: контекстное меню чата (долгое нажатие / правый клик) -->
-        <div v-if="chatMenu.show" class="message-menu-overlay" @click="closeChatMenu" @contextmenu.prevent="closeChatMenu">
-          <div class="message-menu chat-menu" @click.stop>
-            <button @click="toggleArchive()">
-              <Icon name="archive" :size="14" />
-              {{ chatFlagOf(flagKey(chatMenu.target)).archived ? (t('chat_unarchive') || 'Из архива') : (t('chat_archive') || 'В архив') }}
-            </button>
-            <button @click="toggleMute()">
-              <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
-              {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
-            </button>
-          </div>
-        </div>
-
         <!-- Typing indicator -->
         <div v-if="Object.keys(typingUsers).length > 0" class="typing-indicator">
           <span class="typing-dots">
@@ -851,6 +837,21 @@
             {{ t('group_create') || 'Create' }}
           </button>
         </div>
+      </div>
+    </div>
+    <!-- N5: контекстное меню чата (долгое нажатие / правый клик).
+         Корневой уровень (28.08): раньше лежал в .main-area, который на
+         мобильном скрыт при экране списка — меню открывалось «за экраном». -->
+    <div v-if="chatMenu.show" class="message-menu-overlay" @click="closeChatMenu" @contextmenu.prevent="closeChatMenu">
+      <div class="message-menu chat-menu" @click.stop>
+        <button @click="toggleArchive()">
+          <Icon name="archive" :size="14" />
+          {{ chatFlagOf(flagKey(chatMenu.target)).archived ? (t('chat_unarchive') || 'Из архива') : (t('chat_archive') || 'В архив') }}
+        </button>
+        <button @click="toggleMute()">
+          <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
+          {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
+        </button>
       </div>
     </div>
     <!-- Тост-уведомление (Key Recovery и пр.) -->
@@ -4487,8 +4488,14 @@ export default {
         // Дедуп: письмо уже учтено ранее (повторный фетч) — пропускаем,
         // иначе счётчик непрочитанных рос бы на каждом поллинге.
         const mid = m.uid + '|' + (m.folder || 'INBOX');
-        if (this.processedUnreadIds.has(mid)) continue;
+        // Дедуп по Message-ID (28.08, баг 0.1.78): одно и то же письмо
+        // приходит с РАЗНЫМИ ключами uid|folder — копия из INBOX и копия из
+        // [Gmail]/All Mail имеют разные uid → два уведомления на письмо
+        // (монитор + JS-поллинг гонят параллельно). Message-ID глобален.
+        const dk = m.message_id ? 'mid:' + m.message_id : mid;
+        if (this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk)) continue;
         this.processedUnreadIds.add(mid);
+        this.processedUnreadIds.add(dk);
         if (this.processedUnreadIds.size > 600) {
           // Держим хвост: выкидываем старые (Set в порядке вставки).
           for (const old of this.processedUnreadIds) {

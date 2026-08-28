@@ -500,8 +500,15 @@ export default {
 .media-quality-select {
   width: 100%;
   max-width: 320px;
-  padding: 10px 14px;
+  /* 28.08: фикс «стрелка приклеена к краю» на Android WebView —
+     нативная стрелка убрана, своя chevron-иконка с отступом справа. */
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 10px 36px 10px 14px;
   background: #0d1117;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
   border: 1px solid #30363d;
   border-radius: 8px;
   color: #e6edf3;
