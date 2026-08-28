@@ -21,6 +21,7 @@ use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 use tokio::time::{timeout as t_timeout, Duration};
@@ -229,6 +230,119 @@ impl Default for EmailState {
     fn default() -> Self {
         Self(Mutex::new(None), Mutex::new(None), Mutex::new(None))
     }
+}
+
+/// Фоновый IMAP IDLE-монитор (28.08, t_64e7241a): цикл «IDLE → fetch → emit»
+/// живёт в Rust-таске и НЕ зависит от JS-таймеров — при заморозке/торможении
+/// WebView доставка писем и сигналов звонков не деградирует до 30с-поллинга.
+/// Каждое событие: fetch_newer (INBOX+JUNK+All, свои курсоры) → emit
+/// «mail-changed» {messages, cursors}; фронт обрабатывает их тем же путём,
+/// что и раньше (processIncoming: звонки, непрочитанные, уведомления).
+#[derive(Default)]
+pub struct IdleMonitor {
+    stop: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+}
+
+fn idle_stop_flag(state: &tauri::State<'_, IdleMonitor>) {
+    state.stop.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn email_idle_start(
+    app: tauri::AppHandle,
+    email_state: State<'_, EmailState>,
+    monitor: State<'_, IdleMonitor>,
+    cursors: HashMap<String, u32>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    let cfg = email_state
+        .1
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    // Идемпотентно: повторный старт (смена почты, ребилд сессии) не плодит
+    // второй цикл — старый останавливаем и запускаем новый со свежим конфигом.
+    monitor.stop.store(true, Ordering::SeqCst);
+    // ждём, пока старый таск завершится (макс. ~8с: idle tick 7с)
+    for _ in 0..40 {
+        if !monitor.running.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    monitor.stop.store(false, Ordering::SeqCst);
+    monitor.running.store(true, Ordering::SeqCst);
+    let stop = monitor.stop.clone();
+    let running = monitor.running.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut client = EmailClient::new(cfg);
+        // Стартовые курсоры приходят от фронта (cursorsCache) — иначе
+        // пустой HashMap заставил бы fetch_newer тянуть последние ~100
+        // писем INBOX при каждом старте монитора.
+        let mut cursors: HashMap<String, u32> = cursors;
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            // Подключение (после сбоя — переподключение с backoff).
+            if let Err(e) = client.connect_imap().await {
+                eprintln!("[idle-monitor] connect failed: {e}");
+                for _ in 0..15 {
+                    if stop.load(Ordering::SeqCst) {
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                continue;
+            }
+            // IDLE-тик 7с: серверный push приходит за ~1с, а сам тик служит
+            // страховкой для JUNK (Gmail кладёт call_* в спам, IDLE-INBOX его
+            // не видит) — ровно как в старом JS-цикле.
+            let changed = match client.idle_wait("INBOX", Duration::from_secs(7)).await {
+                Ok(o) => o == IdleOutcome::Changed,
+                Err(e) => {
+                    eprintln!("[idle-monitor] idle failed: {e}");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            match client.fetch_newer(&cursors).await {
+                Ok((msgs, new_cursors)) => {
+                    cursors = new_cursors;
+                    if !msgs.is_empty() || changed {
+                        let payload = serde_json::json!({
+                            "messages": msgs,
+                            "cursors": cursors,
+                        });
+                        if let Err(e) = app.emit("mail-changed", payload) {
+                            eprintln!("[idle-monitor] emit failed: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[idle-monitor] fetch_newer failed: {e}");
+                    // Сессия могла рассинхрониться — на следующем витке
+                    // переподключимся (connect_imap выше).
+                    let _ = client.disconnect();
+                }
+            }
+        }
+        let _ = client.disconnect();
+        running.store(false, Ordering::SeqCst);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn email_idle_stop(monitor: State<'_, IdleMonitor>) -> Result<(), String> {
+    monitor.stop.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -480,7 +594,12 @@ async fn email_send(
 }
 
 #[tauri::command]
-async fn email_disconnect(state: State<'_, EmailState>) -> Result<(), String> {
+async fn email_disconnect(
+    state: State<'_, EmailState>,
+    monitor: State<'_, IdleMonitor>,
+) -> Result<(), String> {
+    // Фоновый монитор гасим первым — иначе он переподключится сразу после disconnect.
+    monitor.stop.store(true, Ordering::SeqCst);
     let mut guard = state.0.lock().await;
     if let Some(mut client) = guard.take() {
         client.disconnect();
@@ -936,6 +1055,7 @@ pub fn run() {
     builder
         .manage(CryptoState::default())
         .manage(EmailState::default())
+        .manage(IdleMonitor::default())
         .manage(tokio::sync::Mutex::new(media::CallMediaManager::new()))
         .invoke_handler(tauri::generate_handler![
             generate_keypair,
@@ -969,6 +1089,8 @@ pub fn run() {
             email_fetch_bodies,
             email_copy_to_inbox,
             email_idle_wait,
+            email_idle_start,
+            email_idle_stop,
             email_send,
             recovery_generate_mnemonic,
             recovery_validate_mnemonic,

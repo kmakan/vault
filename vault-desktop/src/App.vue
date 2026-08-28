@@ -1333,6 +1333,26 @@ export default {
         this.hangup('remote');
       }
     }).catch(e => console.warn('[call] listen connection-state failed:', e));
+    // Rust IDLE-монитор (t_64e7241a): «mail-changed» приходит из tokio-таска,
+    // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.
+    // Обработка идемпотентна к JS-поллингу: дедуп по uid|folder + processedUnreadIds.
+    this._unlistenMailChanged = tauriListen('mail-changed', async (ev) => {
+      const p = ev && ev.payload;
+      if (!p) return;
+      if (p.cursors) { try { this.saveCursors(this.email, p.cursors); } catch (e) { /* kv */ } }
+      const msgs = p.messages || [];
+      if (!msgs.length) return;
+      const merged = [...this.emails];
+      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+      for (const m of msgs) {
+        const k = m.uid + '|' + (m.folder || 'INBOX');
+        if (!seen.has(k)) { seen.add(k); merged.push(m); }
+      }
+      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      if (merged.length > 2000) merged.length = 2000;
+      this.emails = merged;
+      await this.processIncoming(msgs, { notify: true });
+    }).catch(e => console.warn('[idle-monitor] listen failed:', e));
     // Настройки рингтонов (27.08, Настройки → Звонки) — из kv_store.
     try {
       const ri = await db.kvGet('anon', 'call-ringtone-incoming');
@@ -5148,6 +5168,11 @@ export default {
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
       this._idleActive = true;
+      // Rust-монитор (t_64e7241a): запускаем параллельно с JS-циклом.
+      // Идемпотентен на стороне Rust; курсоры берём из кэша активного
+      // аккаунта, чтобы первый fetch не тянул старые письма.
+      api.idleStart(this.loadCursors(this.email) || {}).catch(e =>
+        console.warn('[idle-monitor] start failed:', e));
       let lastSafety = Date.now();
       let idleFailed = false;
       try {

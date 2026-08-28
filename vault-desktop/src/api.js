@@ -1017,6 +1017,14 @@ export class ApiClient {
   async idleWait(timeoutMs = 2000, folder = 'INBOX') {
     return await invoke('email_idle_wait', { folder, timeoutMs });
   }
+  // Фоновый IDLE-монитор в Rust (t_64e7241a): цикл IDLE→fetch→emit
+  // «mail-changed» живёт в tokio-таске и не зависит от JS-таймеров.
+  async idleStart(cursors = {}) {
+    return await invoke('email_idle_start', { cursors });
+  }
+  async idleStop() {
+    return await invoke('email_idle_stop', {});
+  }
 
   // ── Calls (M3, Фаза 2): WebRTC media backend (webrtc-rs) ────────────────
   // startOutgoing → SDP offer (JSON RTCSessionDescription); acceptIncoming →
