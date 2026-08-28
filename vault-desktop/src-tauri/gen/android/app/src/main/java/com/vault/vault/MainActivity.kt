@@ -55,11 +55,17 @@ class MainActivity : TauriActivity() {
 
     // Исключение из оптимизации батареи (28.08): без него Doze замораживает
     // foreground-сервис и IMAP IDLE-цикл — входящие звонки не доходят при
-    // выключенном экране. Запрашиваем системный диалог «Не ограничивать».
+    // выключенном экране. ВАЖНО: системный диалог ACTION_REQUEST_IGNORE_...
+    // открывается ПОВЕРХ приложения и уводит его в фон. Раньше он вызывался
+    // при КАЖДОМ onCreate → «приложение само сворачивается». Теперь запрос
+    // ОДНОРАЗОВЫЙ (флаг в SharedPreferences) — больше не дёргаем.
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val prefs = getSharedPreferences("vault_prefs", MODE_PRIVATE)
+        val asked = prefs.getBoolean("battery_opt_asked", false)
         val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
-        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+        if (!asked && !pm.isIgnoringBatteryOptimizations(packageName)) {
+          prefs.edit().putBoolean("battery_opt_asked", true).apply()
           val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
             data = android.net.Uri.parse("package:$packageName")
           }
