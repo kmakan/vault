@@ -17,9 +17,28 @@ class MainActivity : TauriActivity() {
   // и входящие звонки не доходят, пока приложение свёрнуто.
   private var keepAliveWebView: WebView? = null
 
+  companion object {
+    init {
+      // Идемпотентно: Rust.kt уже грузит ту же lib, но гарантируем, что
+      // native-символы доступны до первого вызова external fun.
+      System.loadLibrary("vault_desktop")
+    }
+  }
+
+  // ndk-context (28.08): tao 0.35 НЕ инициализирует crate ndk-context, из-за
+  // чего Rust-звонки падали с «android context was not initialized». Пробрасы-
+  // ваем контекст явно; реализация — src-tauri/src/audio/audio_android.rs.
+  private external fun nativeInitAndroidContext(context: android.content.Context)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    try {
+      nativeInitAndroidContext(applicationContext)
+      Log.i("VaultRust", "ndk-context initialized from Kotlin")
+    } catch (e: Throwable) {
+      Log.e("VaultRust", "ndk-context init failed: " + e.message)
+    }
     // Звонки (27.08): на Android 13+ микрофон требует runtime-разрешения,
     // а не только записи в манифесте. cpal/AAudio без него падает при
     // старте audio-пайплайна после connected → приложение сворачивалось.

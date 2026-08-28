@@ -188,6 +188,97 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
     Ok(stream)
 }
 
+// ─── Инициализация ndk-context из Kotlin (28.08) ───────────────────────────
+// Корень бага «входящий звонок молча не показывается»: tao 0.35 (Tauri 2.11)
+// хранит Android-контекст в собственной приватной карте и НЕ инициализирует
+// crate ndk-context → ndk_context::android_context() паникует
+// ("android context was not initialized") на каждом JNI-пути (logcat Cubot,
+// 28.08: panic в tokio-rt-worker сразу после incoming_ringing SET).
+// Фикс: MainActivity.kt вызывает nativeInitAndroidContext(this) один раз в
+// onCreate; мы делаем GlobalRef (local-ссылка живёт только до возврата из
+// JNI!) и отдаём указатели в ndk-context. Дальше весь существующий код
+// (showIncomingCall / dismiss / speakerphone) работает без изменений.
+static CTX_INIT_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `external fun nativeInitAndroidContext(context: Context)` в MainActivity.
+/// # Safety — вызывается из JVM с валидным JNIEnv/jobject (JNI-контракт).
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativeInitAndroidContext(
+    env: jni::JNIEnv,
+    _activity: jni::objects::JObject,
+    context: jni::objects::JObject,
+) {
+    if CTX_INIT_DONE.load(Ordering::SeqCst) {
+        return; // initialize_android_context assert-ится на повторный вызов
+    }
+    let result = (|| -> Result<(), String> {
+        let vm = env
+            .get_java_vm()
+            .map_err(|e| format!("get_java_vm: {e}"))?;
+        let vm_ptr = vm.get_java_vm_pointer() as *mut std::ffi::c_void;
+        // Глобальная ссылка: local-ref из JNI-фрейма умер бы сразу после возврата.
+        let global = env
+            .new_global_ref(context)
+            .map_err(|e| format!("new_global_ref: {e}"))?;
+        let ctx_ptr = {
+            use std::ops::Deref;
+            (global.deref() as &jni::objects::JObject).as_raw() as *mut std::ffi::c_void
+        };
+        std::mem::forget(global); // держим ссылку до конца жизни процесса
+        ndk_context::initialize_android_context(vm_ptr, ctx_ptr);
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            CTX_INIT_DONE.store(true, Ordering::SeqCst);
+            eprintln!("[audio] ndk-context initialized from Kotlin");
+        }
+        Err(e) => eprintln!("[audio] ndk-context init FAILED: {e}"),
+    }
+}
+
+/// Найти класс приложения с нативного потока. ВАЖНО: `env.find_class` на
+/// потоке, прикреплённом через attach_current_thread, использует системный
+/// classloader и НЕ видит классы APK (ClassNotFoundException). Резолвим
+/// через classloader активити — Activity.getClassLoader() (метод Context,
+/// НЕ Object.getClass().getClassLoader() — то дало бы BootClassLoader и
+/// уронило процесс, logcat Cubot 28.08).
+fn find_app_class(
+    env: &mut jni::JNIEnv,
+    activity: &jni::objects::JObject,
+    name: &str,
+) -> Result<jni::objects::JClass<'static>, String> {
+    let loader = env
+        .call_method(
+            activity,
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )
+        .map_err(|e| format!("getClassLoader: {e}"))?
+        .l()
+        .map_err(|e| format!("getClassLoader cast: {e}"))?;
+    let jname = env
+        .new_string(name)
+        .map_err(|e| format!("new_string: {e}"))?;
+    let cls = env
+        .call_method(
+            &loader,
+            "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &[(&jname).into()],
+        )
+        .map_err(|e| {
+            // Pending Java-исключение гасим: иначе оно «всплывёт» на следующем
+            // JNI-вызове этого потока и уронит процесс (FATAL EXCEPTION).
+            let _ = env.exception_clear();
+            format!("loadClass {name}: {e}")
+        })?
+        .l()
+        .map_err(|e| format!("loadClass cast: {e}"))?;
+    Ok(unsafe { jni::objects::JClass::from_raw(cls.as_raw()) })
+}
+
 /// Динамик вкл/выкл (27.08): AudioManager.setSpeakerphoneOn через JNI.
 /// Вызывается из media_set_speaker. Без AAudio-стримов — только маршрутизация
 /// вывода (earpiece ↔ speaker). Ошибки логируем, не роняем звонок.
@@ -247,9 +338,8 @@ pub(crate) fn show_incoming_call_notification(caller_name: &str) {
         let jname = env
             .new_string(&name)
             .map_err(|e| format!("new_string: {e}"))?;
-        let cls = env
-            .find_class("com/vault/vault/VaultForegroundService")
-            .map_err(|e| format!("find_class: {e}"))?;
+        let cls = find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
+            .map_err(|e| format!("find class: {e}"))?;
         env.call_static_method(
             &cls,
             "showIncomingCall",
@@ -276,9 +366,8 @@ pub(crate) fn dismiss_incoming_call_notification() {
             .attach_current_thread()
             .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
-        let cls = env
-            .find_class("com/vault/vault/VaultForegroundService")
-            .map_err(|e| format!("find_class: {e}"))?;
+        let cls = find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
+            .map_err(|e| format!("find class: {e}"))?;
         env.call_static_method(
             &cls,
             "dismissIncomingCall",

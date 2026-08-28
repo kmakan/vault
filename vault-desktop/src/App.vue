@@ -943,6 +943,7 @@ export default {
       callStartedAt: 0,
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
+      windowHeight: typeof window !== 'undefined' ? window.innerHeight : 800,
       appIconId: 'letter',
       // Смена почты (24.08): форма как при входе, ключи не трогаются.
       showChangeEmail: false,
@@ -1129,9 +1130,14 @@ export default {
       const p = this.profiles[this.editingContact];
       return (p && p.bio) || '';
     },
-    // Мобильный режим: ширина экрана < 768px (портрет телефона).
+    // Мобильный режим: узкий экран ПО ЛЮБОЙ стороне (28.08). Раньше был
+    // только порог по ширине (<768) — телефон в ландшафте (800×360 CSS-px)
+    // попадал в десктопную двухпанельную раскладку: сайдбар 320px + пустая
+    // чёрная правая часть. Как в Telegram: телефон остаётся однопанельным
+    // при повороте. Порог по высоте (<480) ниже любого реального
+    // десктопного окна, но типичная высота телефона в ландшафте.
     isMobile() {
-      return this.windowWidth < 768;
+      return this.windowWidth < 768 || this.windowHeight < 480;
     },
     // На Android WebView userAgent содержит 'Android' — надёжнее, чем ширина.
     isAndroid() {
@@ -1338,6 +1344,7 @@ export default {
     // чтобы переключать одну-панель-за-раз.
     this.onWindowResize = () => {
       this.windowWidth = window.innerWidth;
+      this.windowHeight = window.innerHeight;
       // В ландшафте/на десктопе обе панели видны — чат всегда «открыт».
       if (!this.isMobile) this.mobileChatOpen = false;
     };
@@ -9220,7 +9227,7 @@ body {
   display: none !important;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 479px) {
   .sidebar {
     width: 100%;
   }
@@ -9289,7 +9296,7 @@ body {
 
 /* Модалка настроек на мобильном: на всю ширину и высоту, чтобы сайдбар
    с разделами был виден (не обрезался). */
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 479px) {
   .modal-settings {
     width: 100%;
     max-width: 100%;
@@ -9312,7 +9319,7 @@ body {
    Правило стоит ПОСЛЕ .invite-popup-panel, чтобы перебить его padding-шортхэнд.
    box-sizing обязателен: глобального border-box нет, иначе padding раздует
    высоту модалки и контент выпадет за экран. */
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 479px) {
   .modal-settings {
     box-sizing: border-box;
     padding-top: calc(16px + var(--safe-top, 0px));
