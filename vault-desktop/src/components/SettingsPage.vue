@@ -62,6 +62,20 @@
           </select>
           <p class="setting-hint">{{ t('settings_media_hint') }}</p>
         </div>
+        <!-- N6 (28.08, паритет Delta Chat): автоочистка — удалять старые
+             письма с УСТРОЙСТВА (с сервера ничего не уходит; при возврате
+             в чат они догрузятся по IMAP). -->
+        <div class="setting-group">
+          <label>{{ t('settings_autoclean') }}</label>
+          <select v-model="localAutoclean" @change="saveAutoclean" class="media-quality-select">
+            <option value="off">{{ t('autoclean_off') }}</option>
+            <option value="1d">{{ t('autoclean_1d') }}</option>
+            <option value="7d">{{ t('autoclean_7d') }}</option>
+            <option value="30d">{{ t('autoclean_30d') }}</option>
+            <option value="365d">{{ t('autoclean_365d') }}</option>
+          </select>
+          <p class="setting-hint">{{ t('settings_autoclean_hint') }}</p>
+        </div>
         <AppBehavior />
       </div>
 
@@ -212,7 +226,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -224,6 +238,8 @@ export default {
       localDisplayName: this.displayName || '',
       localBio: this.bio || '',
       localMediaQuality: 'high',
+      // N6: период автоочистки ('off'|'1d'|'7d'|'30d'|'365d').
+      localAutoclean: 'off',
       experimentsCalls: false,
       notifSound: true,
       notifTray: true,
@@ -260,6 +276,7 @@ export default {
     // Настройки чатов/экспериментов (kv_store)
     try {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
+      this.localAutoclean = (await db.kvGet('anon', 'autoclean-period')) || 'off';
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
       // Звонки (27.08): выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
@@ -276,6 +293,14 @@ export default {
       try {
         await db.kvSet('anon', 'media-quality', this.localMediaQuality);
       } catch (e) { /* ignore */ }
+    },
+    // N6: период автоочистки + немедленный запуск очистки (App.vue слушает
+    // событие autoclean-change).
+    async saveAutoclean() {
+      try {
+        await db.kvSet('anon', 'autoclean-period', this.localAutoclean);
+      } catch (e) { /* ignore */ }
+      this.$emit('autoclean-change', this.localAutoclean);
     },
     // ── Звонки (27.08): сохранение + превью рингтонов ──────────────────
     async saveRingtoneIncoming() {

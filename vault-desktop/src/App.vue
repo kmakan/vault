@@ -542,7 +542,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" />
         </div>
       </div>
 
@@ -1470,6 +1470,7 @@ export default {
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.loadChatFlags(); // N5: архив/mute чатов из sqlite kv_store
+          this.runAutoclean(); // N6: плановая автоочистка при входе
           this.startPolling()
           this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
@@ -1696,6 +1697,7 @@ export default {
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
         this.loadChatFlags(); // N5: архив/mute чатов из sqlite kv_store
+        this.runAutoclean(); // N6: плановая автоочистка при входе
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
@@ -4571,6 +4573,38 @@ export default {
       // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
       // может прийти в каноническом регистре контакта — нормализуем.
       return !!this.chatFlagOf(String(key || '').toLowerCase()).muted;
+    },
+    // ── N6: автоочистка («удалять сообщения с устройства», модель DC) ──
+    // Период хранит SettingsPage (kv 'autoclean-period'); здесь — запуск:
+    // 1) SQL-purge конвертов/тел/чат-кэшей старше cutoff (db_autoclean_purge);
+    // 2) синхронизация памяти: this.emails и emailBodyCache без старых;
+    // 3) повтор при каждом входе (mounted) — не только по клику в настройках.
+    async runAutoclean(period) {
+      const p = period || (await db.kvGet('anon', 'autoclean-period')) || 'off';
+      if (p === 'off' || !this.isLoggedIn) return;
+      const days = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 }[p];
+      if (!days) return;
+      const cutoff = Date.now() - days * 86400000;
+      try {
+        const acc = this.email || 'anon';
+        // Даты считаем ЗДЕСЬ: колонка date — сырой заголовок Date (RFC 2822),
+        // в SQL new Date() недоступен. Письма без даты не трогаем.
+        const stale = this.emails.filter(m => m.date && new Date(m.date).getTime() < cutoff);
+        if (!stale.length) return;
+        const keys = stale.map(m => (m.folder || 'INBOX') + ':' + String(m.uid ?? m.id ?? ''))
+          .filter(k => !k.endsWith(':'));
+        const purged = await db.autocleanPurge(acc, JSON.stringify(keys));
+        // Память зеркалим тем же списком.
+        const staleSet = new Set(keys);
+        this.emails = this.emails.filter(m =>
+          !staleSet.has((m.folder || 'INBOX') + ':' + String(m.uid ?? m.id ?? '')));
+        for (const k of keys) delete this.emailBodyCache[k];
+        this.bodyCacheOrder = this.bodyCacheOrder.filter(k => staleSet.has(k) === false);
+        this.persistBodyCache();
+        console.info('[autoclean] purged', purged, 'bodies /', keys.length, 'msgs, period', p);
+      } catch (e) {
+        console.warn('[autoclean] failed:', e);
+      }
     },
     openChatMenu(target, e) {
       e.preventDefault();

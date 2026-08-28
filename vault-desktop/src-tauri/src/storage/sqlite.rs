@@ -504,6 +504,44 @@ pub fn body_cache_load_all(&self, account: &str) -> Result<Vec<(String, String)>
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+/// N6 (28.08, паритет Delta Chat «Автоочистка»): удалить с устройства
+/// перечисленные письма. Ключи — JSON-массив "folder:uid" (список считает
+/// фронт через new Date(): колонка date — сырой заголовок Date (RFC 2822),
+/// лексикографическое сравнение с ISO в SQL НЕРАБОТО, поэтому даты не
+/// сравниваем здесь). Чистит три слоя:
+///  - body_cache (тела) по ключу;
+///  - emails (конверты) по (folder, uid);
+///  - kv_store chat-cache:* — сбрасываем полностью (пересоберётся из emails;
+///    выборочная чистка по ts внутри JSON не стоит своей сложности).
+/// Возвращает число удалённых тел. IMAP-курсоры НЕ трогаем: письма с сервера
+/// не удаляются, при возврате в чат они догрузятся по UID (модель DC
+/// «удалять с устройства», а не «удалять везде»).
+pub fn autoclean_purge(&self, account: &str, keys_json: &str) -> Result<usize> {
+    let keys: Vec<String> = serde_json::from_str(keys_json).unwrap_or_default();
+    let mut deleted = 0usize;
+    for k in &keys {
+        let (folder, uid) = match k.split_once(':') {
+            Some((f, u)) => (f.to_string(), u.to_string()),
+            None => continue,
+        };
+        deleted += self.conn.execute(
+            "DELETE FROM body_cache WHERE account=?1 AND cache_key=?2",
+            params![account, k],
+        )?;
+        self.conn.execute(
+            "DELETE FROM emails WHERE account=?1 AND folder=?2 AND uid=?3",
+            params![account, folder, uid],
+        )?;
+    }
+    if !keys.is_empty() {
+        self.conn.execute(
+            "DELETE FROM kv_store WHERE account=?1 AND key LIKE 'chat-cache:%'",
+            params![account],
+        )?;
+    }
+    Ok(deleted)
+}
+
 // Generic per-account key/value store (edits, reactions, pinned, avatars...).
 pub fn kv_set(&self, account: &str, key: &str, value: &str) -> Result<()> {
     self.conn.execute(

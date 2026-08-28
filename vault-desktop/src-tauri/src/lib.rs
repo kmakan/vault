@@ -850,6 +850,14 @@ fn db_body_cache_load_all(account: String) -> Result<Vec<(String, String)>, Stri
         .map_err(|e| e.to_string())
 }
 
+/// N6: автоочистка — удалить с устройства всё старше cutoff (ISO).
+#[tauri::command]
+fn db_autoclean_purge(account: String, keys_json: String) -> Result<usize, String> {
+    open_db()?
+        .autoclean_purge(&account, &keys_json)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn debug_log(msg: String) {
     eprintln!("[JS] {}", msg);
@@ -1122,6 +1130,7 @@ pub fn run() {
             db_body_cache_get,
             db_body_cache_clear,
             db_body_cache_load_all,
+            db_autoclean_purge,
             debug_log,
             db_kv_set,
             db_kv_get,

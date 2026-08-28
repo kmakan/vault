@@ -62,6 +62,10 @@ const db = {
     invoke('db_emails_load', { account }),
   emailsClear: (account) =>
     invoke('db_emails_clear', { account }),
+  // N6: автоочистка — удалить с устройства письма по JSON-массиву ключей
+  // "folder:uid" (список считает фронт: колонка date — сырой RFC 2822).
+  autocleanPurge: (account, keysJson) =>
+    invoke('db_autoclean_purge', { account, keysJson }),
 };
 
 export class ApiClient {
