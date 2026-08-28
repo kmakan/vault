@@ -91,6 +91,12 @@ struct CallHandler {
     /// Мгновенный hangup (28.08): входящий DataChannel от пира (callee
     /// получает канал, созданный caller'ом, через DCEP-негосиацию).
     dc_tx: Sender<Arc<dyn DataChannel>>,
+    /// Состояние соединения (28.08): пробрасываем ВСЕ смены состояния в UI.
+    /// Корень «экран не закрывается»: когда пир кладёт трубку, а DataChannel
+    /// уже мёртв (ICE Disconnected) и email call_end не дошёл — единственный
+    /// сигнал о завершении это ICE-состояние. Раньше обрабатывался только
+    /// Connected, и UI не узнавал о разрыве.
+    state_tx: Sender<RTCPeerConnectionState>,
 }
 
 #[async_trait::async_trait]
@@ -105,6 +111,8 @@ impl PeerConnectionEventHandler for CallHandler {
         if state == RTCPeerConnectionState::Connected {
             let _ = self.connected_tx.try_send(());
         }
+        // Пробрасываем каждое состояние в UI (28.08) — см. state_tx.
+        let _ = self.state_tx.try_send(state);
     }
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
@@ -216,12 +224,16 @@ impl CallMediaManager {
         let (connected_tx, connected_rx) = channel::<()>(1);
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
         let (dc_tx, mut dc_rx) = channel::<Arc<dyn DataChannel>>(1);
+        // Состояние соединения → UI (28.08): единственный надёжный сигнал
+        // о разрыве, когда DataChannel мёртв и email call_end не дошёл.
+        let (state_tx, mut state_rx) = channel::<RTCPeerConnectionState>(8);
 
         let handler = Arc::new(CallHandler {
             gather_complete_tx: gather_tx,
             connected_tx,
             track_tx,
             dc_tx,
+            state_tx,
         });
 
         let pc: Arc<dyn PeerConnection> = Arc::new(
@@ -334,6 +346,35 @@ impl CallMediaManager {
                             break;
                         }
                     }
+                }
+            });
+        }
+
+        // Состояние соединения → UI (28.08): пробрасываем ВСЕ смены ICE-
+        // состояния. Корень «экран не закрывается»: когда пир кладёт трубку,
+        // а DataChannel уже мёртв (ICE Disconnected) и email call_end не
+        // дошёл — единственный сигнал о завершении это ICE-состояние.
+        // UI сам решает, что делать (grace-период на Disconnected, hangup
+        // на Failed/Closed).
+        {
+            let app3 = app.clone();
+            let cid3 = call_id.to_owned();
+            tauri::async_runtime::spawn(async move {
+                while let Some(state) = state_rx.recv().await {
+                    let s = match state {
+                        RTCPeerConnectionState::New => "new",
+                        RTCPeerConnectionState::Connecting => "connecting",
+                        RTCPeerConnectionState::Connected => "connected",
+                        RTCPeerConnectionState::Disconnected => "disconnected",
+                        RTCPeerConnectionState::Failed => "failed",
+                        RTCPeerConnectionState::Closed => "closed",
+                        _ => continue,
+                    };
+                    eprintln!("[media] connection state -> {s}");
+                    let _ = app3.emit(
+                        "call-connection-state",
+                        serde_json::json!({ "callId": cid3, "state": s }),
+                    );
                 }
             });
         }

@@ -1300,6 +1300,33 @@ export default {
         this.hangup('remote');
       }
     }).catch(e => console.warn('[call] listen remote-hangup failed:', e));
+    // СОСТОЯНИЕ ICE (28.08): единственный надёжный сигнал о разрыве, когда
+    // DataChannel уже мёртв и email call_end не дошёл (корень бага «экран
+    // с красной кнопкой не закрывается»). disconnected → grace 10с (сеть
+    // может восстановиться), потом hangup; failed/closed → hangup сразу.
+    this._unlistenConnState = tauriListen('call-connection-state', (ev) => {
+      const p = ev && ev.payload;
+      const cid = p && p.callId;
+      const st = p && p.state;
+      if (!cid || !this.currentCall || this.currentCall.call_id !== cid) return;
+      console.log('[call] connection state:', st);
+      if (st === 'connected') {
+        if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
+      } else if (st === 'disconnected') {
+        if (!this._connLostTimer) {
+          this._connLostTimer = setTimeout(() => {
+            this._connLostTimer = null;
+            if (this.currentCall && this.currentCall.call_id === cid) {
+              console.log('[call] ICE disconnected grace expired — hanging up');
+              this.hangup('remote');
+            }
+          }, 10000);
+        }
+      } else if (st === 'failed' || st === 'closed') {
+        if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
+        this.hangup('remote');
+      }
+    }).catch(e => console.warn('[call] listen connection-state failed:', e));
     // Настройки рингтонов (27.08, Настройки → Звонки) — из kv_store.
     try {
       const ri = await db.kvGet('anon', 'call-ringtone-incoming');
@@ -1400,6 +1427,8 @@ export default {
     // Слушатели Tauri-событий звонка (27-28.08).
     if (this._unlistenMediaConnected) { this._unlistenMediaConnected(); this._unlistenMediaConnected = null; }
     if (this._unlistenRemoteHangup) { this._unlistenRemoteHangup(); this._unlistenRemoteHangup = null; }
+    if (this._unlistenConnState) { this._unlistenConnState(); this._unlistenConnState = null; }
+    if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
     // ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора ──
@@ -4882,6 +4911,8 @@ export default {
       this.stopSignalResend();
       // Предохранитель «Соединение…» (27.08).
       clearTimeout(this._mediaFallbackTimer);
+      // Grace-таймер ICE disconnected (28.08).
+      if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
       this.stopCallClock();
       this.callState = 'idle';
       this.currentCall = null;
