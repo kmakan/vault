@@ -8,6 +8,10 @@
          чтобы IMAP IDLE-цикл продолжал доставлять входящие вызовы в фоне. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Режим звонка (28.08): FGS-тип phoneCall даёт исключение из запрета
+         на запуск activity из фона (BAL) — экран звонка открывается,
+         даже когда приложение свёрнуто. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Входящий звонок (28.08): full-screen intent поверх локскрина.
@@ -32,7 +36,9 @@
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -45,7 +51,7 @@
         <service
             android:name=".VaultForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|phoneCall" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

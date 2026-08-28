@@ -38,6 +38,7 @@ class VaultForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         createChannel()
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -60,6 +61,7 @@ class VaultForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         wakeLock = null
@@ -130,6 +132,11 @@ class VaultForegroundService : Service() {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
 
+        // Живой экземпляр сервиса (28.08): нужен, чтобы из статического
+        // JNI-метода переключить FGS в режим phoneCall (BAL-исключение).
+        @Volatile
+        private var instance: VaultForegroundService? = null
+
         // Входящий звонок (28.08): отдельный high-importance канал +
         // full-screen intent — звонок поверх локскрина как в обычной
         // звонилке. Вызывается из Rust через JNI (audio_android.rs).
@@ -137,12 +144,53 @@ class VaultForegroundService : Service() {
         const val CALL_NOTIF_ID = 9002
 
         /**
-         * Показать full-screen уведомление входящего звонка.
-         * Вызывается из Rust (JNI) в момент incoming_ringing.
+         * Перевести FGS в режим phoneCall (28.08). На Android 14+ FGS-тип
+         * phoneCall даёт исключение из запрета на запуск activity из фона
+         * (Background Activity Launch) — без него свернутое приложение НЕ
+         * может само открыть экран звонка, и пользователь видит только
+         * heads-up в шторке. Вызывается перед показом уведомления звонка.
+         */
+        private fun enterCallMode(svc: VaultForegroundService) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    svc.startForeground(
+                        NOTIF_ID,
+                        svc.buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                    )
+                    Log.i("VaultRust", "FGS switched to phoneCall mode")
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "enterCallMode failed: " + e.message)
+            }
+        }
+
+        /** Вернуть FGS в обычный режим dataSync после завершения звонка. */
+        private fun exitCallMode(svc: VaultForegroundService) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    svc.startForeground(
+                        NOTIF_ID,
+                        svc.buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "exitCallMode failed: " + e.message)
+            }
+        }
+
+        /**
+         * Показать full-screen уведомление входящего звонка И открыть
+         * экран приложения (28.08). Вызывается из Rust (JNI) в момент
+         * incoming_ringing.
          */
         @JvmStatic
         fun showIncomingCall(context: Context, callerName: String) {
             try {
+                // 1) FGS → phoneCall: даёт право поднять activity из фона.
+                instance?.let { enterCallMode(it) }
+
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val channel = NotificationChannel(
@@ -187,6 +235,26 @@ class VaultForegroundService : Service() {
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
+
+                // 2) Явно поднять activity (28.08): full-screen intent
+                //    срабатывает только при ЗАБЛОКИРОВАННОМ экране; при
+                //    разблокированном Android показывает лишь heads-up и
+                //    приложение остаётся свёрнутым. Поэтому сами стартуем
+                //    MainActivity (BAL-исключение даёт phoneCall-FGS).
+                try {
+                    val openIntent = context.packageManager
+                        .getLaunchIntentForPackage(context.packageName)
+                    if (openIntent != null) {
+                        openIntent.addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        )
+                        context.startActivity(openIntent)
+                        Log.i("VaultRust", "activity launched for incoming call")
+                    }
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "launch activity failed: " + e.message)
+                }
             } catch (e: Throwable) {
                 Log.w("VaultRust", "showIncomingCall failed: " + e.message)
             }
@@ -198,6 +266,8 @@ class VaultForegroundService : Service() {
             try {
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 nm.cancel(CALL_NOTIF_ID)
+                // Вернуть FGS из phoneCall обратно в dataSync (28.08).
+                instance?.let { exitCallMode(it) }
             } catch (e: Throwable) {
                 Log.w("VaultRust", "dismissIncomingCall failed: " + e.message)
             }
