@@ -78,6 +78,12 @@ export default {
   chat_muted: '已静音',
   chat_show_archive: '显示归档',
   chat_hide_archive: '隐藏归档',
+  group_clone: '复制群组',
+  group_clone_prompt: '新群组名称（副本）',
+  group_clone_done: '副本已创建',
+  group_clone_invited: '已邀请',
+  group_clone_skipped: '已跳过（无密钥）',
+  group_clone_failed: '创建副本失败',
   // 通话 (M3)
   call_start: '通话',
   call_incoming: '来电…',

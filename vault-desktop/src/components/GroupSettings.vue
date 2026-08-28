@@ -112,6 +112,12 @@
 
     <!-- Actions -->
     <div class="group-settings__actions">
+      <!-- N7 (28.08): клон группы — та же команда, пустая история. -->
+      <button
+        v-if="isCreator"
+        class="btn btn-secondary"
+        @click="$emit('clone')"
+      >{{ t('group_clone') || 'Дублировать группу' }}</button>
       <button
         v-if="!isCreator"
         class="btn btn-warning"
@@ -142,7 +148,7 @@ const props = defineProps({
   profiles: { type: Object, default: () => ({}) },
 })
 
-const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change', 'rename-group'])
+const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change', 'rename-group', 'clone'])
 
 function addMember() {
   // Открываем попап выбора контактов (основной UX добавления участника).

@@ -78,6 +78,12 @@ export default {
   chat_muted: 'Muted',
   chat_show_archive: 'Show archive',
   chat_hide_archive: 'Hide archive',
+  group_clone: 'Duplicate group',
+  group_clone_prompt: 'New group name (clone)',
+  group_clone_done: 'Clone created',
+  group_clone_invited: 'invited',
+  group_clone_skipped: 'skipped (no key)',
+  group_clone_failed: 'Failed to create clone',
   // Calls (M3)
   call_start: 'Call',
   call_incoming: 'Incoming call…',

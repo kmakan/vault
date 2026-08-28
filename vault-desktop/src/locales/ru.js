@@ -78,6 +78,12 @@ export default {
   chat_muted: 'Без звука',
   chat_show_archive: 'Показать архив',
   chat_hide_archive: 'Скрыть архив',
+  group_clone: 'Дублировать группу',
+  group_clone_prompt: 'Имя новой группы (клон)',
+  group_clone_done: 'Клон создан',
+  group_clone_invited: 'приглашены',
+  group_clone_skipped: 'пропущены (нет ключа)',
+  group_clone_failed: 'Не удалось создать клон',
   // Звонки (M3)
   call_start: 'Позвонить',
   call_incoming: 'Входящий звонок…',

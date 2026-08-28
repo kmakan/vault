@@ -781,6 +781,7 @@
             @add-member="addMember"
             @avatar-update="onGroupAvatarUpdate"
             @rename-group="onGroupRename"
+            @clone="cloneGroup"
           />
         </div>
       </div>
@@ -6270,6 +6271,62 @@ export default {
     createGroupAndClose() {
       this.createGroup();
       this.showCreateGroup = false;
+    },
+    // N7 (28.08, паритет Delta Chat): клон группы — новый чат с тем же
+    // составом участников, но пустой историей (например, «Работа» →
+    // «Работа — проект X»). Инвайты уходят автоматически: ключ новой
+    // группы шифруется на публичный ключ каждого участника (тот же путь,
+    // что inviteSelectedMembers). Только создатель оригинала.
+    async cloneGroup() {
+      const src = this.currentGroup;
+      if (!src || src.created_by !== this.email) return;
+      const base = (src.name || 'Группа').trim();
+      const name = prompt(this.t('group_clone_prompt') || 'Имя новой группы (клон)', base + ' 2');
+      if (!name || !name.trim()) return;
+      this.showGroupSettings = false;
+      try {
+        const group = await api.createGroup(name.trim(), '');
+        group.members = [{ email: this.email, role: 'Admin' }];
+        group.blocked = [];
+        // Аватар клона — как у оригинала (общий kv 'anon').
+        const avatar = (await db.kvGet('anon', 'group-avatar:' + src.id)) || '';
+        if (avatar) {
+          await db.kvSet('anon', 'group-avatar:' + group.id, avatar);
+          this.groupAvatars[group.id] = avatar;
+        }
+        this.groups.push(group);
+        this.currentGroup = group;
+        // Ключ группы: groups_create уже вернул group_key — кладём в память
+        // (без этого шифрование инвайтов и отправка в клон невозможны).
+        if (group.group_key) this.groupKeys[group.id] = group.group_key;
+        // Инвайт всем участникам оригинала (кроме нас) — с проверкой ключа,
+        // как в обычном добавлении: без peerKey безопасный инвайт невозможен.
+        const invited = [];
+        const skipped = [];
+        for (const m of (src.members || [])) {
+          const email = (m.email || '').toLowerCase();
+          if (!email || email === (this.email || '').toLowerCase()) continue;
+          const peerPub = this.peerKeys[m.email] || this.peerKeys[email] || null;
+          if (!peerPub) { skipped.push(m.email); continue; }
+          try {
+            const enc = await crypto.encryptGroupKeyForUser(group.group_key, peerPub);
+            await api.inviteGroupMember(group.id, m.email, enc, this.publicKey);
+            group.members.push({ email: m.email, role: m.role || 'Member', invited: true });
+            invited.push(m.email);
+          } catch (e) {
+            skipped.push(m.email);
+          }
+        }
+        // Группы персистятся на Rust-стороне (groups_create уже сохранил);
+        // локальный members-массив — только для отображения invited-статуса.
+        const msg = (this.t('group_clone_done') || 'Клон создан') +
+          (invited.length ? ': ' + this.t('group_clone_invited') + ' ' + invited.join(', ') : '') +
+          (skipped.length ? '\n' + (this.t('group_clone_skipped') || 'пропущены (нет ключа)') + ': ' + skipped.join(', ') : '');
+        alert(msg);
+      } catch (e) {
+        console.error('cloneGroup failed:', e);
+        alert((this.t('group_clone_failed') || 'Не удалось создать клон') + ': ' + e.message);
+      }
     },
     removeMember(email) {
       if (!this.currentGroup) return;
