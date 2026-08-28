@@ -71,6 +71,13 @@ export default {
   status_delivered: 'Delivered',
   status_read: 'Read',
   notif_new_message: 'New message',
+  chat_archive: 'Archive',
+  chat_unarchive: 'Unarchive',
+  chat_mute: 'Mute',
+  chat_unmute: 'Unmute',
+  chat_muted: 'Muted',
+  chat_show_archive: 'Show archive',
+  chat_hide_archive: 'Hide archive',
   // Calls (M3)
   call_start: 'Call',
   call_incoming: 'Incoming call…',

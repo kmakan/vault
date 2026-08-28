@@ -71,6 +71,13 @@ export default {
   status_delivered: '已送达',
   status_read: '已读',
   notif_new_message: '新消息',
+  chat_archive: '归档',
+  chat_unarchive: '取消归档',
+  chat_mute: '静音',
+  chat_unmute: '取消静音',
+  chat_muted: '已静音',
+  chat_show_archive: '显示归档',
+  chat_hide_archive: '隐藏归档',
   // 通话 (M3)
   call_start: '通话',
   call_incoming: '来电…',

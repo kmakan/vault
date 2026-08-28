@@ -135,6 +135,7 @@
           :key="contact.email"
           :class="['contact-item', { active: activeChat === contact.email }]"
           @click="selectChat(contact.email)"
+          @contextmenu="openChatMenu({ type: 'contact', email: contact.email }, $event)"
         >
           <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
           <div class="contact-info">
@@ -143,6 +144,7 @@
           </div>
           <div class="contact-status">
             <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
+            <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
             <span v-if="isRecentlySeen(contact.email)" class="status-dot online" title="Недавно видели"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
@@ -159,10 +161,11 @@
             {{ t('nav_groups') || 'Groups' }}
           </div>
           <div 
-            v-for="group in groups" 
+            v-for="group in filteredGroups" 
             :key="group.id"
             :class="['contact-item', { active: activeChat === `group:${group.id}` }]"
             @click="selectGroup(group)"
+            @contextmenu="openChatMenu({ type: 'group', id: group.id }, $event)"
           >
             <img v-if="groupAvatars[group.id]" :src="groupAvatars[group.id]" class="group-avatar group-avatar-img" :alt="group.name" />
             <div v-else class="group-avatar">
@@ -172,10 +175,16 @@
               <div class="contact-name">{{ group.name }}</div>
               <div class="contact-email">{{ (group.members || []).length }} {{ membersLabel((group.members || []).length) }}</div>
             </div>
-            <div class="contact-status" v-if="unreadOf('group:' + group.id)">
-              <span class="unread-badge">{{ unreadOf('group:' + group.id) }}</span>
+            <div class="contact-status">
+              <span v-if="unreadOf('group:' + group.id)" class="unread-badge">{{ unreadOf('group:' + group.id) }}</span>
+              <Icon v-if="isMuted('group:' + group.id)" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
             </div>
           </div>
+        </div>
+        <!-- N5: переключатель архива (виден, когда есть архивные чаты) -->
+        <div v-if="hasArchivedChats" class="archive-toggle" @click="showArchived = !showArchived">
+          <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
+          <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
         </div>
       </div>
     </div>
@@ -418,6 +427,20 @@
               <div class="message-menu-sep"></div>
               <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openExternal(u).catch(() => {}); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
             </template>
+          </div>
+        </div>
+
+        <!-- N5: контекстное меню чата (долгое нажатие / правый клик) -->
+        <div v-if="chatMenu.show" class="message-menu-overlay" @click="closeChatMenu" @contextmenu.prevent="closeChatMenu">
+          <div class="message-menu chat-menu" @click.stop>
+            <button @click="toggleArchive()">
+              <Icon name="archive" :size="14" />
+              {{ chatFlagOf(flagKey(chatMenu.target)).archived ? (t('chat_unarchive') || 'Из архива') : (t('chat_archive') || 'В архив') }}
+            </button>
+            <button @click="toggleMute()">
+              <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
+              {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
+            </button>
           </div>
         </div>
 
@@ -911,6 +934,14 @@ export default {
       // Хранятся в sqlite kv_store (НЕ localStorage — он запрещён как
       // источник данных Vault); сбрасываются при открытии чата.
       unreadCounts: {},
+      // N5 (28.08, паритет Delta Chat): флаги чатов email|'group:<id>' →
+      // { archived, muted }. Архив скрыт из основного списка (переключатель
+      // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
+      // непрочитанных остаётся). Персист в sqlite kv 'chat-flags'.
+      chatFlags: {},
+      showArchived: false,
+      // Контекстное меню чата (долгое нажатие / правый клик в списке).
+      chatMenu: { show: false, target: null },
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
       processedUnreadIds: new Set(),
@@ -1157,11 +1188,22 @@ export default {
       return this.email.split('@')[0].substring(0, 2).toUpperCase();
     },
     filteredContacts() {
-      if (!this.searchQuery) return this.contacts;
+      // N5: архивные чаты скрыты из основного списка (показываются только
+      // при showArchived). Поиск работает по видимому подмножеству.
+      let list = this.contacts.filter(c =>
+        !!(this.chatFlags[c.email.toLowerCase()] || {}).archived === this.showArchived);
+      if (!this.searchQuery) return list;
       const q = this.searchQuery.toLowerCase();
-      return this.contacts.filter(c => {
+      return list.filter(c => {
         return c.email.toLowerCase().includes(q) || this.nameOf(c.email).toLowerCase().includes(q);
       });
+    },
+    filteredGroups() {
+      return this.groups.filter(g =>
+        !!(this.chatFlags['group:' + g.id] || {}).archived === this.showArchived);
+    },
+    hasArchivedChats() {
+      return Object.values(this.chatFlags).some(f => f && f.archived);
     },
     // ── Звонки (M3): строки и таймер для оверлея ──
     callTexts() {
@@ -1427,6 +1469,7 @@ export default {
           this.isLoggedIn = true;
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
+          this.loadChatFlags(); // N5: архив/mute чатов из sqlite kv_store
           this.startPolling()
           this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
@@ -1652,6 +1695,7 @@ export default {
         initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
+        this.loadChatFlags(); // N5: архив/mute чатов из sqlite kv_store
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
         await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
         await this.loadContacts();
@@ -4460,7 +4504,7 @@ export default {
         // задержанные/догоняющие письма спамом не считаем) и только когда
         // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
         // пользователь на списке контактов — иначе уведомление теряется).
-        if (notify && fresh && !this.chatVisible(chatKey)) {
+        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
@@ -4504,6 +4548,55 @@ export default {
         this.unreadCounts[chatKey] = 0;
         await this.saveUnreadCounts();
       }
+    },
+    // ── N5: архив + mute per-chat (паритет Delta Chat) ─────────────────────
+    async loadChatFlags() {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'chat-flags');
+        this.chatFlags = raw ? JSON.parse(raw) : {};
+      } catch (e) { this.chatFlags = {}; }
+    },
+    async saveChatFlags() {
+      try {
+        await db.kvSet(this.email || 'anon', 'chat-flags', JSON.stringify(this.chatFlags));
+      } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
+    },
+    flagKey(target) {
+      return target.type === 'group' ? 'group:' + target.id : target.email.toLowerCase();
+    },
+    chatFlagOf(key) {
+      return this.chatFlags[key] || {};
+    },
+    isMuted(key) {
+      // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
+      // может прийти в каноническом регистре контакта — нормализуем.
+      return !!this.chatFlagOf(String(key || '').toLowerCase()).muted;
+    },
+    openChatMenu(target, e) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.chatMenu = { show: true, target };
+    },
+    closeChatMenu() {
+      this.chatMenu = { show: false, target: null };
+    },
+    async toggleArchive() {
+      const key = this.flagKey(this.chatMenu.target);
+      const f = { ...(this.chatFlags[key] || {}) };
+      f.archived = !f.archived;
+      if (!f.archived && !f.muted) delete this.chatFlags[key];
+      else this.chatFlags[key] = f;
+      this.closeChatMenu();
+      await this.saveChatFlags();
+    },
+    async toggleMute() {
+      const key = this.flagKey(this.chatMenu.target);
+      const f = { ...(this.chatFlags[key] || {}) };
+      f.muted = !f.muted;
+      if (!f.archived && !f.muted) delete this.chatFlags[key];
+      else this.chatFlags[key] = f;
+      this.closeChatMenu();
+      await this.saveChatFlags();
     },
     // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
     // call_id обработанного звонка (request/accept/end/reject). После
@@ -8154,6 +8247,24 @@ body {
 .message-menu button:hover {
   background: var(--bg-hover, #1e1e4a);
 }
+
+/* N5: переключатель архива в списке чатов */
+.archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-tertiary, #1e1e3a);
+  color: var(--text-secondary, #94a3b8);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.archive-toggle:hover { background: var(--bg-hover, #26264f); color: var(--text-primary, #f1f5f9); }
+/* N5: иконка mute у чата в списке */
+.chat-mute-icon { color: var(--text-secondary, #64748b); flex-shrink: 0; }
 
 /* Reply quote bar above the message input */
 .reply-bar {

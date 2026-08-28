@@ -71,6 +71,13 @@ export default {
   status_delivered: 'Доставлено',
   status_read: 'Просмотрено',
   notif_new_message: 'Новое сообщение',
+  chat_archive: 'В архив',
+  chat_unarchive: 'Из архива',
+  chat_mute: 'Без звука',
+  chat_unmute: 'Со звуком',
+  chat_muted: 'Без звука',
+  chat_show_archive: 'Показать архив',
+  chat_hide_archive: 'Скрыть архив',
   // Звонки (M3)
   call_start: 'Позвонить',
   call_incoming: 'Входящий звонок…',
