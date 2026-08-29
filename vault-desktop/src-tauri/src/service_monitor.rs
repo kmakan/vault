@@ -703,9 +703,21 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     let env_ts = env_json.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
 
     if typ.starts_with("call_") {
-        // Мёртвый JS не примет звонок (нет WebRTC без WebView) — честно
-        // сообщаем о пропущенном; пиллюлю в чат допишет JS при открытии.
+        // Свежий call_request при мёртвом activity: звонок в полный экран —
+        // нативный путь showIncomingCall (FGS → phoneCall + full-screen
+        // intent + рингтон + startActivity, тот же, что из JS). JS-машина
+        // без WebView не работает, но UI экрана звонка — это activity,
+        // которую мы МОЖЕМ поднять нативно (28.08-механизм).
         if typ == "call_request" && env_ts > 0 && now_ms() - env_ts < CALL_STALE_MS {
+            let caller = env_json
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&from_lc);
+            if crate::audio::audio_android::show_incoming_call_notification(caller) {
+                return Outcome::Delivered;
+            }
+            // JNI-путь не удался (нет ndk-context/класса) — хотя бы пуш.
             return if notify(&from_lc, "Пропущенный звонок Vault") {
                 Outcome::Delivered
             } else {

@@ -309,7 +309,10 @@ pub(crate) fn set_speakerphone(on: bool) {
 /// VaultForegroundService.showIncomingCall(context, callerName) через JNI.
 /// Работает при свёрнутом/заблокированном приложении — звонок поверх
 /// локскрина как в обычной звонилке. Desktop — no-op (см. audio.rs).
-pub(crate) fn show_incoming_call_notification(caller_name: &str) {
+/// Возвращает true при успехе (headless-монитор 29.08 использует как сигнал
+/// «нативный звонок показан»); Java-exception гасится exception_clear —
+/// pending-exception ронял процесс при следующем входе в JVM.
+pub(crate) fn show_incoming_call_notification(caller_name: &str) -> bool {
     let name = caller_name.to_owned();
     let result = std::panic::catch_unwind(move || {
         let ctx = ndk_context::android_context();
@@ -334,9 +337,18 @@ pub(crate) fn show_incoming_call_notification(caller_name: &str) {
         Ok::<(), String>(())
     });
     match result {
-        Ok(Ok(())) => eprintln!("[audio] incoming-call notification: {caller_name}"),
-        Ok(Err(e)) => eprintln!("[audio] showIncomingCall failed: {e}"),
-        Err(_) => eprintln!("[audio] showIncomingCall panicked (JNI)"),
+        Ok(Ok(())) => {
+            eprintln!("[audio] incoming-call notification: {caller_name}");
+            true
+        }
+        Ok(Err(e)) => {
+            eprintln!("[audio] showIncomingCall failed: {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("[audio] showIncomingCall panicked (JNI)");
+            false
+        }
     }
 }
 
