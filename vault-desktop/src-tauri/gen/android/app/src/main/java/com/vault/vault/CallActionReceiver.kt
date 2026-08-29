@@ -8,17 +8,13 @@ import android.util.Log
 /**
  * Нативные кнопки уведомления входящего звонка (29.08): «Отклонить» и
  * «Принять» в шторке. Смахивание CATEGORY_CALL-уведомления не создаёт
- * НИКАКОГО события — звонящий продолжал гудеть до таймаута (жалоба 29.08:
- * «после отклонения на телефоне десктоп не отключается»).
+ * НИКАКОГО события — звонящий продолжал гудеть до таймаута.
  *
- * Кнопки не могут вызвать JS напрямую (WebView может быть мёртв/свёрнут):
- * Отклонить → Kotlin пишет call_reject-конверт через почтовый мост.
- * Принять  → поднимает MainActivity (там живой JS покажет экран звонка и
- *            отправит call_accept по существующей машине состояний).
- *
- * Конверт отправляет нативный Postman: CallActionReceiver делегирует
- * VaultForegroundService.sendCallRejectEmail(callerEmail), который кладёт
- * письмо через Rust-мост (JNI emailSendMessage).
+ * 0.1.91 (простая схема юзера): кнопки дергают ЖИВОЙ WebView напрямую через
+ * MainActivity.dispatchCallAction → window.__vaultAcceptCall/__vaultRejectCall.
+ * Экран звонка с таймером открывается штатной JS-машиной (без второго свайпа).
+ * WebView мёртв (activity убита) → пуш «Пропущенный звонок» уже был показан
+ * монитором, кнопки просто гасят уведомление.
  */
 class CallActionReceiver : BroadcastReceiver() {
 
@@ -28,21 +24,21 @@ class CallActionReceiver : BroadcastReceiver() {
         const val REQ_REJECT = 31001
         const val REQ_ACCEPT = 31002
 
-        // Email звонящего, поставленный при showIncomingCall (last caller).
+        // Email звонящего и call_id текущего показанного звонка.
         var currentCallerEmail: String? = null
-        // call_id текущего показанного звонка (для call_reject конверта).
         var currentCallId: String = ""
-        // WebView жив? Ставится VaultForegroundService в onCreate FGS.
-        var jsAlive: Boolean = false
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_REJECT -> {
                 Log.i("VaultRust", "call action: REJECT tapped")
-                // Гасим нативный звонок (рингтон+уведомление) немедленно.
+                // Гасим уведомление + рингтон немедленно.
                 try { VaultForegroundService.dismissIncomingCall(context) } catch (_: Throwable) {}
-                // call_reject уходит почтой через Rust-мост (не зависит от WebView).
+                // call_reject в ЖИВОЙ WebView (JS отправит email-конверт);
+                // WebView мёртв → 0.1.91: всё равно шлём call_reject почтой
+                // через Rust-мост (nativeSendCallSignal).
+                MainActivity.dispatchCallAction("reject")
                 try {
                     VaultForegroundService.sendCallRejectFromAction()
                 } catch (e: Throwable) {
@@ -50,20 +46,12 @@ class CallActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_ACCEPT -> {
-                Log.i("VaultRust", "call action: ACCEPT tapped — dismissing notif, opening activity")
-                // СНАЧАЛА гасим уведомление (29.08: после accept кнопки оставались
-                // висеть в шторке до таймаута 180с — «двойной UI» для юзера).
+                Log.i("VaultRust", "call action: ACCEPT tapped")
+                // Гасим уведомление (кнопки не должны висеть).
                 try { VaultForegroundService.dismissIncomingCall(context) } catch (_: Throwable) {}
-                // Затем поднимаем activity: живой JS покажет экран звонка и
-                // отправит call_accept (см. handleCallSignal incoming_ringing).
-                try {
-                    val open = context.packageManager
-                        .getLaunchIntentForPackage(context.packageName)
-                    open?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    context.startActivity(open)
-                } catch (e: Throwable) {
-                    Log.w("VaultRust", "call accept open activity failed: " + e.message)
-                }
+                // accept в живой WebView: JS-машина сама сделает acceptCall
+                // (call_accept + answer почтой) и покажет экран звонка.
+                MainActivity.dispatchCallAction("accept")
             }
         }
     }

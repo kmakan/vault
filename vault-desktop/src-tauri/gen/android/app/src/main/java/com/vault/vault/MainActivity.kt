@@ -23,6 +23,31 @@ class MainActivity : TauriActivity() {
       // native-символы доступны до первого вызова external fun.
       System.loadLibrary("vault_desktop")
     }
+
+    // Статический мост для нативных кнопок уведомления (0.1.91): ACCEPT /
+    // REJECT из шторки дергают JS-функции window.__vaultAcceptCall() /
+    // window.__vaultRejectCall() через живой WebView (keep-alive), минуя
+    // рестарт UI и рассинхрон state machine.
+    @JvmStatic
+    fun dispatchCallAction(action: String) {
+      val js = when (action) {
+        "accept" -> "window.__vaultAcceptCall && window.__vaultAcceptCall()"
+        "reject" -> "window.__vaultRejectCall && window.__vaultRejectCall()"
+        else -> return
+      }
+      val wv = liveWebView ?: run {
+        Log.w("VaultRust", "dispatchCallAction($action): no live WebView")
+        return
+      }
+      wv.post {
+        wv.evaluateJavascript(js, null)
+        Log.i("VaultRust", "dispatchCallAction($action): JS dispatched")
+      }
+    }
+
+    // WebView живёт в activity-процессе (keep-alive 27.08). Статик-ссылка
+    // ставится в onWebViewCreate, снимается в onDestroy.
+    private var liveWebView: WebView? = null
   }
 
   // ndk-context (28.08): tao 0.35 НЕ инициализирует crate ndk-context, из-за
@@ -138,6 +163,7 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     keepAliveWebView = webView
+    liveWebView = webView
   }
 
   override fun onPause() {
@@ -171,6 +197,7 @@ class MainActivity : TauriActivity() {
     // пока процесс (FGS) ещё жив или перезапущен системой без activity.
     try { nativePauseMonitor(false) } catch (_: Throwable) {}
     keepAliveWebView = null
+    liveWebView = null
     super.onDestroy()
   }
 }

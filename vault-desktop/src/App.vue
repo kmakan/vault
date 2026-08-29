@@ -1325,8 +1325,22 @@ export default {
   async mounted() {
     applyTheme(loadSavedTheme())
     applyFont(loadSavedFont())
+    // НАТИВНЫЕ КНОПКИ УВЕДОМЛЕНИЯ ЗВОНКА (0.1.91, простая схема юзера):
+    // Kotlin (CallActionReceiver) дергает window.__vaultAcceptCall() /
+    // __vaultRejectCall() через живой keep-alive WebView. JS-машина сама
+    // делает acceptCall/rejectCall: call_accept/reject уходит почтой,
+    // экран звонка открывается штатно — БЕЗ второго свайпа.
+    try {
+      window.__vaultAcceptCall = () => {
+        console.log('[call] native ACCEPT tapped');
+        this.acceptCall();
+      };
+      window.__vaultRejectCall = () => {
+        console.log('[call] native REJECT tapped');
+        this.rejectCall();
+      };
+    } catch (e) { /* не критично */ }
     // Событие «медиа подключено» из Rust (27.08): ICE/DTLS установлены и
-    // аудио-пайплайн стартовал — только теперь показываем таймер разговора.
     // Раньше таймер шёл с момента accept, а SDP шёл по почте до 54с —
     // пользователь видел «минуту тишины» при работающем таймере.
     this._unlistenMediaConnected = tauriListen('call-media-connected', (ev) => {
