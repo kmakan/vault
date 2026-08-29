@@ -569,7 +569,18 @@ impl EmailClient {
             .context("Not connected to IMAP server")?;
 
         // Всегда select (включая INBOX) — на новом соединении папка не выбрана.
-        let _ = session.select(folder);
+        // ФИКС (29.08): ошибка select БОЛЬШЕ не игнорируется. Пример: select
+        // Спама упал → uid_fetch по совпавшему ЧИСЛУ uid вытянул тело ЧУЖОГО
+        // письма из INBOX (100КБ рассылка) → base64 невалиден → «decrypt
+        // failed» навсегда (звонок при смахнутом приложении не показывался).
+        // Также проверяем UIDVALIDITY? Достаточно Err: невозможно определить
+        // папку — честный Err (caller делает retry).
+        let sel = session
+            .select(folder)
+            .map_err(|e| anyhow::anyhow!("select {folder} failed: {e}"))?;
+        if sel.exists == 0 {
+            anyhow::bail!("select {folder}: mailbox empty (select failed silently?)");
+        }
 
         let mut body = String::new();
         let fetch_res = session.uid_fetch(uid, "(RFC822.TEXT)");
