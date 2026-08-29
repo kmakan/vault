@@ -4498,20 +4498,30 @@ export default {
         // [Gmail]/All Mail имеют разные uid → два уведомления на письмо
         // (монитор + JS-поллинг гонят параллельно). Message-ID глобален.
         const dk = m.message_id ? 'mid:' + m.message_id : mid;
-        if (this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk)) continue;
-        this.processedUnreadIds.add(mid);
-        this.processedUnreadIds.add(dk);
-        if (this.processedUnreadIds.size > 600) {
-          // Держим хвост: выкидываем старые (Set в порядке вставки).
-          for (const old of this.processedUnreadIds) {
-            this.processedUnreadIds.delete(old);
-            if (this.processedUnreadIds.size <= 500) break;
+        // ФИКС РЕГРЕССИИ (29.08, пуш при свёрнутом Vault): дедуп СЧЁТЧИКА
+        // (processedUnreadIds) не имеет права блокировать УВЕДОМЛЕНИЕ.
+        // В 2fa9103 здесь стоял `continue` — тихий поллинг (notify=false)
+        // первым «съедал» письмо, заносил mid:<Message-ID> в персистный
+        // дедуп, и последующее push-событие монитора (notify=true) молча
+        // пропускалось: пуш не появлялся НИКОГДА. Теперь счётчик растёт
+        // только для новых писем, а уведомление дедупится НЕЗАВИСИМО —
+        // персист notifiedIds в notify.js (ключ dk = Message-ID).
+        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk));
+        if (counted) {
+          this.processedUnreadIds.add(mid);
+          this.processedUnreadIds.add(dk);
+          if (this.processedUnreadIds.size > 600) {
+            // Держим хвост: выкидываем старые (Set в порядке вставки).
+            for (const old of this.processedUnreadIds) {
+              this.processedUnreadIds.delete(old);
+              if (this.processedUnreadIds.size <= 500) break;
+            }
           }
+          await this.saveUnreadSeen();
         }
-        await this.saveUnreadSeen();
         const fresh = Date.now() - new Date(m.date || 0).getTime() < 15 * 60 * 1000;
-        // Счётчик непрочитанных: всегда, кроме видимого сейчас чата.
-        if (!this.chatVisible(chatKey)) {
+        // Счётчик непрочитанных: для новых писем, кроме видимого сейчас чата.
+        if (counted && !this.chatVisible(chatKey)) {
           this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
           await this.saveUnreadCounts();
         }
@@ -4525,7 +4535,11 @@ export default {
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
-            id: mid,
+            // Дедуп уведомления — по ГЛОБАЛЬНОМУ Message-ID (dk), а не
+            // uid|folder: копия в INBOX и [Gmail]/All Mail не дадут два
+            // пуша, при этом повторная доставка того же письма монитору
+            // после тихого поллинга пуш НЕ отменит (см. фикс регрессии).
+            id: dk,
           });
         } else if (notify) {
           console.log('[notify] SKIP fresh=' + fresh + ' visible=' + this.chatVisible(chatKey) + ' muted=' + this.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');

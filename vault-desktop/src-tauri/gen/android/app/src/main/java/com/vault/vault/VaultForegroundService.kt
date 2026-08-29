@@ -41,6 +41,17 @@ class VaultForegroundService : Service() {
         super.onCreate()
         instance = this
         createChannel()
+        // ГАРАНТ (29.08, обычный входящий вызов не принимался): если процесс
+        // Vault умер при ПОКАЗАННОМ уведомлении звонка, в шторке остаётся
+        // CATEGORY_CALL + full-screen-intent уведомление, а FGS — в режиме
+        // phoneCall. На MTK/Cubot это ломает свайп ответа системного
+        // телефонного приложения (звонки «зависают» в состоянии вызова).
+        // Новый экземпляр сервиса = нового процесса → живого звонка Vault
+        // точно нет: убираем stale-уведомление сразу при старте.
+        try {
+            val nm0 = getSystemService(NotificationManager::class.java)
+            nm0?.cancel(CALL_NOTIF_ID)
+        } catch (_: Throwable) {}
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vault:idle-wake").apply {
@@ -313,6 +324,31 @@ class VaultForegroundService : Service() {
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
+
+                // НАТИВНЫЙ WATCHDOG (29.08): таймер сброса звонка живёт в
+                // JS (callRingTimer 180с). Если WebView заморожен/убит,
+                // dismissIncomingCall из JS никогда не придёт → уведомление
+                // CATEGORY_CALL и FGS phoneCall зависнут, а на MTK/Cubot
+                // висящий «вызов» ломает свайп ответа ОБЫЧного телефонного
+                // звонка. Дублируем таймер нативно: через 190с (с запасом к
+                // JS-таймауту) гасим себя, если звонок всё ещё не принят.
+                try {
+                    val watchdog = android.os.Handler(android.os.Looper.getMainLooper())
+                    val wdRunnable = Runnable {
+                        // Отпускаем только если звонок так и не был принят
+                        // (в активном звонке notif уже отменён/заменён).
+                        try {
+                            val nmW = getSystemService(NotificationManager::class.java)
+                            val active = nmW?.activeNotifications
+                                ?.any { it.id == CALL_NOTIF_ID } ?: false
+                            if (active) {
+                                Log.i("VaultRust", "call watchdog: dismissing stale call notification")
+                                dismissIncomingCall(context)
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                    watchdog.postDelayed(wdRunnable, 190_000)
+                } catch (_: Throwable) {}
 
                 // 3) Нативный зацикленный рингтон (28.08): звук канала
                 //    уведомления играет ОДИН раз, а HTML5 Audio в WebView
