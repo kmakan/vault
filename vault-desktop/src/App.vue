@@ -4898,7 +4898,14 @@ export default {
             console.log('[call] remote end after local hangup — ensuring cleanup');
             this.hangup('remote_late');
           }
-          // Запоминаем call_id на случай, если call_end придёт ПОСЛЕ сброса.
+          // ЗАПОМНИТЬ ТЕРМИНАЛЬНЫЙ call_id ВСЕГДА (29.08, «зомби-звонок»):
+          // cancel/end/reject мог прийти РАНЬШЕ call_request в порядке
+          // доставки (INBOX/All Mail/Спам — разные копии, порядок не
+          // гарантирован). Без помни later call_request поднимал звонок,
+          // которого уже нет (запомненные терминалы гасят его в guard
+          // isCallSeen ниже). Свежие cancel не попадали в stale-ветку —
+          // потому и не запоминались.
+          await this.rememberCallSeen(call_id);
           if (this.lastCallId !== call_id) this.lastCallId = call_id;
           break;
         case 'call_sdp':

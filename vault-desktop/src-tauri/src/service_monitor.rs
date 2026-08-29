@@ -703,18 +703,51 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     let env_ts = env_json.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
 
     if typ.starts_with("call_") {
+        let call_id = env_json
+            .get("call_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        // ТЕРМИНАЛЬНЫЕ СИГНАЛЫ (29.08, «зомби-звонок»): cancel/end/reject
+        // запоминаем в kv cancelled-calls (TTL через ротацию, 100 шт) —
+        // порядок доставки писем НЕ гарантирован, request может приехать
+        // ПОЗЖЕ своего cancel (зомби-звонок при открытии приложения).
+        if matches!(typ.as_str(), "call_cancel" | "call_end" | "call_reject") {
+            if !call_id.is_empty() {
+                let mut cancelled: Vec<String> =
+                    kv_json(ctx.db, ctx.account, &"cancelled-calls".to_string());
+                if !cancelled.contains(&call_id) {
+                    cancelled.push(call_id);
+                    let cut = cancelled.len().saturating_sub(100);
+                    let cancelled = cancelled.split_off(cut);
+                    kv_save(ctx.db, ctx.account, &"cancelled-calls".to_string(), &cancelled);
+                }
+            }
+            return Outcome::Delivered;
+        }
         // Свежий call_request при мёртвом activity: звонок в полный экран —
         // нативный путь showIncomingCall (FGS → phoneCall + full-screen
         // intent + рингтон + startActivity, тот же, что из JS). JS-машина
         // без WebView не работает, но UI экрана звонка — это activity,
         // которую мы МОЖЕМ поднять нативно (28.08-механизм).
         if typ == "call_request" && env_ts > 0 && now_ms() - env_ts < CALL_STALE_MS {
+            // ЗОМБИ-СТРАЖ: для этого call_id уже приходил терминальный
+            // сигнал (отменили/отклонили/завершили) — молча фиксируем.
+            let cancelled: Vec<String> = kv_json(ctx.db, ctx.account, &"cancelled-calls".to_string());
+            if !call_id.is_empty() && cancelled.contains(&call_id) {
+                log::info!("[svc-monitor] call_request {call_id} already cancelled — skip");
+                return Outcome::Delivered;
+            }
             let caller = env_json
                 .get("name")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&from_lc);
-            if crate::audio::audio_android::show_incoming_call_notification(caller) {
+            let jni_ok = crate::audio::audio_android::show_incoming_call_notification(caller);
+            log::info!(
+                "[svc-monitor] call_request {call_id} from {from_lc}: showIncomingCall jni_ok={jni_ok}"
+            );
+            if jni_ok {
                 return Outcome::Delivered;
             }
             // JNI-путь не удался (нет ndk-context/класса) — хотя бы пуш.
@@ -724,6 +757,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                 Outcome::Retry
             };
         }
+        log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
         return Outcome::Delivered;
     }
     // Профиль-конверты/квитанции: текста нет — не уведомляем.
