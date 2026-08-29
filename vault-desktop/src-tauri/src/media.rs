@@ -688,7 +688,9 @@ pub async fn media_set_speaker(
 #[tauri::command]
 pub async fn media_show_incoming_call(caller_name: String) -> Result<(), String> {
     #[cfg(target_os = "android")]
-    crate::audio::audio_android::show_incoming_call_notification(&caller_name);
+    {
+        crate::audio::audio_android::show_incoming_call_notification(&caller_name);
+    }
     #[cfg(not(target_os = "android"))]
     {
         let _ = caller_name;
