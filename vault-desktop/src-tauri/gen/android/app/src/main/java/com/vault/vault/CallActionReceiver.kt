@@ -50,13 +50,17 @@ class CallActionReceiver : BroadcastReceiver() {
                 }
             }
             ACTION_ACCEPT -> {
-                Log.i("VaultRust", "call action: ACCEPT tapped — opening activity")
+                Log.i("VaultRust", "call action: ACCEPT tapped — dismissing notif, opening activity")
+                // СНАЧАЛА гасим уведомление (29.08: после accept кнопки оставались
+                // висеть в шторке до таймаута 180с — «двойной UI» для юзера).
+                try { VaultForegroundService.dismissIncomingCall(context) } catch (_: Throwable) {}
+                // Затем поднимаем activity: живой JS покажет экран звонка и
+                // отправит call_accept (см. handleCallSignal incoming_ringing).
                 try {
                     val open = context.packageManager
                         .getLaunchIntentForPackage(context.packageName)
                     open?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                     context.startActivity(open)
-                    // call_accept уйдёт из JS при accept на экране звонка.
                 } catch (e: Throwable) {
                     Log.w("VaultRust", "call accept open activity failed: " + e.message)
                 }
