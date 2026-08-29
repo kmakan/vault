@@ -1247,20 +1247,12 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|_app, event| {
-            // ФИКС (29.08, пуш при свёрнутом Vault): процесс убивался
-            // «чисто (0)» через ~340 мс после mail-changed — WebView JS
-            // не успевал показать уведомление. На Android не даём раннеру
-            // завершиться: процесс живёт вместе с VaultForegroundService
-            // (FGS + AlarmManager-перезапуск), монитор IDLE и обработчик
-            // уведомлений остаются в памяти.
-            #[cfg(target_os = "android")]
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
-            }
-            #[cfg(not(target_os = "android"))]
-            let _ = &event;
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+        // ОТКАТ prevent_exit (29.08): удержание раннера после ExitRequested
+        // на Android оставляло живой процесс с УНИЧТОЖЕННОЙ activity —
+        // повторный open пересоздавал activity, но wry не перепривязывал
+        // поверхность WebView → чёрный экран до полного рестарта. Живучесть
+        // процесса для пушей обеспечивает VaultForegroundService; уведомле-
+        // ния при мёртвом JS будут шться нативно со стороны Rust (след. шаг).
 }
