@@ -2,8 +2,18 @@
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.
 #
-# For more details, see
+# For more details, see:
 #   http://developer.android.com/guide/developing/tools/proguard.html
+
+# JNI-вызываемые статические методы (29.08): R8-shrinker удаляет методы
+# без Java-колеров — headless-монитор упал в NoSuchMethodError showMessage
+# (уведомление о сообщении при убитом activity). Показ/снятие звонка тоже
+# зовутся только из Rust — держим всё JNI-API сервиса.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void showMessage(android.content.Context, java.lang.String, java.lang.String);
+    public static void showIncomingCall(android.content.Context, java.lang.String);
+    public static void dismissIncomingCall(android.content.Context);
+}
 
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface

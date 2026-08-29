@@ -11,6 +11,21 @@ mod audio;
 mod storage;
 mod groups;
 mod history_store;
+// Headless IMAP-монитор для FGS-процесса (29.08): уведомления при убитом
+// activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
+#[cfg(target_os = "android")]
+mod service_monitor;
+
+/// Общий вход инициализации ndk-context (29.08): MainActivity
+/// (audio_android) и headless-монитор FGS (service_monitor) делят один
+/// флаг — двойная инициализация паниковала бы (panic=abort).
+#[cfg(target_os = "android")]
+pub(crate) fn service_monitor_ensure_ctx(
+    env: &mut jni::JNIEnv,
+    context: &jni::objects::JObject,
+) {
+    service_monitor::ensure_ndk_context(env, context);
+}
 
 use credential_store::StoredCredentials;
 use storage::sqlite::Storage;

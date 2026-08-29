@@ -198,7 +198,9 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
 // onCreate; мы делаем GlobalRef (local-ссылка живёт только до возврата из
 // JNI!) и отдаём указатели в ndk-context. Дальше весь существующий код
 // (showIncomingCall / dismiss / speakerphone) работает без изменений.
-static CTX_INIT_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// 29.08: CTX_INIT_DONE перенесён в service_monitor::ensure_ndk_context —
+// общий флаг для MainActivity И FGS-монитора (двойной
+// initialize_android_context = panic=abort смерть процесса).
 
 /// `external fun nativeInitAndroidContext(context: Context)` в MainActivity.
 /// # Safety — вызывается из JVM с валидным JNIEnv/jobject (JNI-контракт).
@@ -208,33 +210,14 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativeInitAndroidCont
     _activity: jni::objects::JObject,
     context: jni::objects::JObject,
 ) {
-    if CTX_INIT_DONE.load(Ordering::SeqCst) {
-        return; // initialize_android_context assert-ится на повторный вызов
-    }
-    let result = (|| -> Result<(), String> {
-        let vm = env
-            .get_java_vm()
-            .map_err(|e| format!("get_java_vm: {e}"))?;
-        let vm_ptr = vm.get_java_vm_pointer() as *mut std::ffi::c_void;
-        // Глобальная ссылка: local-ref из JNI-фрейма умер бы сразу после возврата.
-        let global = env
-            .new_global_ref(context)
-            .map_err(|e| format!("new_global_ref: {e}"))?;
-        let ctx_ptr = {
-            use std::ops::Deref;
-            (global.deref() as &jni::objects::JObject).as_raw() as *mut std::ffi::c_void
-        };
-        std::mem::forget(global); // держим ссылку до конца жизни процесса
-        ndk_context::initialize_android_context(vm_ptr, ctx_ptr);
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            CTX_INIT_DONE.store(true, Ordering::SeqCst);
-            eprintln!("[audio] ndk-context initialized from Kotlin");
-        }
-        Err(e) => eprintln!("[audio] ndk-context init FAILED: {e}"),
-    }
+    // 29.08: инициализация перенесена в общий ensure_ndk_context (используется
+    // и headless-монитором из FGS-процесса — service_monitor.rs). Флаг
+    // CTX_INIT_DONE разделяется обоими входами: повторный
+    // initialize_android_context паникует, а у нас panic=abort — процесс умер
+    // бы при открытии приложения после старта монитора в сервисном процессе.
+    let mut env_ref = env;
+    let ctx_ref = context;
+    let _ = crate::service_monitor_ensure_ctx(&mut env_ref, &ctx_ref);
 }
 
 /// Найти класс приложения с нативного потока. ВАЖНО: `env.find_class` на
@@ -243,11 +226,12 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativeInitAndroidCont
 /// через classloader активити — Activity.getClassLoader() (метод Context,
 /// НЕ Object.getClass().getClassLoader() — то дало бы BootClassLoader и
 /// уронило процесс, logcat Cubot 28.08).
-fn find_app_class(
+pub(crate) fn find_app_class(
     env: &mut jni::JNIEnv,
     activity: &jni::objects::JObject,
     name: &str,
 ) -> Result<jni::objects::JClass<'static>, String> {
+    // pub(crate) комментарий перенесён к сигнатуре — внутри тела не нужен.
     let loader = env
         .call_method(
             activity,

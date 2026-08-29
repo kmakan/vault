@@ -35,6 +35,13 @@ class VaultForegroundService : Service() {
     // Wifi-lock: не даёт Wi-Fi уйти в сон, иначе TCP-соединение IMAP рвётся.
     private var wifiLock: WifiManager.WifiLock? = null
 
+    // Natives из libvault_desktop.so (service_monitor.rs, 29.08): headless
+    // IMAP-монитор живёт в Rust-таске внутри ЭТОГО процесса. ОБЯЗАТЕЛЬНО
+    // экземплярные методы (не companion!): JNI-символ внешнего метода
+    // companion содержит $Companion и не совпадёт с Rust-экспортом.
+    private external fun nativeStartMonitor(dataDir: String)
+    private external fun nativeStopMonitor()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -78,6 +85,8 @@ class VaultForegroundService : Service() {
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         wakeLock = null
         wifiLock = null
+        // Headless-монитор (29.08): глушим Rust-задачу вместе с сервисом.
+        try { nativeStopMonitor() } catch (_: Throwable) {}
         // Защита от убийства (28.08): OEM-оптимизация батареи (Xiaomi/Huawei/
         // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
         // перезапуск через AlarmManager, чтобы сервис воскрес.
@@ -107,6 +116,17 @@ class VaultForegroundService : Service() {
             }
         } catch (e: Throwable) {
             Log.w("VaultRust", "startForeground failed: " + e.message)
+        }
+        // HEADLESS-МОНИТОР (29.08): процесс без activity не имеет ни WebView,
+        // ни Rust-рантайма Tauri — после свайпа приложения из recents система
+        // перезапускает ТОЛЬКО этот сервис, и уведомления умирали до открытия
+        // приложения. Поднимаем нативный IMAP-монитор (Rust): IDLE → fetch →
+        // decrypt → showMessage. При живой MainActivity монитор ставится на
+        // паузу (nativePauseMonitor из onResume) — доставляет JS, дубликатов нет.
+        try {
+            nativeStartMonitor(applicationContext.dataDir.absolutePath)
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "nativeStartMonitor failed: " + e.message)
         }
         // Пересоздавать сервис, если система его прибьёт.
         return START_STICKY
@@ -153,8 +173,63 @@ class VaultForegroundService : Service() {
     }
 
     companion object {
+        init {
+            // Сервис-процесс не касается MainActivity/Rust.kt — грузим .so
+            // сами (идемпотентно: в activity-процессе библиотека уже
+            // загружена). Без этого nativeStartMonitor молча падал бы в
+            // UnsatisfiedLinkError, перехваченный try/catch в onStartCommand.
+            try { System.loadLibrary("vault_desktop") } catch (_: Throwable) {}
+        }
+
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
+
+        // Уведомление о сообщении из headless-монитора (вызывается из Rust
+        // через JNI). Отдельный high-importance канал — MONITOR_CHANNEL_ID.
+        @JvmStatic
+        fun showMessage(context: Context, title: String, text: String) {
+            try {
+                val nm = context.getSystemService(NotificationManager::class.java) ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = NotificationChannel(
+                        MONITOR_CHANNEL_ID,
+                        "Vault сообщения",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Новые сообщения Vault при свёрнутом приложении"
+                        enableVibration(true)
+                        setShowBadge(true)
+                        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+                val launchIntent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)
+                val pi: PendingIntent? = launchIntent?.let {
+                    PendingIntent.getActivity(
+                        context, 2, it,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                }
+                val notif = NotificationCompat.Builder(context, MONITOR_CHANNEL_ID)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .build()
+                nm.notify(MONITOR_NOTIF_ID, notif)
+                Log.i("VaultRust", "monitor message notification shown: $title")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "showMessage failed: " + e.message)
+            }
+        }
+
+        const val MONITOR_CHANNEL_ID = "vault_messages"
+        const val MONITOR_NOTIF_ID = 9003
 
         // Перезапуск сервиса после убийства (28.08): OEM-оптимизация батареи
         // (Xiaomi/Huawei/Samsung/Oppo на Android 11) убивает foreground-сервис.
@@ -338,9 +413,10 @@ class VaultForegroundService : Service() {
                         // Отпускаем только если звонок так и не был принят
                         // (в активном звонке notif уже отменён/заменён).
                         try {
-                            val nmW = getSystemService(NotificationManager::class.java)
-                            val active = nmW?.activeNotifications
-                                ?.any { it.id == CALL_NOTIF_ID } ?: false
+                            val nmW = context.getSystemService(NotificationManager::class.java)
+                            val active = nmW?.activeNotifications?.any { n ->
+                                n.id == CALL_NOTIF_ID
+                            } ?: false
                             if (active) {
                                 Log.i("VaultRust", "call watchdog: dismissing stale call notification")
                                 dismissIncomingCall(context)

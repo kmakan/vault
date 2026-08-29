@@ -770,7 +770,8 @@ impl EmailClient {
 /// Decode quoted-printable MIME body — transport-encoded `=XX` and soft line
 /// breaks (`=\r\n`). Needed because SMTP relays (Gmail included) may re-encode
 /// the Vault encrypted block (base64) as quoted-printable on delivery.
-fn decode_quoted_printable(input: &str) -> String {
+/// (pub: service_monitor.rs расшифровывает тела в headless-режиме, 29.08.)
+pub(crate) fn decode_quoted_printable(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;

@@ -115,6 +115,13 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "full-screen-intent permission request failed: " + e.message)
     }
 
+    // Headless-монитор (29.08): activity ЖИВА — JS (keep-alive WebView)
+    // доставляет сам даже свёрнутым, монитор молчит до onDestroy.
+    // ВАЖНО: onCreate основной темы → startForegroundService; сервисный
+    // onStartCommand на main-потоке выполнится ПОСЛЕ onResume, т.е. монитор
+    // стартует уже с paused=true в activity-процессе (нет дублей с JS).
+    try { nativePauseMonitor(true) } catch (_: Throwable) {}
+
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
     try {
       val svc = Intent(this, VaultForegroundService::class.java)
@@ -143,9 +150,26 @@ class MainActivity : TauriActivity() {
     } catch (e: Throwable) {
       Log.w("VaultRust", "webview keep-alive onResume failed: " + e.message)
     }
+    // Headless-монитор: паузу НЕ снимаем — JS keep-alive продолжает доставлять
+    // и свёрнутым. Монитор понадобится только если activity уничтожат.
+  }
+
+  // Headless-монитор (29.08): Rust-сторона держит монитор на паузе, пока
+  // жива MainActivity (JS доставляет всё сам — без дублей уведомлений).
+  // Символ в VaultForegroundService — там живёт монитор.
+  private external fun nativePauseMonitor(paused: Boolean)
+
+  override fun onResume() {
+    super.onResume()
+    // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
+    try { nativePauseMonitor(true) } catch (_: Throwable) {}
   }
 
   override fun onDestroy() {
+    // Activity уничтожена (системой или смахиванием): JS с WebView умрёт —
+    // снимаем паузу, headless-монитор подхватывает доставку уведомлений,
+    // пока процесс (FGS) ещё жив или перезапущен системой без activity.
+    try { nativePauseMonitor(false) } catch (_: Throwable) {}
     keepAliveWebView = null
     super.onDestroy()
   }
