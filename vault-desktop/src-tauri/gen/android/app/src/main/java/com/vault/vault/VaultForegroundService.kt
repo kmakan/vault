@@ -41,6 +41,31 @@ class VaultForegroundService : Service() {
     // companion содержит $Companion и не совпадёт с Rust-экспортом.
     private external fun nativeStartMonitor(dataDir: String)
     private external fun nativeStopMonitor()
+    // call_reject из нативной кнопки шторки (CallActionReceiver): шифрует
+    // конверт peer-ключом и шлёт SMTP — работает при мёртвом WebView.
+    private external fun nativeSendCallSignal(callerEmail: String, callId: String, signal: String)
+
+    /**
+     * Отправить call_reject через Rust-мост (29.08): вызывается из
+     * CallActionReceiver при тапе «Отклонить» в шторке. Данные звонка
+     * хранятся в CallActionReceiver (ставятся в showIncomingCall).
+     * НЕСТАТИЧЕСКИЙ (external JNI-символ без $Companion требует instance),
+     * поэтому идём через instance, выставленный в onCreate.
+     */
+    fun sendCallRejectEmail() {
+        val email = CallActionReceiver.currentCallerEmail
+        val callId = CallActionReceiver.currentCallId
+        if (email.isNullOrEmpty() || callId.isEmpty()) {
+            Log.w("VaultRust", "call reject: no context (email/callId)")
+            return
+        }
+        try {
+            instance?.nativeSendCallSignal(email, callId, "call_reject")
+                ?: Log.w("VaultRust", "call reject: no FGS instance")
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "nativeSendCallSignal failed: " + e.message)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -259,6 +284,13 @@ class VaultForegroundService : Service() {
         @Volatile
         private var instance: VaultForegroundService? = null
 
+        /** Статический мост из CallActionReceiver: делегирует instance-методу. */
+        @JvmStatic
+        fun sendCallRejectFromAction() {
+            instance?.sendCallRejectEmail()
+                ?: Log.w("VaultRust", "call reject: no FGS instance")
+        }
+
         // Входящий звонок (28.08): отдельный high-importance канал +
         // full-screen intent — звонок поверх локскрина как в обычной
         // звонилке. Вызывается из Rust через JNI (audio_android.rs).
@@ -352,8 +384,23 @@ class VaultForegroundService : Service() {
          * экран приложения (28.08). Вызывается из Rust (JNI) в момент
          * incoming_ringing.
          */
-        @JvmStatic
         fun showIncomingCall(context: Context, callerName: String) {
+            // Перегрузка для обратной совместимости (JS mediaShowIncomingCall
+            // не знает email/call_id): нативный вызов из монитора идёт в
+            // расширенную версию — там хранится контекст для кнопок Reject.
+            showIncomingCall(context, callerName, CallActionReceiver.currentCallerEmail ?: "", "")
+        }
+
+        /**
+         * Расширенная версия (29.08): callerEmail + callId сохраняются в
+         * CallActionReceiver для нативной кнопки «Отклонить» (email-сигнал
+         * call_reject уходит через Rust-мост nativeSendCallSignal даже при
+         * мёртвом WebView).
+         */
+        @JvmStatic
+        fun showIncomingCall(context: Context, callerName: String, callerEmail: String, callId: String) {
+            CallActionReceiver.currentCallerEmail = callerEmail.ifEmpty { callerName }
+            CallActionReceiver.currentCallId = callId
             try {
                 // 1) FGS → phoneCall: даёт право поднять activity из фона.
                 instance?.let { enterCallMode(it) }
@@ -385,6 +432,33 @@ class VaultForegroundService : Service() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                 }
+                // Кнопки «Отклонить/Принять» на самом уведомлении (29.08):
+                // смахивание CATEGORY_CALL не создаёт события, и звонящий
+                // гудел до таймаута. REJECT шлёт call_reject почтой через
+                // Rust-мост (nativeSendCallSignal — работает при мёртвом JS).
+                var notifActions: NotificationCompat.Builder.() -> Unit = {}
+                try {
+                    val rejectIntent = Intent(context, CallActionReceiver::class.java).apply {
+                        action = CallActionReceiver.ACTION_REJECT
+                    }
+                    val rejectPi = PendingIntent.getBroadcast(
+                        context, CallActionReceiver.REQ_REJECT, rejectIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    val acceptIntent = Intent(context, CallActionReceiver::class.java).apply {
+                        action = CallActionReceiver.ACTION_ACCEPT
+                    }
+                    val acceptPi = PendingIntent.getBroadcast(
+                        context, CallActionReceiver.REQ_ACCEPT, acceptIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    notifActions = {
+                        addAction(R.drawable.ic_notification, "Отклонить", rejectPi)
+                        addAction(R.drawable.ic_notification, "Принять", acceptPi)
+                    }
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "call actions setup failed: " + e.message)
+                }
                 val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
                     .setContentTitle(callerName)
                     .setContentText(context.getString(R.string.call_notif_text))
@@ -396,6 +470,7 @@ class VaultForegroundService : Service() {
                     .setOngoing(true)
                     .setAutoCancel(false)
                     .setTimeoutAfter(180_000) // гудок 180с = таймауту звонка
+                    .apply(notifActions)
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")

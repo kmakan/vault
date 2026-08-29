@@ -307,13 +307,23 @@ pub(crate) fn set_speakerphone(on: bool) {
 
 /// Full-screen уведомление входящего звонка (28.08): вызывает статический
 /// VaultForegroundService.showIncomingCall(context, callerName) через JNI.
-/// Работает при свёрнутом/заблокированном приложении — звонок поверх
-/// локскрина как в обычной звонилке. Desktop — no-op (см. audio.rs).
 /// Возвращает true при успехе (headless-монитор 29.08 использует как сигнал
 /// «нативный звонок показан»); Java-exception гасится exception_clear —
 /// pending-exception ронял процесс при следующем входе в JVM.
 pub(crate) fn show_incoming_call_notification(caller_name: &str) -> bool {
+    show_incoming_call_notification_ext(caller_name, "", "")
+}
+
+/// Расширенная версия (29.08): передаёт email звонящего и call_id в Kotlin —
+/// нужны нативной кнопке «Отклонить» (call_reject через Rust-мост).
+pub(crate) fn show_incoming_call_notification_ext(
+    caller_name: &str,
+    caller_email: &str,
+    call_id: &str,
+) -> bool {
     let name = caller_name.to_owned();
+    let email = caller_email.to_owned();
+    let cid = call_id.to_owned();
     let result = std::panic::catch_unwind(move || {
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
@@ -325,13 +335,23 @@ pub(crate) fn show_incoming_call_notification(caller_name: &str) -> bool {
         let jname = env
             .new_string(&name)
             .map_err(|e| format!("new_string: {e}"))?;
-        let cls = find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
-            .map_err(|e| format!("find class: {e}"))?;
+        let jemail = env
+            .new_string(&email)
+            .map_err(|e| format!("new_string: {e}"))?;
+        let jcid = env
+            .new_string(&cid)
+            .map_err(|e| format!("new_string: {e}"))?;
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
         env.call_static_method(
             &cls,
             "showIncomingCall",
-            "(Landroid/content/Context;Ljava/lang/String;)V",
-            &[(&activity).into(), (&jname).into()],
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&activity).into(), (&jname).into(), (&jemail).into(), (&jcid).into()],
         )
         .map_err(|e| format!("showIncomingCall: {e}"))?;
         Ok::<(), String>(())

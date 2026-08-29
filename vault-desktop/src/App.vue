@@ -4771,9 +4771,14 @@ export default {
         }
         return;
       }
-      // ДЕДУП (22.08): call_id уже обработанного звонка (персист в kv
-      // 'call-seen') не должен снова дёргать state machine — например, тот
-      // же call_request из повторного фетча после рассинхрона курсоров.
+      // ДЕДУП (22.08) + ПОВТОРНЫЙ ПОКАЗ (29.08): call_id уже показанного звонка
+      // из повторного фетча гасится — НО только если звонок ещё «жив» в системе
+      // (not cancelled). Ретрансляция call_request (каждые 15с) того же call_id
+      // после ЛОКАЛЬНОГО отклонения обязана СНОВА поднять экран звонка? НЕТ:
+      // юзер уже решил судьбу звонка — гасим. А вот РЕТРАНСЛЯЦИИ ДО отклонения
+      // дедупятся через currentCall check (4800) — они безопасны.
+      // Зомби-гвард (0.1.85): терминальные cancel/end/reject запоминаются —
+      // request, приехавший ПОЗЖЕ своего cancel, гасится здесь.
       if (type === 'call_request' && !(this.currentCall && this.currentCall.call_id === call_id)) {
         if (await this.isCallSeen(call_id)) return;
         await this.rememberCallSeen(call_id);

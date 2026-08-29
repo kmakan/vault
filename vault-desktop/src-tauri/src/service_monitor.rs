@@ -188,6 +188,94 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativePauseMonitor(
     }
 }
 
+/// `external fun nativeSendCallSignal(callerEmail: String, callId: String, signal: String)`
+/// — нативная кнопка «Отклонить» в уведомлении звонка (CallActionReceiver):
+/// WebView может быть мёртв, а собеседник должен узнать об отказе немедленно
+/// (29.08: «после отклонения на телефоне десктоп не отключается»). Шифруем
+/// call_reject-конверт (peer-ключ из key_store, HOME уже установлен монитором)
+/// и отправляем SMTP пустой темой — stealth, тот же путь, что JS sendCallEnvelope.
+/// # Safety — вызывается из JVM с валидным JNIEnv (JNI-контракт).
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeSendCallSignal(
+    mut env: jni::JNIEnv,
+    _service: jni::objects::JObject,
+    caller_email: jni::objects::JString,
+    call_id: jni::objects::JString,
+    signal: jni::objects::JString,
+) {
+    init_logcat();
+    let email: String = match env.get_string(&caller_email) {
+        Ok(s) => s.into(),
+        Err(_) => return,
+    };
+    let cid: String = match env.get_string(&call_id) {
+        Ok(s) => s.into(),
+        Err(_) => return,
+    };
+    let sig: String = match env.get_string(&signal) {
+        Ok(s) => s.into(),
+        Err(_) => return,
+    };
+    // Шифрование + SMTP в tokio-рантайме (blocking-потоки JVM не заняты).
+    let handle = runtime().spawn(async move {
+        let peer_key = match crate::key_store::load_peer_keys() {
+            Ok(list) => list
+                .into_iter()
+                .find(|p| p.email.eq_ignore_ascii_case(&email))
+                .map(|p| p.public_key),
+            Err(_) => None,
+        };
+        let Some(peer_key) = peer_key else {
+            log::warn!("[svc-monitor] call signal {sig}: no peer key for {email}");
+            return;
+        };
+        let priv_key = match crate::key_store::load_keypair() {
+            Ok(Some(k)) => k.private_key,
+            _ => {
+                log::warn!("[svc-monitor] call signal {sig}: no keypair");
+                return;
+            }
+        };
+        let envelope = serde_json::json!({
+            "vault": 1,
+            "id": format!("{}{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis().to_string())
+                .unwrap_or_default(),
+                "na"),
+            "type": sig,
+            "call_id": cid,
+            "ts": now_ms(),
+        });
+        let plain = envelope.to_string();
+        let cipher = match crate::crypto::encrypt_vault_cmd(&plain, &priv_key, Some(&peer_key)) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[svc-monitor] call signal {sig}: encrypt failed: {e}");
+                return;
+            }
+        };
+        let creds = match crate::credential_store::load_credentials() {
+            Ok(Some(c)) => c,
+            _ => return,
+        };
+        let mut client = EmailClient::new(EmailConfig {
+            email: creds.email.clone(),
+            password: creds.password.clone(),
+            imap_server: creds.imap_server.clone(),
+            imap_port: creds.imap_port,
+            smtp_server: creds.smtp_server.clone(),
+            smtp_port: creds.smtp_port,
+        });
+        // send_email использует SMTP-транспорт, IMAP-сессию не открываем.
+        match client.send_email(&email, "", &cipher).await {
+            Ok(()) => log::info!("[svc-monitor] call signal {sig} sent to {email}"),
+            Err(e) => log::warn!("[svc-monitor] call signal {sig} send failed: {e}"),
+        }
+    });
+    let _ = handle; // fire-and-forget: задача завершится сама
+}
+
 /// Инициализация ndk-context из любого JNI-входа (идемпотентно;
 /// initialize_android_context assert-ится на повторный вызов — гасим).
 /// Вызывается из nativeStartMonitor (этот модуль) и из
