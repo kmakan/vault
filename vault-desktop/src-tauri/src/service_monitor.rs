@@ -703,7 +703,11 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             return Outcome::Retry;
         }
     };
-    let body_clean = crate::email::decode_quoted_printable(&body);
+    // ВАЖНО (0.1.88): fetch_message_body УЖЕ декодирует quoted-printable.
+    // Повторный декод здесь ПОРТИЛ base64: хвостовой padding "==" и случайные
+    // "=XX" во 2-м проходе съедали 2 байта данных (bodylen 8193 при валидном
+    // 8088 → len%4=1 → «decrypt failed» → звонок/уведомление молча гибли).
+    let body_clean = body;
 
     // Расшифровка: ключ отправителя → self-ключ (письма себе шифруются своим
     // ключом) → перебор контактов (страховка для нестандартных сценариев).
