@@ -13,6 +13,7 @@
 // Хранение: эскроу-письмо самому себе (стелс-конверт, пустая тема) +
 // опционально файл резервной копии. Восстановление: логин в ящик + слова.
 
+use base64::Engine as _;
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
@@ -20,7 +21,6 @@ use chacha20poly1305::{
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use base64::Engine as _;
 use sha2::{Digest, Sha256, Sha512};
 
 const WORDLIST: &str = include_str!("bip39_english.txt");
@@ -243,10 +243,7 @@ mod tests {
         // нормализация: лишние пробелы/регистр допустимы при вводе
         validate_mnemonic(&format!("  {}  ", m1.to_uppercase())).expect("normalized valid");
 
-        let bad = m1.replace(
-            m1.split_whitespace().next().unwrap(),
-            "abandon",
-        );
+        let bad = m1.replace(m1.split_whitespace().next().unwrap(), "abandon");
         if bad != m1 {
             assert!(validate_mnemonic(&bad).is_err(), "checksum must fail");
         }
@@ -254,7 +251,8 @@ mod tests {
 
     #[test]
     fn wrap_unwrap_roundtrip() {
-        let backup = r#"{"version":1,"keypair":{"public_key":"aa","private_key":"bb"},"peer_keys":[]}"#;
+        let backup =
+            r#"{"version":1,"keypair":{"public_key":"aa","private_key":"bb"},"peer_keys":[]}"#;
         let mnemonic = generate_mnemonic().unwrap();
         let wrapped = wrap_backup(backup, &mnemonic).unwrap();
 

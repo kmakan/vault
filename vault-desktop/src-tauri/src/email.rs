@@ -15,7 +15,6 @@
 
 use anyhow::{Context, Result};
 use imap::Session;
-use std::collections::{HashMap, HashSet};
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
 use lettre::message::Message;
@@ -23,6 +22,7 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -201,9 +201,7 @@ impl EmailClient {
             if out.all.is_none() && attrs.iter().any(|a| a == "\\all") {
                 out.all = Some(name.to_string());
             }
-            if out.junk.is_none()
-                && attrs.iter().any(|a| a == "\\junk" || a == "\\spam")
-            {
+            if out.junk.is_none() && attrs.iter().any(|a| a == "\\junk" || a == "\\spam") {
                 out.junk = Some(name.to_string());
             }
             if out.sent.is_none() && attrs.iter().any(|a| a == "\\sent") {
@@ -248,11 +246,7 @@ impl EmailClient {
     }
 
     /// Fetch the most recent `limit` messages from one mailbox, newest first.
-    fn fetch_folder(
-        &mut self,
-        folder: &str,
-        limit: usize,
-    ) -> Result<Vec<EmailMessage>> {
+    fn fetch_folder(&mut self, folder: &str, limit: usize) -> Result<Vec<EmailMessage>> {
         let session = self
             .imap_session
             .as_mut()
@@ -291,14 +285,13 @@ impl EmailClient {
                     let header_str = String::from_utf8_lossy(header);
                     let from = extract_header(&header_str, "From:")
                         .unwrap_or_else(|| "Unknown".to_string());
-                    let to = extract_header(&header_str, "To:")
-                        .unwrap_or_else(|| "Unknown".to_string());
+                    let to =
+                        extract_header(&header_str, "To:").unwrap_or_else(|| "Unknown".to_string());
                     let subject = extract_header(&header_str, "Subject:")
                         .unwrap_or_else(|| "(no subject)".to_string());
                     let date = extract_header(&header_str, "Date:")
                         .unwrap_or_else(|| "Unknown".to_string());
-                    let message_id = extract_header(&header_str, "Message-ID:")
-                        .unwrap_or_default();
+                    let message_id = extract_header(&header_str, "Message-ID:").unwrap_or_default();
 
                     messages.push(EmailMessage {
                         id: uid,
@@ -329,55 +322,55 @@ impl EmailClient {
     }
 
     /// Fetch recent messages. Folder strategy (user-confirmed 20.08): ONLY
-        /// INBOX + Junk. Sent is NEVER read: the sender's copies are found in
-        /// Junk/INBOX (Gmail self-BCC behaviour) or not needed (outgoing messages
-        /// persist to local history immediately, Delta-Chat style).
-        pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
-            let folders = self.find_special_folders();
+    /// INBOX + Junk. Sent is NEVER read: the sender's copies are found in
+    /// Junk/INBOX (Gmail self-BCC behaviour) or not needed (outgoing messages
+    /// persist to local history immediately, Delta-Chat style).
+    pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
+        let folders = self.find_special_folders();
 
-            let mut messages = self.fetch_folder("INBOX", 250)?;
-            let mut seen: HashSet<String> = messages
-                .iter()
-                .filter(|m| !m.message_id.is_empty())
-                .map(|m| m.message_id.clone())
-                .collect();
+        let mut messages = self.fetch_folder("INBOX", 250)?;
+        let mut seen: HashSet<String> = messages
+            .iter()
+            .filter(|m| !m.message_id.is_empty())
+            .map(|m| m.message_id.clone())
+            .collect();
 
-            if let Some(junk) = &folders.junk {
-                match self.fetch_folder(junk, 150) {
-                    Ok(junk_msgs) => {
-                        for m in junk_msgs {
-                            if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                                continue;
-                            }
-                            messages.push(m);
+        if let Some(junk) = &folders.junk {
+            match self.fetch_folder(junk, 150) {
+                Ok(junk_msgs) => {
+                    for m in junk_msgs {
+                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                            continue;
                         }
+                        messages.push(m);
                     }
-                    // The Junk folder may be missing/unreachable — do not fail the
-                    // whole fetch, INBOX is already retrieved.
-                    Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
                 }
+                // The Junk folder may be missing/unreachable — do not fail the
+                // whole fetch, INBOX is already retrieved.
+                Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
             }
-
-            // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
-            // прячется туда автосортировкой провайдера (From==To). Читаем и её.
-            if let Some(selfl) = &folders.self_letters {
-                match self.fetch_folder(selfl, 100) {
-                    Ok(self_msgs) => {
-                        for m in self_msgs {
-                            if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                                continue;
-                            }
-                            messages.push(m);
-                        }
-                    }
-                    Err(e) => eprintln!("[email] self-letters folder {selfl} fetch failed: {e}"),
-                }
-            }
-
-            // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
-            let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
-            Ok(messages)
         }
+
+        // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
+        // прячется туда автосортировкой провайдера (From==To). Читаем и её.
+        if let Some(selfl) = &folders.self_letters {
+            match self.fetch_folder(selfl, 100) {
+                Ok(self_msgs) => {
+                    for m in self_msgs {
+                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                            continue;
+                        }
+                        messages.push(m);
+                    }
+                }
+                Err(e) => eprintln!("[email] self-letters folder {selfl} fetch failed: {e}"),
+            }
+        }
+
+        // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
+        let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
+        Ok(messages)
+    }
 
     /// Fetch messages in one mailbox: either the most recent `limit`
     /// (first sync, no cursor) or everything with UID > `last_uid`
@@ -488,37 +481,36 @@ impl EmailClient {
         let folders = self.find_special_folders();
         eprintln!(
             "[email] fetch_newer: junk={:?} all={:?} cursors_junk={:?}",
-            folders.junk, folders.all, cursors.get("JUNK")
+            folders.junk,
+            folders.all,
+            cursors.get("JUNK")
         );
         let mut new_cursors = cursors.clone();
         let mut seen: HashSet<String> = HashSet::new();
         let mut messages: Vec<EmailMessage> = Vec::new();
 
-        let mut collect =
-            |folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
-                // Пустой результат НЕ продвигает курсор: uid_search мог вернуть
-                // пусто из-за троттлинга/рассинхрона сессии, и запись 0
-                // «отравляла» папку — инкремент от 0 при следующих поллингах
-                // тоже возвращал пусто (Zoho), чаты пустели навсегда (20.08).
-                // Курсор движется только при реально полученных письмах.
-                if max_uid > 0 {
-                    new_cursors.insert(fallback.to_string(), max_uid);
+        let mut collect = |folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
+            // Пустой результат НЕ продвигает курсор: uid_search мог вернуть
+            // пусто из-за троттлинга/рассинхрона сессии, и запись 0
+            // «отравляла» папку — инкремент от 0 при следующих поллингах
+            // тоже возвращал пусто (Zoho), чаты пустели навсегда (20.08).
+            // Курсор движется только при реально полученных письмах.
+            if max_uid > 0 {
+                new_cursors.insert(fallback.to_string(), max_uid);
+            }
+            if max_uid == 0 {
+                return; // empty folder — nothing new
+            }
+            for m in msgs {
+                if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                    continue;
                 }
-                if max_uid == 0 {
-                    return; // empty folder — nothing new
-                }
-                for m in msgs {
-                    if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                        continue;
-                    }
-                    messages.push(m);
-                }
-            };
+                messages.push(m);
+            }
+        };
 
         // INBOX — всегда (основной источник входящих).
-        match self
-            .fetch_folder_from("INBOX", cursors.get("INBOX").copied(), 100)
-        {
+        match self.fetch_folder_from("INBOX", cursors.get("INBOX").copied(), 100) {
             Ok((msgs, max)) => collect("INBOX", "INBOX", msgs, max),
             Err(e) => eprintln!("[email] INBOX incremental fetch failed: {e}"),
         }
@@ -528,9 +520,7 @@ impl EmailClient {
         // сессиями (Gmail encoding variance). Ключ курсора для Junk — всегда
         // "JUNK" (не имя папки), чтобы курсор переживал перезапуск.
         if let Some(junk) = &folders.junk {
-            match self
-                .fetch_folder_from(junk, cursors.get("JUNK").copied(), 50)
-            {
+            match self.fetch_folder_from(junk, cursors.get("JUNK").copied(), 50) {
                 Ok((msgs, max)) => collect(junk, "JUNK", msgs, max),
                 Err(e) => eprintln!("[email] Junk folder {junk} incremental fetch failed: {e}"),
             }
@@ -539,9 +529,7 @@ impl EmailClient {
         // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
         // автосортировкой провайдера уезжает туда, минуя INBOX. Курсор "SELF".
         if let Some(selfl) = &folders.self_letters {
-            match self
-                .fetch_folder_from(selfl, cursors.get("SELF").copied(), 50)
-            {
+            match self.fetch_folder_from(selfl, cursors.get("SELF").copied(), 50) {
                 Ok((msgs, max)) => collect(selfl, "SELF", msgs, max),
                 Err(e) => eprintln!("[email] self-letters {selfl} incremental fetch failed: {e}"),
             }
@@ -742,11 +730,11 @@ impl EmailClient {
                 // Сервер оборвал IDLE-соединение (Gmail рвёт ~каждые 24-29 мин,
                 // сетевой сбой) — переподключаемся и пробуем ещё раз.
                 self.reconnect_imap().await?;
-                self.idle_wait_once(folder, timeout)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("IDLE retry failed after reconnect: {e} (original: {first_err})")
-                    })
+                self.idle_wait_once(folder, timeout).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "IDLE retry failed after reconnect: {e} (original: {first_err})"
+                    )
+                })
             }
         }
     }

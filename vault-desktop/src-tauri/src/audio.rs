@@ -19,21 +19,21 @@
 #[cfg(target_os = "android")]
 pub(crate) mod audio_android;
 
-use std::sync::Arc;
-#[cfg(not(target_os = "android"))]
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 #[cfg(not(target_os = "android"))]
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
+use std::sync::Mutex;
 use std::time::Duration;
 
 use audiopus::coder::Decoder;
 #[cfg(not(target_os = "android"))]
 use audiopus::coder::Encoder;
-use audiopus::{Channels as OpusChannels, SampleRate};
 #[cfg(not(target_os = "android"))]
 use audiopus::Application;
+use audiopus::{Channels as OpusChannels, SampleRate};
 use bytes::Bytes;
 #[cfg(not(target_os = "android"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -51,12 +51,12 @@ use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 // Убирает акустическую петлю (динамики → микрофон) и клиппинг. Android не
 // нужен: там аппаратный AEC через InputPreset::VoiceCommunication (oboe).
 #[cfg(not(target_os = "android"))]
-use webrtc_audio_processing::Processor;
-#[cfg(not(target_os = "android"))]
 use webrtc_audio_processing::config::{
     Config as ApmConfig, EchoCanceller, GainController, GainController1, GainControllerMode,
     HighPassFilter, NoiseSuppression, NoiseSuppressionLevel,
 };
+#[cfg(not(target_os = "android"))]
+use webrtc_audio_processing::Processor;
 
 /// Дескриптор APM для пайплайна. Desktop — WebRTC-процессор (общий для mic и
 /// speaker через Arc); Android — `()` (аппаратный AEC, софт не участвует).
@@ -76,7 +76,9 @@ const APM_FRAME: usize = 480;
 fn create_apm() -> Result<Arc<Processor>, String> {
     let ap = Processor::new(48000).map_err(|e| format!("APM new: {e}"))?;
     let config = ApmConfig {
-        echo_canceller: Some(EchoCanceller::Full { stream_delay_ms: None }),
+        echo_canceller: Some(EchoCanceller::Full {
+            stream_delay_ms: None,
+        }),
         noise_suppression: Some(NoiseSuppression {
             level: NoiseSuppressionLevel::High,
             analyze_linear_aec_output: false,
@@ -236,7 +238,10 @@ pub(crate) struct ResamplerIn {
 
 impl ResamplerIn {
     pub(crate) fn new(from: u32, to: u32) -> Self {
-        Self { step: to as f64 / from as f64, pos: 0.0 }
+        Self {
+            step: to as f64 / from as f64,
+            pos: 0.0,
+        }
     }
     /// Returns true when this input should be emitted (kept as output).
     fn push(&mut self) -> bool {
@@ -259,7 +264,10 @@ pub(crate) struct ResamplerOut {
 
 impl ResamplerOut {
     pub(crate) fn new(from: u32, to: u32) -> Self {
-        Self { step: from as f64 / to as f64, pos: 1.0 }
+        Self {
+            step: from as f64 / to as f64,
+            pos: 1.0,
+        }
     }
     fn tick(&mut self) -> bool {
         self.pos += self.step;
@@ -299,8 +307,14 @@ pub async fn run_audio_pipeline(
     // Desktop — WebRTC AEC3+NS+AGC; Android — () (аппаратный AEC).
     #[cfg(not(target_os = "android"))]
     let apm: Apm = match create_apm() {
-        Ok(a) => { eprintln!("[audio] APM ready (AEC3+NS+AGC)"); Some(a) }
-        Err(e) => { eprintln!("[audio] APM unavailable, raw capture: {e}"); None }
+        Ok(a) => {
+            eprintln!("[audio] APM ready (AEC3+NS+AGC)");
+            Some(a)
+        }
+        Err(e) => {
+            eprintln!("[audio] APM unavailable, raw capture: {e}");
+            None
+        }
     };
     #[cfg(target_os = "android")]
     let apm: Apm = ();
@@ -315,7 +329,12 @@ pub async fn run_audio_pipeline(
         }
     };
     let writer = tokio::spawn(write_opus_loop(
-        track.clone(), ssrc, payload_type, opus_rx, stop_rx.clone(), media_key,
+        track.clone(),
+        ssrc,
+        payload_type,
+        opus_rx,
+        stop_rx.clone(),
+        media_key,
     ));
 
     // Remote track → speaker (появляется после первого RTP от пира).
@@ -407,16 +426,30 @@ fn start_mic_capture_inner(
     let ch = cfg.channels() as usize;
 
     let stream_result: Result<cpal::Stream, String> = match cfg.sample_format() {
-        cpal::SampleFormat::F32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f32),
-        cpal::SampleFormat::I16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i16),
-        cpal::SampleFormat::U16 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, u16),
-        cpal::SampleFormat::I32 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i32),
-        cpal::SampleFormat::F64 => build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f64),
+        cpal::SampleFormat::F32 => {
+            build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f32)
+        }
+        cpal::SampleFormat::I16 => {
+            build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i16)
+        }
+        cpal::SampleFormat::U16 => {
+            build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, u16)
+        }
+        cpal::SampleFormat::I32 => {
+            build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, i32)
+        }
+        cpal::SampleFormat::F64 => {
+            build_mic!(device, cfg, device_rate, ch, opus_tx, muted, apm, f64)
+        }
         other => return Err(format!("unsupported input format {other:?}")),
     };
     let stream = stream_result?;
     stream.play().map_err(|e| e.to_string())?;
-    eprintln!("[audio] mic open: {} @ {}Hz", cfg.sample_format(), device_rate);
+    eprintln!(
+        "[audio] mic open: {} @ {}Hz",
+        cfg.sample_format(),
+        device_rate
+    );
     Ok(stream)
 }
 
@@ -473,9 +506,7 @@ fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<AudioStreamHandle, String
 #[cfg(not(target_os = "android"))]
 fn start_speaker_cpal(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
     // panic=abort: cpal может паниковать — ловим (26.08).
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        start_speaker_inner(pcm_rx)
-    })) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_speaker_inner(pcm_rx))) {
         Ok(r) => r,
         Err(_) => {
             eprintln!("[audio] panic in speaker init — caught");
@@ -503,7 +534,11 @@ fn start_speaker_inner(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, Strin
     };
     let stream = stream_result?;
     stream.play().map_err(|e| e.to_string())?;
-    eprintln!("[audio] speaker open: {} @ {}Hz", cfg.sample_format(), device_rate);
+    eprintln!(
+        "[audio] speaker open: {} @ {}Hz",
+        cfg.sample_format(),
+        device_rate
+    );
     Ok(stream)
 }
 
@@ -751,9 +786,7 @@ fn _sound_play_inner(bytes: &[u8], looped: bool) -> Result<(), String> {
     let device = host
         .default_output_device()
         .ok_or_else(|| "No output device for sound".to_string())?;
-    let cfg = device
-        .default_output_config()
-        .map_err(|e| e.to_string())?;
+    let cfg = device.default_output_config().map_err(|e| e.to_string())?;
     let device_rate = cfg.sample_rate();
     let pcm = resample(&samples, rate, device_rate);
     eprintln!(

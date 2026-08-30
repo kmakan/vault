@@ -1,16 +1,17 @@
+use anyhow::Result;
+use chrono::Utc;
+use hex;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::Result;
-use rand::RngCore;
-use chrono::Utc;
-use hex;
 
 const GROUPS_FILE: &str = "groups.json";
 
 fn get_groups_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".vault"))
 }
 
@@ -204,7 +205,10 @@ pub fn import_group(
         id: group_id.to_string(),
         name: name.to_string(),
         // Реальный создатель группы приходит в инвайте; без него — отправитель.
-        created_by: created_by.filter(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or_else(|| sender.to_string()),
+        created_by: created_by
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| sender.to_string()),
         created_at: now,
         members,
         blocked: Vec::new(),
@@ -307,7 +311,11 @@ mod tests {
     fn with_tmp_groups<T>(f: impl FnOnce() -> T) -> T {
         let _guard = TMP_LOCK.lock().unwrap();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("vault-groups-test-{}-{}.json", std::process::id(), seq));
+        let path = std::env::temp_dir().join(format!(
+            "vault-groups-test-{}-{}.json",
+            std::process::id(),
+            seq
+        ));
         let _ = std::fs::remove_file(&path);
         std::env::set_var("VAULT_GROUPS_FILE", &path);
         let result = f();
@@ -402,7 +410,15 @@ mod tests {
     fn test_import_group() {
         with_tmp_groups(|| {
             let group = create_group("test group", "alice@example.com").unwrap();
-            let imported = import_group(&group.id, "test group", &group.group_key, "bob@example.com", None, None).unwrap();
+            let imported = import_group(
+                &group.id,
+                "test group",
+                &group.group_key,
+                "bob@example.com",
+                None,
+                None,
+            )
+            .unwrap();
             assert_eq!(imported.members.len(), 2);
             assert_eq!(imported.members[1].email, "bob@example.com");
             assert_eq!(imported.members[1].role, GroupRole::Member);
@@ -440,11 +456,22 @@ mod tests {
             )
             .unwrap();
             assert_eq!(imported.created_by, "alice@example.com");
-            let alice = imported.members.iter().find(|m| m.email == "alice@example.com").unwrap();
+            let alice = imported
+                .members
+                .iter()
+                .find(|m| m.email == "alice@example.com")
+                .unwrap();
             assert_eq!(alice.role, GroupRole::Admin);
-            let carol = imported.members.iter().find(|m| m.email == "carol@example.com").unwrap();
+            let carol = imported
+                .members
+                .iter()
+                .find(|m| m.email == "carol@example.com")
+                .unwrap();
             assert_eq!(carol.role, GroupRole::Moderator);
-            assert!(imported.members.iter().any(|m| m.email == "bob@example.com"));
+            assert!(imported
+                .members
+                .iter()
+                .any(|m| m.email == "bob@example.com"));
         });
     }
 

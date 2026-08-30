@@ -287,23 +287,24 @@ pub(crate) fn ensure_ndk_context(env: &mut jni::JNIEnv, context: &jni::objects::
     if DONE.load(Ordering::SeqCst) {
         return;
     }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
-        let vm = env.get_java_vm().map_err(|e| format!("vm: {e}"))?;
-        let vm_ptr = vm.get_java_vm_pointer() as *mut std::ffi::c_void;
-        let global = env
-            .new_global_ref(context)
-            .map_err(|e| format!("gref: {e}"))?;
-        let ctx_ptr = {
-            use std::ops::Deref;
-            (global.deref() as &jni::objects::JObject).as_raw() as *mut std::ffi::c_void
-        };
-        std::mem::forget(global); // живёт до конца процесса
-        // SAFETY: валидные JavaVM/Context указатели из JNI-входа; вызов
-        // идемпотентен глобально (DONE проверен выше, повтор — assert-паника,
-        // которую мы ловим снаружи catch_unwind).
-        unsafe { ndk_context::initialize_android_context(vm_ptr, ctx_ptr) };
-        Ok(())
-    }));
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), String> {
+            let vm = env.get_java_vm().map_err(|e| format!("vm: {e}"))?;
+            let vm_ptr = vm.get_java_vm_pointer() as *mut std::ffi::c_void;
+            let global = env
+                .new_global_ref(context)
+                .map_err(|e| format!("gref: {e}"))?;
+            let ctx_ptr = {
+                use std::ops::Deref;
+                (global.deref() as &jni::objects::JObject).as_raw() as *mut std::ffi::c_void
+            };
+            std::mem::forget(global); // живёт до конца процесса
+                                      // SAFETY: валидные JavaVM/Context указатели из JNI-входа; вызов
+                                      // идемпотентен глобально (DONE проверен выше, повтор — assert-паника,
+                                      // которую мы ловим снаружи catch_unwind).
+            unsafe { ndk_context::initialize_android_context(vm_ptr, ctx_ptr) };
+            Ok(())
+        }));
     match result {
         Ok(Ok(())) => {
             DONE.store(true, Ordering::SeqCst);
@@ -367,7 +368,10 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
     };
     // Инвариант: решение принимается ровно один раз (в ringing).
     if entry.state != "ringing" {
-        log::info!("[svc-monitor] decision {dec}: call {cid} already {} — ignore", entry.state);
+        log::info!(
+            "[svc-monitor] decision {dec}: call {cid} already {} — ignore",
+            entry.state
+        );
         return;
     }
 
@@ -388,9 +392,10 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
                 let ctx = ndk_context::android_context();
                 let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
                     .map_err(|e| format!("vm: {e}"))?;
-                let mut env2 = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
-                let activity =
-                    unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+                let mut env2 = vm
+                    .attach_current_thread()
+                    .map_err(|e| format!("attach: {e}"))?;
+                let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
                 let cls = crate::audio::audio_android::find_app_class(
                     &mut env2,
                     &activity,
@@ -400,14 +405,13 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
                 let jdec = env2
                     .new_string("accept")
                     .map_err(|e| format!("new_string: {e}"))?;
-                env2
-                    .call_static_method(
-                        &cls,
-                        "dispatchCallAction",
-                        "(Ljava/lang/String;)V",
-                        &[(&jdec).into()],
-                    )
-                    .map_err(|e| format!("dispatchCallAction: {e}"))?;
+                env2.call_static_method(
+                    &cls,
+                    "dispatchCallAction",
+                    "(Ljava/lang/String;)V",
+                    &[(&jdec).into()],
+                )
+                .map_err(|e| format!("dispatchCallAction: {e}"))?;
                 Ok::<(), String>(())
             }));
             match result {
@@ -644,8 +648,8 @@ async fn run_loop(stop: Arc<AtomicBool>) {
 /// Запись pending-очереди: письмо, КОТОРОЕ ЕЩЁ НЕ ДОСТАВЛЕНО.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PendingEntry {
-    mid: String,   // Message-ID (или from|folder|uid для писем без него)
-    from: String,  // отправитель (lowercase)
+    mid: String,  // Message-ID (или from|folder|uid для писем без него)
+    from: String, // отправитель (lowercase)
     folder: String,
     uid: String,
     tries: u32,
@@ -706,7 +710,11 @@ fn pending_key() -> String {
 }
 
 /// seen-дедуп: только ДОСТАВЛЕННЫЕ/окончательно отброшенные Message-ID.
-fn seen_contains(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str, mid: &str) -> bool {
+fn seen_contains(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+    mid: &str,
+) -> bool {
     let list: Vec<String> = kv_json(db, account, &seen_key());
     list.iter().any(|x| x == mid)
 }
@@ -722,7 +730,10 @@ fn seen_push(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str, mi
     kv_save(db, account, &seen_key(), &list);
 }
 
-fn pending_list(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str) -> Vec<PendingEntry> {
+fn pending_list(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+) -> Vec<PendingEntry> {
     kv_json(db, account, &pending_key())
 }
 
@@ -742,10 +753,10 @@ fn pending_save(
 /// (корень «телефон звонит заново после отклонения»).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct CallEntry {
-    state: String,     // ringing | accepted | rejected | missed | ended
-    caller: String,    // имя звонящего (для уведомления)
-    email: String,     // адрес звонящего (для call_accept/reject письма)
-    updated_at: i64,   // ms, для TTL-чистки
+    state: String,   // ringing | accepted | rejected | missed | ended
+    caller: String,  // имя звонящего (для уведомления)
+    email: String,   // адрес звонящего (для call_accept/reject письма)
+    updated_at: i64, // ms, для TTL-чистки
 }
 
 const CALL_TOMBSTONE_MS: i64 = 10 * 60 * 1000; // надгробие 10 мин
@@ -755,9 +766,11 @@ fn call_state_key() -> String {
 }
 
 /// Загрузить всю таблицу call_state (kv JSON: call_id → CallEntry).
-fn calls_load(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str) -> std::collections::HashMap<String, CallEntry> {
-    let raw: std::collections::HashMap<String, CallEntry> =
-        kv_json(db, account, &call_state_key());
+fn calls_load(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+) -> std::collections::HashMap<String, CallEntry> {
+    let raw: std::collections::HashMap<String, CallEntry> = kv_json(db, account, &call_state_key());
     raw
 }
 
@@ -770,9 +783,7 @@ fn calls_save(
     let now = now_ms();
     let live: std::collections::HashMap<String, CallEntry> = calls
         .iter()
-        .filter(|(_, c)| {
-            c.state == "ringing" || now - c.updated_at < CALL_TOMBSTONE_MS
-        })
+        .filter(|(_, c)| c.state == "ringing" || now - c.updated_at < CALL_TOMBSTONE_MS)
         .map(|(k, c)| (k.clone(), c.clone()))
         .collect();
     kv_save(db, account, &call_state_key(), &live);
@@ -790,12 +801,14 @@ fn call_set_state(
         return;
     }
     let mut calls = calls_load(db, account);
-    let entry = calls.entry(call_id.to_string()).or_insert_with(|| CallEntry {
-        state: state.to_string(),
-        caller: caller.to_string(),
-        email: String::new(),
-        updated_at: now_ms(),
-    });
+    let entry = calls
+        .entry(call_id.to_string())
+        .or_insert_with(|| CallEntry {
+            state: state.to_string(),
+            caller: caller.to_string(),
+            email: String::new(),
+            updated_at: now_ms(),
+        });
     entry.state = state.to_string();
     entry.updated_at = now_ms();
     if !caller.is_empty() {
@@ -902,12 +915,19 @@ async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
         };
         match deliver_entry(ctx, &mut entry).await {
             Outcome::Delivered => {
-                log::info!("[svc-monitor] delivered: {} (mid={}…)", entry.from, &entry.mid[..entry.mid.len().min(24)]);
+                log::info!(
+                    "[svc-monitor] delivered: {} (mid={}…)",
+                    entry.from,
+                    &entry.mid[..entry.mid.len().min(24)]
+                );
                 seen_push(ctx.db, ctx.account, &entry.mid);
                 remove_pending(ctx, &entry.mid);
             }
             Outcome::HandledByJs => {
-                log::info!("[svc-monitor] handled by JS (activity alive): {}", entry.from);
+                log::info!(
+                    "[svc-monitor] handled by JS (activity alive): {}",
+                    entry.from
+                );
                 remove_pending(ctx, &entry.mid);
             }
             Outcome::Dead => {
@@ -959,19 +979,17 @@ fn remove_pending(ctx: &Ctx<'_>, mid: &str) {
 /// после успеха).
 async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     // Открыта MainActivity → JS сам доставляет и уведомляет.
-    if monitor()
-        .paused
-        .lock()
-        .map(|p| *p)
-        .unwrap_or(false)
-    {
+    if monitor().paused.lock().map(|p| *p).unwrap_or(false) {
         return Outcome::HandledByJs;
     }
     // Тело письма (отдельная IMAP-сессия — IDLE-сессию не дёргаем).
     let body = match fetch_body(&e.folder, &e.uid).await {
         Ok(b) => b,
         Err(err) => {
-            log::warn!("[svc-monitor] body fetch failed (try {}): {err}", e.tries + 1);
+            log::warn!(
+                "[svc-monitor] body fetch failed (try {}): {err}",
+                e.tries + 1
+            );
             return Outcome::Retry;
         }
     };
@@ -1055,8 +1073,11 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         if let Ok(pb) = hex::decode(ctx.private_key) {
             if let Ok(arr) = <[u8; 32]>::try_from(pb.as_slice()) {
                 let my_pub = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(arr));
-                let my_pub_hex: String =
-                    my_pub.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+                let my_pub_hex: String = my_pub
+                    .as_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
                 if env_key.eq_ignore_ascii_case(&my_pub_hex) {
                     log::info!("[svc-monitor] echo-guard: letter with my own key, skip");
                     return Outcome::Delivered;
@@ -1216,8 +1237,8 @@ pub fn notify(title: &str, text: &str) -> bool {
     let log_text = text.to_owned();
     let result = std::panic::catch_unwind(move || {
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|e| format!("vm: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| format!("attach: {e}"))?;
@@ -1260,7 +1281,6 @@ pub fn notify(title: &str, text: &str) -> bool {
         }
     }
 }
-
 
 /// Tauri-команда (фаза 3, 30.08): JS сообщает монитору-владельцу решение/статус
 /// звонка: accept/reject/active/ended. Пишет в call_state monitor.db — единую

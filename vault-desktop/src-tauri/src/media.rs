@@ -23,22 +23,22 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::Emitter;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{watch, Mutex};
 use tokio::time::timeout;
 
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
-use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
+use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::media_stream::track_remote::TrackRemote;
 use webrtc::peer_connection::{
-    PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
-    RTCConfigurationBuilder, RTCIceServer, RTCSessionDescription, RTCIceGatheringState,
-    RTCPeerConnectionState, SettingEngine,
+    PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
+    RTCIceGatheringState, RTCIceServer, RTCPeerConnectionState, RTCSessionDescription,
+    SettingEngine,
 };
-use webrtc::runtime::{Receiver, Sender, channel};
+use webrtc::runtime::{channel, Receiver, Sender};
 
 use rtc::media_stream::MediaStreamTrack;
-use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_OPUS, MediaEngine};
+use rtc::peer_connection::configuration::media_engine::{MediaEngine, MIME_TYPE_OPUS};
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
@@ -82,6 +82,14 @@ struct CallSession {
 pub struct SdpResult {
     pub sdp: String,
     pub call_id: String,
+    /// PQ (30.08): инкапсуляция против ek принимающего (b64) — фронт кладёт
+    /// в call-конверт (sendCallEnvelope), принимающий передаёт в
+    /// media_accept_incoming. None = legacy-звонок (нет PQ у одной из сторон).
+    #[serde(default)]
+    pub kemct: Option<String>,
+    /// PQ: ek звонящего (b64) — чтобы принимающий мог сохранить контакт.
+    #[serde(default)]
+    pub sender_ek: Option<String>,
 }
 
 /// Event handler: forwards webrtc events into channels for the session.
@@ -180,7 +188,14 @@ impl CallMediaManager {
         call_id: &str,
         media_key: Option<[u8; 32]>,
         is_caller: bool,
-    ) -> Result<(Arc<dyn PeerConnection>, Arc<TrackLocalStaticSample>, Receiver<()>), String> {
+    ) -> Result<
+        (
+            Arc<dyn PeerConnection>,
+            Arc<TrackLocalStaticSample>,
+            Receiver<()>,
+        ),
+        String,
+    > {
         let mut media_engine = MediaEngine::default();
         let audio_codec = RTCRtpCodec {
             mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -344,14 +359,19 @@ impl CallMediaManager {
                 // этого момента, таймер разговора — только после. Раньше
                 // таймер шёл с момента accept, а SDP шёл по почте до 54с —
                 // пользователь видел «минуту тишины» при работающем таймере.
-                if let Err(e) = app1.emit(
-                    "call-media-connected",
-                    serde_json::json!({ "callId": cid }),
-                ) {
+                if let Err(e) =
+                    app1.emit("call-media-connected", serde_json::json!({ "callId": cid }))
+                {
                     eprintln!("[media] emit call-media-connected failed: {e}");
                 }
                 crate::audio::run_audio_pipeline(
-                    track, ssrc, OPUS_PAYLOAD_TYPE, track_rx, stop_rx, muted, media_key,
+                    track,
+                    ssrc,
+                    OPUS_PAYLOAD_TYPE,
+                    track_rx,
+                    stop_rx,
+                    muted,
+                    media_key,
                     speaker_rx,
                 )
                 .await;
@@ -379,10 +399,8 @@ impl CallMediaManager {
                         let text = String::from_utf8_lossy(&msg.data);
                         if text.trim() == "hangup" {
                             eprintln!("[media] DC hangup received from peer");
-                            let _ = app2.emit(
-                                "call-remote-hangup",
-                                serde_json::json!({ "callId": cid2 }),
-                            );
+                            let _ = app2
+                                .emit("call-remote-hangup", serde_json::json!({ "callId": cid2 }));
                             break;
                         }
                     }
@@ -463,7 +481,10 @@ impl CallMediaManager {
         // Диагностика (26.08): сколько кандидатов реально в SDP — если 0,
         // соединение не поднимется даже с partial-подходом.
         let cand_count = desc.sdp.matches("a=candidate:").count();
-        eprintln!("[media] local SDP: candidates={cand_count}, len={}", sdp_json.len());
+        eprintln!(
+            "[media] local SDP: candidates={cand_count}, len={}",
+            sdp_json.len()
+        );
         Ok(sdp_json)
     }
 
@@ -478,13 +499,17 @@ impl CallMediaManager {
         let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key, true).await?;
 
         let offer = pc.create_offer(None).await.map_err(|e| e.to_string())?;
-        pc.set_local_description(offer).await.map_err(|e| e.to_string())?;
+        pc.set_local_description(offer)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let sdp = Self::wait_for_local_sdp(&pc, &mut gather_rx).await?;
 
         Ok(SdpResult {
             sdp,
             call_id: call_id.to_owned(),
+            kemct: None,
+            sender_ek: None,
         })
     }
 
@@ -501,16 +526,22 @@ impl CallMediaManager {
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
-        pc.set_remote_description(offer).await.map_err(|e| e.to_string())?;
+        pc.set_remote_description(offer)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let answer = pc.create_answer(None).await.map_err(|e| e.to_string())?;
-        pc.set_local_description(answer).await.map_err(|e| e.to_string())?;
+        pc.set_local_description(answer)
+            .await
+            .map_err(|e| e.to_string())?;
 
         let sdp = Self::wait_for_local_sdp(&pc, &mut gather_rx).await?;
 
         Ok(SdpResult {
             sdp,
             call_id: call_id.to_owned(),
+            kemct: None,
+            sender_ek: None,
         })
     }
 
@@ -536,7 +567,9 @@ impl CallMediaManager {
             .calls
             .get(call_id)
             .ok_or_else(|| "call not found".to_string())?;
-        session.muted.store(muted, std::sync::atomic::Ordering::Relaxed);
+        session
+            .muted
+            .store(muted, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -609,18 +642,53 @@ pub async fn media_start_outgoing(
     app: tauri::AppHandle,
     call_id: String,
     peer_public_key: String,
+    peer_pq_ek: Option<String>,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
-    // Вычисляем общий ключ (X25519 DH) для E2E-шифрования медиа.
+    // Медиа-ключ (30.08, PQ): гибрид ML-KEM-768+X25519 при наличии PQ-ключей
+    // у обеих сторон; иначе прежний X25519 DH (legacy-звонок со старым клиентом).
+    // Гибридный ключ: HKDF(x25519_ss ‖ mlkem_ss) — mlkem-часть отправитель
+    // вычисляет инкапсуляцией против ek принимающего; kemct едет в
+    // call-конверте (SdpResult.kemct → sendCallEnvelope), принимающий
+    // декапсулирует в media_accept_incoming и собирает тот же HKDF.
+    let mut kemct_out: Option<String> = None;
+    let mut sender_ek_out: Option<String> = None;
     let media_key = match crate::key_store::load_keypair() {
-        Ok(Some(kp)) => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
-            Ok(k) => Some(k),
-            Err(e) => { eprintln!("[media] DH failed: {e}"); None }
+        Ok(Some(kp)) => match (kp.pq_private_key.as_deref(), peer_pq_ek.as_deref()) {
+            (Some(seed), Some(ek)) => {
+                match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+                    Ok(x_ss) => match crate::crypto_pq::media_hybrid_key_out(&x_ss, seed, ek) {
+                        Ok((k, ct, my_ek)) => {
+                            kemct_out = Some(ct);
+                            sender_ek_out = Some(my_ek);
+                            Some(k)
+                        }
+                        Err(e) => {
+                            eprintln!("[media] PQ hybrid failed: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("[media] DH failed: {e}");
+                        None
+                    }
+                }
+            }
+            _ => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    eprintln!("[media] DH failed: {e}");
+                    None
+                }
+            },
         },
         _ => None,
     };
-    mgr.start_outgoing(app, &call_id, media_key).await
+    let mut sdp = mgr.start_outgoing(app, &call_id, media_key).await?;
+    sdp.kemct = kemct_out;
+    sdp.sender_ek = sender_ek_out;
+    Ok(sdp)
 }
 
 #[tauri::command]
@@ -629,17 +697,43 @@ pub async fn media_accept_incoming(
     call_id: String,
     offer_sdp: String,
     peer_public_key: String,
+    kemct: Option<String>,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
+    // PQ (30.08): kemct из call-конверта + свой PQ-seed → тот же гибридный
+    // HKDF-ключ, что у звонящего. Нет kemct/seed — legacy X25519.
     let media_key = match crate::key_store::load_keypair() {
-        Ok(Some(kp)) => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
-            Ok(k) => Some(k),
-            Err(e) => { eprintln!("[media] DH failed: {e}"); None }
+        Ok(Some(kp)) => match (kp.pq_private_key.as_deref(), kemct.as_deref()) {
+            (Some(seed), Some(ct)) => {
+                match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+                    Ok(x_ss) => match crate::crypto_pq::media_hybrid_key_in(&x_ss, seed, ct) {
+                        Ok(k) => Some(k),
+                        Err(e) => {
+                            eprintln!("[media] PQ hybrid-in failed: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("[media] DH failed: {e}");
+                        None
+                    }
+                }
+            }
+            _ => match crate::crypto::derive_shared_key(&kp.private_key, &peer_public_key) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    eprintln!("[media] DH failed: {e}");
+                    None
+                }
+            },
         },
         _ => None,
     };
-    mgr.accept_incoming(app, &call_id, &offer_sdp, media_key).await
+    let sdp = mgr
+        .accept_incoming(app, &call_id, &offer_sdp, media_key)
+        .await?;
+    Ok(sdp)
 }
 
 #[tauri::command]
@@ -765,7 +859,9 @@ pub async fn media_sound_play(name: String, looped: bool) -> Result<(), String> 
         Ok(Ok(r)) => r,
         Ok(Err(e)) => Err(format!("sound task join failed: {e}")),
         Err(_) => {
-            eprintln!("[sound] play timed out (cpal hung on audio device) — continuing without ringtone");
+            eprintln!(
+                "[sound] play timed out (cpal hung on audio device) — continuing without ringtone"
+            );
             Err("sound play timed out (audio device hung)".into())
         }
     }

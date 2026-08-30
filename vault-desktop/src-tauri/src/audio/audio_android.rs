@@ -10,8 +10,8 @@
 //! build_speaker). Формат end-to-end — 48кГц моно f32 (как у Opus).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 use audiopus::coder::Encoder;
 use audiopus::{Application, Channels as OpusChannels, SampleRate as OpusRate};
@@ -24,7 +24,7 @@ use oboe::{
     DataCallbackResult, Error, Input, InputPreset, Mono, Output, PerformanceMode, Usage,
 };
 
-use super::{FRAME_SAMPLES, ResamplerIn, ResamplerOut};
+use super::{ResamplerIn, ResamplerOut, FRAME_SAMPLES};
 
 /// Oboe-микрофон: тип стрима, который держим до конца звонка (drop = close).
 pub(crate) type MicStream = AudioStreamAsync<Input, MicCallback>;
@@ -74,11 +74,7 @@ impl AudioInputCallback for MicCallback {
         DataCallbackResult::Continue
     }
 
-    fn on_error_before_close(
-        &mut self,
-        _stream: &mut dyn AudioInputStreamSafe,
-        error: Error,
-    ) {
+    fn on_error_before_close(&mut self, _stream: &mut dyn AudioInputStreamSafe, error: Error) {
         eprintln!("[audio] oboe mic error: {error}");
     }
 }
@@ -115,11 +111,7 @@ impl AudioOutputCallback for SpeakerCallback {
         DataCallbackResult::Continue
     }
 
-    fn on_error_before_close(
-        &mut self,
-        _stream: &mut dyn AudioOutputStreamSafe,
-        error: Error,
-    ) {
+    fn on_error_before_close(&mut self, _stream: &mut dyn AudioOutputStreamSafe, error: Error) {
         eprintln!("[audio] oboe speaker error: {error}");
     }
 }
@@ -134,7 +126,9 @@ pub(crate) fn start_mic_capture_oboe(
         .map_err(|e| format!("opus encoder: {e}"))?;
     // Тюнинг Opus (27.08, шум в голосе) — как в desktop build_mic!:
     // 48 кбит/с + FEC + PLC-готовность + Voice + complexity 10.
-    encoder.set_bitrate(audiopus::Bitrate::BitsPerSecond(48000)).ok();
+    encoder
+        .set_bitrate(audiopus::Bitrate::BitsPerSecond(48000))
+        .ok();
     encoder.set_inband_fec(true).ok();
     encoder.set_packet_loss_perc(10).ok();
     encoder.set_complexity(10).ok();
@@ -157,7 +151,9 @@ pub(crate) fn start_mic_capture_oboe(
         .set_callback(cb)
         .open_stream()
         .map_err(|e| format!("oboe input open: {e}"))?;
-    stream.request_start().map_err(|e| format!("oboe input start: {e}"))?;
+    stream
+        .request_start()
+        .map_err(|e| format!("oboe input start: {e}"))?;
     let rate = stream.get_sample_rate();
     let api = stream.get_audio_api();
     eprintln!("[audio] oboe mic open: {rate} Hz, api={api:?}");
@@ -182,7 +178,9 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
         .set_callback(cb)
         .open_stream()
         .map_err(|e| format!("oboe output open: {e}"))?;
-    stream.request_start().map_err(|e| format!("oboe output start: {e}"))?;
+    stream
+        .request_start()
+        .map_err(|e| format!("oboe output start: {e}"))?;
     let rate = stream.get_sample_rate();
     eprintln!("[audio] oboe speaker open: {rate} Hz");
     Ok(stream)
@@ -233,12 +231,7 @@ pub(crate) fn find_app_class(
 ) -> Result<jni::objects::JClass<'static>, String> {
     // pub(crate) комментарий перенесён к сигнатуре — внутри тела не нужен.
     let loader = env
-        .call_method(
-            activity,
-            "getClassLoader",
-            "()Ljava/lang/ClassLoader;",
-            &[],
-        )
+        .call_method(activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .map_err(|e| format!("getClassLoader: {e}"))?
         .l()
         .map_err(|e| format!("getClassLoader cast: {e}"))?;
@@ -324,38 +317,39 @@ pub(crate) fn show_incoming_call_notification_ext(
     let name = caller_name.to_owned();
     let email = caller_email.to_owned();
     let cid = call_id.to_owned();
-    let result = std::panic::catch_unwind(move || {
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
-        let mut env = vm
-            .attach_current_thread()
-            .map_err(|e| format!("attach: {e}"))?;
-        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
-        let jname = env
-            .new_string(&name)
-            .map_err(|e| format!("new_string: {e}"))?;
-        let jemail = env
-            .new_string(&email)
-            .map_err(|e| format!("new_string: {e}"))?;
-        let jcid = env
-            .new_string(&cid)
-            .map_err(|e| format!("new_string: {e}"))?;
-        let cls = find_app_class(
-            &mut env,
-            &activity,
-            "com.vault.vault.VaultForegroundService",
-        )
-        .map_err(|e| format!("find class: {e}"))?;
-        env.call_static_method(
+    let result =
+        std::panic::catch_unwind(move || {
+            let ctx = ndk_context::android_context();
+            let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+                .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+            let mut env = vm
+                .attach_current_thread()
+                .map_err(|e| format!("attach: {e}"))?;
+            let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+            let jname = env
+                .new_string(&name)
+                .map_err(|e| format!("new_string: {e}"))?;
+            let jemail = env
+                .new_string(&email)
+                .map_err(|e| format!("new_string: {e}"))?;
+            let jcid = env
+                .new_string(&cid)
+                .map_err(|e| format!("new_string: {e}"))?;
+            let cls = find_app_class(
+                &mut env,
+                &activity,
+                "com.vault.vault.VaultForegroundService",
+            )
+            .map_err(|e| format!("find class: {e}"))?;
+            env.call_static_method(
             &cls,
             "showIncomingCall",
             "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
             &[(&activity).into(), (&jname).into(), (&jemail).into(), (&jcid).into()],
         )
         .map_err(|e| format!("showIncomingCall: {e}"))?;
-        Ok::<(), String>(())
-    });
+            Ok::<(), String>(())
+        });
     match result {
         Ok(Ok(())) => {
             eprintln!("[audio] incoming-call notification: {caller_name}");
@@ -382,8 +376,12 @@ pub(crate) fn dismiss_incoming_call_notification() {
             .attach_current_thread()
             .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
-        let cls = find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
-            .map_err(|e| format!("find class: {e}"))?;
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
         env.call_static_method(
             &cls,
             "dismissIncomingCall",

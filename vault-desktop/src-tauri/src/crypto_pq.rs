@@ -126,6 +126,79 @@ pub fn hybrid_key(
 }
 
 // ---------------------------------------------------------------------------
+// Медиа-ключ звонков (PQ): тот же гибрид, но ct едет в call-конверте
+// ---------------------------------------------------------------------------
+
+/// Звонящий: гибридный медиа-ключ из x25519_ss (DH) + инкапсуляции против
+/// ek принимающего. Возвращает (key, kemct_b64, my_ek_b64) — kemct фронт
+/// кладёт в call-конверт (sendCallEnvelope), my_ek — чтобы принимающий
+/// сохранил контакт.
+pub fn media_hybrid_key_out(
+    x25519_ss: &[u8; 32],
+    my_pq_seed_hex: &str,
+    peer_pq_ek_b64: &str,
+) -> anyhow::Result<([u8; 32], String, String)> {
+    let (dk, my_ek) =
+        pq_from_seed(my_pq_seed_hex).ok_or_else(|| anyhow::anyhow!("Invalid ML-KEM seed"))?;
+    let my_ek_b64 = base64::engine::general_purpose::STANDARD.encode(my_ek.to_bytes().as_slice());
+    let peer_ek =
+        pq_ek_from_b64(peer_pq_ek_b64).ok_or_else(|| anyhow::anyhow!("Invalid peer ML-KEM key"))?;
+    let (ct, mlkem_ss) = peer_ek.encapsulate();
+    let mlkem_arr: [u8; 32] = mlkem_ss.as_slice().try_into().expect("ML-KEM ss 32 bytes");
+    let my_pub = my_ek.to_bytes();
+    // Медиа-ключ: HKDF с симметричным (сортированным) info; my_pub/peer_pub
+    // X25519-ключи у звонка уже связаны AAD-конвертом, поэтому здесь —
+    // упрощённый домен (без pub-байтов: их у медиа-пути нет в сигнатуре).
+    let key = media_hybrid_kdf(x25519_ss, &mlkem_arr);
+    let kemct_b64 = base64::engine::general_purpose::STANDARD.encode(ct.as_slice());
+    let _ = dk; // dk нужен только для my_ek-восстановления
+    let _ = my_pub;
+    Ok((key, kemct_b64, my_ek_b64))
+}
+
+/// Принимающий: декапсуляция kemct своим seed → тот же гибридный медиа-ключ.
+pub fn media_hybrid_key_in(
+    x25519_ss: &[u8; 32],
+    my_pq_seed_hex: &str,
+    kemct_b64: &str,
+) -> anyhow::Result<[u8; 32]> {
+    let (dk, _) =
+        pq_from_seed(my_pq_seed_hex).ok_or_else(|| anyhow::anyhow!("Invalid ML-KEM seed"))?;
+    let cleaned: String = kemct_b64
+        .trim()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let ct_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&cleaned)
+        .map_err(|e| anyhow::anyhow!("Invalid kemct base64: {e}"))?;
+    if ct_bytes.len() != PQ_CT_LEN {
+        anyhow::bail!("kemct must be {PQ_CT_LEN} bytes, got {}", ct_bytes.len());
+    }
+    let ct: KemCt768 = KemCt768::try_from(ct_bytes.as_slice())
+        .map_err(|_| anyhow::anyhow!("kemct import failed"))?;
+    let mlkem_ss = dk.decapsulate(&ct);
+    let mlkem_arr: [u8; 32] = mlkem_ss.as_slice().try_into().expect("ML-KEM ss 32 bytes");
+    Ok(media_hybrid_kdf(x25519_ss, &mlkem_arr))
+}
+
+/// HKDF-домен медиа-ключа (отдельный от чатового PQ_SALT-info: звонок и
+/// чат никогда не делят ключи). Обе стороны вычисляют идентично:
+/// ikm = x25519_ss ‖ mlkem_ss, salt = PQ_SALT, info = "VAULT-PQ-V1-media".
+fn media_hybrid_kdf(x25519_ss: &[u8; 32], mlkem_ss: &[u8; 32]) -> [u8; 32] {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let mut ikm = Vec::with_capacity(64);
+    ikm.extend_from_slice(x25519_ss);
+    ikm.extend_from_slice(mlkem_ss);
+    let hk = Hkdf::<Sha256>::new(Some(PQ_SALT), &ikm);
+    let mut okm = [0u8; 32];
+    hk.expand(b"VAULT-PQ-V1-media", &mut okm)
+        .expect("32-byte OKM");
+    okm
+}
+
+// ---------------------------------------------------------------------------
 // Конверт v2 (гибрид) — внутри существующего wire-формата base64(nonce‖ct)
 // ---------------------------------------------------------------------------
 
@@ -467,6 +540,28 @@ mod tests {
             "AAAA",
         );
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_media_hybrid_key_symmetry() {
+        // Звонящий и принимающий получают ОДИН медиа-ключ:
+        // out = HKDF(x25519_ss ‖ encapsulate()), in = HKDF(x25519_ss ‖ decapsulate()).
+        let caller_pq = pq_generate();
+        let callee_pq = pq_generate();
+        let x_ss = [0x42u8; 32];
+
+        let (key_out, kemct, my_ek) =
+            media_hybrid_key_out(&x_ss, &caller_pq.seed_hex, &callee_pq.ek_b64).unwrap();
+        let key_in = media_hybrid_key_in(&x_ss, &callee_pq.seed_hex, &kemct).unwrap();
+        assert_eq!(key_out, key_in, "media keys must match");
+        // ek звонящего корректен (принимающий сохранит контакт)
+        assert!(pq_ek_from_b64(&my_ek).is_some());
+        // Подменённый kemct → другой ключ (не равен)
+        let other = pq_generate();
+        let (_, fake_ct, _) =
+            media_hybrid_key_out(&x_ss, &other.seed_hex, &callee_pq.ek_b64).unwrap();
+        let fake_in = media_hybrid_key_in(&x_ss, &callee_pq.seed_hex, &fake_ct).unwrap();
+        assert_ne!(key_out, fake_in);
     }
 
     #[test]
