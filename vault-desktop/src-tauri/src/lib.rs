@@ -111,11 +111,27 @@ fn get_fingerprint(public_key: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn save_my_keypair(public_key: String, private_key: String) -> Result<(), String> {
+fn save_my_keypair(
+    public_key: String,
+    private_key: String,
+    pq_public_key: Option<String>,
+    pq_private_key: Option<String>,
+) -> Result<(), String> {
+    // PQ-мерж (30.08): при отсутствии новых PQ-полей сохраняем старые —
+    // экспорт/импорт и старый фронт (без PQ) не должны стирать PQ-пару.
+    let (pq_public_key, pq_private_key) = match (pq_public_key, pq_private_key) {
+        (Some(p), Some(s)) => (Some(p), Some(s)),
+        _ => match key_store::load_keypair() {
+            Ok(Some(old)) => (old.pq_public_key, old.pq_private_key),
+            _ => (None, None),
+        },
+    };
     let keypair = StoredKeyPair {
         public_key,
         private_key,
         created_at: chrono::Utc::now().to_rfc3339(),
+        pq_public_key,
+        pq_private_key,
     };
     key_store::save_keypair(&keypair).map_err(|e| e.to_string())
 }
@@ -126,12 +142,18 @@ fn load_my_keypair() -> Result<Option<StoredKeyPair>, String> {
 }
 
 #[tauri::command]
-fn save_peer_key(email: String, public_key: String, label: Option<String>) -> Result<(), String> {
+fn save_peer_key(
+    email: String,
+    public_key: String,
+    label: Option<String>,
+    pq_public_key: Option<String>,
+) -> Result<(), String> {
     let key = StoredPeerKey {
         email,
         public_key,
         label,
         added_at: chrono::Utc::now().to_rfc3339(),
+        pq_public_key,
     };
     key_store::add_peer_key(key).map_err(|e| e.to_string())
 }

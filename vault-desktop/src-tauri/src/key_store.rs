@@ -11,6 +11,13 @@ pub struct StoredKeyPair {
     pub public_key: String,
     pub private_key: String,
     pub created_at: String,
+    /// Post-quantum (30.08): seed ML-KEM-768, hex 64 байта. У старых
+    /// keypair.json поля нет → миграция генерирует при load_keypair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_private_key: Option<String>,
+    /// Post-quantum: ek ML-KEM-768, base64 1184 байта.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +26,10 @@ pub struct StoredPeerKey {
     pub public_key: String,
     pub label: Option<String>,
     pub added_at: String,
+    /// Post-quantum (30.08): ek ML-KEM-768 контакта, base64. Нет — контакт
+    /// ещё без PQ (миграция), ему уходит legacy X25519-конверт.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +45,8 @@ fn get_keys_dir() -> anyhow::Result<PathBuf> {
     if let Ok(p) = std::env::var("VAULT_KEYS_DIR") {
         return Ok(PathBuf::from(p));
     }
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".vault").join(KEYS_DIR))
 }
 
@@ -59,7 +71,17 @@ pub fn load_keypair() -> anyhow::Result<Option<StoredKeyPair>> {
         return Ok(None);
     }
     let data = fs::read_to_string(&path)?;
-    let keypair: StoredKeyPair = serde_json::from_str(&data)?;
+    let mut keypair: StoredKeyPair = serde_json::from_str(&data)?;
+    // PQ-миграция (30.08): у аккаунтов, созданных до post-quantum, нет
+    // ML-KEM-пары. Генерируем при первой загрузке и сразу сохраняем —
+    // конверты v2 начнут уходить автоматически (PQ-3/PQ-4).
+    if keypair.pq_private_key.is_none() || keypair.pq_public_key.is_none() {
+        let pq = crate::crypto_pq::pq_generate();
+        keypair.pq_private_key = Some(pq.seed_hex);
+        keypair.pq_public_key = Some(pq.ek_b64);
+        let json = serde_json::to_string_pretty(&keypair)?;
+        fs::write(&path, json)?;
+    }
     Ok(Some(keypair))
 }
 
@@ -99,6 +121,11 @@ pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
     if let Some(existing) = keys.iter_mut().find(|k| k.email == key.email) {
         existing.public_key = key.public_key;
         existing.label = key.label;
+        // PQ: новый ключ затирает старый; None НЕ трогает существующий
+        // (контакт без PQ остаётся с PQ-ключом, полученным позже из конверта).
+        if key.pq_public_key.is_some() {
+            existing.pq_public_key = key.pq_public_key;
+        }
     } else {
         keys.push(key);
     }
@@ -210,7 +237,8 @@ mod tests {
     fn with_tmp_keys<T>(f: impl FnOnce() -> T) -> T {
         let _guard = TMP_LOCK.lock().unwrap();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("vault-keys-test-{}-{}", std::process::id(), seq));
+        let dir =
+            std::env::temp_dir().join(format!("vault-keys-test-{}-{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("VAULT_KEYS_DIR", &dir);
         let result = f();
@@ -226,10 +254,18 @@ mod tests {
                 public_key: "abcd1234".to_string(),
                 private_key: "ef567890".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
             };
             save_keypair(&kp).unwrap();
             let loaded = load_keypair().unwrap().unwrap();
             assert_eq!(loaded.public_key, kp.public_key);
+            // PQ-миграция: load сгенерировал ML-KEM-пару и сохранил
+            assert!(loaded.pq_private_key.is_some());
+            assert!(loaded.pq_public_key.is_some());
+            // Повторная загрузка НЕ рероллит PQ-пару (стабильный идентификатор)
+            let again = load_keypair().unwrap().unwrap();
+            assert_eq!(loaded.pq_public_key, again.pq_public_key);
         });
     }
 
@@ -241,6 +277,7 @@ mod tests {
                 public_key: "aabbccdd".to_string(),
                 label: Some("Test User".to_string()),
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
             };
             add_peer_key(key.clone()).unwrap();
             let keys = load_peer_keys().unwrap();
@@ -262,6 +299,8 @@ mod tests {
                 public_key: "abcd1234".to_string(),
                 private_key: "ef567890".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
             };
             save_keypair(&kp).unwrap();
 
@@ -270,6 +309,7 @@ mod tests {
                 public_key: kp.public_key.clone(),
                 label: None,
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
             };
             let err = add_peer_key(own_as_peer).unwrap_err();
             assert!(err.to_string().contains("own public key"));
@@ -281,9 +321,34 @@ mod tests {
                 public_key: "ffff0000".to_string(),
                 label: None,
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: Some("fakepq".to_string()),
             };
             add_peer_key(real_peer).unwrap();
             assert_eq!(load_peer_keys().unwrap().len(), 1);
+
+            // PQ-семантика add_peer_key: None не трогает существующий PQ,
+            // валидный новый — обновляет.
+            let no_pq_update = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: "ffff0000".to_string(),
+                label: None,
+                added_at: "2024-01-02T00:00:00Z".to_string(),
+                pq_public_key: None,
+            };
+            add_peer_key(no_pq_update).unwrap();
+            let keys = load_peer_keys().unwrap();
+            assert_eq!(keys[0].pq_public_key.as_deref(), Some("fakepq"));
+
+            let new_pq = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: "ffff0000".to_string(),
+                label: None,
+                added_at: "2024-01-03T00:00:00Z".to_string(),
+                pq_public_key: Some("newpq".to_string()),
+            };
+            add_peer_key(new_pq).unwrap();
+            let keys = load_peer_keys().unwrap();
+            assert_eq!(keys[0].pq_public_key.as_deref(), Some("newpq"));
         });
     }
 }
