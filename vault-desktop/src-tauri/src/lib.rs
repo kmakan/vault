@@ -1,16 +1,17 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
+mod audio;
 mod credential_store;
+mod crypto;
+mod crypto_pq;
+mod email;
+mod groups;
+mod history_store;
 mod key_escrow;
 #[cfg(test)]
 mod key_escrow_smoke;
-mod crypto;
-mod email;
 mod key_store;
 mod media;
-mod audio;
 mod storage;
-mod groups;
-mod history_store;
 // Headless IMAP-монитор для FGS-процесса (29.08): уведомления при убитом
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
 #[cfg(target_os = "android")]
@@ -20,10 +21,7 @@ mod service_monitor;
 /// (audio_android) и headless-монитор FGS (service_monitor) делят один
 /// флаг — двойная инициализация паниковала бы (panic=abort).
 #[cfg(target_os = "android")]
-pub(crate) fn service_monitor_ensure_ctx(
-    env: &mut jni::JNIEnv,
-    context: &jni::objects::JObject,
-) {
+pub(crate) fn service_monitor_ensure_ctx(env: &mut jni::JNIEnv, context: &jni::objects::JObject) {
     service_monitor::ensure_ndk_context(env, context);
 }
 
@@ -32,7 +30,7 @@ use storage::sqlite::Storage;
 
 use crypto::{CryptoState, KeyPair};
 use email::{EmailClient, EmailConfig, EmailMessage, IdleOutcome};
-use key_store::{StoredKeyPair, StoredPeerKey, KeyStoreMetadata};
+use key_store::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -380,9 +378,7 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
 }
 
 #[tauri::command]
-async fn email_fetch_messages(
-    state: State<'_, EmailState>,
-) -> Result<Vec<EmailMessage>, String> {
+async fn email_fetch_messages(state: State<'_, EmailState>) -> Result<Vec<EmailMessage>, String> {
     // Полный скан (fetchPendingContactInvites/Accepts при входе) НЕ должен
     // блокировать UI-фетчи: если клиент занят — возвращаем пусто, инвайты
     // подхватятся следующим тиком. Иначе на большом INBOX полный скан
@@ -425,7 +421,10 @@ async fn email_fetch_incremental(
     // из-за «Timed out waiting for email client lock»).
     let Ok(mut guard) = state.0.try_lock() else {
         eprintln!("[email] incremental SKIPPED: client lock busy");
-        return Ok(IncrementalFetchResult { messages: vec![], cursors });
+        return Ok(IncrementalFetchResult {
+            messages: vec![],
+            cursors,
+        });
     };
     // Весь поллинг ≤ 35с: если IMAP-сессия деградировала (троттлинг Gmail,
     // сеть), fetch_newer/reconnect не должны держать клиент и lock вечно.
@@ -473,14 +472,11 @@ async fn email_fetch_incremental_fast(
         .connect_imap()
         .await
         .map_err(|e| format!("Failed to connect for fast fetch: {e}"))?;
-    let result = t_timeout(
-        Duration::from_secs(30),
-        client.fetch_newer(&cursors),
-    )
-    .await
-    .map_err(|_| "Fast incremental fetch timed out".to_string())?
-    .map_err(|e| e.to_string())
-    .map(|(messages, cursors)| IncrementalFetchResult { messages, cursors });
+    let result = t_timeout(Duration::from_secs(30), client.fetch_newer(&cursors))
+        .await
+        .map_err(|_| "Fast incremental fetch timed out".to_string())?
+        .map_err(|e| e.to_string())
+        .map(|(messages, cursors)| IncrementalFetchResult { messages, cursors });
     let _ = client.disconnect();
     result
 }
@@ -501,17 +497,25 @@ async fn email_fetch_body(
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match t_timeout(Duration::from_secs(25), client.fetch_message_body(&uid, &folder)).await {
+    match t_timeout(
+        Duration::from_secs(25),
+        client.fetch_message_body(&uid, &folder),
+    )
+    .await
+    {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(first_err)) => {
             t_timeout(Duration::from_secs(15), client.reconnect_imap())
                 .await
                 .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
                 .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-            t_timeout(Duration::from_secs(25), client.fetch_message_body(&uid, &folder))
-                .await
-                .map_err(|_| "Timed out fetching body (retry)".to_string())?
-                .map_err(|e| e.to_string())
+            t_timeout(
+                Duration::from_secs(25),
+                client.fetch_message_body(&uid, &folder),
+            )
+            .await
+            .map_err(|_| "Timed out fetching body (retry)".to_string())?
+            .map_err(|e| e.to_string())
         }
         Err(_) => Err("Timed out fetching message body".to_string()),
     }
@@ -540,13 +544,10 @@ async fn email_fetch_bodies(
         .connect_imap()
         .await
         .map_err(|e| format!("Failed to connect for bodies: {e}"))?;
-    t_timeout(
-        Duration::from_secs(60),
-        client.fetch_bodies(&uids, &folder),
-    )
-    .await
-    .map_err(|_| "Timed out fetching message bodies".to_string())?
-    .map_err(|e| e.to_string())
+    t_timeout(Duration::from_secs(60), client.fetch_bodies(&uids, &folder))
+        .await
+        .map_err(|_| "Timed out fetching message bodies".to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Скопировать эскроу-письмо из спама/ToMyself во INBOX.
@@ -595,7 +596,12 @@ async fn email_send(
     // отправку успешной, ретрай не запускался, сигнал звонка терялся навсегда
     // («send timed out after DATA», answer не дошёл, медиа не поднялось).
     // Теперь возвращаем реальный статус: Err → JS-ретрай sendCallEnvelope ×3.
-    match t_timeout(Duration::from_secs(45), client.send_email(&to, &subject, &body)).await {
+    match t_timeout(
+        Duration::from_secs(45),
+        client.send_email(&to, &subject, &body),
+    )
+    .await
+    {
         Ok(Ok(())) => Ok(true),
         Ok(Err(e)) => {
             eprintln!("[email] send error: {e}");
@@ -685,43 +691,59 @@ fn groups_create(name: String, creator: String) -> Result<groups::Group, String>
 
 #[tauri::command]
 fn groups_add_member(group_id: String, email: String) -> Result<groups::Group, String> {
-    groups::add_member(&group_id, &email)
-        .map_err(|e| e.to_string())?;
+    groups::add_member(&group_id, &email).map_err(|e| e.to_string())?;
     groups::load_groups()
-        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
-    groups::remove_member(&group_id, &email)
-        .map_err(|e| e.to_string())?;
+    groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
     groups::load_groups()
-        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn groups_set_member_role(group_id: String, email: String, role: String) -> Result<groups::Group, String> {
+fn groups_set_member_role(
+    group_id: String,
+    email: String,
+    role: String,
+) -> Result<groups::Group, String> {
     let role = match role.as_str() {
         "Admin" => groups::GroupRole::Admin,
         "Member" => groups::GroupRole::Member,
         // "Moderator" is a legacy role (removed from the model) — cannot be assigned.
         _ => return Err("Unknown role".to_string()),
     };
-    groups::set_member_role(&group_id, &email, role)
-        .map_err(|e| e.to_string())?;
+    groups::set_member_role(&group_id, &email, role).map_err(|e| e.to_string())?;
     groups::load_groups()
-        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 fn groups_leave(group_id: String, email: String) -> Result<groups::Group, String> {
-    groups::remove_member(&group_id, &email)
-        .map_err(|e| e.to_string())?;
+    groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
     groups::load_groups()
-        .map(|g| g.get(&group_id).cloned().ok_or_else(|| "Group not found".to_string()))
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
         .map_err(|e| e.to_string())?
 }
 
@@ -764,8 +786,7 @@ fn groups_import(
 
 #[tauri::command]
 fn groups_set_key(group_id: String, group_key: String) -> Result<(), String> {
-    groups::set_group_key(&group_id, &group_key)
-        .map_err(|e| e.to_string())
+    groups::set_group_key(&group_id, &group_key).map_err(|e| e.to_string())
 }
 
 // --- Local persistence (Delta Chat-style disk DB, replaces
@@ -796,7 +817,9 @@ fn db_history_load(account: String, chat_key: String) -> Result<Option<String>, 
 
 #[tauri::command]
 fn db_history_clear(account: String) -> Result<(), String> {
-    open_db()?.clear_history(&account).map_err(|e| e.to_string())
+    open_db()?
+        .clear_history(&account)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -832,9 +855,7 @@ fn db_cursors_save(account: String, cursors_json: String) -> Result<(), String> 
 
 #[tauri::command]
 fn db_cursors_load(account: String) -> Result<HashMap<String, u32>, String> {
-    open_db()?
-        .load_cursors(&account)
-        .map_err(|e| e.to_string())
+    open_db()?.load_cursors(&account).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -887,9 +908,7 @@ fn db_kv_set(account: String, key: String, value: String) -> Result<(), String> 
 
 #[tauri::command]
 fn db_kv_get(account: String, key: String) -> Result<Option<String>, String> {
-    open_db()?
-        .kv_get(&account, &key)
-        .map_err(|e| e.to_string())
+    open_db()?.kv_get(&account, &key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1004,10 +1023,7 @@ fn recovery_parse_escrow_email(body: String) -> Result<Option<String>, String> {
     // переносами ВНУТРИ JSON (base64 wrapped разорван). decode_quoted_printable
     // восстанавливает только мягкие переносы (=). Поэтому перед парсингом
     // убираем ВСЕ CR/LF — JSON соберётся обратно в одну строку (25.08, mail.ru).
-    let cleaned: String = body
-        .chars()
-        .filter(|c| *c != '\n' && *c != '\r')
-        .collect();
+    let cleaned: String = body.chars().filter(|c| *c != '\n' && *c != '\r').collect();
     let trimmed = cleaned.trim();
     if !trimmed.contains("\"key_escrow\"") {
         return Ok(None);
@@ -1018,7 +1034,9 @@ fn recovery_parse_escrow_email(body: String) -> Result<Option<String>, String> {
                 && v.get("type").and_then(|x| x.as_str()) == Some("key_escrow")
             {
                 let payload = v.get("payload").cloned().unwrap_or(serde_json::Value::Null);
-                return Ok(Some(serde_json::to_string(&payload).map_err(|e| e.to_string())?));
+                return Ok(Some(
+                    serde_json::to_string(&payload).map_err(|e| e.to_string())?,
+                ));
             }
             Ok(None)
         }
@@ -1044,9 +1062,7 @@ fn db_emails_load(account: String) -> Result<Vec<storage::sqlite::EmailRow>, Str
 
 #[tauri::command]
 fn db_emails_clear(account: String) -> Result<(), String> {
-    open_db()?
-        .clear_emails(&account)
-        .map_err(|e| e.to_string())
+    open_db()?.clear_emails(&account).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1178,6 +1194,7 @@ pub fn run() {
             // Фаза 3 перепроектирования звонков (30.08): JS сообщает решение
             // монитору-владельцу (call_state в monitor.db) — без него монитор
             // ставит missed поверх принятого звонка.
+            #[cfg(target_os = "android")]
             service_monitor::call_report_state,
         ])
         .setup(|app| {
@@ -1199,8 +1216,7 @@ pub fn run() {
             } else {
                 // Fallback: embed icon directly
                 let icon_bytes = include_bytes!("../icons/128x128.png");
-                tauri::image::Image::from_bytes(icon_bytes)
-                    .expect("Failed to parse bundled icon")
+                tauri::image::Image::from_bytes(icon_bytes).expect("Failed to parse bundled icon")
             };
 
             // Set window icon on Linux
@@ -1268,10 +1284,10 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-        // ОТКАТ prevent_exit (29.08): удержание раннера после ExitRequested
-        // на Android оставляло живой процесс с УНИЧТОЖЕННОЙ activity —
-        // повторный open пересоздавал activity, но wry не перепривязывал
-        // поверхность WebView → чёрный экран до полного рестарта. Живучесть
-        // процесса для пушей обеспечивает VaultForegroundService; уведомле-
-        // ния при мёртвом JS будут шться нативно со стороны Rust (след. шаг).
+    // ОТКАТ prevent_exit (29.08): удержание раннера после ExitRequested
+    // на Android оставляло живой процесс с УНИЧТОЖЕННОЙ activity —
+    // повторный open пересоздавал activity, но wry не перепривязывал
+    // поверхность WebView → чёрный экран до полного рестарта. Живучесть
+    // процесса для пушей обеспечивает VaultForegroundService; уведомле-
+    // ния при мёртвом JS будут шться нативно со стороны Rust (след. шаг).
 }

@@ -58,6 +58,8 @@ async-trait = "0.1"
 bytes = "1"
 cpal = "0.18"
 audiopus = "0.2"
+ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
+hkdf = "0.12"
 
 # Desktop (27.08): программный AEC/NS/AGC (WebRTC AudioProcessingModule).
 # Android не нужен — там аппаратный AEC через InputPreset::VoiceCommunication.

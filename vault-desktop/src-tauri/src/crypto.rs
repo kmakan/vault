@@ -1,13 +1,13 @@
+use base64::Engine as _;
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
-use x25519_dalek::{PublicKey, StaticSecret};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use base64::Engine as _;
+use x25519_dalek::{PublicKey, StaticSecret};
 
-const NONCE_LEN: usize = 24;
+pub const NONCE_LEN: usize = 24;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyPair {
@@ -45,15 +45,15 @@ fn derive_key(public_key: &PublicKey) -> [u8; 32] {
 
 #[allow(dead_code)]
 pub fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u8; 32]> {
-    let priv_bytes = hex::decode(private_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid private key hex: {}", e))?;
+    let priv_bytes =
+        hex::decode(private_hex).map_err(|e| anyhow::anyhow!("Invalid private key hex: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
     let private = StaticSecret::from(priv_arr);
 
-    let peer_bytes = hex::decode(peer_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid peer key hex: {}", e))?;
+    let peer_bytes =
+        hex::decode(peer_hex).map_err(|e| anyhow::anyhow!("Invalid peer key hex: {}", e))?;
     let peer_arr: [u8; 32] = peer_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
@@ -63,16 +63,19 @@ pub fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u
     Ok(*shared.as_bytes())
 }
 
-
 /// Шифрование медиа-фрейма (звонки, defence in depth как SimpleX, но XChaCha20).
 /// Каждый Opus-фрейм шифруется перед отправкой в SRTP — nonce(24) + ciphertext.
 pub fn media_encrypt_frame(key: &[u8], frame: &[u8]) -> anyhow::Result<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit};
     use chacha20poly1305::XChaCha20Poly1305;
-    let key_arr: [u8; 32] = key.try_into().map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
+    let key_arr: [u8; 32] = key
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
     let cipher = XChaCha20Poly1305::new_from_slice(&key_arr).map_err(|e| anyhow::anyhow!("{e}"))?;
     let nonce_bytes: [u8; 24] = rand::random();
-    let ciphertext = cipher.encrypt(&nonce_bytes.into(), frame).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let ciphertext = cipher
+        .encrypt(&nonce_bytes.into(), frame)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut out = Vec::with_capacity(24 + ciphertext.len());
     out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
@@ -83,11 +86,17 @@ pub fn media_encrypt_frame(key: &[u8], frame: &[u8]) -> anyhow::Result<Vec<u8>> 
 pub fn media_decrypt_frame(key: &[u8], data: &[u8]) -> anyhow::Result<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit};
     use chacha20poly1305::XChaCha20Poly1305;
-    let key_arr: [u8; 32] = key.try_into().map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
+    let key_arr: [u8; 32] = key
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("media key must be 32 bytes"))?;
     let cipher = XChaCha20Poly1305::new_from_slice(&key_arr).map_err(|e| anyhow::anyhow!("{e}"))?;
-    if data.len() < 24 { anyhow::bail!("frame too short"); }
+    if data.len() < 24 {
+        anyhow::bail!("frame too short");
+    }
     let (nonce_bytes, ct) = data.split_at(24);
-    let plain = cipher.decrypt(nonce_bytes.into(), ct).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let plain = cipher
+        .decrypt(nonce_bytes.into(), ct)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(plain)
 }
 
@@ -106,8 +115,8 @@ pub fn encrypt_cmd(
     private_key: &str,
     peer_public_key: Option<&str>,
 ) -> anyhow::Result<String> {
-    let priv_bytes = hex::decode(private_key)
-        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_bytes =
+        hex::decode(private_key).map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
@@ -116,8 +125,8 @@ pub fn encrypt_cmd(
 
     let key = match peer_public_key {
         Some(peer_hex) => {
-            let peer_bytes = hex::decode(peer_hex)
-                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_bytes =
+                hex::decode(peer_hex).map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
             let peer_arr: [u8; 32] = peer_bytes
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
@@ -156,8 +165,8 @@ pub fn decrypt_cmd(
         anyhow::bail!("Ciphertext too short");
     }
 
-    let priv_bytes = hex::decode(private_key)
-        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_bytes =
+        hex::decode(private_key).map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
@@ -166,8 +175,8 @@ pub fn decrypt_cmd(
 
     let key = match peer_public_key {
         Some(peer_hex) => {
-            let peer_bytes = hex::decode(peer_hex)
-                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_bytes =
+                hex::decode(peer_hex).map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
             let peer_arr: [u8; 32] = peer_bytes
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
@@ -201,8 +210,8 @@ pub fn encrypt_vault_cmd(
 ) -> anyhow::Result<String> {
     use chacha20poly1305::aead::Payload;
 
-    let priv_bytes = hex::decode(private_key)
-        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_bytes =
+        hex::decode(private_key).map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
@@ -211,8 +220,8 @@ pub fn encrypt_vault_cmd(
 
     let key = match peer_public_key {
         Some(peer_hex) => {
-            let peer_bytes = hex::decode(peer_hex)
-                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_bytes =
+                hex::decode(peer_hex).map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
             let peer_arr: [u8; 32] = peer_bytes
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
@@ -256,10 +265,7 @@ pub fn decrypt_vault_cmd(
 
     // SMTP-переносы (fold ≤76 колонок) оставляют в теле \n — base64-декодер
     // должен их игнорировать, иначе НИ ОДНО входящее письмо не расшифруется.
-    let cleaned: String = ciphertext
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&cleaned)
         .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
@@ -268,8 +274,8 @@ pub fn decrypt_vault_cmd(
         anyhow::bail!("Ciphertext too short");
     }
 
-    let priv_bytes = hex::decode(private_key)
-        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    let priv_bytes =
+        hex::decode(private_key).map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
     let priv_arr: [u8; 32] = priv_bytes
         .try_into()
         .map_err(|_| anyhow::anyhow!("Private key must be 32 bytes"))?;
@@ -278,8 +284,8 @@ pub fn decrypt_vault_cmd(
 
     let key = match peer_public_key {
         Some(peer_hex) => {
-            let peer_bytes = hex::decode(peer_hex)
-                .map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
+            let peer_bytes =
+                hex::decode(peer_hex).map_err(|e| anyhow::anyhow!("Invalid peer key: {}", e))?;
             let peer_arr: [u8; 32] = peer_bytes
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("Peer key must be 32 bytes"))?;
@@ -321,8 +327,7 @@ pub fn fingerprint_cmd(public_key_hex: &str) -> anyhow::Result<String> {
 
 /// Symmetric encrypt with a raw 32-byte hex key (for group shared keys)
 pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<String> {
-    let key_bytes = hex::decode(key_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
+    let key_bytes = hex::decode(key_hex).map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
     if key_bytes.len() != 32 {
         anyhow::bail!("Group key must be 32 bytes");
     }
@@ -360,10 +365,7 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
     // (спам-фильтр), и письмо приходит с '\n' внутри. Строгий base64-декодер
     // падает на переносах → сообщение не расшифровывается. Игнорируем все
     // пробельные символы (тот же фикс, что в decrypt_vault_cmd).
-    let cleaned: String = ciphertext
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&cleaned)
         .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
@@ -372,8 +374,7 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
         anyhow::bail!("Ciphertext too short");
     }
 
-    let key_bytes = hex::decode(key_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
+    let key_bytes = hex::decode(key_hex).map_err(|e| anyhow::anyhow!("Invalid key hex: {}", e))?;
     if key_bytes.len() != 32 {
         anyhow::bail!("Group key must be 32 bytes");
     }
@@ -388,7 +389,13 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
     // Сначала пробуем формат со стелс-меткой (AAD="VAULT", текущий); при
     // неудаче — legacy-формат БЕЗ AAD, чтобы групповые письма, зашифрованные
     // до введения метки, продолжали расшифровываться.
-    let plaintext = match cipher.decrypt(nonce, Payload { msg: ciphertext_bytes, aad: b"VAULT" }) {
+    let plaintext = match cipher.decrypt(
+        nonce,
+        Payload {
+            msg: ciphertext_bytes,
+            aad: b"VAULT",
+        },
+    ) {
         Ok(pt) => pt,
         Err(_) => cipher
             .decrypt(nonce, ciphertext_bytes)
@@ -478,9 +485,7 @@ mod tests {
         let cipher = XChaCha20Poly1305::new((&key_arr).into());
         let nonce_bytes: [u8; NONCE_LEN] = rand::random();
         let nonce = XNonce::from_slice(&nonce_bytes);
-        let ciphertext = cipher
-            .encrypt(nonce, b"legacy group msg" as &[u8])
-            .unwrap();
+        let ciphertext = cipher.encrypt(nonce, b"legacy group msg" as &[u8]).unwrap();
         let mut out = Vec::new();
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ciphertext);
