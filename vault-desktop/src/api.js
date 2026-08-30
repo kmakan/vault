@@ -1095,7 +1095,18 @@ export class ApiClient {
   async mediaSoundPlay(name, looped) {
     return await invoke('media_sound_play', { name, looped });
   }
-  async mediaSoundStop() {
+    // Фаза 3 перепроектирования звонков (30.08): JS сообщает монитору-владельцу
+  // решение/статус звонка. Монитор хранит call_state в monitor.db и не ставит
+  // missed поверх принятого/отклонённого звонка.
+  async reportCallState(callId, state) {
+    try {
+      await invoke('call_report_state', { callId, state });
+    } catch (e) {
+      console.warn('[call] report state failed:', e);
+    }
+  }
+
+async mediaSoundStop() {
     return await invoke('media_sound_stop');
   }
 
@@ -1490,3 +1501,4 @@ function urlSafeB64Decode(str) {
   const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
   return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))));
 }
+

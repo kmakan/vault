@@ -7,6 +7,7 @@
     <!-- Фоновый приём звонков (27.08): foreground-сервис удерживает процесс,
          чтобы IMAP IDLE-цикл продолжал доставлять входящие вызовы в фоне. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Режим звонка (28.08): FGS-тип phoneCall даёт исключение из запрета
          на запуск activity из фона (BAL) — экран звонка открывается,

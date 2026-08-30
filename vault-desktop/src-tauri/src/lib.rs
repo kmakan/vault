@@ -1175,6 +1175,10 @@ pub fn run() {
             // HTML5 Audio (Android, фронт сам).
             media::media_sound_play,
             media::media_sound_stop,
+            // Фаза 3 перепроектирования звонков (30.08): JS сообщает решение
+            // монитору-владельцу (call_state в monitor.db) — без него монитор
+            // ставит missed поверх принятого звонка.
+            service_monitor::call_report_state,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

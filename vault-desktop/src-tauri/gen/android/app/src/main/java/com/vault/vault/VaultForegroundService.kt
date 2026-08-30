@@ -408,33 +408,9 @@ class VaultForegroundService : Service() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                 }
-                // Кнопки «Отклонить/Принять» на самом уведомлении (29.08):
-                // смахивание CATEGORY_CALL не создаёт события, и звонящий
-                // гудел до таймаута. REJECT шлёт call_reject почтой через
-                // Rust-мост (nativeSendCallSignal — работает при мёртвом JS).
-                var notifActions: NotificationCompat.Builder.() -> Unit = {}
-                try {
-                    val rejectIntent = Intent(context, CallActionReceiver::class.java).apply {
-                        action = CallActionReceiver.ACTION_REJECT
-                    }
-                    val rejectPi = PendingIntent.getBroadcast(
-                        context, CallActionReceiver.REQ_REJECT, rejectIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                    )
-                    val acceptIntent = Intent(context, CallActionReceiver::class.java).apply {
-                        action = CallActionReceiver.ACTION_ACCEPT
-                    }
-                    val acceptPi = PendingIntent.getBroadcast(
-                        context, CallActionReceiver.REQ_ACCEPT, acceptIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                    )
-                    notifActions = {
-                        addAction(R.drawable.ic_notification, "Отклонить", rejectPi)
-                        addAction(R.drawable.ic_notification, "Принять", acceptPi)
-                    }
-                } catch (e: Throwable) {
-                    Log.w("VaultRust", "call actions setup failed: " + e.message)
-                }
+                // Уведомление БЕЗ кнопок (0.1.94, упрощение по юзеру): экран звонка с
+                // свайпом поднимается сразу (startActivity ниже), кнопки в шторке
+                // дублировали UI и вносили рассинхрон состояний.
                 val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
                     .setContentTitle(callerName)
                     .setContentText(context.getString(R.string.call_notif_text))
@@ -446,7 +422,6 @@ class VaultForegroundService : Service() {
                     .setOngoing(true)
                     .setAutoCancel(false)
                     .setTimeoutAfter(180_000) // гудок 180с = таймауту звонка
-                    .apply(notifActions)
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
@@ -493,23 +468,29 @@ class VaultForegroundService : Service() {
                 //    phoneCall-FGS и блокирует запуск (BAL). Даём 400мс
                 //    на применение типа сервиса.
                 try {
+                    // 30.08: Android 14 блокирует bg-start, пока phoneCall-FGS
+                    // не «устаканится» (Abort background activity starts).
+                    // Ретраим: 600мс / 1.2с / 2.4с — одна из попыток пройдёт.
                     val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                    handler.postDelayed({
-                        try {
-                            val openIntent = context.packageManager
-                                .getLaunchIntentForPackage(context.packageName)
-                            if (openIntent != null) {
-                                openIntent.addFlags(
-                                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                                )
-                                context.startActivity(openIntent)
-                                Log.i("VaultRust", "activity launched for incoming call")
+                    val delays = longArrayOf(600, 1200, 2400)
+                    for ((idx, d) in delays.withIndex()) {
+                        handler.postDelayed({
+                            try {
+                                val openIntent = context.packageManager
+                                    .getLaunchIntentForPackage(context.packageName)
+                                if (openIntent != null) {
+                                    openIntent.addFlags(
+                                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                    )
+                                    context.startActivity(openIntent)
+                                    Log.i("VaultRust", "activity launched (attempt ${idx + 1})")
+                                }
+                            } catch (e: Throwable) {
+                                Log.w("VaultRust", "launch activity failed: " + e.message)
                             }
-                        } catch (e: Throwable) {
-                            Log.w("VaultRust", "launch activity failed: " + e.message)
-                        }
-                    }, 400)
+                        }, d)
+                    }
                 } catch (e: Throwable) {
                     Log.w("VaultRust", "schedule activity launch failed: " + e.message)
                 }

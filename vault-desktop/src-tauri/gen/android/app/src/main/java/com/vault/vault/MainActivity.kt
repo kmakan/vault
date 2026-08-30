@@ -9,6 +9,7 @@ import android.util.Log
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityCompat
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 
 class MainActivity : TauriActivity() {
@@ -118,6 +119,22 @@ class MainActivity : TauriActivity() {
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "battery-optimization request failed: " + e.message)
+    }
+
+    // Отображение поверх окон (30.08): с этим правом Android разрешает запуск
+    // MainActivity из фонового сервиса — экран звонка открывается сам при
+    // свёрнутом приложении (иначе heads-up «откройте Vault»).
+    try {
+      if (!Settings.canDrawOverlays(this)) {
+        val intent = Intent(
+          Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+          android.net.Uri.parse("package:$packageName")
+        )
+        startActivity(intent)
+        Log.i("VaultRust", "asked overlay permission (screen-over-apps)")
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "overlay permission request failed: " + e.message)
     }
 
     // Full-screen уведомления звонков (28.08): на Android 14+ (API 34)

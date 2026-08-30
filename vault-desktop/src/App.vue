@@ -5033,6 +5033,9 @@ export default {
       this.callRingTimer = null;
       this.playCallSound('connect', false);
       this.callState = 'active';
+      // Фаза 3 (30.08): сообщаем монитору-владельцу, что звонок принят —
+      // иначе headless-таймаут поставит missed поверх принятого.
+      api.reportCallState(c.call_id, 'accept');
       // Таймер НЕ запускаем (27.08): ждём событие call-media-connected
       // из Rust (реальный звук). Предохранитель 120с — см. armMediaFallback.
       this.callMediaConnected = false;
@@ -5074,6 +5077,8 @@ export default {
       if (c) {
         // Повтор call_reject (27.08) — см. sendTerminalRepeat.
         this.sendTerminalRepeat(c.peer, 'call_reject', c.call_id);
+        // Фаза 3 (30.08): решение монитору-владельцу (нет missed поверх).
+        api.reportCallState(c.call_id, 'reject');
       }
       this.hangup('reject');
     },
@@ -5136,6 +5141,14 @@ export default {
       // Grace-таймер ICE disconnected (28.08).
       if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
       this.stopCallClock();
+      // Фаза 3 (30.08): сообщаем монитору-владельцу исход звонка, чтобы
+      // headless-логика не ставила missed поверх реального решения.
+      if (callId) {
+        const st = (wasIncoming && (reason === 'reject' || reason === 'timeout'
+          || reason === 'cancel' || reason === 'preempt')) ? 'rejected'
+          : 'ended';
+        api.reportCallState(callId, st);
+      }
       this.callState = 'idle';
       this.currentCall = null;
       this.callMuted = false;

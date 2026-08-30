@@ -1260,3 +1260,48 @@ pub fn notify(title: &str, text: &str) -> bool {
         }
     }
 }
+
+
+/// Tauri-команда (фаза 3, 30.08): JS сообщает монитору-владельцу решение/статус
+/// звонка: accept/reject/active/ended. Пишет в call_state monitor.db — единую
+/// базу с headless-монитором. Без неё монитор ставит missed поверх принятого.
+#[tauri::command]
+pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
+    if call_id.is_empty() {
+        return Err("empty call_id".into());
+    }
+    // monitor.db — тот же путь, что использует headless-монитор.
+    let db_path = match dirs::data_local_dir() {
+        Some(d) => d.join("com.vault.vault").join("monitor.db"),
+        None => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            std::path::PathBuf::from(home).join("monitor.db")
+        }
+    };
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let db = crate::storage::sqlite::Storage::open(Some(&db_path))
+        .map_err(|e| format!("monitor.db open: {e}"))?;
+    let db = std::sync::Arc::new(std::sync::Mutex::new(db));
+    let account = crate::credential_store::load_credentials()
+        .ok()
+        .flatten()
+        .map(|c| c.email.to_lowercase())
+        .unwrap_or_default();
+    // state от JS: accepted | rejected | ended (активный разговор = accepted)
+    let mapped = match state.as_str() {
+        "accept" | "accepted" | "active" => "accepted",
+        "reject" | "rejected" => "rejected",
+        "end" | "ended" | "cancel" | "hangup" => "ended",
+        _ => state.as_str(),
+    };
+    call_set_state(&db, &account, &call_id, mapped, "");
+    log::info!("[svc-monitor] JS reported call {call_id} → {mapped}");
+    // 30.08: при принятом/отклонённом решении немедленно гасим нативное
+    // уведомление звонка (раньше висело до hangup — юзер видел «утечку»).
+    if matches!(mapped, "accepted" | "rejected") {
+        crate::audio::audio_android::dismiss_incoming_call_notification();
+    }
+    Ok(())
+}
