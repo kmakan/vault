@@ -87,16 +87,10 @@ async fn e2e_encrypt_via_smtp_decrypt_via_imap() -> Result<()> {
 }
 
 /// Poll the INBOX for a message with the given subject (up to ~90s).
-async fn poll_for_message(
-    client: &mut EmailClient,
-    subject: &str,
-) -> Result<String> {
+async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<String> {
     // UID search requires an open session; EmailClient exposes fetch_messages.
     for attempt in 1..=18u32 {
-        let msgs = client
-            .fetch_messages()
-            .await
-            .context("IMAP fetch failed")?;
+        let msgs = client.fetch_messages().await.context("IMAP fetch failed")?;
 
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let body = client

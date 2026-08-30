@@ -71,15 +71,24 @@ async fn key_exchange_via_invite_email_e2e() -> Result<()> {
     // -- 4. Alice: accepts Bob's reply, adds Bob as a contact ---------------
     let (reply_id, reply_sender, reply_key) =
         Invite::from_link(&reply_link).context("Alice could not parse Bob's reply")?;
-    assert_eq!(reply_sender, bob_email, "reply sender should be Bob's email");
+    assert_eq!(
+        reply_sender, bob_email,
+        "reply sender should be Bob's email"
+    );
     assert_eq!(reply_key, bob_pub, "reply key should be Bob's public key");
     let mut alice_contacts = ContactBook::new();
     alice_contacts.add(Contact::new(&reply_sender, "Bob", &reply_key));
     alice_crypto
         .set_peer_key(&bob_pub)
         .context("Alice could not derive shared secret from Bob's key")?;
-    assert!(bob_contacts.contains(&alice_email), "Bob should have Alice as contact");
-    assert!(alice_contacts.contains(&bob_email), "Alice should have Bob as contact");
+    assert!(
+        bob_contacts.contains(&alice_email),
+        "Bob should have Alice as contact"
+    );
+    assert!(
+        alice_contacts.contains(&bob_email),
+        "Alice should have Bob as contact"
+    );
     println!("✓ Alice: accepted reply id={reply_id} → Bob added to contacts, DH shared secret derived (two-way)");
 
     // -- 5. Alice: encrypt & send A->B over email ---------------------------
@@ -162,10 +171,7 @@ async fn key_exchange_via_invite_email_e2e() -> Result<()> {
 /// Returns (uid, body) — uid is needed for mark_as_read.
 async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<(String, String)> {
     for attempt in 1..=12u32 {
-        let msgs = client
-            .fetch_messages()
-            .await
-            .context("IMAP fetch failed")?;
+        let msgs = client.fetch_messages().await.context("IMAP fetch failed")?;
 
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let uid = msg.id.clone();

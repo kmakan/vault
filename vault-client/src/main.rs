@@ -12,11 +12,7 @@ use tracing_subscriber::EnvFilter;
 use crate::api::client::Config;
 
 #[derive(Parser)]
-#[command(
-    name = "vault",
-    about = "🔒 Vault — E2E Encrypted Messenger",
-    version
-)]
+#[command(name = "vault", about = "🔒 Vault — E2E Encrypted Messenger", version)]
 struct Cli {
     /// Run in modern CLI mode with slash commands (default; flag kept for compatibility)
     #[arg(long, short = 'c')]

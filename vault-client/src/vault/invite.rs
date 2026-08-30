@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 /// Vault ID format: vault:email>
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultId {
@@ -267,7 +266,11 @@ impl InviteManager {
     }
 
     /// Accept an invite (recipient side)
-    pub fn accept_invite(&mut self, invite_id: &str, _recipient_public_key: &str) -> Result<Invite> {
+    pub fn accept_invite(
+        &mut self,
+        invite_id: &str,
+        _recipient_public_key: &str,
+    ) -> Result<Invite> {
         let invite = self
             .invites
             .get_mut(invite_id)
@@ -400,8 +403,7 @@ mod tests {
 
     #[test]
     fn test_invite_link_roundtrip_self_contained() {
-        let invite =
-            Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
+        let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
 
         let link = invite.to_link();
         assert!(link.starts_with("https://vault.chat/invite/"));
@@ -419,8 +421,7 @@ mod tests {
     fn test_invite_link_legacy_backward_compat() {
         // Legacy format: base64url(id) with no contact data.
         let id = "inv_legacy123";
-        let old_link =
-            format!("https://vault.chat/invite/{}", base64url_encode(id));
+        let old_link = format!("https://vault.chat/invite/{}", base64url_encode(id));
 
         let parsed = Invite::from_link(&old_link);
         assert!(parsed.is_some());

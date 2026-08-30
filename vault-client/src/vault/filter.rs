@@ -80,10 +80,7 @@ impl VaultFilter {
 
     /// Filter out regular (non-Vault) messages
     pub fn exclude_vault(messages: &[EmailMessage]) -> Vec<&EmailMessage> {
-        messages
-            .iter()
-            .filter(|m| !Self::is_vault_any(m))
-            .collect()
+        messages.iter().filter(|m| !Self::is_vault_any(m)).collect()
     }
 }
 
@@ -132,10 +129,7 @@ mod tests {
     #[test]
     fn test_clean_subject() {
         assert_eq!(VaultFilter::clean_subject("[VAULT] Hello"), "Hello");
-        assert_eq!(
-            VaultFilter::clean_subject("[VAULT-RECEIPT] msg-1"),
-            "msg-1"
-        );
+        assert_eq!(VaultFilter::clean_subject("[VAULT-RECEIPT] msg-1"), "msg-1");
         assert_eq!(VaultFilter::clean_subject("Regular"), "Regular");
     }
 

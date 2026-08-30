@@ -384,7 +384,11 @@ impl Command {
                         let email = parts.next().unwrap().to_string();
                         let name = parts.next().map(|s| s.to_string());
                         let pub_key = parts.next().map(|s| s.to_string());
-                        Command::Add { email, name, pub_key }
+                        Command::Add {
+                            email,
+                            name,
+                            pub_key,
+                        }
                     }
                 }
                 "remove" | "rm" => {
@@ -1268,7 +1272,11 @@ mod tests {
         // /add <email> [name] [pubkey_hex]
         let cmd = Command::parse("/add a@b.ru");
         match cmd {
-            Command::Add { email, name, pub_key } => {
+            Command::Add {
+                email,
+                name,
+                pub_key,
+            } => {
                 assert_eq!(email, "a@b.ru");
                 assert!(name.is_none());
                 assert!(pub_key.is_none());
@@ -1277,7 +1285,11 @@ mod tests {
         }
         let cmd = Command::parse("/add a@b.ru Name 00ff");
         match cmd {
-            Command::Add { email, name, pub_key } => {
+            Command::Add {
+                email,
+                name,
+                pub_key,
+            } => {
                 assert_eq!(email, "a@b.ru");
                 assert_eq!(name, Some("Name".to_string()));
                 assert_eq!(pub_key, Some("00ff".to_string()));

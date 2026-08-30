@@ -52,10 +52,7 @@ fn unique_subject(direction: &str) -> String {
 /// Returns (uid, body) — uid is needed for mark_as_read.
 async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<(String, String)> {
     for attempt in 1..=12u32 {
-        let msgs = client
-            .fetch_messages()
-            .await
-            .context("IMAP fetch failed")?;
+        let msgs = client.fetch_messages().await.context("IMAP fetch failed")?;
 
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let uid = msg.id.clone();
@@ -178,7 +175,10 @@ async fn vault_aad_marker_roundtrip_e2e() -> Result<()> {
     // -- 6. ERROR CASE: non-vault mail must decrypt_vault → Err ---------------
     // 6a. Plain text (not even base64) — chat must reject it.
     let plain_err = bob_crypto.decrypt_vault("hello");
-    assert!(plain_err.is_err(), "plain text must NOT decrypt as a vault message");
+    assert!(
+        plain_err.is_err(),
+        "plain text must NOT decrypt as a vault message"
+    );
 
     // 6b. Ciphertext with the SAME shared DH key, but encrypted WITHOUT the
     //     "VAULT" AAD (legacy `alice_crypto.encrypt()`). AAD auth must fail → Err.
@@ -239,7 +239,10 @@ async fn vault_aad_marker_roundtrip_e2e() -> Result<()> {
     // 8a. Base64 decoding to <24 bytes (too short for the nonce‖ct scheme).
     let short = "aGk="; // decodes to 3 bytes
     let short_err = alice_crypto.decrypt_vault(short);
-    assert!(short_err.is_err(), "decrypt_vault must reject <24-byte payload");
+    assert!(
+        short_err.is_err(),
+        "decrypt_vault must reject <24-byte payload"
+    );
 
     // 8b. Random bytes (>= 24) that are valid base64 but NOT our nonce‖ct AAD
     //     scheme — AAD auth must fail → Err (no panic, no accidental Ok).

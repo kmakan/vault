@@ -1,4 +1,5 @@
 pub mod encryptor;
+pub mod pq;
 
 pub use encryptor::{DecryptedContent, Encryptor};
 
@@ -14,12 +15,21 @@ use chacha20poly1305::{
 use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
-const NONCE_LEN: usize = 24;
+pub const NONCE_LEN: usize = 24;
+pub use NONCE_LEN as NONCE_LEN_PUB;
 
 pub struct CryptoClient {
     private_key: Option<StaticSecret>,
     public_key: Option<PublicKey>,
     shared_secret: Option<SharedSecret>,
+    /// PQ (30.08): ML-KEM-768 seed (hex, приватный) и ek (b64, публичный).
+    /// None — аккаунт до PQ-миграции (legacy X25519).
+    pub pq_seed_hex: Option<String>,
+    pub pq_ek_b64: Option<String>,
+    /// PQ-ключ контакта (ek b64). None — контакт без PQ.
+    pub peer_pq_ek_b64: Option<String>,
+    /// X25519 pubkey последнего пира (для hybrid_encrypt_vault).
+    last_peer_pub_hex: Option<String>,
 }
 
 impl CryptoClient {
@@ -28,6 +38,10 @@ impl CryptoClient {
             private_key: None,
             public_key: None,
             shared_secret: None,
+            pq_seed_hex: None,
+            pq_ek_b64: None,
+            peer_pq_ek_b64: None,
+            last_peer_pub_hex: None,
         }
     }
 
@@ -35,6 +49,11 @@ impl CryptoClient {
     pub fn generate_keypair(&mut self) -> (String, String) {
         let private = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&private);
+
+        // PQ (30.08): ML-KEM-768 пара вместе с X25519.
+        let pq = pq::pq_generate();
+        self.pq_seed_hex = Some(pq.seed_hex);
+        self.pq_ek_b64 = Some(pq.ek_b64);
 
         let pub_hex = hex::encode(public.as_bytes());
         let priv_hex = hex::encode(private.to_bytes());
@@ -61,6 +80,11 @@ impl CryptoClient {
 
     /// Set a remote peer's public key to derive shared secret
     pub fn set_peer_key(&mut self, peer_pub_hex: &str) -> Result<()> {
+        self.set_peer_key_pq(peer_pub_hex, None)
+    }
+
+    /// PQ (30.08): peer X25519 ключ + опциональный ML-KEM ek контакта.
+    pub fn set_peer_key_pq(&mut self, peer_pub_hex: &str, peer_pq_ek: Option<&str>) -> Result<()> {
         let priv_key = self
             .private_key
             .as_ref()
@@ -71,6 +95,9 @@ impl CryptoClient {
             <[u8; 32]>::try_from(peer_bytes.as_slice())
                 .map_err(|_| anyhow::anyhow!("Public key must be 32 bytes"))?,
         );
+
+        self.peer_pq_ek_b64 = peer_pq_ek.map(|s| s.to_string());
+        self.last_peer_pub_hex = Some(peer_pub_hex.to_string());
 
         let shared = priv_key.diffie_hellman(&peer_pub);
         self.shared_secret = Some(shared);
@@ -149,6 +176,30 @@ impl CryptoClient {
     /// authenticated by Poly1305 but NOT present in the ciphertext.  On the
     /// wire the format is identical to `encrypt()`: base64(nonce ‖ ciphertext).
     pub fn encrypt_vault(&self, plaintext: &str) -> Result<String> {
+        // PQ (30.08): при наличии PQ-ключей у обеих сторон — гибридный
+        // конверт "PQ1:<kemct>|<sender_ek>|<wire>" (как desktop PQ-3/PQ-4).
+        // Иначе — прежний legacy X25519 (AAD="VAULT").
+        if let (Some(seed), Some(peer_ek)) =
+            (self.pq_seed_hex.as_deref(), self.peer_pq_ek_b64.as_deref())
+        {
+            if let Some(peer_pub_hex) = self.last_peer_pub_hex.as_deref() {
+                let priv_hex = self
+                    .private_key
+                    .as_ref()
+                    .map(|k| hex::encode(k.to_bytes()))
+                    .context("Generate keys first with /keygen")?;
+                let (wire, hdr) = pq::hybrid_encrypt_vault(
+                    plaintext,
+                    &priv_hex,
+                    peer_pub_hex,
+                    Some(seed),
+                    peer_ek,
+                )?;
+                let kemct = hdr.kemct.unwrap_or_default();
+                let pq_ek_out = hdr.pq.unwrap_or_default();
+                return Ok(format!("PQ1:{kemct}|{pq_ek_out}|{wire}"));
+            }
+        }
         let key = self.get_key()?;
         let cipher = XChaCha20Poly1305::new((&key).into());
         let nonce_bytes: [u8; NONCE_LEN] = rand::random();
@@ -176,6 +227,29 @@ impl CryptoClient {
     /// AAD (or the key is wrong), returns `Err` — the caller should treat it
     /// as non-vault mail (or try the legacy fallback).
     pub fn decrypt_vault(&self, ciphertext: &str) -> Result<String> {
+        // PQ (30.08): "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид ML-KEM+X25519.
+        // Нет префикса — legacy X25519 (AAD="VAULT").
+        let trimmed = ciphertext.trim();
+        if let Some(rest) = trimmed.strip_prefix("PQ1:") {
+            let parts: Vec<&str> = rest.splitn(3, '|').collect();
+            if parts.len() == 3 {
+                let (kemct, _sender_ek, wire) = (parts[0], parts[1], parts[2]);
+                let seed = self.pq_seed_hex.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("PQ message but no PQ seed — run /keygen on this account")
+                })?;
+                let peer_pub = self.last_peer_pub_hex.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("PQ message but peer key not set — /add or /accept first")
+                })?;
+                let priv_hex = self
+                    .private_key
+                    .as_ref()
+                    .map(|k| hex::encode(k.to_bytes()))
+                    .context("Generate keys first with /keygen")?;
+                return pq::hybrid_decrypt_vault(wire, &priv_hex, peer_pub, seed, kemct)
+                    .map_err(|e| anyhow::anyhow!("PQ decrypt failed: {e}"));
+            }
+        }
+
         let compact: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
         let decoded = BASE64.decode(compact).context("Invalid Base64")?;
 

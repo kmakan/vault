@@ -16,6 +16,9 @@ pub struct Contact {
     pub email: String,
     pub name: String,
     pub public_key: String,
+    /// PQ (30.08): ek ML-KEM-768 контакта (b64). None — контакт без PQ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
     pub fingerprint: String,
     pub added_at: String,
     pub last_seen: Option<String>,
@@ -34,6 +37,7 @@ impl Contact {
             email: email.to_string(),
             name: name.to_string(),
             public_key: public_key.to_string(),
+            pq_public_key: None,
             fingerprint,
             added_at: chrono::Utc::now().to_rfc3339(),
             last_seen: None,
@@ -50,6 +54,7 @@ impl Contact {
             email: email.to_string(),
             name: name.to_string(),
             public_key: String::new(),
+            pq_public_key: None,
             fingerprint: String::new(),
             added_at: chrono::Utc::now().to_rfc3339(),
             last_seen: None,

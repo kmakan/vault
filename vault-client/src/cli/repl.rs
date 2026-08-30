@@ -97,9 +97,7 @@ async fn dispatch_line(ctx: &mut CliContext, raw: String) -> Result<bool> {
     let cmd = Command::parse(&line);
 
     // In chat mode, bare text → send
-    let cmd = if ctx.active_chat.is_some()
-        && matches!(&cmd, Command::Unknown(s) if !s.is_empty())
-    {
+    let cmd = if ctx.active_chat.is_some() && matches!(&cmd, Command::Unknown(s) if !s.is_empty()) {
         Command::Send { message: line }
     } else {
         cmd
@@ -250,7 +248,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     // shared X25519 ECDH secret (Desktop-compatible).
                     if let Some(contact) = ctx.contact_book.get(chat) {
                         if !contact.public_key.is_empty() {
-                            if let Err(e) = ctx.crypto.set_peer_key(&contact.public_key) {
+                            if let Err(e) = ctx.crypto.set_peer_key_pq(
+                                &contact.public_key,
+                                contact.pq_public_key.as_deref(),
+                            ) {
                                 Output::warn(&format!("Could not set peer key: {}", e));
                             }
                         } else {
@@ -265,7 +266,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         "id": uuid::Uuid::new_v4().to_string(),
                         "text": &message,
                         "name": ctx.config.email.as_deref().unwrap_or(""),
-                        "avatar": ""
+                        "avatar": "",
+                        // Desktop-совместимость (30.08): свой pubkey в конверте
+                        // + PQ ek — получатель сохранит контакт и ответит гибридом.
+                        "key": ctx.crypto.public_key_hex().unwrap_or_default(),
+                        "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default()
                     });
                     let encrypted = ctx
                         .crypto
@@ -376,59 +381,62 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 let gid = gid.trim().to_string();
                                 // IMAP bodies arrive wrapped at 76 chars (RFC 2045) —
                                 // strip ALL whitespace before base64-decoding.
-                                let compact: String = msg
-                                    .body
-                                    .chars()
-                                    .filter(|c| !c.is_whitespace())
-                                    .collect();
+                                let compact: String =
+                                    msg.body.chars().filter(|c| !c.is_whitespace()).collect();
                                 match URL_SAFE_NO_PAD.decode(compact) {
-                                    Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                                        Ok(payload) => {
-                                            let group_id = payload
-                                                .get("group_id")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or(&gid)
-                                                .to_string();
-                                            let group_name = payload
-                                                .get("group_name")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("group")
-                                                .to_string();
-                                            let group_key = payload
-                                                .get("group_key")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
-                                            let sender = payload
-                                                .get("sender")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or(&msg.from)
-                                                .to_string();
-                                            let mut gm = crate::vault::GroupManager::new();
-                                            match gm.import_group(
-                                                &group_id,
-                                                &group_name,
-                                                &group_key,
-                                                &sender,
-                                            ) {
-                                                Ok(()) => Output::success(&format!(
-                                                    "Group invite accepted: {} ({})",
-                                                    group_name, group_id
-                                                )),
-                                                Err(e) => {
-                                                    Output::warn(&format!(
+                                    Ok(bytes) => {
+                                        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                            Ok(payload) => {
+                                                let group_id = payload
+                                                    .get("group_id")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or(&gid)
+                                                    .to_string();
+                                                let group_name = payload
+                                                    .get("group_name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("group")
+                                                    .to_string();
+                                                let group_key = payload
+                                                    .get("group_key")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                let sender = payload
+                                                    .get("sender")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or(&msg.from)
+                                                    .to_string();
+                                                let mut gm = crate::vault::GroupManager::new();
+                                                match gm.import_group(
+                                                    &group_id,
+                                                    &group_name,
+                                                    &group_key,
+                                                    &sender,
+                                                ) {
+                                                    Ok(()) => Output::success(&format!(
+                                                        "Group invite accepted: {} ({})",
+                                                        group_name, group_id
+                                                    )),
+                                                    Err(e) => Output::warn(&format!(
                                                         "Failed to import group: {}",
                                                         e
-                                                    ))
+                                                    )),
                                                 }
                                             }
+                                            Err(_) => {
+                                                tracing::warn!(
+                                                    "Invalid group invite payload from {}",
+                                                    msg.from
+                                                );
+                                            }
                                         }
-                                        Err(_) => {
-                                            tracing::warn!("Invalid group invite payload from {}", msg.from);
-                                        }
-                                    },
+                                    }
                                     Err(_) => {
-                                        tracing::warn!("Invalid group invite b64 from {}", msg.from);
+                                        tracing::warn!(
+                                            "Invalid group invite b64 from {}",
+                                            msg.from
+                                        );
                                     }
                                 }
                             }
@@ -453,8 +461,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                         Ok(kb) if kb.len() == 32 => {
                                             let mut arr = [0u8; 32];
                                             arr.copy_from_slice(&kb);
-                                            let enc = crate::crypto::encryptor::Encryptor::from_key_bytes(&arr);
-                                                match enc.decrypt(&gmsg.body) {
+                                            let enc =
+                                                crate::crypto::encryptor::Encryptor::from_key_bytes(
+                                                    &arr,
+                                                );
+                                            match enc.decrypt(&gmsg.body) {
                                                     Ok(crate::crypto::encryptor::DecryptedContent::Text(text)) => {
                                                         let date: String = gmsg.date.chars().take(12).collect();
                                                         Output::divider();
@@ -474,7 +485,8 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 _ => {
                                     tracing::warn!(
                                         "Group message for unknown group {} from {}",
-                                        gid, gmsg.from
+                                        gid,
+                                        gmsg.from
                                     );
                                 }
                             }
@@ -568,8 +580,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     // are applied locally, vault converts show their
                                     // inner text, and everything else shows raw.
                                     let displayed =
-                                        match serde_json::from_str::<serde_json::Value>(&inner)
-                                        {
+                                        match serde_json::from_str::<serde_json::Value>(&inner) {
                                             Ok(obj)
                                                 if obj.get("react").and_then(|v| v.as_i64())
                                                     == Some(1) =>
@@ -607,6 +618,40 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                 if obj.get("vault").and_then(|v| v.as_i64())
                                                     == Some(1) =>
                                             {
+                                                // PQ (30.08): конверт несёт pubkey
+                                                // отправителя (+pq ek) — как
+                                                // Desktop: сохраняем/обновляем
+                                                // контакт, чтобы ответить
+                                                // гибридом без invite.
+                                                let sender_key = obj
+                                                    .get("key")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let sender_pq = obj
+                                                    .get("pq")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let sender_mail = extract_sender_from_body(&body);
+                                                if !sender_key.is_empty() {
+                                                    if let (Some(ref mail), Some(my_pub)) =
+                                                        (&sender_mail, ctx.crypto.public_key_hex())
+                                                    {
+                                                        if sender_key != my_pub {
+                                                            if let Some(ref mut contact) =
+                                                                ctx.contact_book.get_mut(mail)
+                                                            {
+                                                                contact.public_key =
+                                                                    sender_key.to_string();
+                                                                contact.pq_public_key =
+                                                                    if sender_pq.is_empty() {
+                                                                        None
+                                                                    } else {
+                                                                        Some(sender_pq.to_string())
+                                                                    };
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 obj.get("text")
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or("")
@@ -618,18 +663,12 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                                     // Record read receipt locally only (no email sent —
                                     // stealth: the desktop client does not send receipts).
-                                    if let Some(ref sender) =
-                                        extract_sender_from_body(&body)
-                                    {
+                                    if let Some(ref sender) = extract_sender_from_body(&body) {
                                         let reader = ctx.config.email.as_deref().unwrap_or("");
-                                        if let Err(e) = ctx
-                                            .receipt_store
-                                            .record_read(&id, reader, sender)
+                                        if let Err(e) =
+                                            ctx.receipt_store.record_read(&id, reader, sender)
                                         {
-                                            tracing::warn!(
-                                                "Failed to save receipt locally: {}",
-                                                e
-                                            );
+                                            tracing::warn!("Failed to save receipt locally: {}", e);
                                         }
                                     }
                                 }
@@ -639,19 +678,17 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     // backwards-compatible reading of old
                                     // VAULT1:-prefixed messages.
                                     match ctx.crypto.decrypt(&body) {
-                                        Ok(plain) => {
-                                            match strip_vault_magic(&plain) {
-                                                Some(inner) => {
-                                                    Output::info("Decrypted message (legacy):");
-                                                    println!("  {}", inner);
-                                                }
-                                                None => {
-                                                    Output::warn(
-                                                        "Not a Vault message — ordinary mail, ignored.",
-                                                    );
-                                                }
+                                        Ok(plain) => match strip_vault_magic(&plain) {
+                                            Some(inner) => {
+                                                Output::info("Decrypted message (legacy):");
+                                                println!("  {}", inner);
                                             }
-                                        }
+                                            None => {
+                                                Output::warn(
+                                                    "Not a Vault message — ordinary mail, ignored.",
+                                                );
+                                            }
+                                        },
                                         Err(_) => {
                                             Output::warn("Could not decrypt (wrong key?)");
                                             println!("  {}", body);
@@ -687,7 +724,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 // X25519 ECDH secret (Desktop-compatible), like /send.
                 if let Some(contact) = ctx.contact_book.get(&to) {
                     if !contact.public_key.is_empty() {
-                        if let Err(e) = ctx.crypto.set_peer_key(&contact.public_key) {
+                        if let Err(e) = ctx.crypto.set_peer_key_pq(&contact.public_key, contact.pq_public_key.as_deref()) {
                             Output::warn(&format!("Could not set peer key: {}", e));
                         }
                     } else {
@@ -754,7 +791,9 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                             match serde_json::from_str::<serde_json::Value>(&inner)
                                             {
                                                 Ok(obj)
-                                                    if obj.get("react").and_then(|v| v.as_i64())
+                                                    if obj
+                                                        .get("react")
+                                                        .and_then(|v| v.as_i64())
                                                         == Some(1) =>
                                                 {
                                                     let em = obj
@@ -768,7 +807,9 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                     format!("[react {} → {}]", em, mid)
                                                 }
                                                 Ok(obj)
-                                                    if obj.get("vault").and_then(|v| v.as_i64())
+                                                    if obj
+                                                        .get("vault")
+                                                        .and_then(|v| v.as_i64())
                                                         == Some(1) =>
                                                 {
                                                     let short: String = obj
@@ -792,14 +833,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                             // backwards-compatible preview of old messages.
                                             match ctx.crypto.decrypt(&msg.body) {
                                                 Ok(plain) => {
-                                                    let lines: Vec<&str> =
-                                                        plain.lines().collect();
-                                                    let first_line =
-                                                        lines.first().unwrap_or(&"");
-                                                    let short: String = first_line
-                                                        .chars()
-                                                        .take(40)
-                                                        .collect();
+                                                    let lines: Vec<&str> = plain.lines().collect();
+                                                    let first_line = lines.first().unwrap_or(&"");
+                                                    let short: String =
+                                                        first_line.chars().take(40).collect();
                                                     format!("[encrypted] {}...", short)
                                                 }
                                                 Err(_) => {
@@ -852,7 +889,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 }
             }
         }
-        Command::Add { email, name, pub_key } => {
+        Command::Add {
+            email,
+            name,
+            pub_key,
+        } => {
             let display_name = name
                 .clone()
                 .unwrap_or_else(|| email.split('@').next().unwrap_or(&email).to_string());
@@ -879,7 +920,9 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         ctx.contact_book.get(&email).unwrap().fingerprint
                     ));
                 } else {
-                    Output::info("No public key provided. Ask the contact to share it via /keyshare.");
+                    Output::info(
+                        "No public key provided. Ask the contact to share it via /keyshare.",
+                    );
                 }
             }
         }
@@ -994,8 +1037,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             match parsed {
                 Some((_id, sender, key)) if !sender.is_empty() && !key.is_empty() => {
                     // Self-contained payload: bundle the sender's contact data right here.
-                    let display_name =
-                        sender.split('@').next().unwrap_or(&sender).to_string();
+                    let display_name = sender.split('@').next().unwrap_or(&sender).to_string();
                     let contact =
                         crate::vault::contacts::Contact::new(&sender, &display_name, &key);
                     ctx.contact_book.add(contact);
@@ -1344,16 +1386,18 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
                             let body = URL_SAFE_NO_PAD.encode(json.as_bytes());
                             match client
-                                .send_email(&email, &format!("VaultGroupInvite: {}", group_id), &body)
+                                .send_email(
+                                    &email,
+                                    &format!("VaultGroupInvite: {}", group_id),
+                                    &body,
+                                )
                                 .await
                             {
                                 Ok(_) => Output::info("Group key invite sent by email"),
-                                Err(e) => {
-                                    Output::warn(&format!(
-                                        "Member added but key invite failed: {}",
-                                        e
-                                    ))
-                                }
+                                Err(e) => Output::warn(&format!(
+                                    "Member added but key invite failed: {}",
+                                    e
+                                )),
                             }
                         }
                     }
@@ -1403,7 +1447,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 Ok(_) => sent += 1,
                                 Err(e) => {
                                     errors += 1;
-                                    tracing::warn!("Failed to send group msg to {}: {}", m.email, e);
+                                    tracing::warn!(
+                                        "Failed to send group msg to {}: {}",
+                                        m.email,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -1428,14 +1476,20 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Promote { group_id, email } => {
             let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.promote_member(&group_id, &email) {
-                Ok(()) => Output::success(&format!("{} promoted to admin in group {}", email, group_id)),
+                Ok(()) => Output::success(&format!(
+                    "{} promoted to admin in group {}",
+                    email, group_id
+                )),
                 Err(e) => Output::error(&format!("Failed to promote: {}", e)),
             }
         }
         Command::Demote { group_id, email } => {
             let mut group_mgr = crate::vault::GroupManager::new();
             match group_mgr.demote_member(&group_id, &email) {
-                Ok(()) => Output::success(&format!("{} demoted to member in group {}", email, group_id)),
+                Ok(()) => Output::success(&format!(
+                    "{} demoted to member in group {}",
+                    email, group_id
+                )),
                 Err(e) => Output::error(&format!("Failed to demote: {}", e)),
             }
         }
@@ -1742,7 +1796,9 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             // Set the recipient's public key (Desktop-compatible shared secret).
             if let Some(c) = ctx.contact_book.get(&to) {
                 if !c.public_key.is_empty() {
-                    let _ = ctx.crypto.set_peer_key(&c.public_key);
+                    let _ = ctx
+                        .crypto
+                        .set_peer_key_pq(&c.public_key, c.pq_public_key.as_deref());
                 }
             }
 
@@ -1782,7 +1838,9 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     if let Some(to) = ctx.active_chat.clone() {
                         if let Some(c) = ctx.contact_book.get(&to) {
                             if !c.public_key.is_empty() {
-                                let _ = ctx.crypto.set_peer_key(&c.public_key);
+                                let _ = ctx
+                                    .crypto
+                                    .set_peer_key_pq(&c.public_key, c.pq_public_key.as_deref());
                             }
                         }
                         let payload = serde_json::json!({

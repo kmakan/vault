@@ -39,15 +39,9 @@ fn client_for(email: String, password: String) -> EmailClient {
 }
 
 /// Poll the INBOX for a message whose subject contains `needle` (up to ~90s).
-async fn poll_for_message(
-    client: &mut EmailClient,
-    needle: &str,
-) -> Result<String> {
+async fn poll_for_message(client: &mut EmailClient, needle: &str) -> Result<String> {
     for attempt in 1..=18u32 {
-        let msgs = client
-            .fetch_messages()
-            .await
-            .context("IMAP fetch failed")?;
+        let msgs = client.fetch_messages().await.context("IMAP fetch failed")?;
 
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(needle)) {
             let body = client
@@ -99,9 +93,7 @@ async fn group_invite_and_message_e2e() -> Result<()> {
         "group_key": group.group_key,
         "sender": alice_email,
     });
-    let invite_body = URL_SAFE_NO_PAD.encode(
-        serde_json::to_string(&payload).unwrap().as_bytes(),
-    );
+    let invite_body = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap().as_bytes());
     let invite_subject = format!("VaultGroupInvite: {}", group.id);
     let alice_client = client_for(alice_email.clone(), alice_pass);
     alice_client
@@ -123,18 +115,21 @@ async fn group_invite_and_message_e2e() -> Result<()> {
         poll_for_message(&mut bob_client, &format!("VaultGroupInvite: {}", group.id)).await?;
     // IMAP bodies arrive wrapped at 76 chars (RFC 2045) — strip ALL whitespace
     // before base64-decoding the invite payload.
-    let compact: String = invite_raw
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let compact: String = invite_raw.chars().filter(|c| !c.is_whitespace()).collect();
     let invite_bytes = URL_SAFE_NO_PAD
         .decode(compact)
         .context("invite b64 decode")?;
     let invite: serde_json::Value =
         serde_json::from_slice(&invite_bytes).context("invite JSON parse")?;
     let gid = invite["group_id"].as_str().context("group_id")?.to_string();
-    let gkey = invite["group_key"].as_str().context("group_key")?.to_string();
-    let gname = invite["group_name"].as_str().context("group_name")?.to_string();
+    let gkey = invite["group_key"]
+        .as_str()
+        .context("group_key")?
+        .to_string();
+    let gname = invite["group_name"]
+        .as_str()
+        .context("group_name")?
+        .to_string();
     let sender = invite["sender"].as_str().context("sender")?.to_string();
     assert_eq!(gid, group.id, "invite group_id matches");
     assert_eq!(gkey, group.group_key, "invite group_key matches");
