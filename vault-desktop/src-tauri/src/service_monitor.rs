@@ -569,6 +569,82 @@ fn pending_save(
     kv_save(db, account, &pending_key(), &list);
 }
 
+/// ─────────── Машина состояний входящего звонка (Фаза 1, 29.08) ───────────
+/// Владелец состояния — монитор (call_state в kv monitor.db). call_id —
+/// первичный ключ. Инварианты: один call_id = один рингтон за всё время;
+/// решение (accepted/rejected) необратимо до ended; ретрансляции call_request
+/// того же call_id НЕ перезапускают рингтон и НЕ создают «новых звонков»
+/// (корень «телефон звонит заново после отклонения»).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct CallEntry {
+    state: String,     // ringing | accepted | rejected | missed | ended
+    caller: String,    // имя/адрес звонящего (для уведомления)
+    updated_at: i64,   // ms, для TTL-чистки
+}
+
+const CALL_TOMBSTONE_MS: i64 = 10 * 60 * 1000; // надгробие 10 мин
+
+fn call_state_key() -> String {
+    "call_state".to_string()
+}
+
+/// Загрузить всю таблицу call_state (kv JSON: call_id → CallEntry).
+fn calls_load(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str) -> std::collections::HashMap<String, CallEntry> {
+    let raw: std::collections::HashMap<String, CallEntry> =
+        kv_json(db, account, &call_state_key());
+    raw
+}
+
+/// Сохранить таблицу call_state c TTL-чисткой надгробий.
+fn calls_save(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+    calls: &std::collections::HashMap<String, CallEntry>,
+) {
+    let now = now_ms();
+    let live: std::collections::HashMap<String, CallEntry> = calls
+        .iter()
+        .filter(|(_, c)| {
+            c.state == "ringing" || now - c.updated_at < CALL_TOMBSTONE_MS
+        })
+        .map(|(k, c)| (k.clone(), c.clone()))
+        .collect();
+    kv_save(db, account, &call_state_key(), &live);
+}
+
+/// Установить состояние звонка (безусловно — владелец здесь).
+fn call_set_state(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+    call_id: &str,
+    state: &str,
+    caller: &str,
+) {
+    if call_id.is_empty() {
+        return;
+    }
+    let mut calls = calls_load(db, account);
+    let entry = calls.entry(call_id.to_string()).or_insert_with(|| CallEntry {
+        state: state.to_string(),
+        caller: caller.to_string(),
+        updated_at: now_ms(),
+    });
+    entry.state = state.to_string();
+    entry.updated_at = now_ms();
+    if !caller.is_empty() {
+        entry.caller = caller.to_string();
+    }
+    calls_save(db, account, &calls);
+}
+
+fn call_get_state(
+    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
+    account: &str,
+    call_id: &str,
+) -> Option<CallEntry> {
+    calls_load(db, account).get(call_id).cloned()
+}
+
 // ─────────────────────── Классификация письма ───────────────────────
 
 fn now_ms() -> i64 {
@@ -800,54 +876,70 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        // ТЕРМИНАЛЬНЫЕ СИГНАЛЫ (29.08, «зомби-звонок»): cancel/end/reject
-        // запоминаем в kv cancelled-calls (TTL через ротацию, 100 шт) —
-        // порядок доставки писем НЕ гарантирован, request может приехать
-        // ПОЗЖЕ своего cancel (зомби-звонок при открытии приложения).
-        if matches!(typ.as_str(), "call_cancel" | "call_end" | "call_reject") {
-            if !call_id.is_empty() {
-                let mut cancelled: Vec<String> =
-                    kv_json(ctx.db, ctx.account, &"cancelled-calls".to_string());
-                if !cancelled.contains(&call_id) {
-                    cancelled.push(call_id);
-                    let cut = cancelled.len().saturating_sub(100);
-                    let cancelled = cancelled.split_off(cut);
-                    kv_save(ctx.db, ctx.account, &"cancelled-calls".to_string(), &cancelled);
-                }
-            }
+        // ФАЗА 1 (29.08): владелец состояния — call_state (kv). Терминальные
+        // сигналы звонящего (cancel/end) = ended (надгробие гасит ретрансляции
+        // и зомби). cancel от ЗВОНЯЩЕГО — не от нас: state=ended.
+        if typ == "call_cancel" || typ == "call_end" {
+            call_set_state(ctx.db, ctx.account, &call_id, "ended", "");
+            log::info!("[svc-monitor] call {call_id}: {typ} → ended");
             return Outcome::Delivered;
         }
-        // Свежий call_request при мёртвом activity: звонок в полный экран —
-        // нативный путь showIncomingCall (FGS → phoneCall + full-screen
-        // intent + рингтон + startActivity, тот же, что из JS). JS-машина
-        // без WebView не работает, но UI экрана звонка — это activity,
-        // которую мы МОЖЕМ поднять нативно (28.08-механизм).
+        if typ == "call_reject" {
+            // Отклонил СОБЕСЕДНИК (мы звонили) или дублируем наш reject —
+            // фиксируем как ended, чтобы поздние request не звонили.
+            call_set_state(ctx.db, ctx.account, &call_id, "ended", "");
+            return Outcome::Delivered;
+        }
+        // Свежий call_request.
         if typ == "call_request" && env_ts > 0 && now_ms() - env_ts < CALL_STALE_MS {
-            // ЗОМБИ-СТРАЖ: для этого call_id уже приходил терминальный
-            // сигнал (отменили/отклонили/завершили) — молча фиксируем.
-            let cancelled: Vec<String> = kv_json(ctx.db, ctx.account, &"cancelled-calls".to_string());
-            if !call_id.is_empty() && cancelled.contains(&call_id) {
-                log::info!("[svc-monitor] call_request {call_id} already cancelled — skip");
-                return Outcome::Delivered;
+            // Идемпотентность: у call_id уже есть запись?
+            match call_get_state(ctx.db, ctx.account, &call_id) {
+                Some(existing) => {
+                    match existing.state.as_str() {
+                        // Уже звонит: ретрансляция — НЕ перезапускаем рингтон,
+                        // НЕ обновляем уведомление. Просто фиксируем.
+                        "ringing" => {
+                            log::info!("[svc-monitor] call {call_id}: retransmission while ringing — ignore");
+                            return Outcome::Delivered;
+                        }
+                        // Решение принято / звонок завершён / пропущен:
+                        // надгробие гасит всё навсегда.
+                        "accepted" | "rejected" | "missed" | "ended" => {
+                            log::info!(
+                                "[svc-monitor] call {call_id}: request after {} — silent",
+                                existing.state
+                            );
+                            return Outcome::Delivered;
+                        }
+                        _ => {}
+                    }
+                }
+                None => {
+                    // Первый раз видим этот call_id → ringing + полный показ.
+                    let caller = env_json
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(&from_lc)
+                        .to_string();
+                    call_set_state(ctx.db, ctx.account, &call_id, "ringing", &caller);
+                    let jni_ok =
+                        crate::audio::audio_android::show_incoming_call_notification(&caller);
+                    log::info!(
+                        "[svc-monitor] call {call_id} NEW from {from_lc}: ringing, jni_ok={jni_ok}"
+                    );
+                    if jni_ok {
+                        return Outcome::Delivered;
+                    }
+                    // JNI-путь не удался — хотя бы пуш «Пропущенный».
+                    call_set_state(ctx.db, ctx.account, &call_id, "missed", &caller);
+                    return if notify(&from_lc, "Пропущенный звонок Vault") {
+                        Outcome::Delivered
+                    } else {
+                        Outcome::Retry
+                    };
+                }
             }
-            let caller = env_json
-                .get("name")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&from_lc);
-            let jni_ok = crate::audio::audio_android::show_incoming_call_notification(caller);
-            log::info!(
-                "[svc-monitor] call_request {call_id} from {from_lc}: showIncomingCall jni_ok={jni_ok}"
-            );
-            if jni_ok {
-                return Outcome::Delivered;
-            }
-            // JNI-путь не удался (нет ndk-context/класса) — хотя бы пуш.
-            return if notify(&from_lc, "Пропущенный звонок Vault") {
-                Outcome::Delivered
-            } else {
-                Outcome::Retry
-            };
         }
         log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
         return Outcome::Delivered;
