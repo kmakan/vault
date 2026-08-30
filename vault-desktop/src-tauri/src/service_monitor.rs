@@ -314,6 +314,167 @@ pub(crate) fn ensure_ndk_context(env: &mut jni::JNIEnv, context: &jni::objects::
     }
 }
 
+/// ───────────── Решение пользователя по звонку (фаза 2, 30.08) ─────────────
+/// Kotlin (CallActionReceiver) передаёт решение ВЛАДЕЛЬЦУ состояния —
+/// монитору. Никакой собственной логики у Kotlin: только транспорт.
+/// decision: "accept" | "reject". Монитор:
+///   rejected → state=rejected + dismiss + call_reject письмом звонящему;
+///   accepted → state=accepted + dismiss + подъём activity (JS сгенерирует
+///              answer; state machine знает про accepted и не гаснет по таймауту).
+/// # Safety — вызывается из JVM с валидным JNIEnv (JNI-контракт).
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecision(
+    mut env: jni::JNIEnv,
+    _receiver: jni::objects::JObject,
+    call_id: jni::objects::JString,
+    decision: jni::objects::JString,
+) {
+    init_logcat();
+    let cid: String = match env.get_string(&call_id) {
+        Ok(s) => s.into(),
+        Err(_) => return,
+    };
+    let dec: String = match env.get_string(&decision) {
+        Ok(s) => s.into(),
+        Err(_) => return,
+    };
+    log::info!("[svc-monitor] nativeCallDecision {dec} for call {cid}");
+
+    // 1) Смотрим запись звонка (email/caller нужны для письма).
+    let creds = crate::credential_store::load_credentials().ok().flatten();
+    let Some(creds) = creds else { return };
+    let account = creds.email.to_lowercase();
+    let db_path = match dirs::data_local_dir() {
+        Some(d) => d.join("com.vault.vault").join("monitor.db"),
+        None => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            std::path::PathBuf::from(home).join("monitor.db")
+        }
+    };
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let db = match crate::storage::sqlite::Storage::open(Some(&db_path)) {
+        Ok(s) => Arc::new(Mutex::new(s)),
+        Err(e) => {
+            log::error!("[svc-monitor] decision: monitor.db open failed: {e}");
+            return;
+        }
+    };
+    let Some(entry) = call_get_state(&db, &account, &cid) else {
+        log::warn!("[svc-monitor] decision {dec}: unknown call {cid}");
+        return;
+    };
+    // Инвариант: решение принимается ровно один раз (в ringing).
+    if entry.state != "ringing" {
+        log::info!("[svc-monitor] decision {dec}: call {cid} already {} — ignore", entry.state);
+        return;
+    }
+
+    // 2) Гасим нативное уведомление в любом случае.
+    crate::audio::audio_android::dismiss_incoming_call_notification();
+
+    match dec.as_str() {
+        "reject" => {
+            call_set_state(&db, &account, &cid, "rejected", &entry.caller);
+            // call_reject звонящему (тот же путь, что nativeSendCallSignal).
+            spawn_call_signal_email(entry.email.clone(), cid.clone(), "call_reject");
+        }
+        "accept" => {
+            call_set_state(&db, &account, &cid, "accepted", &entry.caller);
+            // Поднимаем activity: живой JS увидит accepted (фаза 3: событие
+            // call-state-changed) и сгенерирует answer.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let ctx = ndk_context::android_context();
+                let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+                    .map_err(|e| format!("vm: {e}"))?;
+                let mut env2 = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+                let activity =
+                    unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+                let cls = crate::audio::audio_android::find_app_class(
+                    &mut env2,
+                    &activity,
+                    "com.vault.vault.MainActivity",
+                )
+                .map_err(|e| format!("find class: {e}"))?;
+                let jdec = env2
+                    .new_string("accept")
+                    .map_err(|e| format!("new_string: {e}"))?;
+                env2
+                    .call_static_method(
+                        &cls,
+                        "dispatchCallAction",
+                        "(Ljava/lang/String;)V",
+                        &[(&jdec).into()],
+                    )
+                    .map_err(|e| format!("dispatchCallAction: {e}"))?;
+                Ok::<(), String>(())
+            }));
+            match result {
+                Ok(Ok(())) => log::info!("[svc-monitor] accept: activity dispatched"),
+                Ok(Err(e)) => log::warn!("[svc-monitor] accept dispatch failed: {e}"),
+                Err(_) => log::warn!("[svc-monitor] accept dispatch panicked"),
+            }
+        }
+        _ => log::warn!("[svc-monitor] unknown decision: {dec}"),
+    }
+}
+
+/// Огне-и-забыть отправка call_* письма звонящему (общий путь для reject).
+fn spawn_call_signal_email(email: String, call_id: String, signal: &'static str) {
+    let handle = runtime().spawn(async move {
+        let peer_key = match crate::key_store::load_peer_keys() {
+            Ok(list) => list
+                .into_iter()
+                .find(|p| p.email.eq_ignore_ascii_case(&email))
+                .map(|p| p.public_key),
+            Err(_) => None,
+        };
+        let Some(peer_key) = peer_key else {
+            log::warn!("[svc-monitor] {signal}: no peer key for {email}");
+            return;
+        };
+        let priv_key = match crate::key_store::load_keypair() {
+            Ok(Some(k)) => k.private_key,
+            _ => return,
+        };
+        let envelope = serde_json::json!({
+            "vault": 1,
+            "id": format!("{}{}", now_ms(), "na"),
+            "type": signal,
+            "call_id": call_id,
+            "ts": now_ms(),
+        });
+        let cipher = match crate::crypto::encrypt_vault_cmd(
+            &envelope.to_string(),
+            &priv_key,
+            Some(&peer_key),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[svc-monitor] {signal}: encrypt failed: {e}");
+                return;
+            }
+        };
+        let Some(creds) = crate::credential_store::load_credentials().ok().flatten() else {
+            return;
+        };
+        let mut client = EmailClient::new(EmailConfig {
+            email: creds.email.clone(),
+            password: creds.password.clone(),
+            imap_server: creds.imap_server,
+            imap_port: creds.imap_port,
+            smtp_server: creds.smtp_server,
+            smtp_port: creds.smtp_port,
+        });
+        match client.send_email(&email, "", &cipher).await {
+            Ok(()) => log::info!("[svc-monitor] {signal} sent to {email}"),
+            Err(e) => log::warn!("[svc-monitor] {signal} send failed: {e}"),
+        }
+    });
+    let _ = handle;
+}
+
 // ─────────────────────────── Основной цикл ───────────────────────────
 
 async fn run_loop(stop: Arc<AtomicBool>) {
@@ -582,7 +743,8 @@ fn pending_save(
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 struct CallEntry {
     state: String,     // ringing | accepted | rejected | missed | ended
-    caller: String,    // имя/адрес звонящего (для уведомления)
+    caller: String,    // имя звонящего (для уведомления)
+    email: String,     // адрес звонящего (для call_accept/reject письма)
     updated_at: i64,   // ms, для TTL-чистки
 }
 
@@ -631,6 +793,7 @@ fn call_set_state(
     let entry = calls.entry(call_id.to_string()).or_insert_with(|| CallEntry {
         state: state.to_string(),
         caller: caller.to_string(),
+        email: String::new(),
         updated_at: now_ms(),
     });
     entry.state = state.to_string();
@@ -956,6 +1119,13 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                         .unwrap_or(&from_lc)
                         .to_string();
                     call_set_state(ctx.db, ctx.account, &call_id, "ringing", &caller);
+                    // email звонящего — для call_accept/reject из решения
+                    // (nativeCallDecision, фаза 2): дописываем в запись.
+                    let mut calls = calls_load(ctx.db, ctx.account);
+                    if let Some(e2) = calls.get_mut(&call_id) {
+                        e2.email = from_lc.clone();
+                    }
+                    calls_save(ctx.db, ctx.account, &calls);
                     let jni_ok =
                         crate::audio::audio_android::show_incoming_call_notification(&caller);
                     log::info!(

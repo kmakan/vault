@@ -45,28 +45,6 @@ class VaultForegroundService : Service() {
     // конверт peer-ключом и шлёт SMTP — работает при мёртвом WebView.
     private external fun nativeSendCallSignal(callerEmail: String, callId: String, signal: String)
 
-    /**
-     * Отправить call_reject через Rust-мост (29.08): вызывается из
-     * CallActionReceiver при тапе «Отклонить» в шторке. Данные звонка
-     * хранятся в CallActionReceiver (ставятся в showIncomingCall).
-     * НЕСТАТИЧЕСКИЙ (external JNI-символ без $Companion требует instance),
-     * поэтому идём через instance, выставленный в onCreate.
-     */
-    fun sendCallRejectEmail() {
-        val email = CallActionReceiver.currentCallerEmail
-        val callId = CallActionReceiver.currentCallId
-        if (email.isNullOrEmpty() || callId.isEmpty()) {
-            Log.w("VaultRust", "call reject: no context (email/callId)")
-            return
-        }
-        try {
-            instance?.nativeSendCallSignal(email, callId, "call_reject")
-                ?: Log.w("VaultRust", "call reject: no FGS instance")
-        } catch (e: Throwable) {
-            Log.w("VaultRust", "nativeSendCallSignal failed: " + e.message)
-        }
-    }
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -284,12 +262,10 @@ class VaultForegroundService : Service() {
         @Volatile
         private var instance: VaultForegroundService? = null
 
-        /** Статический мост из CallActionReceiver: делегирует instance-методу. */
+        // call_id текущего показанного звонка (ставится в showIncomingCall,
+        // читается CallActionReceiver для nativeCallDecision).
         @JvmStatic
-        fun sendCallRejectFromAction() {
-            instance?.sendCallRejectEmail()
-                ?: Log.w("VaultRust", "call reject: no FGS instance")
-        }
+        var currentCallId: String = "" 
 
         // Входящий звонок (28.08): отдельный high-importance канал +
         // full-screen intent — звонок поверх локскрина как в обычной
@@ -388,7 +364,7 @@ class VaultForegroundService : Service() {
             // Перегрузка для обратной совместимости (JS mediaShowIncomingCall
             // не знает email/call_id): нативный вызов из монитора идёт в
             // расширенную версию — там хранится контекст для кнопок Reject.
-            showIncomingCall(context, callerName, CallActionReceiver.currentCallerEmail ?: "", "")
+            showIncomingCall(context, callerName, "", "")
         }
 
         /**
@@ -399,8 +375,8 @@ class VaultForegroundService : Service() {
          */
         @JvmStatic
         fun showIncomingCall(context: Context, callerName: String, callerEmail: String, callId: String) {
-            CallActionReceiver.currentCallerEmail = callerEmail.ifEmpty { callerName }
-            CallActionReceiver.currentCallId = callId
+            
+            currentCallId = callId
             try {
                 // 1) FGS → phoneCall: даёт право поднять activity из фона.
                 instance?.let { enterCallMode(it) }
