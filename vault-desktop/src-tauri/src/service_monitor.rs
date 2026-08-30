@@ -1017,12 +1017,17 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                 // Отправитель не из контактов — ретраи бессмысленны.
                 return Outcome::Dead;
             }
+            // 30.08: печатаем также очищенную длину (без whitespace) и хвост —
+            // определение источника порчи base64 (обрезка Gmail/фолдинг).
+            let cleaned_len = body_clean.chars().filter(|c| !c.is_whitespace()).count();
             log::info!(
-                "[svc-monitor] decrypt failed (try {}): {from_lc} peer={}… bodylen={} head={}",
+                "[svc-monitor] decrypt failed (try {}): {from_lc} peer={}… bodylen={} cleanlen={} head={} tail={}",
                 e.tries + 1,
                 ctx.peers.get(&from_lc).map(|k| k.chars().take(8).collect::<String>()).unwrap_or_default(),
                 body_clean.len(),
-                body_clean.chars().take(60).collect::<String>()
+                cleaned_len,
+                body_clean.chars().take(60).collect::<String>(),
+                body_clean.chars().rev().take(30).collect::<String>().chars().rev().collect::<String>()
             );
             return Outcome::Retry;
         }
