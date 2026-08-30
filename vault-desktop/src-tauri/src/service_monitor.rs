@@ -433,6 +433,10 @@ async fn run_loop(stop: Arc<AtomicBool>) {
         if stop.load(Ordering::SeqCst) {
             break;
         }
+        // MISSED-ТАЙМАУТ (фаза 1): ringing без решения дольше RING_TIMEOUT_MS
+        // → missed + пуш + снять уведомление звонка (по плану 45с; 180с
+        // таймаут уведомления Android снимал слишком поздно).
+        check_ring_timeouts(&ctx);
         // IDLE-тик 7с (как JS-монитор): серверный push ~1с, тик страхует папки.
         let changed = match client.idle_wait("INBOX", IDLE_TICK).await {
             Ok(o) => o == IdleOutcome::Changed,
@@ -643,6 +647,35 @@ fn call_get_state(
     call_id: &str,
 ) -> Option<CallEntry> {
     calls_load(db, account).get(call_id).cloned()
+}
+
+/// Таймаут звонка без решения (фаза 1): 45с.
+const RING_TIMEOUT_MS: i64 = 45 * 1000;
+
+/// ringing дольше RING_TIMEOUT_MS → missed + пуш + dismiss уведомления.
+/// Вызывается каждым тиком run_loop (7с) — ретрансляции не сбрасывают
+/// updated_at (решение/таймаут по ВРЕМЕНИ ПЕРВОГО рингтона).
+fn check_ring_timeouts(ctx: &Ctx<'_>) {
+    let calls = calls_load(ctx.db, ctx.account);
+    let now = now_ms();
+    let mut changed = false;
+    for (call_id, c) in calls.iter() {
+        if c.state == "ringing" && now - c.updated_at > RING_TIMEOUT_MS {
+            // missed: надгробие против поздних ретрансляций.
+            call_set_state(ctx.db, ctx.account, call_id, "missed", "");
+            log::info!("[svc-monitor] call {call_id}: ring timeout → missed");
+            // Снять уведомление звонка (рингтон+вибро) — если висит.
+            crate::audio::audio_android::dismiss_incoming_call_notification();
+            // Пуш-резюме: юзер должен узнать о пропущенном.
+            let _ = notify(&c.caller, "Пропущенный звонок Vault");
+            changed = true;
+        }
+    }
+    if changed {
+        // TTL-чистка надгробий произойдёт внутри calls_save.
+        let calls = calls_load(ctx.db, ctx.account);
+        calls_save(ctx.db, ctx.account, &calls);
+    }
 }
 
 // ─────────────────────── Классификация письма ───────────────────────
