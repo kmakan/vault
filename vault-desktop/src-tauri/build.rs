@@ -15,7 +15,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ANDROID_NDK_HOME");
     println!("cargo:rerun-if-env-changed=NDK_HOME");
     match target.as_str() {
-        "aarch64-linux-android" | "armv7-linux-androideabi" | "i686-linux-android" | "x86_64-linux-android" => {
+        "aarch64-linux-android"
+        | "armv7-linux-androideabi"
+        | "i686-linux-android"
+        | "x86_64-linux-android" => {
             let ndk = std::env::var("ANDROID_NDK_HOME").unwrap_or_default();
             let triple = if target == "armv7-linux-androideabi" {
                 "arm-linux-androideabi"
@@ -23,13 +26,15 @@ fn main() {
                 target.as_str()
             };
             // API-level libs (aaudio, android, log) — в /34
-            let lib_dir = format!("{ndk}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}/34");
+            let lib_dir =
+                format!("{ndk}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}/34");
             println!("cargo:rustc-link-search=native={lib_dir}");
             println!("cargo:rustc-link-lib=aaudio");
             println!("cargo:rustc-link-lib=android");
             println!("cargo:rustc-link-lib=log");
             // C++ runtime (libc++_static.a, libc++abi.a) — в родительской директории
-            let cpp_dir = format!("{ndk}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}");
+            let cpp_dir =
+                format!("{ndk}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/{triple}");
             println!("cargo:rustc-link-search=native={cpp_dir}");
             println!("cargo:rustc-link-lib=static=c++_static");
             println!("cargo:rustc-link-lib=static=c++abi");

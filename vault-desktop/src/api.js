@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import cryptoClient from './crypto.js';
 
 // ═════════════════════════════════════════════════════════════════════════
 // Vault Desktop — serverless email transport (phase 2)
@@ -686,6 +687,9 @@ export class ApiClient {
       sender_name: name,
       sender_avatar: avatar,
       public_key: publicKey,
+      // PQ (30.08): ek ML-KEM-768 приглашающего — получатель сразу сможет
+      // отвечать гибридными конвертами. Старый клиент проигнорирует поле.
+      pq_public_key: (cryptoClient && cryptoClient.pqEk) || null,
     });
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     // Запоминаем, что МЫ пригласили этого отправителя: его accept-письмо
@@ -847,6 +851,8 @@ export class ApiClient {
       sender_name: name,
       sender_avatar: avatar,
       public_key: publicKey,
+      // PQ (30.08): свой ek — приглашающий получит гибридный контакт.
+      pq_public_key: (cryptoClient && cryptoClient.pqEk) || null,
     });
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true };
@@ -885,7 +891,13 @@ export class ApiClient {
         continue;
       }
       try {
-        await invoke('save_peer_key', { email: sender, publicKey: parsed.public_key, label: parsed.sender_name || null });
+        // PQ (30.08): ek из accept-письма — контакт сразу гибридный.
+        await invoke('save_peer_key', {
+          email: sender,
+          publicKey: parsed.public_key,
+          label: parsed.sender_name || null,
+          pqPublicKey: parsed.pq_public_key || null,
+        });
         // Пометка вечная (как tombstones): без неё после удаления контакта
         // это accept-письмо молча вернёт контакт со старым ключом.
         this.markAcceptedContact(`${sender}|${m.uid}`);
@@ -1033,11 +1045,23 @@ export class ApiClient {
   // ── Calls (M3, Фаза 2): WebRTC media backend (webrtc-rs) ────────────────
   // startOutgoing → SDP offer (JSON RTCSessionDescription); acceptIncoming →
   // SDP answer; setRemote — вторая половина рукопожатия; close — teardown.
-  async mediaStartOutgoing(callId, peerPublicKey) {
-    return await invoke('media_start_outgoing', { callId, peerPublicKey });
+  async mediaStartOutgoing(callId, peerPublicKey, peerPqEk = null) {
+    // PQ (30.08): ek контакта → гибридный media_key; kemct/sender_ek
+    // в SdpResult — фронт кладёт их в call-конверт.
+    return await invoke('media_start_outgoing', {
+      callId,
+      peerPublicKey,
+      peerPqEk: peerPqEk || null,
+    });
   }
-  async mediaAcceptIncoming(callId, offerSdp, peerPublicKey) {
-    return await invoke('media_accept_incoming', { callId, offerSdp, peerPublicKey });
+  async mediaAcceptIncoming(callId, offerSdp, peerPublicKey, kemct = null) {
+    // PQ: kemct из call-конверта звонящего → декапсуляция своим seed.
+    return await invoke('media_accept_incoming', {
+      callId,
+      offerSdp,
+      peerPublicKey,
+      kemct: kemct || null,
+    });
   }
   async mediaSetRemote(callId, sdp) {
     return await invoke('media_set_remote', { callId, sdp });

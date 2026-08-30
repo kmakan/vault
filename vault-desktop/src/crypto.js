@@ -16,12 +16,25 @@ export class CryptoClient {
     this.privateKey = null;
     this.publicKey = null;
     this.peerPublicKey = null;
+    // Post-quantum (30.08): ML-KEM-768 пара (seed hex / ek b64) и PQ-ключи
+    // контактов. Отсутствие = аккаунт/контакт до PQ-миграции (legacy X25519).
+    this.pqSeed = null;
+    this.pqEk = null;
+    this.peerPqEk = null;
   }
 
   async generateKeypair() {
     const keypair = await invoke('generate_keypair');
     this.privateKey = keypair.private_key;
     this.publicKey = keypair.public_key;
+    // PQ-пара генерируется в key_store (PQ-2 миграция) — подхватываем после
+    // сохранения (saveToStorage → load_my_keypair возвращает pq-поля).
+    await this.saveToStorage();
+    const stored = await invoke('load_my_keypair');
+    if (stored) {
+      this.pqSeed = stored.pq_private_key || null;
+      this.pqEk = stored.pq_public_key || null;
+    }
     return keypair;
   }
 
@@ -32,6 +45,10 @@ export class CryptoClient {
     if (stored && isValidKeypair(stored)) {
       this.privateKey = stored.private_key;
       this.publicKey = stored.public_key;
+      // PQ (30.08): load_my_keypair мигрирует старые файлы (генерит ML-KEM)
+      // и возвращает pq-поля. Отсутствие — легаси-аккаунт без PQ.
+      this.pqSeed = stored.pq_private_key || null;
+      this.pqEk = stored.pq_public_key || null;
       return { keypair: stored, loaded: true };
     }
     return { keypair: null, loaded: false };
@@ -41,9 +58,12 @@ export class CryptoClient {
     if (!this.publicKey || !this.privateKey) {
       throw new Error('No keypair to save');
     }
+    // PQ (30.08): передаём pq при наличии; Rust мержит со старыми, если нет.
     await invoke('save_my_keypair', {
       publicKey: this.publicKey,
       privateKey: this.privateKey,
+      pqPublicKey: this.pqEk || null,
+      pqPrivateKey: this.pqSeed || null,
     });
   }
 
@@ -51,12 +71,19 @@ export class CryptoClient {
     this.privateKey = hex;
   }
 
-  setPeerPublicKey(hex) {
+  setPeerPublicKey(hex, pqEk = null) {
     this.peerPublicKey = hex;
+    // PQ: pq-ключ пира опционален (контакт без PQ → legacy-конверт)
+    this.peerPqEk = pqEk;
   }
 
-  async savePeerKey(email, publicKey, label) {
-    await invoke('save_peer_key', { email, publicKey, label: label || null });
+  async savePeerKey(email, publicKey, label, pqPublicKey = null) {
+    await invoke('save_peer_key', {
+      email,
+      publicKey,
+      label: label || null,
+      pqPublicKey: pqPublicKey || null,
+    });
   }
 
   async loadPeerKeys() {
@@ -129,13 +156,16 @@ export class CryptoClient {
   }
 
   // Vault messages use AAD="VAULT" (serverless-mail vault chats).
-  // Same keys/arguments as encrypt/decrypt — only the AAD marker differs.
+  // PQ (30.08): при наличии PQ-ключей у обеих сторон команда возвращает
+  // гибридный конверт "PQ1:kemct|sender_ek|wire"; иначе legacy X25519.
   async encryptVault(plaintext) {
     if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');
     return await invoke('encrypt_vault_message', {
       plaintext,
       privateKey: this.privateKey,
       peerPublicKey: this.peerPublicKey,
+      myPqSeed: this.pqSeed || null,
+      peerPqEk: this.peerPqEk || null,
     });
   }
 
@@ -145,6 +175,8 @@ export class CryptoClient {
       ciphertext,
       privateKey: this.privateKey,
       peerPublicKey: this.peerPublicKey,
+      myPqSeed: this.pqSeed || null,
+      senderPqEk: null,
     });
   }
 

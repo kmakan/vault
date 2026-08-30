@@ -1057,6 +1057,8 @@ export default {
       publicKey: null,
       fingerprint: null,
       peerKeys: {},
+      // PQ (30.08): ML-KEM ek контактов {email: b64}
+      peerPqKeys: {},
       peerKeyInput: '',
       showKeyManager: false,
       showQRCode: false,
@@ -1641,10 +1643,14 @@ export default {
         // пропасть из памяти (реактивно, 26.08).
         this.peerKeys = {};
         this.peerKeysLoaded = {};
+        // PQ (30.08): ek ML-KEM-768 контактов (b64). Параллельная Map —
+        // peerKeys остаётся X25519-строками (30+ использований не трогаем).
+        this.peerPqKeys = {};
         const stored = await crypto.loadPeerKeys();
         for (const pk of stored) {
           this.peerKeys[pk.email] = pk.public_key;
           this.peerKeysLoaded[pk.email] = true;
+          if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
         }
       } catch (error) {
         console.error('Failed to load peer keys:', error);
@@ -1950,10 +1956,13 @@ export default {
         console.error('Failed to load groups:', error);
       }
     },
-    setPeerKey(email, key) {
+    setPeerKey(email, key, pq = null) {
       this.peerKeys[email] = key;
-      crypto.setPeerPublicKey(key);
-      crypto.savePeerKey(email, key, null).catch(err => {
+      // PQ (30.08): pq может прийти из конверта (env.pq) — сохраняем в
+      // peerPqKeys и в peer_keys.json; null не трогает существующий.
+      if (pq) this.peerPqKeys[email] = pq;
+      crypto.setPeerPublicKey(key, this.peerPqKeys && this.peerPqKeys[email]);
+      crypto.savePeerKey(email, key, null, pq || undefined).catch(err => {
         console.error('Failed to save peer key:', err);
       });
     },
@@ -1998,7 +2007,7 @@ export default {
       this.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
       this.openMobileChat();
       if (this.peerKeys[email]) {
-        crypto.setPeerPublicKey(this.peerKeys[email]);
+        crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
       }
       // Если письма ещё не загружены (клик сразу после входа — поллинг идёт
       // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.
@@ -2561,6 +2570,9 @@ export default {
         key: crypto.publicKey || '',
         ts: Date.now(),
       };
+      // PQ (30.08): свой ML-KEM ek — получатель сохранит контакт и сможет
+      // ответить гибридом (конверт несёт оба публичных ключа).
+      if (crypto.pqEk) env.pq = crypto.pqEk;
       // Исчезающие сообщения (25.08): ttl в секундах от момента ПРОСМОТРА
       // получателем. 0 = обычное сообщение. Получатель ставит локальный
       // таймер удаления после показа (expireEphemeral).
@@ -2573,7 +2585,7 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
+          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
@@ -2696,7 +2708,7 @@ export default {
             const content = await crypto.encryptWithGroupKey(payload, groupKey);
             await api.sendGroupEdit(this.currentGroup.id, content);
           } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
             const content = await crypto.encryptVault(payload);
             await api.sendEdit(this.activeChat, content);
           }
@@ -2774,7 +2786,7 @@ export default {
       const related = relatedAll;
       console.log('[loadMessages] email=' + email + ' emailsTotal=' + this.emails.length + ' related=' + related.length);
       if (related.length > 0) {
-        crypto.setPeerPublicKey(this.peerKeys[email]);
+        crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
         // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
         // командой (Rust выбирает папку один раз). Поштучный фетч делал
         // чат пустым на минуту — теперь открытие чата почти мгновенно.
@@ -2934,11 +2946,11 @@ export default {
                     const oldProf = this.profiles[oldEmail];
                     if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);
                     // Регистрируем ключ под новым email (peer_keys.json).
-                    this.setPeerKey(sender, env.key);
+                    this.setPeerKey(sender, env.key, env.pq || null);
                   } else if (!this.peerKeys[sender] && env.key !== crypto.publicKey) {
                     // Незнакомый ключ с нового адреса: сохраняем как есть —
                     // контакт появится после обмена ключами (инвайт/QR).
-                    this.setPeerKey(sender, env.key);
+                    this.setPeerKey(sender, env.key, env.pq || null);
                   }
                 }
                 if (env.name || env.avatar) {
@@ -3065,7 +3077,7 @@ export default {
         const raw = await api.getMessages(email);
         if (stale()) return;
         if (this.cryptoReady && this.peerKeys[email]) {
-          crypto.setPeerPublicKey(this.peerKeys[email]);
+          crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
               const { text, attachment } = this.parseMessageContent(msg.content);
@@ -3470,7 +3482,7 @@ export default {
       for (const peer of peers) {
         const peerKey = this.peerKeys[peer];
         if (!peerKey) continue;
-        crypto.setPeerPublicKey(peerKey);
+        crypto.setPeerPublicKey(peerKey, this.peerPqKeys && this.peerPqKeys[peer]);
         const content = await crypto.encryptVault(JSON.stringify(body));
         try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
       }
@@ -4080,7 +4092,7 @@ export default {
         } else {
           // Regular chat message
           if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
             // Encrypt as a vault message (AAD="VAULT") so the peer can recognize
             // and authenticate it as ours.
             content = await crypto.encryptVault(envelope);
@@ -4407,7 +4419,7 @@ export default {
         // 1:1 — расшифровка пир-ключом.
         if (this.peerKeys[from]) {
           try {
-            crypto.setPeerPublicKey(this.peerKeys[from]);
+            crypto.setPeerPublicKey(this.peerKeys[from], this.peerPqKeys && this.peerPqKeys[from]);
             const plain = await crypto.decryptVault(body);
             // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
             // бейджи, не в уведомления) — уходят в state machine звонка.
@@ -4468,7 +4480,7 @@ export default {
               console.log('[identity] fingerprint match:', matched.knownEmail, '→', from, '— смена почты (poll)');
               // Переносим историю чата со старого адреса на новый.
               await this.migrateChatHistory(matched.knownEmail, from);
-              this.setPeerKey(from, matched.env.key);
+              this.setPeerKey(from, matched.env.key, matched.env.pq || null);
               // Профиль со старого адреса переносим на новый.
               const oldProf = this.profiles[matched.knownEmail];
               if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);
@@ -4738,6 +4750,11 @@ export default {
         ts: Date.now(),
         ...(payload.sdp ? { sdp: payload.sdp } : {}),
         ...(payload.role ? { role: payload.role } : {}),
+        // PQ (30.08): kemct звонящего едет в call_request; принимающий
+        // собирает гибридный media_key декапсуляцией. sender_ek — чтобы
+        // contact сохранялся и для ответного гибрида.
+        ...(payload.kemct ? { kemct: payload.kemct } : {}),
+        ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
       };
       const content = await crypto.encryptVault(JSON.stringify(body));
       // Ретрай ×3 (23.08): Gmail-троттлинг рвёт SMTP в момент звонка
@@ -4827,7 +4844,11 @@ export default {
           // он едет в первом письме. Сохраняем: при accept сразу создадим
           // answer (1 hop вместо 2). Если sdp нет (старая версия/fallback) —
           // acceptCall создаст offer сам (старая схема).
-          this.currentCall = { call_id, peer: from, offerSdp: sig.sdp || null };
+          this.currentCall = {
+            call_id, peer: from, offerSdp: sig.sdp || null,
+            // PQ (30.08): kemct звонящего — в mediaAcceptIncoming при accept.
+            kemct: sig.kemct || null, senderEk: sig.sender_ek || null,
+          };
           this.lastCallId = call_id;
           this.callState = 'incoming_ringing';
           this.callMuted = false;
@@ -4885,7 +4906,7 @@ export default {
                 }
               } else {
                 try {
-                  const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '');
+                  const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '', sig.kemct || null);
                   console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
                   const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
                   await this.sendCallEnvelope(from, answerPayload);
@@ -4984,8 +5005,12 @@ export default {
       // старую схему (offer принимающего внутри call_accept).
       let offerSdp = null;
       try {
-        const r = await api.mediaStartOutgoing(call_id, this.peerKeys[peer] || '');
+        const r = await api.mediaStartOutgoing(call_id, this.peerKeys[peer] || '', (this.peerPqKeys && this.peerPqKeys[peer]) || null);
         offerSdp = r.sdp;
+        // PQ (30.08): kemct из SdpResult — поедет в call_request-конверте,
+        // принимающий передаст в mediaAcceptIncoming для гибридного ключа.
+        if (r.kemct) this._pendingKemct = r.kemct;
+        if (r.sender_ek) this._pendingSenderEk = r.sender_ek;
         console.log('[call] offer created at dial time,', (offerSdp || '').length, 'bytes');
       } catch (e) {
         console.error('[call] offer at dial failed (fallback callee-offer):', e);
@@ -4994,7 +5019,13 @@ export default {
       // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
       this.currentCall.hasLocalOffer = !!offerSdp;
       try {
-        await this.sendCallEnvelope(peer, { type: 'call_request', call_id, sdp: offerSdp });
+        // PQ (30.08): kemct/sender_ek из mediaStartOutgoing → в конверт.
+        await this.sendCallEnvelope(peer, {
+          type: 'call_request', call_id, sdp: offerSdp,
+          kemct: this._pendingKemct || undefined,
+          sender_ek: this._pendingSenderEk || undefined,
+        });
+        this._pendingKemct = null; this._pendingSenderEk = null;
       } catch (e) {
         console.error('call_request failed:', e);
         this.hangup('error');
@@ -5017,7 +5048,13 @@ export default {
         }
         try {
           // Offer внутри (28.08) — ретрансляция несёт и его.
-          await this.sendCallEnvelope(peer, { type: 'call_request', call_id, sdp: offerSdp });
+          // PQ (30.08): kemct/sender_ek из mediaStartOutgoing → в конверт.
+        await this.sendCallEnvelope(peer, {
+          type: 'call_request', call_id, sdp: offerSdp,
+          kemct: this._pendingKemct || undefined,
+          sender_ek: this._pendingSenderEk || undefined,
+        });
+        this._pendingKemct = null; this._pendingSenderEk = null;
           console.log('[call] call_request retransmitted', call_id);
         } catch (e) {
           console.warn('[call] call_request retransmit failed:', e && e.message || e);
@@ -5056,11 +5093,11 @@ export default {
       try {
         let acceptPayload;
         if (c.offerSdp) {
-          const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, this.peerKeys[c.peer] || '');
+          const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, this.peerKeys[c.peer] || '', c.kemct || null);
           console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
           acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
         } else {
-          const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '');
+          const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '', (this.peerPqKeys && this.peerPqKeys[c.peer]) || null);
           console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
           acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
         }
@@ -5555,7 +5592,7 @@ export default {
           wire = await crypto.encryptWithGroupKey(envelope, groupKey);
         }
       } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-        crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+        crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
         const envelope = await this.buildEnvelope(attachmentPayload);
         try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
         wire = await crypto.encryptVault(envelope);
@@ -5734,7 +5771,7 @@ export default {
                 wire = await crypto.encryptWithGroupKey(envelope, groupKey);
               }
             } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-              crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+              crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
               const envelope = await this.buildEnvelope(attachmentPayload);
               try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
               wire = await crypto.encryptVault(envelope);
@@ -5932,7 +5969,7 @@ export default {
             const content = await crypto.encryptWithGroupKey(payload, groupKey);
             await api.sendGroupRead(this.currentGroup.id, content);
           } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
             const content = await crypto.encryptVault(payload);
             await api.sendReadReceipt(this.activeChat, content);
           }
@@ -5993,7 +6030,7 @@ export default {
           if (!body || !crypto.isEncrypted(body)) continue;
           const sender = this.senderEmail(m.from);
           try {
-            crypto.setPeerPublicKey(this.peerKeys[sender]);
+            crypto.setPeerPublicKey(this.peerKeys[sender], this.peerPqKeys && this.peerPqKeys[sender]);
             const text = await crypto.decryptVault(body);
             const env = this.parseEnvelope(text);
             // Только настоящие сообщения (envelope с id): квитанции/правки/
@@ -6008,7 +6045,7 @@ export default {
       if (!Object.keys(acks).length) return;
       for (const [sender, ids] of Object.entries(acks)) {
         try {
-          crypto.setPeerPublicKey(this.peerKeys[sender]);
+          crypto.setPeerPublicKey(this.peerKeys[sender], this.peerPqKeys && this.peerPqKeys[sender]);
           const content = await crypto.encryptVault(JSON.stringify({ delivered: 1, msg_ids: ids }));
           await api.sendReadReceipt(sender, content);
         } catch (e) {
@@ -6162,7 +6199,7 @@ export default {
             const content = await crypto.encryptWithGroupKey(payload, groupKey);
             await api.sendGroupReact(this.currentGroup.id, content);
           } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat]);
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
             const content = await crypto.encryptVault(payload);
             await api.sendReaction(this.activeChat, content);
           }
@@ -6685,7 +6722,10 @@ export default {
       // Попап закрываем СРАЗУ — accept-письмо идёт через медленный SMTP.
       this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
-        await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null);
+        // PQ (30.08): pq-ключ приглашающего (если прислал) — контакт сразу
+        // гибридный. pq отсутствует → legacy X25519-контакт.
+        if (c.pq_public_key) this.peerPqKeys[c.sender] = c.pq_public_key;
+        await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);
         // Вечная пометка «инвайт обработан» — иначе после удаления контакта
         // старое письмо-инвайт снова покажет попап приглашения.
         await api.markAcceptedContact(key);
