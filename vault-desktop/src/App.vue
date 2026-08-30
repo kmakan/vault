@@ -5032,6 +5032,14 @@ export default {
       clearTimeout(this.callRingTimer);
       this.callRingTimer = null;
       this.playCallSound('connect', false);
+      // 30.08 «тишина после принятия»: короткий connect-бип не даёт понять,
+      // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
+      // ('connected' звук) или до hangup — как в обычных мессенджерах.
+      setTimeout(() => {
+        if (this.callState === 'active' && !this.callMediaConnected) {
+          this.playCallSound('outgoing', true);
+        }
+      }, 1200);
       this.callState = 'active';
       // Фаза 3 (30.08): сообщаем монитору-владельцу, что звонок принят —
       // иначе headless-таймаут поставит missed поверх принятого.
