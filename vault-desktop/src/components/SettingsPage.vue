@@ -185,6 +185,7 @@
           <label class="toggle"><input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" /><span class="slider"></span></label>
           <span style="margin-left:10px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
         </div>
+        <div class="duress-label" style="font-size:11px;color:#f59e0b">[diag] {{ diagText }}</div>
         <div v-if="duressEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
           <div>
             <div class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</div>
@@ -301,6 +302,7 @@ export default {
       duressSosText: '',
       duressSosGeo: false,
       duressContacts: [],
+      diagText: '…',
       duressRecipients: [],
       // Мобильный режим (25.08): на телефоне список разделов и контент —
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
@@ -373,6 +375,13 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
+      // Диагностика (врем.): что реально лежит в конфиге
+      try {
+        const dc = await duressApi.getConfig();
+        this.diagText = `enabled=${dc && dc.lock_enabled}, hashLen=${(dc && dc.lock_hash || '').length}`;
+      } catch (e) {
+        this.diagText = 'get error: ' + (e && e.message || e);
+      }
     } catch (e) { /* ignore */ }
   },
   methods: {
@@ -439,9 +448,16 @@ export default {
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
         console.log('[duress] config saved, lock_enabled =', cfg.lock_enabled);
+        // Диагностика (врем.): перечитываем конфиг сразу после записи — если
+        // чтение вернуло НЕ то, что писали, увидим в alert (разные БД?!).
+        const verify = await duressApi.getConfig();
+        console.log('[duress] verify after save: enabled=', verify && verify.lock_enabled,
+          ', hashLen=', (verify && verify.lock_hash || '').length);
+        alert((this.t('duress_saved') || 'Аварийная защита сохранена') +
+          `\n[diag] записано: enabled=${cfg.lock_enabled}, hashLen=${(cfg.lock_hash||'').length}` +
+          `\n[diag] перечитано: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}`);
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
-        alert(this.t('duress_saved') || 'Аварийная защита сохранена');
       } catch (e) {
         alert('Duress save failed: ' + (e && e.message || e));
       }

@@ -3779,11 +3779,17 @@ export default {
     async checkDuressLock() {
       try {
         const cfg = await invoke('duress_get_config');
-        this.duressLocked = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
+        const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
+        this.duressLocked = enabled;
         console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
-          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', this.duressLocked);
+          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
+        // ДИАГНОСТИКА НА ЭКРАНЕ (0.1.116): замок настроен, но не показан?
+        // Так пользователь без adb увидит, что вернул Rust. Врем. мера —
+        // убрать после стабилизации.
+        this.duressDiag = `enabled=${cfg && cfg.lock_enabled}, hashLen=${(cfg && cfg.lock_hash || '').length}, locked=${enabled}`;
       } catch (e) {
         console.warn('[duress] check failed:', e);
+        this.duressDiag = 'check error: ' + (e && e.message || e);
       }
       // Android (0.1.115): «выход» из приложения НЕ убивает процесс — FGS и
       // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
