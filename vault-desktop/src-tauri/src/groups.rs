@@ -141,6 +141,27 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
     Ok(())
 }
 
+/// Миграция участника группы на новый адрес (смена почты). Старый и новый
+/// адреса должны быть привязаны к одному fingerprint (peer_keys) — это
+/// проверяет фронт перед вызовом (см. inviteSelectedMembers). Правит:
+/// members (email), created_by, invited-метки. Идемпотентно.
+pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result<()> {
+    let mut groups = load_groups()?;
+    if let Some(group) = groups.get_mut(group_id) {
+        if let Some(m) = group.members.iter_mut().find(|m| m.email == old_email) {
+            m.email = new_email.to_string();
+            m.key_shared = true; // ключ группы у него уже есть (шёл в инвайте)
+        }
+        if group.created_by == old_email {
+            group.created_by = new_email.to_string();
+        }
+        save_groups(&groups)?;
+    } else {
+        anyhow::bail!("Group not found");
+    }
+    Ok(())
+}
+
 pub fn import_group(
     group_id: &str,
     name: &str,

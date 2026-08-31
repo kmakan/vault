@@ -289,6 +289,7 @@ export default {
   delete_message_confirm: 'Delete message for everyone?',
   delete_for_me: 'Delete for me',
   delete_for_me_confirm: 'Delete for yourself? The other side keeps the message.',
+  invite_skipped: 'Skipped',
   pin_message: 'Pin message',
   unpin_message: 'Unpin',
   pinned_message: 'Pinned message',

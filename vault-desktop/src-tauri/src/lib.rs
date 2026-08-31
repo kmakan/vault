@@ -767,6 +767,24 @@ fn groups_add_member(group_id: String, email: String) -> Result<groups::Group, S
         .map_err(|e| e.to_string())?
 }
 
+/// Смена адреса участника группы (смена почты, тот же fingerprint).
+/// Фронт проверяет, что old/new привязаны к одному ключу (peer_keys).
+#[tauri::command]
+fn groups_rename_member(
+    group_id: String,
+    old_email: String,
+    new_email: String,
+) -> Result<groups::Group, String> {
+    groups::rename_member(&group_id, &old_email, &new_email).map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
@@ -1282,6 +1300,7 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            groups_rename_member,
             groups_remove_member,
             groups_set_member_role,
             groups_leave,

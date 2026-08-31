@@ -289,6 +289,7 @@ export default {
   delete_message_confirm: '为所有人删除此消息？',
   delete_for_me: '为自己删除',
   delete_for_me_confirm: '仅在自己设备上删除？对方仍保留此消息。',
+  invite_skipped: '已跳过',
   pin_message: '置顶消息',
   unpin_message: '取消置顶',
   pinned_message: '置顶消息',

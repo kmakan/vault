@@ -6532,6 +6532,13 @@ export default {
       if (!this.addMemberSelected.includes(email)) this.addMemberSelected.push(email);
       this.addMemberQuery = '';
     },
+    // Один fingerprint у двух адресов? (смена почты: старый/новый в peer_keys
+    // ссылаются на один публичный ключ — см. aliasesOf)
+    emailSharesFingerprint(emailA, emailB) {
+      const ka = this.peerKeys[emailA || ''] || this.peerKeys[String(emailA || '').toLowerCase()];
+      const kb = this.peerKeys[emailB || ''] || this.peerKeys[String(emailB || '').toLowerCase()];
+      return !!(ka && kb && ka === kb);
+    },
     async inviteSelectedMembers() {
       // Попап закрываем СРАЗУ — отправка идёт в фоне, итог сообщаем alert'ом.
       // Раньше попап висел 30-60 с (медленный SMTP) и было непонятно,
@@ -6543,10 +6550,28 @@ export default {
       this.addMemberQuery = '';
       const sent = [];
       const failed = [];
+      const skipped = [];
       for (const email of emails) {
         try {
-          // Уже участник (мог добавиться, пока попап был открыт) — пропускаем.
-          if ((this.currentGroup.members || []).some(m => m.email === email)) continue;
+          // Уже участник ПОД ЭТИМ адресом — явный skip (не тихий continue:
+          // «штатный» попап без отправки маскировал недоставленные инвайты).
+          if ((this.currentGroup.members || []).some(m => m.email === email)) {
+            skipped.push(email + ' — ' + (this.t('already_in_group') || 'уже в группе'));
+            continue;
+          }
+          // Участник ПОД ДРУГИМ адресом с тем же fingerprint (смена почты):
+          // мигрируем адрес в составе группы и шлём инвайт на новый адрес —
+          // без этого после смены почты участник «залипал» под мёртвым адресом,
+          // а повторный инвайт тихо скипался (баг 31.08, группа «Четыре»).
+          const stale = (this.currentGroup.members || []).find(
+            m => m.email !== email && this.emailSharesFingerprint(m.email, email));
+          if (stale) {
+            await invoke('groups_rename_member', {
+              groupId: this.currentGroup.id, oldEmail: stale.email, newEmail: email,
+            });
+            stale.email = email;
+            stale.key_shared = true;
+          }
           // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
           // Без ключа собеседника безопасный инвайт невозможен — как в Session:
           // в группу добавляют только установленные контакты.
@@ -6566,11 +6591,15 @@ export default {
           }
           sent.push(email);
         } catch (e) {
-          failed.push(email + ' — ' + e.message);
+          failed.push(email + ' — ' + ((e && e.message) || e));
         }
       }
+      // Состав группы перечитываем с диска: groups_rename_member правил
+      // groups.json в Rust-стороне, локальный members мог разойтись.
+      try { await this.loadGroups(); } catch (e) { /* не критично */ }
       const parts = [];
       if (sent.length) parts.push((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
+      if (skipped.length) parts.push((this.t('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
       if (failed.length) parts.push((this.t('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
       alert(parts.join('\n\n') || (this.t('add_member_nothing') || 'Приглашения не отправлены'));
     },
