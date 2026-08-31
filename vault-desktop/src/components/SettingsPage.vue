@@ -180,12 +180,12 @@
         </div>
 
         <!-- Duress-защита (t_b185e3e2): замок, panic-PIN, duress-PIN -->
-        <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:10px">
-          <b>{{ t('duress_title') || 'Аварийная защита' }}</b>
-          <label class="toggle" style="align-self:flex-start">
+        <div class="setting-row duress-block">
+          <b class="duress-title">{{ t('duress_title') || 'Аварийная защита' }}</b>
+          <label class="duress-toggle-row">
             <input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" />
             <span class="slider"></span>
-            <span style="margin-left:8px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
+            <span class="duress-toggle-label">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
           </label>
           <template v-if="duressEnabled">
             <label class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</label>
@@ -196,10 +196,10 @@
             <input v-model="duressDuressCode" type="password" class="duress-input" :placeholder="t('duress_optional') || 'необязательно'" />
             <label class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</label>
             <input v-model="duressSosText" class="duress-input" :placeholder="'Телефон не у меня{coords}'" />
-            <label class="toggle" style="align-self:flex-start">
+            <label class="duress-toggle-row">
               <input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" />
               <span class="slider"></span>
-              <span style="margin-left:8px">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
+              <span class="duress-toggle-label">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
             </label>
             <label class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</label>
             <div class="duress-contacts">
@@ -451,10 +451,21 @@ export default {
       const url = (isAndroid && this.updateInfo.apk_url) ||
         this.updateInfo.desktop_url ||
         'https://vault-msg.ru';
-      shellOpen(url).catch((e) => {
-        console.warn('shellOpen failed:', e);
-        try { window.location.href = url; } catch (e2) { /* ignore */ }
-      });
+      // 0.1.111: opener-плагин перехватывает клики по <a target="_blank"> с
+      // http(s)/mailto/tel — программный клик надёжнее прямого invoke (обходит
+      // и ACL-глюки, и различия mobile/desktop). Фолбэк — shellOpen.
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch (e) {
+        console.warn('anchor click failed:', e);
+        shellOpen(url).catch((e2) => console.warn('shellOpen failed:', e2));
+      }
     },
     async saveDisplayName() {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
@@ -956,10 +967,18 @@ export default {
 .profile-actions .btn { width: 100%; max-width: 320px; }
 .profile-actions .logout-btn { margin-top: 0; }
 
-.duress-label{font-size:13px;color:var(--muted,#8b93a7);margin-top:4px}
-.duress-input{width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#1f2940);background:var(--bg-soft,#0f1522);color:var(--text,#e7ecf5);font-size:14px}
-.duress-warn{font-size:12.5px;color:var(--gold,#f59e0b);margin:4px 0 0}
-.duress-contacts{max-height:160px;overflow-y:auto;border:1px solid var(--border,#1f2940);border-radius:8px;padding:8px;width:100%;display:flex;flex-direction:column;gap:6px}
+
+
+.duress-block{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+.duress-title{font-size:15px;color:var(--text,#e7ecf5)}
+.duress-toggle-row{display:flex;align-items:center;gap:10px;width:100%;padding:6px 0}
+.duress-toggle-row .slider{flex:none}
+.duress-toggle-label{flex:1;font-size:14px;color:var(--text,#e7ecf5)}
+.duress-label{display:block;width:100%;font-size:13px;color:var(--muted,#8b93a7);margin-top:6px}
+.duress-input{display:block;width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#1f2940);background:var(--bg-soft,#0f1522);color:var(--text,#e7ecf5);font-size:14px}
+.duress-warn{display:block;width:100%;font-size:12.5px;color:var(--gold,#f59e0b);margin:6px 0 0}
+.duress-contacts{width:100%;max-height:160px;overflow-y:auto;border:1px solid var(--border,#1f2940);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
 .duress-contact{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text,#e7ecf5);cursor:pointer}
+.duress-block .btn-primary{align-self:flex-start}
 
 </style>
