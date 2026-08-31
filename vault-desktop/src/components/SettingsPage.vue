@@ -192,7 +192,24 @@
         <div class="help-links">
           <a href="https://github.com/nousresearch/vault" target="_blank">📖 {{ t('settings_docs').replace('📖 ', '') }}</a>
           <a href="https://github.com/nousresearch/vault/issues" target="_blank">🐛 {{ t('settings_report_bug').replace('🐛 ', '') }}</a>
-          <div class="version">Vault v0.1.0</div>
+          <div class="update-check">
+            <button
+              class="update-btn"
+              :disabled="updateChecking"
+              @click="checkForUpdates"
+            >
+              {{ updateChecking ? t('update_checking') : t('update_check_btn') }}
+            </button>
+            <template v-if="updateAvailable">
+              <div class="update-banner">
+                <span class="update-badge">{{ t('update_new') }} v{{ updateInfo.version }}</span>
+                <button class="update-download-btn" @click="openDownloadPage">{{ t('update_download') }}</button>
+              </div>
+              <p v-if="updateInfo.changelog" class="update-changelog">{{ updateInfo.changelog }}</p>
+            </template>
+            <p v-else-if="updateStatus" :class="['update-status', { 'update-status-err': updateStatusIsErr }]">{{ updateStatus }}</p>
+          </div>
+          <div class="version">Vault v{{ appVersion }}</div>
         </div>
       </div>
 
@@ -242,6 +259,13 @@ export default {
       localAutoclean: 'off',
       experimentsCalls: false,
       notifSound: true,
+      // RELEASE-PREP (t_eb3465e4): проверка обновлений через latest.json.
+      appVersion: '0.1.100',
+      updateChecking: false,
+      updateAvailable: false,
+      updateStatus: '',
+      updateStatusIsErr: false,
+      updateInfo: { version: '', changelog: '', apk_url: '', desktop_url: '' },
       notifTray: true,
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
@@ -284,6 +308,49 @@ export default {
     } catch (e) { /* ignore */ }
   },
   methods: {
+    // ── RELEASE-PREP (t_eb3465e4): проверка обновлений ─────────────────
+    // Rust-команда check_app_update сравнивает semver-численно и возвращает
+    // latest.json только если версия новее текущей. Скачивание — через
+    // браузер на страницу релизов (t('update_download') → shell-open).
+    async checkForUpdates() {
+      this.updateChecking = true;
+      this.updateAvailable = false;
+      this.updateStatus = '';
+      this.updateStatusIsErr = false;
+      try {
+        // Реальная версия из tauri.conf (не хардкод в data).
+        const { getVersion } = await import('@tauri-apps/api/app');
+        this.appVersion = await getVersion();
+      } catch (e) { /* dev-окружение без Tauri — остаётся data-дефолт */ }
+      try {
+        const res = await invoke('check_app_update', { currentVersion: this.appVersion });
+        if (res) {
+          this.updateInfo = {
+            version: res.version || '',
+            changelog: res.changelog || '',
+            apk_url: res.apk_url || '',
+            desktop_url: res.desktop_url || '',
+          };
+          this.updateAvailable = true;
+        } else {
+          this.updateStatus = this.t('update_uptodate').replace('{v}', this.appVersion);
+        }
+      } catch (e) {
+        this.updateStatus = this.t('update_error');
+        this.updateStatusIsErr = true;
+      } finally {
+        this.updateChecking = false;
+      }
+    },
+    // «Обновить»: на Android ведём на страницу релизов (пользователь ставит
+    // APK сам — маркетов пока нет); ссылка из latest.json, фолбэк — сайт.
+    openDownloadPage() {
+      const isAndroid = /android/i.test(navigator.userAgent);
+      const url = (isAndroid && this.updateInfo.apk_url) ||
+        this.updateInfo.desktop_url ||
+        'https://vault-msg.ru';
+      window.open(url, '_blank');
+    },
     async saveDisplayName() {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
       try { await api.setDisplayName(this.localDisplayName); } catch (e) { console.error(e); }
@@ -672,6 +739,31 @@ export default {
 .help-links a { color: #58a6ff; text-decoration: none; font-size: 14px; }
 .help-links a:hover { text-decoration: underline; }
 .version { color: #484f58; font-size: 12px; margin-top: 16px; }
+
+/* RELEASE-PREP (t_eb3465e4): блок проверки обновлений */
+.update-check { display: flex; flex-direction: column; gap: 10px; }
+.update-btn {
+  align-self: flex-start; padding: 8px 14px; border-radius: 8px;
+  border: 1px solid var(--accent, #58a6ff); background: transparent;
+  color: var(--accent, #58a6ff); font-size: 13px; cursor: pointer;
+  transition: background .15s;
+}
+.update-btn:hover:not(:disabled) { background: rgba(88, 166, 255, .12); }
+.update-btn:disabled { opacity: .5; cursor: wait; }
+.update-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 8px;
+  border: 1px solid rgba(63, 185, 80, .4); background: rgba(63, 185, 80, .08);
+}
+.update-badge { color: #3fb950; font-weight: 600; font-size: 14px; }
+.update-download-btn {
+  padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer;
+  background: #238636; color: #fff; font-size: 13px; font-weight: 600;
+}
+.update-download-btn:hover { background: #2ea043; }
+.update-changelog { color: var(--text-secondary, #8b949e); font-size: 13px; margin: 0; white-space: pre-line; }
+.update-status { color: var(--text-secondary, #8b949e); font-size: 13px; margin: 0; }
+.update-status-err { color: #f85149; }
 
 /* Мобильный режим (25.08): список разделов и контент — два «экрана»,
    переключаются v-show (см. шаблон): экран списка (профиль + вертикальный

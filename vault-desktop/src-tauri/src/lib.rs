@@ -965,6 +965,81 @@ fn debug_log(msg: String) {
     eprintln!("[JS] {}", msg);
 }
 
+/// RELEASE-PREP (t_eb3465e4): проверка обновлений. GET latest.json с
+/// vault-msg.ru (статический файл на нашем nginx, без серверного кода).
+/// Возвращает {version, changelog, apk_url, desktop_url} или
+/// Err(message) при сетевой недоступности — фронт покажет мягкий текст.
+/// HTTP-клиент: native-tls (уже в дереве для lettre) — без новых зависимостей.
+#[tauri::command]
+async fn check_app_update(current_version: String) -> Result<Option<serde_json::Value>, String> {
+    const ENDPOINT: &str = "https://vault-msg.ru/latest.json";
+    const TIMEOUT_SECS: u64 = 10;
+
+    // Простое сравнение semver-подобных строк "0.1.100" > "0.1.99":
+    // численно по компонентам, не лексикографически ("0.1.9" > "0.1.10" иначе).
+    fn version_gt(a: &str, b: &str) -> bool {
+        let parse = |s: &str| -> Vec<u64> {
+            s.trim_start_matches('v')
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|p| !p.is_empty())
+                .map(|p| p.parse::<u64>().unwrap_or(0))
+                .collect()
+        };
+        let (av, bv) = (parse(a), parse(b));
+        for i in 0..av.len().max(bv.len()) {
+            let (x, y) = (av.get(i).copied().unwrap_or(0), bv.get(i).copied().unwrap_or(0));
+            if x != y {
+                return x > y;
+            }
+        }
+        false
+    }
+
+    let response = t_timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
+        use std::io::Read;
+        use std::net::TcpStream;
+
+        // native-tls handshake + минимальный HTTP/1.1 GET. Сервер — наш nginx
+        // со статикой; редиректов и чанков не ожидаем, но обрабатываем оба.
+        let connector = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
+        let stream = TcpStream::connect("vault-msg.ru:443").map_err(|e| e.to_string())?;
+        let mut stream = connector
+            .connect("vault-msg.ru", stream)
+            .map_err(|e| e.to_string())?;
+        let req = format!(
+            "GET /latest.json HTTP/1.1\r\nHost: vault-msg.ru\r\nUser-Agent: Vault/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            current_version
+        );
+        use std::io::Write;
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        Ok::<String, String>(String::from_utf8_lossy(&buf).to_string())
+    })
+    .await
+    .map_err(|_| "timeout".to_string())??;
+
+    // Выделить тело: после первого пустого-строчного разделителя.
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .ok_or("bad http response")?;
+    let latest: serde_json::Value =
+        serde_json::from_str(body.trim()).map_err(|e| format!("bad json: {e}"))?;
+    let remote_version = latest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .ok_or("no version field")?
+        .to_string();
+    if version_gt(&remote_version, &current_version) {
+        Ok(Some(latest))
+    } else {
+        Ok(None)
+    }
+}
+
 #[tauri::command]
 fn db_kv_set(account: String, key: String, value: String) -> Result<(), String> {
     open_db()?
@@ -1228,6 +1303,7 @@ pub fn run() {
             db_body_cache_clear,
             db_body_cache_load_all,
             db_autoclean_purge,
+            check_app_update,
             debug_log,
             db_kv_set,
             db_kv_get,
