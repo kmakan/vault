@@ -2,10 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "android",
   "description": "Android-only capabilities (QR scanner + opener for update button)",
-  "windows": ["main"],
-  "platforms": ["android"],
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "android"
+  ],
   "permissions": [
     "barcode-scanner:default",
-    "opener:allow-open-url"
+    "opener:default"
   ]
 }
