@@ -489,7 +489,7 @@ impl EmailClient {
         let mut seen: HashSet<String> = HashSet::new();
         let mut messages: Vec<EmailMessage> = Vec::new();
 
-        let mut collect = |folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
+        let mut collect = |_folder: &str, fallback: &str, msgs: Vec<EmailMessage>, max_uid: u32| {
             // Пустой результат НЕ продвигает курсор: uid_search мог вернуть
             // пусто из-за троттлинга/рассинхрона сессии, и запись 0
             // «отравляла» папку — инкремент от 0 при следующих поллингах

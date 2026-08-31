@@ -113,7 +113,7 @@ fn decrypt_vault_message(
     if let Some(rest) = trimmed.strip_prefix("PQ1:") {
         let parts: Vec<&str> = rest.splitn(3, '|').collect();
         if parts.len() == 3 {
-            let (kemct, sender_ek, wire) = (parts[0], parts[1], parts[2]);
+            let (kemct, _sender_ek, wire) = (parts[0], parts[1], parts[2]);
             // my_pq_seed обязателен; peer (sender) X25519 ключ — из конверта
             let peer_key = peer_public_key.as_deref();
             let seed = my_pq_seed
@@ -1243,7 +1243,7 @@ pub fn run() {
                 .with_tag("VaultRust"),
         );
     }
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
