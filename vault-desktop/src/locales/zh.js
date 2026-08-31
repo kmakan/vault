@@ -287,6 +287,8 @@ export default {
   edit_message: '编辑',
   delete_message: '删除',
   delete_message_confirm: '为所有人删除此消息？',
+  delete_for_me: '为自己删除',
+  delete_for_me_confirm: '仅在自己设备上删除？对方仍保留此消息。',
   pin_message: '置顶消息',
   unpin_message: '取消置顶',
   pinned_message: '置顶消息',

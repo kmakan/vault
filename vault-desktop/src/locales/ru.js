@@ -288,6 +288,8 @@ export default {
   edit_message: 'Редактировать',
   delete_message: 'Удалить',
   delete_message_confirm: 'Удалить сообщение у всех?',
+  delete_for_me: 'Удалить у меня',
+  delete_for_me_confirm: 'Удалить у себя? У собеседника сообщение останется.',
   pin_message: 'Закрепить',
   unpin_message: 'Открепить',
   pinned_message: 'Закреплённое сообщение',

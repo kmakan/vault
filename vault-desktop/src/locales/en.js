@@ -287,6 +287,8 @@ export default {
   edit_message: 'Edit',
   delete_message: 'Delete',
   delete_message_confirm: 'Delete message for everyone?',
+  delete_for_me: 'Delete for me',
+  delete_for_me_confirm: 'Delete for yourself? The other side keeps the message.',
   pin_message: 'Pin message',
   unpin_message: 'Unpin',
   pinned_message: 'Pinned message',

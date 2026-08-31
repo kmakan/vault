@@ -415,12 +415,15 @@
            (см. media (hover: none)), всё доступно отсюда. -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
           <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
-            <button @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
-            <button @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
-            <button @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
-            <button v-if="activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
+            <button v-if="!messageMenu.msg.callEvent" @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
+            <button v-if="!messageMenu.msg.callEvent" @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
+            <button v-if="!messageMenu.msg.callEvent" @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
+            <button v-if="!messageMenu.msg.callEvent && activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
+            <!-- «Удалить у меня» (31.08): любые сообщения (свои, чужие) и пилюли звонков;
+                 только своё устройство, у собеседника остаётся. -->
+            <button @click="deleteMessageForMe(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_for_me') || 'Удалить у меня' }}</button>
             <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
             <template v-if="messageMenu.phones && messageMenu.phones.length">
               <div class="message-menu-sep"></div>
@@ -2690,6 +2693,27 @@ export default {
         : this.activeChat;
       this.recordLocalEdit(chatKey, msg.id, null, 'delete');
       await this.sendEditEmail(msg.id, null, 'delete');
+    },
+    // «Удалить у меня» (31.08, паритет DC): убрать сообщение ТОЛЬКО со своего
+    // устройства — свои и ЧУЖИЕ сообщения, а также пилюли звонков. У
+    // собеседника остаётся. Механизм тот же tombstone (msg.id + Message-ID),
+    // что у «удалить у всех»/ephemeral: mergeHistory/mergePending/поллинг
+    // отфильтруют его навсегда, воскрешение из письма/All Mail невозможно.
+    // Никаких писем не отправляется.
+    async deleteMessageForMe(msg) {
+      if (!msg || !msg.id) return;
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      if (!chatKey || chatKey === '__notes__') return;
+      this.addTombstone(msg.id);
+      this.addMidTombstone(msg.mid);
+      const idx = this.messages.indexOf(msg);
+      if (idx !== -1) this.messages.splice(idx, 1);
+      this.saveCurrentHistory(chatKey);
+      // chat-cache тоже обновляем: loadChatCache не фильтрует tombstones,
+      // иначе при мгновенном открытии чата сообщение мигало бы из кэша.
+      this.saveChatCache(chatKey, this.messages);
     },
     // Транспорт правок (паттерн sendReactionEmail):
     // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
@@ -6286,9 +6310,10 @@ export default {
       if (phoneEl) { e.preventDefault(); this.copyText(phoneEl.dataset.phone); }
     },
     openMessageMenu(event, msg) {
-      // Пилюли звонков (27.08) — не сообщения: контекстное меню не нужно.
-      if (msg && msg.callEvent) return;
-      const content = msg.content || '';
+      // Пилюли звонков (27.08) — не сообщения: обычные пункты (ответить,
+      // копировать) не имеют смысла, но «Удалить у меня» нужно (31.08) —
+      // меню открывается, шаблон прячет неприменимое по msg.callEvent.
+      const content = msg.callEvent ? '' : (msg.content || '');
       const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
       const phones = [...content.matchAll(PHONE_RE)]
         .map(m => m[0].trim())
