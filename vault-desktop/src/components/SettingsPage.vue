@@ -180,28 +180,34 @@
         </div>
 
         <!-- Duress-защита (t_b185e3e2): замок, panic-PIN, duress-PIN -->
-        <div class="setting-row duress-block">
-          <b class="duress-title">{{ t('duress_title') || 'Аварийная защита' }}</b>
-          <label class="duress-toggle-row">
-            <input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" />
-            <span class="slider"></span>
-            <span class="duress-toggle-label">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
-          </label>
-          <template v-if="duressEnabled">
-            <label class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</label>
+      <div class="setting-row" style="display:block">
+        <div style="margin-bottom:14px">
+          <label class="toggle"><input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" /><span class="slider"></span></label>
+          <span style="margin-left:10px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
+        </div>
+        <div v-if="duressEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
+          <div>
+            <div class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</div>
             <input v-model="duressLockCode" type="password" class="duress-input" :placeholder="t('duress_code_ph') || 'минимум 4 символа'" />
-            <label class="duress-label">{{ t('duress_panic') || 'Panic-код (стирает все данные при вводе)' }}</label>
+          </div>
+          <div>
+            <div class="duress-label">{{ t('duress_panic') || 'Panic-код (стирает все данные при вводе)' }}</div>
             <input v-model="duressPanicCode" type="password" class="duress-input" :placeholder="t('duress_optional') || 'необязательно'" />
-            <label class="duress-label">{{ t('duress_duress') || 'Duress-код (тихо отправит SOS и откроет приложение)' }}</label>
+          </div>
+          <div>
+            <div class="duress-label">{{ t('duress_duress') || 'Duress-код (тихо отправит SOS и откроет приложение)' }}</div>
             <input v-model="duressDuressCode" type="password" class="duress-input" :placeholder="t('duress_optional') || 'необязательно'" />
-            <label class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</label>
+          </div>
+          <div>
+            <div class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</div>
             <input v-model="duressSosText" class="duress-input" :placeholder="'Телефон не у меня{coords}'" />
-            <label class="duress-toggle-row">
-              <input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" />
-              <span class="slider"></span>
-              <span class="duress-toggle-label">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
-            </label>
-            <label class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</label>
+          </div>
+          <div>
+            <label class="toggle"><input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" /><span class="slider"></span></label>
+            <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
+          </div>
+          <div>
+            <div class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</div>
             <div class="duress-contacts">
               <label v-for="c in duressContacts" :key="c" class="duress-contact">
                 <input type="checkbox" :value="c" v-model="duressRecipients" />
@@ -209,12 +215,13 @@
               </label>
               <p v-if="!duressContacts.length" class="duress-warn">{{ t('duress_no_contacts') || 'Добавьте контакты, чтобы отправлять им SOS' }}</p>
             </div>
-            <button class="btn-primary" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer" @click="duressSave">
-              {{ t('duress_save') || 'Сохранить аварийную защиту' }}
-            </button>
-            <p class="duress-warn">{{ t('duress_warn') || 'Запомните коды! Panic-код стирает ВСЕ данные безвозвратно. Duress-код выглядит как обычный вход, но тихо предупреждает выбранные контакты.' }}</p>
-          </template>
+          </div>
+          <button class="btn-primary" style="align-self:flex-start;padding:8px 16px;border-radius:8px;border:none;cursor:pointer" @click="duressSave">
+            {{ t('duress_save') || 'Сохранить аварийную защиту' }}
+          </button>
+          <div class="duress-warn">{{ t('duress_warn') || 'Запомните коды! Panic-код стирает ВСЕ данные безвозвратно. Duress-код выглядит как обычный вход, но тихо предупреждает выбранные контакты.' }}</div>
         </div>
+      </div>
       </div>
 
       <!-- ЯЗЫК -->
