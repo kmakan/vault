@@ -45,3 +45,6 @@ release-key.jks
 # Python
 __pycache__/
 *.pyc
+
+# OpenViking knowledge base (локальные данные)
+/data/
