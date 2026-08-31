@@ -290,6 +290,7 @@ export default {
   delete_message_confirm: 'Удалить сообщение у всех?',
   delete_for_me: 'Удалить у меня',
   delete_for_me_confirm: 'Удалить у себя? У собеседника сообщение останется.',
+  group_refresh: 'Перечитать группу',
   invite_skipped: 'Пропущены',
   pin_message: 'Закрепить',
   unpin_message: 'Открепить',

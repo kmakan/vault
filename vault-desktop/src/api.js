@@ -345,7 +345,12 @@ export class ApiClient {
     if (!res || !res.ok) throw new Error('Failed to send vault email');
     return { ok: true };
   }
-  async getGroupMessages(groupId, emails) {
+  // forceFullScan (0.1.106): игнорировать this.emails и сделать ПОЛНЫЙ IMAP-скан.
+  // Нужно, когда письма физически в ящике, но «за курсором» инкрементального
+  // фетча (session desync / троттлинг в момент прихода) — инкремент их уже не
+  // вернёт, чат группы выглядит пустым (баг 31.08: Спам ya.ru). Вызывается при
+  // открытии группы и pull-to-refresh; поллинг по-прежнему лёгкий.
+  async getGroupMessages(groupId, emails, forceFullScan = false) {
     // STEALTH-ГРУППЫ (18.08): темы у групповых писем ПУСТЫЕ (как в 1:1), так
     // что фильтрация по subject невозможна. Возвращаем ВСЕ письма, чей
     // отправитель — участник группы; классификация по содержимому после
@@ -369,7 +374,7 @@ export class ApiClient {
     // участников не уходило). Поллинг передаёт актуальный this.emails
     // (loadEmails обновляет его инкрементально); полный скан остаётся
     // только как fallback, когда список ещё пуст (первый вход).
-    const msgs = emails && emails.length ? emails : await this.fetchEmails('local');
+    const msgs = (!forceFullScan && emails && emails.length) ? emails : await this.fetchEmails('local');
     const mine = msgs.filter(m => {
       const from = String(m.from || '').toLowerCase();
       return memberEmails.some(e => from.includes(e));
