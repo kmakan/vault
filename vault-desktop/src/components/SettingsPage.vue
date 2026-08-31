@@ -229,6 +229,7 @@
 import api, { db } from '../api.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
+import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
 import Icon from './Icon.vue';
@@ -344,12 +345,18 @@ export default {
     },
     // «Обновить»: на Android ведём на страницу релизов (пользователь ставит
     // APK сам — маркетов пока нет); ссылка из latest.json, фолбэк — сайт.
+    // Фикс (31.08): window.open в Tauri WebView молча НЕ открывает внешние
+    // ссылки — используем системный opener-плагин (shell:allow-open в
+    // capabilities, тот же механизм, что openExternal в App.vue).
     openDownloadPage() {
       const isAndroid = /android/i.test(navigator.userAgent);
       const url = (isAndroid && this.updateInfo.apk_url) ||
         this.updateInfo.desktop_url ||
         'https://vault-msg.ru';
-      window.open(url, '_blank');
+      shellOpen(url).catch((e) => {
+        console.warn('shellOpen failed:', e);
+        try { window.location.href = url; } catch (e2) { /* ignore */ }
+      });
     },
     async saveDisplayName() {
       // Имя — настройка аккаунта: хранится в kv_store (db.kvSet), не localStorage.
