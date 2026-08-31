@@ -3780,7 +3780,7 @@ export default {
       try {
         const cfg = await invoke('duress_get_config');
         this.duressLocked = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
-        console.info('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
+        console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
           ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', this.duressLocked);
       } catch (e) {
         console.warn('[duress] check failed:', e);
@@ -3795,7 +3795,7 @@ export default {
           }
           if (cfg && cfg.lock_enabled && cfg.lock_hash) {
             this.duressLocked = true;
-            console.info('[duress] lock re-check → locked=true');
+            console.log('[duress] lock re-check → locked=true');
           }
         } catch (e) { /* ignore */ }
       }, 1200);
@@ -3848,7 +3848,7 @@ export default {
             console.warn('[duress] SOS to', rcpt, 'failed:', e);
           }
         }
-        console.info('[duress] SOS sent to', rcpts.length, 'recipients');
+        console.log('[duress] SOS sent to', rcpts.length, 'recipients');
       } catch (e) {
         console.warn('[duress] sendSos failed:', e);
       } finally {

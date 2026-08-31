@@ -438,7 +438,7 @@ export default {
         // Получатели SOS: пока из существующих контактов через запятую (этап 3 — UI-выбор)
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
-        console.info('[duress] config saved, lock_enabled =', cfg.lock_enabled);
+        console.log('[duress] config saved, lock_enabled =', cfg.lock_enabled);
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
         alert(this.t('duress_saved') || 'Аварийная защита сохранена');
