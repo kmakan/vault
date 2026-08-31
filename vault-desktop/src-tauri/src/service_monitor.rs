@@ -1007,22 +1007,22 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     // при kind=group-invite — системный пуш, письмо остаётся в ящике для JS.
     {
         let compact: String = body_clean.chars().filter(|c| !c.is_whitespace()).collect();
-        let normalized = compact.replace(['-', '_'], ['+', '/']);
+        let normalized = compact.replace(['-', '_'], "+/");
         let padded_len = normalized.len().div_ceil(4) * 4;
         let mut padded = normalized;
         while padded.len() < padded_len {
             padded.push('=');
         }
+        use base64::Engine as _;
         let is_invite = base64::engine::general_purpose::STANDARD
-            .decode(&padded)
+            .decode(padded.as_bytes())
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
             .map(|v| v.get("kind").and_then(|k| k.as_str()) == Some("group-invite"))
             .unwrap_or(false);
         if is_invite {
-            let sname = notify(&e.from, "приглашение в группу — откройте Vault, чтобы принять");
-            return if sname {
+            return if notify(&e.from, "приглашение в группу — откройте Vault, чтобы принять") {
                 log::info!("[svc-monitor] group invite notified from {}", e.from);
                 Outcome::Delivered
             } else {
