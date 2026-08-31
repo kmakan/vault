@@ -368,8 +368,9 @@ pub async fn run_audio_pipeline(
 /// Живой дескриптор аудио-устройства: держим до конца звонка, drop = stop.
 /// Desktop — cpal::Stream, Android — oboe AudioStreamAsync (drop = close).
 enum AudioStreamHandle {
+    // Stream удерживается намеренно: drop = остановка (поле не читается).
     #[cfg(not(target_os = "android"))]
-    Cpal(cpal::Stream),
+    Cpal(#[allow(dead_code)] cpal::Stream),
     #[cfg(target_os = "android")]
     OboeInput(audio_android::MicStream),
     #[cfg(target_os = "android")]

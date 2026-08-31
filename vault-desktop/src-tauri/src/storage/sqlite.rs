@@ -8,6 +8,7 @@ pub struct Storage {
     conn: Connection,
 }
 
+#[allow(dead_code)]
 impl Storage {
     /// Open or create the local database
     pub fn open(db_path: Option<&PathBuf>) -> Result<Self> {
@@ -714,6 +715,7 @@ pub struct KeyRecord {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct StorageStats {
     pub chats: i64,
     pub messages: i64,

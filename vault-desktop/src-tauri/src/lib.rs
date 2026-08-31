@@ -5,6 +5,9 @@ mod crypto;
 mod crypto_pq;
 mod email;
 mod groups;
+// Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
+// API-запас (замечание 31.08 — публичный репозиторий без warnings).
+#[allow(dead_code)]
 mod history_store;
 mod key_escrow;
 #[cfg(test)]
@@ -323,6 +326,7 @@ pub struct IdleMonitor {
     running: Arc<AtomicBool>,
 }
 
+#[allow(dead_code)]
 fn idle_stop_flag(state: &tauri::State<'_, IdleMonitor>) {
     state.stop.store(true, Ordering::SeqCst);
 }
@@ -988,9 +992,11 @@ fn debug_log(msg: String) {
 /// Возвращает {version, changelog, apk_url, desktop_url} или
 /// Err(message) при сетевой недоступности — фронт покажет мягкий текст.
 /// HTTP-клиент: native-tls (уже в дереве для lettre) — без новых зависимостей.
+/// Хост проверки обновлений (RELEASE-PREP): connect + Host-заголовок в check_app_update.
+const UPDATE_ENDPOINT_HOST: &str = "vault-msg.ru";
+
 #[tauri::command]
 async fn check_app_update(current_version: String) -> Result<Option<serde_json::Value>, String> {
-    const ENDPOINT: &str = "https://vault-msg.ru/latest.json";
     const TIMEOUT_SECS: u64 = 10;
 
     // Простое сравнение semver-подобных строк "0.1.100" > "0.1.99":
@@ -1020,13 +1026,13 @@ async fn check_app_update(current_version: String) -> Result<Option<serde_json::
         // native-tls handshake + минимальный HTTP/1.1 GET. Сервер — наш nginx
         // со статикой; редиректов и чанков не ожидаем, но обрабатываем оба.
         let connector = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
-        let stream = TcpStream::connect("vault-msg.ru:443").map_err(|e| e.to_string())?;
+        let stream = TcpStream::connect((UPDATE_ENDPOINT_HOST, 443)).map_err(|e| e.to_string())?;
         let mut stream = connector
-            .connect("vault-msg.ru", stream)
+            .connect(UPDATE_ENDPOINT_HOST, stream)
             .map_err(|e| e.to_string())?;
         let req = format!(
-            "GET /latest.json HTTP/1.1\r\nHost: vault-msg.ru\r\nUser-Agent: Vault/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
-            current_version
+            "GET /latest.json HTTP/1.1\r\nHost: {}\r\nUser-Agent: Vault/{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            UPDATE_ENDPOINT_HOST, current_version
         );
         use std::io::Write;
         stream
