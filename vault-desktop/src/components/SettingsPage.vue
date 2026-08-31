@@ -197,7 +197,7 @@
             <label class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</label>
             <input v-model="duressSosText" class="duress-input" :placeholder="'Телефон не у меня{coords}'" />
             <label class="toggle" style="align-self:flex-start">
-              <input type="checkbox" v-model="duressSosGeo" />
+              <input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" />
               <span class="slider"></span>
               <span style="margin-left:8px">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
             </label>
@@ -371,6 +371,12 @@ export default {
           const all = await api.getContacts();
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         } catch (e) { /* ignore */ }
+      }
+    },
+    onSosGeoChange(on) {
+      if (on && /android/i.test(navigator.userAgent)) {
+        // Мост в MainActivity: runtime-запрос ACCESS_FINE_LOCATION
+        try { window.__vaultRequestGeo && window.__vaultRequestGeo(); } catch (e) { /* ignore */ }
       }
     },
     async duressSave() {

@@ -14,6 +14,8 @@
          даже когда приложение свёрнуто. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Входящий звонок (28.08): full-screen intent поверх локскрина.
          На Android 14+ без этого разрешения setFullScreenIntent молча

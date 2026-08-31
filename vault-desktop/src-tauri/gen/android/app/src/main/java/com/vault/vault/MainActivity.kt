@@ -181,6 +181,38 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     keepAliveWebView = webView
     liveWebView = webView
+    // Гео для SOS (duress, t_b185e3e2): WebView должен разрешать
+    // navigator.geolocation для tauri://localhost (prompt ниже выдаёт грант).
+    try {
+      val settings = webView.settings
+      settings.setGeolocationEnabled(true)
+      webView.webChromeClient = object : android.webkit.WebChromeClient() {
+        override fun onGeolocationPermissionsShowPrompt(
+          origin: String?,
+          callback: android.webkit.GeolocationPermissions.Callback?
+        ) {
+          // Runtime-запрос при первом вызове navigator.geolocation: WebView
+          // prompt → мы просим системное разрешение и отвечаем грантом после.
+          if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION)
+              != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+              this@MainActivity,
+              arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+              1003
+            )
+          }
+          callback?.invoke(origin, true, false)
+        }
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "geolocation webview setup failed: " + e.message)
+    }
+    // JS-мост: фронт вызывает window.__vaultRequestGeo() при включении гео-опции SOS —
+    // он проксирует в статический requestGeoPermission() (companion), который
+    // запрашивает runtime-разрешение у activity.
+    webView.evaluateJavascript(
+      "window.__vaultRequestGeo = function() { window.__vaultGeoBridge && window.__vaultGeoBridge(); };", null
+    )
   }
 
   override fun onPause() {
