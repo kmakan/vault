@@ -1086,6 +1086,7 @@ fn db_kv_get(account: String, key: String) -> Result<Option<String>, String> {
 fn android_open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        let url_for_log = url.clone();
         let r = std::panic::catch_unwind(move || {
             let ctx = ndk_context::android_context();
             let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
@@ -1112,7 +1113,7 @@ fn android_open_url(url: String) -> Result<(), String> {
             Ok::<(), String>(())
         });
         match r {
-            Ok(Ok(())) => log::info!("[android] openUrl ok: {url}"),
+            Ok(Ok(())) => log::info!("[android] openUrl ok: {url_for_log}"),
             Ok(Err(e)) => log::error!("[android] openUrl failed: {e}"),
             Err(_) => log::error!("[android] openUrl panic"),
         }
