@@ -1,5 +1,12 @@
 <template>
   <div class="app-container">
+    <!-- Duress-замок (t_b185e3e2): поверх всего UI до ввода кода -->
+    <LockScreen
+      v-if="duressLocked"
+      @unlock="onLockUnlock"
+      @duress="onLockDuress"
+      @panic="onLockPanic"
+    />
     <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
     <div v-if="!isLoggedIn && restoringSession" class="login-screen">
       <div class="login-box">
@@ -901,6 +908,7 @@ import { saveHistory, loadHistory } from './history.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
+import LockScreen from './components/LockScreen.vue';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1329,6 +1337,8 @@ export default {
     }
   },
   async mounted() {
+    // Duress-замок: включён ли (до авторизации)
+    this.checkDuressLock();
     applyTheme(loadSavedTheme())
     applyFont(loadSavedFont())
     // НАТИВНЫЕ КНОПКИ УВЕДОМЛЕНИЯ ЗВОНКА (0.1.91, простая схема юзера):
@@ -3749,6 +3759,71 @@ export default {
 
     // --- Key Recovery (25.08) ---
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
+    // ── Duress-замок (t_b185e3e2) ────────────────────────────────────────
+    // При старте: если замок включён — показываем LockScreen вместо UI.
+    async checkDuressLock() {
+      try {
+        const cfg = await invoke('duress_get_config');
+        this.duressLocked = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
+      } catch (e) {
+        console.warn('[duress] check failed:', e);
+      }
+    },
+    onLockUnlock() {
+      this.duressLocked = false;
+    },
+    // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
+    // монтирования тихо отправляем SOS-письмо выбранным контактам.
+    async onLockDuress() {
+      this.duressLocked = false;
+      this.duressPending = true;
+      this.$nextTick(() => this.sendDuressSos());
+    },
+    // Panic-PIN: Rust уже стёр данные — выходим на login (локально пусто).
+    async onLockPanic() {
+      this.duressLocked = false;
+      try {
+        await api.logout();
+      } catch (e) { /* ignore */ }
+      this.isLoggedIn = false;
+      this.email = null;
+      this.showToast(this.t('panic_done') || 'Данные стёрты', 4000);
+    },
+    // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
+    // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
+    async sendDuressSos() {
+      try {
+        const cfg = await invoke('duress_get_config');
+        if (!cfg || !cfg.sos_enabled_rcpts) { /* compat */ }
+        const rcpts = (cfg.sos_recipients || []).filter(Boolean);
+        if (!rcpts.length) return;
+        // Гео: если включено — получаем координаты через плагин geolocation (этап 3);
+        // сейчас — без гео (текст без координат), фича дополняется на этапе 3.
+        let coords = '';
+        try {
+          const pos = await invoke('plugin:geolocation|get_current_position');
+          coords = `, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+        } catch (e) { /* гео недоступно/не включено — без координат */ }
+        const text = (cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}')
+          .replace('{coords}', coords);
+        for (const rcpt of rcpts) {
+          try {
+            const content = await crypto.encryptVault(JSON.stringify({
+              vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+              type: 'sos', text, name: this.displayName || '', ts: Date.now(),
+            }));
+            await api.sendEmail('local', { to: rcpt, subject: '', body: content });
+          } catch (e) {
+            console.warn('[duress] SOS to', rcpt, 'failed:', e);
+          }
+        }
+        console.info('[duress] SOS sent to', rcpts.length, 'recipients');
+      } catch (e) {
+        console.warn('[duress] sendSos failed:', e);
+      } finally {
+        this.duressPending = false;
+      }
+    },
     showToast(message, ms = 5000) {
       this.toastMessage = message;
       if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -6112,6 +6187,9 @@ export default {
     // с in-memory кэшем для синхронной фильтрации (filterDeleted).
     // См. initLocalDb() — загрузка при входе.
     tombstonesCache: [],
+    // Duress-замок (t_b185e3e2): LockScreen поверх UI; duressPending — тихий SOS.
+    duressLocked: false,
+    duressPending: false,
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},

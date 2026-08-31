@@ -69,6 +69,15 @@ const db = {
     invoke('db_autoclean_purge', { account, keysJson }),
 };
 
+// ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
+export const duressApi = {
+  getConfig: () => invoke('duress_get_config'),
+  hashSecret: (secret) => invoke('duress_hash_secret', { secret }),
+  verify: (secret, storedHash) => invoke('duress_verify', { secret, storedHash }),
+  saveConfig: (config) => invoke('duress_save_config', { config }),
+  wipeAll: () => invoke('duress_wipe_all'),
+};
+
 export class ApiClient {
   constructor() {
     const saved = localStorage.getItem('vault-token');
