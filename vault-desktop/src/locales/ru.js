@@ -45,6 +45,8 @@ export default {
   settings_cancel: 'Отмена',
 
   // Duress (t_b185e3e2)
+  duress_recipients: "Кому отправлять SOS",
+  duress_no_contacts: "Добавьте контакты, чтобы отправлять им SOS",
   duress_title: "Аварийная защита",
   duress_lock_enable: "Блокировка приложения (PIN/пароль)",
   duress_lock_code: "Код разблокировки",

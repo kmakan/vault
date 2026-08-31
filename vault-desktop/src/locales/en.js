@@ -45,6 +45,8 @@ export default {
   settings_cancel: 'Cancel',
 
   // Duress (t_b185e3e2)
+  duress_recipients: "SOS recipients",
+  duress_no_contacts: "Add contacts to send them an SOS",
   duress_title: "Duress protection",
   duress_lock_enable: "App lock (PIN/password)",
   duress_lock_code: "Unlock code",

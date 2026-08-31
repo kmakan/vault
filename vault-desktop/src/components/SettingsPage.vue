@@ -201,6 +201,14 @@
               <span class="slider"></span>
               <span style="margin-left:8px">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
             </label>
+            <label class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</label>
+            <div class="duress-contacts">
+              <label v-for="c in duressContacts" :key="c" class="duress-contact">
+                <input type="checkbox" :value="c" v-model="duressRecipients" />
+                <span>{{ c }}</span>
+              </label>
+              <p v-if="!duressContacts.length" class="duress-warn">{{ t('duress_no_contacts') || 'Добавьте контакты, чтобы отправлять им SOS' }}</p>
+            </div>
             <button class="btn-primary" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer" @click="duressSave">
               {{ t('duress_save') || 'Сохранить аварийную защиту' }}
             </button>
@@ -285,6 +293,8 @@ export default {
       duressDuressCode: '',
       duressSosText: '',
       duressSosGeo: false,
+      duressContacts: [],
+      duressRecipients: [],
       // Мобильный режим (25.08): на телефоне список разделов и контент —
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -357,6 +367,9 @@ export default {
           const cfg = await duressApi.getConfig();
           this.duressSosText = cfg.sos_text || '';
           this.duressSosGeo = !!cfg.sos_geo;
+          this.duressRecipients = [...(cfg.sos_recipients || [])];
+          const all = await api.getContacts();
+          this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         } catch (e) { /* ignore */ }
       }
     },
@@ -383,7 +396,7 @@ export default {
         cfg.sos_text = this.duressSosText || '';
         cfg.sos_geo = this.duressSosGeo;
         // Получатели SOS: пока из существующих контактов через запятую (этап 3 — UI-выбор)
-        cfg.sos_recipients = (cfg.sos_recipients || []);
+        cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
@@ -936,4 +949,11 @@ export default {
 }
 .profile-actions .btn { width: 100%; max-width: 320px; }
 .profile-actions .logout-btn { margin-top: 0; }
+
+.duress-label{font-size:13px;color:var(--muted,#8b93a7);margin-top:4px}
+.duress-input{width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border,#1f2940);background:var(--bg-soft,#0f1522);color:var(--text,#e7ecf5);font-size:14px}
+.duress-warn{font-size:12.5px;color:var(--gold,#f59e0b);margin:4px 0 0}
+.duress-contacts{max-height:160px;overflow-y:auto;border:1px solid var(--border,#1f2940);border-radius:8px;padding:8px;width:100%;display:flex;flex-direction:column;gap:6px}
+.duress-contact{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text,#e7ecf5);cursor:pointer}
+
 </style>

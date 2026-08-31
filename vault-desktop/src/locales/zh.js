@@ -45,6 +45,8 @@ export default {
   settings_cancel: '取消',
 
   // Duress (t_b185e3e2)
+  duress_recipients: "求救接收人",
+  duress_no_contacts: "先添加联系人才能发送求救",
   duress_title: "紧急保护",
   duress_lock_enable: "应用锁定（PIN/密码）",
   duress_lock_code: "解锁代码",
