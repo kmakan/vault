@@ -187,6 +187,26 @@ class VaultForegroundService : Service() {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
 
+        // Открыть URL системным браузером (duress/update, 0.1.115): вызывается
+        // из Rust android_open_url через тот же JNI-мост, что showMessage.
+        // Работает и из activity-, и из сервис-процесса (context может быть
+        // application context — потому FLAG_ACTIVITY_NEW_TASK обязателен).
+        @JvmStatic
+        fun openUrlCompat(context: android.content.Context, url: String) {
+            try {
+                val intent = android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(url)
+                ).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                android.util.Log.i("VaultRust", "openUrlCompat: opened $url")
+            } catch (e: Throwable) {
+                android.util.Log.e("VaultRust", "openUrlCompat failed: " + e.message)
+            }
+        }
+
         // Уведомление о сообщении из headless-монитора (вызывается из Rust
         // через JNI). Отдельный high-importance канал — MONITOR_CHANNEL_ID.
         @JvmStatic

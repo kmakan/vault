@@ -1077,6 +1077,54 @@ fn db_kv_get(account: String, key: String) -> Result<Option<String>, String> {
     open_db()?.kv_get(&account, &key).map_err(|e| e.to_string())
 }
 
+/// Открыть URL системным браузером (Android: ACTION_VIEW через JNI-мост в
+/// VaultForegroundService.openUrlCompat — плагин-opener на Android не доходил
+/// до браузера; desktop: plugin-shell openExternal-путь не используется, вызов
+/// только с мобильных). Возвращает Ok(()) даже если браузер не открылся —
+/// фолбэк (anchor-click) уже был сделан во фронте.
+#[tauri::command]
+fn android_open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let r = std::panic::catch_unwind(move || {
+            let ctx = ndk_context::android_context();
+            let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+                .map_err(|e| format!("vm: {e}"))?;
+            let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+            let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+            let jurl = env.new_string(&url).map_err(|e| format!("u: {e}"))?;
+            let cls = crate::audio::audio_android::find_app_class(
+                &mut env,
+                &activity,
+                "com.vault.vault.VaultForegroundService",
+            )
+            .map_err(|e| format!("find class: {e}"))?;
+            let call = env.call_static_method(
+                &cls,
+                "openUrlCompat",
+                "(Landroid/content/Context;Ljava/lang/String;)V",
+                &[(&activity).into(), (&jurl).into()],
+            );
+            if let Err(err) = call {
+                let _ = env.exception_clear();
+                return Err(format!("openUrlCompat: {err}"));
+            }
+            Ok::<(), String>(())
+        });
+        match r {
+            Ok(Ok(())) => log::info!("[android] openUrl ok: {url}"),
+            Ok(Err(e)) => log::error!("[android] openUrl failed: {e}"),
+            Err(_) => log::error!("[android] openUrl panic"),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = url;
+        log::info!("[android] openUrl called on non-android — skip");
+    }
+    Ok(())
+}
+
 // ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
 #[tauri::command]
 fn duress_get_config() -> Result<duress::DuressConfig, String> {
@@ -1338,6 +1386,7 @@ pub fn run() {
             groups_create,
             groups_add_member,
             groups_rename_member,
+            android_open_url,
             duress_get_config,
             duress_hash_secret,
             duress_verify,

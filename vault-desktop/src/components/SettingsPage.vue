@@ -481,14 +481,23 @@ export default {
     // Фикс (31.08): window.open в Tauri WebView молча НЕ открывает внешние
     // ссылки — используем системный opener-плагин (shell:allow-open в
     // capabilities, тот же механизм, что openExternal в App.vue).
-    openDownloadPage() {
+    async openDownloadPage() {
       const isAndroid = /android/i.test(navigator.userAgent);
       const url = (isAndroid && this.updateInfo.apk_url) ||
         this.updateInfo.desktop_url ||
         'https://vault-msg.ru';
-      // 0.1.111: opener-плагин перехватывает клики по <a target="_blank"> с
-      // http(s)/mailto/tel — программный клик надёжнее прямого invoke (обходит
-      // и ACL-глюки, и различия mobile/desktop). Фолбэк — shellOpen.
+      // 0.1.115: на Android opener-плагин так и не открыл браузер (ACL/стек
+      // плагина молча падал) — зовём НАТИВНУЮ команду android_open_url
+      // (Rust→JNI→VaultForegroundService.openUrlCompat→ACTION_VIEW).
+      // Desktop оставляет anchor-click (там он работает).
+      if (/android/i.test(navigator.userAgent)) {
+        try {
+          await invoke('android_open_url', { url });
+        } catch (e) {
+          console.warn('[update] android_open_url failed:', e);
+        }
+        return;
+      }
       try {
         const a = document.createElement('a');
         a.href = url;

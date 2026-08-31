@@ -3785,6 +3785,27 @@ export default {
       } catch (e) {
         console.warn('[duress] check failed:', e);
       }
+      // Android (0.1.115): «выход» из приложения НЕ убивает процесс — FGS и
+      // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
+      // замок не показывался. Ловим возврат из фона: если замок включён и в этой
+      // сессии ещё не разблокирован (duressUnlockedThisSession false) — показать.
+      if (!this._duressVisibilityBound) {
+        this._duressVisibilityBound = true;
+        const relock = async () => {
+          if (this.duressUnlockedThisSession) return;
+          try {
+            const cfg = await invoke('duress_get_config');
+            if (cfg && cfg.lock_enabled && cfg.lock_hash) {
+              this.duressLocked = true;
+              console.log('[duress] relock on resume → locked=true');
+            }
+          } catch (e) { /* ignore */ }
+        };
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') relock();
+        });
+        window.addEventListener('focus', relock);
+      }
       // Повтор через секунду: restoreSession/монтирование UI может перерисовать
       // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
       setTimeout(async () => {
@@ -3802,6 +3823,7 @@ export default {
     },
     onLockUnlock() {
       this.duressLocked = false;
+      this.duressUnlockedThisSession = true; // до ухода в фон замок не ре-армить
     },
     // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
     // монтирования тихо отправляем SOS-письмо выбранным контактам.
@@ -6221,6 +6243,7 @@ export default {
     // Duress-замок (t_b185e3e2): LockScreen поверх UI; duressPending — тихий SOS.
     duressLocked: false,
     duressPending: false,
+    duressUnlockedThisSession: false,
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},
