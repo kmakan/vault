@@ -229,7 +229,7 @@
 import api, { db } from '../api.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
-import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
 import Icon from './Icon.vue';

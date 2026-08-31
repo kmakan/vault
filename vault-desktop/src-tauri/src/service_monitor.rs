@@ -999,6 +999,38 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     // 8088 → len%4=1 → «decrypt failed» → звонок/уведомление молча гибли).
     let body_clean = body;
 
+    // ── Групп-приглашения (0.1.104): тело = НЕзашифрованный urlSafeB64-JSON
+    // {kind:'group-invite', group_name, sender_name...}. Конвертом не является,
+    // decrypt ниже его не берёт и письмо молча умирало (Outcome::Dead) — ни
+    // уведомления при смахнутом приложении, ни явного следа. Детектим ДО
+    // расшифровки: декод b64 (с очисткой whitespace — письмо фолдится по 76),
+    // при kind=group-invite — системный пуш, письмо остаётся в ящике для JS.
+    {
+        let compact: String = body_clean.chars().filter(|c| !c.is_whitespace()).collect();
+        let normalized = compact.replace(['-', '_'], ['+', '/']);
+        let padded_len = normalized.len().div_ceil(4) * 4;
+        let mut padded = normalized;
+        while padded.len() < padded_len {
+            padded.push('=');
+        }
+        let is_invite = base64::engine::general_purpose::STANDARD
+            .decode(&padded)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
+            .map(|v| v.get("kind").and_then(|k| k.as_str()) == Some("group-invite"))
+            .unwrap_or(false);
+        if is_invite {
+            let sname = notify(&e.from, "приглашение в группу — откройте Vault, чтобы принять");
+            return if sname {
+                log::info!("[svc-monitor] group invite notified from {}", e.from);
+                Outcome::Delivered
+            } else {
+                Outcome::Retry
+            };
+        }
+    }
+
     // Расшифровка: ключ отправителя → self-ключ (письма себе шифруются своим
     // ключом) → перебор контактов (страховка для нестандартных сценариев).
     let from_lc = e.from.clone();
