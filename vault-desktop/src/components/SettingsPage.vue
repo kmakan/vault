@@ -178,6 +178,35 @@
           <span>{{ t('settings_hide_last_seen') }}</span>
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
+
+        <!-- Duress-защита (t_b185e3e2): замок, panic-PIN, duress-PIN -->
+        <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:10px">
+          <b>{{ t('duress_title') || 'Аварийная защита' }}</b>
+          <label class="toggle" style="align-self:flex-start">
+            <input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" />
+            <span class="slider"></span>
+            <span style="margin-left:8px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
+          </label>
+          <template v-if="duressEnabled">
+            <label class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</label>
+            <input v-model="duressLockCode" type="password" class="duress-input" :placeholder="t('duress_code_ph') || 'минимум 4 символа'" />
+            <label class="duress-label">{{ t('duress_panic') || 'Panic-код (стирает все данные при вводе)' }}</label>
+            <input v-model="duressPanicCode" type="password" class="duress-input" :placeholder="t('duress_optional') || 'необязательно'" />
+            <label class="duress-label">{{ t('duress_duress') || 'Duress-код (тихо отправит SOS и откроет приложение)' }}</label>
+            <input v-model="duressDuressCode" type="password" class="duress-input" :placeholder="t('duress_optional') || 'необязательно'" />
+            <label class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</label>
+            <input v-model="duressSosText" class="duress-input" :placeholder="'Телефон не у меня{coords}'" />
+            <label class="toggle" style="align-self:flex-start">
+              <input type="checkbox" v-model="duressSosGeo" />
+              <span class="slider"></span>
+              <span style="margin-left:8px">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
+            </label>
+            <button class="btn-primary" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer" @click="duressSave">
+              {{ t('duress_save') || 'Сохранить аварийную защиту' }}
+            </button>
+            <p class="duress-warn">{{ t('duress_warn') || 'Запомните коды! Panic-код стирает ВСЕ данные безвозвратно. Duress-код выглядит как обычный вход, но тихо предупреждает выбранные контакты.' }}</p>
+          </template>
+        </div>
       </div>
 
       <!-- ЯЗЫК -->
@@ -229,6 +258,7 @@
 import api, { db } from '../api.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
+import { duressApi } from '../api.js';
 import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import AvatarUpload from './AvatarUpload.vue';
@@ -248,6 +278,13 @@ export default {
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
+      // Duress (t_b185e3e2)
+      duressEnabled: false,
+      duressLockCode: '',
+      duressPanicCode: '',
+      duressDuressCode: '',
+      duressSosText: '',
+      duressSosGeo: false,
       // Мобильный режим (25.08): на телефоне список разделов и контент —
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -313,6 +350,48 @@ export default {
     // Rust-команда check_app_update сравнивает semver-численно и возвращает
     // latest.json только если версия новее текущей. Скачивание — через
     // браузер на страницу релизов (t('update_download') → shell-open).
+    // ── Duress (t_b185e3e2) ─────────────────────────────────────────────
+    async duressToggleLock() {
+      if (this.duressEnabled) {
+        try {
+          const cfg = await duressApi.getConfig();
+          this.duressSosText = cfg.sos_text || '';
+          this.duressSosGeo = !!cfg.sos_geo;
+        } catch (e) { /* ignore */ }
+      }
+    },
+    async duressSave() {
+      if (!this.duressLockCode || this.duressLockCode.length < 4) {
+        alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+        return;
+      }
+      if (this.duressPanicCode && this.duressPanicCode === this.duressLockCode) {
+        alert(this.t('duress_err_same') || 'Panic-код не должен совпадать с кодом разблокировки');
+        return;
+      }
+      if (this.duressDuressCode && (this.duressDuressCode === this.duressLockCode ||
+          this.duressDuressCode === this.duressPanicCode)) {
+        alert(this.t('duress_err_same') || 'Коды не должны совпадать');
+        return;
+      }
+      try {
+        const cfg = await duressApi.getConfig();
+        cfg.lock_enabled = this.duressEnabled;
+        cfg.lock_hash = await duressApi.hashSecret(this.duressLockCode);
+        cfg.panic_hash = this.duressPanicCode ? await duressApi.hashSecret(this.duressPanicCode) : '';
+        cfg.duress_hash = this.duressDuressCode ? await duressApi.hashSecret(this.duressDuressCode) : '';
+        cfg.sos_text = this.duressSosText || '';
+        cfg.sos_geo = this.duressSosGeo;
+        // Получатели SOS: пока из существующих контактов через запятую (этап 3 — UI-выбор)
+        cfg.sos_recipients = (cfg.sos_recipients || []);
+        await duressApi.saveConfig(cfg);
+        // Очистить введённое в память
+        this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
+        alert(this.t('duress_saved') || 'Аварийная защита сохранена');
+      } catch (e) {
+        alert('Duress save failed: ' + (e && e.message || e));
+      }
+    },
     async checkForUpdates() {
       this.updateChecking = true;
       this.updateAvailable = false;
