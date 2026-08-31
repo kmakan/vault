@@ -3780,9 +3780,25 @@ export default {
       try {
         const cfg = await invoke('duress_get_config');
         this.duressLocked = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
+        console.info('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
+          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', this.duressLocked);
       } catch (e) {
         console.warn('[duress] check failed:', e);
       }
+      // Повтор через секунду: restoreSession/монтирование UI может перерисовать
+      // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
+      setTimeout(async () => {
+        try {
+          const cfg = await invoke('duress_get_config');
+          if (cfg && cfg.lock_enabled && cfg.lock_hash && !this.isLoggedIn === false) {
+            // уже залогинен — замок всё равно показываем (замок = при запуске)
+          }
+          if (cfg && cfg.lock_enabled && cfg.lock_hash) {
+            this.duressLocked = true;
+            console.info('[duress] lock re-check → locked=true');
+          }
+        } catch (e) { /* ignore */ }
+      }, 1200);
     },
     onLockUnlock() {
       this.duressLocked = false;
