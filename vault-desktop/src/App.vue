@@ -240,7 +240,7 @@
           <div class="chat-actions">
             <template v-if="activeChatType === 'group'">
               <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
-              <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="refreshGroupFull"><Icon name="arrow-down" :size="17" /></button>
+              <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="refreshGroupFull"><Icon name="refresh" :size="17" /></button>
               <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
             </template>
             <template v-else-if="activeChat && activeChat !== '__notes__'">
@@ -3164,8 +3164,6 @@ export default {
         if (!stale()) this.messages = [];
       }
     },
-    async loadGroupMessages(groupId, forceRescan = false) {
-
     // Полный рескан группы (0.1.106): письма, «застрявшие за курсором» из-за
     // разового сбоя (session desync / DNS / троттлинг), инкрементальный фетч
     // больше не вернёт. Кнопка в шапке группы делает полный IMAP-скан папок
@@ -3175,6 +3173,7 @@ export default {
       await this.loadGroupMessages(this.currentGroup.id, true);
       this.scrollToBottom(false);
     },
+    async loadGroupMessages(groupId, forceRescan = false) {
       // Токен загрузки — см. loadMessages (защита от гонки переключения).
       const seq = this.loadSeq;
       const chat = 'group:' + groupId;
