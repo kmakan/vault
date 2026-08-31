@@ -360,6 +360,19 @@ export default {
       // Звонки (27.08): выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
+      // Duress (t_b185e3e2): восстановить состояние тумблера из конфига — иначе
+      // после перезапуска тумблер выглядит выключенным, даже если замок активен.
+      try {
+        const dcfg = await duressApi.getConfig();
+        this.duressEnabled = !!(dcfg && dcfg.lock_enabled && dcfg.lock_hash);
+        if (this.duressEnabled) {
+          this.duressSosText = dcfg.sos_text || '';
+          this.duressSosGeo = !!dcfg.sos_geo;
+          this.duressRecipients = [...(dcfg.sos_recipients || [])];
+          const all = await api.getContacts();
+          this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
+        }
+      } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
   },
   methods: {
@@ -369,15 +382,28 @@ export default {
     // браузер на страницу релизов (t('update_download') → shell-open).
     // ── Duress (t_b185e3e2) ─────────────────────────────────────────────
     async duressToggleLock() {
-      if (this.duressEnabled) {
-        try {
-          const cfg = await duressApi.getConfig();
+      try {
+        const cfg = await duressApi.getConfig();
+        if (this.duressEnabled) {
+          // Включили: тянем существующий конфиг (если уже настраивали)
           this.duressSosText = cfg.sos_text || '';
           this.duressSosGeo = !!cfg.sos_geo;
           this.duressRecipients = [...(cfg.sos_recipients || [])];
           const all = await api.getContacts();
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
-        } catch (e) { /* ignore */ }
+          // Если коды уже были заданы ранее — сразу включаем замок (не заставляем
+          // повторно вводить): иначе тумблер выглядит «слетевшим».
+          if (cfg.lock_hash) {
+            cfg.lock_enabled = true;
+            await duressApi.saveConfig(cfg);
+          }
+        } else {
+          // Выключили: lock_enabled=false, остальное сохраняем
+          cfg.lock_enabled = false;
+          await duressApi.saveConfig(cfg);
+        }
+      } catch (e) {
+        console.warn('[duress] toggle failed:', e);
       }
     },
     onSosGeoChange(on) {
@@ -389,6 +415,7 @@ export default {
     async duressSave() {
       if (!this.duressLockCode || this.duressLockCode.length < 4) {
         alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+        this.duressEnabled = false; // тумблер не врёт: замок НЕ включён
         return;
       }
       if (this.duressPanicCode && this.duressPanicCode === this.duressLockCode) {
@@ -411,6 +438,7 @@ export default {
         // Получатели SOS: пока из существующих контактов через запятую (этап 3 — UI-выбор)
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
+        console.info('[duress] config saved, lock_enabled =', cfg.lock_enabled);
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
         alert(this.t('duress_saved') || 'Аварийная защита сохранена');
