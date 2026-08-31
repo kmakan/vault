@@ -1296,11 +1296,18 @@ async mediaSoundStop() {
   }
   async declineGroupInvite(groupId, msgUid, senderEmail) {
     // Ничего не отправляем — просто помечаем инвайт как отклонённый, чтобы при
-    // следующем поллинге он больше не предлагался.
-    const key = `${groupId}|${msgUid}`;
+    // следующем поллинге он больше не предлагался. Дедуп ПО ГРУППЕ (0.1.106):
+    // отмечаем группу целиком — иначе ретраи инвайта (разные uid) показывали
+    // попап снова и снова (баг 31.08 «четвёртое, пятое, шестое…»).
     const declined = await this.getDeclinedInvites();
-    if (!declined.includes(key)) {
-      declined.push(key);
+    const gidPrefix = `${groupId}|`;
+    if (!declined.some(k => k.startsWith(gidPrefix))) {
+      declined.push(`${groupId}|${msgUid}`);
+      // На всякий случай помечаем и другие известные экземпляры группы.
+      const accepted = await this.getAcceptedInvites();
+      for (const k of [...declined, ...accepted]) {
+        if (k.startsWith(gidPrefix) && !declined.includes(k)) declined.push(k);
+      }
       await db.kvSet(this.email || 'anon', 'declined-invites', JSON.stringify(declined));
     }
     return { ok: true };
@@ -1449,25 +1456,36 @@ async mediaSoundStop() {
     const { groupInvites } = await this.fetchAllHandshake();
     const declined = await this.getDeclinedInvites();
     const accepted = await this.getAcceptedInvites();
-    const out = [];
+    // Дедуп ПО ГРУППЕ (0.1.106): отправитель мог ретраить инвайт несколько раз —
+    // каждое письмо имеет свой uid, и без дедупа попап показывается по кругу
+    // («четвёртое, пятое, шестое…», баг 31.08). Один попап на группу, свежейшее
+    // письмо побеждает.
+    const byGroup = new Map(); // group_id -> {item, date}
     for (const m of groupInvites) {
       const parsed = m.parsed || {};
-      // Legacy-письма без kind: пробуем распарсить тело (fetchAllHandshake
-      // уже сделал это; parsed может быть null, если тело не прочиталось).
       if (!parsed.group_id) {
         console.warn('[invites] unparseable invite body, uid', m.uid);
         continue;
       }
-      // Пропускаем, если уже отклонён.
-      if (declined.includes(`${parsed.group_id}|${m.uid}`)) continue;
-      // Пропускаем, если уже принят (персистится в acceptGroupInvite).
-      if (accepted.includes(`${parsed.group_id}|${m.uid}`)) continue;
+      // Уже отклонён/принят ЛЮБОЙ экземпляр этой группы (ключи «group_id|uid»).
+      const gidPrefix = `${parsed.group_id}|`;
+      if (declined.some(k => k.startsWith(gidPrefix))) continue;
+      if (accepted.some(k => k.startsWith(gidPrefix))) continue;
+      // Группа уже импортирована (я участник/создатель) — все её инвайты мимо.
       try {
         const g = await invoke('groups_get', { groupId: parsed.group_id });
         if (g && (g.created_by === this.email || (g.members || []).some(mm => mm.email === this.email))) {
           continue;
         }
       } catch (e) { /* группа ещё не импортирована */ }
+      const prev = byGroup.get(parsed.group_id);
+      if (!prev || String(m.date || '') >= String(prev.date || '')) {
+        byGroup.set(parsed.group_id, m);
+      }
+    }
+    const out = [];
+    for (const m of byGroup.values()) {
+      const parsed = m.parsed || {};
       out.push({
         group_id: parsed.group_id,
         group_name: parsed.group_name,
