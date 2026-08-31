@@ -2,6 +2,7 @@
 mod audio;
 mod credential_store;
 mod crypto;
+mod duress;
 mod crypto_pq;
 mod email;
 mod groups;
@@ -1076,6 +1077,35 @@ fn db_kv_get(account: String, key: String) -> Result<Option<String>, String> {
     open_db()?.kv_get(&account, &key).map_err(|e| e.to_string())
 }
 
+// ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
+#[tauri::command]
+fn duress_get_config() -> Result<duress::DuressConfig, String> {
+    Ok(duress::load_config())
+}
+
+/// Сохранение конфига: фронт сам хэширует? НЕТ — хэширует Rust (соль внутри).
+/// Вход: уже проверенные секреты в открытом виде? НЕТ — принимаем готовые хэши
+/// из duress_hash_secret, чтобы секрет не ходил дважды.
+#[tauri::command]
+fn duress_hash_secret(secret: String) -> Result<String, String> {
+    Ok(duress::hash_secret(&secret))
+}
+
+#[tauri::command]
+fn duress_verify(secret: String, stored_hash: String) -> Result<bool, String> {
+    Ok(duress::verify_secret(&secret, &stored_hash))
+}
+
+#[tauri::command]
+fn duress_save_config(config: duress::DuressConfig) -> Result<(), String> {
+    duress::save_config(&config)
+}
+
+#[tauri::command]
+fn duress_wipe_all() -> Result<(), String> {
+    duress::wipe_all_data()
+}
+
 #[tauri::command]
 fn db_kv_delete(account: String, key: String) -> Result<(), String> {
     open_db()?
@@ -1308,6 +1338,11 @@ pub fn run() {
             groups_create,
             groups_add_member,
             groups_rename_member,
+            duress_get_config,
+            duress_hash_secret,
+            duress_verify,
+            duress_save_config,
+            duress_wipe_all,
             groups_remove_member,
             groups_set_member_role,
             groups_leave,

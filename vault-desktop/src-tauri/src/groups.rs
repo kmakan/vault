@@ -307,6 +307,15 @@ pub fn rename_group(group_id: &str, new_name: &str) -> Result<Group> {
     Ok(cloned)
 }
 
+/// Стереть ВСЕ локальные группы (panic-PIN, t_b185e3e2).
+pub fn delete_all_local() -> Result<()> {
+    let path = get_groups_path()?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
 pub fn delete_group(group_id: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if groups.remove(group_id).is_some() {

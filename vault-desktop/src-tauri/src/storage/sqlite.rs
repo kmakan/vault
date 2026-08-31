@@ -473,6 +473,21 @@ impl Storage {
 
     // Body cache: encrypted mail bodies by "folder:uid". Can grow to several MB,
     // must NOT live in localStorage (5 MB cap).
+    /// Полное стирание пользовательских данных (panic-PIN, t_b185e3e2):
+    /// чаты/история/письма/тумбы/кэши/курсоры/kv — вся таблица emails и kv_store.
+    /// Схема остаётся (база продолжает работать «с нуля»).
+    pub fn wipe_user_data(&self) -> Result<()> {
+        for table in [
+            "emails", "chat_history", "tombstones", "imap_cursors", "body_cache",
+            "kv_store", "chats", "messages", "contacts", "encryption_keys",
+        ] {
+            self.conn
+                .execute(&format!("DELETE FROM {table}"), [])
+                .map_err(|e| anyhow::anyhow!("wipe {table}: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn body_cache_set(&self, account: &str, cache_key: &str, body: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO body_cache (account, cache_key, body) VALUES (?1, ?2, ?3)
