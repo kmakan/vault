@@ -1205,6 +1205,25 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
         return Outcome::Delivered;
     }
+    // SOS (duress, t_b185e3e2): критичное письмо «телефон не у меня» — пуш с
+    // высоким приоритетом, в чат НЕ пишется (JS тоже фильтрует type:sos).
+    if typ == "sos" {
+        let who = env_json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&from_lc);
+        let sos_text = env_json
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Телефон не у меня");
+        let title = format!("🚨 SOS: {who}");
+        return if notify(&title, sos_text) {
+            log::info!("[svc-monitor] SOS delivered from {from_lc}");
+            Outcome::Delivered
+        } else {
+            Outcome::Retry
+        };
+    }
     // Профиль-конверты/квитанции: текста нет — не уведомляем.
     let text = env_json
         .get("text")

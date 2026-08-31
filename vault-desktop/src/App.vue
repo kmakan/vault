@@ -3115,6 +3115,15 @@ export default {
           crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
+              // SOS (duress): не пишется в чат — только уведомление.
+              {
+                const envCheck = msg.content && crypto.isEncrypted(msg.content)
+                  ? this.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
+                if (envCheck && envCheck.type === 'sos') {
+                  this.showToast('🚨 ' + (envCheck.name || this.activeChat) + ': ' + envCheck.text, 8000);
+                  return null; // Promise.all: null отфильтруется ниже
+                }
+              }
               const { text, attachment } = this.parseMessageContent(msg.content);
               const base = {
                 ...msg,
@@ -3128,6 +3137,12 @@ export default {
                 try {
                   const text = await crypto.decryptVault(msg.content);
                   const env = this.parseEnvelope(text);
+                  if (env && env.type === 'sos') {
+                    // SOS (duress): НЕ пишется в чат — только уведомление
+                    // (Android пушнул монитор; desktop показывает тост здесь).
+                    this.showToast('🚨 ' + (env.name || this.activeChat) + ': ' + env.text, 8000);
+                    return null; // map-колбэк: null отфильтруется ниже
+                  }
                   if (env) {
                     // Зелёная точка: письмо от контакта = активность сейчас
                     if (!this.isOwnSender(msg.sender_id)) {
@@ -3167,7 +3182,7 @@ export default {
               encrypted: false,
               attachment,
             };
-          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          }).filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
