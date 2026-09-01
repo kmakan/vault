@@ -68,8 +68,6 @@
             <activity
             android:name=".LockActivity"
             android:exported="false"
-            android:launchMode="singleTask"
-            android:excludeFromRecents="true"
-            android:taskAffinity="" />
+            android:excludeFromRecents="true" />
     </application>
 </manifest>

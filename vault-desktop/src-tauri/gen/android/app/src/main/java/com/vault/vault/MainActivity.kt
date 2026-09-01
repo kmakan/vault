@@ -236,21 +236,17 @@ class MainActivity : TauriActivity() {
     // Замок (0.1.117): при уходе из приложения — сброс «разблокирован» и показ
     // LockActivity при следующем возврате (паттерн банковских приложений).
     try {
+      // 0.1.125: НЕ стартуем LockActivity здесь (старт при уходе давал «замок
+      // на миг» — task-механика Android: отдельный task LockActivity оставался
+      // позади при возврате). Армирование перенесено в onResume — замок
+      // показывается ПОВЕРХ MainActivity в момент возврата.
       val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
       prefs.edit().putBoolean("unlocked", false)
         .putLong("last_pause_ms", System.currentTimeMillis())
         .putBoolean("last_pause_started_lock", false)
         .apply()
-      if (prefs.getBoolean("lock_enabled", false) &&
-          !prefs.getString("pin_hash", null).isNullOrEmpty()) {
-        prefs.edit().putBoolean("last_pause_started_lock", true).apply()
-        Log.i("VaultRust", "[lock] onPause → starting LockActivity")
-        startActivity(android.content.Intent(this, LockActivity::class.java)
-          .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-      } else {
-        Log.i("VaultRust", "[lock] onPause: enabled=" + prefs.getBoolean("lock_enabled", false) +
-          " hashLen=" + (prefs.getString("pin_hash", null)?.length ?: 0))
-      }
+      Log.i("VaultRust", "[lock] onPause: armed (enabled=" + prefs.getBoolean("lock_enabled", false) +
+        " hashLen=" + (prefs.getString("pin_hash", null)?.length ?: 0) + ")")
     } catch (e: Throwable) {
       Log.w("VaultRust", "lock onPause failed: " + e.message)
     }
@@ -275,6 +271,22 @@ class MainActivity : TauriActivity() {
     super.onResume()
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
     try { nativePauseMonitor(true) } catch (_: Throwable) {}
+    // Замок (0.1.125): вернулись в приложение — если PIN установлен и сессия
+    // не разблокирована, показываем LockActivity ПОВЕРХ (same task, без
+    // FLAG_ACTIVITY_NEW_TASK — он ломал видимость «мигнувшим» замком).
+    try {
+      val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
+      val en = prefs.getBoolean("lock_enabled", false)
+      val hasHash = !prefs.getString("pin_hash", null).isNullOrEmpty()
+      val unlocked = prefs.getBoolean("unlocked", true)
+      Log.i("VaultRust", "[lock] onResume: enabled=$en hash=$hasHash unlocked=$unlocked")
+      if (en && hasHash && !unlocked) {
+        Log.i("VaultRust", "[lock] onResume → showing LockActivity over UI")
+        startActivity(android.content.Intent(this, LockActivity::class.java))
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "lock onResume failed: " + e.message)
+    }
   }
 
   override fun onDestroy() {
