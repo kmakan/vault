@@ -3777,6 +3777,14 @@ export default {
     // ── Duress-замок (t_b185e3e2) ────────────────────────────────────────
     // При старте: если замок включён — показываем LockScreen вместо UI.
     async checkDuressLock() {
+      // Android (0.1.117): замок переехал на НАТИВНЫЙ LockActivity (Kotlin,
+      // паттерн банковских приложений: onPause→замок). JS-замок здесь больше
+      // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
+      if (/android/i.test(navigator.userAgent)) {
+        this.duressLocked = false;
+        this.duressDiag = 'native lock (LockActivity)';
+        return;
+      }
       try {
         const cfg = await invoke('duress_get_config');
         const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);

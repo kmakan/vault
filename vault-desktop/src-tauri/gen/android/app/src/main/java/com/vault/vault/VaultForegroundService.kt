@@ -187,6 +187,50 @@ class VaultForegroundService : Service() {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
 
+        // ── Замок (0.1.117): паттерн банковских приложений ─────────────────
+        // Хэш PIN хранится в SharedPreferences (дублируется Rust при сохранении
+        // конфига). LockActivity сверяет код через nativeVerifyPin (Rust PBKDF2).
+        // markUnlocked сбрасывает флаг — MainActivity не запускает замок повторно.
+        @JvmStatic
+        fun verifyPinHash(context: android.content.Context, code: String): Boolean {
+            val prefs = context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+            val hash = prefs.getString("pin_hash", null) ?: return false
+            return try {
+                nativeVerifyPin(code, hash)
+            } catch (e: Throwable) {
+                android.util.Log.e("VaultRust", "nativeVerifyPin: " + e.message)
+                false
+            }
+        }
+
+        @JvmStatic
+        fun markUnlocked(context: android.content.Context) {
+            context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("unlocked", true).apply()
+        }
+
+        @JvmStatic
+        fun shouldLock(context: android.content.Context): Boolean {
+            val prefs = context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+            val enabled = prefs.getBoolean("lock_enabled", false)
+            val hasHash = !prefs.getString("pin_hash", null).isNullOrEmpty()
+            val unlocked = prefs.getBoolean("unlocked", true)
+            return enabled && hasHash && !unlocked
+        }
+
+        /// Дублирование конфига замка в prefs (вызывается Rust'ом при сохранении).
+        @JvmStatic
+        fun syncLockPrefs(context: android.content.Context, enabled: String, pinHash: String) {
+            context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("lock_enabled", enabled == "1")
+                .putString("pin_hash", pinHash)
+                .commit()
+        }
+
+        /// Rust (JNI): PBKDF2-проверка кода против stored hash.
+        private external fun nativeVerifyPin(code: String, hash: String): Boolean
+
         // Открыть URL системным браузером (duress/update, 0.1.115): вызывается
         // из Rust android_open_url через тот же JNI-мост, что showMessage.
         // Работает и из activity-, и из сервис-процесса (context может быть

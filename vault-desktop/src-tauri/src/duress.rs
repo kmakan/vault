@@ -151,7 +151,16 @@ pub fn save_config(cfg: &DuressConfig) -> Result<(), String> {
         "duress-config",
         &serde_json::to_string(cfg).map_err(|e| e.to_string())?,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    // Android (0.1.117): дублируем замок в SharedPreferences — Kotlin-замок
+    // (LockActivity) читает prefs, а не БД: единый источник конфига для
+    // нативного экрана блокировки.
+    #[cfg(target_os = "android")]
+    {
+        let enabled = cfg.lock_enabled && !cfg.lock_hash.is_empty();
+        sync_prefs_android(enabled, &cfg.lock_hash);
+    }
+    Ok(())
 }
 
 /// Стирание ВСЕХ локальных данных (panic-PIN). Порядок важен: сначала
@@ -166,4 +175,70 @@ pub fn wipe_all_data() -> Result<(), String> {
     // 4. Локальная БД: чаты/история/тумбы/кэши/курсоры/kv
     let s = crate::storage::sqlite::Storage::open(None).map_err(|e| e.to_string())?;
     s.wipe_user_data().map_err(|e| e.to_string())
+}
+
+// ── Android-мост замка (0.1.117): PBKDF2-проверка для LockActivity ─────────
+// Вызывается из Kotlin (external fun nativeVerifyPin). Тот же verify_secret,
+// что у JS-замка: один формат хэша —salt:hash hex.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeVerifyPin(
+    mut env: jni::JNIEnv,
+    _service: jni::objects::JObject,
+    code: jni::objects::JString,
+    hash: jni::objects::JString,
+) -> jni::sys::jboolean {
+    use jni::objects::{JObject, JValue};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<bool, String> {
+        let code: String = env
+            .get_string((&code as &JObject).cast())
+            .map_err(|e| format!("code: {e}"))?
+            .into();
+        let hash: String = env
+            .get_string((&hash as &JObject).cast())
+            .map_err(|e| format!("hash: {e}"))?
+            .into();
+        Ok(verify_secret(&code, &hash))
+    }));
+    let ok = matches!(r, Ok(Ok(true)));
+    if r.is_err() {
+        let _ = env.exception_clear();
+    }
+    ok as jni::sys::jboolean
+}
+
+/// Записать lock_enabled/pin_hash в Android SharedPreferences (дубликат
+/// конфига для Kotlin-замка). Вызывается из duress_save_config на Android.
+#[cfg(target_os = "android")]
+pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
+    use jni::objects::JValue;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let _ = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let jenabled = env.new_string(if enabled { "1" } else { "0" }).map_err(|e| e.to_string())?;
+        let jhash = env.new_string(pin_hash).map_err(|e| e.to_string())?;
+        let call = env.call_static_method(
+            &cls,
+            "syncLockPrefs",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&activity).into(), (&jenabled).into(), (&jhash).into()],
+        );
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("syncLockPrefs: {err}"));
+        }
+        Ok(())
+    }));
 }

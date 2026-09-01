@@ -164,6 +164,19 @@ class MainActivity : TauriActivity() {
     // стартует уже с paused=true в activity-процессе (нет дублей с JS).
     try { nativePauseMonitor(true) } catch (_: Throwable) {}
 
+    // Замок при холодном старте: если PIN установлен и сессия не разблокирована —
+    // сразу LockActivity (например, система убила процесс; юзер снова открыл).
+    try {
+      val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
+      if (prefs.getBoolean("lock_enabled", false) &&
+          !prefs.getString("pin_hash", null).isNullOrEmpty() &&
+          !prefs.getBoolean("unlocked", true)) {
+        startActivity(android.content.Intent(this, LockActivity::class.java))
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "lock onCreate failed: " + e.message)
+    }
+
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
     try {
       val svc = Intent(this, VaultForegroundService::class.java)
@@ -217,6 +230,19 @@ class MainActivity : TauriActivity() {
 
   override fun onPause() {
     super.onPause()
+    // Замок (0.1.117): при уходе из приложения — сброс «разблокирован» и показ
+    // LockActivity при следующем возврате (паттерн банковских приложений).
+    try {
+      val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
+      prefs.edit().putBoolean("unlocked", false).apply()
+      if (prefs.getBoolean("lock_enabled", false) &&
+          !prefs.getString("pin_hash", null).isNullOrEmpty()) {
+        startActivity(android.content.Intent(this, LockActivity::class.java)
+          .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "lock onPause failed: " + e.message)
+    }
     // WryActivity.onPause вызывает mWebView.onPause(), что ставит JS на паузу.
     // Сразу возвращаем WebView в resumed-состояние: JS-цикл IMAP IDLE продолжает
     // работать в фоне, входящие call_request доходят без разворачивания приложения.
