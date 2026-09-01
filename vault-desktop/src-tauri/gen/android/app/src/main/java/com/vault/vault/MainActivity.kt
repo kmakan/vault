@@ -168,9 +168,12 @@ class MainActivity : TauriActivity() {
     // сразу LockActivity (например, система убила процесс; юзер снова открыл).
     try {
       val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
-      if (prefs.getBoolean("lock_enabled", false) &&
-          !prefs.getString("pin_hash", null).isNullOrEmpty() &&
-          !prefs.getBoolean("unlocked", true)) {
+      val en = prefs.getBoolean("lock_enabled", false)
+      val hasHash = !prefs.getString("pin_hash", null).isNullOrEmpty()
+      val unlocked = prefs.getBoolean("unlocked", true)
+      Log.i("VaultRust", "[lock] cold-start check: enabled=$en hash=$hasHash unlocked=$unlocked")
+      if (en && hasHash && !unlocked) {
+        Log.i("VaultRust", "[lock] cold-start → starting LockActivity")
         startActivity(android.content.Intent(this, LockActivity::class.java))
       }
     } catch (e: Throwable) {

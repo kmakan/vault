@@ -3787,10 +3787,14 @@ export default {
         this.duressLocked = false;
         // Диагностика prefs нативного замка: enabled/hashLen/unlocked.
         // Если после «Сохранить» enabled=false — prefs не пишутся (JNI-мост).
+        console.log('[duress] android branch: reading native prefs…');
         this.duressDiag = 'native: читаем prefs…';
         try {
-          this.duressDiag = 'native lock: ' + await invoke('android_duress_prefs_debug');
+          const dbg = await invoke('android_duress_prefs_debug');
+          console.log('[duress] android prefs debug:', dbg);
+          this.duressDiag = 'native lock: ' + dbg;
         } catch (e) {
+          console.warn('[duress] android prefs debug FAILED:', e);
           this.duressDiag = 'native lock: prefs debug err ' + (e && e.message || e);
         }
         return;

@@ -16,6 +16,7 @@ import android.widget.TextView
 class LockActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    android.util.Log.i("VaultRust", "[lock] LockActivity onCreate — lock shown")
 
     val root = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -61,12 +62,14 @@ class LockActivity : Activity() {
     fun tryUnlock() {
       val code = pin.text.toString()
       if (code.isEmpty()) return
+      android.util.Log.i("VaultRust", "[lock] tryUnlock: verifying code (len=" + code.length + ")")
       val ok = try {
         VaultForegroundService.verifyPinHash(this@LockActivity, code)
       } catch (e: Throwable) {
         android.util.Log.e("VaultRust", "verifyPin failed: " + e.message)
         false
       }
+      android.util.Log.i("VaultRust", "[lock] verifyPin result: " + ok)
       if (ok) {
         VaultForegroundService.markUnlocked(this@LockActivity)
         finish()
