@@ -182,7 +182,7 @@ pub fn wipe_all_data() -> Result<(), String> {
 // что у JS-замка: один формат хэша —salt:hash hex.
 #[cfg(target_os = "android")]
 #[no_mangle]
-pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeVerifyPin(
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Companion_nativeVerifyPin(
     mut env: jni::JNIEnv,
     _service: jni::objects::JObject,
     code: jni::objects::JString,
