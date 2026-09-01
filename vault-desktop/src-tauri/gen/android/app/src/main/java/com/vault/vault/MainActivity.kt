@@ -172,10 +172,9 @@ class MainActivity : TauriActivity() {
       val hasHash = !prefs.getString("pin_hash", null).isNullOrEmpty()
       val unlocked = prefs.getBoolean("unlocked", true)
       Log.i("VaultRust", "[lock] cold-start check: enabled=$en hash=$hasHash unlocked=$unlocked")
-      if (en && hasHash && !unlocked) {
-        Log.i("VaultRust", "[lock] cold-start → starting LockActivity")
-        startActivity(android.content.Intent(this, LockActivity::class.java))
-      }
+      // 0.1.127: показ замка ТОЛЬКО в onResume (единственная точка) — здесь
+      // ничего не стартуем: onCreate→onResume всё равно покажет замок, а
+      // два LockActivity в стеке требовали двойного ввода кода.
     } catch (e: Throwable) {
       Log.w("VaultRust", "lock onCreate failed: " + e.message)
     }
