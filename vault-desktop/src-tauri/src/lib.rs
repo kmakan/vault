@@ -1155,10 +1155,11 @@ fn android_duress_prefs_debug() -> Result<String, String> {
             .map_err(|e| { let _ = env.exception_clear(); format!("lockPrefsDebug: {e}") })?
             .l()
             .map_err(|e| format!("cast: {e}"))?;
-        let s: String = env
-            .get_string(&jni::objects::JString::from_raw(jstr.as_raw()))
-            .map_err(|e| format!("get_string: {e}"))?
-            .into();
+        let s: String = unsafe {
+            env.get_string(&jni::objects::JString::from_raw(jstr.as_raw()))
+                .map_err(|e| format!("get_string: {e}"))?
+                .into()
+        };
         Ok(s)
     }));
     match r {
