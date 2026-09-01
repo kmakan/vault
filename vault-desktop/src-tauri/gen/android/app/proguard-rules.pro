@@ -43,3 +43,17 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# Duress-замок + openUrl (01.09, 0.1.123): ВСЕ статик-методы companion FGS,
+# вызываемые из Rust через JNI. R8 без этих правил переименовал их в a/b/c/d —
+# NoSuchMethodError «Java exception was thrown» на lockPrefsDebug/syncLockPrefs/
+# openUrlCompat (замок не армился, кнопка «Обновить» не открывала браузер).
+-keepclassmembers class com.vault.vault.VaultForegroundService$Companion {
+    public static boolean verifyPinHash(android.content.Context, java.lang.String);
+    public static void markUnlocked(android.content.Context);
+    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String);
+    public static java.lang.String lockPrefsDebug(android.content.Context);
+    public static void openUrlCompat(android.content.Context, java.lang.String);
+}
+-keep class com.vault.vault.VaultForegroundService$Companion { *; }
+-keep class com.vault.vault.LockActivity { *; }
