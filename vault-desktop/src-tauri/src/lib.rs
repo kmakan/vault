@@ -1126,6 +1126,54 @@ fn android_open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+// Диагностика замка на Android (0.1.121): состояние SharedPreferences, которые
+// читает нативный LockActivity. Возвращает "enabled=…, hashLen=…" — видно на
+// экране настроек без adb (JS не имеет доступа к prefs напрямую).
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_duress_prefs_debug() -> Result<String, String> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<String, String> {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let jstr = env
+            .call_static_method(
+                &cls,
+                "lockPrefsDebug",
+                "()Ljava/lang/String;",
+                &[],
+            )
+            .map_err(|e| { let _ = env.exception_clear(); format!("lockPrefsDebug: {e}") })?
+            .l()
+            .map_err(|e| format!("cast: {e}"))?;
+        let s: String = env
+            .get_string(&jni::objects::JString::from_raw(jstr.as_raw()))
+            .map_err(|e| format!("get_string: {e}"))?
+            .into();
+        Ok(s)
+    }));
+    match r {
+        Ok(Ok(s)) => Ok(s),
+        Ok(Err(e)) => Ok(format!("prefs err: {e}")),
+        Err(_) => Ok("prefs panic".into()),
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn android_duress_prefs_debug() -> Result<String, String> {
+    Ok("desktop (no prefs)".into())
+}
+
 // Диагностика БД (0.1.116): фактический путь vault.db на устройстве.
 #[tauri::command]
 fn db_path_debug() -> Result<String, String> {
@@ -1396,6 +1444,7 @@ pub fn run() {
             groups_rename_member,
             android_open_url,
             db_path_debug,
+            android_duress_prefs_debug,
             duress_get_config,
             duress_hash_secret,
             duress_verify,

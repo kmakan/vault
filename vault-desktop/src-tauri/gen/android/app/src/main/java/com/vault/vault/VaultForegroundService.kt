@@ -228,6 +228,17 @@ class VaultForegroundService : Service() {
                 .commit()
         }
 
+        /// Диагностика (0.1.121): состояние prefs для экрана настроек (Rust
+        /// вызывает через JNI; JS напрямую prefs не видит).
+        @JvmStatic
+        fun lockPrefsDebug(context: android.content.Context): String {
+            val prefs = context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+            val hash = prefs.getString("pin_hash", null)
+            return "enabled=" + prefs.getBoolean("lock_enabled", false) +
+                ", hashLen=" + (hash?.length ?: 0) +
+                ", unlocked=" + prefs.getBoolean("unlocked", true)
+        }
+
         /// Rust (JNI): PBKDF2-проверка кода против stored hash.
         private external fun nativeVerifyPin(code: String, hash: String): Boolean
 

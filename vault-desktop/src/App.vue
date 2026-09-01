@@ -3785,7 +3785,14 @@ export default {
       // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
       if (/android/i.test(navigator.userAgent)) {
         this.duressLocked = false;
-        this.duressDiag = 'native lock (LockActivity)';
+        // Диагностика prefs нативного замка: enabled/hashLen/unlocked.
+        // Если после «Сохранить» enabled=false — prefs не пишутся (JNI-мост).
+        this.duressDiag = 'native: читаем prefs…';
+        try {
+          this.duressDiag = 'native lock: ' + await invoke('android_duress_prefs_debug');
+        } catch (e) {
+          this.duressDiag = 'native lock: prefs debug err ' + (e && e.message || e);
+        }
         return;
       }
       try {

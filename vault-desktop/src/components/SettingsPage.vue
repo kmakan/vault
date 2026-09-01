@@ -464,6 +464,14 @@ export default {
         try {
           this.$root.duressDiag = `enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}, locked=${verify && verify.lock_enabled && !!verify.lock_hash}`;
         } catch (_) {}
+        // Android: покажем и prefs нативного LockActivity (enabled/hashLen) —
+        // если они не пишутся, замок не сработает; это увидно сразу.
+        if (/android/i.test(navigator.userAgent)) {
+          try {
+            const prefsDbg = await invoke('android_duress_prefs_debug');
+            this.$root.duressDiag = 'native: ' + prefsDbg;
+          } catch (_) {}
+        }
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
       } catch (e) {
