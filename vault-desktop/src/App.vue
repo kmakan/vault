@@ -920,6 +920,7 @@ const APP_SITE_URL = '';
 export default {
   name: 'ChatApp',
   components: {
+    LockScreen,
     SettingsPage,
     EmailSettings,
     KeyManager,
