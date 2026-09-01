@@ -234,11 +234,19 @@ class MainActivity : TauriActivity() {
     // LockActivity при следующем возврате (паттерн банковских приложений).
     try {
       val prefs = getSharedPreferences("vault_duress", MODE_PRIVATE)
-      prefs.edit().putBoolean("unlocked", false).apply()
+      prefs.edit().putBoolean("unlocked", false)
+        .putLong("last_pause_ms", System.currentTimeMillis())
+        .putBoolean("last_pause_started_lock", false)
+        .apply()
       if (prefs.getBoolean("lock_enabled", false) &&
           !prefs.getString("pin_hash", null).isNullOrEmpty()) {
+        prefs.edit().putBoolean("last_pause_started_lock", true).apply()
+        Log.i("VaultRust", "[lock] onPause → starting LockActivity")
         startActivity(android.content.Intent(this, LockActivity::class.java)
           .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+      } else {
+        Log.i("VaultRust", "[lock] onPause: enabled=" + prefs.getBoolean("lock_enabled", false) +
+          " hashLen=" + (prefs.getString("pin_hash", null)?.length ?: 0))
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "lock onPause failed: " + e.message)

@@ -1149,10 +1149,14 @@ fn android_duress_prefs_debug() -> Result<String, String> {
             .call_static_method(
                 &cls,
                 "lockPrefsDebug",
-                "()Ljava/lang/String;",
-                &[],
+                "(Landroid/content/Context;)Ljava/lang/String;",
+                &[(&activity).into()],
             )
-            .map_err(|e| { let _ = env.exception_clear(); format!("lockPrefsDebug: {e}") })?
+            .map_err(|e| {
+                let desc = env.exception_describe().unwrap_or_default();
+                let _ = env.exception_clear();
+                format!("lockPrefsDebug: {e} | {desc}")
+            })?
             .l()
             .map_err(|e| format!("cast: {e}"))?;
         let s: String = unsafe {
