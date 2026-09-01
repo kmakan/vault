@@ -55,5 +55,19 @@
     public static java.lang.String lockPrefsDebug(android.content.Context);
     public static void openUrlCompat(android.content.Context, java.lang.String);
 }
+# 0.1.129: R8 вырезает генерированные @JvmStatic-делегаты на ВНЕШНЕМ классе
+# (вызовы из Rust идут как static на VaultForegroundService!) — NoSuchMethodError
+# «no static method» в release. Держим СТАТИКИ на внешнем классе явно:
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static boolean verifyPinHash(android.content.Context, java.lang.String);
+    public static void markUnlocked(android.content.Context);
+    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String);
+    public static java.lang.String lockPrefsDebug(android.content.Context);
+    public static void openUrlCompat(android.content.Context, java.lang.String);
+    public static void showMessage(android.content.Context, java.lang.String, java.lang.String);
+    public static void showIncomingCall(android.content.Context, java.lang.String);
+    public static void showIncomingCall(android.content.Context, java.lang.String, java.lang.String, java.lang.String);
+    public static void dismissIncomingCall(android.content.Context);
+}
 -keep class com.vault.vault.VaultForegroundService$Companion { *; }
 -keep class com.vault.vault.LockActivity { *; }
