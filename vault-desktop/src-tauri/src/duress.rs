@@ -188,16 +188,15 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeVerif
     code: jni::objects::JString,
     hash: jni::objects::JString,
 ) -> jni::sys::jboolean {
-    use jni::objects::{JObject, JValue};
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<bool, String> {
         let code: String = env
-            .get_string((&code as &JObject).cast())
+            .get_string(&code)
             .map_err(|e| format!("code: {e}"))?
             .into();
         let hash: String = env
-            .get_string((&hash as &JObject).cast())
+            .get_string(&hash)
             .map_err(|e| format!("hash: {e}"))?
             .into();
         Ok(verify_secret(&code, &hash))
