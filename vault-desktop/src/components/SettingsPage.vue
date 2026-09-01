@@ -460,6 +460,10 @@ export default {
           `\n[diag] перечитано: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}` +
           `\nЕсли «перечитано» совпадает с «записано» — сохранение работает; перезапустите приложение.`);
         this.diagText = `после сохранения: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}`;
+        // Живая плашка App: обновляем сразу, не дожидаясь перезапуска
+        try {
+          this.$root.duressDiag = `enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}, locked=${verify && verify.lock_enabled && !!verify.lock_hash}`;
+        } catch (_) {}
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
       } catch (e) {
