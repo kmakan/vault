@@ -1153,9 +1153,9 @@ fn android_duress_prefs_debug() -> Result<String, String> {
                 &[(&activity).into()],
             )
             .map_err(|e| {
-                let desc = env.exception_describe().unwrap_or_default();
+                let _ = env.exception_describe();
                 let _ = env.exception_clear();
-                format!("lockPrefsDebug: {e} | {desc}")
+                format!("lockPrefsDebug: {e}")
             })?
             .l()
             .map_err(|e| format!("cast: {e}"))?;
