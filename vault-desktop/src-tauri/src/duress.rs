@@ -214,7 +214,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeVerif
 pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
     use jni::objects::JValue;
     use std::panic::{catch_unwind, AssertUnwindSafe};
-    let _ = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         let ctx = ndk_context::android_context();
         let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
             .map_err(|e| format!("vm: {e}"))?;
@@ -240,4 +240,9 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
         }
         Ok(())
     }));
+    match r {
+        Ok(Ok(())) => log::info!("[duress] sync_prefs_android: OK (enabled={enabled})"),
+        Ok(Err(e)) => log::error!("[duress] sync_prefs_android FAILED: {e}"),
+        Err(_) => log::error!("[duress] sync_prefs_android PANICKED"),
+    }
 }

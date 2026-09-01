@@ -1538,6 +1538,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
+                    // Duress-замок (0.1.118): окно уходит в трей, процесс живёт.
+                    // Вебвью продолжает висеть «visible» — visibilitychange не
+                    // сработает при возврате, и relock-флаг разблокировки не
+                    // сбрасывался: замок не показывался при возврате из трея.
+                    // Сигналим фронту ДО скрытия: фронт сбросит флаг сессии и
+                    // поднимет LockScreen заранее — при показе окна замок уже
+                    // на экране (паттерн банковских приложений).
+                    use tauri::Emitter;
+                    let _ = window.emit("vault://window-hidden", ());
                     window.hide().unwrap();
                     api.prevent_close();
                 }

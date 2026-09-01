@@ -7,6 +7,8 @@
       @duress="onLockDuress"
       @panic="onLockPanic"
     />
+    <!-- Врем. диагностика duress-замка: видна всегда, пока фикс не подтверждён -->
+    <div v-if="duressDiag" style="position:fixed;left:8px;bottom:6px;z-index:10000;font-size:11px;color:#f59e0b;pointer-events:none;background:rgba(11,15,23,.7);padding:2px 8px;border-radius:6px">[duress] {{ duressDiag }}</div>
     <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
     <div v-if="!isLoggedIn && restoringSession" class="login-screen">
       <div class="login-box">
@@ -3816,9 +3818,34 @@ export default {
           } catch (e) { /* ignore */ }
         };
         document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') relock();
+          // Уход из видимости (сворачивание, скрытие в трей, переключение
+          // окна) = конец «доверенного периода»: флаг сессии снимаем, чтобы
+          // relock при возврате ПОКАЗАЛ замок. Банковский паттерн: замок
+          // должен появляться после КАЖДОГО ухода, а не только после смерти
+          // процесса (иначе минимизация не блокирует).
+          if (document.visibilityState === 'hidden') {
+            this.duressUnlockedThisSession = false;
+          } else {
+            relock();
+          }
         });
         window.addEventListener('focus', relock);
+        // Desktop close-to-tray (0.1.118): Rust эмитит событие ПЕРЕД скрытием
+        // окна в трей. Здесь сбрасываем флаг «разблокирован в этой сессии» и
+        // сразу поднимаем замок: при возврате из трея LockScreen уже на экране
+        // (WebView скрытого окна может не слать visibilitychange).
+        (async () => {
+          const { listen } = await import('@tauri-apps/api/event');
+          await listen('vault://window-hidden', () => {
+            this.duressUnlockedThisSession = false;
+            invoke('duress_get_config').then((cfg) => {
+              if (cfg && cfg.lock_enabled && cfg.lock_hash) {
+                this.duressLocked = true;
+                console.log('[duress] tray-hide → armed lock for next show');
+              }
+            }).catch(() => {});
+          });
+        })();
       }
       // Повтор через секунду: restoreSession/монтирование UI может перерисовать
       // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
@@ -6258,6 +6285,7 @@ export default {
     duressLocked: false,
     duressPending: false,
     duressUnlockedThisSession: false,
+    duressDiag: '',
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},
