@@ -127,6 +127,9 @@ pub struct DuressConfig {
     pub sos_recipients: Vec<String>,
     #[serde(default)]
     pub sos_text: String,
+    /// Добавлять координаты в SOS (флаг из настроек).
+    #[serde(default)]
+    pub sos_geo: bool,
 }
 
 pub fn load_config() -> DuressConfig {

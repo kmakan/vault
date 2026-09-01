@@ -1126,6 +1126,13 @@ fn android_open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+// Диагностика БД (0.1.116): фактический путь vault.db на устройстве.
+#[tauri::command]
+fn db_path_debug() -> Result<String, String> {
+    let home = dirs::data_local_dir().ok_or("no data dir")?;
+    Ok(home.join("com.vault.vault").join("vault.db").to_string_lossy().to_string())
+}
+
 // ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
 #[tauri::command]
 fn duress_get_config() -> Result<duress::DuressConfig, String> {
@@ -1388,6 +1395,7 @@ pub fn run() {
             groups_add_member,
             groups_rename_member,
             android_open_url,
+            db_path_debug,
             duress_get_config,
             duress_hash_secret,
             duress_verify,

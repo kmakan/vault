@@ -375,10 +375,12 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
-      // Диагностика (врем.): что реально лежит в конфиге
+      // Диагностика (врем.): что реально лежит в конфиге + путь БД
       try {
         const dc = await duressApi.getConfig();
-        this.diagText = `enabled=${dc && dc.lock_enabled}, hashLen=${(dc && dc.lock_hash || '').length}`;
+        let dbp = '';
+        try { dbp = await invoke('db_path_debug'); } catch (_) {}
+        this.diagText = `enabled=${dc && dc.lock_enabled}, hashLen=${(dc && dc.lock_hash || '').length}, db=${dbp}`;
       } catch (e) {
         this.diagText = 'get error: ' + (e && e.message || e);
       }
@@ -455,7 +457,9 @@ export default {
           ', hashLen=', (verify && verify.lock_hash || '').length);
         alert((this.t('duress_saved') || 'Аварийная защита сохранена') +
           `\n[diag] записано: enabled=${cfg.lock_enabled}, hashLen=${(cfg.lock_hash||'').length}` +
-          `\n[diag] перечитано: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}`);
+          `\n[diag] перечитано: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}` +
+          `\nЕсли «перечитано» совпадает с «записано» — сохранение работает; перезапустите приложение.`);
+        this.diagText = `после сохранения: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}`;
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
       } catch (e) {
