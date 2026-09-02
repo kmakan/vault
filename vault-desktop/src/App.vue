@@ -275,6 +275,13 @@
                 </button>
               </div>
             </div>
+            <!-- Избранное (02.09): показать только помеченные сообщения чата.
+                 Активный режим — янтарная звезда (стиль исчезающих сообщений). -->
+            <button v-if="activeChat && activeChat !== '__notes__'" class="chat-action-btn" :class="{ 'starred-on': showStarredOnly }"
+              :title="(t('chat_starred') || 'Избранное') + (showStarredOnly ? ' — показать все сообщения' : '')"
+              @click="showStarredOnly = !showStarredOnly">
+              <Icon name="star" :size="17" :color="showStarredOnly ? '#f59e0b' : '#8b949e'" />
+            </button>
             <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
             <div class="export-dropdown" v-if="activeChat">
               <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
@@ -303,7 +310,11 @@
         </div>
 
         <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
-          <div v-if="activeChat && messages.length === 0" class="messages-empty">
+          <div v-if="activeChat && showStarredOnly && filteredMessages.length === 0" class="messages-empty">
+            <div class="empty-icon">⭐</div>
+            <div class="empty-text">{{ t('starred_empty') || 'Нет избранных сообщений' }}</div>
+          </div>
+          <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
             <div class="empty-icon">🔒</div>
             <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое 🔒' }}</div>
           </div>
@@ -394,6 +405,9 @@
               >{{ r }}</span>
             </div>
             <div class="message-footer">
+              <!-- Пометка «Избранное» (02.09): звёздочка рядом с временем,
+                   как в WhatsApp — видна и в обычном режиме чата. -->
+              <Icon v-if="isStarred(msg)" name="star" :size="11" cls="msg-starred-icon" />
               <div class="message-time">{{ msg.time }}</div>
               <!-- Статус — маленький цветной кружок (без текста, чтобы не
                    путаться с языками): красный=отправка, жёлтый=отправлено,
@@ -429,6 +443,9 @@
             <button v-if="!messageMenu.msg.callEvent" @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
             <button v-if="!messageMenu.msg.callEvent" @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
             <button v-if="!messageMenu.msg.callEvent" @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
+            <!-- Избранное (02.09, паритет WhatsApp): пометить/снять у любого
+                 сообщения (своего, чужого), кроме пилюль звонков. -->
+            <button v-if="!messageMenu.msg.callEvent" @click="toggleStar(messageMenu.msg); messageMenu = null"><Icon name="star" :size="14" /> {{ isStarred(messageMenu.msg) ? (t('unstar_message') || 'Убрать из избранного') : (t('star_message') || 'В избранное') }}</button>
             <button v-if="!messageMenu.msg.callEvent && activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
@@ -963,6 +980,13 @@ export default {
       showArchived: false,
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
       chatMenu: { show: false, target: null },
+      // Избранное (02.09, паритет WhatsApp): помеченные сообщения чата.
+      // chatKey → массив msg.id; персист в sqlite kv_store ('starred:<chatKey>').
+      // Локально, как «Удалить у меня»: собеседнику не видно, по почте не
+      // синхронизируется. showStarredOnly — режим «показать только избранные»
+      // в шапке открытого чата (сам чат при открытии показывается как обычно).
+      starredMap: {},
+      showStarredOnly: false,
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
       processedUnreadIds: new Set(),
@@ -1261,11 +1285,27 @@ export default {
       return this.nameOf(c.peer);
     },
     filteredMessages() {
-      if (!this.chatSearchQuery) return this.messages;
+      let list = this.messages;
+      // Режим «Избранное» (02.09): только помеченные сообщения текущего чата.
+      if (this.showStarredOnly) {
+        const set = this.starredSet;
+        list = list.filter(m => set.has(m.id));
+      }
+      if (!this.chatSearchQuery) return list;
       const q = this.chatSearchQuery.toLowerCase();
-      return this.messages.filter(m =>
+      return list.filter(m =>
         m.content && m.content.toLowerCase().includes(q)
       );
+    },
+    starredSet() {
+      const key = this.currentChatKey;
+      return new Set((key && this.starredMap[key]) || []);
+    },
+    currentChatKey() {
+      if (!this.activeChat) return '';
+      return this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
     },
     filteredAddContacts() {
       const q = (this.addMemberQuery || '').toLowerCase();
@@ -2017,6 +2057,8 @@ export default {
       this.loadSeq++;
       this.activeChat = email;
       this.activeChatType = 'chat';
+      this.showStarredOnly = false; // избранное — режим, сбрасывается при смене чата
+      this.loadStarredFor(email);
       // TTL исчезающих для 1-на-1 — из kv (как selectGroup для групп): иначе
       // currentEphemeralTtl остаётся от ПРЕДЫДУЩЕГО чата, иконка замка врёт,
       // а старый fallback применял чужой TTL к сообщениям (баг 25.08).
@@ -2381,6 +2423,8 @@ export default {
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
       this.activeChatType = 'group';
+      this.showStarredOnly = false; // избранное — режим, сбрасывается при смене чата
+      this.loadStarredFor('group:' + group.id);
       this.showEphemeralMenu = false;
       this.currentEphemeralTtl = await this.ephemeralTtlOf('group:' + group.id);
       this.currentGroup = group;
@@ -2729,6 +2773,36 @@ export default {
       // chat-cache тоже обновляем: loadChatCache не фильтрует tombstones,
       // иначе при мгновенном открытии чата сообщение мигало бы из кэша.
       this.saveChatCache(chatKey, this.messages);
+    },
+    // ── Избранное (02.09, паритет WhatsApp) ────────────────────────────────
+    // Пометка сообщений только локально (как «Удалить у меня»): собеседнику
+    // не видно, по почте не синхронизируется. Персист в sqlite kv_store под
+    // ключом 'starred:<chatKey>' — переживает перезапуск и рескан из писем,
+    // т.к. фильтр идёт по msg.id при рендере (звёздочка + режим избранного).
+    isStarred(msg) {
+      return !!(msg && msg.id && this.starredSet.has(msg.id));
+    },
+    async toggleStar(msg) {
+      if (!msg || !msg.id) return;
+      const key = this.currentChatKey;
+      if (!key || key === '__notes__') return;
+      const list = new Set(this.starredMap[key] || []);
+      if (list.has(msg.id)) list.delete(msg.id);
+      else list.add(msg.id);
+      // Реактивность: новый объект массива, иначе Vue не увидит изменение.
+      this.starredMap = { ...this.starredMap, [key]: Array.from(list) };
+      try {
+        if (list.size) await db.kvSet(this.email || 'anon', 'starred:' + key, JSON.stringify(Array.from(list)));
+        else await db.kvDelete(this.email || 'anon', 'starred:' + key);
+      } catch (e) { /* kv недоступен — живёт в памяти до перезапуска */ }
+    },
+    async loadStarredFor(chatKey) {
+      if (!chatKey || chatKey === '__notes__') return;
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'starred:' + chatKey);
+        const arr = raw ? JSON.parse(raw) : [];
+        this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
+      } catch (e) { /* тихо */ }
     },
     // Транспорт правок (паттерн sendReactionEmail):
     // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
@@ -8957,6 +9031,18 @@ body {
 .message-time {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* Пометка «Избранное» рядом с временем сообщения (02.09) */
+.msg-starred-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+/* Активный режим «показать только избранное» в шапке чата */
+.chat-action-btn.starred-on {
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 6px;
 }
 
 .message-footer {
