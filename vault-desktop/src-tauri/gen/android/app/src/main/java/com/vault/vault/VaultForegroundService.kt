@@ -219,10 +219,11 @@ class VaultForegroundService : Service() {
         }
 
         /// Дублирование конфига замка в prefs (вызывается Rust'ом при сохранении).
+        /// bio (02.09): "1" — снимать замок по отпечатку (BiometricPrompt).
         @JvmStatic
         fun syncLockPrefs(
             context: android.content.Context, enabled: String, pinHash: String,
-            duressHash: String, panicHash: String
+            duressHash: String, panicHash: String, bio: String
         ) {
             context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
                 .edit()
@@ -230,6 +231,7 @@ class VaultForegroundService : Service() {
                 .putString("pin_hash", pinHash)
                 .putString("duress_hash", duressHash)
                 .putString("panic_hash", panicHash)
+                .putBoolean("bio_enabled", bio == "1")
                 .commit()
         }
 

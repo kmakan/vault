@@ -51,7 +51,7 @@
 -keepclassmembers class com.vault.vault.VaultForegroundService$Companion {
     public static boolean verifyPinHash(android.content.Context, java.lang.String);
     public static void markUnlocked(android.content.Context);
-    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String);
+    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
     public static java.lang.String lockPrefsDebug(android.content.Context);
     public static void openUrlCompat(android.content.Context, java.lang.String);
 }
@@ -61,7 +61,7 @@
 -keepclassmembers class com.vault.vault.VaultForegroundService {
     public static boolean verifyPinHash(android.content.Context, java.lang.String);
     public static void markUnlocked(android.content.Context);
-    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+    public static void syncLockPrefs(android.content.Context, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
     public static java.lang.String lockPrefsDebug(android.content.Context);
     public static void openUrlCompat(android.content.Context, java.lang.String);
     public static java.lang.String handleLockCode(android.content.Context, java.lang.String);

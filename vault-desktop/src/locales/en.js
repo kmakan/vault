@@ -54,6 +54,7 @@ export default {
   duress_duress: "Duress code (silently sends SOS, then opens the app)",
   duress_sos_text: "SOS message text ({coords} inserts coordinates)",
   duress_geo: "Add coordinates to SOS (requests location access)",
+  duress_bio: "Unlock with fingerprint",
   duress_save: "Save duress protection",
   duress_warn: "Remember your codes! Panic code wipes ALL data irreversibly. Duress code looks like a normal sign-in but silently alerts selected contacts.",
   duress_code_ph: "at least 4 characters",

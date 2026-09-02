@@ -130,6 +130,9 @@ pub struct DuressConfig {
     /// Добавлять координаты в SOS (флаг из настроек).
     #[serde(default)]
     pub sos_geo: bool,
+    /// Снимать замок по отпечатку (Android, BiometricPrompt). Desktop — no-op.
+    #[serde(default)]
+    pub bio_enabled: bool,
 }
 
 pub fn load_config() -> DuressConfig {
@@ -158,7 +161,7 @@ pub fn save_config(cfg: &DuressConfig) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         let enabled = cfg.lock_enabled && !cfg.lock_hash.is_empty();
-        sync_prefs_android(enabled, &cfg.lock_hash, &cfg.duress_hash, &cfg.panic_hash);
+        sync_prefs_android(enabled, &cfg.lock_hash, &cfg.duress_hash, &cfg.panic_hash, cfg.bio_enabled);
     }
     Ok(())
 }
@@ -211,7 +214,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
 /// Записать lock_enabled/pin_hash в Android SharedPreferences (дубликат
 /// конфига для Kotlin-замка). Вызывается из duress_save_config на Android.
 #[cfg(target_os = "android")]
-pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, panic_hash: &str) {
+pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, panic_hash: &str, bio: bool) {
     use jni::objects::JValue;
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
@@ -230,11 +233,12 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, pani
         let jhash = env.new_string(pin_hash).map_err(|e| e.to_string())?;
         let jduress = env.new_string(duress_hash).map_err(|e| e.to_string())?;
         let jpanic = env.new_string(panic_hash).map_err(|e| e.to_string())?;
+        let jbio = env.new_string(if bio { "1" } else { "0" }).map_err(|e| e.to_string())?;
         let call = env.call_static_method(
             &cls,
             "syncLockPrefs",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-            &[(&activity).into(), (&jenabled).into(), (&jhash).into(), (&jduress).into(), (&jpanic).into()],
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&activity).into(), (&jenabled).into(), (&jhash).into(), (&jduress).into(), (&jpanic).into(), (&jbio).into()],
         );
         if let Err(err) = call {
             let _ = env.exception_clear();

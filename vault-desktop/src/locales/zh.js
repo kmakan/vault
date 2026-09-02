@@ -54,6 +54,7 @@ export default {
   duress_duress: "胁迫代码（静默发送求救，然后打开应用）",
   duress_sos_text: "求救消息文本（{coords} 插入坐标）",
   duress_geo: "在求救中添加坐标（请求定位权限）",
+  duress_bio: "使用指纹解锁",
   duress_save: "保存紧急保护",
   duress_warn: "请记住您的代码！恐慌代码会不可逆地抹除所有数据。胁迫代码看似正常登录，但会悄悄通知所选联系人。",
   duress_code_ph: "至少4个字符",

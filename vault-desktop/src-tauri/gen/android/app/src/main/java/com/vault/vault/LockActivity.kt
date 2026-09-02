@@ -1,6 +1,5 @@
 package com.vault.vault
 
-import android.app.Activity
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -8,12 +7,19 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
 
 /// Экран блокировки (duress, 0.1.117): показывается при возврате в приложение,
 /// если PIN установлен. Паттерн банковских приложений: активность поверх всего,
 /// WebView недоступен, пока код не введён. Проверка хэша — через
 /// VaultForegroundService.verifyPinHash (Rust PBKDF2 через JNI).
-class LockActivity : Activity() {
+/// Биометрия (02.09): если bio_enabled и сканер доступен — при открытии замка
+/// сразу всплывает BiometricPrompt; отпечаток снимает ТОЛЬКО обычный замок
+/// (duress/panic — как и раньше, только вводом кода, чтобы не обходить SOS).
+class LockActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     android.util.Log.i("VaultRust", "[lock] LockActivity onCreate — lock shown")
@@ -101,10 +107,66 @@ class LockActivity : Activity() {
       } else false
     }
 
+    // Кнопка «По отпечатку» (02.09): повторный вызов промпта, если пользователь
+    // отменил системный диалог. Показывается только когда биометрия доступна.
+    val bioBtn = Button(this).apply {
+      text = "👆 По отпечатку"
+      visibility = android.view.View.GONE
+      setBackgroundColor(0xFF1F2735.toInt())
+      setTextColor(0xFFE7ECF5.toInt())
+    }
+    bioBtn.setOnClickListener { showBiometricPrompt() }
+
     root.setPadding(pad, pad, pad, pad)
-    for (v in listOf(title, sub, pin, err, btn)) root.addView(v)
+    for (v in listOf(title, sub, pin, err, btn, bioBtn)) root.addView(v)
     (btn.layoutParams as LinearLayout.LayoutParams).topMargin = pad
+    (bioBtn.layoutParams as LinearLayout.LayoutParams).topMargin = (pad / 2)
     setContentView(root)
+
+    // Автопоказ промпта при открытии замка (как в банковских приложениях).
+    val bioOn = getSharedPreferences("vault_duress", MODE_PRIVATE).getBoolean("bio_enabled", false)
+    if (bioOn && canBiometric()) {
+      bioBtn.visibility = android.view.View.VISIBLE
+      showBiometricPrompt()
+    }
+  }
+
+  private fun canBiometric(): Boolean {
+    return try {
+      BiometricManager.from(this).canAuthenticate(
+        BiometricManager.Authenticators.BIOMETRIC_STRONG
+      ) == BiometricManager.BIOMETRIC_SUCCESS
+    } catch (e: Throwable) {
+      android.util.Log.e("VaultRust", "[lock] canBiometric: " + e.message)
+      false
+    }
+  }
+
+  private fun showBiometricPrompt() {
+    try {
+      val executor = ContextCompat.getMainExecutor(this)
+      val prompt = BiometricPrompt(this, executor,
+        object : BiometricPrompt.AuthenticationCallback() {
+          override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+            android.util.Log.i("VaultRust", "[lock] biometric OK — unlocking")
+            VaultForegroundService.markUnlocked(this@LockActivity)
+            finish()
+          }
+          override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+            // Не ругаемся: код-фолбэк всегда доступен на экране замка.
+            android.util.Log.i("VaultRust", "[lock] biometric err " + errorCode + ": " + errString)
+          }
+        })
+      val info = BiometricPrompt.PromptInfo.Builder()
+        .setTitle("Vault заблокирован")
+        .setSubtitle("Приложите палец или введите код")
+        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        .setNegativeButtonText("Ввести код")
+        .build()
+      prompt.authenticate(info)
+    } catch (e: Throwable) {
+      android.util.Log.e("VaultRust", "[lock] biometric prompt failed: " + e.message)
+    }
   }
 
   // Кнопка «назад» не закрывает замок.

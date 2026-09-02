@@ -207,6 +207,13 @@
             <label class="toggle"><input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" /><span class="slider"></span></label>
             <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
           </div>
+          <!-- Биометрия (02.09): только Android — нативный BiometricPrompt
+               поверх замка LockActivity. Отпечаток снимает обычный замок;
+               duress/panic по-прежнему только вводом кода. -->
+          <div v-if="isAndroid">
+            <label class="toggle"><input type="checkbox" v-model="duressBio" /><span class="slider"></span></label>
+            <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_bio') || 'Снимать замок по отпечатку пальца' }}</span>
+          </div>
           <div>
             <div class="duress-label">{{ t('duress_recipients') || 'Кому отправлять SOS' }}</div>
             <div class="duress-contacts">
@@ -301,6 +308,8 @@ export default {
       duressDuressCode: '',
       duressSosText: '',
       duressSosGeo: false,
+      duressBio: false,
+      isAndroid: /android/i.test(navigator.userAgent),
       duressContacts: [],
       diagText: '…',
       duressRecipients: [],
@@ -370,6 +379,7 @@ export default {
         if (this.duressEnabled) {
           this.duressSosText = dcfg.sos_text || '';
           this.duressSosGeo = !!dcfg.sos_geo;
+          this.duressBio = !!dcfg.bio_enabled;
           this.duressRecipients = [...(dcfg.sos_recipients || [])];
           const all = await api.getContacts();
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
@@ -399,6 +409,7 @@ export default {
           // Включили: тянем существующий конфиг (если уже настраивали)
           this.duressSosText = cfg.sos_text || '';
           this.duressSosGeo = !!cfg.sos_geo;
+          this.duressBio = !!cfg.bio_enabled;
           this.duressRecipients = [...(cfg.sos_recipients || [])];
           const all = await api.getContacts();
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
@@ -446,6 +457,7 @@ export default {
         cfg.duress_hash = this.duressDuressCode ? await duressApi.hashSecret(this.duressDuressCode) : '';
         cfg.sos_text = this.duressSosText || '';
         cfg.sos_geo = this.duressSosGeo;
+        cfg.bio_enabled = this.isAndroid && this.duressBio;
         // Получатели SOS: пока из существующих контактов через запятую (этап 3 — UI-выбор)
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
