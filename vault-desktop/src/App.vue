@@ -232,7 +232,7 @@
                 <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
               </button>
             </template>
-            <div class="chat-header-text">
+            <div class="chat-header-text" :class="{ 'text-inline': activeChatType !== 'group' && activeChat !== '__notes__' }">
               <h3>{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
@@ -9965,6 +9965,24 @@ body {
     min-width: 0;
     max-width: 100%;
     align-items: flex-start;
+  }
+  /* 0.1.135: 1-на-1 чаты — под аватаром ОДНА строка «🔒 Имя»
+     (замок первым, имя рядом), а не две строки. Группы/заметки —
+     прежняя колонка (там статус длиннее: участники/пояснение). */
+  .chat-head-col .chat-header-text.text-inline {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+  .chat-head-col .chat-header-text.text-inline .chat-status {
+    order: -1;      /* замок ПЕРЕД именем */
+    flex-shrink: 0;
+  }
+  .chat-head-col .chat-header-text.text-inline h3 {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
   }
   .chat-header-text h3 {
     font-size: 14px;
