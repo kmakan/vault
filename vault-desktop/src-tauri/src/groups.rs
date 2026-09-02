@@ -48,6 +48,12 @@ pub struct GroupMember {
     pub joined_at: String,
     #[serde(default)]
     pub key_shared: bool,
+    /// Fingerprint публичного ключа участника (02.09, membership по ключу):
+    /// 128-hex id — стабилен при смене почты. Пустой у старых групп —
+    /// лениво заполняется фронтендом при первом fingerprint-матче.
+    /// Инвайты старых версий его не несут — десериализация остаётся совместимой.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,7 +104,8 @@ pub fn create_group(name: &str, creator: &str) -> Result<Group> {
         email: creator.to_string(),
         role: GroupRole::Admin,
         joined_at: now.clone(),
-        key_shared: true, // creator has the key
+        key_shared: true,
+        fingerprint: String::new(), // creator has the key
     });
 
     let group = Group {
@@ -132,7 +139,8 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
             email: email.to_string(),
             role: GroupRole::Member,
             joined_at: now,
-            key_shared: false, // new member does not have the key yet
+            key_shared: false,
+            fingerprint: String::new(), // new member does not have the key yet
         });
         save_groups(&groups)?;
     } else {
@@ -189,6 +197,7 @@ pub fn import_group(
                         role: im.role.clone(),
                         joined_at: now.clone(),
                         key_shared: false,
+                        fingerprint: String::new(),
                     }),
                 }
             }
@@ -198,7 +207,8 @@ pub fn import_group(
                 email: sender.to_string(),
                 role: GroupRole::Member,
                 joined_at: now.clone(),
-                key_shared: true, // sender has the key (just invited us)
+                key_shared: true,
+                fingerprint: String::new(), // sender has the key (just invited us)
             });
         }
     };
@@ -468,12 +478,14 @@ mod tests {
                     role: GroupRole::Admin,
                     joined_at: String::new(),
                     key_shared: false,
+                    fingerprint: String::new(),
                 },
                 GroupMember {
                     email: "carol@example.com".into(),
                     role: GroupRole::Moderator,
                     joined_at: String::new(),
                     key_shared: false,
+                    fingerprint: String::new(),
                 },
             ];
             let imported = import_group(
@@ -525,6 +537,63 @@ mod tests {
             delete_group(&group.id).unwrap();
             assert!(!load_groups().unwrap().contains_key(&group.id));
             assert!(delete_group(&group.id).is_err()); // второй раз — уже нет
+        });
+    }
+
+    // ── Membership по fingerprint (02.09) ─────────────────────────────────
+
+    #[test]
+    fn test_rename_member_keeps_membership_on_email_change() {
+        // Смена почты участника: адрес мигрирует, роль и факт владения ключом
+        // группы сохраняются (главный сценарий fingerprint-membership).
+        with_tmp_groups(|| {
+            let group = create_group("g", "alice@example.com").unwrap();
+            add_member(&group.id, "bob@example.com").unwrap();
+            rename_member(&group.id, "bob@example.com", "bob@newmail.com").unwrap();
+            let g = load_groups().unwrap().get(&group.id).unwrap().clone();
+            assert!(g.members.iter().any(|m| m.email == "bob@newmail.com"));
+            assert!(!g.members.iter().any(|m| m.email == "bob@example.com"));
+            let bob = g
+                .members
+                .iter()
+                .find(|m| m.email == "bob@newmail.com")
+                .unwrap();
+            assert_eq!(bob.role, GroupRole::Member);
+            assert!(bob.key_shared); // ключ группы остался у него
+        });
+    }
+
+    #[test]
+    fn test_fingerprint_field_backfill_and_compat() {
+        // Поле fingerprint: serde default — старые groups.json (без поля)
+        // десериализуются; заполнение не затирает существующее значение.
+        with_tmp_groups(|| {
+            let group = create_group("g", "alice@example.com").unwrap();
+            // Ручная запись «старого» формата (без fingerprint) читается.
+            let raw = serde_json::json!({
+                "grp_legacy": {
+                    "id": "grp_legacy",
+                    "name": "old",
+                    "created_by": "a@x.com",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "members": [
+                        {"email": "a@x.com", "role": "Admin", "joined_at": "", "key_shared": true}
+                    ],
+                    "encrypted": true,
+                    "group_key": "aa"
+                }
+            });
+            std::fs::write(
+                std::env::var("VAULT_GROUPS_FILE").unwrap(),
+                serde_json::to_string(
+                    &serde_json::from_str::<HashMap<String, Group>>(&raw.to_string()).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let groups = load_groups().unwrap();
+            let legacy = groups.get("grp_legacy").unwrap();
+            assert!(legacy.members[0].fingerprint.is_empty()); // default = ""
         });
     }
 }

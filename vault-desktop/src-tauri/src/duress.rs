@@ -161,7 +161,13 @@ pub fn save_config(cfg: &DuressConfig) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         let enabled = cfg.lock_enabled && !cfg.lock_hash.is_empty();
-        sync_prefs_android(enabled, &cfg.lock_hash, &cfg.duress_hash, &cfg.panic_hash, cfg.bio_enabled);
+        sync_prefs_android(
+            enabled,
+            &cfg.lock_hash,
+            &cfg.duress_hash,
+            &cfg.panic_hash,
+            cfg.bio_enabled,
+        );
     }
     Ok(())
 }
@@ -214,14 +220,22 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
 /// Записать lock_enabled/pin_hash в Android SharedPreferences (дубликат
 /// конфига для Kotlin-замка). Вызывается из duress_save_config на Android.
 #[cfg(target_os = "android")]
-pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, panic_hash: &str, bio: bool) {
+pub fn sync_prefs_android(
+    enabled: bool,
+    pin_hash: &str,
+    duress_hash: &str,
+    panic_hash: &str,
+    bio: bool,
+) {
     use jni::objects::JValue;
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|e| format!("vm: {e}"))?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let cls = crate::audio::audio_android::find_app_class(
             &mut env,
@@ -229,11 +243,15 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, pani
             "com.vault.vault.VaultForegroundService",
         )
         .map_err(|e| format!("find class: {e}"))?;
-        let jenabled = env.new_string(if enabled { "1" } else { "0" }).map_err(|e| e.to_string())?;
+        let jenabled = env
+            .new_string(if enabled { "1" } else { "0" })
+            .map_err(|e| e.to_string())?;
         let jhash = env.new_string(pin_hash).map_err(|e| e.to_string())?;
         let jduress = env.new_string(duress_hash).map_err(|e| e.to_string())?;
         let jpanic = env.new_string(panic_hash).map_err(|e| e.to_string())?;
-        let jbio = env.new_string(if bio { "1" } else { "0" }).map_err(|e| e.to_string())?;
+        let jbio = env
+            .new_string(if bio { "1" } else { "0" })
+            .map_err(|e| e.to_string())?;
         let call = env.call_static_method(
             &cls,
             "syncLockPrefs",
@@ -253,18 +271,16 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, pani
     }
 }
 
-
 // ── Android: duress/panic из нативного LockActivity (0.1.130) ────────────────
 
 /// Полный вайп при panic-коде: ключи, БД сообщений, конфиг замка (в т.ч. prefs).
 #[cfg(target_os = "android")]
 #[no_mangle]
-pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Companion_nativePanicWipe() {
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Companion_nativePanicWipe(
+) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = crate::groups::delete_all_local();
-        match crate::storage::sqlite::Storage::open(None)
-            .and_then(|s| s.wipe_user_data())
-        {
+        match crate::storage::sqlite::Storage::open(None).and_then(|s| s.wipe_user_data()) {
             Ok(()) => log::info!("[duress] panic wipe: local data wiped"),
             Err(e) => log::error!("[duress] panic wipe failed: {e}"),
         }
@@ -306,12 +322,24 @@ pub fn clear_prefs_android() -> Result<(), String> {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
-        let cls = crate::audio::audio_android::find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
-            .map_err(|e| format!("find class: {e}"))?;
-        let call = env.call_static_method(&cls, "clearLockPrefs", "(Landroid/content/Context;)V", &[(&activity).into()]);
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let call = env.call_static_method(
+            &cls,
+            "clearLockPrefs",
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        );
         if let Err(err) = call {
             let _ = env.exception_clear();
             return Err(format!("clearLockPrefs: {err}"));

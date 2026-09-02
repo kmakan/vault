@@ -2429,6 +2429,10 @@ export default {
       this.activeChatType = 'group';
       this.showStarredOnly = false; // избранное — режим, сбрасывается при смене чата
       this.loadStarredFor('group:' + group.id);
+      // Ленивое заполнение fingerprint участников (02.09): старые группы без
+      // fingerprint — заполняем из peer_keys при открытии (один раз; Rust
+      // сохраняет). Нужно для membership по ключу при смене почты.
+      this.backfillGroupFingerprints(group);
       this.showEphemeralMenu = false;
       this.currentEphemeralTtl = await this.ephemeralTtlOf('group:' + group.id);
       this.currentGroup = group;
@@ -4790,9 +4794,20 @@ export default {
           } catch (e) { /* не наше письмо */ }
         }
         // Группы — ключом группы, где отправитель участник (1:1-ключ не пройдёт).
+        // MEMBERSHIP ПО FINGERPRINT (02.09): отправитель может быть участником
+        // под СТАРЫМ адресом (сменил почту). Если from не найден среди email,
+        // но pubkey конверта совпадает с peerKey одного из участников —
+        // мигрируем адрес в составе группы (groups_rename_member) и считаем
+        // участником. Без этого письмо от сменившего почту молча терялось
+        // (members.includes(from) = false → расшифровка группой не пробовалась).
         if (!chatKey) {
           for (const g of this.groups) {
-            const members = (g.members || []).map(x => String(x.email || '').toLowerCase());
+            let members = (g.members || []).map(x => String(x.email || '').toLowerCase());
+            if (!members.includes(from)) {
+              const migrated = await this.tryMigrateGroupMember(g, from);
+              if (!migrated) continue;
+              members = (g.members || []).map(x => String(x.email || '').toLowerCase());
+            }
             if (!members.includes(from)) continue;
             let gk = this.groupKeys[g.id];
             if (!gk && this.cryptoReady) {
@@ -6155,7 +6170,10 @@ export default {
     // (тот же приём, что isOut в 1-на-1 пути loadMessages).
     isOwnSender(senderId) {
       if (!senderId || !this.email) return false;
-      return String(senderId).toLowerCase().includes(this.email.toLowerCase());
+      const s = String(senderId).toLowerCase();
+      // Свои письма могли прийти и со СТАРОГО адреса (смена почты) —
+      // проверяем все свои алиасы (aliasesOf: один pubkey → все адреса).
+      return this.aliasesOf(this.email).some(a => s.includes(a));
     },
     // Нормализация сырого заголовка From («Имя <email>») до чистого email.
     // avatarOf/nameOf ищут профили по email — без этого аватар/имя
@@ -6814,6 +6832,60 @@ export default {
       const kb = this.peerKeys[emailB || ''] || this.peerKeys[String(emailB || '').toLowerCase()];
       return !!(ka && kb && ka === kb);
     },
+    // MEMBERSHIP ПО FINGERPRINT (02.09): from не числится в группе, но у нас
+    // есть его peerKey (контакт известен) и он совпадает с peerKey одного из
+    // участников → участник сменил почту. Мигрируем адрес в составе (Rust
+    // groups_rename_member правит members + created_by) и сохраняем fingerprint
+    // участника. Возвращает true, если после миграции from — участник.
+    // Атомарность: если письмо пришло до того, как мы узнали новый peerKey,
+    // матчинга не будет — но матчинг в processIncoming (setPeerKey) уже
+    // сохранил ключ к моменту поллинга.
+    async tryMigrateGroupMember(group, from) {
+      try {
+        const newKey = this.peerKeys[from] || this.peerKeys[String(from || '').toLowerCase()];
+        if (!newKey) return false;
+        const stale = (group.members || []).find(m => {
+          if (String(m.email || '').toLowerCase() === String(from).toLowerCase()) return false;
+          const mk = this.peerKeys[m.email] || this.peerKeys[String(m.email || '').toLowerCase()];
+          return mk && mk === newKey;
+        });
+        if (!stale) return false;
+        console.log('[groups] fingerprint membership match:', stale.email, '→', from, 'in', group.id);
+        await invoke('groups_rename_member', {
+          groupId: group.id, oldEmail: stale.email, newEmail: from,
+        });
+        // Локальный объект группы обновляем сразу (Rust уже записал groups.json).
+        stale.email = from;
+        stale.key_shared = true;
+        return true;
+      } catch (e) {
+        console.warn('[groups] migrate member failed:', e && e.message || e);
+        return false;
+      }
+    },
+    // Ленивое заполнение fingerprint участников группы из peer_keys (02.09).
+    // Старые groups.json без поля fingerprint: при открытии группы проставляем
+    // id участников, чей pubkey известен. Матчинг при смене почты идёт по
+    // самому pubkey (tryMigrateGroupMember); поле хранится для будущих
+    // офлайн-проверок и UX. Идемпотентен: сохраняет только если заполнилось.
+    async backfillGroupFingerprints(group) {
+      try {
+        let touched = false;
+        for (const m of (group.members || [])) {
+          if (m.fingerprint) continue;
+          const k = this.peerKeys[m.email] || this.peerKeys[String(m.email || '').toLowerCase()];
+          if (!k) continue;
+          m.fingerprint = k;
+          touched = true;
+        }
+        if (!touched) return;
+        await invoke('groups_save_member_fingerprints', {
+          groupId: group.id,
+          members: (group.members || []).map(m => ({ email: m.email, fingerprint: m.fingerprint || '' })),
+        });
+        console.log('[groups] fingerprints backfilled:', group.id);
+      } catch (e) { /* тихо: поле некритично, матчинг идёт по peer_keys */ }
+    },
     async inviteSelectedMembers() {
       // Попап закрываем СРАЗУ — отправка идёт в фоне, итог сообщаем alert'ом.
       // Раньше попап висел 30-60 с (медленный SMTP) и было непонятно,
@@ -7167,6 +7239,13 @@ export default {
       for (const [k, v] of Object.entries(this.profiles || {})) {
         if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
       }
+      // Смена почты (02.09): профиль может лежать под СТАРЫМ адресом —
+      // все алиасы (один pubkey → несколько адресов) дадут имя.
+      for (const alias of this.aliasesOf(email)) {
+        if (alias === e) continue;
+        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
+        if (ap && ap.name && ap.name !== alias) return ap.name;
+      }
       return email;
     },
     avatarOf(email) {
@@ -7178,7 +7257,13 @@ export default {
       for (const [k, v] of Object.entries(this.profiles || {})) {
         if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
       }
-      return '';
+      // Смена почты (02.09): аватар может лежать под СТАРЫМ адресом (алиасом).
+      for (const alias of this.aliasesOf(email)) {
+        if (alias === e) continue;
+        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
+        if (ap && ap.avatar) return ap.avatar;
+      }
+      return null;
     },
     loadLocalProfiles() {
       try {

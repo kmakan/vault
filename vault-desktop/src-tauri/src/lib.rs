@@ -2,8 +2,8 @@
 mod audio;
 mod credential_store;
 mod crypto;
-mod duress;
 mod crypto_pq;
+mod duress;
 mod email;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
@@ -790,6 +790,50 @@ fn groups_rename_member(
         .map_err(|e| e.to_string())?
 }
 
+/// Membership по fingerprint (02.09): массовое заполнение fingerprint
+/// участников из peer_keys (ленивая миграция старых groups.json). Идемпотентно:
+/// пустой fingerprint не затирает существующий.
+#[tauri::command]
+fn groups_save_member_fingerprints(
+    group_id: String,
+    members: Vec<MemberFingerprintIn>,
+) -> Result<groups::Group, String> {
+    let mut groups = groups::load_groups().map_err(|e| e.to_string())?;
+    let group = groups
+        .get_mut(&group_id)
+        .ok_or_else(|| "Group not found".to_string())?;
+    for m in members {
+        if m.fingerprint.is_empty() {
+            continue;
+        }
+        if let Some(existing) = group
+            .members
+            .iter_mut()
+            .find(|x| x.email.eq_ignore_ascii_case(&m.email))
+        {
+            if existing.fingerprint.is_empty() {
+                existing.fingerprint = m.fingerprint;
+            }
+        }
+    }
+    groups::save_groups(&groups).map_err(|e| e.to_string())?;
+    groups::load_groups()
+        .map(|g| {
+            g.get(&group_id)
+                .cloned()
+                .ok_or_else(|| "Group not found".to_string())
+        })
+        .map_err(|e| e.to_string())?
+}
+
+/// Вход для groups_save_member_fingerprints (JS-объект { email, fingerprint }).
+#[derive(Debug, serde::Deserialize)]
+struct MemberFingerprintIn {
+    email: String,
+    #[serde(default)]
+    fingerprint: String,
+}
+
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
@@ -1012,7 +1056,10 @@ async fn check_app_update(current_version: String) -> Result<Option<serde_json::
         };
         let (av, bv) = (parse(a), parse(b));
         for i in 0..av.len().max(bv.len()) {
-            let (x, y) = (av.get(i).copied().unwrap_or(0), bv.get(i).copied().unwrap_or(0));
+            let (x, y) = (
+                av.get(i).copied().unwrap_or(0),
+                bv.get(i).copied().unwrap_or(0),
+            );
             if x != y {
                 return x > y;
             }
@@ -1091,7 +1138,9 @@ fn android_open_url(url: String) -> Result<(), String> {
             let ctx = ndk_context::android_context();
             let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
                 .map_err(|e| format!("vm: {e}"))?;
-            let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+            let mut env = vm
+                .attach_current_thread()
+                .map_err(|e| format!("attach: {e}"))?;
             let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
             let jurl = env.new_string(&url).map_err(|e| format!("u: {e}"))?;
             let cls = crate::audio::audio_android::find_app_class(
@@ -1135,9 +1184,11 @@ fn android_duress_prefs_debug() -> Result<String, String> {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<String, String> {
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
-            .map_err(|e| format!("vm: {e}"))?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let cls = crate::audio::audio_android::find_app_class(
             &mut env,
@@ -1183,7 +1234,11 @@ fn android_duress_prefs_debug() -> Result<String, String> {
 #[tauri::command]
 fn db_path_debug() -> Result<String, String> {
     let home = dirs::data_local_dir().ok_or("no data dir")?;
-    Ok(home.join("com.vault.vault").join("vault.db").to_string_lossy().to_string())
+    Ok(home
+        .join("com.vault.vault")
+        .join("vault.db")
+        .to_string_lossy()
+        .to_string())
 }
 
 // ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
@@ -1447,6 +1502,7 @@ pub fn run() {
             groups_create,
             groups_add_member,
             groups_rename_member,
+            groups_save_member_fingerprints,
             android_open_url,
             db_path_debug,
             android_duress_prefs_debug,

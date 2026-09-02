@@ -1022,7 +1022,10 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             .map(|v| v.get("kind").and_then(|k| k.as_str()) == Some("group-invite"))
             .unwrap_or(false);
         if is_invite {
-            return if notify(&e.from, "приглашение в группу — откройте Vault, чтобы принять") {
+            return if notify(
+                &e.from,
+                "приглашение в группу — откройте Vault, чтобы принять",
+            ) {
                 log::info!("[svc-monitor] group invite notified from {}", e.from);
                 Outcome::Delivered
             } else {

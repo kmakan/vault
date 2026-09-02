@@ -478,8 +478,16 @@ impl Storage {
     /// Схема остаётся (база продолжает работать «с нуля»).
     pub fn wipe_user_data(&self) -> Result<()> {
         for table in [
-            "emails", "chat_history", "tombstones", "imap_cursors", "body_cache",
-            "kv_store", "chats", "messages", "contacts", "encryption_keys",
+            "emails",
+            "chat_history",
+            "tombstones",
+            "imap_cursors",
+            "body_cache",
+            "kv_store",
+            "chats",
+            "messages",
+            "contacts",
+            "encryption_keys",
         ] {
             self.conn
                 .execute(&format!("DELETE FROM {table}"), [])
