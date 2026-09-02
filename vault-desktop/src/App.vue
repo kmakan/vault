@@ -210,6 +210,12 @@
             <button v-if="isMobile" class="chat-back-btn" @click="closeMobileChat" :title="t('back') || 'Назад'">
               <Icon name="chevron-left" :size="22" />
             </button>
+            <!-- 02.09 (0.1.134): аватар + имя/статус в одной колонке .chat-head-col.
+                 На узких экранах она ПЕРЕВОРАЧИВАЕТСЯ вертикально (media <768):
+                 имя и замок шифрования встают ПОД аватаром — раньше имя
+                 сжималось и перекрывалось кнопками действий (звезда избранного
+                 добавила 6-ю кнопку справа). На десктопе — прежний ряд. -->
+            <div class="chat-head-col">
             <template v-if="activeChatType === 'group'">
               <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
               <div v-else class="group-avatar">
@@ -225,12 +231,9 @@
               <button class="chat-avatar-btn" :title="'Профиль ' + (nameOf(activeChat) || activeChat)" @click="openContactCard(activeChat)">
                 <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
               </button>
-              <div class="chat-avatar-col">
-                <div class="chat-avatar-email" :title="activeChat">{{ activeChat }}</div>
-              </div>
             </template>
             <div class="chat-header-text">
-              <h3 v-if="activeChatName !== activeChat">{{ activeChatName }}</h3>
+              <h3>{{ activeChatName }}</h3>
               <div class="chat-status">
                 <template v-if="activeChatType === 'group'">
                   <span class="members-count" @click="showMembersList = true">
@@ -245,6 +248,7 @@
                   {{ peerKeys[activeChat] ? '🔒' : '⚠️' }}<span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
                 </template>
               </div>
+            </div>
             </div>
           </div>
           <div class="chat-actions">
@@ -8321,6 +8325,17 @@ body {
   min-width: 0;
 }
 
+/* 0.1.134 (02.09): обёртка аватар+имя+статус. На десктопе — ряд (как было).
+   На мобильном (media <768 ниже) — колонка: имя и замок ПОД аватаром,
+   чтобы не перекрываться кнопками действий (звезда добавила 6-ю кнопку). */
+.chat-head-col {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
 .chat-avatar {
   width: 40px;
   height: 40px;
@@ -9938,6 +9953,28 @@ body {
   }
   .chat-header-info {
     gap: 10px;
+  }
+  /* 0.1.134: колонка «аватар → имя → замок» вертикально: имя и статус
+     встают под аватаром, ничего не перекрывается кнопками справа. */
+  .chat-head-col {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .chat-head-col .chat-header-text {
+    min-width: 0;
+    max-width: 100%;
+    align-items: flex-start;
+  }
+  .chat-header-text h3 {
+    font-size: 14px;
+    line-height: 1.25;
+    margin-bottom: 1px;
+  }
+  .chat-head-col .group-avatar,
+  .chat-head-col .chat-avatar-btn {
+    width: 32px;
+    height: 32px;
   }
   .chat-header-info h3 {
     font-size: 15px;
