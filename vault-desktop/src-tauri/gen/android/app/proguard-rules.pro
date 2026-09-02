@@ -67,6 +67,7 @@
     public static java.lang.String handleLockCode(android.content.Context, java.lang.String);
     public static void notifyDuressEntered(android.content.Context);
     public static void clearLockPrefs(android.content.Context);
+    public static void panicWipeFromNative();
     public static void showMessage(android.content.Context, java.lang.String, java.lang.String);
     public static void showIncomingCall(android.content.Context, java.lang.String);
     public static void showIncomingCall(android.content.Context, java.lang.String, java.lang.String, java.lang.String);

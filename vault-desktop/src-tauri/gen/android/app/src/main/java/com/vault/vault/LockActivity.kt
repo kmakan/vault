@@ -84,7 +84,7 @@ class LockActivity : Activity() {
         }
         "panic" -> {
           // Полный вайп (ключи, БД, конфиг) и выход на замок «пустого» приложения.
-          VaultForegroundService.nativePanicWipe()
+          VaultForegroundService.panicWipeFromNative()
           VaultForegroundService.markUnlocked(this@LockActivity)
           finish()
         }

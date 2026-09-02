@@ -289,6 +289,17 @@ class VaultForegroundService : Service() {
                 .edit().clear().commit()
         }
 
+        /// Panic-код: полный вайп из Rust (обёртка для LockActivity).
+        @JvmStatic
+        fun panicWipeFromNative() {
+            try {
+                nativePanicWipe()
+                android.util.Log.i("VaultRust", "[duress] panic wipe executed")
+            } catch (e: Throwable) {
+                android.util.Log.e("VaultRust", "panicWipe failed: " + e.message)
+            }
+        }
+
         /// Rust (JNI): PBKDF2-проверка кода против stored hash.
         private external fun nativeVerifyPin(code: String, hash: String): Boolean
         private external fun nativeSendDuressSos(geo: String)
