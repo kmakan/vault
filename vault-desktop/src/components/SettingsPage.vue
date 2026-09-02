@@ -185,7 +185,7 @@
           <label class="toggle"><input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" /><span class="slider"></span></label>
           <span style="margin-left:10px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
         </div>
-        <div class="duress-label" style="font-size:11px;color:#f59e0b">[diag] {{ diagText }}</div>
+        <div v-if="diagText && /err|error|panic|fail|False|enabled=false/i.test(diagText)" class="duress-label" style="font-size:11px;color:#f87171">[diag] {{ diagText }}</div>
         <div v-if="duressEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
           <div>
             <div class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</div>

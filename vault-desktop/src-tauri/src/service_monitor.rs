@@ -1376,3 +1376,62 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Duress-SOS (0.1.130): зашифрованные письма выбранным контактам из headless-
+/// контекста (нативный LockActivity — WebView может быть мёртв). Тело —
+/// Vault-конверт type:"sos", как sendDuressSos JS — получатели видят сообщение
+/// в чате от нас + системное уведомление от своего монитора.
+pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
+    let recipients: Vec<String> = recipients.to_vec();
+    let text = text.to_string();
+    let handle = runtime().spawn(async move {
+        let priv_key = match crate::key_store::load_keypair() {
+            Ok(Some(k)) => k.private_key,
+            _ => return,
+        };
+        let peers = crate::key_store::load_peer_keys().unwrap_or_default();
+        let Some(creds) = crate::credential_store::load_credentials().ok().flatten() else {
+            log::warn!("[duress] SOS: no credentials");
+            return;
+        };
+        let mut client = EmailClient::new(EmailConfig {
+            email: creds.email.clone(),
+            password: creds.password.clone(),
+            imap_server: creds.imap_server,
+            imap_port: creds.imap_port,
+            smtp_server: creds.smtp_server,
+            smtp_port: creds.smtp_port,
+        });
+        for rcpt in &recipients {
+            let peer_key = peers
+                .iter()
+                .find(|p| p.email.eq_ignore_ascii_case(rcpt))
+                .map(|p| p.public_key.clone());
+            let envelope = serde_json::json!({
+                "vault": 1,
+                "id": format!("{}sos", now_ms()),
+                "type": "text",
+                "text": text,
+                "sos": true,
+                "ts": now_ms(),
+            });
+            let cipher = match crate::crypto::encrypt_vault_cmd(
+                &envelope.to_string(),
+                &priv_key,
+                peer_key.as_deref(),
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("[duress] SOS encrypt failed for {rcpt}: {e}");
+                    continue;
+                }
+            };
+            match client.send_email(rcpt.as_str(), "", &cipher).await {
+                Ok(()) => log::info!("[duress] SOS sent to {rcpt}"),
+                Err(e) => log::warn!("[duress] SOS send failed for {rcpt}: {e}"),
+            }
+        }
+    });
+    let _ = handle;
+    Ok(())
+}

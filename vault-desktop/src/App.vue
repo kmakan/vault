@@ -7,8 +7,9 @@
       @duress="onLockDuress"
       @panic="onLockPanic"
     />
-    <!-- Врем. диагностика duress-замка: видна всегда, пока фикс не подтверждён -->
-    <div v-if="duressDiag" style="position:fixed;left:8px;bottom:6px;z-index:10000;font-size:11px;color:#f59e0b;pointer-events:none;background:rgba(11,15,23,.7);padding:2px 8px;border-radius:6px">[duress] {{ duressDiag }}</div>
+    <!-- Диагностика duress-замка: показывается ТОЛЬКО при сбое (в норме не видна).
+         Формулировки с 'err'/'error'/'prefs err' означают разрыв JNI-моста. -->
+    <div v-if="duressDiag && /err|error|panic|fail/i.test(duressDiag)" style="position:fixed;left:8px;bottom:6px;z-index:10000;font-size:11px;color:#f87171;pointer-events:none;background:rgba(11,15,23,.7);padding:2px 8px;border-radius:6px">[duress] {{ duressDiag }}</div>
     <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
     <div v-if="!isLoggedIn && restoringSession" class="login-screen">
       <div class="login-box">

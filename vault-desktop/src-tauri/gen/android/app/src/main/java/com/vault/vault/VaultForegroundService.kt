@@ -220,11 +220,16 @@ class VaultForegroundService : Service() {
 
         /// Дублирование конфига замка в prefs (вызывается Rust'ом при сохранении).
         @JvmStatic
-        fun syncLockPrefs(context: android.content.Context, enabled: String, pinHash: String) {
+        fun syncLockPrefs(
+            context: android.content.Context, enabled: String, pinHash: String,
+            duressHash: String, panicHash: String
+        ) {
             context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean("lock_enabled", enabled == "1")
                 .putString("pin_hash", pinHash)
+                .putString("duress_hash", duressHash)
+                .putString("panic_hash", panicHash)
                 .commit()
         }
 
@@ -243,8 +248,51 @@ class VaultForegroundService : Service() {
                 ", pauseStartedLock=" + prefs.getBoolean("last_pause_started_lock", false)
         }
 
+        /// Проверка кода по ВСЕМ хэшам замка. Возвращает тип:
+        /// "lock" — обычный код (вход), "duress" — тихий SOS, "panic" — wipe, "none".
+        @JvmStatic
+        fun handleLockCode(context: android.content.Context, code: String): String {
+            val prefs = context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+            val lockHash = prefs.getString("pin_hash", null) ?: return "none"
+            val duressHash = prefs.getString("duress_hash", null)
+            val panicHash = prefs.getString("panic_hash", null)
+            return try {
+                when {
+                    nativeVerifyPin(code, lockHash) -> "lock"
+                    duressHash != null && duressHash.isNotEmpty() && nativeVerifyPin(code, duressHash) -> "duress"
+                    panicHash != null && panicHash.isNotEmpty() && nativeVerifyPin(code, panicHash) -> "panic"
+                    else -> "none"
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("VaultRust", "handleLockCode: " + e.message)
+                "none"
+            }
+        }
+
+        /// Duress-код введён на нативном замке: headless-SOS (Rust шлёт письма
+        /// выбранным контактам; гео-привязка недоступна без живого WebView —
+        /// текст SOS уходит как есть).
+        @JvmStatic
+        fun notifyDuressEntered(context: android.content.Context) {
+            try {
+                nativeSendDuressSos("")
+                android.util.Log.i("VaultRust", "[duress] SOS triggered from native lock")
+            } catch (e: Throwable) {
+                android.util.Log.e("VaultRust", "notifyDuressEntered: " + e.message)
+            }
+        }
+
+        /// Очистить prefs замка (после panic-wipe из Rust).
+        @JvmStatic
+        fun clearLockPrefs(context: android.content.Context) {
+            context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
+                .edit().clear().commit()
+        }
+
         /// Rust (JNI): PBKDF2-проверка кода против stored hash.
         private external fun nativeVerifyPin(code: String, hash: String): Boolean
+        private external fun nativeSendDuressSos(geo: String)
+        private external fun nativePanicWipe()
 
         // Открыть URL системным браузером (duress/update, 0.1.115): вызывается
         // из Rust android_open_url через тот же JNI-мост, что showMessage.

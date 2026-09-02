@@ -63,19 +63,35 @@ class LockActivity : Activity() {
       val code = pin.text.toString()
       if (code.isEmpty()) return
       android.util.Log.i("VaultRust", "[lock] tryUnlock: verifying code (len=" + code.length + ")")
-      val ok = try {
-        VaultForegroundService.verifyPinHash(this@LockActivity, code)
+      val kind = try {
+        VaultForegroundService.handleLockCode(this@LockActivity, code)
       } catch (e: Throwable) {
-        android.util.Log.e("VaultRust", "verifyPin failed: " + e.message)
-        false
+        android.util.Log.e("VaultRust", "handleLockCode failed: " + e.message)
+        "none"
       }
-      android.util.Log.i("VaultRust", "[lock] verifyPin result: " + ok)
-      if (ok) {
-        VaultForegroundService.markUnlocked(this@LockActivity)
-        finish()
-      } else {
-        err.text = "Неверный код"
-        pin.setText("")
+      android.util.Log.i("VaultRust", "[lock] code kind: " + kind)
+      when (kind) {
+        "lock" -> {
+          VaultForegroundService.markUnlocked(this@LockActivity)
+          finish()
+        }
+        "duress" -> {
+          // Не выдаём: показываем «обычный вход», но тихо отправляем SOS
+          // (WebView-машине придёт событие из Rust — она уже умеет sendDuressSos).
+          VaultForegroundService.notifyDuressEntered(this@LockActivity)
+          VaultForegroundService.markUnlocked(this@LockActivity)
+          finish()
+        }
+        "panic" -> {
+          // Полный вайп (ключи, БД, конфиг) и выход на замок «пустого» приложения.
+          VaultForegroundService.nativePanicWipe()
+          VaultForegroundService.markUnlocked(this@LockActivity)
+          finish()
+        }
+        else -> {
+          err.text = "Неверный код"
+          pin.setText("")
+        }
       }
     }
     btn.setOnClickListener { tryUnlock() }

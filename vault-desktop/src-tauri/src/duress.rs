@@ -158,7 +158,7 @@ pub fn save_config(cfg: &DuressConfig) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         let enabled = cfg.lock_enabled && !cfg.lock_hash.is_empty();
-        sync_prefs_android(enabled, &cfg.lock_hash);
+        sync_prefs_android(enabled, &cfg.lock_hash, &cfg.duress_hash, &cfg.panic_hash);
     }
     Ok(())
 }
@@ -211,7 +211,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
 /// Записать lock_enabled/pin_hash в Android SharedPreferences (дубликат
 /// конфига для Kotlin-замка). Вызывается из duress_save_config на Android.
 #[cfg(target_os = "android")]
-pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
+pub fn sync_prefs_android(enabled: bool, pin_hash: &str, duress_hash: &str, panic_hash: &str) {
     use jni::objects::JValue;
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
@@ -228,11 +228,13 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
         .map_err(|e| format!("find class: {e}"))?;
         let jenabled = env.new_string(if enabled { "1" } else { "0" }).map_err(|e| e.to_string())?;
         let jhash = env.new_string(pin_hash).map_err(|e| e.to_string())?;
+        let jduress = env.new_string(duress_hash).map_err(|e| e.to_string())?;
+        let jpanic = env.new_string(panic_hash).map_err(|e| e.to_string())?;
         let call = env.call_static_method(
             &cls,
             "syncLockPrefs",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
-            &[(&activity).into(), (&jenabled).into(), (&jhash).into()],
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[(&activity).into(), (&jenabled).into(), (&jhash).into(), (&jduress).into(), (&jpanic).into()],
         );
         if let Err(err) = call {
             let _ = env.exception_clear();
@@ -245,4 +247,95 @@ pub fn sync_prefs_android(enabled: bool, pin_hash: &str) {
         Ok(Err(e)) => log::error!("[duress] sync_prefs_android FAILED: {e}"),
         Err(_) => log::error!("[duress] sync_prefs_android PANICKED"),
     }
+}
+
+
+// ── Android: duress/panic из нативного LockActivity (0.1.130) ────────────────
+
+/// Полный вайп при panic-коде: ключи, БД сообщений, конфиг замка (в т.ч. prefs).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Companion_nativePanicWipe() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = crate::groups::delete_all_local();
+        match crate::storage::sqlite::Storage::open(None)
+            .and_then(|s| s.wipe_user_data())
+        {
+            Ok(()) => log::info!("[duress] panic wipe: local data wiped"),
+            Err(e) => log::error!("[duress] panic wipe failed: {e}"),
+        }
+        // prefs замка очищаем тоже: после вайпа замок не должен требовать старый PIN.
+        let _ = clear_prefs_android();
+    }));
+}
+
+/// Тихий SOS при duress-коде: headless-отправка письма выбранным контактам
+/// (текст + координаты, если включены) без открытия UI.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Companion_nativeSendDuressSos(
+    mut env: jni::JNIEnv,
+    _service: jni::objects::JObject,
+    geo: jni::objects::JString,
+) {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let _ = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+        let geo: String = env.get_string(&geo).map_err(|e| e.to_string())?.into();
+        let cfg = crate::duress::load_config();
+        if cfg.sos_recipients.is_empty() {
+            log::warn!("[duress] SOS: no recipients configured");
+            return Ok(());
+        }
+        let text = if geo.is_empty() {
+            cfg.sos_text.clone()
+        } else {
+            format!("{} | {}", cfg.sos_text, geo)
+        };
+        crate::duress::send_sos_headless(&cfg.sos_recipients, &text);
+        Ok(())
+    }));
+}
+
+/// Очистить prefs замка (после panic-wipe).
+#[cfg(target_os = "android")]
+pub fn clear_prefs_android() -> Result<(), String> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let r = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(&mut env, &activity, "com.vault.vault.VaultForegroundService")
+            .map_err(|e| format!("find class: {e}"))?;
+        let call = env.call_static_method(&cls, "clearLockPrefs", "(Landroid/content/Context;)V", &[(&activity).into()]);
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("clearLockPrefs: {err}"));
+        }
+        Ok(())
+    }));
+    match r {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("panic".into()),
+    }
+}
+
+/// Headless SOS-отправка: plaintext-письмо с маркером [VAULT-SOS] (скорость
+/// важнее конфиденциальности — телефон у посторонних). Монитор получателя
+/// покажет системное уведомление по маркеру, JS-клиент — как обычное письмо.
+#[cfg(target_os = "android")]
+pub fn send_sos_headless(recipients: &[String], text: &str) {
+    let recipients: Vec<String> = recipients.to_vec();
+    let text = text.to_string();
+    std::thread::spawn(move || {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::service_monitor::send_sos_mails(&recipients, &text)
+        }));
+        match r {
+            Ok(Ok(())) => log::info!("[duress] SOS sent to {} recipients", recipients.len()),
+            Ok(Err(e)) => log::error!("[duress] SOS send failed: {e}"),
+            Err(_) => log::error!("[duress] SOS send panicked"),
+        }
+    });
 }
