@@ -44,7 +44,7 @@
         <!-- Ключ восстановления (25.08): мнемоника 12 слов, Session-style.
              Обёртывает backup и отправляет эскроу-письмо себе. -->
         <div class="section recovery-section">
-          <h4>🔑 {{ t('recovery_title') }}</h4>
+          <h4><Icon name="key" :size="15" gradient /> {{ t('recovery_title') }}</h4>
           <p class="recovery-hint">{{ t('recovery_hint') }}</p>
 
           <div v-if="!recoveryCreated" class="recovery-actions">

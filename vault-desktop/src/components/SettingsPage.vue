@@ -108,9 +108,9 @@
              на другом устройстве / после переустановки. -->
         <div class="change-email-block">
           <h3 class="backup-title">{{ t('settings_backup_title') }}</h3>
-          <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn">⬇ {{ backupBusy ? '…' : t('settings_backup_export') }}</button>
+          <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn"><Icon name="download" :size="14" /> {{ backupBusy ? '…' : t('settings_backup_export') }}</button>
           <label class="backup-import-label">
-            <span class="btn btn-secondary backup-btn">⬆ {{ t('settings_backup_import') }}</span>
+            <span class="btn btn-secondary backup-btn"><Icon name="upload" :size="14" /> {{ t('settings_backup_import') }}</span>
             <input type="file" accept=".json,application/json" class="backup-file-input" @change="importBackup" />
           </label>
           <p v-if="backupResult" class="change-email-note">{{ backupResult }}</p>

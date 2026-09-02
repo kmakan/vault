@@ -13,14 +13,14 @@
     <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
     <div v-if="!isLoggedIn && restoringSession" class="login-screen">
       <div class="login-box">
-        <h1>🔒 Vault</h1>
+        <h1><Icon name="lock" :size="26" gradient /> Vault</h1>
         <p class="login-hint">{{ t('restoring_session') || 'Подключение к почте…' }}</p>
       </div>
     </div>
     <!-- LOGIN SCREEN -->
     <div v-else-if="!isLoggedIn" class="login-screen">
       <div class="login-box">
-        <h1>🔒 Vault</h1>
+        <h1><Icon name="lock" :size="26" gradient /> Vault</h1>
         <p>E2E Encrypted Messenger</p>
         <form @submit.prevent="login">
           <input v-model="email" type="email" placeholder="Email" required />
@@ -90,7 +90,7 @@
 
           <p v-if="loginError" class="login-error">{{ loginError }}</p>
         </form>
-        <p class="login-hint">{{ t('login_hint') || 'Регистрация не нужна: у Vault нет сервера — приложение работает поверх вашей почты. Войдите под своим email, ключи создадутся автоматически. Добавляйте собеседников по id участника или QR-коду (🔗 вверху).' }}</p>
+        <p class="login-hint">{{ t('login_hint') || 'Регистрация не нужна: у Vault нет сервера — приложение работает поверх вашей почты. Войдите под своим email, ключи создадутся автоматически. Добавляйте собеседников по id участника или QR-коду.' }}</p>
       </div>
     </div>
     <!-- MAIN APP -->
@@ -155,7 +155,7 @@
           <div class="contact-status">
             <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
             <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
-            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами через 🔗 (по id участника или QR)'">🔓</span>
+            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами (по id участника или QR)'"><Icon name="unlock" :size="13" /></span>
             <span v-if="isRecentlySeen(contact.email)" class="status-dot online" title="Недавно видели"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
           </div>
@@ -245,7 +245,7 @@
                   <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
                 </template>
                 <template v-else>
-                  {{ peerKeys[activeChat] ? '🔒' : '⚠️' }}<span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
+                  <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
                 </template>
               </div>
             </div>
@@ -315,12 +315,12 @@
 
         <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
           <div v-if="activeChat && showStarredOnly && filteredMessages.length === 0" class="messages-empty">
-            <div class="empty-icon">⭐</div>
+            <div class="empty-icon"><Icon name="star" :size="28" gradient /></div>
             <div class="empty-text">{{ t('starred_empty') || 'Нет избранных сообщений' }}</div>
           </div>
           <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
-            <div class="empty-icon">🔒</div>
-            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое 🔒' }}</div>
+            <div class="empty-icon"><Icon name="lock" :size="28" gradient /></div>
+            <div class="empty-text">{{ t('chat_empty_plain') || 'Нет сообщений — отправьте первое' }}</div>
           </div>
           <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
           <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
@@ -360,7 +360,7 @@
             </div>
             <div class="message-content">
               <template v-if="msg.deleted">
-                <span class="message-deleted">🚫 {{ t('message_deleted') || 'Сообщение удалено' }}</span>
+                <Icon name="ban" :size="13" /> <span class="message-deleted">{{ t('message_deleted') || 'Сообщение удалено' }}</span>
               </template>
               <template v-else>
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
@@ -384,7 +384,7 @@
               </div>
               <div v-else-if="msg.attachment" class="attachment-preview">
                 <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
-                  📄 {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
+                  <Icon name="file" :size="13" /> {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
                   <span class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</span>
                 </div>
               </div>
@@ -517,7 +517,7 @@
           @close="showAudioRecorder = false"
         />
           <button class="send-btn" @click="sendMessage" :disabled="sending">
-            <span class="send-icon">➤</span>
+            <span class="send-icon"><Icon name="send" :size="16" /></span>
           </button>
         </div>
       </div>
@@ -694,7 +694,7 @@
               {{ t('no_contacts') || 'Контакты не найдены' }}
             </div>
             <div v-if="addMemberQuery.includes('@')" class="add-member-manual" @click="addManualEmail">
-              ✏️ {{ t('enter_email_manual') || 'Ввести email вручную' }}
+              <Icon name="pencil" :size="14" /> {{ t('enter_email_manual') || 'Ввести email вручную' }}
               <span class="add-member-manual-email">— {{ addMemberQuery }}</span>
             </div>
           </div>
@@ -2040,7 +2040,7 @@ export default {
       if (!this.peerKeys[email]) {
         // Не молчим: объясняем, что нужно обменяться ключами, и сразу открываем
         // панель 🔗 (QRCodePanel) — ввод id участника или сканирование QR.
-        alert(this.t('chat_no_key') || 'Нет ключа собеседника — обменяйтесь ключами: нажмите 🔗 (Добавить контакт) и введите id участника или отсканируйте QR-код.');
+        alert(this.t('chat_no_key') || 'Нет ключа собеседника — обменяйтесь ключами: нажмите кнопку «Добавить контакт» (кнопка со значком ссылки вверху) и введите id участника или отсканируйте QR-код.');
         this.showQRCode = true;
         return;
       }
@@ -4074,7 +4074,7 @@ export default {
                   this.showToast(t('recovery_moved_toast'), 12000);
                 } catch (e) {
                   console.warn('escrow copy to inbox failed:', e);
-                  this.showToast('⚠️ ' + t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
+                  this.showToast(t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
                 }
               } else {
                 this.showToast(t('recovery_keep'), 8000);
@@ -5406,7 +5406,7 @@ export default {
         // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
         // ДИАГНОСТИКА (26.08): показываем ошибку в UI — на Android иначе не
         // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
-        this.showToast('⚠️ media start failed: ' + (e && e.message || e), 10000);
+        this.showToast('media start failed: ' + (e && e.message || e), 10000);
         try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
         catch (e2) { console.error('call_accept failed:', e2); }
       }
@@ -6852,7 +6852,7 @@ export default {
           // в группу добавляют только установленные контакты.
           const peerPub = this.peerKeys[email] || null;
           if (!peerPub) {
-            failed.push(email + ' — ' + (this.t('add_member_no_key') || 'нет ключа: сначала добавьте контакт (🔗)'));
+            failed.push(email + ' — ' + (this.t('add_member_no_key') || 'нет ключа: сначала добавьте контакт'));
             continue;
           }
           const groupKeys = await api.getGroupKeys(this.currentGroup.id);

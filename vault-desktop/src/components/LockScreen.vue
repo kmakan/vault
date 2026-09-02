@@ -1,7 +1,7 @@
 <template>
   <div class="lock-screen">
     <div class="lock-card">
-      <div class="lock-icon">🔒</div>
+      <div class="lock-icon"><Icon name="lock" :size="34" gradient /></div>
       <h2 class="lock-title">{{ t('lock_title') || 'Vault заблокирован' }}</h2>
       <p class="lock-sub">{{ t('lock_sub') || 'Введите код доступа' }}</p>
       <input

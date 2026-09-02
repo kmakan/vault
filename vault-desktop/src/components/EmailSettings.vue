@@ -3,7 +3,7 @@
     <!-- NO ACCOUNT — show setup -->
     <div v-if="!loading && accounts.length === 0 && !showForm">
       <div class="empty-state">
-        <p>📧 {{ t('settings_email_accounts') }}. {{ t('settings_add_account') }}.</p>
+        <p>{{ t('settings_email_accounts') }}. {{ t('settings_add_account') }}.</p>
         <button @click="startAdd" class="btn btn-primary btn-sm">+ {{ t('settings_add_account') }}</button>
       </div>
     </div>

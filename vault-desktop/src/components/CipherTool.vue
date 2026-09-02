@@ -37,7 +37,7 @@
               :class="{ active: activeTab === 'file' }"
               @click="activeTab = 'file'"
             >
-              {{ t('cipher_file_tab') || '📁 Файл' }}
+              <Icon name="file" :size="14" /> {{ t('cipher_file_tab') || 'Файл' }}
             </button>
           </div>
 
@@ -169,9 +169,9 @@
             <div class="file-zone">
               <div class="file-zone-title">{{ t('cipher_file_encrypt_title') }}</div>
               <input type="file" ref="encryptFileInput" class="file-input" @change="onFileEncryptSelect" />
-              <div v-if="fileEncrypting" class="file-status">⏳ {{ t('cipher_file_working') }}…</div>
+              <div v-if="fileEncrypting" class="file-status"><Icon name="refresh" :size="13" /> {{ t('cipher_file_working') }}…</div>
               <div v-if="fileEncryptName" class="file-status">
-                ✅ {{ t('cipher_file_encrypted') }}: {{ fileEncryptName }}
+                <Icon name="check" :size="13" /> {{ t('cipher_file_encrypted') }}: {{ fileEncryptName }}
                 ({{ formatBytes(fileEncryptSize) }})
               </div>
               <button
@@ -187,8 +187,8 @@
             <div class="file-zone">
               <div class="file-zone-title">{{ t('cipher_file_decrypt_title') }}</div>
               <input type="file" ref="decryptFileInput" class="file-input" accept=".vault,.txt,text/plain" @change="onFileDecryptSelect" />
-              <div v-if="fileDecrypting" class="file-status">⏳ {{ t('cipher_file_working') }}…</div>
-              <div v-if="fileDecryptResult" class="file-status">✅ {{ fileDecryptResult }}</div>
+              <div v-if="fileDecrypting" class="file-status"><Icon name="refresh" :size="13" /> {{ t('cipher_file_working') }}…</div>
+              <div v-if="fileDecryptResult" class="file-status"><Icon name="check" :size="13" /> {{ fileDecryptResult }}</div>
             </div>
             <div v-if="fileError" class="error-message">{{ fileError }}</div>
           </div>

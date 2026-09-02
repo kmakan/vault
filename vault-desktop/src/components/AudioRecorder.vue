@@ -28,7 +28,7 @@
             <Icon name="trash" :size="14" /> {{ t('audio_discard') || 'Discard' }}
           </button>
           <button class="btn-stop" @click="stopRecording">
-            <span>⏹️</span> {{ t('audio_stop') || 'Stop' }}
+            <span><Icon name="square" :size="14" /></span> {{ t('audio_stop') || 'Stop' }}
           </button>
         </div>
       </div>
@@ -44,7 +44,7 @@
             <Icon name="trash" :size="14" /> {{ t('audio_discard') || 'Discard' }}
           </button>
           <button class="btn-send" @click="send">
-            <span>➤</span> {{ t('audio_send') || 'Send Voice' }}
+            <span><Icon name="send" :size="14" /></span> {{ t('audio_send') || 'Send Voice' }}
           </button>
         </div>
       </div>
