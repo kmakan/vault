@@ -131,11 +131,18 @@ class LockActivity : AppCompatActivity() {
     }
   }
 
+  // Класс сканера: WEAK|STRONG, а не только STRONG. Cubot X50 (Android 11)
+  // имеет сканер Class 3 (WEAK) — с BIOMETRIC_STRONG canAuthenticate возвращал
+  // NOT_SUPPORTED и промпт молча не появлялся (баг 02.09, живой тест).
+  private val bioAuth: Int
+    get() = BiometricManager.Authenticators.BIOMETRIC_WEAK or
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
+
   private fun canBiometric(): Boolean {
     return try {
-      BiometricManager.from(this).canAuthenticate(
-        BiometricManager.Authenticators.BIOMETRIC_STRONG
-      ) == BiometricManager.BIOMETRIC_SUCCESS
+      val r = BiometricManager.from(this).canAuthenticate(bioAuth)
+      android.util.Log.i("VaultRust", "[lock] canBiometric=$r (0=SUCCESS)")
+      r == BiometricManager.BIOMETRIC_SUCCESS
     } catch (e: Throwable) {
       android.util.Log.e("VaultRust", "[lock] canBiometric: " + e.message)
       false
@@ -160,7 +167,7 @@ class LockActivity : AppCompatActivity() {
       val info = BiometricPrompt.PromptInfo.Builder()
         .setTitle("Vault заблокирован")
         .setSubtitle("Приложите палец или введите код")
-        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        .setAllowedAuthenticators(bioAuth)
         .setNegativeButtonText("Ввести код")
         .build()
       prompt.authenticate(info)
