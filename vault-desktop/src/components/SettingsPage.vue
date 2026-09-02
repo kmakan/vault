@@ -201,7 +201,7 @@
           </div>
           <div>
             <div class="duress-label">{{ t('duress_sos_text') || 'Текст SOS-сообщения ({coords} — подставит координаты)' }}</div>
-            <input v-model="duressSosText" class="duress-input" :placeholder="'Телефон не у меня{coords}'" />
+            <input v-model="duressSosText" class="duress-input" :placeholder="t('sos_text_ph')" />
           </div>
           <div>
             <label class="toggle"><input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" /><span class="slider"></span></label>

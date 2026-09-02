@@ -23,7 +23,7 @@
           <button @click="deleteAccount(accounts[0].id)" class="delete-btn">×</button>
         </div>
       </div>
-      <p class="hint">Ключи E2E хранятся локально. Смена почты не влияет на ключи.</p>
+      <p class="hint">{{ t('email_keys_local_hint') }}</p>
     </div>
 
     <!-- ADD/EDIT FORM -->
@@ -181,15 +181,15 @@ export default {
         this.showForm = false;
         await this.loadAccounts();
       } catch (e) {
-        alert('Ошибка: ' + e.message);
+        alert(this.t('err_generic') + e.message);
       } finally {
         this.submitting = false;
       }
     },
     async deleteAccount(id) {
-      if (!(await confirm('Удалить аккаунт? Ключи E2E останутся.'))) return;
+      if (!(await confirm(this.t('email_del_account_confirm')))) return;
       try { await api.deleteEmailAccount(id); await this.loadAccounts(); }
-      catch (e) { alert('Ошибка: ' + e.message); }
+      catch (e) { alert(this.t('err_generic') + e.message); }
     },
     cancelForm() { this.showForm = false; this.editingAccount = null; }
   }

@@ -156,7 +156,7 @@
             <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
             <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
             <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами (по id участника или QR)'"><Icon name="unlock" :size="13" /></span>
-            <span v-if="isRecentlySeen(contact.email)" class="status-dot online" title="Недавно видели"></span>
+            <span v-if="isRecentlySeen(contact.email)" class="status-dot online" :title="t('contact_seen_recently')"></span>
             <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
           </div>
         </div>
@@ -228,7 +228,7 @@
               </div>
             </template>
             <template v-else>
-              <button class="chat-avatar-btn" :title="'Профиль ' + (nameOf(activeChat) || activeChat)" @click="openContactCard(activeChat)">
+              <button class="chat-avatar-btn" :title="t('profile_title_of', { name: nameOf(activeChat) || activeChat })" @click="openContactCard(activeChat)">
                 <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
               </button>
             </template>
@@ -267,7 +267,7 @@
                  (серый выкл / янтарный вкл) и заливка кнопки. -->
             <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
               <button class="chat-action-btn ephemeral-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
-                :title="'Исчезающие сообщения' + (currentEphemeralTtl ? ': вкл (' + ephemeralLabel(currentEphemeralTtl) + '), новые сообщения будут исчезать' : ' — выключены')"
+                :title="t('ephemeral_title') + (currentEphemeralTtl ? t('ephemeral_on_suffix').replace('{ttl}', ephemeralLabel(currentEphemeralTtl)) : t('ephemeral_off_suffix'))"
                 @click="showEphemeralMenu = !showEphemeralMenu">
                 <Icon name="lock" :size="17" :color="currentEphemeralTtl > 0 ? '#f59e0b' : '#8b949e'" />
               </button>
@@ -320,7 +320,7 @@
           </div>
           <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
             <div class="empty-icon"><Icon name="lock" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('chat_empty_plain') || 'Нет сообщений — отправьте первое' }}</div>
+            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое' }}</div>
           </div>
           <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
           <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
@@ -578,10 +578,10 @@
         <div class="modal-settings change-email-panel">
           <button class="modal-close-x" @click="showChangeEmail = false"><Icon name="x" :size="20" /></button>
           <h3 class="invite-popup-title"><Icon name="mail" :size="18" /> {{ t('settings_change_email') || 'Сменить почту' }}</h3>
-          <p class="change-email-hint">Контакты и группы останутся: ключи E2E не привязаны к адресу. После смены отправьте сообщение или профиль — собеседники узнают новый адрес автоматически.</p>
+          <p class="change-email-hint">{{ t('change_email_hint') }}</p>
           <form @submit.prevent="changeEmail">
-            <input v-model="newEmail" type="email" placeholder="Новый email" required class="change-email-input" />
-            <input v-model="newPassword" type="password" placeholder="Пароль приложения / от внешних устройств" required class="change-email-input" />
+            <input v-model="newEmail" type="email" :placeholder="t('change_email_new_ph')" required class="change-email-input" />
+            <input v-model="newPassword" type="password" :placeholder="t('change_email_pass_ph')" required class="change-email-input" />
             <div class="change-email-row">
               <button type="button" class="server-toggle" @click="showChangeEmailServers = !showChangeEmailServers"><Icon name="settings" :size="14" /> {{ t('server_settings') || 'Настройки сервера' }}</button>
             </div>
@@ -599,8 +599,8 @@
             </div>
             <div v-if="changeEmailError" class="login-error">{{ changeEmailError }}</div>
             <div class="change-email-actions">
-              <button type="button" @click="showChangeEmail = false" class="btn btn-ghost">Отмена</button>
-              <button type="submit" :disabled="changeEmailLoading" class="btn btn-primary">{{ changeEmailLoading ? 'Подключение…' : 'Сменить почту' }}</button>
+              <button type="button" @click="showChangeEmail = false" class="btn btn-ghost">{{ t('general_cancel') || 'Отмена' }}</button>
+              <button type="submit" :disabled="changeEmailLoading" class="btn btn-primary">{{ changeEmailLoading ? t('change_email_connecting') : t('change_email_btn') }}</button>
             </div>
           </form>
         </div>
@@ -721,14 +721,14 @@
       <div v-if="showAvatarUpload" class="modal-overlay" @click.self="showAvatarUpload = false">
         <div class="modal-avatar">
           <button class="modal-close-x" @click="showAvatarUpload = false"><Icon name="x" :size="20" /></button>
-          <h3>Фото профиля</h3>
+          <h3>{{ t('profile_photo_title') }}</h3>
           <div class="avatar-preview-circle">
             <img v-if="userAvatarUrl" :src="userAvatarUrl" class="avatar-preview-img" />
             <span v-else class="avatar-initials avatar-preview-initials">{{ emailInitials }}</span>
           </div>
-          <p class="avatar-hint">Формат: PNG, JPG, SVG. Рекомендуется 100×100 px.</p>
+          <p class="avatar-hint">{{ t('profile_photo_hint') }}</p>
           <label class="avatar-upload-btn">
-            <Icon name="camera" :size="14" /> Выбрать файл
+            <Icon name="camera" :size="14" /> {{ t('profile_photo_choose') }}
             <input type="file" accept="image/png,image/jpeg,image/svg+xml" @change="onAvatarFileSelect" hidden />
           </label>
         </div>
@@ -748,12 +748,12 @@
             </div>
           </div>
           <div v-if="contactCardBio" class="contact-bio-view">«{{ contactCardBio }}»</div>
-          <p v-else class="contact-bio-empty">{{ contactCardEmail === email ? 'Добавьте статус в Настройки → Профиль' : 'Контакт ещё не добавил статус «О себе»' }}</p>
+          <p v-else class="contact-bio-empty">{{ contactCardEmail === email ? t('contact_bio_self') : t('contact_bio_empty') }}</p>
           <div class="contact-card-footer">
             <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) }">
-              {{ isRecentlySeen(contactCardEmail) ? 'Недавно видели' : 'Не в сети' }}
+              {{ isRecentlySeen(contactCardEmail) ? t('contact_seen_recently') : t('contact_offline') }}
             </span>
-            <button class="btn btn-primary btn-sm" @click="startEditFromCard">Изменить локально</button>
+            <button class="btn btn-primary btn-sm" @click="startEditFromCard">{{ t('contact_edit_local') }}</button>
           </div>
         </div>
       </div>
@@ -859,13 +859,13 @@
             class="modal-input"
             @keyup.enter="createGroupAndClose"
           />
-          <label>Аватар группы</label>
+          <label>{{ t('group_avatar_label') }}</label>
           <div class="new-group-avatar-row">
             <div class="new-group-avatar" @click="$refs.groupAvatarInput.click()">
               <img v-if="newGroupAvatar" :src="newGroupAvatar" alt="" />
               <div v-else class="new-group-avatar__placeholder"><Icon name="camera" :size="22" /></div>
             </div>
-            <span class="new-group-avatar__hint">Нажмите, чтобы загрузить фото</span>
+            <span class="new-group-avatar__hint">{{ t('group_avatar_hint') }}</span>
             <input ref="groupAvatarInput" type="file" accept="image/png,image/jpeg,image/webp" style="display:none" @change="onNewGroupAvatarSelected" />
           </div>
         </div>
@@ -3635,7 +3635,7 @@ export default {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
       if (file.size > 500 * 1024) {
-        alert('Файл слишком большой (макс 500KB)');
+        alert(this.t('err_file_too_big_500'));
         e.target.value = '';
         return;
       }
@@ -4182,7 +4182,7 @@ export default {
       const file = e.target.files[0];
       if (!file) return;
       if (file.size > 2 * 1024 * 1024) {
-        alert('Файл слишком большой (макс 2MB)');
+        alert(this.t('err_file_too_big_2m'));
         return;
       }
       const reader = new FileReader();
@@ -4294,7 +4294,7 @@ export default {
           if (!this.saveNotes(list)) {
             list.pop();
             this.messages = [...list];
-            alert('Локальное хранилище заметок переполнено — заметка не сохранена.');
+            alert(this.t('err_notes_full'));
             return;
           }
           this.messages = [...list];
@@ -4328,7 +4328,7 @@ export default {
             } catch (e) { /* не удалось — alert ниже */ }
           }
           if (!groupKey) {
-            alert('Групповой ключ не загружен — переоткройте группу');
+            alert(this.t('err_group_key'));
             return;
           }
           content = await crypto.encryptWithGroupKey(envelope, groupKey);
@@ -4472,7 +4472,7 @@ export default {
           email = await prompt('Email контакта?');
         }
         if (!email || !email.includes('@')) {
-          alert('Введите email контакта');
+          alert(this.t('err_enter_email'));
           return;
         }
         const normalized = email.trim().toLowerCase();
@@ -5853,7 +5853,7 @@ export default {
         if (!this.saveNotes(list)) {
           list.pop();
           this.messages = [...list];
-          alert('Локальное хранилище заметок переполнено — голосовое не сохранено. Удалите часть заметок/вложений.');
+          alert(this.t('err_notes_full_voice'));
           this.showAudioRecorder = false;
           return;
         }
@@ -6041,7 +6041,7 @@ export default {
               if (!this.saveNotes(noteList)) {
                 noteList.pop();
                 this.messages = [...noteList];
-                alert('Локальное хранилище заметок переполнено — файл не сохранён.');
+                alert(this.t('err_notes_full_file'));
                 return;
               }
               this.messages = [...noteList];

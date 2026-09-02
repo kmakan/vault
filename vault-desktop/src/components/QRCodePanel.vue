@@ -2,35 +2,35 @@
   <div class="qr-code-panel">
     <div class="qr-panel-card">
       <div class="qr-header-row">
-        <h3>Добавить контакт</h3>
+        <h3>{{ t('qr_add_contact') }}</h3>
         <button class="modal-close-x" @click="$emit('close')"><Icon name="x" :size="20" /></button>
       </div>
-      <p class="panel-subtitle">Обменяйтесь ключами, чтобы начать защищённый чат</p>
+      <p class="panel-subtitle">{{ t('qr_subtitle') }}</p>
 
       <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-          <h4>Сообщите собеседнику ваш ID</h4>
+          <h4>{{ t('qr_step1_title') }}</h4>
           <div class="id-row">
             <code class="my-id">{{ myFingerprint || myEmail }}</code>
-            <button @click="copyMyId">Копировать</button>
+            <button @click="copyMyId">{{ t('qr_copy') }}</button>
           </div>
-          <p class="hint" v-if="myFingerprint">ID — ваш fingerprint. Он не меняется при смене почты (в отличие от email).</p>
+          <p class="hint" v-if="myFingerprint">{{ t('qr_id_hint') }}</p>
           <details class="qr-collapse" v-if="publicKey">
-            <summary>Показать QR-код (для Android / другого устройства)</summary>
+            <summary>{{ t('qr_show_qr') }}</summary>
             <div class="qr-display">
               <canvas ref="qrCanvas"></canvas>
             </div>
-            <p class="hint">Отсканируйте код устройством с Vault — ключ добавится автоматически.</p>
+            <p class="hint">{{ t('qr_scan_hint') }}</p>
           </details>
           <details class="qr-collapse" v-if="publicKey">
-            <summary>Скопировать ключ (передать через любой канал: мессенджер, SMS…)</summary>
+            <summary>{{ t('qr_copy_key_summary') }}</summary>
             <div class="id-row key-row">
               <code class="my-id key-preview">{{ keyPreview }}</code>
-              <button @click="copyMyKey">Копировать ключ</button>
+              <button @click="copyMyKey">{{ t('qr_copy_key_btn') }}</button>
             </div>
             <p class="hint">
-              Собеседник вставит это в поле «Добавить ключ» (шаг 3) — email-письмо не нужно.
+              {{ t('qr_key_hint') }}
               Ключ публичный: его можно передавать открыто, переписку он не раскрывает.
             </p>
           </details>
@@ -40,19 +40,19 @@
       <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-          <h4>Введите email собеседника</h4>
+          <h4>{{ t('qr_step2_title') }}</h4>
           <div class="scan-input">
             <input
               v-model="inviteEmail"
-              placeholder="Email собеседника"
+              :placeholder="t('qr_email_ph')"
               @keyup.enter="sendInviteById"
             />
             <button @click="sendInviteById" :disabled="!inviteEmail">
-              Отправить запрос
+              {{ t('qr_send_request') }}
             </button>
           </div>
           <p class="hint">
-            Собеседник получит приглашение. После принятия чат появится в списке.
+            {{ t('qr_invite_hint') }}
           </p>
         </div>
       </div>
@@ -60,25 +60,25 @@
       <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-          <h4>Или вставьте ключ из QR-кода собеседника</h4>
+          <h4>{{ t('qr_step3_title') }}</h4>
           <div class="scan-input">
             <input
               v-model="scanInput"
-              placeholder="Содержимое QR-кода или ключ (hex)"
+              :placeholder="t('qr_paste_ph')"
               @keyup.enter="addScannedKey"
             />
             <button @click="addScannedKey" :disabled="!scanInput">
-              Добавить ключ
+              {{ t('qr_add_key') }}
             </button>
           </div>
-          <p class="hint">Подходит, если собеседник прислал вам свой QR-код или ключ.</p>
+          <p class="hint">{{ t('qr_paste_hint') }}</p>
           <div class="scan-qr-row">
             <button class="scan-qr-btn" @click="triggerScan" :disabled="scanning">
-              <Icon name="camera" :size="15" /> {{ scanning ? 'Сканирую…' : 'Сканировать QR с экрана собеседника' }}
+              <Icon name="camera" :size="15" /> {{ scanning ? t('qr_scanning') : t('qr_scan_camera') }}
             </button>
             <input ref="scanFile" type="file" accept="image/*" capture="environment" style="display:none" @change="onScanFilePicked" />
           </div>
-          <p class="hint">Наведите камеру на QR-код собеседника (или выберите фото с QR) — ключ добавится автоматически.</p>
+          <p class="hint">{{ t('qr_camera_hint') }}</p>
         </div>
       </div>
     </div>
@@ -90,10 +90,12 @@ import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import { scan, Format, cancel, checkPermissions, requestPermissions } from '@tauri-apps/plugin-barcode-scanner';
 import Icon from './Icon.vue';
+import { useI18n } from '../i18n.js';
 
 export default {
   name: 'QRCodePanel',
   components: { Icon },
+  setup() { const { t } = useI18n(); return { t }; },
   props: {
     publicKey: {
       type: String,
@@ -171,7 +173,7 @@ export default {
 
         // Validate the public key
         if (!/^[0-9a-f]{64}$/i.test(publicKey)) {
-          alert('Неверный формат ключа. Ожидается hex строка длиной 64 символа.');
+          alert(this.t('qr_bad_key'));
           return;
         }
 
@@ -179,7 +181,7 @@ export default {
         this.$emit('key-scanned', { publicKey, email });
         this.scanInput = '';
       } catch (error) {
-        alert('Ошибка при обработке QR-кода: ' + error.message);
+        alert(this.t('qr_process_err') + error.message);
       }
     },
     // Нативный сканер QR (Android: tauri-plugin-barcode-scanner, Session-like).
@@ -192,7 +194,7 @@ export default {
         if (perm !== 'granted') {
           const granted = await requestPermissions();
           if (granted !== 'granted') {
-            alert('Нет разрешения на камеру. Включите в настройках.');
+            alert(this.t('qr_no_camera'));
             this.scanning = false;
             return;
           }
@@ -228,13 +230,13 @@ export default {
         const dataUrl = await this.fileToDataUrl(file);
         const decoded = await this.decodeQrFromImage(dataUrl);
         if (!decoded) {
-          alert('QR-код не найден на изображении. Попробуйте ближе/чётче.');
+          alert(this.t('qr_not_found'));
           return;
         }
         this.scanInput = decoded;
         await this.addScannedKey();
       } catch (e) {
-        alert('Ошибка сканирования: ' + e.message);
+        alert(this.t('qr_scan_err') + e.message);
       } finally {
         this.scanning = false;
       }
@@ -270,12 +272,12 @@ export default {
     },
     copyMyId() {
       navigator.clipboard.writeText(this.myFingerprint || this.myEmail);
-      alert('Ваш ID скопирован — отправьте его собеседнику');
+      alert(this.t('qr_id_copied'));
     },
     copyMyKey() {
       if (!this.publicKey) return;
       navigator.clipboard.writeText(this.publicKey);
-      alert('Публичный ключ скопирован — передайте его собеседнику любым удобным способом');
+      alert(this.t('qr_key_copied'));
     },
     sendInviteById() {
       const email = (this.inviteEmail || '').trim();
