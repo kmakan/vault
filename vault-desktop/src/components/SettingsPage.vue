@@ -209,9 +209,11 @@
           </div>
           <!-- Биометрия (02.09): только Android — нативный BiometricPrompt
                поверх замка LockActivity. Отпечаток снимает обычный замок;
-               duress/panic по-прежнему только вводом кода. -->
+               duress/panic по-прежнему только вводом кода. 0.1.133: тумблер
+               сохраняется МГНОВЕННО (не требует повторного ввода кода и
+               «Сохранить» — из-за этого bio_enabled не доезжал до prefs). -->
           <div v-if="isAndroid">
-            <label class="toggle"><input type="checkbox" v-model="duressBio" /><span class="slider"></span></label>
+            <label class="toggle"><input type="checkbox" v-model="duressBio" @change="onBioChange" /><span class="slider"></span></label>
             <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_bio') || 'Снимать замок по отпечатку пальца' }}</span>
           </div>
           <div>
@@ -432,6 +434,20 @@ export default {
       if (on && /android/i.test(navigator.userAgent)) {
         // Мост в MainActivity: runtime-запрос ACCESS_FINE_LOCATION
         try { window.__vaultRequestGeo && window.__vaultRequestGeo(); } catch (e) { /* ignore */ }
+      }
+    },
+    // Биометрия: мгновенное сохранение тумблера (0.1.133). Раньше bio_enabled
+    // писал только duressSave — требовал повторного ввода кода разблокировки;
+    // юзер переключал тумблер и выходил, bio не доезжал до prefs → замок
+    // открывался без предложения отпечатка (живой тест 02.09).
+    async onBioChange() {
+      try {
+        const cfg = await duressApi.getConfig();
+        cfg.bio_enabled = this.isAndroid && this.duressBio;
+        await duressApi.saveConfig(cfg);
+        console.log('[duress] bio toggle saved, bio_enabled =', cfg.bio_enabled);
+      } catch (e) {
+        console.warn('[duress] bio toggle save failed:', e);
       }
     },
     async duressSave() {
