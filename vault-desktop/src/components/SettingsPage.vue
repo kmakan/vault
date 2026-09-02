@@ -244,15 +244,16 @@
       <div v-if="activeCategory === 'help'" class="settings-section">
         <h2>{{ t('settings_help') }}</h2>
         <div class="help-links">
-          <a href="https://github.com/nousresearch/vault" target="_blank">📖 {{ t('settings_docs').replace('📖 ', '') }}</a>
-          <a href="https://github.com/nousresearch/vault/issues" target="_blank">🐛 {{ t('settings_report_bug').replace('🐛 ', '') }}</a>
+          <!-- 02.09: эмодзи 📖/🐛 заменены на иконки набора (единый стиль) -->
+          <a href="https://github.com/nousresearch/vault" target="_blank"><Icon name="book" :size="15" /> {{ t('settings_docs') }}</a>
+          <a href="https://github.com/nousresearch/vault/issues" target="_blank"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
           <div class="update-check">
             <button
               class="update-btn"
               :disabled="updateChecking"
               @click="checkForUpdates"
             >
-              {{ updateChecking ? t('update_checking') : t('update_check_btn') }}
+              <Icon v-if="!updateChecking" name="refresh" :size="14" /> {{ updateChecking ? t('update_checking') : t('update_check_btn') }}
             </button>
             <template v-if="updateAvailable">
               <div class="update-banner">
@@ -956,7 +957,7 @@ export default {
 
 /* Help */
 .help-links { display: flex; flex-direction: column; gap: 12px; }
-.help-links a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+.help-links a { color: #58a6ff; text-decoration: none; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
 .help-links a:hover { text-decoration: underline; }
 .version { color: #484f58; font-size: 12px; margin-top: 16px; }
 
