@@ -17,7 +17,6 @@
 ## 📊 Современные симметричные шифры
 
 ### 1. AES-256-GCM (Gold Standard)
-**Используется**: Везде (TLS, SSH, BitLocker, FileVault)
 
 ```python
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -48,7 +47,6 @@ plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data)
 ---
 
 ### 2. ChaCha20-Poly1305
-**Используется**: Google, Cloudflare, WireGuard
 
 ```python
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -74,7 +72,6 @@ plaintext = chacha.decrypt(nonce, ciphertext, associated_data)
 ---
 
 ### 3. XChaCha20-Poly1305
-**Используется**: libsodium, WhatsApp
 
 ```python
 from nacl.secret import SecretBox
@@ -100,7 +97,6 @@ plaintext = box.decrypt(ciphertext)
 ## 📊 Асимметричные шифры (для обмена ключами)
 
 ### 1. X25519 (Curve25519)
-**Используется**: Signal, WhatsApp, TLS 1.3
 
 ```python
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
@@ -125,7 +121,6 @@ shared_key = private_key.exchange(peer_public_key)
 ---
 
 ### 2. Ed25519 (для подписей)
-**Используется**: SSH, GPG, Signal
 
 ```python
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -144,7 +139,6 @@ public_key.verify(signature, message)
 ---
 
 ### 3. RSA-4096 (классический)
-**Используется**: GPG, S/MIME, старые системы
 
 ```python
 from cryptography.hazmat.primitives.asymmetric import rsa, padding

@@ -8,7 +8,6 @@
 ## 📊 Современные протоколы E2E шифрования
 
 ### 1. Signal Protocol (Gold Standard)
-**Используется**: Signal, WhatsApp, Facebook Messenger, Google Messages
 
 **Компоненты:**
 - **X3DH** (Extended Triple Diffie-Hellman) — обмен ключами
@@ -28,7 +27,6 @@
 ---
 
 ### 2. MLS (Messaging Layer Security)
-**Используется**: IETF стандарт, Signal (экспериментально), Keybase
 
 **Компоненты:**
 - **TreeKEM** — обновление ключей для групп
@@ -47,7 +45,6 @@
 ---
 
 ### 3. Keybase Protocol
-**Используется**: Keybase, Zoom ( end-to-end)
 
 **Компоненты:**
 - **Saltpack** — формат шифрования
@@ -115,7 +112,6 @@ Klassisches DH + Kyber/BIKE/HQC (пост-квантовые алгоритмы)
 Master Secret = KDF(DH_secret || PQ_secret)
 ```
 
-**Используется**: Signal (экспериментально), Apple (iMessage)
 
 ---
 
@@ -170,7 +166,6 @@ Master Secret = KDF(DH_secret || PQ_secret)
 - Forward secrecy для групп
 
 #### 3.排除 Lists (Exclude Lists)
-**Используется**: Keybase, Slack
 
 ```
 1. Создаётся список исключённых участников
@@ -305,7 +300,6 @@ H E L L O   W O R L D
 **Проблема**: Частотный анализ, малое количество ключей
 
 ### 3. Двойное шифрование (Envelope Encryption)
-**Используется**: AWS KMS, Google Cloud KMS
 
 ```
 1. Генерируется Data Key (DK)
