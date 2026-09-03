@@ -20,7 +20,7 @@ sudo rpm -i vault-0.1.140-1.x86_64.rpm
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://gitverse.ru/maksim/vault-msg.git
+git clone https://gitverse.ru/maksim/vault.git
 cd vault/vault-desktop
 npm install
 npm run tauri build
@@ -65,7 +65,7 @@ update check verifies the version against `latest.json`.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://gitverse.ru/maksim/vault-msg.git
+git clone https://gitverse.ru/maksim/vault.git
 cd vault/vault-client
 cargo build --release
 
