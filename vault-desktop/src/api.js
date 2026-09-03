@@ -1361,7 +1361,7 @@ async mediaSoundStop() {
   async getProfilesAll() {
     try {
       const raw = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-      // From («Name@Yandex.ru» — как прислал сервер), теперь — всегда lowercase. Сливаем дубли:
+      // From («Koanmak@yandex.ru»), теперь — всегда lowercase. Сливаем дубли:
       // приоритет — НЕпустым полям (старый аватар не должен стираться новым
       // пустым профилем, пришедшим от старого клиента без аватара).
       const merged = {};

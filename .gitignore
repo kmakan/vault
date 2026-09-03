@@ -29,6 +29,10 @@ vault-desktop/src/dbg.js
 
 # Temporary
 /tmp/
+graphify-out/
+
+# AI tools
+.grok/
 
 # Android builds
 mailcipher-android/
@@ -42,5 +46,5 @@ release-key.jks
 __pycache__/
 *.pyc
 
-# Local data
+# OpenViking knowledge base (локальные данные)
 /data/
