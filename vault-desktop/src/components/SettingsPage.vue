@@ -280,7 +280,7 @@
               <span v-if="feedbackStatus" :class="['update-status', { 'update-status-err': feedbackStatusIsErr }]">{{ feedbackStatus }}</span>
             </div>
           </div>
-          <div class="version">Vault v{{ appVersion }}</div>
+          <div v-if="appVersion" class="version">Vault v{{ appVersion }}</div>
         </div>
       </div>
 
@@ -345,7 +345,7 @@ export default {
       experimentsCalls: false,
       notifSound: true,
       // RELEASE-PREP: проверка обновлений через latest.json.
-      appVersion: '0.1.100',
+      appVersion: '',
       updateChecking: false,
       updateAvailable: false,
       updateStatus: '',
@@ -387,6 +387,11 @@ export default {
     notifSystem(on) { setNotificationsEnabled(on); },
   },
   async mounted() {
+    // Версия приложения для отображения в «Помощи» (без клика «Проверить»).
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app');
+      this.appVersion = await getVersion();
+    } catch (e) { /* dev-окружение без Tauri — остаётся data-дефолт */ }
     // Настройки чатов/экспериментов (kv_store)
     try {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';

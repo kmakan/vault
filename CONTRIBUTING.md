@@ -12,7 +12,7 @@ Thank you for your interest in contributing! Here's how to get started.
 ### Clone & Build
 
 ```bash
-git clone https://github.com/kmakan/vault.git
+git clone https://github.com/<owner>/vault.git
 cd vault
 
 # Client (CLI)
