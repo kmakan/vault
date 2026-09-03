@@ -249,7 +249,6 @@ export default {
   file_too_large: 'File will not pass through email: your provider attachment limit is',
   file_too_large_hint: ' File was not sent.',
   avatar_upload: 'Upload Photo',
-  typing: 'typing...',
 
   // Cipher
   cipher_title: 'Cipher',

@@ -148,7 +148,7 @@ impl Storage {
             --    account. this.emails is in-memory only — on restart it was
             --    empty while UID cursors were already advanced, so old mails
             --    (below the cursor) never came back and chats looked empty
-            --    (20.08 icemaksim: «сообщение не появилось»). Persisting the
+            --    Without it, chats looked empty after restart. Persisting the
             --    envelope list keeps cursors and mails consistent across
             --    restarts without a full IMAP rescan.
             CREATE TABLE IF NOT EXISTS emails (

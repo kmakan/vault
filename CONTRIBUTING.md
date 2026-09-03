@@ -12,7 +12,7 @@ Thank you for your interest in contributing! Here's how to get started.
 ### Clone & Build
 
 ```bash
-git clone https://github.com/nickswl/vault.git
+git clone https://github.com/<owner>/vault.git
 cd vault
 
 # Client (CLI)
@@ -29,7 +29,7 @@ npm run tauri dev
 
 ```bash
 cd vault-client
-cargo test  # 228 tests
+cargo test  # 430+ tests across crates
 ```
 
 ---
@@ -42,7 +42,8 @@ cargo test  # 228 tests
 - Add tests for new features
 
 ### Vue.js
-- Use Composition API (`<script setup>`)
+- Components: Composition API (`<script setup>`) where possible;
+  `App.vue` uses the Options API (large legacy surface — keep its style in PRs)
 - i18n: all user-facing text through `t('key')`
 - New locale? Add file in `src/locales/xx.js`
 

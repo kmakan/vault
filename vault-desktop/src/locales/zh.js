@@ -249,7 +249,6 @@ export default {
   file_too_large: '文件无法通过邮件发送：您的邮件服务商附件限制为',
   file_too_large_hint: ' 文件未发送。',
   avatar_upload: '上传头像',
-  typing: '正在输入...',
 
   // Cipher
   cipher_title: '加密',

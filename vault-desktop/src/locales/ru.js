@@ -249,7 +249,6 @@ export default {
   file_too_large: 'Файл не пройдёт через почту: лимит вложений вашего провайдера',
   file_too_large_hint: ' Файл не отправлен.',
   avatar_upload: 'Загрузить фото',
-  typing: 'печатает...',
 
   // Cipher
   cipher_title: 'Шифр',

@@ -1346,7 +1346,7 @@ export default {
           (g.members || []).some(m => m.email === this.email)
         );
         // Участники групп — тоже контакты (кроме себя): так под приглашённым
-        // аккаунтом виден отправитель инвайта (icemaksim → koanmak и наоборот).
+        // аккаунтом виден отправитель инвайта (A → B и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));
         for (const g of this.groups) {
           // Аватар/иконка группы: sqlite kv_store — аватар устанавливает
@@ -3035,7 +3035,7 @@ export default {
         // старый список остаётся в UI — клик по чату не видит пустоту.
         // ПЕРСИСТ: this.emails восстанавливается из sqlite при входе
         // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
-        // перезапуске и чаты без истории были пустыми (icemaksim).
+        // перезапуске и чаты без истории были пустыми.
         if (!silent && this.emails.length === 0) {
           try {
             const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (this.email || 'anon'));
@@ -3067,7 +3067,7 @@ export default {
             // ВАЖНО: больше НЕ делаем полный скан при входе
             // курсоры в sqlite надёжны, история в sqlite — источник чатов.
             // Принудительный полный скан с пустыми курсорами ломал INBOX
-            // на больших ящиках (icemaksim: 15624 писем, UID SEARCH ALL
+            // на больших ящиках (десятки тысяч писем, UID SEARCH ALL
             // падал с «Unable to parse status response» в imap 2.4.1).
             const cursors = this.loadCursors(account.id);
             const res = await api.fetchEmailsIncremental(account.id, cursors);

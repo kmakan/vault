@@ -4,13 +4,13 @@
 
 ### Option 1: Download DEB/RPM
 
-Download from GitHub Releases:
+Download from [vault-msg.ru](https://vault-msg.ru) or the repository Releases page:
 ```bash
 # Ubuntu/Debian
-sudo dpkg -i vault_0.1.0_amd64.deb
+sudo dpkg -i vault_0.1.140_amd64.deb
 
 # Fedora/RHEL
-sudo rpm -i vault-0.1.0-1.x86_64.rpm
+sudo rpm -i vault-0.1.140-1.x86_64.rpm
 ```
 
 ### Option 2: Build from Source
@@ -20,7 +20,7 @@ sudo rpm -i vault-0.1.0-1.x86_64.rpm
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://github.com/nickswl/vault.git
+git clone https://gitverse.ru/maksim/vault-msg.git
 cd vault/vault-desktop
 npm install
 npm run tauri build
@@ -50,10 +50,11 @@ npx tauri android build
 ### Install on Device
 
 ```bash
-adb install app-universal-release-unsigned.apk
+adb install app-universal-release.apk
 ```
 
-**Note:** APK is unsigned. For production, sign with a release keystore.
+Release APKs are signed with the Vault release keystore; the in-app
+update check verifies the version against `latest.json`.
 
 ---
 
@@ -64,7 +65,7 @@ adb install app-universal-release-unsigned.apk
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone & build
-git clone https://github.com/nickswl/vault.git
+git clone https://gitverse.ru/maksim/vault-msg.git
 cd vault/vault-client
 cargo build --release
 

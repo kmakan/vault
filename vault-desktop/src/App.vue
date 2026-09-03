@@ -474,14 +474,6 @@
           </div>
         </div>
 
-        <!-- Typing indicator -->
-        <div v-if="Object.keys(typingUsers).length > 0" class="typing-indicator">
-          <span class="typing-dots">
-            <span></span><span></span><span></span>
-          </span>
-          <span class="typing-text">{{ t('typing') || 'typing...' }}</span>
-        </div>
-
         <!-- Reply quote bar (shown while replying to a message) -->
         <div v-if="replyTo" class="reply-bar">
           <Icon name="reply" :size="14" cls="reply-bar-ic" />
@@ -509,7 +501,6 @@
             ref="messageInput"
             v-model="newMessage"
             @keyup.enter="sendMessage"
-            @input="onTypingInput"
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
@@ -1205,9 +1196,6 @@ export default {
       editContactAvatar: '',
       // User identity
       userId: null,
-      // Typing indicators
-      typingUsers: {},
-      typingTimeout: null,
     }
   },
   computed: {
@@ -1868,7 +1856,7 @@ export default {
         // Кэш имени привязан к аккаунту (namespace = email) — сбрасываем.
         api._displayName = undefined;
         // счётчики, пометки) из namespace старого адреса в новый — иначе
-        // переписка «исчезает» после смены (vault_msg@mail.ru → bk.ru).
+        // переписка «исчезает» после смены адреса.
         await this.migrateAccountData(oldEmail, this.email);
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
@@ -1996,7 +1984,7 @@ export default {
           (g.members || []).some(m => m.email === this.email)
         );
         // Участники групп — тоже контакты (кроме себя): так под приглашённым
-        // аккаунтом виден отправитель инвайта (icemaksim → koanmak и наоборот).
+        // аккаунтом виден отправитель инвайта (A → B и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));
         for (const g of this.groups) {
           // Аватар/иконка группы: sqlite kv_store — аватар устанавливает
@@ -2871,7 +2859,7 @@ export default {
       }
       // Смена почты: контакт мог сменить адрес — ищем письма по
       // ВСЕМ адресам с его ключом (алиасы), иначе история старого адреса
-      // не видна в чате нового (vault_msg@mail.ru → bk.ru).
+      // не видна в чате нового адреса.
       const aliases = this.aliasesOf(email);
       const relatedAll = this.emails
         .filter(m => {
@@ -4173,23 +4161,6 @@ export default {
       };
       reader.readAsDataURL(file);
     },
-    onTypingEvent(msg) {
-      if (msg.user_id === this.userId) return;
-      if (msg.chat === this.activeChat) {
-        this.typingUsers[msg.user_id] = Date.now();
-        this.typingUsers = { ...this.typingUsers };
-        // Clear after 3 seconds
-        setTimeout(() => {
-          if (this.typingUsers[msg.user_id] && Date.now() - this.typingUsers[msg.user_id] >= 2900) {
-            delete this.typingUsers[msg.user_id];
-            this.typingUsers = { ...this.typingUsers };
-          }
-        }, 3100);
-      }
-    },
-    onTypingInput() {
-      // typing-индикатор: транспорт появится на M3
-    },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
       // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
@@ -4496,7 +4467,7 @@ export default {
         // старый список остаётся в UI — клик по чату не видит пустоту.
         // ПЕРСИСТ: this.emails восстанавливается из sqlite при входе
         // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
-        // перезапуске и чаты без истории были пустыми (icemaksim).
+        // перезапуске и чаты без истории были пустыми.
         if (!silent && this.emails.length === 0) {
           try {
             const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (this.email || 'anon'));
@@ -4528,7 +4499,7 @@ export default {
             // ВАЖНО: больше НЕ делаем полный скан при входе
             // курсоры в sqlite надёжны, история в sqlite — источник чатов.
             // Принудительный полный скан с пустыми курсорами ломал INBOX
-            // на больших ящиках (icemaksim: 15624 писем, UID SEARCH ALL
+            // на больших ящиках (десятки тысяч писем, UID SEARCH ALL
             // падал с «Unable to parse status response» в imap 2.4.1).
             const cursors = this.loadCursors(account.id);
             const res = await api.fetchEmailsIncremental(account.id, cursors);
@@ -5058,7 +5029,7 @@ export default {
       // время, молча отбрасывался (callState !== 'idle') — вызовы пропадали.
       // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты и на вход
       // в аккаунт после перезапуска окна (пользователь мог перезапустить
-      // окно, и icemaksim залогинился позже звонка) — конверты старше 10
+      // окно, и собеседник залогинился позже звонка) — конверты старше 10
       // минут неактуальны — игнорируем (и запоминаем call_id).
       if (sig.ts && Date.now() - sig.ts > 600000) {
         console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
@@ -9171,39 +9142,6 @@ body {
 }
 .call-back-btn:hover { filter: brightness(1.12); }
 .call-back-btn:active { transform: scale(0.96); }
-
-/* Typing indicator */
-.typing-indicator {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.typing-dots {
-  display: flex;
-  gap: 3px;
-}
-
-.typing-dots span {
-  width: 6px;
-  height: 6px;
-  background: var(--text-muted);
-  border-radius: 50%;
-  animation: typing-bounce 1.4s infinite ease-in-out;
-}
-
-.typing-dots span:nth-child(1) { animation-delay: 0s; }
-.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes typing-bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
-}
 
 /* Reactions */
 .message-reactions {

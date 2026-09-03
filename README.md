@@ -1,273 +1,143 @@
-# 🔐 Vault (Vault)
+# Vault
 
-> **Secure messenger over email. No servers. No phone numbers. Just email.**
+> **A private messenger that lives inside ordinary email.**
+> No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.0 | License: MIT | Status: Beta
+> Version: 0.1.140 · License: AGPL-3.0 · Status: Beta
+
+[English](#english) · [Русский](#русский)
 
 ---
 
-## What is Vault?
+## English
 
-Vault is a privacy-first messenger that works over email (IMAP/SMTP). It uses **end-to-end encryption** (X25519 + XChaCha20-Poly1305) so that no one — not even email providers — can read your messages.
+Vault turns your existing email into a secure messenger. Messages are
+encrypted end-to-end on your device and sent as ordinary-looking emails
+through your own IMAP/SMTP provider. There is no Vault server anywhere —
+if every relay in the world went down, your messenger would keep working.
 
-**Key principles:**
-- 🚫 **No servers** — your email is the transport
-- 🚫 **No phone numbers** — just email addresses
-- 🔒 **E2E encryption** — messages are encrypted on your device
-- 🌍 **Multi-language** — EN, RU, CN (more coming)
-- 💻 **Cross-platform** — Desktop (Linux), Android, Terminal
+### Why Vault
 
----
+| | Vault | Typical email-based messengers |
+|---|---|---|
+| Servers required | **none** (your mailbox is the transport) | chatmail/relays in practice |
+| Post-quantum E2E | **yes** — ML-KEM-768 + X25519 hybrid | no |
+| Voice calls | **yes** — Opus over DTLS-SRTP, serverless signaling | no |
+| Stealth | messages indistinguishable from normal mail | visible in headers/subjects |
+| Onboarding | just an email address + app password | invites, IDs, phrases |
 
-## Quick Start
+### Features
 
-### Install
+- **Hybrid post-quantum encryption** — every conversation key is derived
+  from both an X25519 and an ML-KEM-768 shared secret (HKDF-SHA256);
+  payload encryption is XChaCha20-Poly1305. Legacy X25519-only fallback
+  keeps old contacts working during migration.
+- **1-to-1 and group chats** — roles (creator/admin/member), invites via
+  QR or link, membership survives an email change (key-fingerprint
+  migration), pinned / edited / deleted-for-me / starred / disappearing
+  messages, reactions, replies, read receipts.
+- **Voice calls** — Opus 48 kHz, per-frame AEAD + DTLS-SRTP, P2P via
+  WebRTC with email signaling and instant hangup over a control
+  DataChannel. No call servers.
+- **Attachments** — encrypted files, images, audio messages; provider
+  size limits detected automatically.
+- **Duress & panic controls** — a duress password opens an empty vault,
+  a panic code wipes the device; optional SOS email with geolocation.
+  Biometric app lock on Android.
+- **Local-first storage** — SQLite on your device; no cloud sync, no
+  telemetry, no third-party SDKs.
+- **Cross-platform** — Desktop (Linux/Windows/macOS via Tauri 2),
+  Android (Tauri 2), terminal (Rust CLI with feature parity).
+- **i18n** — English, Russian, Chinese.
+
+### How it works
+
+```
+┌──────────────┐   E2E-encrypted email    ┌──────────────┐
+│  Alice       │ ───────────────────────► │  Bob         │
+│  Vault app   │   (any IMAP/SMTP mail)   │  Vault app   │
+│  keys+DB on  │                          │  keys+DB on  │
+│  device      │ ◄─────────────────────── │  device      │
+└──────────────┘                          └──────────────┘
+        ▲                                        ▲
+        └────── mail providers see: opaque base64 body,
+                no subject, no Vault markers ──────┘
+```
+
+- **Key exchange** — QR code in person, or send your public key over any
+  channel you already trust. Fingerprints are short and verifiable.
+- **Groups** — a shared group key is delivered inside an E2E envelope to
+  each member; group state lives locally on every device.
+- **Calls** — SDP offers/answers travel as the same E2E envelopes;
+  media goes peer-to-peer (STUN only, TURN relay planned as a premium
+  option).
+
+### Known limitations (honest)
+
+- **No forward secrecy yet** — chat keys are static; a stolen keypair can
+  decrypt history. Double-ratchet is on the roadmap.
+- **Email metadata** — your providers see that two addresses exchange
+  mail (not what, not that it is Vault).
+- **Latency** — plain email delivery is 30–60 s; IMAP IDLE brings it to
+  ~1 s while the app is alive. A push relay is planned.
+- **Attachments** are capped by your mail provider (typically 25–30 MB).
+
+### Build from source
 
 ```bash
-# Clone
-git clone https://github.com/nickswl/vault.git
-cd vault
+# Desktop (Tauri 2, Rust + Vue 3)
+cd vault-desktop && npm install && npm run tauri build
 
-# Build client
-cd vault-client
-cargo build --release
+# Android (JDK 17, Android SDK 35, NDK 27)
+cd vault-desktop && npx tauri android build
 
-# Run
-../target/release/vault-client
+# CLI
+cd vault-client && cargo build --release
 ```
 
-### Desktop (Tauri)
+Tests: `cargo test` in each crate (220+ unit/integration tests, real
+provider e2e included).
 
-```bash
-cd vault-desktop
-npm install
-npm run tauri build   # or: npm run tauri dev
-```
+### Downloads
 
-### Android
+Downloads and changelog: **[vault-msg.ru](https://vault-msg.ru)** (Android APK + desktop builds, `latest.json` for in-app update checks).
 
-```bash
-# Requires: JDK 17, Android SDK 35, NDK 27
-cd vault-desktop
-npx tauri android build
-# Output: src-tauri/gen/android/app/build/outputs/apk/
-```
+### Security & privacy
+
+- Read [SECURITY.md](SECURITY.md) — design, known limitations, disclosure.
+- Read [PRIVACY.md](PRIVACY.md) — what leaves your device (only opaque email).
+
+### License
+
+AGPL-3.0 — see [LICENSE](LICENSE). Commercial/dual licensing available on
+request.
 
 ---
 
-## Features
+## Русский
 
-### Core
-- ✅ X25519 key exchange + XChaCha20-Poly1305 encryption
-- ✅ IMAP/SMTP email transport
-- ✅ Multi-account support
-- ✅ Message threads & replies
-- ✅ Reactions (emoji)
-- ✅ Read receipts & delivery status
-- ✅ Edit / delete messages
+Vault превращает обычную почту в приватный мессенджер. Сообщения
+шифруются на устройстве (гибрид **ML-KEM-768 + X25519**, постквантово) и
+уходят как **обычные письма** через ваш IMAP/SMTP. Серверов Vault не
+существует — мессенджер живёт, пока работает почта.
 
-### Media
-- ✅ File attachments (encrypted)
-- ✅ Image/video thumbnails (Kitty graphics protocol)
-- ✅ Drag & drop in Desktop
+**Возможности:** 1-на-1 и групповые чаты (роли, QR-инвайты, реакции,
+редактирование, «удалить у меня», избранное, исчезающие сообщения),
+голосовые звонки (Opus + DTLS-SRTP, P2P, без серверов), зашифрованные
+вложения, duress/panic-режимы с полным стиранием, SOS с гео, вход по
+отпечатку (Android), локальная база SQLite, три языка интерфейса.
 
-### Organization
-- ✅ Folders for chats
-- ✅ Search (FTS5 full-text)
-- ✅ Pin / mute chats
-- ✅ Notes to Self — instant local notes (stored unencrypted on the device, never sent via email)
+**Честно об ограничениях:** нет forward secrecy (в роадмапе), почтовые
+метаданные видны провайдеру, доставка 30–60 с (IDLE — ~1 с), размер
+вложений ограничен лимитами почты.
 
-### Groups
-- ✅ Create group, invite members
-- ✅ Promote / demote admins
-- ✅ Block / unblock users (local)
-- ✅ Leave group, delete group
-
-### Key Exchange
-- ✅ QR code (in-person)
-- ✅ Copy & paste (Signal, Telegram, WhatsApp)
-- ✅ VPN warnings for blocked regions
-
-### Desktop UI
-- ✅ Professional design (CSS variables, dark theme)
-- ✅ i18n (English, Русский, 中文)
-- ✅ Language selector in settings
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Vault Client                  │
-│                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Crypto   │  │ Groups   │  │ Email (IMAP) │  │
-│  │ X25519   │  │ Local    │  │              │  │
-│  │ XChaCha  │  │ JSON     │  │              │  │
-│  └──────────┘  └──────────┘  └──────────────┘  │
-│         │              │              │          │
-│         └──────────────┼──────────────┘          │
-│                        │                         │
-│              ┌─────────┴─────────┐               │
-│              │   UI Layer        │               │
-│              │  CLI / Desktop    │               │
-│              │  / Android        │               │
-│              └───────────────────┘               │
-└─────────────────────────────────────────────────┘
-                      │
-                      │ email (IMAP/SMTP)
-                      ▼
-              ┌───────────────┐
-              │  Email Server  │
-              │  (any IMAP)    │
-              └───────────────┘
-```
-
-**No central server.** Users communicate directly via email. Groups are stored locally on each device. Key exchange happens out-of-band (QR, Signal, etc.).
-
----
-
-## CLI Commands
-
-### Session
-| Command | Description |
-|---------|-------------|
-| `/connect <email> <pass> [server]` | Connect to IMAP |
-| `/status` | Show connection status |
-| `/help [topic]` | Show help |
-| `/quit` | Exit |
-
-### Messaging
-| Command | Description |
-|---------|-------------|
-| `/chat <email>` | Enter chat mode |
-| `/send <message>` | Send encrypted message |
-| `/inbox` | List recent messages |
-| `/read <id>` | Read a message |
-| `/reply <id> <msg>` | Reply to message |
-| `/thread <subject>` | Show thread |
-
-### Keys & Encryption
-| Command | Description |
-|---------|-------------|
-| `/keygen` | Generate key pair |
-| `/keys` | Show key status |
-| `/keyshare <email>` | Share public key (with VPN warning) |
-| `/encrypt <text>` | Encrypt text |
-| `/decrypt <text>` | Decrypt ciphertext |
-
-### Groups
-| Command | Description |
-|---------|-------------|
-| `/creategroup <name>` | Create new group |
-| `/groupmembers <id>` | List members |
-| `/groupinvite <id> <email>` | Add member |
-| `/groupremove <id> <email>` | Remove member |
-| `/promote <id> <email>` | Promote to admin |
-| `/demote <id> <email>` | Demote to member |
-| `/block <id> <email>` | Block user in group |
-| `/unblock <id> <email>` | Unblock user |
-| `/leavegroup <id>` | Leave group |
-
-### Organization
-| Command | Description |
-|---------|-------------|
-| `/fc <name> [icon]` | Create folder |
-| `/fl` | List folders |
-| `/fa <folder> <chat>` | Add chat to folder |
-| `/search <query>` | Search messages |
-| `/pin <id>` | Pin message |
-
----
-
-## Key Exchange
-
-Since Vault has no server, you need to exchange keys securely with your contacts.
-
-| Method | Security | VPN Needed | Notes |
-|--------|----------|------------|-------|
-| **QR Code** | Highest | ❌ | Best — scan in person |
-| **Copy & Send** | High | ⚠️ | Send via Signal/Telegram/WhatsApp |
-| **PGP Email** | High | ❌ | For PGP users |
-
-**⚠️ VPN Warning:** Signal may be blocked in Russia, China, Iran, and other regions. Use VPN if you cannot connect.
-
----
-
-## Groups (Telegram-like)
-
-Vault groups work like Telegram — **without a server**:
-
-- **Creator** = Admin by default
-- **Admins** can invite/remove members
-- **Blocking** is local (you don't see blocked users' messages)
-- **Roles** are advisory (no server to enforce)
-
-All group state is stored in `~/.vault/groups.json`.
-
----
-
-## Project Structure
-
-```
-vault/
-├── vault-client/     # Rust CLI + core logic
-│   ├── src/
-│   │   ├── cli/           # CLI commands, REPL
-│   │   ├── crypto/        # X25519, XChaCha20
-│   │   ├── vault/       # Groups, contacts, invites, etc.
-│   │   └── main.rs
-│   └── Cargo.toml
-├── vault-desktop/    # Vue.js + Tauri 2
-│   ├── src/
-│   │   ├── components/    # Vue components
-│   │   ├── locales/       # i18n (en, ru, zh)
-│   │   └── i18n.js
-│   ├── src-tauri/         # Rust backend (Tauri)
-│   └── package.json
-├── docs/                  # Documentation
-│   ├── design/            # Design docs
-│   ├── deployment/        # Build & deploy guides
-│   └── research/          # Research notes
-└── README.md
-```
-
----
-
-## Testing
-
-```bash
-# Client tests
-cd vault-client
-cargo test          # 228 tests
-
-# Desktop build check
-cd vault-desktop
-npm run build
-```
-
----
+Сборка, загрузка и политика безопасности — выше по тексту.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### Areas for Contribution
-- 🌐 More languages (i18n)
-- 📱 Android UI polish
-- 🔐 Key exchange improvements
-- 📧 Email provider compatibility
-- 🧪 Test coverage
-
----
-
-## License
-
-MIT — do whatever you want.
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md). Good first issues are tagged
+`good-first-issue`.
 
 ## Credits
 
-Built with Rust, Vue.js, Tauri, and a lot of ☕.
+Built with Rust, Vue 3, Tauri 2.
