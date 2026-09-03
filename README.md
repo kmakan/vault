@@ -3,7 +3,7 @@
 > **A private messenger that lives inside ordinary email.**
 > No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.140 · License: AGPL-3.0 · Status: Beta
+> Version: 0.1.142 · License: AGPL-3.0 · Status: Beta
 
 [English](#english) · [Русский](#русский)
 
