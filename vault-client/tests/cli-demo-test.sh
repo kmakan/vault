@@ -86,7 +86,7 @@ CATS=(
     "Session|help, /?, /h, /quit, /exit, /q, /clear, /cls|8"
     "Connection|/connect, /status, /st|3"
     "Messaging|/chat, /send, /inbox, /read, /reply, /thread, /search|7"
-    "Telegram|/react, /forward, /pin, /unpin, /mute, /unmute, /typing|7"
+    "Chat UX|/react, /forward, /pin, /unpin, /mute, /unmute, /typing|7"
     "Contacts|/contacts, /add, /rm, /whois, /invite, /accept, /confirm|7"
     "Crypto|/keygen, /kg, /keys, /k, /keyshare, /encrypt, /enc, /decrypt, /dec|9"
     "Files|/attach, /sendfile, /sf|3"

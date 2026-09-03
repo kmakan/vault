@@ -5,8 +5,9 @@
 # ============================================================
 
 set timeout 10
-set binary_path "/home/maksim/whisper/mailcipher-client/target/release/mailcipher-client"
-set log_file "/home/maksim/whisper/mailcipher-client/tests/cli-demo-output.log"
+set script_dir [file dirname [info script]]
+set binary_path "$script_dir/../target/release/mailcipher-client"
+set log_file "$script_dir/cli-demo-output.log"
 
 # Start the CLI
 spawn $binary_path

@@ -212,7 +212,7 @@ vault:<email>
 
 2. **Через защищенный канал:**
    ```bash
-   # Отправьте fingerprint через Signal/Telegram
+   # Отправьте fingerprint через любой защищённый канал
    /fingerprint
    # Вывод: a1b2:c3d4:e5f6:...
    ```
