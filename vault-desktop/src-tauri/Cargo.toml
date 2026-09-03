@@ -74,10 +74,10 @@ webrtc-audio-processing = { version = "2", features = ["bundled"] }
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 webkit2gtk = { version = "2", features = ["v2_40"] }
 
-# Android (27.08): нативный аудио-путь SimpleX — Oboe/AAudio вместо cpal.
+# Android: нативный аудио-путь — Oboe/AAudio вместо cpal.
 # cpal на Android идёт через JNI/Java (AAudio через JavaVM) — паникует при
 # старте аудио (panic=abort → приложение «сворачивается»). oboe-rs дёргает
-# C++ Oboe напрямую через NDK — без JNI, как у SimpleX (libwebrtc → Oboe).
+# C++ Oboe напрямую через NDK — без JNI (тот же путь, что в WebRTC).
 [target.'cfg(target_os = "android")'.dependencies]
 oboe = "0.6"
 # Динамик (speakerphone) на Android (27.08): AudioManager.setSpeakerphoneOn
