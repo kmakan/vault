@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-client:
+    name: Check Client
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: vault-client -> target
+      - name: Check
+        working-directory: vault-client
+        run: cargo check
+      - name: Test
+        working-directory: vault-client
+        run: cargo test
+
+  check-desktop:
+    name: Check Desktop
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: vault-desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: vault-desktop/src-tauri -> target
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libgtk-3-dev libayatana-appindicator3-dev
+      - name: Install npm dependencies
+        working-directory: vault-desktop
+        run: npm ci
+      - name: Check frontend
+        working-directory: vault-desktop
+        run: npm run build
+      - name: Check Tauri
+        working-directory: vault-desktop
+        run: npx tauri build

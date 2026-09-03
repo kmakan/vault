@@ -1,0 +1,46 @@
+# Dependencies
+/target/
+**/target/
+node_modules/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Временный отладочный harness (командный канал для автотестов, не коммитить)
+vault-desktop/src/dbg.js
+.email_test_env.py
+.email_test_env
+
+# Logs
+*.log
+
+# Temporary
+/tmp/
+
+# Android builds
+mailcipher-android/
+
+# Keystore
+*.jks
+*.keystore
+release-key.jks
+
+# Python
+__pycache__/
+*.pyc
+
+# Local data
+/data/

@@ -1,0 +1,98 @@
+[package]
+name = "vault-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vault_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+env_logger = "0.11"
+android_logger = "0.14"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Encryption
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+sha2 = "0.10"
+# Key Escrow (25.08): KDF пароля ящика для оборачивания backup-ключей.
+# hmac нужен для PBKDF2 вручную (без тяжёлого pbkdf2-crate — sha2/hmac уже в дереве).
+hmac = "0.12"
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+anyhow = "1"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Email transport (serverless IMAP/SMTP)
+tauri-plugin-barcode-scanner = { version = "2", optional = true }
+# imap: вендоренная копия 2.4.1 — патч client.rs:1369 (assert_eq! тегов →
+# ошибка вместо паники; zoho присылает ответы со сдвинутыми тегами, и с
+# panic=abort оригинальный assert убивал приложение при sign-in).
+imap = { path = "../../vendor/imap" }
+lettre = { version = "0.11", features = ["tokio1", "tokio1-native-tls"] }
+native-tls = "0.2"
+# Android: openssl-sys не находит системный OpenSSL при кросс-компиляции —
+# собираем openssl из исходников (vendored) для android-таргета.
+openssl = { version = "0.10", features = ["vendored"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Local database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Calls (M3, Phase 2): WebRTC media
+webrtc = "0.20"
+rtc = "0.20.3"
+async-trait = "0.1"
+bytes = "1"
+cpal = "0.18"
+audiopus = "0.2"
+ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
+hkdf = "0.12"
+
+# Desktop (27.08): программный AEC/NS/AGC (WebRTC AudioProcessingModule).
+# Android не нужен — там аппаратный AEC через InputPreset::VoiceCommunication.
+# bundled: системной webrtc-audio-processing-2 нет (в системе 1.3 от PipeWire) —
+# собираем из исходников крейта, статическая линковка, нет runtime-зависимости.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+webrtc-audio-processing = { version = "2", features = ["bundled"] }
+
+# Linux: прямой доступ к WebKitGTK WebView для обработчика разрешений
+# (getUserMedia для голосовых сообщений). Версия совпадает с tauri-runtime-wry.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+webkit2gtk = { version = "2", features = ["v2_40"] }
+
+# Android: нативный аудио-путь — Oboe/AAudio вместо cpal.
+# cpal на Android идёт через JNI/Java (AAudio через JavaVM) — паникует при
+# старте аудио (panic=abort → приложение «сворачивается»). oboe-rs дёргает
+# C++ Oboe напрямую через NDK — без JNI (тот же путь, что в WebRTC).
+[target.'cfg(target_os = "android")'.dependencies]
+oboe = "0.6"
+# Динамик (speakerphone) на Android (27.08): AudioManager.setSpeakerphoneOn
+# через JNI. Обе версии уже в lock-файле (jni 0.21 — зависимость tauri).
+jni = "0.21"
+ndk-context = "0.1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+barcode-scanner = ["tauri-plugin-barcode-scanner"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "s"    # optimize for size
+panic = "abort"

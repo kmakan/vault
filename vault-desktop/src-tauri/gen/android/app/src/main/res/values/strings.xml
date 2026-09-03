@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">"Vault"</string>
+    <string name="main_activity_title">"Vault"</string>
+
+    <!-- Foreground-сервис (27.08): фоновый приём звонков. -->
+    <string name="fg_channel_name">Vault в фоне</string>
+    <string name="fg_channel_desc">Держит Vault запущенным для приёма звонков</string>
+    <string name="fg_notif_title">Vault работает</string>
+    <string name="fg_notif_text">Готов принимать звонки</string>
+
+    <!-- Входящий звонок (28.08): full-screen уведомление. -->
+    <string name="call_channel_name">Входящие звонки</string>
+    <string name="call_channel_desc">Уведомления о входящих звонках Vault</string>
+    <string name="call_notif_text">Входящий звонок Vault — откройте, чтобы ответить</string>
+</resources>

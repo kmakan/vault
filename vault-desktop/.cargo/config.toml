@@ -1,0 +1,17 @@
+# Android cross-compile (23.08): ndk-sys (через cpal → AAudio) объявляет
+# #[link(name = "aaudio")], но cargo не знает системные пути NDK — без этого
+# линковка падает «unable to find library -laaudio». Добавляем sysroot
+# каждого android-таргета в путь поиска библиотек.
+#
+# ANDROID_NDK_HOME задаётся перед tauri android build (см. доки).
+[target.aarch64-linux-android]
+rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/34"]
+
+[target.i686-linux-android]
+rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/i686-linux-android/34"]
+
+[target.x86_64-linux-android]
+rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/34"]

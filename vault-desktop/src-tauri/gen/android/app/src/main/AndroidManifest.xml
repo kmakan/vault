@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Звонки (26.08): WebRTC-аудио требует доступ к микрофону. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Фоновый приём звонков (27.08): foreground-сервис удерживает процесс,
+         чтобы IMAP IDLE-цикл продолжал доставлять входящие вызовы в фоне. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Режим звонка (28.08): FGS-тип phoneCall даёт исключение из запрета
+         на запуск activity из фона (BAL) — экран звонка открывается,
+         даже когда приложение свёрнуто. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Входящий звонок (28.08): full-screen intent поверх локскрина.
+         На Android 14+ без этого разрешения setFullScreenIntent молча
+         деградирует в обычный heads-up. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Вибрация при входящем звонке. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Биометрия замка (02.09): снятие по отпечатку (BiometricPrompt). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Исключение из оптимизации батареи (запрашивается в runtime). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.vault_desktop"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:exported="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Фоновый приём звонков (27.08). -->
+        <service
+            android:name=".VaultForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|phoneCall" />
+
+        <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/file_paths" />
+        </provider>
+            <activity
+            android:name=".LockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true" />
+    </application>
+</manifest>
