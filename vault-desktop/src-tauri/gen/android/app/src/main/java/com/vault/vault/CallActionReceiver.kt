@@ -5,15 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 
-/**
- * Нативные кнопки уведомления входящего звонка — ТОНКИЙ транспорт (0.1.92,
- * фаза 2 перепроектирования). Владелец состояния — Rust-монитор
- * (call_state в monitor.db): он знает ringing/accepted/rejected, решает
- * идемпотентность, шлёт call_accept/reject почтой и гасит рингтон.
- *
- * Ресивер только: dismiss + передать решение в nativeCallDecision.
- * Никакой логики email/activity/JS здесь больше нет.
- */
 class CallActionReceiver : BroadcastReceiver() {
 
     companion object {

@@ -11,7 +11,7 @@ pub struct StoredKeyPair {
     pub public_key: String,
     pub private_key: String,
     pub created_at: String,
-    /// Post-quantum (30.08): seed ML-KEM-768, hex 64 байта. У старых
+    /// Post-quantum: seed ML-KEM-768, hex 64 байта. У старых
     /// keypair.json поля нет → миграция генерирует при load_keypair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pq_private_key: Option<String>,
@@ -26,7 +26,7 @@ pub struct StoredPeerKey {
     pub public_key: String,
     pub label: Option<String>,
     pub added_at: String,
-    /// Post-quantum (30.08): ek ML-KEM-768 контакта, base64. Нет — контакт
+    /// Post-quantum: ek ML-KEM-768 контакта, base64. Нет — контакт
     /// ещё без PQ (миграция), ему уходит legacy X25519-конверт.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pq_public_key: Option<String>,
@@ -72,7 +72,7 @@ pub fn load_keypair() -> anyhow::Result<Option<StoredKeyPair>> {
     }
     let data = fs::read_to_string(&path)?;
     let mut keypair: StoredKeyPair = serde_json::from_str(&data)?;
-    // PQ-миграция (30.08): у аккаунтов, созданных до post-quantum, нет
+    // PQ-миграция: у аккаунтов, созданных до post-quantum, нет
     // ML-KEM-пары. Генерируем при первой загрузке и сразу сохраняем —
     // конверты v2 начнут уходить автоматически (PQ-3/PQ-4).
     if keypair.pq_private_key.is_none() || keypair.pq_public_key.is_none() {
@@ -107,7 +107,6 @@ pub fn load_peer_keys() -> anyhow::Result<Vec<StoredPeerKey>> {
 pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
     // SELF-KEY GUARD: saving one's own public key as a peer's key silently
     // breaks ECDH in BOTH directions (encrypt-to-self / decrypt mismatch).
-    // Root cause of the 15.08 "messages don't work both ways" incident: a
     // stale invite sent from a shared-HOME instance carried the sender's own
     // keypair as "their" public key, and the acceptor stored it. Reject at
     // the single choke point all peer-key writes go through (contact invite

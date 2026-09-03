@@ -17,32 +17,29 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
-/**
- * Foreground-сервис (27.08): держит процесс Vault живым в фоне, чтобы
+/* Foreground-сервис: держит процесс Vault живым в фоне, чтобы
  * WebView/JS не был убит системой и IMAP IDLE-цикл (idleLoop) продолжал
  * доставлять входящие звонки. Без него Android выгружает процесс через
  * несколько минут после сворачивания — и звонки не доходят.
- *
  * Показывает постоянное уведомление минимального приоритета (честный
  * способ удержания процесса). Тап по уведомлению возвращает в приложение.
  */
 class VaultForegroundService : Service() {
 
-    // Wake-lock (27.08): без него CPU засыпает при выключенном экране (Doze),
+    // Wake-lock: без него CPU засыпает при выключенном экране (Doze)
     // и IMAP IDLE-сокет перестаёт читаться — push о новом письме не доходит.
     // PARTIAL_WAKE_LOCK держит CPU, экран остаётся выключенным.
     private var wakeLock: PowerManager.WakeLock? = null
     // Wifi-lock: не даёт Wi-Fi уйти в сон, иначе TCP-соединение IMAP рвётся.
     private var wifiLock: WifiManager.WifiLock? = null
 
-    // Natives из libvault_desktop.so (service_monitor.rs, 29.08): headless
+    // Natives из libvault_desktop.so: headless
     // IMAP-монитор живёт в Rust-таске внутри ЭТОГО процесса. ОБЯЗАТЕЛЬНО
     // экземплярные методы (не companion!): JNI-символ внешнего метода
     // companion содержит $Companion и не совпадёт с Rust-экспортом.
     private external fun nativeStartMonitor(dataDir: String)
     private external fun nativeStopMonitor()
     // call_reject из нативной кнопки шторки (CallActionReceiver): шифрует
-    // конверт peer-ключом и шлёт SMTP — работает при мёртвом WebView.
     private external fun nativeSendCallSignal(callerEmail: String, callId: String, signal: String)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -51,7 +48,7 @@ class VaultForegroundService : Service() {
         super.onCreate()
         instance = this
         createChannel()
-        // ГАРАНТ (29.08, обычный входящий вызов не принимался): если процесс
+        // ГАРАНТ: если процесс
         // Vault умер при ПОКАЗАННОМ уведомлении звонка, в шторке остаётся
         // CATEGORY_CALL + full-screen-intent уведомление, а FGS — в режиме
         // phoneCall. На MTK/Cubot это ломает свайп ответа системного
@@ -88,16 +85,15 @@ class VaultForegroundService : Service() {
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         wakeLock = null
         wifiLock = null
-        // Headless-монитор (29.08): глушим Rust-задачу вместе с сервисом.
+        // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // Защита от убийства (28.08): OEM-оптимизация батареи (Xiaomi/Huawei/
         // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
         // перезапуск через AlarmManager, чтобы сервис воскрес.
         scheduleRestart(this)
         super.onDestroy()
     }
 
-    // Пользователь смахнул приложение из recents (28.08): система вызывает
+    // Пользователь смахнул приложение из recents: система вызывает
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
@@ -120,7 +116,7 @@ class VaultForegroundService : Service() {
         } catch (e: Throwable) {
             Log.w("VaultRust", "startForeground failed: " + e.message)
         }
-        // HEADLESS-МОНИТОР (29.08): процесс без activity не имеет ни WebView,
+        // HEADLESS-МОНИТОР: процесс без activity не имеет ни WebView
         // ни Rust-рантайма Tauri — после свайпа приложения из recents система
         // перезапускает ТОЛЬКО этот сервис, и уведомления умирали до открытия
         // приложения. Поднимаем нативный IMAP-монитор (Rust): IDLE → fetch →
@@ -187,7 +183,6 @@ class VaultForegroundService : Service() {
         const val CHANNEL_ID = "vault_foreground"
         const val NOTIF_ID = 9001
 
-        // ── Замок (0.1.117): паттерн банковских приложений ─────────────────
         // Хэш PIN хранится в SharedPreferences (дублируется Rust при сохранении
         // конфига). LockActivity сверяет код через nativeVerifyPin (Rust PBKDF2).
         // markUnlocked сбрасывает флаг — MainActivity не запускает замок повторно.
@@ -219,7 +214,7 @@ class VaultForegroundService : Service() {
         }
 
         /// Дублирование конфига замка в prefs (вызывается Rust'ом при сохранении).
-        /// bio (02.09): "1" — снимать замок по отпечатку (BiometricPrompt).
+        /// bio: "1" — снимать замок по отпечатку (BiometricPrompt).
         @JvmStatic
         fun syncLockPrefs(
             context: android.content.Context, enabled: String, pinHash: String,
@@ -235,7 +230,6 @@ class VaultForegroundService : Service() {
                 .commit()
         }
 
-        /// Диагностика (0.1.121): состояние prefs для экрана настроек (Rust
         /// вызывает через JNI; JS напрямую prefs не видит).
         @JvmStatic
         fun lockPrefsDebug(context: android.content.Context): String {
@@ -307,7 +301,7 @@ class VaultForegroundService : Service() {
         private external fun nativeSendDuressSos(geo: String)
         private external fun nativePanicWipe()
 
-        // Открыть URL системным браузером (duress/update, 0.1.115): вызывается
+        // Открыть URL системным браузером: вызывается
         // из Rust android_open_url через тот же JNI-мост, что showMessage.
         // Работает и из activity-, и из сервис-процесса (context может быть
         // application context — потому FLAG_ACTIVITY_NEW_TASK обязателен).
@@ -374,7 +368,7 @@ class VaultForegroundService : Service() {
         const val MONITOR_CHANNEL_ID = "vault_messages"
         const val MONITOR_NOTIF_ID = 9003
 
-        // Перезапуск сервиса после убийства (28.08): OEM-оптимизация батареи
+        // Перезапуск сервиса после убийства: OEM-оптимизация батареи
         // (Xiaomi/Huawei/Samsung/Oppo на Android 11) убивает foreground-сервис.
         // AlarmManager будит PendingIntent через 3с и стартует сервис заново.
         // PendingIntent живёт в системе даже когда процесс убит.
@@ -397,7 +391,7 @@ class VaultForegroundService : Service() {
             }
         }
 
-        // Живой экземпляр сервиса (28.08): нужен, чтобы из статического
+        // Живой экземпляр сервиса: нужен, чтобы из статического
         // JNI-метода переключить FGS в режим phoneCall (BAL-исключение).
         @Volatile
         private var instance: VaultForegroundService? = null
@@ -407,17 +401,16 @@ class VaultForegroundService : Service() {
         @JvmStatic
         var currentCallId: String = "" 
 
-        // Входящий звонок (28.08): отдельный high-importance канал +
-        // full-screen intent — звонок поверх локскрина как в обычной
+        // Входящий звонок: отдельный high-importance канал +
         // звонилке. Вызывается из Rust через JNI (audio_android.rs).
-        // ВАЖНО (28.08): ID канала v2 — старый канал (0.1.70/0.1.71) уже
+        // ВАЖНО: ID канала v2 — старый канал уже
         // создан на устройствах со звуком, а createNotificationChannel НЕ
         // обновляет существующий канал. Новый ID гарантирует применение
         // тихого канала: рингтон теперь играет нативный MediaPlayer.
         const val CALL_CHANNEL_ID = "vault_incoming_call_v2"
         const val CALL_NOTIF_ID = 9002
 
-        // Нативный зацикленный рингтон (28.08): HTML5 Audio в WebView
+        // Нативный зацикленный рингтон: HTML5 Audio в WebView
         // глохнет при троттлинге фона, а звук канала уведомления играет
         // ОДИН раз — пользователь слышал «сигнал прозвучал и оборвался».
         // MediaPlayer в сервисе крутится надёжно до dismissIncomingCall.
@@ -458,8 +451,7 @@ class VaultForegroundService : Service() {
             ringtonePlayer = null
         }
 
-        /**
-         * Перевести FGS в режим phoneCall (28.08). На Android 14+ FGS-тип
+        /* Перевести FGS в режим phoneCall. На Android 14+ FGS-тип
          * phoneCall даёт исключение из запрета на запуск activity из фона
          * (Background Activity Launch) — без него свернутое приложение НЕ
          * может само открыть экран звонка, и пользователь видит только
@@ -495,9 +487,8 @@ class VaultForegroundService : Service() {
             }
         }
 
-        /**
-         * Показать full-screen уведомление входящего звонка И открыть
-         * экран приложения (28.08). Вызывается из Rust (JNI) в момент
+        /* Показать full-screen уведомление входящего звонка И открыть
+         * экран приложения. Вызывается из Rust (JNI) в момент
          * incoming_ringing.
          */
         fun showIncomingCall(context: Context, callerName: String) {
@@ -507,12 +498,6 @@ class VaultForegroundService : Service() {
             showIncomingCall(context, callerName, "", "")
         }
 
-        /**
-         * Расширенная версия (29.08): callerEmail + callId сохраняются в
-         * CallActionReceiver для нативной кнопки «Отклонить» (email-сигнал
-         * call_reject уходит через Rust-мост nativeSendCallSignal даже при
-         * мёртвом WebView).
-         */
         @JvmStatic
         fun showIncomingCall(context: Context, callerName: String, callerEmail: String, callId: String) {
             
@@ -529,7 +514,7 @@ class VaultForegroundService : Service() {
                         NotificationManager.IMPORTANCE_HIGH
                     ).apply {
                         description = context.getString(R.string.call_channel_desc)
-                        // Звук канала ОТКЛЮЧЁН (28.08): рингтон играет
+                        // Звук канала ОТКЛЮЧЁН: рингтон играет
                         // нативный зацикленный MediaPlayer (startRingtone).
                         // Звук канала играл ОДИН раз и дублировал MediaPlayer.
                         setSound(null, null)
@@ -548,7 +533,7 @@ class VaultForegroundService : Service() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                 }
-                // Уведомление БЕЗ кнопок (0.1.94, упрощение по юзеру): экран звонка с
+                // Уведомление БЕЗ кнопок: экран звонка с
                 // свайпом поднимается сразу (startActivity ниже), кнопки в шторке
                 // дублировали UI и вносили рассинхрон состояний.
                 val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
@@ -566,7 +551,7 @@ class VaultForegroundService : Service() {
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
 
-                // НАТИВНЫЙ WATCHDOG (29.08): таймер сброса звонка живёт в
+                // НАТИВНЫЙ WATCHDOG: таймер сброса звонка живёт в
                 // JS (callRingTimer 180с). Если WebView заморожен/убит,
                 // dismissIncomingCall из JS никогда не придёт → уведомление
                 // CATEGORY_CALL и FGS phoneCall зависнут, а на MTK/Cubot
@@ -592,13 +577,11 @@ class VaultForegroundService : Service() {
                     watchdog.postDelayed(wdRunnable, 190_000)
                 } catch (_: Throwable) {}
 
-                // 3) Нативный зацикленный рингтон (28.08): звук канала
                 //    уведомления играет ОДИН раз, а HTML5 Audio в WebView
                 //    глохнет в фоне. MediaPlayer в сервисе крутится надёжно
                 //    до dismissIncomingCall — «сигнал не обрывается».
                 startRingtone(context)
 
-                // 2) Явно поднять activity (28.08): full-screen intent
                 //    срабатывает только при ЗАБЛОКИРОВАННОМ экране; при
                 //    разблокированном Android показывает лишь heads-up и
                 //    приложение остаётся свёрнутым. Поэтому сами стартуем
@@ -608,7 +591,6 @@ class VaultForegroundService : Service() {
                 //    phoneCall-FGS и блокирует запуск (BAL). Даём 400мс
                 //    на применение типа сервиса.
                 try {
-                    // 30.08: Android 14 блокирует bg-start, пока phoneCall-FGS
                     // не «устаканится» (Abort background activity starts).
                     // Ретраим: 600мс / 1.2с / 2.4с — одна из попыток пройдёт.
                     val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -645,9 +627,9 @@ class VaultForegroundService : Service() {
             try {
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 nm.cancel(CALL_NOTIF_ID)
-                // Остановить нативный рингтон (28.08).
+                // Остановить нативный рингтон.
                 stopRingtone()
-                // Вернуть FGS из phoneCall обратно в dataSync (28.08).
+                // Вернуть FGS из phoneCall обратно в dataSync.
                 instance?.let { exitCallMode(it) }
             } catch (e: Throwable) {
                 Log.w("VaultRust", "dismissIncomingCall failed: " + e.message)

@@ -13,7 +13,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 
 class MainActivity : TauriActivity() {
-  // Фоновый приём звонков (27.08): держим ссылку на WebView, чтобы не давать
+  // Фоновый приём звонков: держим ссылку на WebView, чтобы не давать
   // ему замерзать в onPause — иначе JS-таймеры (idleLoop / IMAP IDLE) встают
   // и входящие звонки не доходят, пока приложение свёрнуто.
   private var keepAliveWebView: WebView? = null
@@ -25,7 +25,7 @@ class MainActivity : TauriActivity() {
       System.loadLibrary("vault_desktop")
     }
 
-    // Статический мост для нативных кнопок уведомления (0.1.91): ACCEPT /
+    // Статический мост для нативных кнопок уведомления: ACCEPT /
     // REJECT из шторки дергают JS-функции window.__vaultAcceptCall() /
     // window.__vaultRejectCall() через живой WebView (keep-alive), минуя
     // рестарт UI и рассинхрон state machine.
@@ -46,12 +46,12 @@ class MainActivity : TauriActivity() {
       }
     }
 
-    // WebView живёт в activity-процессе (keep-alive 27.08). Статик-ссылка
+    // WebView живёт в activity-процессе. Статик-ссылка
     // ставится в onWebViewCreate, снимается в onDestroy.
     private var liveWebView: WebView? = null
   }
 
-  // ndk-context (28.08): tao 0.35 НЕ инициализирует crate ndk-context, из-за
+  // ndk-context: tao 0.35 НЕ инициализирует crate ndk-context, из-за
   // чего Rust-звонки падали с «android context was not initialized». Пробрасы-
   // ваем контекст явно; реализация — src-tauri/src/audio/audio_android.rs.
   private external fun nativeInitAndroidContext(context: android.content.Context)
@@ -65,7 +65,7 @@ class MainActivity : TauriActivity() {
     } catch (e: Throwable) {
       Log.e("VaultRust", "ndk-context init failed: " + e.message)
     }
-    // Звонки (27.08): на Android 13+ микрофон требует runtime-разрешения,
+    // Звонки: на Android 13+ микрофон требует runtime-разрешения
     // а не только записи в манифесте. cpal/AAudio без него падает при
     // старте audio-пайплайна после connected → приложение сворачивалось.
     // Запрашиваем один раз при запуске (пользователь видит системный
@@ -98,10 +98,10 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "POST_NOTIFICATIONS request failed: " + e.message)
     }
 
-    // Исключение из оптимизации батареи (28.08): без него Doze замораживает
+    // Исключение из оптимизации батареи: без него Doze замораживает
     // foreground-сервис и IMAP IDLE-цикл — входящие звонки не доходят при
     // выключенном экране. ВАЖНО: системный диалог ACTION_REQUEST_IGNORE_...
-    // открывается ПОВЕРХ приложения и уводит его в фон. Раньше он вызывался
+    // открывается ПОВЕРХ приложения и уводит его в фон.
     // при КАЖДОМ onCreate → «приложение само сворачивается». Теперь запрос
     // ОДНОРАЗОВЫЙ (флаг в SharedPreferences) — больше не дёргаем.
     try {
@@ -121,7 +121,7 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "battery-optimization request failed: " + e.message)
     }
 
-    // Отображение поверх окон (30.08): с этим правом Android разрешает запуск
+    // Отображение поверх окон: с этим правом Android разрешает запуск
     // MainActivity из фонового сервиса — экран звонка открывается сам при
     // свёрнутом приложении (иначе heads-up «откройте Vault»).
     try {
@@ -137,7 +137,7 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "overlay permission request failed: " + e.message)
     }
 
-    // Full-screen уведомления звонков (28.08): на Android 14+ (API 34)
+    // Full-screen уведомления звонков: на Android 14+ (API 34)
     // USE_FULL_SCREEN_INTENT стало СПЕЦИАЛЬНЫМ разрешением — оно НЕ
     // выдаётся автоматически, и без него setFullScreenIntent молча
     // деградирует в heads-up («маленькое окно» вместо экрана звонка).
@@ -157,7 +157,7 @@ class MainActivity : TauriActivity() {
       Log.w("VaultRust", "full-screen-intent permission request failed: " + e.message)
     }
 
-    // Headless-монитор (29.08): activity ЖИВА — JS (keep-alive WebView)
+    // Headless-монитор: activity ЖИВА — JS (keep-alive WebView)
     // доставляет сам даже свёрнутым, монитор молчит до onDestroy.
     // ВАЖНО: onCreate основной темы → startForegroundService; сервисный
     // onStartCommand на main-потоке выполнится ПОСЛЕ onResume, т.е. монитор
@@ -172,7 +172,6 @@ class MainActivity : TauriActivity() {
       val hasHash = !prefs.getString("pin_hash", null).isNullOrEmpty()
       val unlocked = prefs.getBoolean("unlocked", true)
       Log.i("VaultRust", "[lock] cold-start check: enabled=$en hash=$hasHash unlocked=$unlocked")
-      // 0.1.127: показ замка ТОЛЬКО в onResume (единственная точка) — здесь
       // ничего не стартуем: onCreate→onResume всё равно покажет замок, а
       // два LockActivity в стеке требовали двойного ввода кода.
     } catch (e: Throwable) {
@@ -196,7 +195,7 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     keepAliveWebView = webView
     liveWebView = webView
-    // Гео для SOS (duress, t_b185e3e2): WebView должен разрешать
+    // Гео для SOS: WebView должен разрешать
     // navigator.geolocation для tauri://localhost (prompt ниже выдаёт грант).
     try {
       val settings = webView.settings
@@ -232,10 +231,9 @@ class MainActivity : TauriActivity() {
 
   override fun onPause() {
     super.onPause()
-    // Замок (0.1.117): при уходе из приложения — сброс «разблокирован» и показ
-    // LockActivity при следующем возврате (паттерн банковских приложений).
+    // Замок: при уходе из приложения — сброс «разблокирован» и показ
+    // LockActivity при следующем возврате.
     try {
-      // 0.1.125: НЕ стартуем LockActivity здесь (старт при уходе давал «замок
       // на миг» — task-механика Android: отдельный task LockActivity оставался
       // позади при возврате). Армирование перенесено в onResume — замок
       // показывается ПОВЕРХ MainActivity в момент возврата.
@@ -261,7 +259,7 @@ class MainActivity : TauriActivity() {
     // и свёрнутым. Монитор понадобится только если activity уничтожат.
   }
 
-  // Headless-монитор (29.08): Rust-сторона держит монитор на паузе, пока
+  // Headless-монитор: Rust-сторона держит монитор на паузе, пока
   // жива MainActivity (JS доставляет всё сам — без дублей уведомлений).
   // Символ в VaultForegroundService — там живёт монитор.
   private external fun nativePauseMonitor(paused: Boolean)
@@ -270,7 +268,7 @@ class MainActivity : TauriActivity() {
     super.onResume()
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
     try { nativePauseMonitor(true) } catch (_: Throwable) {}
-    // Замок (0.1.125): вернулись в приложение — если PIN установлен и сессия
+    // Замок: вернулись в приложение — если PIN установлен и сессия
     // не разблокирована, показываем LockActivity ПОВЕРХ (same task, без
     // FLAG_ACTIVITY_NEW_TASK — он ломал видимость «мигнувшим» замком).
     try {

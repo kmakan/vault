@@ -23,7 +23,7 @@ pub enum DataType {
 /// Standalone Encryptor/Decryptor for Vault
 ///
 /// Produces transport-agnostic encrypted output that can be shared via
-/// any channel (WhatsApp, Telegram, email, etc.) and decrypted by any
+/// any channel and decrypted by any
 /// Vault client that has the matching key.
 pub struct Encryptor {
     signing_key: SigningKey,

@@ -63,7 +63,7 @@ pub fn derive_shared_key(private_hex: &str, peer_hex: &str) -> anyhow::Result<[u
     Ok(*shared.as_bytes())
 }
 
-/// Шифрование медиа-фрейма (звонки, defence in depth как SimpleX, но XChaCha20).
+/// Шифрование медиа-фрейма.
 /// Каждый Opus-фрейм шифруется перед отправкой в SRTP — nonce(24) + ciphertext.
 pub fn media_encrypt_frame(key: &[u8], frame: &[u8]) -> anyhow::Result<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit};
@@ -340,10 +340,9 @@ pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<S
 
     use chacha20poly1305::aead::Payload;
     // Стелс-метка: аутентифицируем групповые письма AAD="VAULT" — тот же
-    // маркер, что у 1-на-1 (encrypt_vault_cmd). Раньше групповые письма шли
+    // маркер, что у 1-на-1 (encrypt_vault_cmd).
     // БЕЗ AAD и определялись только по видимой теме `VaultGroup: <id>` —
     // не стелс и не надёжно. С меткой приём проверяет «это письмо Vault»
-    // криптографически (Poly1305), как и в 1-на-1.
     let payload = Payload {
         msg: plaintext.as_bytes(),
         aad: b"VAULT",
@@ -364,7 +363,7 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
     // Групповые сообщения идут через SMTP: отправка фолдит base64 строками ≤76
     // (спам-фильтр), и письмо приходит с '\n' внутри. Строгий base64-декодер
     // падает на переносах → сообщение не расшифровывается. Игнорируем все
-    // пробельные символы (тот же фикс, что в decrypt_vault_cmd).
+    // пробельные символы.
     let cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&cleaned)
@@ -387,7 +386,6 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
 
     use chacha20poly1305::aead::Payload;
     // Сначала пробуем формат со стелс-меткой (AAD="VAULT", текущий); при
-    // неудаче — legacy-формат БЕЗ AAD, чтобы групповые письма, зашифрованные
     // до введения метки, продолжали расшифровываться.
     let plaintext = match cipher.decrypt(
         nonce,

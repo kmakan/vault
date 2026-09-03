@@ -7,7 +7,7 @@ mod duress;
 mod email;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
-// API-запас (замечание 31.08 — публичный репозиторий без warnings).
+// API-запас.
 #[allow(dead_code)]
 mod history_store;
 mod key_escrow;
@@ -16,12 +16,12 @@ mod key_escrow_smoke;
 mod key_store;
 mod media;
 mod storage;
-// Headless IMAP-монитор для FGS-процесса (29.08): уведомления при убитом
+// Headless IMAP-монитор для FGS-процесса: уведомления при убитом
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
 #[cfg(target_os = "android")]
 mod service_monitor;
 
-/// Общий вход инициализации ndk-context (29.08): MainActivity
+/// Общий вход инициализации ndk-context: MainActivity
 /// (audio_android) и headless-монитор FGS (service_monitor) делят один
 /// флаг — двойная инициализация паниковала бы (panic=abort).
 #[cfg(target_os = "android")]
@@ -78,7 +78,7 @@ fn encrypt_vault_message(
     my_pq_seed: Option<String>,
     peer_pq_ek: Option<String>,
 ) -> Result<String, String> {
-    // PQ (30.08): если у контакта есть ML-KEM-ключ — гибридный конверт.
+    // PQ: если у контакта есть ML-KEM-ключ — гибридный конверт.
     // Фронт получает (wire, {pq, kemct}) и кладёт метаданные в JSON-конверт.
     // Нет PQ-ключа — legacy X25519 (старые контакты/клиенты).
     match (peer_public_key.as_deref(), peer_pq_ek.as_deref()) {
@@ -110,7 +110,7 @@ fn decrypt_vault_message(
     my_pq_seed: Option<String>,
     sender_pq_ek: Option<String>,
 ) -> Result<String, String> {
-    // PQ (30.08): "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид;
+    // PQ: "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид
     // прочее — legacy X25519. Порядок фолбэка важен: гибрид не должен
     // молча падать на legacy (иначе PQ-защита исчезает незаметно).
     let trimmed = ciphertext.trim();
@@ -165,7 +165,7 @@ fn save_my_keypair(
     pq_public_key: Option<String>,
     pq_private_key: Option<String>,
 ) -> Result<(), String> {
-    // PQ-мерж (30.08): при отсутствии новых PQ-полей сохраняем старые —
+    // PQ-мерж: при отсутствии новых PQ-полей сохраняем старые
     // экспорт/импорт и старый фронт (без PQ) не должны стирать PQ-пару.
     let (pq_public_key, pq_private_key) = match (pq_public_key, pq_private_key) {
         (Some(p), Some(s)) => (Some(p), Some(s)),
@@ -293,7 +293,7 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
 /// Слот 0 — IMAP-клиент (поллинг/фетчи); слот 1 — конфиг для SMTP-отправки.
 /// SMTP отдельно от IMAP-lock: при зависшей IMAP-сессии (сломанный сокет,
 /// каждая операция упирается в 30с таймаут) отправка НЕ должна ждать lock
-/// и падать «Timed out waiting for email client lock» (баг 20.08).
+/// и падать «Timed out waiting for email client lock».
 /// Слот 2 — IMAP IDLE-клиент (Фаза 1.5 звонков): отдельная сессия, чтобы
 /// IDLE (блокирующее ожидание) не держал lock основной сессии поллинга/UI.
 pub struct EmailState(
@@ -315,12 +315,11 @@ impl Default for EmailState {
     }
 }
 
-/// Фоновый IMAP IDLE-монитор (28.08, t_64e7241a): цикл «IDLE → fetch → emit»
+/// Фоновый IMAP IDLE-монитор: цикл «IDLE → fetch → emit»
 /// живёт в Rust-таске и НЕ зависит от JS-таймеров — при заморозке/торможении
 /// WebView доставка писем и сигналов звонков не деградирует до 30с-поллинга.
 /// Каждое событие: fetch_newer (INBOX+JUNK+All, свои курсоры) → emit
 /// «mail-changed» {messages, cursors}; фронт обрабатывает их тем же путём,
-/// что и раньше (processIncoming: звонки, непрочитанные, уведомления).
 #[derive(Default)]
 pub struct IdleMonitor {
     stop: Arc<AtomicBool>,
@@ -384,7 +383,6 @@ async fn email_idle_start(
             }
             // IDLE-тик 7с: серверный push приходит за ~1с, а сам тик служит
             // страховкой для JUNK (Gmail кладёт call_* в спам, IDLE-INBOX его
-            // не видит) — ровно как в старом JS-цикле.
             let changed = match client.idle_wait("INBOX", Duration::from_secs(7)).await {
                 Ok(o) => o == IdleOutcome::Changed,
                 Err(e) => {
@@ -453,7 +451,7 @@ async fn email_fetch_messages(state: State<'_, EmailState>) -> Result<Vec<EmailM
     // Полный скан (fetchPendingContactInvites/Accepts при входе) НЕ должен
     // блокировать UI-фетчи: если клиент занят — возвращаем пусто, инвайты
     // подхватятся следующим тиком. Иначе на большом INBOX полный скан
-    // держит lock десятки секунд и fetch_bodies падает (баг 20.08).
+    // держит lock десятки секунд и fetch_bodies падает.
     let Ok(mut guard) = state.0.try_lock() else {
         return Ok(Vec::new());
     };
@@ -488,7 +486,6 @@ async fn email_fetch_incremental(
 ) -> Result<IncrementalFetchResult, String> {
     // Поллинг НЕ ждёт lock: если клиент занят UI-операцией (fetch_bodies при
     // открытии чата), тик молча пропускается — фоновый поллинг не должен
-    // конкурировать с интерактивом за IMAP-сессию (баг 20.08: чаты пустые
     // из-за «Timed out waiting for email client lock»).
     let Ok(mut guard) = state.0.try_lock() else {
         eprintln!("[email] incremental SKIPPED: client lock busy");
@@ -529,10 +526,9 @@ async fn email_fetch_incremental_fast(
     state: State<'_, EmailState>,
     cursors: HashMap<String, u32>,
 ) -> Result<IncrementalFetchResult, String> {
-    // БЫСТРЫЙ фетч для звонков (22.08): работает на ОТДЕЛЬНОМ клиенте (как
     // email_fetch_bodies), НЕ конкурирует за основной lock (state.0), который
     // может быть занят зависшими операциями (троттлинг Gmail) — при этом
-    // входящий call_request не виден часами (баг «звонок не доходит»).
+    // входящий call_request не виден часами.
     let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
         .map_err(|_| "Timed out waiting for config lock".to_string())?
@@ -561,7 +557,7 @@ async fn email_fetch_body(
     let folder = folder.unwrap_or_else(|| "INBOX".to_string());
     // Поштучный фетч (инвайты/аватары) НЕ должен держать lock вечно:
     // таймаут на lock и на саму операцию — иначе при медленном сокете
-    // N писем × 30с блокируют UI-фетчи тел (баг 20.08).
+    // N писем × 30с блокируют UI-фетчи тел.
     let mut guard = t_timeout(Duration::from_secs(30), state.0.lock())
         .await
         .map_err(|_| "Timed out waiting for email client lock".to_string())?;
@@ -603,7 +599,7 @@ async fn email_fetch_bodies(
     // uid_fetch НЕ прерывается t_timeout (идёт до сокет-таймаута 30с).
     // На общем клиенте (поллинг + reconnect + retry) один такой фетч
     // держал lock 60-90с, и ВСЕ параллельные fetch_bodies падали по
-    // lock-таймауту (баг 20.08: чат открывался пустым). Отдельный клиент
+    // lock-таймауту. Отдельный клиент
     // из config: поллинг и UI не конкурируют вообще.
     let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
@@ -655,17 +651,15 @@ async fn email_send(
     // SMTP НЕ ждёт IMAP-lock: берём config из отдельного слота и отправляем
     // своим транспортом. Иначе при зависшей IMAP-сессии (сломанный сокет —
     // каждая операция упирается в 30с таймаут) отправка ждала бы lock и
-    // падала «Timed out waiting for email client lock» (баг 20.08).
+    // падала «Timed out waiting for email client lock».
     let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
         .map_err(|_| "Timed out waiting for config lock".to_string())?
         .clone()
         .ok_or_else(|| "Not connected to email server".to_string())?;
     let mut client = EmailClient::new(cfg);
-    // SMTP: lettre-транспорт с 30с таймаутом на операцию. ВАЖНО (23.08):
-    // раньше при зависании после DATA мы возвращали Ok(true) — фронт считал
+    // SMTP: lettre-транспорт с 30с таймаутом на операцию. ВАЖНО
     // отправку успешной, ретрай не запускался, сигнал звонка терялся навсегда
-    // («send timed out after DATA», answer не дошёл, медиа не поднялось).
     // Теперь возвращаем реальный статус: Err → JS-ретрай sendCallEnvelope ×3.
     match t_timeout(
         Duration::from_secs(45),
@@ -790,7 +784,7 @@ fn groups_rename_member(
         .map_err(|e| e.to_string())?
 }
 
-/// Membership по fingerprint (02.09): массовое заполнение fingerprint
+/// Membership по fingerprint: массовое заполнение fingerprint
 /// участников из peer_keys (ленивая миграция старых groups.json). Идемпотентно:
 /// пустой fingerprint не затирает существующий.
 #[tauri::command]
@@ -922,11 +916,10 @@ fn groups_set_key(group_id: String, group_key: String) -> Result<(), String> {
     groups::set_group_key(&group_id, &group_key).map_err(|e| e.to_string())
 }
 
-// --- Local persistence (Delta Chat-style disk DB, replaces
 // localStorage/IndexedDB for durable state) ---
 // Всё локальное состояние Vault живёт в sqlite (~/.local/share/
 // com.vault.vault/vault.db): история чатов, tombstones, IMAP-курсоры,
-// кэш тел, key/value. localStorage больше не источник истины — у него
+// кэш тел, key/value.
 // квота ~5 МБ (body-cache у Gmail-аккаунтов уже 3–7 МБ) и он ненадёжен
 // в WebKitGTK. Никакой зависимости от IndexedDB.
 
@@ -1019,7 +1012,7 @@ fn db_body_cache_load_all(account: String) -> Result<Vec<(String, String)>, Stri
         .map_err(|e| e.to_string())
 }
 
-/// N6: автоочистка — удалить с устройства всё старше cutoff (ISO).
+/// автоочистка — удалить с устройства всё старше cutoff (ISO).
 #[tauri::command]
 fn db_autoclean_purge(account: String, keys_json: String) -> Result<usize, String> {
     open_db()?
@@ -1032,7 +1025,7 @@ fn debug_log(msg: String) {
     eprintln!("[JS] {}", msg);
 }
 
-/// RELEASE-PREP (t_eb3465e4): проверка обновлений. GET latest.json с
+/// RELEASE-PREP: проверка обновлений. GET latest.json с
 /// vault-msg.ru (статический файл на нашем nginx, без серверного кода).
 /// Возвращает {version, changelog, apk_url, desktop_url} или
 /// Err(message) при сетевой недоступности — фронт покажет мягкий текст.
@@ -1044,8 +1037,7 @@ const UPDATE_ENDPOINT_HOST: &str = "vault-msg.ru";
 async fn check_app_update(current_version: String) -> Result<Option<serde_json::Value>, String> {
     const TIMEOUT_SECS: u64 = 10;
 
-    // Простое сравнение semver-подобных строк "0.1.100" > "0.1.99":
-    // численно по компонентам, не лексикографически ("0.1.9" > "0.1.10" иначе).
+    // численно по компонентам, не лексикографически.
     fn version_gt(a: &str, b: &str) -> bool {
         let parse = |s: &str| -> Vec<u64> {
             s.trim_start_matches('v')
@@ -1175,7 +1167,7 @@ fn android_open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-// Диагностика замка на Android (0.1.121): состояние SharedPreferences, которые
+// состояние SharedPreferences, которые
 // читает нативный LockActivity. Возвращает "enabled=…, hashLen=…" — видно на
 // экране настроек без adb (JS не имеет доступа к prefs напрямую).
 #[cfg(target_os = "android")]
@@ -1230,7 +1222,7 @@ fn android_duress_prefs_debug() -> Result<String, String> {
     Ok("desktop (no prefs)".into())
 }
 
-// Диагностика БД (0.1.116): фактический путь vault.db на устройстве.
+// фактический путь vault.db на устройстве.
 #[tauri::command]
 fn db_path_debug() -> Result<String, String> {
     let home = dirs::data_local_dir().ok_or("no data dir")?;
@@ -1241,7 +1233,7 @@ fn db_path_debug() -> Result<String, String> {
         .to_string())
 }
 
-// ── Duress-защита (t_b185e3e2) ──────────────────────────────────────────────
+// ── Duress-защита ──────────────────────────────────────────────
 #[tauri::command]
 fn duress_get_config() -> Result<duress::DuressConfig, String> {
     Ok(duress::load_config())
@@ -1287,9 +1279,9 @@ fn db_kv_set_all(entries: Vec<(String, String, String)>) -> Result<(), String> {
     open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())
 }
 
-// --- Backup (24.08): полный экспорт состояния — ключи + kv_store.
+// --- Backup: полный экспорт состояния — ключи + kv_store.
 // JSON можно сохранить в файл и восстановить на другом устройстве/после
-// переустановки (аналог «Экспорт резервной копии» у Delta Chat).
+// переустановки.
 #[tauri::command]
 fn export_backup() -> Result<String, String> {
     let keys = key_store::export_keys().map_err(|e| e.to_string())?;
@@ -1330,7 +1322,7 @@ fn import_backup(json_data: String) -> Result<String, String> {
     Ok(restored.join(", "))
 }
 
-// --- Key Recovery (25.08): мнемоника 12 слов обёртывает backup. ---
+// --- Key Recovery: мнемоника 12 слов обёртывает backup.
 // Генерация мнемоники (показывается пользователю один раз).
 #[tauri::command]
 fn recovery_generate_mnemonic() -> Result<String, String> {
@@ -1381,7 +1373,7 @@ fn recovery_parse_escrow_email(body: String) -> Result<Option<String>, String> {
     // fold_lines при отправке рвёт длинные строки на ~76 символов ЖЁСТКИМИ
     // переносами ВНУТРИ JSON (base64 wrapped разорван). decode_quoted_printable
     // восстанавливает только мягкие переносы (=). Поэтому перед парсингом
-    // убираем ВСЕ CR/LF — JSON соберётся обратно в одну строку (25.08, mail.ru).
+    // убираем ВСЕ CR/LF — JSON соберётся обратно в одну строку.
     let cleaned: String = body.chars().filter(|c| *c != '\n' && *c != '\r').collect();
     let trimmed = cleaned.trim();
     if !trimmed.contains("\"key_escrow\"") {
@@ -1426,7 +1418,7 @@ fn db_emails_clear(account: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // RUST_LOG (23.08): без инициализации лога error!/debug! из webrtc/rtc
+    // RUST_LOG: без инициализации лога error!/debug! из webrtc/rtc
     // не видны — ICE-gathering падал молча («ICE gathering timed out»).
     let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     if std::env::var("VAULT_LOG_INIT").is_err() {
@@ -1435,7 +1427,7 @@ pub fn run() {
             .filter_level(log::LevelFilter::Info)
             .parse_filters(&rust_log)
             .try_init();
-        // Android Rust-логи → logcat (26.08, диагностика звонков).
+        // Android Rust-логи → logcat.
         #[cfg(target_os = "android")]
         let _ = android_logger::init_once(
             android_logger::Config::default()
@@ -1558,11 +1550,11 @@ pub fn run() {
             // свёрнутым окном; autoplay-политика WebKitGTK не мешает).
             media::media_ringtone_start,
             media::media_ringtone_stop,
-            // Звуки звонка (27.08): WAV-ассеты через cpal (desktop) /
+            // Звуки звонка: WAV-ассеты через cpal (desktop) /
             // HTML5 Audio (Android, фронт сам).
             media::media_sound_play,
             media::media_sound_stop,
-            // Фаза 3 перепроектирования звонков (30.08): JS сообщает решение
+            // Фаза 3 перепроектирования звонков: JS сообщает решение
             // монитору-владельцу (call_state в monitor.db) — без него монитор
             // ставит missed поверх принятого звонка.
             #[cfg(target_os = "android")]
@@ -1648,13 +1640,13 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if CLOSE_TO_TRAY.load(Ordering::Relaxed) {
-                    // Duress-замок (0.1.118): окно уходит в трей, процесс живёт.
+                    // Duress-замок: окно уходит в трей, процесс живёт.
                     // Вебвью продолжает висеть «visible» — visibilitychange не
                     // сработает при возврате, и relock-флаг разблокировки не
                     // сбрасывался: замок не показывался при возврате из трея.
                     // Сигналим фронту ДО скрытия: фронт сбросит флаг сессии и
                     // поднимет LockScreen заранее — при показе окна замок уже
-                    // на экране (паттерн банковских приложений).
+                    // на экране.
                     use tauri::Emitter;
                     let _ = window.emit("vault://window-hidden", ());
                     window.hide().unwrap();
@@ -1664,10 +1656,9 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-    // ОТКАТ prevent_exit (29.08): удержание раннера после ExitRequested
+    // ОТКАТ prevent_exit: удержание раннера после ExitRequested
     // на Android оставляло живой процесс с УНИЧТОЖЕННОЙ activity —
     // повторный open пересоздавал activity, но wry не перепривязывал
     // поверхность WebView → чёрный экран до полного рестарта. Живучесть
     // процесса для пушей обеспечивает VaultForegroundService; уведомле-
-    // ния при мёртвом JS будут шться нативно со стороны Rust (след. шаг).
 }

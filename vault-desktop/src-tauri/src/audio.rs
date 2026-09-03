@@ -11,7 +11,7 @@
 //! (encode side) / from 48kHz mono (play side) happens in the callbacks with
 //! a linear resampler when the device rate differs.
 //!
-//! Platform audio I/O (27.08): desktop — cpal; Android — oboe/AAudio
+//! Platform audio I/O: desktop — cpal; Android — oboe/AAudio
 //! (`audio_android`), т.к. cpal на Android идёт через JNI и паникует при
 //! старте (panic=abort → приложение сворачивается). Opus/шифрование/RTP —
 //! общие, меняется только захват/воспроизведение.
@@ -47,7 +47,7 @@ use rtc::shared::time::SystemInstant;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 
-// Desktop (27.08): программный AEC/NS/AGC — WebRTC AudioProcessingModule.
+// Desktop: программный AEC/NS/AGC — WebRTC AudioProcessingModule.
 // Убирает акустическую петлю (динамики → микрофон) и клиппинг. Android не
 // нужен: там аппаратный AEC через InputPreset::VoiceCommunication (oboe).
 #[cfg(not(target_os = "android"))]
@@ -65,7 +65,7 @@ pub(crate) type Apm = Option<Arc<Processor>>;
 #[cfg(target_os = "android")]
 pub(crate) type Apm = ();
 
-/// 10мс-фрейм APM @ 48kHz (WebRTC фиксирован на 10мс). 20мс Opus-фрейм (960)
+/// 10мс-фрейм APM @ 48kHz. 20мс Opus-фрейм (960)
 /// обрабатывается двумя такими кусками.
 #[cfg(not(target_os = "android"))]
 const APM_FRAME: usize = 480;
@@ -98,7 +98,7 @@ fn create_apm() -> Result<Arc<Processor>, String> {
 }
 
 /// Обработать 20мс capture-фрейм (960 сэмплов @48k mono) через APM двумя
-/// 10мс-кусками (WebRTC фиксирован на 10мс). No-op без APM.
+/// 10мс-кусками. No-op без APM.
 #[cfg(not(target_os = "android"))]
 fn apm_capture(apm: &Apm, frame: &mut [f32]) {
     if let Some(ap) = apm {
@@ -137,7 +137,7 @@ macro_rules! build_mic {
         let mut encoder =
             Encoder::new(SampleRate::Hz48000, OpusChannels::Mono, Application::Voip)
                 .map_err(|e| e.to_string())?;
-        // Тюнинг Opus (27.08, шум в голосе): дефолтный Auto-битрейт даёт
+        // Тюнинг Opus: дефолтный Auto-битрейт даёт
         // ~12-16 кбит/с на тихой речи — «каша» и шум квантования. 48 кбит/с
         // + FEC (восстановление потерянных пакетов) + PLC-готовность 10% +
         // Voice-сигнал + максимальная complexity.
@@ -163,10 +163,10 @@ macro_rules! build_mic {
                             buf.push(avg);
                             if buf.len() >= FRAME_SAMPLES {
                                 let mut frame: Vec<f32> = buf.drain(..FRAME_SAMPLES).collect();
-                                // AEC/NS/AGC (27.08): обрабатываем capture-фрейм
+                                // AEC/NS/AGC: обрабатываем capture-фрейм
                                 // ДО кодирования — убираем петлю и клиппинг.
                                 apm_capture(&$apm, &mut frame);
-                                // RMS микрофона (диагностика 23.08): каждые
+                                // RMS микрофона: каждые
                                 // ~0.4с — реальный уровень захвата. Если mic
                                 // тихий (rms < 0.01) — проблема устройства,
                                 // а не кодека.
@@ -291,19 +291,18 @@ pub async fn run_audio_pipeline(
     mut stop_rx: watch::Receiver<bool>,
     muted: Arc<AtomicBool>,
     media_key: Option<[u8; 32]>,
-    // Динамик вкл/выкл (27.08): реальный эффект — на Android
+    // Динамик вкл/выкл: реальный эффект — на Android
     // (AudioManager.setSpeakerphoneOn через media_set_speaker); здесь
     // канал принимается для единой сигнатуры и будущего использования.
     _speaker_rx: watch::Receiver<bool>,
 ) {
-    // ВАЖНО (23.08): rtc вызывает on_track ТОЛЬКО на ПЕРВОМ RTP-пакете пира
+    // ВАЖНО: rtc вызывает on_track ТОЛЬКО на ПЕРВОМ RTP-пакете пира
     // (rtc-0.20 handler/endpoint.rs: «Fire OnOpen when received the first RTP
-    // packet»). Раньше мы ждали remote-трек ДО старта микрофона → обе стороны
     // ждали друг друга и никто не слал RTP: вечный deadlock, звука нет.
     // Теперь микрофон + writer стартуют СРАЗУ (RTP идёт, on_track срабатывает
     // у пира), а remote-трек ждём параллельно в отдельной таске.
 
-    // APM (27.08): общий для mic (capture) и speaker (render/reference).
+    // APM: общий для mic (capture) и speaker (render/reference).
     // Desktop — WebRTC AEC3+NS+AGC; Android — () (аппаратный AEC).
     #[cfg(not(target_os = "android"))]
     let apm: Apm = match create_apm() {
@@ -401,7 +400,7 @@ fn start_mic_capture_cpal(
     muted: Arc<AtomicBool>,
     apm: Apm,
 ) -> Result<cpal::Stream, String> {
-    // panic=abort: cpal может паниковать — ловим (26.08).
+    // panic=abort: cpal может паниковать — ловим.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         start_mic_capture_inner(opus_tx, muted, apm)
     })) {
@@ -467,7 +466,7 @@ async fn write_opus_loop(
         tokio::select! {
             frame = rx.recv() => {
                 let Some(frame) = frame else { break };
-                // E2E-шифрование медиа (26.08, как SimpleX): каждый Opus-фрейм
+                // E2E-шифрование медиа: каждый Opus-фрейм
                 // XChaCha20-Poly1305 поверх DTLS-SRTP — defence in depth.
                 let frame = match &media_key {
                     Some(k) => match crate::crypto::media_encrypt_frame(k, &frame) {
@@ -506,7 +505,7 @@ fn start_speaker(pcm_rx: Receiver<Vec<f32>>) -> Result<AudioStreamHandle, String
 
 #[cfg(not(target_os = "android"))]
 fn start_speaker_cpal(pcm_rx: Receiver<Vec<f32>>) -> Result<cpal::Stream, String> {
-    // panic=abort: cpal может паниковать — ловим (26.08).
+    // panic=abort: cpal может паниковать — ловим.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_speaker_inner(pcm_rx))) {
         Ok(r) => r,
         Err(_) => {
@@ -564,7 +563,7 @@ async fn read_remote_loop(
                 let Some(ev) = ev else { break };
                 match ev {
                     TrackRemoteEvent::OnRtpPacket(pkt) => {
-                        // E2E-расшифровка медиа (26.08): обратная операция.
+                        // E2E-расшифровка медиа: обратная операция.
                         let payload = match &media_key {
                             Some(k) => match crate::crypto::media_decrypt_frame(k, &pkt.payload) {
                                 Ok(p) => p,
@@ -575,11 +574,11 @@ async fn read_remote_loop(
                         let mut out = vec![0f32; DECODE_BUF];
                         if let Ok(n) = decoder.decode_float(Some(&payload[..]), &mut out[..], false) {
                             out.truncate(n);
-                            // AEC reference (27.08): скормить APM far-end сигнал
+                            // AEC reference: скормить APM far-end сигнал
                             // (то, что сейчас играет в динамиках) — без этого
                             // эхоподавление не знает, что вычитать из микрофона.
                             apm_render(&apm, &out);
-                            // RMS (диагностика шума 23.08): уровень принятого
+                            // RMS: уровень принятого
                             // аудио — каждые 20-й пакет. Если rms > 0.05, это
                             // реальный звук, не тишина.
                             static PKT_CNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -600,11 +599,11 @@ async fn read_remote_loop(
     }
 }
 
-// ── Звуки звонка (27.08, редизайн): WAV-ассеты вместо осциллятора 440 Гц ─────
+// ── Звуки звонка: WAV-ассеты вместо осциллятора 440 Гц ─────
 // Desktop: проигрываются через cpal (напрямую из Rust, не webview) — не зависят
 // от autoplay-политики WebKitGTK, слышны при свёрнутом окне. WAV вшиты в бинарь
 // (include_bytes!), ресемплятся под устройство линейной интерполяцией.
-// Android (26.08): cpal НЕ используется (AAudio через JNI паникует) — звуки
+// Android: cpal НЕ используется (AAudio через JNI паникует) — звуки
 // играет фронт через HTML5 Audio (public/sounds/*.wav), здесь no-op.
 //
 // ring_incoming / ring_outgoing — зацикленные (loop=true), останавливаются
@@ -623,8 +622,8 @@ const SND_CONNECT: &[u8] = include_bytes!("../sounds/ring_connect.wav");
 const SND_END: &[u8] = include_bytes!("../sounds/ring_end.wav");
 #[cfg(not(target_os = "android"))]
 const SND_MISSED: &[u8] = include_bytes!("../sounds/ring_missed.wav");
-// Варианты рингтонов (27.08, настройки звонков): пользователь выбирает в
-// Настройки → Звонки. Имена = суффикс файла: incoming_classic / incoming_pulse
+// Варианты рингтонов: пользователь выбирает в
+// Настройки → Звонки.
 // / outgoing_classic. Дефолт — ring_incoming/ring_outgoing («кристальный чайм»).
 #[cfg(not(target_os = "android"))]
 const SND_INCOMING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_incoming_classic.wav");
@@ -632,7 +631,7 @@ const SND_INCOMING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_incoming_clas
 const SND_INCOMING_PULSE: &[u8] = include_bytes!("../sounds/ring_incoming_pulse.wav");
 #[cfg(not(target_os = "android"))]
 const SND_OUTGOING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_outgoing_classic.wav");
-// «Можно говорить» (28.08): яркий восходящий двухтональный сигнал в момент
+// «Можно говорить»: яркий восходящий двухтональный сигнал в момент
 // реального соединения медиа (событие call-media-connected) — играет у ОБОИХ.
 #[cfg(not(target_os = "android"))]
 const SND_CONNECTED: &[u8] = include_bytes!("../sounds/ring_connected.wav");
@@ -754,16 +753,15 @@ pub fn sound_play(name: &str, looped: bool) -> Result<(), String> {
         "connect" => SND_CONNECT,
         "end" => SND_END,
         "missed" => SND_MISSED,
-        // Варианты рингтонов (27.08, настройки звонков).
+        // Варианты рингтонов.
         "incoming_classic" => SND_INCOMING_CLASSIC,
         "incoming_pulse" => SND_INCOMING_PULSE,
         "outgoing_classic" => SND_OUTGOING_CLASSIC,
-        // «Можно говорить» (28.08) — реальное соединение медиа.
+        // «Можно говорить» — реальное соединение медиа.
         "connected" => SND_CONNECTED,
         other => return Err(format!("unknown sound: {other}")),
     };
     // panic=abort + cpal может паниковать — ловим и возвращаем Err вместо
-    // мгновенного убийства процесса (26.08).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         _sound_play_inner(bytes, looped)
     }));

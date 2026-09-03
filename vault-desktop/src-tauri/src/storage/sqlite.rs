@@ -103,8 +103,8 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id);
             CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 
-            -- Vault local persistence (Delta Chat-style disk DB, replaces
-            -- localStorage/IndexedDB for durable state):
+            -- Vault local persistence (durable state, replaces
+            -- localStorage/IndexedDB):
             -- 1) chat history — the single source of truth for chats
             CREATE TABLE IF NOT EXISTS chat_history (
                 account TEXT NOT NULL,
@@ -145,13 +145,11 @@ impl Storage {
                 value TEXT NOT NULL,
                 PRIMARY KEY (account, key)
             );
-            -- 6) envelope cache (Delta Chat-style): the fetched mail list per
-            --    account. this.emails is in-memory only — on restart it was
-            --    empty while UID cursors were already advanced, so old mails
-            --    (below the cursor) never came back and chats looked empty
-            --    (20.08 icemaksim: «сообщение не появилось»). Persisting the
-            --    envelope list keeps cursors and mails consistent across
-            --    restarts without a full IMAP rescan.
+            -- 6) envelope cache: the fetched mail list per account. Without it
+            --    the in-memory list is empty after a restart while UID cursors
+            --    are already advanced, so old mails never come back and chats
+            --    look empty. Persisting the envelope list keeps cursors and
+            --    mails consistent across restarts without a full IMAP rescan.
             CREATE TABLE IF NOT EXISTS emails (
                 account TEXT NOT NULL,
                 uid TEXT NOT NULL,
@@ -395,7 +393,7 @@ impl Storage {
         })
     }
 
-    // ─── Vault persistence (Delta Chat-style disk DB) ─────────────
+    // ─── Vault persistence ─────────────
 
     // Chat history: full JSON dump per (account, chat_key). Atomic upsert.
     pub fn save_history(&self, account: &str, chat_key: &str, messages_json: &str) -> Result<()> {
@@ -473,7 +471,7 @@ impl Storage {
 
     // Body cache: encrypted mail bodies by "folder:uid". Can grow to several MB,
     // must NOT live in localStorage (5 MB cap).
-    /// Полное стирание пользовательских данных (panic-PIN, t_b185e3e2):
+    /// Полное стирание пользовательских данных
     /// чаты/история/письма/тумбы/кэши/курсоры/kv — вся таблица emails и kv_store.
     /// Схема остаётся (база продолжает работать «с нуля»).
     pub fn wipe_user_data(&self) -> Result<()> {
@@ -527,7 +525,7 @@ impl Storage {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    /// N6 (28.08, паритет Delta Chat «Автоочистка»): удалить с устройства
+    /// удалить с устройства
     /// перечисленные письма. Ключи — JSON-массив "folder:uid" (список считает
     /// фронт через new Date(): колонка date — сырой заголовок Date (RFC 2822),
     /// лексикографическое сравнение с ISO в SQL НЕРАБОТО, поэтому даты не

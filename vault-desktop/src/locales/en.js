@@ -44,7 +44,7 @@ export default {
   settings_profile_saved: 'Profile saved — contacts will update it',
   settings_cancel: 'Cancel',
 
-  // Duress (t_b185e3e2)
+  // Duress
   duress_recipients: "SOS recipients",
   duress_no_contacts: "Add contacts to send them an SOS",
   duress_title: "Duress protection",
@@ -134,7 +134,7 @@ export default {
   call_canceled: 'Call canceled',
   call_ended: 'Call ended',
   call_back: 'Call back',
-  // Call settings (27.08)
+  // Call settings
   settings_calls: 'Calls',
   calls_ringtone_incoming: 'Incoming ringtone',
   calls_ringtone_outgoing: 'Ringback tone',
@@ -444,7 +444,7 @@ export default {
   recovery_moved_toast: 'Escrow letter moved to Inbox. Do NOT delete this letter — it is needed to restore your account.',
   recovery_move_fail: 'Could not move the letter to Inbox automatically. Please move it to Inbox manually. Do NOT delete this letter — it is needed to restore your account.',
   recovery_keep: 'Do NOT delete this letter — it is needed to restore your account.',
-  // QRCodePanel (02.09, i18n audit: was fully hardcoded)
+  // QRCodePanel
   qr_add_contact: 'Add contact',
   qr_subtitle: 'Exchange keys to start a secure chat',
   qr_step1_title: 'Share your ID with the other person',

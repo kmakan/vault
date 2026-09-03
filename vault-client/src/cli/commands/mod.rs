@@ -39,7 +39,6 @@ pub enum Command {
         subject: String,
     },
 
-    // ── Telegram-like features ──────────────────────────────
     React {
         id: String,
         emoji: String,
@@ -295,7 +294,6 @@ impl Command {
                     }
                 }
 
-                // Telegram-like features
                 "react" => {
                     let mut parts = args.splitn(2, ' ');
                     match (parts.next(), parts.next()) {
@@ -725,7 +723,6 @@ impl Command {
                         Command::Unknown("/keyshare requires a contact name or email".into())
                     } else {
                         // Parse: /keyshare <contact> [method]
-                        // Methods: copy, signal, simplex, pgp, briar
                         let parts: Vec<&str> = args.splitn(2, ' ').collect();
                         let contact = parts[0].to_string();
                         let method = parts.get(1).map(|s| s.to_lowercase());
@@ -1350,11 +1347,11 @@ mod tests {
             _ => panic!(),
         }
         // Test with method
-        let cmd = Command::parse("/keyshare alice@test.com signal");
+        let cmd = Command::parse("/keyshare alice@test.com chat");
         match cmd {
             Command::KeyShare { contact, method } => {
                 assert_eq!(contact, "alice@test.com");
-                assert_eq!(method, Some("signal".into()));
+                assert_eq!(method, Some("chat".into()));
             }
             _ => panic!(),
         }

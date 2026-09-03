@@ -8,7 +8,6 @@
 // уже полученного (и расшифрованного) письма. Это сохраняет zero-metadata.
 //
 // FCM/UnifiedPush (если появится) будет лишь «будильником», запускающим этот
-// же поллинг, когда приложение закрыто — как в почтовый мессенджер.
 // ═════════════════════════════════════════════════════════════════════════
 import {
   isPermissionGranted,
@@ -78,7 +77,7 @@ export async function initNotifications() {
 //   зашифрованных сообщений, чтобы не утекал контент), id — uid письма для
 //   дедупликации. Возвращает true, если уведомление показано.
 export function notifyNewMessage({ title, body, id } = {}) {
-  // ДИАГНОСТИКА (29.08): молчаливые отказы — главная причина «пуша нет».
+  // молчаливые отказы — главная причина «пуша нет».
   if (!notificationsEnabled()) { console.log('[notify] SKIP: disabled by setting'); return false; }
   if (!permissionReady) { console.log('[notify] SKIP: permission not ready'); return false; }
   if (id != null && notifiedIds.has(String(id))) { console.log('[notify] SKIP: already notified id=' + id); return false; }
@@ -90,7 +89,6 @@ export function notifyNewMessage({ title, body, id } = {}) {
     // Android: системный small icon — те же два полумесяца, что и у фонового
     // уведомления в шторке (VaultForegroundService → R.drawable.ic_notification).
     // Имя ресурса ДОЛЖНО существовать в res/drawable: плагин ищет его через
-    // getIdentifier и молча откатывается на «!» (ic_dialog_info), если нет.
     // На десктопе иконку берёт плагин из окна приложения (auto_icon) —
     // передавать имя drawable нельзя (notify-rust ищет файл по имени).
     const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// Historically this struct also carried `base_url` / `access_token` /
 /// `refresh_token` for the REST backend (localhost:9443). The backend was
-/// removed on 16.08.2026 in favour of the serverless email transport, so only
 /// the fields actually used by the CLI remain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {

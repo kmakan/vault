@@ -16,7 +16,7 @@ pub struct Contact {
     pub email: String,
     pub name: String,
     pub public_key: String,
-    /// PQ (30.08): ek ML-KEM-768 контакта (b64). None — контакт без PQ.
+    /// PQ: ek ML-KEM-768 контакта (b64). None — контакт без PQ.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pq_public_key: Option<String>,
     pub fingerprint: String,

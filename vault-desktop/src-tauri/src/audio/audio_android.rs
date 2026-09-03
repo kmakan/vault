@@ -1,13 +1,10 @@
-//! Нативный аудио-путь Android (27.08): Oboe/AAudio вместо cpal — как SimpleX.
 //!
 //! cpal на Android идёт через JNI (JavaVM/AAudio через Java) — паникует при
 //! старте аудио (panic=abort → приложение «сворачивается»). Oboe — чистый
-//! C++ через NDK, без JNI: тот же механизм, что у SimpleX (libwebrtc → Oboe).
 //!
 //! Микрофон: Oboe-колбэк (высокоприоритетный аудио-поток) → 20мс-фреймы →
 //! Opus encode → канал на writer (в точности как cpal-макрос build_mic,
 //! но без JNI). Динамик: декодированные PCM-чанки → Oboe-колбэк (cpal
-//! build_speaker). Формат end-to-end — 48кГц моно f32 (как у Opus).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -55,7 +52,7 @@ impl AudioInputCallback for MicCallback {
                     self.buf.push(s);
                     if self.buf.len() >= FRAME_SAMPLES {
                         let frame: Vec<f32> = self.buf.drain(..FRAME_SAMPLES).collect();
-                        // RMS микрофона (диагностика): реальный уровень захвата.
+                        // RMS микрофона: реальный уровень захвата.
                         self.frame_cnt += 1;
                         if self.frame_cnt % 20 == 0 {
                             let rms: f32 = (frame.iter().map(|s| s * s).sum::<f32>()
@@ -124,7 +121,6 @@ pub(crate) fn start_mic_capture_oboe(
 ) -> Result<MicStream, String> {
     let mut encoder = Encoder::new(OpusRate::Hz48000, OpusChannels::Mono, Application::Voip)
         .map_err(|e| format!("opus encoder: {e}"))?;
-    // Тюнинг Opus (27.08, шум в голосе) — как в desktop build_mic!:
     // 48 кбит/с + FEC + PLC-готовность + Voice + complexity 10.
     encoder
         .set_bitrate(audiopus::Bitrate::BitsPerSecond(48000))
@@ -186,17 +182,15 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
     Ok(stream)
 }
 
-// ─── Инициализация ndk-context из Kotlin (28.08) ───────────────────────────
-// Корень бага «входящий звонок молча не показывается»: tao 0.35 (Tauri 2.11)
+// ─── Инициализация ndk-context из Kotlin ───────────────────────────
+// tao 0.35 (Tauri 2.11)
 // хранит Android-контекст в собственной приватной карте и НЕ инициализирует
 // crate ndk-context → ndk_context::android_context() паникует
 // ("android context was not initialized") на каждом JNI-пути (logcat Cubot,
-// 28.08: panic в tokio-rt-worker сразу после incoming_ringing SET).
-// Фикс: MainActivity.kt вызывает nativeInitAndroidContext(this) один раз в
+// MainActivity.kt вызывает nativeInitAndroidContext(this) один раз в
 // onCreate; мы делаем GlobalRef (local-ссылка живёт только до возврата из
 // JNI!) и отдаём указатели в ndk-context. Дальше весь существующий код
 // (showIncomingCall / dismiss / speakerphone) работает без изменений.
-// 29.08: CTX_INIT_DONE перенесён в service_monitor::ensure_ndk_context —
 // общий флаг для MainActivity И FGS-монитора (двойной
 // initialize_android_context = panic=abort смерть процесса).
 
@@ -208,7 +202,6 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativeInitAndroidCont
     _activity: jni::objects::JObject,
     context: jni::objects::JObject,
 ) {
-    // 29.08: инициализация перенесена в общий ensure_ndk_context (используется
     // и headless-монитором из FGS-процесса — service_monitor.rs). Флаг
     // CTX_INIT_DONE разделяется обоими входами: повторный
     // initialize_android_context паникует, а у нас panic=abort — процесс умер
@@ -223,7 +216,6 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativeInitAndroidCont
 /// classloader и НЕ видит классы APK (ClassNotFoundException). Резолвим
 /// через classloader активити — Activity.getClassLoader() (метод Context,
 /// НЕ Object.getClass().getClassLoader() — то дало бы BootClassLoader и
-/// уронило процесс, logcat Cubot 28.08).
 pub(crate) fn find_app_class(
     env: &mut jni::JNIEnv,
     activity: &jni::objects::JObject,
@@ -256,7 +248,7 @@ pub(crate) fn find_app_class(
     Ok(unsafe { jni::objects::JClass::from_raw(cls.as_raw()) })
 }
 
-/// Динамик вкл/выкл (27.08): AudioManager.setSpeakerphoneOn через JNI.
+/// Динамик вкл/выкл: AudioManager.setSpeakerphoneOn через JNI.
 /// Вызывается из media_set_speaker. Без AAudio-стримов — только маршрутизация
 /// вывода (earpiece ↔ speaker). Ошибки логируем, не роняем звонок.
 pub(crate) fn set_speakerphone(on: bool) {
@@ -298,16 +290,15 @@ pub(crate) fn set_speakerphone(on: bool) {
     }
 }
 
-/// Full-screen уведомление входящего звонка (28.08): вызывает статический
+/// Full-screen уведомление входящего звонка: вызывает статический
 /// VaultForegroundService.showIncomingCall(context, callerName) через JNI.
-/// Возвращает true при успехе (headless-монитор 29.08 использует как сигнал
 /// «нативный звонок показан»); Java-exception гасится exception_clear —
 /// pending-exception ронял процесс при следующем входе в JVM.
 pub(crate) fn show_incoming_call_notification(caller_name: &str) -> bool {
     show_incoming_call_notification_ext(caller_name, "", "")
 }
 
-/// Расширенная версия (29.08): передаёт email звонящего и call_id в Kotlin —
+/// Расширенная версия: передаёт email звонящего и call_id в Kotlin
 /// нужны нативной кнопке «Отклонить» (call_reject через Rust-мост).
 pub(crate) fn show_incoming_call_notification_ext(
     caller_name: &str,

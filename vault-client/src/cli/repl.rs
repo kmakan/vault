@@ -267,7 +267,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         "text": &message,
                         "name": ctx.config.email.as_deref().unwrap_or(""),
                         "avatar": "",
-                        // Desktop-совместимость (30.08): свой pubkey в конверте
+                        // Desktop-совместимость: свой pubkey в конверте
                         // + PQ ek — получатель сохранит контакт и ответит гибридом.
                         "key": ctx.crypto.public_key_hex().unwrap_or_default(),
                         "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default()
@@ -618,7 +618,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                 if obj.get("vault").and_then(|v| v.as_i64())
                                                     == Some(1) =>
                                             {
-                                                // PQ (30.08): конверт несёт pubkey
+                                                // PQ: конверт несёт pubkey
                                                 // отправителя (+pq ek) — как
                                                 // Desktop: сохраняем/обновляем
                                                 // контакт, чтобы ответить
@@ -1123,33 +1123,18 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
             if let Some(pub_hex) = ctx.crypto.public_key_hex() {
                 match method.as_deref() {
-                    Some("signal") => {
-                        Output::info(&format!("Key for {} — Send via Signal", contact));
+                    Some("chat") => {
+                        Output::info(&format!("Key for {} — send via a secure chat", contact));
                         println!();
                         println!("  Your public key ({}):", contact);
                         println!("  {}", pub_hex);
                         println!();
                         Output::warn("Instructions:");
-                        println!("  1. Open Signal → {}'s chat", contact);
+                        println!("  1. Open any end-to-end encrypted chat with {}", contact);
                         println!("  2. Paste the key above");
                         println!("  3. Ask them to save it and reply with theirs");
                         println!();
-                        Output::warn("⚠  Signal may be blocked in your region (RU, CN, IR).");
-                        Output::warn("   Use a VPN to connect if needed.");
-                    }
-                    Some("simplex") => {
-                        Output::info(&format!("Key for {} — Send via SimpleX", contact));
-                        println!();
-                        println!("  Your public key ({}):", contact);
-                        println!("  {}", pub_hex);
-                        println!();
-                        Output::warn("Instructions:");
-                        println!("  1. Open SimpleX → {}'s chat", contact);
-                        println!("  2. Paste the key above");
-                        println!("  3. Ask them to save it and reply with theirs");
-                        println!();
-                        Output::warn("⚠  SimpleX may require VPN in some regions.");
-                        Output::warn("   Download: https://simplex.chat");
+                        Output::warn("⚠  Some messengers may require a VPN in your region.");
                     }
                     Some("pgp") => {
                         Output::info(&format!("Key for {} — Send via PGP email", contact));
@@ -1165,38 +1150,23 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         println!("  Subject: [Vault] Public Key Exchange");
                         println!("  Body: <your encrypted public key>");
                     }
-                    Some("briar") => {
-                        Output::info(&format!("Key for {} — Send via Briar", contact));
-                        println!();
-                        println!("  Your public key ({}):", contact);
-                        println!("  {}", pub_hex);
-                        println!();
-                        Output::warn("Instructions:");
-                        println!("  1. Open Briar → {}'s chat", contact);
-                        println!("  2. Paste the key above");
-                        println!("  3. Ask them to save it and reply with theirs");
-                        println!();
-                        Output::info("Briar uses Tor — no VPN needed.");
-                        Output::info("Download: https://briarproject.org");
-                    }
                     Some("copy") | None => {
                         Output::info(&format!("Sharing public key with {}...", contact));
                         Output::fingerprint(&pub_hex);
                         println!();
                         Output::info("Key exchange methods:");
                         println!("  1. QR Code    — scan in person (most secure)");
-                        println!("  2. Copy below — send via Signal/Telegram/WhatsApp");
+                        println!("  2. Copy below — send via any secure channel");
                         println!("  3. Email PGP  — send via encrypted email");
                         println!();
                         Output::warn("Copy this key and send via a secure channel:");
                         println!("  {}", pub_hex);
                         println!();
-                        Output::warn("⚠  Signal may be blocked in your region (RU, CN, IR).");
-                        Output::warn("   Use VPN if you cannot connect to Signal.");
+                        Output::warn("⚠  Some messengers may require a VPN in your region.");
                     }
                     Some(unknown) => {
                         Output::error(&format!(
-                            "Unknown method '{}'. Available: copy, signal, simplex, pgp, briar",
+                            "Unknown method '{}'. Available: copy, chat, pgp",
                             unknown
                         ));
                     }
@@ -1774,7 +1744,6 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             Output::success(&format!("Set {} = {}", key, value));
         }
 
-        // ── Telegram-like features ──────────────────────────
         Command::React { id, emoji } => {
             let user = ctx.config.email.as_deref().unwrap_or("local");
             if !Reaction::is_valid_emoji(&emoji) {
@@ -2045,15 +2014,11 @@ fn print_help(topic: Option<&str>) {
                     "",
                     "Key exchange methods:",
                     "  /ks <email>            — show all methods (default: copy)",
-                    "  /ks <email> signal     — copy key + Signal instructions",
-                    "  /ks <email> simplex    — copy key + SimpleX instructions",
+                    "  /ks <email> chat       — copy key + secure-chat instructions",
                     "  /ks <email> pgp        — copy key + PGP email template",
-                    "  /ks <email> briar      — copy key + Briar instructions",
                     "  /ks <email> copy       — just show the key to copy",
                     "",
-                    "⚠  Signal may be blocked in some regions (RU, CN, IR).",
-                    "   Use VPN if you cannot connect to Signal.",
-                    "   SimpleX also may need VPN. Briar uses Tor (no VPN).",
+                    "⚠  Some messengers may require a VPN in your region.",
                 ],
             );
         }
@@ -2078,7 +2043,7 @@ fn print_help(topic: Option<&str>) {
         }
         Some("folders") => {
             Output::block(
-                "/folder* — Chat folders (Telegram-style)",
+                "/folder* — Chat folders",
                 &[
                     "  /foldercreate <name> [icon]   Create a folder (default: 📁)",
                     "  /folderdelete <name>          Delete a folder",
@@ -2123,7 +2088,7 @@ fn print_help(topic: Option<&str>) {
         }
         Some("groups") => {
             Output::block(
-                "/group* — Group management (Telegram-style, no server)",
+                "/group* — Group management (no server)",
                 &[
                     "  /creategroup <name>         Create a new group",
                     "  /groupmembers <id>         List group members",
@@ -2352,7 +2317,7 @@ fn print_help(topic: Option<&str>) {
                     "  KEYS & ENCRYPTION",
                     "    /keygen            Generate key pair",
                     "    /keys              Show key status",
-                    "    /ks <email> [m]  Share public key (copy|signal|pgp|briar)",
+                    "    /ks <email> [m]  Share public key (copy|chat|pgp)",
                     "    /encrypt <text>    Encrypt text",
                     "    /decrypt <text>    Decrypt text",
                     "",

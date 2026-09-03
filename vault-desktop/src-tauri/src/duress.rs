@@ -1,4 +1,4 @@
-// ── Duress-защита (t_b185e3e2, ТЗ юзера 31.08) ──────────────────────────────
+// ── Duress-защита ──────────────────────────────
 // Замок приложения + panic-PIN (стереть всё) + duress-PIN (SOS-письмо с гео).
 //
 // Хранение: kv_store (account='anon', key='duress-config'), JSON:
@@ -107,7 +107,7 @@ mod tests {
     }
 }
 
-// ── Tauri-команды duress (t_b185e3e2) ───────────────────────────────────────
+// ── Tauri-команды duress ───────────────────────────────────────
 // Хранение конфига — kv_store('anon', 'duress-config'). Действия по типу ввода
 // решает фронт (у него контекст UI); Rust даёт крипту (хэш/проверка) и wipe.
 
@@ -155,7 +155,7 @@ pub fn save_config(cfg: &DuressConfig) -> Result<(), String> {
         &serde_json::to_string(cfg).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    // Android (0.1.117): дублируем замок в SharedPreferences — Kotlin-замок
+    // Android: дублируем замок в SharedPreferences — Kotlin-замок
     // (LockActivity) читает prefs, а не БД: единый источник конфига для
     // нативного экрана блокировки.
     #[cfg(target_os = "android")]
@@ -186,7 +186,7 @@ pub fn wipe_all_data() -> Result<(), String> {
     s.wipe_user_data().map_err(|e| e.to_string())
 }
 
-// ── Android-мост замка (0.1.117): PBKDF2-проверка для LockActivity ─────────
+// ── Android-мост замка: PBKDF2-проверка для LockActivity ─────────
 // Вызывается из Kotlin (external fun nativeVerifyPin). Тот же verify_secret,
 // что у JS-замка: один формат хэша —salt:hash hex.
 #[cfg(target_os = "android")]
@@ -271,7 +271,7 @@ pub fn sync_prefs_android(
     }
 }
 
-// ── Android: duress/panic из нативного LockActivity (0.1.130) ────────────────
+// ── Android: duress/panic из нативного LockActivity ────────────────
 
 /// Полный вайп при panic-коде: ключи, БД сообщений, конфиг замка (в т.ч. prefs).
 #[cfg(target_os = "android")]

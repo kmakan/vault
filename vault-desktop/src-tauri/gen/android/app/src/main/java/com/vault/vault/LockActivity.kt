@@ -12,13 +12,12 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 
-/// Экран блокировки (duress, 0.1.117): показывается при возврате в приложение,
-/// если PIN установлен. Паттерн банковских приложений: активность поверх всего,
+/// Экран блокировки: показывается при возврате в приложение
+/// если PIN установлен.
 /// WebView недоступен, пока код не введён. Проверка хэша — через
 /// VaultForegroundService.verifyPinHash (Rust PBKDF2 через JNI).
-/// Биометрия (02.09): если bio_enabled и сканер доступен — при открытии замка
+/// Биометрия: если bio_enabled и сканер доступен — при открытии замка
 /// сразу всплывает BiometricPrompt; отпечаток снимает ТОЛЬКО обычный замок
-/// (duress/panic — как и раньше, только вводом кода, чтобы не обходить SOS).
 class LockActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -107,7 +106,7 @@ class LockActivity : AppCompatActivity() {
       } else false
     }
 
-    // Кнопка «По отпечатку» (02.09): повторный вызов промпта, если пользователь
+    // Кнопка «По отпечатку»: повторный вызов промпта, если пользователь
     // отменил системный диалог. Показывается только когда биометрия доступна.
     val bioBtn = Button(this).apply {
       text = "👆 По отпечатку"
@@ -123,7 +122,7 @@ class LockActivity : AppCompatActivity() {
     (bioBtn.layoutParams as LinearLayout.LayoutParams).topMargin = (pad / 2)
     setContentView(root)
 
-    // Автопоказ промпта при открытии замка (как в банковских приложениях).
+    // Автопоказ промпта при открытии замка.
     val bioOn = getSharedPreferences("vault_duress", MODE_PRIVATE).getBoolean("bio_enabled", false)
     if (bioOn && canBiometric()) {
       bioBtn.visibility = android.view.View.VISIBLE
@@ -133,7 +132,7 @@ class LockActivity : AppCompatActivity() {
 
   // Класс сканера: WEAK|STRONG, а не только STRONG. Cubot X50 (Android 11)
   // имеет сканер Class 3 (WEAK) — с BIOMETRIC_STRONG canAuthenticate возвращал
-  // NOT_SUPPORTED и промпт молча не появлялся (баг 02.09, живой тест).
+  // NOT_SUPPORTED и промпт молча не появлялся.
   private val bioAuth: Int
     get() = BiometricManager.Authenticators.BIOMETRIC_WEAK or
             BiometricManager.Authenticators.BIOMETRIC_STRONG

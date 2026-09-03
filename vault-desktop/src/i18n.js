@@ -11,7 +11,6 @@ const state = reactive({
 
 export function useI18n() {
   // t(key, params?) — params подставляются в {плейсхолдеры} строки
-  // (02.09: нужно для 'Profile {name}', '{ttl}' и т.п. — раньше t() брал
   // только ключ, и приходилось склеивать строки руками).
   const t = (key, params) => {
     let s = locales[state.locale]?.[key] || locales.en[key] || key

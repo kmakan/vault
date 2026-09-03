@@ -47,7 +47,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 /// Opus dynamic payload type (both ends are our app; registered in MediaEngine).
 const OPUS_PAYLOAD_TYPE: u8 = 120;
 /// Max time to wait for ICE gathering before giving up (non-trickle).
-/// 4с (27.08): было 15с — ответ (SDP) создавался слишком долго, звонок
+/// 4с: было 15с — ответ (SDP) создавался слишком долго, звонок
 /// успевал сгореть по таймеру гудка. Host-кандидаты собираются <1с;
 /// STUN/srflx за 4с успевают, иначе отдаём то, что есть (wait_for_local_sdp
 /// на таймауте не падает, а отдаёт частичные кандидаты).
@@ -66,13 +66,13 @@ struct CallSession {
     stop_tx: watch::Sender<bool>,
     /// Mic mute flag (checked by the capture callback).
     muted: Arc<AtomicBool>,
-    /// Динамик вкл/выкл (27.08): desktop — смена устройства вывода,
+    /// Динамик вкл/выкл: desktop — смена устройства вывода
     /// Android — speakerphone через JNI (audio_android::set_speakerphone).
     speaker_tx: watch::Sender<bool>,
-    /// Мгновенный hangup поверх WebRTC (28.08): DataChannel «vault-ctrl».
+    /// DataChannel «vault-ctrl».
     /// call_end по email идёт 30-60с — собеседник сидит с трубкой. DC
     /// доставляет «hangup» за миллисекунды после DTLS. None до открытия.
-    /// Слот общий (29.08): у звонящего в нём его собственный канал, у
+    /// Слот общий: у звонящего в нём его собственный канал, у
     /// принимающего — канал, пришедший через on_data_channel.
     dc: Arc<Mutex<Option<Arc<dyn DataChannel>>>>,
 }
@@ -82,7 +82,7 @@ struct CallSession {
 pub struct SdpResult {
     pub sdp: String,
     pub call_id: String,
-    /// PQ (30.08): инкапсуляция против ek принимающего (b64) — фронт кладёт
+    /// PQ: инкапсуляция против ek принимающего (b64) — фронт кладёт
     /// в call-конверт (sendCallEnvelope), принимающий передаёт в
     /// media_accept_incoming. None = legacy-звонок (нет PQ у одной из сторон).
     #[serde(default)]
@@ -98,13 +98,11 @@ struct CallHandler {
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     track_tx: Sender<Arc<dyn TrackRemote>>,
-    /// Мгновенный hangup (28.08): входящий DataChannel от пира (callee
     /// получает канал, созданный caller'ом, через DCEP-негосиацию).
     dc_tx: Sender<Arc<dyn DataChannel>>,
-    /// Состояние соединения (28.08): пробрасываем ВСЕ смены состояния в UI.
+    /// Состояние соединения: пробрасываем ВСЕ смены состояния в UI.
     /// Корень «экран не закрывается»: когда пир кладёт трубку, а DataChannel
-    /// уже мёртв (ICE Disconnected) и email call_end не дошёл — единственный
-    /// сигнал о завершении это ICE-состояние. Раньше обрабатывался только
+    /// сигнал о завершении это ICE-состояние.
     /// Connected, и UI не узнавал о разрыве.
     state_tx: Sender<RTCPeerConnectionState>,
 }
@@ -121,7 +119,7 @@ impl PeerConnectionEventHandler for CallHandler {
         if state == RTCPeerConnectionState::Connected {
             let _ = self.connected_tx.try_send(());
         }
-        // Пробрасываем каждое состояние в UI (28.08) — см. state_tx.
+        // Пробрасываем каждое состояние в UI — см. state_tx.
         let _ = self.state_tx.try_send(state);
     }
 
@@ -139,17 +137,15 @@ impl CallMediaManager {
         // Dev fallback: public STUN (roadmap: dev-only; X2TURN comes in Phase 3).
         // Множество серверов: stun.l.google.com из РФ/с мобильного интернета может
         // быть недоступен (замедление/блокировка) → gathering таймаутил на Android
-        // (27.08: answer создавался 22с, пока Google STUN не отвечал). Запросы ко
+        // Запросы ко
         // всем серверам идут ПАРАЛЛЕЛЬНО (stun_gatherer.rs), поэтому несколько
         // серверов не замедляют gathering — самый быстрый ответ даёт srflx.
-        // Проверены с сети 27.08 (мс): google 36, sipgate 56, zadarma 60,
-        // sipnet.ru 73, 1und1.de 60. МЁРТВЫЕ (не добавлять): stunprotocol.org
+        // sipnet.ru 73, 1und1.de 60.
         // (DNS), stun.yandex.ru и stun.mts.ru (таймаут).
-        // STUN для host/srflx. TURN (openrelay.metered.ca) убран (27.08):
+        // STUN для host/srflx. TURN (openrelay.metered.ca) убран
         // отдаёт 400 Bad Request на все allocate → 15с ожидания gathering и
         // шум в логах. Для desktop↔desktop в одной сети host-кандидатов
         // достаточно; TURN вернём, когда поднимем свой (coturn, как у
-        // SimpleX turn.simplex.im:443).
         let dev_ice = RTCIceServer {
             urls: vec![
                 "stun:stun.l.google.com:19302".to_owned(),
@@ -221,7 +217,7 @@ impl CallMediaManager {
             .with_ice_servers(self.ice_servers.clone())
             .build();
 
-        // ICE-таймауты под email-сигнализацию (27.08, корень ICE Failed):
+        // ICE-таймауты под email-сигнализацию
         // дефолты disconnected 5с + failed 25с = 30с. Answerer (звонящий)
         // начинает проверки сразу после set_remote(offer), а offerer
         // (принимающий) физически не может отвечать, пока не получит answer
@@ -242,8 +238,7 @@ impl CallMediaManager {
         let (connected_tx, connected_rx) = channel::<()>(1);
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
         let (dc_tx, mut dc_rx) = channel::<Arc<dyn DataChannel>>(1);
-        // Состояние соединения → UI (28.08): единственный надёжный сигнал
-        // о разрыве, когда DataChannel мёртв и email call_end не дошёл.
+        // Состояние соединения → UI: единственный надёжный сигнал
         let (state_tx, mut state_rx) = channel::<RTCPeerConnectionState>(8);
 
         let handler = Arc::new(CallHandler {
@@ -266,14 +261,14 @@ impl CallMediaManager {
                 .map_err(|e| e.to_string())?,
         );
 
-        // МГНОВЕННЫЙ HANGUP (28.08): DataChannel «vault-ctrl» поверх
+        // DataChannel «vault-ctrl» поверх
         // DTLS-SCTP. call_end по email идёт 30-60с — собеседник сидит с
         // трубкой. DC доставляет «hangup» за миллисекунды.
-        // КОРЕНЬ БАГА (29.08, «трубка ложится только по почте»): обе
+        // обе
         // стороны создавали СВОЙ канал с одинаковым label — SCTP-ассоциация
         // склеивала их в один stream, DCEP-негосиация входящего канала не
         // происходила (ни у кого не срабатывал on_data_channel), и
-        // «hangup» уходил в мёртвый локальный канал. Теперь канал создаёт
+        // Теперь канал создаёт
         // ТОЛЬКО звонящий (до offer — DCEP попадает в SDP); принимающий
         // получает его через on_data_channel. Слот общий (Arc<Mutex<..>>):
         // слушатель принимающего пишет туда пришедший канал, send_hangup
@@ -355,8 +350,8 @@ impl CallMediaManager {
                     _ = stop_rx.changed() => return,
                 }
                 eprintln!("[media] connected — starting audio pipeline");
-                // Событие в UI (27.08): оверлей показывает «Соединение…» до
-                // этого момента, таймер разговора — только после. Раньше
+                // Событие в UI: оверлей показывает «Соединение…» до
+                // этого момента, таймер разговора — только после.
                 // таймер шёл с момента accept, а SDP шёл по почте до 54с —
                 // пользователь видел «минуту тишины» при работающем таймере.
                 if let Err(e) =
@@ -378,11 +373,10 @@ impl CallMediaManager {
             });
         }
 
-        // Слушаем ВХОДЯЩИЙ DataChannel от пира (28.08): пир создаёт свой
+        // Слушаем ВХОДЯЩИЙ DataChannel от пира: пир создаёт свой
         // «vault-ctrl», он приходит нам через on_data_channel (dc_rx).
-        // Сообщение «hangup» → событие в UI → мгновенное завершение без
         // ожидания call_end по email (30-60с). Пришедший канал пишем в
-        // общий слот (29.08) — принимающий шлёт свой «hangup» по нему.
+        // общий слот — принимающий шлёт свой «hangup» по нему.
         {
             let app2 = app.clone();
             let cid2 = call_id.to_owned();
@@ -408,9 +402,8 @@ impl CallMediaManager {
             });
         }
 
-        // Состояние соединения → UI (28.08): пробрасываем ВСЕ смены ICE-
+        // Состояние соединения → UI: пробрасываем ВСЕ смены ICE
         // состояния. Корень «экран не закрывается»: когда пир кладёт трубку,
-        // а DataChannel уже мёртв (ICE Disconnected) и email call_end не
         // дошёл — единственный сигнал о завершении это ICE-состояние.
         // UI сам решает, что делать (grace-период на Disconnected, hangup
         // на Failed/Closed).
@@ -457,7 +450,7 @@ impl CallMediaManager {
         pc: &Arc<dyn PeerConnection>,
         gather_rx: &mut Receiver<()>,
     ) -> Result<String, String> {
-        // На Android (26.08) gathering НЕ завершается (Complete не приходит)
+        // На Android gathering НЕ завершается (Complete не приходит)
         // за 15с даже с несколькими STUN — Google STUN недоступен из РФ,
         // российские STUN тоже могут быть нестабильны на мобильном. НО:
         // host-кандидаты собираются почти сразу (локальная сеть), и для
@@ -478,7 +471,7 @@ impl CallMediaManager {
             .await
             .ok_or_else(|| "no local description".to_string())?;
         let sdp_json = serde_json::to_string(&desc).map_err(|e| e.to_string())?;
-        // Диагностика (26.08): сколько кандидатов реально в SDP — если 0,
+        // сколько кандидатов реально в SDP — если 0
         // соединение не поднимется даже с partial-подходом.
         let cand_count = desc.sdp.matches("a=candidate:").count();
         eprintln!(
@@ -573,7 +566,7 @@ impl CallMediaManager {
         Ok(())
     }
 
-    /// Динамик вкл/выкл (27.08): Android — speakerphone через AudioManager
+    /// Динамик вкл/выкл: Android — speakerphone через AudioManager
     /// (JNI в audio_android); desktop — no-op (вывод всегда на динамики,
     /// переключение устройств — задача ОС).
     pub async fn set_speaker(&mut self, call_id: &str, on: bool) -> Result<(), String> {
@@ -587,7 +580,7 @@ impl CallMediaManager {
         Ok(())
     }
 
-    /// Мгновенный hangup поверх WebRTC (28.08): шлёт «hangup» по
+    /// шлёт «hangup» по
     /// DataChannel «vault-ctrl» — собеседник получает за миллисекунды,
     /// не ждёт call_end по email (30-60с). Email-сигнал остаётся как
     /// fallback (фронт шлёт его отдельно). Ok(false) если канала нет
@@ -646,8 +639,7 @@ pub async fn media_start_outgoing(
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
-    // Медиа-ключ (30.08, PQ): гибрид ML-KEM-768+X25519 при наличии PQ-ключей
-    // у обеих сторон; иначе прежний X25519 DH (legacy-звонок со старым клиентом).
+    // Медиа-ключ: гибрид ML-KEM-768+X25519 при наличии PQ-ключей
     // Гибридный ключ: HKDF(x25519_ss ‖ mlkem_ss) — mlkem-часть отправитель
     // вычисляет инкапсуляцией против ek принимающего; kemct едет в
     // call-конверте (SdpResult.kemct → sendCallEnvelope), принимающий
@@ -701,7 +693,7 @@ pub async fn media_accept_incoming(
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
-    // PQ (30.08): kemct из call-конверта + свой PQ-seed → тот же гибридный
+    // PQ: kemct из call-конверта + свой PQ-seed → тот же гибридный
     // HKDF-ключ, что у звонящего. Нет kemct/seed — legacy X25519.
     let media_key = match crate::key_store::load_keypair() {
         Ok(Some(kp)) => match (kp.pq_private_key.as_deref(), kemct.as_deref()) {
@@ -765,7 +757,7 @@ pub async fn media_set_muted(
     mgr.set_muted(&call_id, muted).await
 }
 
-/// Динамик (27.08): Android — speakerphone вкл/выкл; desktop — no-op.
+/// Динамик: Android — speakerphone вкл/выкл; desktop — no-op.
 #[tauri::command]
 pub async fn media_set_speaker(
     call_id: String,
@@ -776,7 +768,7 @@ pub async fn media_set_speaker(
     mgr.set_speaker(&call_id, on).await
 }
 
-/// Full-screen уведомление входящего звонка (28.08): Android — системное
+/// Full-screen уведомление входящего звонка: Android — системное
 /// уведомление поверх локскрина (JNI → VaultForegroundService.showIncomingCall);
 /// desktop — no-op (окно и так видно). Вызывается из JS при incoming_ringing.
 #[tauri::command]
@@ -800,7 +792,7 @@ pub async fn media_dismiss_incoming_call() -> Result<(), String> {
     Ok(())
 }
 
-/// Мгновенный hangup поверх WebRTC (28.08): «hangup» по DataChannel —
+/// «hangup» по DataChannel
 /// собеседник получает за миллисекунды вместо 30-60с по email.
 /// Возвращает true если отправлено по DC, false — канала нет (email fallback).
 #[tauri::command]
@@ -822,7 +814,7 @@ pub async fn media_set_ice_servers(
     Ok(())
 }
 
-/// Рингтон входящего звонка (22.08, запрос пользователя): включает гудки
+/// Рингтон входящего звонка: включает гудки
 /// 440 Гц через cpal (независимо от webview/autoplay). Вызывается из фронта
 /// при call_request, отключается при accept/reject/timeout/hangup.
 #[tauri::command]
@@ -836,17 +828,16 @@ pub async fn media_ringtone_stop() -> Result<(), String> {
     Ok(())
 }
 
-/// Звуки звонка (27.08, редизайн): WAV-ассеты через cpal. name:
+/// Звуки звонка: WAV-ассеты через cpal. name
 /// incoming | outgoing | connect | end | missed. looped=true — крутить
 /// до media_sound_stop (для incoming/outgoing). На Android — no-op
 /// (фронт играет HTML5 Audio из public/sounds).
 #[tauri::command]
 pub async fn media_sound_play(name: String, looped: bool) -> Result<(), String> {
     // cpal может НАМЕРТВО зависнуть на enum/конфиге аудио-устройства
-    // (глючный Bluetooth: default_output_device() блокирует поток). Раньше
+    // (глючный Bluetooth: default_output_device блокирует поток).
     // это выполнялось прямо в async-команде на tokio-воркере → воркер
     // занимался навсегда, и следующий invoke (email_send с call_request)
-    // не получал воркера — сигнал звонка не отправлялся (баг 27.08:
     // call_request не долетал до Gmail, call_cancel при hangup проходил).
     // Решение: cpal — в blocking-пул tokio (отдельные потоки, не воркеры)
     // + таймаут 3с, чтобы зависший cpal не блокировал рантайм.

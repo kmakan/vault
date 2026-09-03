@@ -184,7 +184,7 @@ export default {
         alert(this.t('qr_process_err') + error.message);
       }
     },
-    // Нативный сканер QR (Android: tauri-plugin-barcode-scanner, Session-like).
+    // Нативный сканер QR.
     // Desktop (Linux) — плагин не поддерживается, fallback на input file + jsQR.
     async triggerScan() {
       this.scanning = true;
@@ -199,7 +199,7 @@ export default {
             return;
           }
         }
-        // Запускаем нативный сканер (полноэкранный, как в Session).
+        // Запускаем нативный сканер.
         // windowed:false — камера показывается ПОВЕРХ webview (как отдельный
         // экран). windowed:true делает webview прозрачным, а наш оверлей
         // .qr-code-panel непрозрачный → камера скрыта, scan() зависает.
@@ -480,7 +480,7 @@ export default {
   margin: 8px 0 0;
 }
 
-/* Шапка карточки: заголовок + единый крестик закрытия (25.08). */
+/* Шапка карточки: заголовок + единый крестик закрытия. */
 .qr-header-row {
   display: flex;
   align-items: center;
@@ -491,7 +491,7 @@ export default {
   margin: 0;
 }
 
-/* Мобильный (25.08): фуллскрин + safe-top, единый вид с остальными окнами. */
+/* Мобильный: фуллскрин + safe-top, единый вид с остальными окнами. */
 @media (max-width: 767px) {
   .qr-panel-card {
     width: 100%;

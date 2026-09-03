@@ -44,7 +44,7 @@ export default {
   settings_profile_saved: '个人资料已保存 — 联系人将更新',
   settings_cancel: '取消',
 
-  // Duress (t_b185e3e2)
+  // Duress
   duress_recipients: "求救接收人",
   duress_no_contacts: "先添加联系人才能发送求救",
   duress_title: "紧急保护",
@@ -134,7 +134,7 @@ export default {
   call_canceled: '通话已取消',
   call_ended: '通话结束',
   call_back: '回拨',
-  // 通话设置 (27.08)
+  // 通话设置
   settings_calls: '通话',
   calls_ringtone_incoming: '来电铃声',
   calls_ringtone_outgoing: '回铃音',
@@ -434,7 +434,6 @@ export default {
   recovery_moved_toast: '托管信件已移至收件箱。请勿删除此邮件——它用于恢复您的账户。',
   recovery_move_fail: '无法自动将信件移至收件箱。请手动将其移至收件箱。请勿删除此邮件——它用于恢复您的账户。',
   recovery_keep: '请勿删除此邮件——它用于恢复您的账户。',
-  // QRCodePanel（02.09 i18n 审计：此前完全硬编码）
   qr_add_contact: '添加联系人',
   qr_subtitle: '交换密钥以开始加密聊天',
   qr_step1_title: '将您的 ID 告知对方',

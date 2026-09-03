@@ -1,5 +1,5 @@
-// Key Recovery (25.08) — восстановление личности при чистом входе.
-// Механизм как в Session: мнемоника из 12 слов (BIP39, 128 бит энтропии),
+// Key Recovery — восстановление личности при чистом входе.
+// мнемоника из 12 слов (BIP39, 128 бит энтропии)
 // которая ОБЁРТЫВАЕТ существующий backup (keypair + peer_keys + kv_store).
 //
 // ВАЖНОЕ ОТЛИЧИЕ от Session: у Session слова детерминированно порождают пару
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 
 const WORDLIST: &str = include_str!("bip39_english.txt");
-const PBKDF2_ITERS: u32 = 2048; // как у BIP39 seed-функции
+const PBKDF2_ITERS: u32 = 2048; 
 const PASSPHRASE: &str = "Vault recovery";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

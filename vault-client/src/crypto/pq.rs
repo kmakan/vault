@@ -1,7 +1,7 @@
 //! Post-quantum hybrid encryption (ML-KEM-768 + X25519), Vault PQ-V1.
 //!
 //! Схема (docs/security/POST-QUANTUM-PLAN.md):
-//! - Каждый аккаунт: X25519 пара (как раньше) + ML-KEM-768 seed/dekapair.
+//! - Каждый аккаунт: X25519 пара + ML-KEM-768 seed/dekapair.
 //! - Ключ диалога: K = HKDF-SHA256(ikm = x25519_ss ‖ mlkem_ss,
 //!   salt = "VAULT-PQ-V1", info = ...pubkeys) — гибрид: подделка
 //!   ЛЮБОГО из двух обменов не даёт ключа.
@@ -30,7 +30,7 @@ pub const PQ_SALT: &[u8] = b"VAULT-PQ-V1";
 /// ek 1184, ct 1088, shared secret 32, seed 64.
 /// ВАЖНО: 1188 — это размер pkcs8/«полный» формат; здесь — байтовая
 /// кодировка модуля, которую возвращает KeyExport::to_bytes (проверено
-/// диагностикой /tmp/pqdiag). При апгрейде крейта проверить тестом
+/// При апгрейде крейта проверить тестом
 /// test_ek_len_wire_format.
 pub const PQ_EK_LEN: usize = 1184;
 pub const PQ_CT_LEN: usize = 1088;
@@ -217,7 +217,6 @@ pub struct HybridHeader {
 /// получателя, PQ-ek получателя (обязателен — иначе legacy
 /// encrypt_vault_cmd). Свой PQ-seed опционален (для `pq`-поля конверта).
 ///
-/// Возвращает (wire_b64, hybrid_meta): wire_b64 — прежний формат
 /// base64(nonce ‖ ct) с AAD="VAULT", но ключ — гибридный KDF;
 /// hybrid_meta — pq/kemct для JSON-конверта.
 pub fn hybrid_encrypt_vault(
@@ -292,7 +291,6 @@ pub fn hybrid_encrypt_vault(
 }
 
 /// Расшифровать гибридный конверт. Если у получателя нет PQ-ключа или
-/// письмо без kemct — Err (вызывающий код откатывается на legacy
 /// decrypt_vault_cmd, см. POST-QUANTUM-PLAN «fallback»).
 pub fn hybrid_decrypt_vault(
     ciphertext: &str,
@@ -539,7 +537,6 @@ mod tests {
     #[test]
     fn test_hybrid_rejects_legacy_ciphertext() {
         // Гибридный decrypt на legacy-письме (без kemct вообще) — Err →
-        // вызывающий код откатывается на decrypt_vault_cmd.
         let (alice, bob, _, bob_pq) = full_setup();
         use chacha20poly1305::aead::{Aead as _Aead, KeyInit as _KeyInit, Payload as _P};
         use chacha20poly1305::XChaCha20Poly1305 as _XC;

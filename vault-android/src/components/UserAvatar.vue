@@ -70,7 +70,7 @@ async function loadAvatar() {
   }
   // Fast local cache (sqlite kv_store + in-memory Map в api.js)
   const stored = await api.getAvatar(props.email)
-  if (seq !== avatarSeq) return // устаревший запрос — email уже сменился
+  if (seq !== avatarSeq) return 
   if (stored) {
     resolvedAvatar.value = stored
     return

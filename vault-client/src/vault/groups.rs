@@ -328,7 +328,6 @@ mod tests {
     use super::*;
 
     /// Каждый тест получает GroupManager с УНИКАЛЬНЫМ временным файлом.
-    /// Раньше тесты использовали test_mgr() → писали в реальный
     /// ~/.vault/groups.json; при параллельном прогоне (cargo test) это
     /// гонка read-modify-write, которая затирала живые группы пользователя.
     fn test_mgr() -> GroupManager {

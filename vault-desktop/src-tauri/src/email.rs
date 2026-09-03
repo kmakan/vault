@@ -100,7 +100,7 @@ struct SpecialFolders {
     /// «Письма себе» (mail.ru: INBOX/ToMyself) — провайдеры с автосортировкой
     /// раскладывают письма From==To (эскроу-письмо Key Recovery!) в подпапку
     /// INBOX, и письмо «самому себе» не видно в INBOX. Без сканирования
-    /// этой папки восстановление аккаунта молча не работает (25.08, mail.ru).
+    /// этой папки восстановление аккаунта молча не работает.
     self_letters: Option<String>,
 }
 
@@ -133,7 +133,7 @@ impl EmailClient {
         // чтение/запись. BufStream-обёртка imap-крейта читает блокирующим
         // read() — при зависшем/заторможенном сервере (троттлинг Gmail,
         // рассинхрон сессии) вызов висит ВЕЧНО, окно перестаёт отвечать на
-        // всё (это и была «поломка» 18.08). Таймаут read/write 30 с даёт
+        // всё. Таймаут read/write 30 с даёт
         // Err, который существующий reconnect-путь уже умеет обрабатывать.
         // Сам TcpStream::connect тоже без таймаута: на мобильном интернете
         // оператор часто молча дропает SYN на 993 (блокировка IMAP) — connect
@@ -228,7 +228,7 @@ impl EmailClient {
             }
             // «Письма себе» (mail.ru: INBOX/ToMyself, локаль «Письма себе»).
             // Автосортировка провайдера прячет From==To из INBOX — эскроу-письмо
-            // восстановления аккаунта было бы невидимо (25.08).
+            // восстановления аккаунта было бы невидимо.
             if out.self_letters.is_none()
                 && (name_l.ends_with("/tomyself")
                     || name_l == "tomyself"
@@ -265,7 +265,6 @@ impl EmailClient {
         // писем последовательные запросы занимали минуты, и поллинг/клик
         // по чату «зависали» (а то и умирали по таймауту).
         // Ошибка батч-фетча пробрасывается наверх (НЕ молчаливый пустой
-        // список): lib.rs трактует Err как «reconnect + retry». Раньше
         // if-let-Ok глотал ошибку, и приложение молча видело пустой ящик.
         if !uids.is_empty() {
             let uid_set = uids
@@ -321,10 +320,9 @@ impl EmailClient {
         self.connect_imap().await
     }
 
-    /// Fetch recent messages. Folder strategy (user-confirmed 20.08): ONLY
+    /// Fetch recent messages. Folder strategy: ONLY
     /// INBOX + Junk. Sent is NEVER read: the sender's copies are found in
     /// Junk/INBOX (Gmail self-BCC behaviour) or not needed (outgoing messages
-    /// persist to local history immediately, Delta-Chat style).
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
         let folders = self.find_special_folders();
 
@@ -398,7 +396,7 @@ impl EmailClient {
         };
         let raw_uids: Vec<u32> = uid_list.iter().copied().collect();
         let raw_max = raw_uids.iter().copied().max().unwrap_or(0);
-        // САМОВОССТАНОВЛЕНИЕ (22.08): Gmail периодически ПЕРЕСОЗДАЁТ папку
+        // САМОВОССТАНОВЛЕНИЕ: Gmail периодически ПЕРЕСОЗДАЁТ папку
         // Спама (автоочистка) — UIDVALIDITY меняется, UID'ы начинаются с 1.
         // Старый курсор (например 2963) оказывается ВПЕРЕДИ реального max
         // (например 69), и клиентский фильтр uid > last_uid навсегда
@@ -493,7 +491,7 @@ impl EmailClient {
             // Пустой результат НЕ продвигает курсор: uid_search мог вернуть
             // пусто из-за троттлинга/рассинхрона сессии, и запись 0
             // «отравляла» папку — инкремент от 0 при следующих поллингах
-            // тоже возвращал пусто (Zoho), чаты пустели навсегда (20.08).
+            // тоже возвращал пусто (Zoho), чаты пустели навсегда.
             // Курсор движется только при реально полученных письмах.
             if max_uid > 0 {
                 new_cursors.insert(fallback.to_string(), max_uid);
@@ -557,7 +555,7 @@ impl EmailClient {
             .context("Not connected to IMAP server")?;
 
         // Всегда select (включая INBOX) — на новом соединении папка не выбрана.
-        // ФИКС (29.08): ошибка select БОЛЬШЕ не игнорируется. Пример: select
+        // ошибка select БОЛЬШЕ не игнорируется. Пример: select
         // Спама упал → uid_fetch по совпавшему ЧИСЛУ uid вытянул тело ЧУЖОГО
         // письма из INBOX (100КБ рассылка) → base64 невалиден → «decrypt
         // failed» навсегда (звонок при смахнутом приложении не показывался).
@@ -596,7 +594,7 @@ impl EmailClient {
     /// Безопасный COPY: оригинал НЕ удаляется (нет риска потерять письмо при
     /// сбое). Эскроу-письмо восстановления должно лежать в папке, которую
     /// провайдер не чистит, — иначе через ~30 дней восстановление станет
-    /// невозможным (25.08, вариант A).
+    /// невозможным.
     pub async fn copy_to_inbox(&mut self, folder: &str, uid: &str) -> Result<(), String> {
         let session = self
             .imap_session
@@ -626,7 +624,7 @@ impl EmailClient {
 
         // ВСЕГДА select(folder), включая INBOX: на новом соединении (теперь
         // каждый fetch_bodies — отдельный клиент) папка не выбрана, uid_fetch
-        // без select возвращает пусто (баг 20.08: INBOX empty_uid).
+        // без select возвращает пусто.
         let _ = session.select(folder);
 
         let mut out = Vec::with_capacity(uids.len());
@@ -659,7 +657,7 @@ impl EmailClient {
         }
 
         // Пустое тело = рассинхрон сессии (см. fetch_message_body): Err, чтобы
-        // lib.rs сделал reconnect и повторил весь батч. Ok с дырками раньше
+        // lib.rs сделал reconnect и повторил весь батч.
         // намертво кэшировался фронтом как пустые сообщения.
         if let Some(uid) = empty_uid {
             anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
@@ -682,7 +680,7 @@ impl EmailClient {
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
 
         // Яндекс SMTP — порт 465 (SMTPS: TLS сразу, без STARTTLS). Для порта
-        // 465 нужен relay() (TLS), для 587 — starttls_relay(). До 21.08 код
+        // 465 нужен relay (TLS), для 587 — starttls_relay.
         // всегда делал starttls_relay даже на 465 — Яндекс ждал TLS-рукопожатие,
         // а клиент начинал с STARTTLS-команды → соединение рвалось, «Failed to
         // send email».
@@ -695,7 +693,7 @@ impl EmailClient {
         };
         let transport = transport_builder
             .credentials(creds)
-            // 10с вместо 30с (28.08): при зависании SMTP сигнал звонка
+            // 10с вместо 30с: при зависании SMTP сигнал звонка
             // (call_accept/answer) ждал 30с до ретрая — собеседник висел
             // в «Соединение…». 10с достаточно для штатной отправки.
             .timeout(Some(std::time::Duration::from_secs(10)))
@@ -769,7 +767,6 @@ impl EmailClient {
 /// Decode quoted-printable MIME body — transport-encoded `=XX` and soft line
 /// breaks (`=\r\n`). Needed because SMTP relays (Gmail included) may re-encode
 /// the Vault encrypted block (base64) as quoted-printable on delivery.
-/// (pub: service_monitor.rs расшифровывает тела в headless-режиме, 29.08.)
 pub(crate) fn decode_quoted_printable(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());

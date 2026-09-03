@@ -112,7 +112,7 @@
 
     <!-- Actions -->
     <div class="group-settings__actions">
-      <!-- N7 (28.08): клон группы — та же команда, пустая история. -->
+      <!-- клон группы — та же команда, пустая история. -->
       <button
         v-if="isCreator"
         class="btn btn-secondary"

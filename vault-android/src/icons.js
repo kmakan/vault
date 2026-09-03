@@ -1,4 +1,4 @@
-// Единый набор иконок Vault (lucide-геометрия, 24-viewBox, stroke 2).
+// Единый набор иконок Vault.
 // Каждая иконка — массив SVG-примитивов: {type:'path', d} | {type:'circle',
 // cx,cy,r} | {type:'line', x1..y2} | {type:'rect', x,y,w,h,rx}.
 // Потребление — через components/Icon.vue (gradient для брендовых акцентов,

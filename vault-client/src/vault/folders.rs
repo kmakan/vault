@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-/// Папка для организации чатов (аналог папок в Telegram)
+/// Папка для организации чатов
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Folder {
     /// Уникальный идентификатор папки

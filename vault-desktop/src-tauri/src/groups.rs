@@ -48,7 +48,7 @@ pub struct GroupMember {
     pub joined_at: String,
     #[serde(default)]
     pub key_shared: bool,
-    /// Fingerprint публичного ключа участника (02.09, membership по ключу):
+    /// Fingerprint публичного ключа участника
     /// 128-hex id — стабилен при смене почты. Пустой у старых групп —
     /// лениво заполняется фронтендом при первом fingerprint-матче.
     /// Инвайты старых версий его не несут — десериализация остаётся совместимой.
@@ -317,7 +317,7 @@ pub fn rename_group(group_id: &str, new_name: &str) -> Result<Group> {
     Ok(cloned)
 }
 
-/// Стереть ВСЕ локальные группы (panic-PIN, t_b185e3e2).
+/// Стереть ВСЕ локальные группы.
 pub fn delete_all_local() -> Result<()> {
     let path = get_groups_path()?;
     if path.exists() {
@@ -540,7 +540,7 @@ mod tests {
         });
     }
 
-    // ── Membership по fingerprint (02.09) ─────────────────────────────────
+    // ── Membership по fingerprint ─────────────────────────────────
 
     #[test]
     fn test_rename_member_keeps_membership_on_email_change() {

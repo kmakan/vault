@@ -41,8 +41,7 @@
           </div>
         </div>
 
-        <!-- Ключ восстановления (25.08): мнемоника 12 слов, Session-style.
-             Обёртывает backup и отправляет эскроу-письмо себе. -->
+        <!-- Обёртывает backup и отправляет эскроу-письмо себе. -->
         <div class="section recovery-section">
           <h4><Icon name="key" :size="15" gradient /> {{ t('recovery_title') }}</h4>
           <p class="recovery-hint">{{ t('recovery_hint') }}</p>
@@ -143,7 +142,7 @@ export default {
       importData: '',
       importResult: null,
       copiedField: null,
-      // Key Recovery (25.08)
+      // Key Recovery
       recoveryBusy: false,
       recoveryCreated: false,   // слова показаны, ждём подтверждения записи
       recoveryWords: [],
@@ -207,7 +206,7 @@ export default {
     },
     async removePeerKey(email) {
       if (!(await confirm(`Remove peer key for ${email}?`))) return;
-      // Реактивность (26.08): сначала плавно убираем из списка, потом
+      // Реактивность: сначала плавно убираем из списка, потом
       // удаляем в хранилище — иначе элемент дёргается/висит до перезагрузки.
       this.removingEmail = email;
       try {
@@ -310,7 +309,7 @@ export default {
   color: var(--text-primary, white);
 }
 
-/* Мобильный (25.08): фуллскрин + safe-top, единый вид с настройками/шифром. */
+/* Мобильный: фуллскрин + safe-top, единый вид с настройками/шифром. */
 @media (max-width: 767px) {
   .key-manager-overlay {
     align-items: stretch;
@@ -530,7 +529,7 @@ export default {
   background: rgba(248, 81, 73, 0.25);
 }
 
-/* --- Key Recovery (25.08) --- */
+/* --- Key Recovery */
 .recovery-section .recovery-hint {
   margin: 4px 0 10px;
   color: var(--text-muted, #8b949e);
@@ -565,7 +564,7 @@ export default {
   min-width: 16px;
   text-align: right;
 }
-/* Плавное исчезновение при удалении ключа контакта (26.08). */
+/* Плавное исчезновение при удалении ключа контакта. */
 .peer-key-removing {
   opacity: 0 !important;
   transform: translateX(24px);

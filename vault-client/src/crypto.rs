@@ -22,7 +22,7 @@ pub struct CryptoClient {
     private_key: Option<StaticSecret>,
     public_key: Option<PublicKey>,
     shared_secret: Option<SharedSecret>,
-    /// PQ (30.08): ML-KEM-768 seed (hex, приватный) и ek (b64, публичный).
+    /// PQ: ML-KEM-768 seed (hex, приватный) и ek (b64, публичный).
     /// None — аккаунт до PQ-миграции (legacy X25519).
     pub pq_seed_hex: Option<String>,
     pub pq_ek_b64: Option<String>,
@@ -50,7 +50,7 @@ impl CryptoClient {
         let private = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&private);
 
-        // PQ (30.08): ML-KEM-768 пара вместе с X25519.
+        // PQ: ML-KEM-768 пара вместе с X25519.
         let pq = pq::pq_generate();
         self.pq_seed_hex = Some(pq.seed_hex);
         self.pq_ek_b64 = Some(pq.ek_b64);
@@ -83,7 +83,7 @@ impl CryptoClient {
         self.set_peer_key_pq(peer_pub_hex, None)
     }
 
-    /// PQ (30.08): peer X25519 ключ + опциональный ML-KEM ek контакта.
+    /// PQ: peer X25519 ключ + опциональный ML-KEM ek контакта.
     pub fn set_peer_key_pq(&mut self, peer_pub_hex: &str, peer_pq_ek: Option<&str>) -> Result<()> {
         let priv_key = self
             .private_key
@@ -176,9 +176,8 @@ impl CryptoClient {
     /// authenticated by Poly1305 but NOT present in the ciphertext.  On the
     /// wire the format is identical to `encrypt()`: base64(nonce ‖ ciphertext).
     pub fn encrypt_vault(&self, plaintext: &str) -> Result<String> {
-        // PQ (30.08): при наличии PQ-ключей у обеих сторон — гибридный
+        // PQ: при наличии PQ-ключей у обеих сторон — гибридный
         // конверт "PQ1:<kemct>|<sender_ek>|<wire>" (как desktop PQ-3/PQ-4).
-        // Иначе — прежний legacy X25519 (AAD="VAULT").
         if let (Some(seed), Some(peer_ek)) =
             (self.pq_seed_hex.as_deref(), self.peer_pq_ek_b64.as_deref())
         {
@@ -227,8 +226,7 @@ impl CryptoClient {
     /// AAD (or the key is wrong), returns `Err` — the caller should treat it
     /// as non-vault mail (or try the legacy fallback).
     pub fn decrypt_vault(&self, ciphertext: &str) -> Result<String> {
-        // PQ (30.08): "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид ML-KEM+X25519.
-        // Нет префикса — legacy X25519 (AAD="VAULT").
+        // PQ: "PQ1:<kemct>|<sender_ek>|<wire>" — гибрид ML-KEM+X25519.
         let trimmed = ciphertext.trim();
         if let Some(rest) = trimmed.strip_prefix("PQ1:") {
             let parts: Vec<&str> = rest.splitn(3, '|').collect();

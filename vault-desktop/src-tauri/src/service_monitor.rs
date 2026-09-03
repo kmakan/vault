@@ -1,8 +1,8 @@
-// Headless IMAP-монитор для Android-сервиса (29.08).
+// Headless IMAP-монитор для Android-сервиса.
 //
 // ПРОБЛЕМА: при свёрнутом Vault пользователь смахивает приложение из
 // recents / жмёт «назад» → activity finish + remove-task → процесс умирает
-// (logcat 29.08 12:06: wm_finish_activity → am_proc_died). Система
+// Система
 // перезапускает ТОЛЬКО VaultForegroundService в новом пустом процессе,
 // где нет ни WebView, ни Tauri-рантайма, ни IMAP-монитора — уведомления
 // о новых сообщениях не приходят до открытия приложения.
@@ -16,18 +16,13 @@
 //
 // ДЕДУП: пока MainActivity жива (JS доставляет всё сам и быстрее), монитор
 // стоит на паузе (nativePauseMonitor из MainActivity.onResume/onPause). Если
-// процесс мёртв — монитор единственный, дубликатов нет.
 //
-// НАДЁЖНОСТЬ (29.08, «терялся курсор на письма»): доставка ТРАНЗАКЦИОННАЯ.
-// Раньше seen-дедуп писался ДО показа уведомления — любой краш (JNI/
+// НАДЁЖНОСТЬ: доставка ТРАНЗАКЦИОННАЯ.
 // расшифровка/фетч тела) терял письмо навсегда (курсор уже продвинут,
 // Message-ID в seen). Теперь письмо попадает в pending-очередь (kv
 // monitor.db) и живёт там, пока уведомление не покажется УСПЕШНО:
-//   • fetch тела / расшифровка неудачны → ретрай на следующем тике
-//     (до MAX_TRIES, фетч тела бывает разово-битым — 29.08 uid179);
 //   • notify через JNI упал → ретрай (Java-exception погашен
 //     exception_clear, процесс жив);
-//   • 3 неудачи → письмо в seen (отрицательный dedup-ответ), лог;
 //   • MainActivity открылась (paused) → JS доставит сам: pending-запись
 //     тихо удаляется БЕЗ seen (дедуп JS независим).
 // seen-список notify_seen:<account> (последние SEEN_CAP Message-ID) —
@@ -45,7 +40,6 @@ use crate::key_store;
 
 // ───────────── Логи в logcat (headless-процесс не имеет stderr) ─────────────
 // eprintln! в сервис-процессе (без Tauri) уходит в /dev/null: stderr там
-// никуда не подключён, и e2e-тест 29.08 оказался слепым — в logcat не было
 // НИ ОДНОЙ строки монитора, работали его уведомления или нет — неизвестно.
 // В service-процессе lib.rs run() не вызывается (нет activity) → фасад log
 // никем не занят: init_once(android_logger) здесь — первый и главный, все
@@ -190,8 +184,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_MainActivity_nativePauseMonitor(
 
 /// `external fun nativeSendCallSignal(callerEmail: String, callId: String, signal: String)`
 /// — нативная кнопка «Отклонить» в уведомлении звонка (CallActionReceiver):
-/// WebView может быть мёртв, а собеседник должен узнать об отказе немедленно
-/// (29.08: «после отклонения на телефоне десктоп не отключается»). Шифруем
+/// Шифруем
 /// call_reject-конверт (peer-ключ из key_store, HOME уже установлен монитором)
 /// и отправляем SMTP пустой темой — stealth, тот же путь, что JS sendCallEnvelope.
 /// # Safety — вызывается из JVM с валидным JNIEnv (JNI-контракт).
@@ -315,7 +308,7 @@ pub(crate) fn ensure_ndk_context(env: &mut jni::JNIEnv, context: &jni::objects::
     }
 }
 
-/// ───────────── Решение пользователя по звонку (фаза 2, 30.08) ─────────────
+/// ───────────── Решение пользователя по звонку ─────────────
 /// Kotlin (CallActionReceiver) передаёт решение ВЛАДЕЛЬЦУ состояния —
 /// монитору. Никакой собственной логики у Kotlin: только транспорт.
 /// decision: "accept" | "reject". Монитор:
@@ -507,7 +500,7 @@ async fn run_loop(stop: Arc<AtomicBool>) {
     }
     let account = creds.email.to_lowercase();
     log::info!("[svc-monitor] peers loaded: {}", peers.len());
-    // ДИАГНОСТИКА (29.08, «decrypt failed» на телефоне): выведенный из
+    // выведенный из
     // загруженного привата публичный ключ. Если он != ожидаемому (JS app
     // показывает тот же fingerprint в UI), монитор читает ЧУЖОЙ keypair.json
     // (не тот HOME / не тот каталог) — корень «письмо не расшифровывается
@@ -592,7 +585,7 @@ async fn run_loop(stop: Arc<AtomicBool>) {
             }
             continue;
         }
-        // ДОВЕРШИТЬ НЕДОСТАВЛЕННОЕ РАНЬШЕ НОВЫХ ПИСЕМ: pending-очередь
+        // pending-очередь
         // пережила рестарт процесса — обрабатываем её первой.
         drain_pending(&ctx, stop.clone()).await;
         if stop.load(Ordering::SeqCst) {
@@ -745,7 +738,7 @@ fn pending_save(
     kv_save(db, account, &pending_key(), &list);
 }
 
-/// ─────────── Машина состояний входящего звонка (Фаза 1, 29.08) ───────────
+/// ─────────── Машина состояний входящего звонка ───────────
 /// Владелец состояния — монитор (call_state в kv monitor.db). call_id —
 /// первичный ключ. Инварианты: один call_id = один рингтон за всё время;
 /// решение (accepted/rejected) необратимо до ended; ретрансляции call_request
@@ -993,13 +986,13 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             return Outcome::Retry;
         }
     };
-    // ВАЖНО (0.1.88): fetch_message_body УЖЕ декодирует quoted-printable.
+    // ВАЖНО: fetch_message_body УЖЕ декодирует quoted-printable.
     // Повторный декод здесь ПОРТИЛ base64: хвостовой padding "==" и случайные
     // "=XX" во 2-м проходе съедали 2 байта данных (bodylen 8193 при валидном
     // 8088 → len%4=1 → «decrypt failed» → звонок/уведомление молча гибли).
     let body_clean = body;
 
-    // ── Групп-приглашения (0.1.104): тело = НЕзашифрованный urlSafeB64-JSON
+    // ── Групп-приглашения: тело = НЕзашифрованный urlSafeB64-JSON
     // {kind:'group-invite', group_name, sender_name...}. Конвертом не является,
     // decrypt ниже его не берёт и письмо молча умирало (Outcome::Dead) — ни
     // уведомления при смахнутом приложении, ни явного следа. Детектим ДО
@@ -1062,15 +1055,13 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     let plain = match plain {
         Some(p) => p,
         None => {
-            // Диагностика (29.08): тело + ключ при неудачной расшифровке —
             // base64 шифротекста, секрета не содержит. Бывает разово-битый
-            // фетч (uid179 29.08): ретрай на следующем тике.
+            // фетч: ретрай на следующем тике.
             if ctx.peers.is_empty() || !ctx.peers.contains_key(&from_lc) {
                 log::info!("[svc-monitor] skip (sender not in peers): {from_lc}");
                 // Отправитель не из контактов — ретраи бессмысленны.
                 return Outcome::Dead;
             }
-            // 30.08: печатаем также очищенную длину (без whitespace) и хвост —
             // определение источника порчи base64 (обрезка Gmail/фолдинг).
             let cleaned_len = body_clean.chars().filter(|c| !c.is_whitespace()).count();
             log::info!(
@@ -1099,9 +1090,9 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         }
     };
     if env_json.get("vault").and_then(|v| v.as_i64()) != Some(1) {
-        return Outcome::Delivered; // расшифровалось, но не конверт: фиксируем, молча
+        return Outcome::Delivered; 
     }
-    // ЭХО-ЗАЩИТА (порт из processIncoming, 29.08): конверт с МОИМ публичным
+    // ЭХО-ЗАЩИТА: конверт с МОИМ публичным
     // ключом — это письмо себе (profile-broadcast / копия в свой ящик) —
     // НЕ уведомляем. Без неё self-письмо давало ложный пуш «от себя».
     if let Some(env_key) = env_json.get("key").and_then(|v| v.as_str()) {
@@ -1133,7 +1124,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        // ФАЗА 1 (29.08): владелец состояния — call_state (kv). Терминальные
+        // ФАЗА 1: владелец состояния — call_state (kv). Терминальные
         // сигналы звонящего (cancel/end) = ended (надгробие гасит ретрансляции
         // и зомби). cancel от ЗВОНЯЩЕГО — не от нас: state=ended.
         if typ == "call_cancel" || typ == "call_end" {
@@ -1143,7 +1134,6 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         }
         if typ == "call_reject" {
             // Отклонил СОБЕСЕДНИК (мы звонили) или дублируем наш reject —
-            // фиксируем как ended, чтобы поздние request не звонили.
             call_set_state(ctx.db, ctx.account, &call_id, "ended", "");
             return Outcome::Delivered;
         }
@@ -1154,7 +1144,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                 Some(existing) => {
                     match existing.state.as_str() {
                         // Уже звонит: ретрансляция — НЕ перезапускаем рингтон,
-                        // НЕ обновляем уведомление. Просто фиксируем.
+                        // НЕ обновляем уведомление.
                         "ringing" => {
                             log::info!("[svc-monitor] call {call_id}: retransmission while ringing — ignore");
                             return Outcome::Delivered;
@@ -1208,7 +1198,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
         return Outcome::Delivered;
     }
-    // SOS (duress, t_b185e3e2): критичное письмо «телефон не у меня» — пуш с
+    // SOS: критичное письмо «телефон не у меня» — пуш с
     // высоким приоритетом, в чат НЕ пишется (JS тоже фильтрует type:sos).
     if typ == "sos" {
         let who = env_json
@@ -1268,7 +1258,7 @@ async fn fetch_body(folder: &str, uid: &str) -> Result<String, String> {
         }))
     });
     let mut cl = entry.lock().await;
-    // Разово-битый фетч (29.08 uid179): пересоединяемся перед КАЖДОЙ
+    // Разово-битый фетч: пересоединяемся перед КАЖДОЙ
     // попыткой — сессия IMAP могла рассинхрониться.
     let _ = cl.disconnect();
     cl.connect_imap()
@@ -1285,7 +1275,6 @@ async fn fetch_body(folder: &str, uid: &str) -> Result<String, String> {
 /// context — глобальная ссылка сервиса из ndk-context.
 /// Возвращает true только при успехе: Java-exception от вызова гасится
 /// exception_clear (иначе pending-exception ронял ВЕСЬ процесс —
-/// NoSuchMethodError 29.08 при R8-минификации), и мы честно ретраим.
 pub fn notify(title: &str, text: &str) -> bool {
     let log_title = title.to_owned();
     let log_text = text.to_owned();
@@ -1314,7 +1303,7 @@ pub fn notify(title: &str, text: &str) -> bool {
         if let Err(err) = call {
             // ГАСИТЬ pending Java-exception ОБЯЗАТЕЛЬНО: брошенное
             // исключение остаётся на потоке и роняет процесс при следующем
-            // входе в JVM (FATAL EXCEPTION 29.08 18:22).
+            // входе в JVM.
             let _ = env.exception_clear();
             return Err(format!("showMessage: {err}"));
         }
@@ -1336,7 +1325,7 @@ pub fn notify(title: &str, text: &str) -> bool {
     }
 }
 
-/// Tauri-команда (фаза 3, 30.08): JS сообщает монитору-владельцу решение/статус
+/// Tauri-команда: JS сообщает монитору-владельцу решение/статус
 /// звонка: accept/reject/active/ended. Пишет в call_state monitor.db — единую
 /// базу с headless-монитором. Без неё монитор ставит missed поверх принятого.
 #[tauri::command]
@@ -1372,16 +1361,15 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
     };
     call_set_state(&db, &account, &call_id, mapped, "");
     log::info!("[svc-monitor] JS reported call {call_id} → {mapped}");
-    // 30.08: при принятом/отклонённом решении немедленно гасим нативное
-    // уведомление звонка (раньше висело до hangup — юзер видел «утечку»).
+    // уведомление звонка.
     if matches!(mapped, "accepted" | "rejected") {
         crate::audio::audio_android::dismiss_incoming_call_notification();
     }
     Ok(())
 }
 
-/// Duress-SOS (0.1.130): зашифрованные письма выбранным контактам из headless-
-/// контекста (нативный LockActivity — WebView может быть мёртв). Тело —
+/// Duress-SOS: зашифрованные письма выбранным контактам из headless
+/// контекста. Тело
 /// Vault-конверт type:"sos", как sendDuressSos JS — получатели видят сообщение
 /// в чате от нас + системное уведомление от своего монитора.
 pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {

@@ -16,7 +16,7 @@ export class CryptoClient {
     this.privateKey = null;
     this.publicKey = null;
     this.peerPublicKey = null;
-    // Post-quantum (30.08): ML-KEM-768 пара (seed hex / ek b64) и PQ-ключи
+    // Post-quantum: ML-KEM-768 пара (seed hex / ek b64) и PQ-ключи
     // контактов. Отсутствие = аккаунт/контакт до PQ-миграции (legacy X25519).
     this.pqSeed = null;
     this.pqEk = null;
@@ -45,7 +45,7 @@ export class CryptoClient {
     if (stored && isValidKeypair(stored)) {
       this.privateKey = stored.private_key;
       this.publicKey = stored.public_key;
-      // PQ (30.08): load_my_keypair мигрирует старые файлы (генерит ML-KEM)
+      // PQ: load_my_keypair мигрирует старые файлы (генерит ML-KEM)
       // и возвращает pq-поля. Отсутствие — легаси-аккаунт без PQ.
       this.pqSeed = stored.pq_private_key || null;
       this.pqEk = stored.pq_public_key || null;
@@ -58,7 +58,7 @@ export class CryptoClient {
     if (!this.publicKey || !this.privateKey) {
       throw new Error('No keypair to save');
     }
-    // PQ (30.08): передаём pq при наличии; Rust мержит со старыми, если нет.
+    // PQ: передаём pq при наличии; Rust мержит со старыми, если нет.
     await invoke('save_my_keypair', {
       publicKey: this.publicKey,
       privateKey: this.privateKey,
@@ -106,7 +106,7 @@ export class CryptoClient {
     return await invoke('get_key_store_metadata');
   }
 
-  // --- Key Recovery (25.08): мнемоника 12 слов обёртывает backup ---
+  // --- Key Recovery: мнемоника 12 слов обёртывает backup
   async recoveryGenerateMnemonic() {
     return await invoke('recovery_generate_mnemonic');
   }
@@ -156,7 +156,7 @@ export class CryptoClient {
   }
 
   // Vault messages use AAD="VAULT" (serverless-mail vault chats).
-  // PQ (30.08): при наличии PQ-ключей у обеих сторон команда возвращает
+  // PQ: при наличии PQ-ключей у обеих сторон команда возвращает
   // гибридный конверт "PQ1:kemct|sender_ek|wire"; иначе legacy X25519.
   async encryptVault(plaintext) {
     if (!this.privateKey) throw new Error('No private key. Call generateKeypair first.');

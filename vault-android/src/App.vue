@@ -76,9 +76,10 @@
           <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
         </div>
 
-        <!-- Заметки для себя: локальный чат с собой (Session/Telegram pattern).
+        <!-- Заметки для себя: локальный чат с собой.
              Не зависит от peer_keys, почты и шифрования — хранится только
-             в localStorage vault-notes-<email>. -->
+             в localStorage vault-notes-<email>.
+             -->
         <div
           class="contact-item notes-self"
           :class="{ active: activeChat === '__notes__' }"
@@ -479,7 +480,7 @@
         </div>
       </div>
 
-      <!-- CONTACT REQUEST POPUP (1-на-1: приглашение по id участника/QR, как в Session) -->
+      <!-- CONTACT REQUEST POPUP -->
       <div v-if="showContactPopup && pendingContacts.length" class="modal-overlay" @click.self="showContactPopup = false">
         <div class="modal-settings invite-popup-panel">
           <button class="modal-close" @click="showContactPopup = false">←</button>
@@ -700,7 +701,6 @@ import api from './api.js';
 import { db } from './api.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
-// ws.js удалён (16.08): WebSocket к backend (localhost:9443) мёртв — backend
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
@@ -761,12 +761,11 @@ export default {
   data() {
     return {
       currentView: 'chats',
-      // Мобильная навигация (Telegram/Delta Chat паттерн): на узком экране
+      // Мобильная навигация: на узком экране
       // видна ОДНА панель — список чатов ИЛИ открытый чат на весь экран.
       // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
       mobileChatOpen: false,
       // Счётчики непрочитанных по чатам (email | 'group:<id>' → число).
-      // Хранятся в sqlite kv_store (НЕ localStorage — он запрещён как
       // источник данных Vault); сбрасываются при открытии чата.
       unreadCounts: {},
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
@@ -792,7 +791,7 @@ export default {
       messages: [],
       newMessage: '',
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
-      // слать копию письма (двойные сообщения у получателей, 20.08).
+      // слать копию письма.
       sending: false,
       // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
       // чат секунды назад (двойной Enter с паузой), повторную отправку
@@ -1110,12 +1109,12 @@ export default {
           this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || '';
           this.displayName = (await api.getDisplayName()) || this.email || '';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
-          await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
+          await this.loadBodyCache(); 
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
-          // фетч почты идёт в фоне — вход не должен ждать IMAP (20.08).
+          // фетч почты идёт в фоне — вход не должен ждать IMAP.
           this.isLoggedIn = true;
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
@@ -1282,7 +1281,7 @@ export default {
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
-        await this.loadBodyCache(); // персистентный кэш тел — мгновенное открытие чатов
+        await this.loadBodyCache(); 
         await this.loadContacts();
         await this.loadGroups();
         // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
@@ -1358,7 +1357,7 @@ export default {
           if (ic) this.groupIconMap[g.id] = ic;
           for (const m of g.members || []) {
             if (m.email === this.email || seen.has(m.email)) continue;
-            // Модель Delta Chat: удаление контакта НЕ трогает группы —
+            // удаление контакта НЕ трогает группы
             // участник остаётся полноценным контактом в списке.
             seen.add(m.email);
             this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
@@ -1396,7 +1395,7 @@ export default {
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
-      // Мгновенное открытие: показываем кэш прошлой сессии, пока идёт
+      // показываем кэш прошлой сессии, пока идёт
       // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
       const cachedChat = await this.loadChatCache(email);
       if (cachedChat && cachedChat.length) {
@@ -1422,7 +1421,7 @@ export default {
         } catch (e) { /* Not connected — тихий фолбэк */ }
       }
       await this.loadMessages(email);
-      // Как в других мессенджерах: при открытии чата — сразу к последнему
+      // при открытии чата — сразу к последнему
       // сообщению (вниз).
       this.scrollToBottom(true);
     },
@@ -1520,11 +1519,11 @@ export default {
       if (!t) { this.jumpToBottom(); return; }
       el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
     },
-    // --- Персистентный кэш тел: SQLite (20.08 — localStorage запрещён) ---
+    // --- Персистентный кэш тел: SQLite
     bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
     chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
     // Загрузка кэша тел писем из SQLite — вызывается после логина/восстановления
-    // сессии. localStorage НЕ источник истины (юзер, 20.08).
+    // сессии.
     async loadBodyCache() {
       try {
         const rows = await db.bodyCacheLoadAll(this.email || 'anon');
@@ -1569,7 +1568,7 @@ export default {
       }
     },
     // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
-    // Хранится в SQLite kv_store (20.08 — localStorage запрещён как источник).
+    // Хранится в SQLite kv_store.
     async loadChatCache(chat) {
       try {
         const raw = await db.kvGet(this.email || 'anon', 'chat-cache:' + chat);
@@ -1582,12 +1581,10 @@ export default {
       try {
         // email-объект письма не персистим (тяжёлый и не нужен для рендера).
         // attachment персистим: без него из кэша пропадают плеер аудио,
-        // кнопка «скачать» и текст вложения (регрессия демо 17.08).
+        // кнопка «скачать» и текст вложения.
         const slim = (list || []).map(m => ({
           id: m.id, content: m.content, from: m.from, time: m.time,
           encrypted: m.encrypted, vault: m.vault, status: m.status,
-          // ts нужен для сортировки кэша при мгновенном открытии чата
-          // (кэш в sqlite может быть в порядке вставки — 20.08).
           ts: m.ts || this.msgTs(m) || undefined,
           reactions: m.reactions || undefined,
           deleted: m.deleted || undefined,
@@ -1630,7 +1627,7 @@ export default {
         // Страховка: не держим запись дольше 10 минут (если SMTP молча не
         // отправил письмо, сообщение не должно висеть «отправленным» вечно).
         // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
-        // должен видеть, что сообщение не дошло (фикс 20.08).
+        // должен видеть, что сообщение не дошло.
         if (msg.status !== 'failed' && msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
         remaining[id] = msg;
         out.push(msg);
@@ -1644,7 +1641,7 @@ export default {
       }
       // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
       // сообщений и вложений нет email-объекта, сортировка по email.date давала
-      // 0 и рвала хронологию (баг 20.08: «сообщения перестроились»).
+      // 0 и рвала хронологию.
       out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
       return out;
     },
@@ -1659,14 +1656,13 @@ export default {
       return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
     },
     // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
-    // из IndexedDB. История — источник истины: отправленные/полученные
+    // из IndexedDB.
     // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
     // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
-    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает (20.08).
+    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает.
     // Локальная история чата: SQLite (db.history_load) — единственный
     // источник. localStorage-копии НЕТ: WebKitGTK-localStorage ограничен
     // ~5 МБ (body-cache уже 3–7 МБ), история живёт в sqlite vault.db
-    // (таблица chat_history) с 20.08 (фикс юзера).
     async loadLocalHistory(chatKey) {
       let hist = null;
       try {
@@ -1676,7 +1672,6 @@ export default {
     },
     // 'sending' — переходный статус, он не должен долго жить в истории: его
     // персистят оптимистично ДО отправки, а финальный пишут после. После
-    // перезапуска промис отправки мёртв, и запись со старым 'sending' (>60 с)
     // вечно горела красным. Повышаем до 'sent' (письмо либо принято SMTP, либо
     // умерло вместе с процессом — квитанции получателей уточнят статус позже).
     normalizeStaleSending(hist) {
@@ -1690,11 +1685,10 @@ export default {
       }
       return hist;
     },
-    // mergeHistory: ИСТОРИЯ — источник истины (сообщения, отправленные или
     // полученные когда-либо, остаются в чате навсегда, с датами), а письма
-    // из IMAP только ДОБАВЛЯЮТ новое. Раньше было наоборот — чат каждый
+    // из IMAP только ДОБАВЛЯЮТ новое.
     // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
-    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами (20.08).
+    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами.
     async mergeHistory(chatKey, list) {
       const hist = await this.loadLocalHistory(chatKey);
       if (!hist || !hist.length) return list;
@@ -1703,8 +1697,7 @@ export default {
       // Из писем добавляем только то, чего ещё нет в истории (новое).
       const extra = list.filter(m => m && m.id && !ids.has(m.id));
       // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
-      // вставки (старые баги mergePending записывали её не по времени), и
-      // возврат без сортировки показывал сообщения в порядке хранения (20.08:
+      // вставки, и
       // «16:37 20:31 18:06 18:07 20:38»).
       if (!extra.length) {
         hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
@@ -1721,7 +1714,7 @@ export default {
       if (m.email && m.email.date) return new Date(m.email.date).getTime();
       if (m.created_at) return new Date(m.created_at).getTime();
       // Оптимистичные исходящие (вложения/голос) персистились без ts —
-      // только _pendingAt; без этого фолбэка они сортировались в начало (20.08).
+      // только _pendingAt; без этого фолбэка они сортировались в начало.
       if (m._pendingAt) return m._pendingAt;
       return 0;
     },
@@ -1729,7 +1722,6 @@ export default {
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
-      // Мгновенное открытие группы из кэша (как и 1-на-1 чаты).
       const cachedGroup = await this.loadChatCache(`group:${group.id}`);
       if (cachedGroup && cachedGroup.length) {
         cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
@@ -1772,9 +1764,8 @@ export default {
       await this.loadGroupMessages(group.id);
       this.scrollToBottom(true);
     },
-    // --- Заметки для себя (локальный чат, Session/Telegram pattern) ---
+    // --- Заметки для себя
     // Хранятся ТОЛЬКО в localStorage (vault-notes-<email>), не шифруются,
-    // не уходят по почте, работают офлайн и мгновенно.
     notesStoreKey() {
       return 'vault-notes-' + (this.email || 'anon');
     },
@@ -2002,7 +1993,6 @@ export default {
       this.editingMessage = msg;
       this.replyTo = null;
       // Редактируем только тело ответа; цитата "> ..." остаётся нетронутой
-      // (раньше в поле попадал весь content с цитатой — правка её стирала).
       this.newMessage = this.replyBody(msg.content || '');
       this.$nextTick(() => {
         const input = this.$refs.messageInput;
@@ -2033,7 +2023,6 @@ export default {
       this.addMidTombstone(msg.mid);
       msg.deleted = true;
       msg.content = '';
-      // Мгновенно убираем из чата — удалённое сообщение исчезает у всех
       // (у получателей — после доставки delete-письма).
       const idx = this.messages.indexOf(msg);
       if (idx !== -1) this.messages.splice(idx, 1);
@@ -2069,7 +2058,6 @@ export default {
         }
       })();
     },
-    // Локальная история: мгновенный показ до живого фетча — чат открывается
     // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
     // в localStorage, см. loadLocalHistory).
     showHistoryFirst(chatKey, isStale) {
@@ -2078,7 +2066,7 @@ export default {
           // История в sqlite — в порядке вставки; показываем сразу по времени.
           hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
           // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
-          // сырые сообщения (баг до фильтра в loadMessages) — сигналы не
+          // сырые сообщения — сигналы не
           // рендерятся ни в истории, ни в чате.
           this.messages = hist.filter(m => {
             const c = (m && m.content) || '';
@@ -2103,8 +2091,7 @@ export default {
       const seq = this.loadSeq;
       const chat = email;
       const stale = () => seq !== this.loadSeq || this.activeChat !== chat;
-      // Мгновенный показ локальной истории (если есть) до живого фетча.
-      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // ВАЖНО: await — история должна загрузиться ДО мержа, иначе
       // гонка с loadMessages: merged=[] без истории и saveCurrentHistory([])
       // затирал сохранённую историю → сообщения «пропадали» (kmakan).
       await this.showHistoryFirst(chat, stale);
@@ -2137,7 +2124,6 @@ export default {
         crypto.setPeerPublicKey(this.peerKeys[email]);
         // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
         // командой (Rust выбирает папку один раз). Поштучный фетч делал
-        // чат пустым на минуту — теперь открытие чата почти мгновенно.
         const byFolder = {};
         for (const m of related) {
           const f = m.folder || 'INBOX';
@@ -2158,7 +2144,6 @@ export default {
             // Ошибка батча (IMAP-рассинхрон, одно пустое тело роняет весь
             // запрос в Rust) НЕ должна обнулять чат: без try/catch падал
             // весь loadMessages и чат застревал на slim-кэше без вложений
-            // (регрессия демо 17.08 — получатель не видел сообщения).
             let bodies = {};
             try {
               bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
@@ -2255,7 +2240,6 @@ export default {
                 // isOut=true = письмо прислал СОБЕСЕДНИК (см. from: isOut?'them':'me').
                 // Аватар/имя в конверте принадлежат отправителю письма:
                 //   входящее (isOut) -> собеседник (email), исходящее -> я (this.email).
-                // Раньше было наоборот — входящий аватар сохранялся под МОИМ email,
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
                 const sender = isOut ? email : this.email;
                 if (env.name || env.avatar) {
@@ -2315,7 +2299,7 @@ export default {
           m.status = ack && ack.read ? 'read' : 'delivered';
         }
         // pending-записи отправителя: квитанции {read:1}/{delivered:1} снимают
-        // 'failed'/'sent' → 'read'/'delivered' (фикс 20.08).
+        // 'failed'/'sent' → 'read'/'delivered'.
         const pb = this.pendingOutgoing[chat] || {};
         for (const [pid, pmsg] of Object.entries(pb)) {
           const ack = wireAcks[pid];
@@ -2335,7 +2319,6 @@ export default {
         }
         // Квитанции получателя — к СВОИМ сообщениям в истории (Sent не
         // читается, свои сообщения в `list` из IMAP не попадают; без этого
-        // шага их статус после перезапуска не обновлялся — 20.08).
         for (const m of merged0) {
           if (m.from !== 'me' || !m.id) continue;
           const ack = wireAcks[m.id];
@@ -2352,7 +2335,6 @@ export default {
           return;
         }
         this.messages = merged;
-        // Персистим отрисованный чат: следующее открытие — мгновенно из кэша.
         this.saveChatCache(chat, this.messages);
         // Локальная история (IndexedDB) — полный архив чата.
         this.saveCurrentHistory(chat);
@@ -2363,10 +2345,9 @@ export default {
       }
 
       // Fallback: legacy backend path (groups, peer-key chats)
-      // Фикс 19.08: если в фетче писем НЕТ (все старее лимитов/курсоров),
       // а локальная история чата уже показана (showHistoryFirst) — не
       // затираем её. Иначе после перезапуска чаты «пустели», хотя кэш
-      // истории на месте (регрессия инкрементального фетча 5e9e4e6).
+      // истории на месте.
       if (this.messages && this.messages.length) return;
       try {
         const raw = await api.getMessages(email);
@@ -2434,8 +2415,7 @@ export default {
         this.pinnedMsgId = (pin && pin.msg_id) || null;
         this.pinnedPreview = (pin && pin.preview) || '';
       }
-      // Мгновенный показ локальной истории (если есть) до живого фетча.
-      // ВАЖНО (20.08): await — история должна загрузиться ДО мержа, иначе
+      // ВАЖНО: await — история должна загрузиться ДО мержа, иначе
       // гонка с loadGroupMessages: merged=[] без истории и saveCurrentHistory
       // затирал сохранённую историю → сообщения «пропадали» (kmakan).
       await this.showHistoryFirst(chat, stale);
@@ -2448,7 +2428,7 @@ export default {
         // selectGroup загрузка ключа была пропущена (guard `cryptoReady`),
         // и в памяти ключа нет, хотя группы.json уже содержит его. Догружаем
         // ключ прямо здесь, чтобы групповые сообщения не рендерились
-        // шифротекстом (баг демо 17.08 — группа «Три» у koanmak).
+        // шифротекстом.
         if (!groupKey && this.cryptoReady) {
           try {
             const kd = await api.getMyGroupKey(groupId);
@@ -2461,7 +2441,7 @@ export default {
           }
         }
 
-        // STEALTH-ГРУППЫ (18.08): у групповых писем темы ПУСТЫЕ (как в 1:1),
+        // STEALTH-ГРУППЫ: у групповых писем темы ПУСТЫЕ
         // поэтому subject-фильтрации нет. getGroupMessages вернул ВСЕ письма,
         // чей отправитель — участник группы; здесь — единый проход:
         //   1) расшифровка групповым ключом (не расшифровалось = чужое
@@ -2571,7 +2551,7 @@ export default {
           }
           // pending-записи отправителя (свою копию он не получает — живут
           // только в pendingOutgoing): квитанции {read:1} участников снимают
-          // 'failed'/'sent' → 'read' (фикс 20.08).
+          // 'failed'/'sent' → 'read'.
           const pb = this.pendingOutgoing[chat] || {};
           for (const [pid, pmsg] of Object.entries(pb)) {
             const ack = wireAcks[pid];
@@ -2592,7 +2572,7 @@ export default {
           // У отправителя группы нет самокопии письма (Sent не читается), его
           // сообщения живут только в истории и в `list` из IMAP не попадают,
           // поэтому без этого шага их статус после перезапуска не обновлялся
-          // до 'read' (20.08: «красный, хотя дошло до всех»).
+          // до 'read'.
           for (const m of merged0) {
             if (m.from !== 'me' || !m.id) continue;
             const acks = wireAcks[m.id];
@@ -2635,7 +2615,6 @@ export default {
     // групп, где мы участники, а не только для открытой. Вызывается из
     // loadEmails (поллинг): участник, не открывавший группу после смены
     // аватара, всё равно получает его (sidebar + шапка при следующем
-    // открытии). Расшифровка — групповым ключом, как в loadGroupMessages.
     // Список писем НЕ фетчим заново: берём уже загруженный this.emails
     // (loadEmails вызвал fetchEmails выше) — только тела новых meta-писем
     // подтягиваются по одному. Применённый uid кэшируем в localStorage,
@@ -2645,7 +2624,7 @@ export default {
       const emails = this.emails || [];
       for (const g of this.groups) {
         if (!g || !g.id) continue;
-        // STEALTH (18.08): тема пустая, поэтому meta-письмо ищем по
+        // STEALTH: тема пустая, поэтому meta-письмо ищем по
         // отправителю — участнику группы (как getGroupMessages).
         const members = (g.members || [])
           .map(m => String(m.email || '').toLowerCase())
@@ -2771,7 +2750,7 @@ export default {
       }
     },
     onTypingInput() {
-      // typing-индикатор: транспорт появится на M3 (ws.js удалён 16.08)
+      // typing-индикатор: транспорт появится на M3
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
@@ -2781,7 +2760,6 @@ export default {
       if (this.sending) return;
       // Анти-дубль ПОСЛЕ отправки: двойной Enter с паузой (первая отправка
       // уже завершилась) — тот же текст в тот же чат в течение 30 секунд
-      // не отправляется повторно (фикс 20.08: «сообщение отправляется не
       // один раз»).
       const chatId = this.activeChatType === 'group' && this.currentGroup
         ? 'group:' + this.currentGroup.id
@@ -2818,7 +2796,6 @@ export default {
 
       try {
         this.sending = true;
-        // Watchdog (20.08): если отправка зависла (SMTP/IMAP не ответил в
         // таймаут, JS-ошибка вне try), sending должен разблокироваться —
         // иначе кнопка/Enter навсегда блокируются, сообщение «висит» в поле.
         clearTimeout(this._sendingWatchdog);
@@ -2885,7 +2862,7 @@ export default {
             return;
           }
           content = await crypto.encryptWithGroupKey(envelope, groupKey);
-          // Оптимистичный показ (как в 1-на-1): Gmail SMTP отвечает медленно,
+          // Оптимистичный показ: Gmail SMTP отвечает медленно
           // а немедленная перезагрузка чата стирала ещё не доставленное
           // сообщение — выглядело как будто ответ/сообщение не отправилось.
           // Запись регистрируется в pendingOutgoing: поллинг подмешивает её
@@ -2904,7 +2881,6 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending('group:' + this.currentGroup.id, pendingMsg);
-          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory('group:' + this.currentGroup.id);
@@ -2928,7 +2904,6 @@ export default {
           }
           // Персистим обновлённый статус в pendingOutgoing (иначе поллинг
           // подмешивал бы запись со старым 'sending'). И в историю — иначе
-          // showHistoryFirst после перезапуска покажет 'sending' (20.08:
           // у групп нет самокопии письма, которая заменила бы pending).
           const bucket = this.pendingOutgoing['group:' + this.currentGroup.id];
           if (bucket && bucket[pendingMsg.id]) {
@@ -2961,7 +2936,6 @@ export default {
           };
           this.messages.push(pendingMsg);
           this.markPending(this.activeChat, pendingMsg);
-          // Своё исходящее ПЕРСИСТИМ сразу (как Delta Chat пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory(this.activeChat);
@@ -2971,8 +2945,6 @@ export default {
             // через ящик: его подтвердит поллинг).
             pendingMsg.status = 'sent';
           } catch (e) {
-            // ФИКС 20.08: при фейле отправки помечаем 'failed' (красный) и
-            // персистим — раньше статус навсегда оставался 'sending',
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
             pendingMsg.failedTo = [e && e.message || String(e)];
@@ -2984,7 +2956,6 @@ export default {
             this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: bucket };
           }
           // Персистим финальный статус в историю (иначе после перезапуска
-          // запись со старым 'sending' горела красным — 20.08).
           this.saveCurrentHistory(this.activeChat);
         }
 
@@ -3037,7 +3008,6 @@ export default {
     },
     // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
     // (initLocalDb загружает их в cursorsCache при входе) — localStorage
-    // больше не источник истины.
     imapCursorsKey(accountId) {
       return 'vault-imap-cursors-' + accountId;
     },
@@ -3063,7 +3033,7 @@ export default {
         const accounts = await api.getEmailAccounts();
         // Не сбрасываем this.emails в начале: пока фетч идёт (или падает),
         // старый список остаётся в UI — клик по чату не видит пустоту.
-        // ПЕРСИСТ (20.08): this.emails восстанавливается из sqlite при входе
+        // ПЕРСИСТ: this.emails восстанавливается из sqlite при входе
         // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
         // перезапуске и чаты без истории были пустыми (icemaksim).
         if (!silent && this.emails.length === 0) {
@@ -3091,10 +3061,10 @@ export default {
           try {
             // Инкрементальный фетч (M1): только письма новее per-folder
             // UID-курсоров. Первый запуск (нет курсоров) — полный скан
-            // последних писем + инициализация курсоров. Раньше каждые 30с
+            // последних писем + инициализация курсоров.
             // пересканировались последние 50-100 писем каждой папки — это
             // и лишний трафик, и триггер троттлинга Gmail.
-            // ВАЖНО (20.08): больше НЕ делаем полный скан при входе —
+            // ВАЖНО: больше НЕ делаем полный скан при входе
             // курсоры в sqlite надёжны, история в sqlite — источник чатов.
             // Принудительный полный скан с пустыми курсорами ломал INBOX
             // на больших ящиках (icemaksim: 15624 писем, UID SEARCH ALL
@@ -3125,7 +3095,7 @@ export default {
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
         this.emails = merged;
-        // ПЕРСИСТ (20.08): envelope cache в sqlite — при перезапуске письма
+        // ПЕРСИСТ: envelope cache в sqlite — при перезапуске письма
         // восстанавливаются без полного IMAP-скана (курсоры согласованы).
         try {
           const acc = accounts[0] ? accounts[0].id : (this.email || 'anon');
@@ -3143,23 +3113,22 @@ export default {
           console.warn('loadEmails: sqlite save failed:', e);
         }
         console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // Непрочитанные + PUSH-уведомления (22.08): каждый fetched-батч
+        // Непрочитанные + PUSH-уведомления: каждый fetched-батч
         // классифицируем (счётчики непрочитанных — всегда; уведомления —
         // только при silent=true, НЕ при первом скане после входа, и только
         // для свежих писем — иначе уведомляли бы обо всей истории ящика и
         // о догоняющих старых письмах).
         if (fetched.length) await this.processIncoming(fetched, { notify: silent });
         // При пустом ящике НЕ показываем красную подсказку — пустой список
-        // и есть норма (пользователь, 21.08: никаких «INBOX пуст» в UI).
+        // и есть норма.
         // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
         await this.processInvites();
         // Аватары групп: meta-письма (VaultGroupMeta) разбираем здесь же, а не
         // только при открытии группы — иначе участник, не открывавший группу,
         // новый аватар админа не увидит никогда.
         await this.syncGroupAvatarsFromMeta();
-        // Квитанции «доставлено» (20.08): шлём {delivered:1} сразу при
+        // Квитанции «доставлено»: шлём {delivered:1} сразу при
         // получении писем поллингом — отправитель видит зелёную точку через
-        // ~30с, а не когда получатель откроет чат (раньше delivered-квитанцию
         // никто не слал — статус висел жёлтым до открытия чата).
         await this.sendDeliveredReceipts(fetched);
       } catch (error) {
@@ -3173,14 +3142,14 @@ export default {
         if (!silent) this.emailsLoading = false;
       }
     },
-    // ── Непрочитанные + PUSH-уведомления (принцип поллинга, 22.08) ─────────
+    // ── Непрочитанные + PUSH-уведомления ─────────
     // processIncoming классифицирует КАЖДЫЙ fetched-батч (поллинг или вход):
     // расшифровывает тела, отличает настоящие сообщения от квитанций/
     // инвайтов/meta (parseEnvelope), ведёт счётчики непрочитанных и
     // (при notify=true) шлёт системные уведомления. Контент НЕ показываем
     // (зашифровано + zero-metadata) — только имя отправителя/группы.
     //
-    // ИДЕМПОТЕНТНОСТЬ (22.08): каждое письмо учитывается ровно ОДИН раз —
+    // ИДЕМПОТЕНТНОСТЬ: каждое письмо учитывается ровно ОДИН раз
     // processedUnreadIds (персист в kv 'unread-seen') хранит uid|folder уже
     // обработанных сообщений. Без этого любой повторный фетч (сбой IMAP,
     // сброс/коллизия курсоров, полный скан после перезапуска) инкрементил
@@ -3382,7 +3351,7 @@ export default {
     async handleCallSignal(sig, from) {
       const { call_id, type } = sig;
       if (!call_id || !from) return;
-      // ЗАЩИТА ОТ УСТАРЕВШИХ КОНВЕРТОВ (22.08): после перезапуска приложение
+      // после перезапуска приложение
       // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
       // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
       // state machine в incoming_ringing, и НОВЫЙ звонок молча отбрасывался.
@@ -3391,7 +3360,6 @@ export default {
         await this.rememberCallSeen(call_id);
         return;
       }
-      // ДЕДУП (22.08): call_id уже обработанного звонка (persist kv
       // 'call-seen') не должен снова дёргать state machine.
       if (type === 'call_request' && !(this.currentCall && this.currentCall.call_id === call_id)) {
         if (await this.isCallSeen(call_id)) return;
@@ -3421,7 +3389,7 @@ export default {
             this.callRingTimer = null;
             this.callState = 'active';
             this.startCallClock();
-            // Фаза 2.3 (SimpleX-схема x.call.offer): OFFER приходит ВНУТРИ
+            // Фаза 2.3: OFFER приходит ВНУТРИ
             // call_accept (sig.sdp). Ставим remote, создаём ANSWER и шлём.
             if (sig.sdp) {
               try {
@@ -3549,9 +3517,9 @@ export default {
       this.idleLoop();
     },
     stopFastPolling() {
-      // IDLE-цикл постоянный — не останавливаем (22.08).
+      // IDLE-цикл постоянный — не останавливаем.
     },
-    // IMAP IDLE-цикл (Фаза 1.5 + 22.08): крутится ПОСТОЯННО, не только на
+    // IMAP IDLE-цикл: крутится ПОСТОЯННО, не только на
     // время звонка. Таймаут ожидания 2с; при событии «новое письмо» — сразу
     // инкрементальный фетч (разбирает call_* сигналы). Страховочный фетч
     // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
@@ -3595,7 +3563,7 @@ export default {
     startPolling(intervalMs = 30000) {
       if (this.pollTimer) return;
       this.pollTimer = setInterval(async () => {
-        // Анти-наложение (20.08): setInterval запускает новый тик каждые 30с,
+        // Анти-наложение: setInterval запускает новый тик каждые 30с
         // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
         // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
         // стартует поверх, lock занят почти всегда, и открытие чата падает с
@@ -3605,7 +3573,7 @@ export default {
         this._pollingActive = true;
         try {
           // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
-          // контактов (модель Delta Chat — группа тоже источник контактов).
+          // контактов.
           try { await this.loadGroups(); } catch (e) { /* тихо */ }
           // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
           // инвайты (попап согласия) и обновляет список писем.
@@ -3765,7 +3733,6 @@ export default {
           alert('Failed to send voice message: ' + (err && err.message || err));
         }
         // Персистим финальный статус в историю (иначе после перезапуска
-        // запись со старым 'sending' горела красным — 20.08).
         this.saveCurrentHistory(chatKey);
       }
     },
@@ -3923,7 +3890,6 @@ export default {
                 msg.status = 'failed';
               }
               // Персистим финальный статус в историю (иначе после перезапуска
-              // запись со старым 'sending' горела красным — 20.08).
               this.saveCurrentHistory(chatKey);
             }
           };
@@ -4005,7 +3971,6 @@ export default {
     },
     // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
     // Паттерн applyReactions: мерж писем в localStorage-хранилище
-    // (vault-edits-<email>), иначе поллинг «откатывал» правку, пока
     // edit-письмо в пути. Последняя по дате правка авторитетна:
     // delete → msg.deleted, edit → msg.content = новый текст + msg.edited.
     editsStorageKey() {
@@ -4059,11 +4024,9 @@ export default {
       const fresh = incomingIds.filter(id => id && sentIds.indexOf(id) < 0);
       if (!fresh.length) return;
       const payload = JSON.stringify({ read: 1, msg_ids: fresh });
-      // ФИКС 20.08 (дубли квитанций): помечаем id как отправленные ДО SMTP —
       // иначе при медленном SMTP (30-60с) следующий поллинг (30с) считает
       // fresh заново и уходит вторая копия квитанции (в ящиках лежали дубли
       // {read:1} с одинаковыми msg_ids — «письма отправляются циклично»).
-      // При фейле SMTP откатываем метку — поллинг попробует ещё раз.
       sent[chatKey] = sentIds.concat(fresh);
       this.saveSentReads(sent);
       (async () => {
@@ -4090,7 +4053,6 @@ export default {
     // получено и расшифровано как vault-сообщение — отправителю уходит
     // {delivered:1, msg_ids:[...]} (stealth, пустая тема; тот же wire-формат,
     // что у read-квитанций — отправитель уже умеет их разбирать, App.vue
-    // wireAcks). Раньше delivered-квитанцию никто не слал: отправитель видел
     // жёлтую точку, пока получатель не откроет чат (тогда уходила read).
     // Групповые письма здесь не обрабатываются (шифр групповым ключом —
     // decryptVault с пир-ключом не пройдёт); для групп статусы — как прежде.
@@ -4099,7 +4061,6 @@ export default {
       const myEmail = (this.email || '').toLowerCase();
       if (!myEmail) return;
       // Дедуп в sqlite kv_store (НЕ localStorage — он может переполниться;
-      // 20.08: localStorage запрещён как источник данных Vault).
       const acc = this.email || 'anon';
       let sentMap = {};
       try {
@@ -4179,7 +4140,7 @@ export default {
     },
     // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
     // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится в sqlite (Delta Chat-style),
+    // поллинг «воскресил» бы удалённое. Хранится в sqlite
     // с in-memory кэшем для синхронной фильтрации (filterDeleted).
     // См. initLocalDb() — загрузка при входе.
     tombstonesCache: [],
@@ -4264,7 +4225,7 @@ export default {
         stored[chatKey] = chatEdits;
         this.saveStoredEdits(stored);
       }
-      // Проставляем на сообщения. Проверка отправителя (аналог Delta Chat
+      // Проставляем на сообщения.
       // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
       // чужие правки игнорируются. Старые правки без sender — применяем
       // (обратная совместимость).
@@ -4513,7 +4474,6 @@ export default {
     },
     async inviteSelectedMembers() {
       // Попап закрываем СРАЗУ — отправка идёт в фоне, итог сообщаем alert'ом.
-      // Раньше попап висел 30-60 с (медленный SMTP) и было непонятно,
       // отправлено приглашение или нет.
       const emails = [...this.addMemberSelected];
       if (!this.currentGroup || !emails.length) return;
@@ -4527,7 +4487,6 @@ export default {
           // Уже участник (мог добавиться, пока попап был открыт) — пропускаем.
           if ((this.currentGroup.members || []).some(m => m.email === email)) continue;
           // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
-          // Без ключа собеседника безопасный инвайт невозможен — как в Session:
           // в группу добавляют только установленные контакты.
           const peerPub = this.peerKeys[email] || null;
           if (!peerPub) {
@@ -4574,7 +4533,7 @@ export default {
       } catch (e) {
         console.error('processInvites: accepts failed:', e);
       }
-      // Контакты 1-на-1 (модель Delta Chat): accept-письма → добавляем ключи
+      // Контакты 1-на-1: accept-письма → добавляем ключи
       // ТОЛЬКО от отправителей, которых МЫ пригласили (invited-senders в api.js).
       // Удаление контакта — строго локальное (deleteContact): никаких писем-
       // уведомлений, никаких замков, никаких повторных отправок. Старые письма
@@ -4666,7 +4625,7 @@ export default {
         }
         if (!groupKey) throw new Error('В приглашении нет ключа группы');
         await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
-        // Аватар группы из инвайта — сохраняем в kv_store (как у админа).
+        // Аватар группы из инвайта — сохраняем в kv_store.
         if (inv.group_avatar) {
           await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
           this.groupAvatars[inv.group_id] = inv.group_avatar;
@@ -4791,8 +4750,8 @@ export default {
     async deleteContact(email) {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
-        // МОДЕЛЬ DELTA CHAT (22.08): удаление СТРОГО ЛОКАЛЬНОЕ — никаких писем
-        // второй стороне (Contact::delete в deltachat-core тоже локальный).
+        // удаление СТРОГО ЛОКАЛЬНОЕ — никаких писем
+        // второй стороне.
         await crypto.removePeerKey(email);
         // Старые handshake-письма от удалённого контакта (invite/accept)
         // помечаем обработанными по uid — не воскрешат контакт. НОВЫЕ
@@ -4840,7 +4799,7 @@ export default {
     },
     loadLocalProfiles() {
       try {
-        // SQLite kv_store (20.08 — localStorage запрещён как источник истины).
+        // SQLite kv_store.
         db.kvGet(this.email || 'anon', 'local-profiles').then(v => {
           if (v) this.localProfiles = JSON.parse(v);
         }).catch(() => {});
@@ -6015,9 +5974,10 @@ body {
 
 .messages {
   flex: 1;
-  /* Ключевой фикс прокрутки: flex-элемент с overflow:auto обязан иметь
+  /* flex-элемент с overflow:auto обязан иметь
      min-height: 0, иначе он растягивается на высоту контента и скролл
-     (в т.ч. колесиком мыши) не появляется. */
+     (в т.ч. колесиком мыши) не появляется.
+     */
   min-height: 0;
   overflow-y: auto;
   padding: 24px;
@@ -6993,8 +6953,6 @@ body {
    ═══════════════════════════════════════════════════════════════ */
 
 .message-input {
-  /* Закреплена внизу чата при любой длине переписки (как в других
-     мессенджерах): не сжимается и не уходит за экран. */
   flex-shrink: 0;
   padding: 16px 24px;
   /* Android: не уходить под системную навигацию (виртуальные кнопки/жесты) */
@@ -7247,18 +7205,7 @@ body {
   background: var(--text-muted);
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   Responsive: мобильная навигация (Telegram/Delta Chat паттерн)
-   ═══════════════════════════════════════════════════════════════ */
-/* 19.08: @media (max-width:768px) скрывал .main-area display:none, и ВСЕ
-   модалки (QR add-contact, settings, invite popups) рендерились ВНУТРИ
-   .main-area → «add contact/settings not responding» (модалка открывалась
-   невидимой). Это лечится НЕ возвратом display:none на main-area, а
-   переносом оверлеев в корень app-container (сделано 21.08: showKeyManager,
-   showQRCode, showSettings, все popup'ы — теперь вне .main-area).
-   На мобильном (<768px): показывается ОДНА панель за раз через классы
-   .mobile-hidden (sidebar скрыт при открытом чате, main-area скрыт при
-   закрытом). В ландшафте/на десктопе — обе панели как раньше. */
+/* Responsive: мобильная навигация */
 .mobile-hidden {
   display: none !important;
 }

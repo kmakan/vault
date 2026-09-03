@@ -34,7 +34,7 @@ async fn e2e_encrypt_via_smtp_decrypt_via_imap() -> Result<()> {
     let bob_pass = env("VAULT_TEST_BOB_PASS")?;
 
     // 1. Alice and Bob share a group/session key (E2E: key exchange happened earlier —
-    //    via /keyshare, QR, or /invite as in Session). Same 32-byte signing key.
+    //    via /keyshare, QR, or /invite). Same 32-byte signing key.
     let key_bytes: [u8; 32] = *b"vault-e2e-shared-key-0123456789a"; // 32 bytes
     let alice = Encryptor::from_key_bytes(&key_bytes);
     let bob = Encryptor::from_key_bytes(&key_bytes);

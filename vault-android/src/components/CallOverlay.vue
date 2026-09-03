@@ -54,7 +54,6 @@
         </div>
       </template>
 
-      <!-- Исходящий: золотая трубка (отмена) — как у входящего, единый стиль -->
       <template v-else-if="state === 'outgoing_ringing'">
         <div class="call-control-row">
           <button class="call-orb call-orb-gold" :title="texts.cancel" @click="$emit('cancel')">
@@ -170,7 +169,6 @@ export default {
       if (!this.dragging || this.decision) return;
       const prevX = this.orbX;
       this.dx = e.clientX - this.startX;
-      // Достигли предела → фиксируем решение и ОТПРАВЛЯЕМ его один раз.
       if (prevX > -this.LATCH_AT && prevX < this.LATCH_AT) {
         if (this.orbX >= this.LATCH_AT) { this.decision = 'accept'; this.$emit('accept'); }
         else if (this.orbX <= -this.LATCH_AT) { this.decision = 'reject'; this.$emit('reject'); }

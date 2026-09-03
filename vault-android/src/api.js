@@ -19,10 +19,10 @@ const GMAIL_CONFIG = {
 
 export { db };
 
-// ── Local persistence: sqlite via Rust (Delta Chat-style disk DB) ─────────
+// ── Local persistence: sqlite via Rust ─────────
 // Всё локальное состояние Vault (история, tombstones, курсоры, кэш тел,
 // kv) живёт в sqlite (~/.local/share/com.vault.vault/vault.db). localStorage
-// больше НЕ источник истины: квота ~5 МБ (body-cache уже 3–7 МБ) и он
+// квота ~5 МБ (body-cache уже 3–7 МБ) и он
 // ненадёжен в WebKitGTK. Все db_* методы — thin invoke-обёртки.
 
 const db = {
@@ -71,7 +71,7 @@ export class ApiClient {
     const savedEmail = localStorage.getItem('vault-email');
     this.email = savedEmail || null;
     this.password = null; // in-memory ONLY — never persisted to localStorage
-    // Диагностика авто-входа: 'auth' | 'network' | 'none' (ставит restoreSession).
+    // 'auth' | 'network' | 'none' (ставит restoreSession).
     this.lastRestoreError = null;
     // Сохранённые серверные настройки (из credentials) — для предзаполнения
     // формы входа, если провайдер сменил IMAP/SMTP и пользователь их правит.
@@ -122,7 +122,7 @@ export class ApiClient {
     this._displayName = undefined; // кэш имени привязан к аккаунту
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', email);
-    // Одноразовая миграция localStorage → kv_store (21.08): старые пометки/
+    // Одноразовая миграция localStorage → kv_store: старые пометки/
     // аватары живы в webview-localStorage, а код читает kv_store.
     this.migrateLegacyLocalStorage().catch(() => {});
     // «Запомнить меня»: учётные данные шифруются device-ключом и пишутся в
@@ -198,7 +198,7 @@ export class ApiClient {
     this._displayName = undefined; // кэш имени привязан к аккаунту
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', creds.email);
-    // Одноразовая миграция localStorage → kv_store (21.08).
+    // Одноразовая миграция localStorage → kv_store.
     this.migrateLegacyLocalStorage().catch(() => {});
     return true;
   }
@@ -217,7 +217,7 @@ export class ApiClient {
     localStorage.removeItem('vault-email');
   }
 
-  // --- Одноразовая миграция localStorage → kv_store (21.08) ---
+  // --- Одноразовая миграция localStorage → kv_store
   // Коммиты af77c15–c0a834b перенесли МЕСТО хранения handshake-пометок,
   // профилей и аватаров из localStorage в sqlite kv_store, но НЕ перенесли
   // сами данные: старые пометки остались в webview-localStorage, а код читает
@@ -228,7 +228,7 @@ export class ApiClient {
     const acc = this.email || 'anon';
     try {
       if (localStorage.getItem('vault-kv-migrated')) return;
-      // 1. Профили/аватары (namespace 'anon', как в getProfilesAll).
+      // 1. Профили/аватары.
       const kvProfiles = await this.getProfilesAll();
       let migrated = false;
       try {
@@ -295,8 +295,8 @@ export class ApiClient {
     }
   }
 
-  // --- Отображаемое имя (display-name) → kv_store (21.08) ---
-  // Раньше — localStorage 'vault-display-name'. Имя — настройка аккаунта,
+  // --- Отображаемое имя (display-name) → kv_store
+  // Имя — настройка аккаунта
   // а не UI-предпочтение: хранится в kv (namespace = account), кэшируется.
   async getDisplayName() {
     if (this._displayName !== undefined) return this._displayName;
@@ -312,8 +312,7 @@ export class ApiClient {
     try { await db.kvSet(this.email || 'anon', 'display-name', name || ''); } catch (e) { /* ignore */ }
   }
 
-  // --- Модель контактов Delta Chat (22.08) ---
-  // Удаление контакта — СТРОГО ЛОКАЛЬНОЕ (как Contact::delete в deltachat-core):
+  // Удаление контакта — СТРОГО ЛОКАЛЬНОЕ
   // удаляется ключ + старые handshake-письма помечаются tombstone по uid
   // (markContactHandshakeDone). Никаких писем-уведомлений второй стороне,
   // никаких списков «удалён мной»/«удалил меня» — они только создавали
@@ -341,13 +340,13 @@ export class ApiClient {
     return { ok: true };
   }
   async getGroupMessages(groupId, emails) {
-    // STEALTH-ГРУППЫ (18.08): темы у групповых писем ПУСТЫЕ (как в 1:1), так
+    // STEALTH-ГРУППЫ: темы у групповых писем ПУСТЫЕ, так
     // что фильтрация по subject невозможна. Возвращаем ВСЕ письма, чей
     // отправитель — участник группы; классификация по содержимому после
     // расшифровки групповым ключом происходит в loadGroupMessages
     // (расшифровка не пройдёт для 1:1-писем/чужих — криптография фильтрует).
     //
-    // ВАЖНО (регрессия 18.08, 124ac4d): тела фетчим БАТЧЕМ по папкам
+    // ВАЖНО: тела фетчим БАТЧЕМ по папкам
     // (fetchEmailBodies — один round-trip на папку), а НЕ по одному письму:
     // при фильтре «все письма участников» сюда попадают и 1:1-письма
     // (десятки!), и по-писемный фетч вызывал IMAP-троттлинг Gmail → фетчи
@@ -357,7 +356,6 @@ export class ApiClient {
     const memberEmails = (g.members || [])
       .map(m => String(m.email || '').toLowerCase())
       .filter(Boolean);
-    // ФИКС 20.08: поллинг группы (каждые 30с) НЕ должен делать полный
     // IMAP-скан (fetchEmails) — это был триггер Gmail-троттлинга: при
     // открытой группе × несколько окон аккаунт упирался в rate limit,
     // SMTP-отправки начинали падать («метка красная», письмо одному из
@@ -415,9 +413,7 @@ export class ApiClient {
       }
     }
     if (failed.length) {
-      // ФИКС 20.08: не бросаем целиком — письма успешным участникам уже
       // ушли, а UI помечает сообщение 'failed' («не доставлено: ...»).
-      // Раньше throw оставлял статус 'sending' (красный) навсегда, а через
       // 10 минут mergePending-страховка молча удаляла сообщение.
       return { ok: false, failed };
     }
@@ -570,7 +566,7 @@ export class ApiClient {
     } catch (e) { /* ignore */ }
     return set;
   }
-  // ── Handshake-пометки: sqlite kv_store (localStorage НЕ источник истины) ──
+  // ── Handshake-пометки: sqlite kv_store ──
   // Персистентные списки обработанных handshake-писем (invite/accept/delete).
   // Ключ = `${sender}|${uid}` (как tombstones): письма навсегда остаются в
   // ящике, и без пометки после удаления контакта снова «активируются».
@@ -607,11 +603,10 @@ export class ApiClient {
     } catch (e) { /* ignore */ }
   }
   // --- Отправленные НАМИ приглашения (invited-senders) ---
-  // Защита авто-принятия (модель Delta Chat, 22.08): accept-письмо добавляет
+  // Защита авто-принятия: accept-письмо добавляет
   // контакт автоматически ТОЛЬКО если мы сами приглашали этого отправителя.
   // Иначе любое стороннее accept-письмо со своим ключом молча попало бы в
   // контакты без согласия, а СТАРЫЕ accept-письма (обработанные ещё до
-  // uid-пометок) «воскрешали» бы удалённый контакт (баг v0.1.8: kmakan на
   // android появился без принятия — UID 278, legacy-accept без пометки).
   async getInvitedSenders() {
     try {
@@ -635,12 +630,12 @@ export class ApiClient {
       await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
     } catch (e) { /* ignore */ }
   }
-  // --- Одноразовый sweep старых handshake-писем (v0.1.9, модель Delta Chat) ---
+  // --- Одноразовый sweep старых handshake-писем
   // Корень «призрачных» инвайтов: handshake-письма живут в ящике ВЕЧНО, а до
   // v0.1.7 не было uid-пометок. В v0.1.8 их подавлял список deleted-senders,
   // в v0.1.9 он удалён (удаление локально) — и СТАРЫЕ инвайты/accept'ы без
   // пометки всплыли заново («пришёл инвайт от kmakan, хотя я не отправлял»).
-  // Фикс: ОДИН РАЗ на аккаунт помечаем ВСЕ текущие непокрытые handshake-письма
+  // ОДИН РАЗ на аккаунт помечаем ВСЕ текущие непокрытые handshake-письма
   // (invites → declined, accepts → accepted), чтобы они больше не всплывали.
   async sweepStaleHandshake() {
     try {
@@ -672,7 +667,7 @@ export class ApiClient {
   async sendContactInvite(email, publicKey) {
     // Письмо-запрос: получатель увидит попап «Принять/Отклонить» и после
     // согласия сохранит наш публичный ключ (контакт появится у обоих).
-    // СТЕЛС (21.08, правка юзера): тема ПУСТАЯ — никаких видимых Vault*
+    // СТЕЛС: тема ПУСТАЯ — никаких видимых Vault*
     // маркеров в заголовках; тип письма — метка kind внутри base64-тела.
     const name = (await this.getDisplayName()) || this.email;
     const avatar = (await this.getAvatar(this.email)) || '';
@@ -685,18 +680,18 @@ export class ApiClient {
     });
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     // Запоминаем, что МЫ пригласили этого отправителя: его accept-письмо
-    // будет авто-принято (fetchPendingContactAccepts). Модель Delta Chat.
+    // будет авто-принято (fetchPendingContactAccepts).
     await this.addInvitedSender(email);
     return { ok: true, invited: true, email };
   }
-  // Единый классификатор handshake-писем (стелс, 21.08): ВСЕ письма ходят с
+  // Единый классификатор handshake-писем: ВСЕ письма ходят с
   // ПУСТОЙ темой, тип письма — метка kind внутри base64-тела. Классифицирует
   // письма один раз за тик поллинга (кэш _handshakeCache сбрасывается в
   // processInvites), чтобы fetch-методы не делали несколько полных IMAP-сканов.
-  // Старые письма (до стелс-фикса) распознаются по legacy subject-маркерам.
+  // Старые письма распознаются по legacy subject-маркерам.
   // Возвращает { invites, accepts, deletes, groupInvites, groupAccepts } —
   // массивы записей { uid, id, date, folder, subject, parsed|null }.
-  // Примечание (22.08): deletes классифицируются для полноты wire-формата,
+  // Примечание: deletes классифицируются для полноты wire-формата
   // но НЕ обрабатываются — удаление контакта строго локальное (модель DC).
   async fetchAllHandshake() {
     if (this._handshakeCache) return this._handshakeCache;
@@ -762,7 +757,7 @@ export class ApiClient {
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
       // Примечание: фильтра «удалён МНОЙ/удалил меня» здесь НЕТ — новые
-      // приглашения от бывших контактов должны доходить (юзер, 21.08).
+      // приглашения от бывших контактов должны доходить.
       // Старые письма от удалённых контактов помечаются declined/accepted
       // по uid в markContactHandshakeDone() при удалении.
       const parsed = m.parsed || {};
@@ -783,12 +778,11 @@ export class ApiClient {
   }
   // Пометить ВСЕ старые handshake-письма от email как обработанные
   // (invite → declined, accept → accepted по uid). Вызывается при ЛОКАЛЬНОМ
-  // удалении контакта (модель Delta Chat): старые письма не должны воскрешать
+  // удалении контакта: старые письма не должны воскрешать
   // контакт, а НОВЫЕ приглашения (после удаления) проходят — их uid ещё не помечен.
   async markContactHandshakeDone(email) {
     try {
       // Кэш сбрасываем: метод вызывается из deleteContact вне поллинга,
-      // кэш может быть устаревшим (письма пришли после последнего тика).
       this._handshakeCache = null;
       const all = await this.fetchAllHandshake();
       const declined = await this.getDeclinedContacts();
@@ -860,11 +854,10 @@ export class ApiClient {
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
       if (!parsed.public_key) continue;
-      // МОДЕЛЬ DELTA CHAT (22.08): авто-принятие ТОЛЬКО от отправителей, которых
+      // авто-принятие ТОЛЬКО от отправителей, которых
       // МЫ сами пригласили (invited-senders). Иначе ЛЮБОЕ accept-письмо со своим
       // ключом молча попало бы в контакты без согласия, а СТАРЫЕ accept-письма,
       // обработанные ещё до uid-пометок, «воскрешали» бы удалённый контакт.
-      // (Баг v0.1.8: на android появился kmakan без принятия — UID 278,
       // legacy-accept от kmakan без пометки, авто-добавлен.)
       if (!invited.includes(sender)) {
         // Не наше приглашение — tombstone письмо, чтобы не обрабатывалось вечно.
@@ -1050,7 +1043,6 @@ export class ApiClient {
     return (g && g.members) || [];
   }
   async inviteGroupMember(groupId, email, groupKeyEnc, senderPublicKey) {
-    // Инвайт участника: НЕ добавляем мгновенно через groups_add_member — вместо
     // этого отправляем письмо VaultGroupInvite. Участник попадёт в группу только
     // после того, как примет приглашение (fetchPendingAccepts → groups_add_member).
     // Ключ группы НИКОГДА не уходит открытым текстом: groupKeyEnc — это group_key,
@@ -1083,7 +1075,6 @@ export class ApiClient {
     await this.sendEmail('local', { to: email, subject: '', body: payload });
     return { ok: true, invited: true, email };
   }
-  // Alias для обратной совместимости — не добавляет мгновенно, а шлёт инвайт.
   // Требует зашифрованный group key (см. inviteGroupMember).
   async addGroupMember(groupId, email) {
     throw new Error('addGroupMember: приглашение требует зашифрованный ключ группы — используйте inviteGroupMember через UI');
@@ -1137,7 +1128,7 @@ export class ApiClient {
     });
     // Письмо-подтверждение шлём ВСЕМ участникам группы (кроме себя), а не
     // только пригласившему: так каждый участник локально добавит новичка
-    // (fetchPendingAccepts → groups_add_member идемпотентно). Раньше accept
+    // (fetchPendingAccepts → groups_add_member идемпотентно).
     // уходил одному инвайтеру — у остальных groups.json никогда не обновлялся
     // (рассинхрон ростера: участник есть у одного, отсутствует у другого).
     const roster = new Set();

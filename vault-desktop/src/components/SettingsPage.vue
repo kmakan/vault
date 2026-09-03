@@ -62,9 +62,10 @@
           </select>
           <p class="setting-hint">{{ t('settings_media_hint') }}</p>
         </div>
-        <!-- N6 (28.08, паритет Delta Chat): автоочистка — удалять старые
+        <!-- автоочистка — удалять старые
              письма с УСТРОЙСТВА (с сервера ничего не уходит; при возврате
-             в чат они догрузятся по IMAP). -->
+             в чат они догрузятся по IMAP).
+             -->
         <div class="setting-group">
           <label>{{ t('settings_autoclean') }}</label>
           <select v-model="localAutoclean" @change="saveAutoclean" class="media-quality-select">
@@ -79,7 +80,7 @@
         <AppBehavior />
       </div>
 
-      <!-- ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ (25.08, по модели Delta Chat) -->
+      <!-- ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ -->
       <div v-if="activeCategory === 'experiments'" class="settings-section">
         <h2>{{ t('settings_experiments') }}</h2>
         <p class="setting-hint" style="margin-bottom:16px">
@@ -96,16 +97,18 @@
       <div v-if="activeCategory === 'email'" class="settings-section">
         <h2>{{ t('settings_email_accounts') }}</h2>
         <EmailSettings />
-        <!-- Смена почты (24.08): ключи E2E не зависят от email — можно сменить
+        <!-- Смена почты: ключи E2E не зависят от email — можно сменить
              адрес, контакты и группы останутся. Контакты узнают новый адрес
-             автоматически: broadcast-письмо несёт тот же fingerprint (ключ). -->
+             автоматически: broadcast-письмо несёт тот же fingerprint (ключ).
+             -->
         <div class="change-email-block">
           <button @click="$emit('change-email')" class="btn btn-secondary"><Icon name="mail" :size="14" /> {{ t('settings_change_email') || 'Сменить почту' }}</button>
           <p class="change-email-note">{{ t('settings_change_email_note') }}</p>
         </div>
-        <!-- Резервная копия (24.08): ключи + профили + пометки. Как у DC
+        <!-- Резервная копия: ключи + профили + пометки.
              «Экспорт резервной копии» — файл можно хранить и восстановить
-             на другом устройстве / после переустановки. -->
+             на другом устройстве / после переустановки.
+             -->
         <div class="change-email-block">
           <h3 class="backup-title">{{ t('settings_backup_title') }}</h3>
           <button @click="exportBackup" :disabled="backupBusy" class="btn btn-secondary backup-btn"><Icon name="download" :size="14" /> {{ backupBusy ? '…' : t('settings_backup_export') }}</button>
@@ -135,7 +138,7 @@
         </div>
       </div>
 
-      <!-- ЗВОНКИ (27.08): рингтон входящего, сигнал ожидания, превью -->
+      <!-- ЗВОНКИ: рингтон входящего, сигнал ожидания, превью -->
       <div v-if="activeCategory === 'calls'" class="settings-section">
         <h2>{{ t('settings_calls') }}</h2>
         <div class="setting-group">
@@ -179,7 +182,7 @@
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
 
-        <!-- Duress-защита (t_b185e3e2): замок, panic-PIN, duress-PIN -->
+        <!-- Duress-защита: замок, panic-PIN, duress-PIN -->
       <div class="setting-row" style="display:block">
         <div style="margin-bottom:14px">
           <label class="toggle"><input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" /><span class="slider"></span></label>
@@ -207,11 +210,6 @@
             <label class="toggle"><input type="checkbox" v-model="duressSosGeo" @change="onSosGeoChange" /><span class="slider"></span></label>
             <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_geo') || 'Добавлять координаты в SOS (запросит доступ к геолокации)' }}</span>
           </div>
-          <!-- Биометрия (02.09): только Android — нативный BiometricPrompt
-               поверх замка LockActivity. Отпечаток снимает обычный замок;
-               duress/panic по-прежнему только вводом кода. 0.1.133: тумблер
-               сохраняется МГНОВЕННО (не требует повторного ввода кода и
-               «Сохранить» — из-за этого bio_enabled не доезжал до prefs). -->
           <div v-if="isAndroid">
             <label class="toggle"><input type="checkbox" v-model="duressBio" @change="onBioChange" /><span class="slider"></span></label>
             <span style="margin-left:10px;font-size:13.5px;color:#8b93a7">{{ t('duress_bio') || 'Снимать замок по отпечатку пальца' }}</span>
@@ -244,7 +242,6 @@
       <div v-if="activeCategory === 'help'" class="settings-section">
         <h2>{{ t('settings_help') }}</h2>
         <div class="help-links">
-          <!-- 02.09: эмодзи 📖/🐛 заменены на иконки набора (единый стиль) -->
           <a href="https://github.com/nousresearch/vault" target="_blank"><Icon name="book" :size="15" /> {{ t('settings_docs') }}</a>
           <a href="https://github.com/nousresearch/vault/issues" target="_blank"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
           <div class="update-check">
@@ -304,7 +301,7 @@ export default {
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
-      // Duress (t_b185e3e2)
+      // Duress
       duressEnabled: false,
       duressLockCode: '',
       duressPanicCode: '',
@@ -316,7 +313,7 @@ export default {
       duressContacts: [],
       diagText: '…',
       duressRecipients: [],
-      // Мобильный режим (25.08): на телефоне список разделов и контент —
+      // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
       // На мобильном стартуем со списка разделов, на десктопе — «Профиль».
@@ -324,11 +321,11 @@ export default {
       localDisplayName: this.displayName || '',
       localBio: this.bio || '',
       localMediaQuality: 'high',
-      // N6: период автоочистки ('off'|'1d'|'7d'|'30d'|'365d').
+      // период автоочистки ('off'|'1d'|'7d'|'30d'|'365d').
       localAutoclean: 'off',
       experimentsCalls: false,
       notifSound: true,
-      // RELEASE-PREP (t_eb3465e4): проверка обновлений через latest.json.
+      // RELEASE-PREP: проверка обновлений через latest.json.
       appVersion: '0.1.100',
       updateChecking: false,
       updateAvailable: false,
@@ -351,7 +348,7 @@ export default {
         { id: 'help', icon: 'help', label: 'Помощь' },
         { id: 'clear', icon: 'trash', label: 'Очистить данные' }
       ],
-      // Звонки (27.08): выбранные рингтоны (имена WAV без ring_/.wav).
+      // Звонки: выбранные рингтоны (имена WAV без ring_/.wav).
       ringtoneIncoming: 'incoming',
       ringtoneOutgoing: 'outgoing',
       previewPlaying: false,
@@ -371,10 +368,10 @@ export default {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
       this.localAutoclean = (await db.kvGet('anon', 'autoclean-period')) || 'off';
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
-      // Звонки (27.08): выбранные рингтоны.
+      // Звонки: выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
-      // Duress (t_b185e3e2): восстановить состояние тумблера из конфига — иначе
+      // Duress: восстановить состояние тумблера из конфига — иначе
       // после перезапуска тумблер выглядит выключенным, даже если замок активен.
       try {
         const dcfg = await duressApi.getConfig();
@@ -388,7 +385,6 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
-      // Диагностика (врем.): что реально лежит в конфиге + путь БД
       try {
         const dc = await duressApi.getConfig();
         let dbp = '';
@@ -400,11 +396,11 @@ export default {
     } catch (e) { /* ignore */ }
   },
   methods: {
-    // ── RELEASE-PREP (t_eb3465e4): проверка обновлений ─────────────────
+    // ── RELEASE-PREP: проверка обновлений ─────────────────
     // Rust-команда check_app_update сравнивает semver-численно и возвращает
     // latest.json только если версия новее текущей. Скачивание — через
     // браузер на страницу релизов (t('update_download') → shell-open).
-    // ── Duress (t_b185e3e2) ─────────────────────────────────────────────
+    // ── Duress ─────────────────────────────────────────────
     async duressToggleLock() {
       try {
         const cfg = await duressApi.getConfig();
@@ -437,10 +433,9 @@ export default {
         try { window.__vaultRequestGeo && window.__vaultRequestGeo(); } catch (e) { /* ignore */ }
       }
     },
-    // Биометрия: мгновенное сохранение тумблера (0.1.133). Раньше bio_enabled
     // писал только duressSave — требовал повторного ввода кода разблокировки;
     // юзер переключал тумблер и выходил, bio не доезжал до prefs → замок
-    // открывался без предложения отпечатка (живой тест 02.09).
+    // открывался без предложения отпечатка.
     async onBioChange() {
       try {
         const cfg = await duressApi.getConfig();
@@ -479,7 +474,6 @@ export default {
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
         console.log('[duress] config saved, lock_enabled =', cfg.lock_enabled);
-        // Диагностика (врем.): перечитываем конфиг сразу после записи — если
         // чтение вернуло НЕ то, что писали, увидим в alert (разные БД?!).
         const verify = await duressApi.getConfig();
         console.log('[duress] verify after save: enabled=', verify && verify.lock_enabled,
@@ -539,7 +533,7 @@ export default {
     },
     // «Обновить»: на Android ведём на страницу релизов (пользователь ставит
     // APK сам — маркетов пока нет); ссылка из latest.json, фолбэк — сайт.
-    // Фикс (31.08): window.open в Tauri WebView молча НЕ открывает внешние
+    // window.open в Tauri WebView молча НЕ открывает внешние
     // ссылки — используем системный opener-плагин (shell:allow-open в
     // capabilities, тот же механизм, что openExternal в App.vue).
     async openDownloadPage() {
@@ -547,7 +541,6 @@ export default {
       const url = (isAndroid && this.updateInfo.apk_url) ||
         this.updateInfo.desktop_url ||
         'https://vault-msg.ru';
-      // 0.1.115: на Android opener-плагин так и не открыл браузер (ACL/стек
       // плагина молча падал) — зовём НАТИВНУЮ команду android_open_url
       // (Rust→JNI→VaultForegroundService.openUrlCompat→ACTION_VIEW).
       // Desktop оставляет anchor-click (там он работает).
@@ -582,7 +575,6 @@ export default {
         await db.kvSet('anon', 'media-quality', this.localMediaQuality);
       } catch (e) { /* ignore */ }
     },
-    // N6: период автоочистки + немедленный запуск очистки (App.vue слушает
     // событие autoclean-change).
     async saveAutoclean() {
       try {
@@ -590,7 +582,7 @@ export default {
       } catch (e) { /* ignore */ }
       this.$emit('autoclean-change', this.localAutoclean);
     },
-    // ── Звонки (27.08): сохранение + превью рингтонов ──────────────────
+    // ── Звонки: сохранение + превью рингтонов ──────────────────
     async saveRingtoneIncoming() {
       try { await db.kvSet('anon', 'call-ringtone-incoming', this.ringtoneIncoming); } catch (e) { /* ignore */ }
     },
@@ -598,7 +590,7 @@ export default {
       try { await db.kvSet('anon', 'call-ringtone-outgoing', this.ringtoneOutgoing); } catch (e) { /* ignore */ }
     },
     // Превью: desktop — cpal в Rust (media_sound_play), Android — HTML5
-    // Audio (как в App.vue playCallSound). Зацикленный звук — стоп кнопкой.
+    // Audio. Зацикленный звук — стоп кнопкой.
     previewSound(name, looped) {
       this.stopPreview();
       try {
@@ -628,12 +620,12 @@ export default {
     async saveProfileFields() {
       await this.saveDisplayName();
       this.$emit('bio-save', this.localBio);
-      // Единое письмо с именем+аватаром+статусом (25.08): чтобы все три
+      // Единое письмо с именем+аватаром+статусом: чтобы все три
       // сущности ушли вместе с одним ts — иначе три отдельных письма с
       // разными ts создают чехарду на приёме (аватар «возвращается» старый).
       this.$emit('profile-save');
     },
-    // --- Резервная копия (24.08) ---
+    // --- Резервная копия
     // Экспорт: ключи + kv_store (профили, пометки, курсоры) в JSON-файл.
     async exportBackup() {
       this.backupBusy = true;
@@ -784,12 +776,11 @@ export default {
   margin-bottom: 16px;
 }
 
-/* Селект настроек (качество медиа, рингтоны — 27.08) */
+/* Селект настроек */
 .media-quality-select {
   width: 100%;
   max-width: 320px;
-  /* 28.08: фикс «стрелка приклеена к краю» на Android WebView —
-     нативная стрелка убрана, своя chevron-иконка с отступом справа. */
+  /* нативная стрелка убрана, своя chevron-иконка с отступом справа. */
   appearance: none;
   -webkit-appearance: none;
   padding: 10px 36px 10px 14px;
@@ -804,7 +795,7 @@ export default {
   box-sizing: border-box;
 }
 
-/* Ряд «селект + кнопка превью» (рингтоны, 27.08) */
+/* Ряд «селект + кнопка превью» */
 .ringtone-row {
   display: flex;
   align-items: center;
@@ -961,7 +952,7 @@ export default {
 .help-links a:hover { text-decoration: underline; }
 .version { color: #484f58; font-size: 12px; margin-top: 16px; }
 
-/* RELEASE-PREP (t_eb3465e4): блок проверки обновлений */
+/* RELEASE-PREP: блок проверки обновлений */
 .update-check { display: flex; flex-direction: column; gap: 10px; }
 .update-btn {
   align-self: flex-start; padding: 8px 14px; border-radius: 8px;
@@ -986,13 +977,13 @@ export default {
 .update-status { color: var(--text-secondary, #8b949e); font-size: 13px; margin: 0; }
 .update-status-err { color: #f85149; }
 
-/* Мобильный режим (25.08): список разделов и контент — два «экрана»,
+/* Мобильный режим: список разделов и контент — два «экрана»
    переключаются v-show (см. шаблон): экран списка (профиль + вертикальный
    список) → тап по разделу → экран раздела с кнопкой «← Назад» сверху.
-   Прежний вариант (горизонтальная полоса вкладок) терял разделы:
    пункты с width:100% уезжали в скролл и полоса выглядела пустой.
-   ВАЖНО: media query после базовых правил — scoped-специфичность равная,
-   побеждает последний. */
+   ВАЖНО: media query после базовых правил — scoped-специфичность равная
+   побеждает последний.
+   */
 @media (max-width: 767px) {
   .settings-page {
     display: block;
@@ -1015,9 +1006,9 @@ export default {
     overflow: visible;
     padding: 4px 0;
     /* Android: env(safe-area-inset-bottom) в WebView часто = 0, поэтому
-       запас ФИКСИРОВАННЫЙ — иначе последний пункт («Очистить данные»)
        при полной прокрутке остаётся под панелью жестов/кнопок и на него
-       невозможно нажать. */
+       невозможно нажать.
+       */
     padding-bottom: calc(48px + var(--safe-bottom, 0px));
   }
   .settings-nav-item {
@@ -1053,7 +1044,7 @@ export default {
 }
 .settings-back-btn:hover { background: #161b22; }
 
-/* Статус «О себе» (25.08) */
+/* Статус «О себе» */
 .bio-input {
   width: 100%; max-width: 320px;
   padding: 10px 14px;
@@ -1062,7 +1053,7 @@ export default {
 }
 .bio-counter { display: block; margin-top: 4px; color: #8b949e; font-size: 11px; text-align: right; max-width: 320px; }
 
-/* Кнопки профиля: столбик с зазором (25.08 — на мобильном были прижаты) */
+/* Кнопки профиля: столбик с зазором */
 .profile-actions {
   display: flex;
   flex-direction: column;

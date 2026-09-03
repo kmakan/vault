@@ -294,7 +294,7 @@ export default {
       }
     },
     // --- Файлы через шифратор ---
-    // Прочитать File как base64 (data URL без префикса).
+    // Прочитать File как base64.
     readFileAsBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();

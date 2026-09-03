@@ -45,7 +45,6 @@ async fn main() -> Result<()> {
 
     // Serverless era: the REPL is the only frontend. The legacy ratatui TUI
     // (vault --tui) depended on the removed REST backend and was deleted
-    // 16.08.2026 together with it.
     let _ = cli_args.cli;
     cli::run_cli(config).await
 }
