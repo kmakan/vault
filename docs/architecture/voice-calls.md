@@ -45,7 +45,7 @@ NAT:          TURN пользователя (X2TURN, coturn over TLS/443) — н
 
 - P2P: host + srflx кандидаты (домашние NAT проходят).
 - Symmetric NAT без TURN → звонок невозможен; **TURN обязателен как настройка**.
-- X2TURN (паттерн SimpleX): coturn на 443/TLS (`alt-tls-listening-port=443`,
+- TURN поверх TLS 443: coturn (`alt-tls-listening-port=443`,
   `lt-cred-mech`, Let's Encrypt, релей 49152:65535) — неотличим от HTTPS для DPI.
 - SettingsPage: список ICE-серверов (STUN/TURN) пользователя, ротация;
   публичные STUN — только dev-сборки.
