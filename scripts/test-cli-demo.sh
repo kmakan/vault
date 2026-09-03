@@ -4,8 +4,8 @@
 
 set -e
 
-CLIENT_DIR="/home/maksim/whisper/vault-client"
-RESULTS_FILE="/home/maksim/whisper/docs/testing/cli-demo-results.md"
+CLIENT_DIR="$(cd "$(dirname "$0")/../vault-client" && pwd)"
+RESULTS_FILE="$(cd "$(dirname "$0")/../docs/testing" && pwd)/cli-demo-results.md"
 
 echo "# CLI Demo Test Results" > "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"

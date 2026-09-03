@@ -242,8 +242,8 @@
       <div v-if="activeCategory === 'help'" class="settings-section">
         <h2>{{ t('settings_help') }}</h2>
         <div class="help-links">
-          <a href="https://github.com/nousresearch/vault" target="_blank"><Icon name="book" :size="15" /> {{ t('settings_docs') }}</a>
-          <a href="https://github.com/nousresearch/vault/issues" target="_blank"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
+          <a href="https://vault-msg.ru" target="_blank"><Icon name="book" :size="15" /> {{ t('settings_docs') }}</a>
+          <a href="mailto:feedback@vault-msg.ru"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
           <div class="update-check">
             <button
               class="update-btn"
@@ -260,6 +260,25 @@
               <p v-if="updateInfo.changelog" class="update-changelog">{{ updateInfo.changelog }}</p>
             </template>
             <p v-else-if="updateStatus" :class="['update-status', { 'update-status-err': updateStatusIsErr }]">{{ updateStatus }}</p>
+          </div>
+          <!-- Обратная связь: письмо через SMTP пользователя (serverless-путь) -->
+          <div class="feedback-block">
+            <textarea
+              v-model="feedbackText"
+              class="feedback-input"
+              rows="3"
+              :placeholder="t('feedback_placeholder')"
+            ></textarea>
+            <div class="feedback-row">
+              <button
+                class="update-btn"
+                :disabled="feedbackSending || !feedbackText.trim()"
+                @click="sendFeedback"
+              >
+                <Icon v-if="!feedbackSending" name="send" :size="14" /> {{ feedbackSending ? t('feedback_sending') : t('feedback_send') }}
+              </button>
+              <span v-if="feedbackStatus" :class="['update-status', { 'update-status-err': feedbackStatusIsErr }]">{{ feedbackStatus }}</span>
+            </div>
           </div>
           <div class="version">Vault v{{ appVersion }}</div>
         </div>
@@ -332,6 +351,11 @@ export default {
       updateStatus: '',
       updateStatusIsErr: false,
       updateInfo: { version: '', changelog: '', apk_url: '', desktop_url: '' },
+      // Обратная связь: письмо через SMTP пользователя.
+      feedbackText: '',
+      feedbackSending: false,
+      feedbackStatus: '',
+      feedbackStatusIsErr: false,
       notifTray: true,
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
@@ -563,6 +587,34 @@ export default {
       } catch (e) {
         console.warn('anchor click failed:', e);
         shellOpen(url).catch((e2) => console.warn('shellOpen failed:', e2));
+      }
+    },
+    async sendFeedback() {
+      const text = this.feedbackText.trim();
+      if (!text || this.feedbackSending) return;
+      this.feedbackSending = true;
+      this.feedbackStatus = '';
+      this.feedbackStatusIsErr = false;
+      try {
+        let ver = this.appVersion;
+        try {
+          const { getVersion } = await import('@tauri-apps/api/app');
+          ver = await getVersion();
+        } catch (e) { /* dev-окружение без Tauri */ }
+        const body = text + '\n\n—\nVault v' + ver + '\n' + navigator.userAgent +
+          (this.email ? '\nAccount: ' + this.email : '');
+        await invoke('email_send', {
+          to: 'feedback@vault-msg.ru',
+          subject: '[feedback] v' + ver,
+          body,
+        });
+        this.feedbackStatus = this.t('feedback_sent');
+        this.feedbackText = '';
+      } catch (e) {
+        this.feedbackStatus = this.t('feedback_err') + ': ' + (e.message || e);
+        this.feedbackStatusIsErr = true;
+      } finally {
+        this.feedbackSending = false;
       }
     },
     async saveDisplayName() {
@@ -954,6 +1006,15 @@ export default {
 
 /* RELEASE-PREP: блок проверки обновлений */
 .update-check { display: flex; flex-direction: column; gap: 10px; }
+.feedback-block { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.feedback-input {
+  width: 100%; max-width: 420px; box-sizing: border-box; resize: vertical;
+  padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.4;
+  border: 1px solid var(--border, #30363d); background: var(--bg-secondary, #0d1117);
+  color: var(--text-primary, #e6edf3); font-family: inherit;
+}
+.feedback-input:focus { outline: none; border-color: var(--accent, #58a6ff); }
+.feedback-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .update-btn {
   align-self: flex-start; padding: 8px 14px; border-radius: 8px;
   border: 1px solid var(--accent, #58a6ff); background: transparent;
