@@ -243,7 +243,7 @@
         <h2>{{ t('settings_help') }}</h2>
         <div class="help-links">
           <a href="https://vault-msg.ru" target="_blank"><Icon name="book" :size="15" /> {{ t('settings_docs') }}</a>
-          <a href="mailto:kmakan@zoho.com"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
+          <a href="mailto:feedback@vault-msg.ru"><Icon name="bug" :size="15" /> {{ t('settings_report_bug') }}</a>
           <div class="update-check">
             <button
               class="update-btn"
@@ -609,7 +609,7 @@ export default {
         const body = text + '\n\n—\nVault v' + ver + '\n' + navigator.userAgent +
           (this.email ? '\nAccount: ' + this.email : '');
         await invoke('email_send', {
-          to: 'kmakan@zoho.com',
+          to: 'feedback@vault-msg.ru',
           subject: '[feedback] v' + ver,
           body,
         });

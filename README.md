@@ -82,83 +82,31 @@ if every relay in the world went down, your messenger would keep working.
   ~1 s while the app is alive. A push relay is planned.
 - **Attachments** are capped by your mail provider (typically 25–30 MB).
 
-### Install (prebuilt binaries)
-
-**Android** — download the signed APK and open it:
-[vault-0.1.142.apk](https://github.com/kmakan/vault/releases/download/v0.1.142/vault-0.1.142.apk)
-(21 MB, Android 7+). The system will ask to allow installs from this source —
-allow it. The APK is signed with the Vault release key, so future versions
-install over it without data loss; in-app updates: Settings → Help →
-"Check for updates".
-
-**Linux (Debian/Ubuntu)** — deb package:
-```bash
-sudo dpkg -i Vault_0.1.142_amd64.deb   # or: sudo apt install ./Vault_0.1.142_amd64.deb
-```
-**Linux (any distro)** — portable tar.gz:
-```bash
-tar xzf vault-desktop-0.1.142-linux-x86_64.tar.gz
-./vault-desktop
-```
-Runtime deps on Ubuntu 22.04+: `libwebkit2gtk-4.1-0` (pulled in automatically
-by the .deb).
-
-**Windows / macOS** — builds in progress; use the CLI meanwhile.
-
-**Terminal (CLI)** — needs Rust 1.75+ only:
-```bash
-cargo install --git https://github.com/kmakan/vault --bin vault-client
-```
-
-All files are also mirrored at [vault-msg.ru/releases](https://vault-msg.ru/releases/)
-and in [GitHub Releases](https://github.com/kmakan/vault/releases).
-
 ### Build from source
 
-Prerequisites: Rust 1.75+ (`rustup`), Node.js 18+; for Android — JDK 17,
-Android SDK 35 + NDK 27 (`ANDROID_HOME` set); for desktop on Linux —
-`libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`.
-
 ```bash
-git clone https://github.com/kmakan/vault.git && cd vault
+# Desktop (Tauri 2, Rust + Vue 3)
+cd vault-desktop && npm install && npm run tauri build
+
+# Android (JDK 17, Android SDK 35, NDK 27)
+cd vault-desktop && npx tauri android build
+
+# CLI
+cd vault-client && cargo build --release
 ```
 
-**Desktop (Tauri 2: Rust core + Vue 3 UI).** `npm install` fetches the
-frontend toolchain; `npm run tauri build` then compiles the Vue app (vite),
-builds the Rust core in release mode and bundles installers:
-```bash
-cd vault-desktop
-npm install
-npm run tauri build
-# output: src-tauri/target/release/bundle/{deb,rpm,appimage}/
-# bare binary: src-tauri/target/release/vault-desktop
-```
-
-**Android.** The Gradle project lives in `vault-desktop/src-tauri/gen/android`
-(already configured — no `tauri android init` needed). This builds the Rust
-core for ARM and packages the APK:
-```bash
-cd vault-desktop
-npx tauri android build --apk --target aarch64
-# output: src-tauri/gen/android/app/build/outputs/apk/universal/release/
-```
-The result is unsigned (the release keystore is not in this repo) — sign it
-with your own keystore before installing (`apksigner` / `zipalign`), or just
-use the prebuilt APK above.
-
-**CLI.** Plain Rust, no extra tooling:
-```bash
-cd vault-client
-cargo build --release   # → target/release/vault-client
-```
-
-Tests: `cargo test` in each crate (430+ unit/integration tests, real
+Tests: `cargo test` in each crate (220+ unit/integration tests, real
 provider e2e included).
+
+### Downloads
+
+Downloads and changelog: **[vault-msg.ru](https://vault-msg.ru)** (Android APK + desktop builds, `latest.json` for in-app update checks).
 
 ### Security & privacy
 
 - Read [SECURITY.md](SECURITY.md) — design, known limitations, disclosure.
 - Read [PRIVACY.md](PRIVACY.md) — what leaves your device (only opaque email).
+- Community rules: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ### License
 
