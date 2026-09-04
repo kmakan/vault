@@ -2129,7 +2129,7 @@ export default {
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
-      this.restoreDraft(email);
+      await this.restoreDraft(email);
       // показываем кэш прошлой сессии, пока идёт
       // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
       const cachedChat = await this.loadChatCache(email);
@@ -2494,7 +2494,7 @@ export default {
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
-      this.restoreDraft('group:' + group.id);
+      await this.restoreDraft('group:' + group.id);
       const cachedGroup = await this.loadChatCache(`group:${group.id}`);
       if (cachedGroup && cachedGroup.length) {
         cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
@@ -6509,25 +6509,36 @@ export default {
     // ── Черновики ──────────────────────────────────────────────────
     // Текст недописанного сообщения сохраняется per-chat (kv) и
     // восстанавливается при возврате в чат.
+    // Черновики: сериализация RMW через очередь (_draftQueue в data) —
+    // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
+    _draftRun(fn) {
+      this._draftQueue = this._draftQueue.then(fn, fn);
+      return this._draftQueue;
+    },
     async saveDraft() {
-      try {
-        const chatKey = this.activeChatType === 'group' && this.currentGroup
-          ? 'group:' + this.currentGroup.id
-          : this.activeChat;
-        if (!chatKey) return;
-        const raw = await db.kvGet(this.email || 'anon', 'drafts');
-        const drafts = raw ? JSON.parse(raw) : {};
-        if ((this.newMessage || '').trim()) drafts[chatKey] = this.newMessage;
-        else delete drafts[chatKey];
-        await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
-      } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      if (!chatKey) return;
+      const text = this.newMessage || '';
+      this._draftRun(async () => {
+        try {
+          const raw = await db.kvGet(this.email || 'anon', 'drafts');
+          const drafts = raw ? JSON.parse(raw) : {};
+          if (text.trim()) drafts[chatKey] = text;
+          else delete drafts[chatKey];
+          await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
+        } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
+      });
     },
     async restoreDraft(chatKey) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'drafts');
-        const drafts = raw ? JSON.parse(raw) : {};
-        this.newMessage = drafts[chatKey] || '';
-      } catch (e) { /* ignore */ }
+      return this._draftRun(async () => {
+        try {
+          const raw = await db.kvGet(this.email || 'anon', 'drafts');
+          const drafts = raw ? JSON.parse(raw) : {};
+          this.newMessage = drafts[chatKey] || '';
+        } catch (e) { /* ignore */ }
+      });
     },
     // Голоса голосований: агрегация из сигнальных писем в карточки poll.
     // myVote определяется по наличию своего голоса в wire (email отправителя).
@@ -6754,6 +6765,8 @@ export default {
     pollOptions: ['', ''],
     // Пересылка: пересылаемое сообщение (объект) + список целей
     forwardTo: null,
+    // Черновики: очередь сериализации kv (read-modify-write)
+    _draftQueue: Promise.resolve(),
     // Папки чатов: активная папка + диалог создания в контекстном меню
     activeFolder: '',
     folderDialogOpen: false,
