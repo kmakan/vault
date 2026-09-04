@@ -85,6 +85,10 @@ export const icons = {
     { type: 'path', d: 'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z' },
     { type: 'circle', cx: 12, cy: 10, r: 3 },
   ],
+  forward: [
+    { type: 'path', d: 'M15 17l5-5-5-5' },
+    { type: 'path', d: 'M4 12h16' },
+  ],
   smile: [
     { type: 'circle', cx: 12, cy: 12, r: 10 },
     { type: 'path', d: 'M8 14s1.5 2 4 2 4-2 4-2' },
