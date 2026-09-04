@@ -88,7 +88,8 @@ test: add CLI parsing tests
 
 ## Reporting Issues
 
-Open an issue on GitHub with:
+For security issues, use the private channel in [SECURITY.md](SECURITY.md),
+not public issues. For everything else, open an issue with:
 - What you expected
 - What happened
 - Steps to reproduce
@@ -98,4 +99,11 @@ Open an issue on GitHub with:
 
 ## License
 
-By contributing, you agree your code is licensed under MIT.
+By contributing, you agree your code is licensed under AGPL-3.0
+(the project license). No CLA — you keep copyright of your contributions.
+
+---
+
+## Code of Conduct
+
+Participants are expected to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

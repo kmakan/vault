@@ -159,6 +159,7 @@ provider e2e included).
 
 - Read [SECURITY.md](SECURITY.md) — design, known limitations, disclosure.
 - Read [PRIVACY.md](PRIVACY.md) — what leaves your device (only opaque email).
+- Community rules: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ### License
 
