@@ -306,10 +306,18 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
             log::warn!("[duress] SOS: no recipients configured");
             return Ok(());
         }
+        // Гео: {coords} в тексте подставляется; если плейсхолдера нет,
+        // а гео включено (sos_geo) и пришло — координаты дописываются в конец.
         let text = if geo.is_empty() {
-            cfg.sos_text.clone()
+            cfg.sos_text.replace("{coords}", "")
         } else {
-            format!("{} | {}", cfg.sos_text, geo)
+            if cfg.sos_text.contains("{coords}") {
+                cfg.sos_text.replace("{coords}", &geo)
+            } else if cfg.sos_geo {
+                format!("{} | {}", cfg.sos_text, geo)
+            } else {
+                cfg.sos_text.replace("{coords}", "")
+            }
         };
         crate::duress::send_sos_headless(&cfg.sos_recipients, &text);
         Ok(())
