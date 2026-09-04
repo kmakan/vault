@@ -1000,6 +1000,8 @@ import LockScreen from './components/LockScreen.vue';
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
 // и клик по логотипу в шапке откроет его во внешнем браузере.
 const APP_SITE_URL = '';
+// Черновики: очередь сериализации kv-RMW (модуль-уровень).
+let DRAFT_QUEUE = Promise.resolve();
 
 export default {
   name: 'ChatApp',
@@ -6509,11 +6511,11 @@ export default {
     // ── Черновики ──────────────────────────────────────────────────
     // Текст недописанного сообщения сохраняется per-chat (kv) и
     // восстанавливается при возврате в чат.
-    // Черновики: сериализация RMW через очередь (draftQueue в data) —
+    // Черновики: сериализация RMW через очередь на статике конструктора —
     // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
     draftRun(fn) {
-      this.draftQueue = this.draftQueue.then(fn, fn);
-      return this.draftQueue;
+      DRAFT_QUEUE = DRAFT_QUEUE.then(fn, fn);
+      return DRAFT_QUEUE;
     },
     async saveDraft() {
       const chatKey = this.activeChatType === 'group' && this.currentGroup
@@ -6766,7 +6768,6 @@ export default {
     // Пересылка: пересылаемое сообщение (объект) + список целей
     forwardTo: null,
     // Черновики: очередь сериализации kv (read-modify-write)
-    draftQueue: Promise.resolve(),
     // Папки чатов: активная папка + диалог создания в контекстном меню
     activeFolder: '',
     folderDialogOpen: false,
