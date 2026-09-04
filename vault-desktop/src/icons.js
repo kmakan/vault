@@ -78,6 +78,13 @@ export const icons = {
     { type: 'line', x1: 18, y1: 20, x2: 18, y2: 4 },
     { type: 'line', x1: 6, y1: 20, x2: 6, y2: 16 },
   ],
+  folder: [
+    { type: 'path', d: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z' },
+  ],
+  'map-pin': [
+    { type: 'path', d: 'M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z' },
+    { type: 'circle', cx: 12, cy: 10, r: 3 },
+  ],
   smile: [
     { type: 'circle', cx: 12, cy: 12, r: 10 },
     { type: 'path', d: 'M8 14s1.5 2 4 2 4-2 4-2' },

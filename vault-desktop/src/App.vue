@@ -198,6 +198,12 @@
           <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
           <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
         </div>
+        <!-- Папки: горизонтальная лента созданных папок -->
+        <div v-if="chatFoldersList.length" class="folder-strip">
+          <button v-for="f in chatFoldersList" :key="f" class="folder-chip"
+                  :class="{ 'folder-chip-on': activeFolder === f }"
+                  @click="activeFolder = activeFolder === f ? '' : f">{{ f }}</button>
+        </div>
       </div>
     </div>
     
@@ -469,6 +475,7 @@
             <button v-if="!messageMenu.msg.callEvent" @click="toggleStar(messageMenu.msg); messageMenu = null"><Icon name="star" :size="14" /> {{ isStarred(messageMenu.msg) ? (t('unstar_message') || 'Убрать из избранного') : (t('star_message') || 'В избранное') }}</button>
             <button v-if="!messageMenu.msg.callEvent && activeChatType === 'group' && isGroupAdmin" @click="pinGroupMessage(messageMenu.msg); messageMenu = null"><Icon name="pin" :size="14" /> {{ t('pin_message') || 'Закрепить' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="startEditMessage(messageMenu.msg); messageMenu = null"><Icon name="pencil" :size="14" /> {{ t('edit_message') || 'Редактировать' }}</button>
+            <button v-if="!messageMenu.msg.callEvent && !messageMenu.msg.deleted && !messageMenu.msg.poll" @click="startForward(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" style="transform:scaleX(-1)" /> {{ t('forward_to') || 'Переслать' }}</button>
             <button v-if="messageMenu.msg.from === 'me' && !messageMenu.msg.deleted" @click="deleteMessage(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_message') || 'Удалить' }}</button>
             <!-- «Удалить у меня»: любые сообщения (свои, чужие) и пилюли звонков
                  только своё устройство, у собеседника остаётся.
@@ -518,6 +525,7 @@
           />
         </div>
         <button class="attach-btn" :title="t('poll_create') || 'Poll'" @click="pollDialog = !pollDialog"><Icon name="bar-chart" :size="19" /></button>
+        <button class="attach-btn" v-if="isAndroid" :title="t('geo_send') || 'Send location'" @click="sendGeoMessage"><Icon name="map-pin" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <!-- Создание голосования -->
         <div v-if="pollDialog" class="poll-dialog">
@@ -529,6 +537,20 @@
               <button v-if="pollOptions.length < 10" class="btn-primary" @click="pollOptions.push('')">{{ t('poll_add_option') || '+ вариант' }}</button>
               <button class="btn-primary" :disabled="!pollQuestion.trim() || pollOptions.filter(o => o.trim()).length < 2" @click="confirmPoll">{{ t('poll_send') || 'Отправить' }}</button>
               <button class="btn-primary" @click="pollDialog = false">{{ t('cancel') || 'Отмена' }}</button>
+            </div>
+          </div>
+        </div>
+        <!-- Пересылка: выбор чата -->
+        <div v-if="forwardTo" class="poll-dialog">
+          <div class="poll-dialog-box">
+            <div class="poll-dialog-title">{{ t('forward_to') || 'Переслать в чат' }}</div>
+            <div class="forward-list">
+              <button v-for="c in forwardTargets" :key="c.key" class="poll-option" @click="doForward(c.key)">
+                <span class="poll-option-label">{{ c.label }}</span>
+              </button>
+            </div>
+            <div class="poll-dialog-row">
+              <button class="btn-primary" @click="forwardTo = null">{{ t('cancel') || 'Отмена' }}</button>
             </div>
           </div>
         </div>
@@ -913,6 +935,24 @@
           <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
           {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
         </button>
+        <div class="message-menu-sep"></div>
+        <div class="chat-menu-folder-label">{{ t('chat_folder') || 'Папка' }}</div>
+        <button @click="setChatFolder('')">
+          <Icon name="x" :size="14" /> {{ t('chat_folder_none') || 'Без папки' }}
+        </button>
+        <button v-for="f in chatFoldersList" :key="f" @click="setChatFolder(f)">
+          <Icon name="folder" :size="14" /> {{ f }}
+        </button>
+        <button v-if="!folderDialogOpen" @click="folderDialogOpen = true; chatFolderNewName = ''">
+          <Icon name="plus" :size="14" /> {{ t('chat_folder_new') || 'Новая папка…' }}
+        </button>
+        <template v-else>
+          <input v-model="chatFolderNewName" class="duress-input" style="margin:4px 6px;width:calc(100% - 12px)"
+                 :placeholder="t('chat_folder_name_ph') || 'Название'" @keyup.enter="createChatFolder()" />
+          <button @click="createChatFolder()">
+            <Icon name="check" :size="14" /> {{ t('chat_folder_add') || 'Создать' }}
+          </button>
+        </template>
       </div>
     </div>
     <!-- Тост-уведомление (Key Recovery и пр.) -->
@@ -1224,6 +1264,21 @@ export default {
     }
   },
   computed: {
+    // Пересылка: список чатов-целей (контакты + группы).
+    forwardTargets() {
+      const list = [];
+      for (const c of this.contacts || []) {
+        if (c.email && c.email !== '__notes__' && c.email !== this.activeChat) {
+          list.push({ key: c.email, label: this.nameOf(c.email) || c.email });
+        }
+      }
+      for (const g of this.groups || []) {
+        if (!(this.activeChatType === 'group' && this.currentGroup && g.id === this.currentGroup.id)) {
+          list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + this.t('group') });
+        }
+      }
+      return list;
+    },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
     editingContactBio() {
       if (!this.editingContact) return '';
@@ -1260,6 +1315,10 @@ export default {
       // при showArchived). Поиск работает по видимому подмножеству.
       let list = this.contacts.filter(c =>
         !!(this.chatFlags[c.email.toLowerCase()] || {}).archived === this.showArchived);
+      // Папка: активная папка показывает только чаты в ней.
+      if (this.activeFolder) {
+        list = list.filter(c => (this.chatFlags[c.email.toLowerCase()] || {}).folder === this.activeFolder);
+      }
       if (!this.searchQuery) return list;
       const q = this.searchQuery.toLowerCase();
       return list.filter(c => {
@@ -1267,11 +1326,19 @@ export default {
       });
     },
     filteredGroups() {
-      return this.groups.filter(g =>
+      let list = this.groups.filter(g =>
         !!(this.chatFlags['group:' + g.id] || {}).archived === this.showArchived);
+      if (this.activeFolder) {
+        list = list.filter(g => (this.chatFlags['group:' + g.id] || {}).folder === this.activeFolder);
+      }
+      return list;
     },
     hasArchivedChats() {
       return Object.values(this.chatFlags).some(f => f && f.archived);
+    },
+    // Папки чатов: список имён из kv (сортированный).
+    chatFoldersList() {
+      return (this.chatFoldersNames || []).slice().sort((a, b) => a.localeCompare(b));
     },
     // ── Звонки (M3): строки и таймер для оверлея ──
     callTexts() {
@@ -2058,9 +2125,11 @@ export default {
       }
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
+      this.saveDraft(); // черновик прошлого чата — до сброса activeChat
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
+      this.restoreDraft(email);
       // показываем кэш прошлой сессии, пока идёт
       // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
       const cachedChat = await this.loadChatCache(email);
@@ -2421,9 +2490,11 @@ export default {
       return 0;
     },
     async selectGroup(group) {
+      this.saveDraft(); // черновик прошлого чата
       this.messages = [];
       this.newMessage = '';
       this.cancelReply();
+      this.restoreDraft('group:' + group.id);
       const cachedGroup = await this.loadChatCache(`group:${group.id}`);
       if (cachedGroup && cachedGroup.length) {
         cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
@@ -2715,6 +2786,31 @@ export default {
       const pct = Math.round(v.counts[lead] * 100 / v.total);
       return `${poll.options[lead]} — ${pct}%`;
     },
+    // ── Гео-сообщение ──────────────────────────────────────────────
+    // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
+    // получателей через linkify; никакой специфики конверта не нужно).
+    async sendGeoMessage() {
+      const coords = await new Promise((resolve) => {
+        let done = false;
+        const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
+        const timer = setTimeout(() => finish(null), 8000);
+        try {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => finish(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
+            () => finish(null),
+            { timeout: 7000, maximumAge: 300000 },
+          );
+        } catch (e) { finish(null); }
+      });
+      if (!coords) {
+        this.showToast(this.t('geo_err') || 'Геолокация недоступна', 3000);
+        return;
+      }
+      this.newMessage = (this.t('geo_im_here') || 'Я здесь:') + ' ' + coords +
+        ' — https://www.openstreetmap.org/?mlat=' + coords.split(',')[0].trim() +
+        '&mlon=' + coords.split(',')[1].trim() + '#map=17/' + coords.split(',')[0].trim() + '/' + coords.split(',')[1].trim();
+      this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
+    },
     // Подтвердить создание голосования (диалог).
     confirmPoll() {
       const q = this.pollQuestion.trim();
@@ -2724,6 +2820,56 @@ export default {
       this.pollQuestion = '';
       this.pollOptions = ['', ''];
       this.sendPoll(q, opts);
+    },
+    // ── Пересылка (forward) ────────────────────────────────────────
+    // Переслать: пере-шифровка текста для выбранного чата с пометкой.
+    startForward(msg) {
+      if (!msg) return;
+      this.forwardTo = msg;
+    },
+    async doForward(key) {
+      const msg = this.forwardTo;
+      this.forwardTo = null;
+      if (!msg || !key) return;
+      const fromName = msg.from === 'me'
+        ? (this.displayName || this.email)
+        : (this.nameOf(this.activeChat) || this.activeChat);
+      const fwdText = (this.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
+      try {
+        this.sending = true;
+        const ttl = await this.ephemeralTtlOf(key);
+        const envelope = await this.buildEnvelope(fwdText, ttl);
+        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
+        const pendingMsg = {
+          id: envelopeId || ('local-' + Date.now()),
+          content: fwdText,
+          from: 'me',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
+        };
+        if (key.startsWith('group:')) {
+          const gid = key.slice(6);
+          const groupKey = this.groupKeys[gid];
+          if (!groupKey) { alert(this.t('err_group_key')); return; }
+          const content = await crypto.encryptWithGroupKey(envelope, groupKey);
+          await api.sendGroupMessage(gid, content);
+          pendingMsg.status = 'sent';
+          this.markPending(key, pendingMsg);
+        } else {
+          if (!this.peerKeys[key]) { alert(this.t('poll_err')); return; }
+          crypto.setPeerPublicKey(this.peerKeys[key], this.peerPqKeys && this.peerPqKeys[key]);
+          const content = await crypto.encryptVault(envelope);
+          await api.sendMessage(key, content);
+          pendingMsg.status = 'sent';
+          this.markPending(key, pendingMsg);
+        }
+        this.showToast(this.t('forward_done') || 'Переслано', 2500);
+      } catch (e) {
+        console.error('[forward] failed:', e);
+        alert(this.t('forward_err') || 'Forward failed');
+      } finally {
+        this.sending = false;
+      }
     },
     // Свой голос: сигнальное письмо (механика sendReaction) + локальная запись.
     castPollVote(msg, option) {
@@ -4451,6 +4597,7 @@ export default {
         // ждать завершения отправки, чтобы поле опустело.
         this.newMessage = '';
         this.cancelReply();
+        this.saveDraft(); // поле пусто — черновик этого чата стираем
 
         let content = payload;
 
@@ -5088,6 +5235,10 @@ export default {
         const raw = await db.kvGet(this.email || 'anon', 'chat-flags');
         this.chatFlags = raw ? JSON.parse(raw) : {};
       } catch (e) { this.chatFlags = {}; }
+      try {
+        const fr = await db.kvGet(this.email || 'anon', 'chat-folders');
+        this.chatFoldersNames = fr ? JSON.parse(fr) : [];
+      } catch (e) { this.chatFoldersNames = []; }
     },
     async saveChatFlags() {
       try {
@@ -5168,10 +5319,32 @@ export default {
       const key = this.flagKey(this.chatMenu.target);
       const f = { ...(this.chatFlags[key] || {}) };
       f.muted = !f.muted;
-      if (!f.archived && !f.muted) delete this.chatFlags[key];
+      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
       else this.chatFlags[key] = f;
       this.closeChatMenu();
       await this.saveChatFlags();
+    },
+    // ── Папки чатов (kv chat-folders + chatFlags[key].folder) ──────────
+    async setChatFolder(name) {
+      const key = this.flagKey(this.chatMenu.target);
+      const f = { ...(this.chatFlags[key] || {}) };
+      if (name) f.folder = name.slice(0, 24);
+      else delete f.folder;
+      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
+      else this.chatFlags[key] = f;
+      this.closeChatMenu();
+      await this.saveChatFlags();
+    },
+    async createChatFolder() {
+      const name = (this.chatFolderNewName || '').trim().slice(0, 24);
+      if (!name) return;
+      if (!this.chatFoldersNames.includes(name)) {
+        this.chatFoldersNames = [...this.chatFoldersNames, name];
+        await db.kvSet(this.email || 'anon', 'chat-folders', JSON.stringify(this.chatFoldersNames));
+      }
+      await this.setChatFolder(name);
+      this.folderDialogOpen = false;
+      this.chatFolderNewName = '';
     },
     // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
     // call_id обработанного звонка (request/accept/end/reject). После
@@ -6333,6 +6506,29 @@ export default {
       const m = String(raw).match(/<([^>]+)>/);
       return (m ? m[1] : raw).trim().toLowerCase();
     },
+    // ── Черновики ──────────────────────────────────────────────────
+    // Текст недописанного сообщения сохраняется per-chat (kv) и
+    // восстанавливается при возврате в чат.
+    async saveDraft() {
+      try {
+        const chatKey = this.activeChatType === 'group' && this.currentGroup
+          ? 'group:' + this.currentGroup.id
+          : this.activeChat;
+        if (!chatKey) return;
+        const raw = await db.kvGet(this.email || 'anon', 'drafts');
+        const drafts = raw ? JSON.parse(raw) : {};
+        if ((this.newMessage || '').trim()) drafts[chatKey] = this.newMessage;
+        else delete drafts[chatKey];
+        await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
+      } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
+    },
+    async restoreDraft(chatKey) {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'drafts');
+        const drafts = raw ? JSON.parse(raw) : {};
+        this.newMessage = drafts[chatKey] || '';
+      } catch (e) { /* ignore */ }
+    },
     // Голоса голосований: агрегация из сигнальных писем в карточки poll.
     // myVote определяется по наличию своего голоса в wire (email отправителя).
     applyPollVotes(list, wirePollVotes) {
@@ -6556,6 +6752,13 @@ export default {
     pollDialog: false,
     pollQuestion: '',
     pollOptions: ['', ''],
+    // Пересылка: пересылаемое сообщение (объект) + список целей
+    forwardTo: null,
+    // Папки чатов: активная папка + диалог создания в контекстном меню
+    activeFolder: '',
+    folderDialogOpen: false,
+    chatFolderNewName: '',
+    chatFoldersNames: [],
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},
@@ -8870,6 +9073,43 @@ body {
 .poll-dialog-box .duress-input:focus { border-color: var(--accent-primary, #6366f1); }
 .poll-dialog-row { display: flex; gap: 8px; margin-top: 4px; }
 .poll-dialog-row .btn-primary { flex: 0 0 auto; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; }
+/* Папки чатов: лента чипов */
+.folder-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 10px 6px;
+  scrollbar-width: thin;
+}
+.folder-chip {
+  flex: 0 0 auto;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  color: inherit;
+  font-size: 12.5px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.folder-chip:hover { background: rgba(245, 158, 11, 0.12); }
+.folder-chip-on {
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+.chat-menu-folder-label {
+  font-size: 11px;
+  opacity: 0.6;
+  padding: 4px 10px 2px;
+}
+.forward-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 
 .reply-btn {
   position: absolute;
