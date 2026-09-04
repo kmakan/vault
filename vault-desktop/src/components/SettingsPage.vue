@@ -606,13 +606,18 @@ export default {
           const { getVersion } = await import('@tauri-apps/api/app');
           ver = await getVersion();
         } catch (e) { /* dev-окружение без Tauri */ }
-        const body = text + '\n\n—\nVault v' + ver + '\n' + navigator.userAgent +
-          (this.email ? '\nAccount: ' + this.email : '');
-        await invoke('email_send', {
-          to: 'kmakan@zoho.com',
-          subject: '[feedback] v' + ver,
-          body,
+        const sent = await this._feedbackPost({
+          text, version: ver, account: this.email || '', ua: navigator.userAgent,
         });
+        if (!sent) {
+          const body = text + '\n\n—\nVault v' + ver + '\n' + navigator.userAgent +
+            (this.email ? '\nAccount: ' + this.email : '');
+          await invoke('email_send', {
+            to: 'kmakan@zoho.com',
+            subject: '[feedback] v' + ver,
+            body,
+          });
+        }
         this.feedbackStatus = this.t('feedback_sent');
         this.feedbackText = '';
       } catch (e) {
@@ -620,6 +625,25 @@ export default {
         this.feedbackStatusIsErr = true;
       } finally {
         this.feedbackSending = false;
+      }
+    },
+    // Основной канал — сервер (структурированно, без SMTP-настроек).
+    // false = недоступен → вызывающий делает email fallback.
+    async _feedbackPost(payload) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const r = await fetch('https://vault-msg.ru/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: ctrl.signal,
+        });
+        return r.ok;
+      } catch (e) {
+        return false;
+      } finally {
+        clearTimeout(timer);
       }
     },
     async saveDisplayName() {
