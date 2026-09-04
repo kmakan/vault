@@ -3164,13 +3164,21 @@ export default {
           crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
-              // SOS (duress): не пишется в чат — только уведомление.
+              // SOS (duress): пишется в чат как обычное сообщение с префиксом —
+              // тост был эфемерным (8с) и SOS терялся, если его не увидели.
               {
                 const envCheck = msg.content && crypto.isEncrypted(msg.content)
                   ? this.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
                 if (envCheck && envCheck.type === 'sos') {
                   this.showToast('🚨 ' + (envCheck.name || this.activeChat) + ': ' + envCheck.text, 8000);
-                  return null; // Promise.all: null отфильтруется ниже
+                  return {
+                    ...msg,
+                    content: '🚨 SOS: ' + envCheck.text,
+                    from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    time: new Date(msg.created_at).toLocaleTimeString(),
+                    status: 'delivered',
+                    attachment: null,
+                  };
                 }
               }
               const { text, attachment } = this.parseMessageContent(msg.content);
@@ -3187,10 +3195,16 @@ export default {
                   const text = await crypto.decryptVault(msg.content);
                   const env = this.parseEnvelope(text);
                   if (env && env.type === 'sos') {
-                    // SOS (duress): НЕ пишется в чат — только уведомление
-                    // (Android пушнул монитор; desktop показывает тост здесь).
+                    // SOS (duress): тоже в чат (см. выше) — тост как дубль-уведомление.
                     this.showToast('🚨 ' + (env.name || this.activeChat) + ': ' + env.text, 8000);
-                    return null; // map-колбэк: null отфильтруется ниже
+                    return {
+                      ...msg,
+                      content: '🚨 SOS: ' + env.text,
+                      from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                      time: new Date(msg.created_at).toLocaleTimeString(),
+                      status: 'delivered',
+                      attachment: null,
+                    };
                   }
                   if (env) {
                     // Зелёная точка: письмо от контакта = активность сейчас
