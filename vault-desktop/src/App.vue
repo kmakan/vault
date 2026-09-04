@@ -3944,8 +3944,10 @@ export default {
             } catch (e) { finish(''); }
           });
         }
-        const text = (cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}')
-          .replace('{coords}', coords);
+        const rawText = cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}';
+        let text = rawText.replace('{coords}', coords);
+        // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
+        if (coords && !rawText.includes('{coords}')) text += coords;
         for (const rcpt of rcpts) {
           try {
             const content = await crypto.encryptVault(JSON.stringify({
