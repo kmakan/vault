@@ -230,20 +230,6 @@ class VaultForegroundService : Service() {
                 .commit()
         }
 
-        /// вызывает через JNI; JS напрямую prefs не видит).
-        @JvmStatic
-        fun lockPrefsDebug(context: android.content.Context): String {
-            val prefs = context.getSharedPreferences("vault_duress", android.content.Context.MODE_PRIVATE)
-            val hash = prefs.getString("pin_hash", null)
-            val lastPause = prefs.getLong("last_pause_ms", 0L)
-            val sincePause = if (lastPause > 0) (System.currentTimeMillis() - lastPause) / 1000 else -1
-            return "enabled=" + prefs.getBoolean("lock_enabled", false) +
-                ", hashLen=" + (hash?.length ?: 0) +
-                ", unlocked=" + prefs.getBoolean("unlocked", true) +
-                ", pauseAgo=" + sincePause + "s" +
-                ", pauseStartedLock=" + prefs.getBoolean("last_pause_started_lock", false)
-        }
-
         /// Проверка кода по ВСЕМ хэшам замка. Возвращает тип:
         /// "lock" — обычный код (вход), "duress" — тихий SOS, "panic" — wipe, "none".
         @JvmStatic

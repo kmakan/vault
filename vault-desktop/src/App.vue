@@ -7,10 +7,6 @@
       @duress="onLockDuress"
       @panic="onLockPanic"
     />
-    <!-- показывается ТОЛЬКО при сбое (в норме не видна).
-         Формулировки с 'err'/'error'/'prefs err' означают разрыв JNI-моста.
-         -->
-    <div v-if="duressDiag && /err|error|panic|fail/i.test(duressDiag)" style="position:fixed;left:8px;bottom:6px;z-index:10000;font-size:11px;color:#f87171;pointer-events:none;background:rgba(11,15,23,.7);padding:2px 8px;border-radius:6px">[duress] {{ duressDiag }}</div>
     <!-- RESTORING SESSION (авто-вход: не показываем пустую форму логина) -->
     <div v-if="!isLoggedIn && restoringSession" class="login-screen">
       <div class="login-box">
@@ -3829,18 +3825,7 @@ export default {
       // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
       if (/android/i.test(navigator.userAgent)) {
         this.duressLocked = false;
-        // enabled/hashLen/unlocked.
-        // Если после «Сохранить» enabled=false — prefs не пишутся (JNI-мост).
-        console.log('[duress] android branch: reading native prefs…');
-        this.duressDiag = 'native: читаем prefs…';
-        try {
-          const dbg = await invoke('android_duress_prefs_debug');
-          console.log('[duress] android prefs debug:', dbg);
-          this.duressDiag = 'native lock: ' + dbg;
-        } catch (e) {
-          console.warn('[duress] android prefs debug FAILED:', e);
-          this.duressDiag = 'native lock: prefs debug err ' + (e && e.message || e);
-        }
+        console.log('[duress] android branch: native LockActivity handles the lock');
         return;
       }
       try {
@@ -3849,13 +3834,8 @@ export default {
         this.duressLocked = enabled;
         console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
           ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
-        // замок настроен, но не показан?
-        // Так пользователь без adb увидит, что вернул Rust. Врем. мера —
-        // убрать после стабилизации.
-        this.duressDiag = `enabled=${cfg && cfg.lock_enabled}, hashLen=${(cfg && cfg.lock_hash || '').length}, locked=${enabled}`;
       } catch (e) {
         console.warn('[duress] check failed:', e);
-        this.duressDiag = 'check error: ' + (e && e.message || e);
       }
       // Android: «выход» из приложения НЕ убивает процесс — FGS и
       // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
@@ -3947,13 +3927,23 @@ export default {
         if (!cfg || !cfg.sos_enabled_rcpts) { /* compat */ }
         const rcpts = (cfg.sos_recipients || []).filter(Boolean);
         if (!rcpts.length) return;
-        // Гео: если включено — получаем координаты через плагин geolocation (этап 3);
-        // сейчас — без гео (текст без координат), фича дополняется на этапе 3.
+        // Гео: если включено — координаты через WebView geolocation
+        // (на Android нативный запрос разрешения идёт при включении флага).
         let coords = '';
-        try {
-          const pos = await invoke('plugin:geolocation|get_current_position');
-          coords = `, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
-        } catch (e) { /* гео недоступно/не включено — без координат */ }
+        if (cfg.sos_geo) {
+          coords = await new Promise((resolve) => {
+            let done = false;
+            const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
+            const timer = setTimeout(() => finish(''), 5000);
+            try {
+              navigator.geolocation.getCurrentPosition(
+                (pos) => finish(`, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
+                () => finish(''),
+                { timeout: 4500, maximumAge: 600000 },
+              );
+            } catch (e) { finish(''); }
+          });
+        }
         const text = (cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}')
           .replace('{coords}', coords);
         for (const rcpt of rcpts) {
@@ -6308,7 +6298,6 @@ export default {
     duressLocked: false,
     duressPending: false,
     duressUnlockedThisSession: false,
-    duressDiag: '',
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},
