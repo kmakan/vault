@@ -365,7 +365,23 @@
               </template>
               <template v-else>
               <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
-              <span v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
+              <!-- Голосование: карточка вместо текста (poll-конверт) -->
+              <div v-if="msg.poll" class="poll-card">
+                <div class="poll-title"><Icon name="bar-chart" :size="14" /> {{ msg.poll.question }}</div>
+                <button v-for="(opt, i) in msg.poll.options" :key="i"
+                        class="poll-option"
+                        :class="{ 'poll-option-mine': msg.poll.myVote === i, 'poll-option-lead': pollLead(msg.poll) === i }"
+                        :disabled="msg.poll.closed || msg.poll.myVote !== null"
+                        @click.stop="castPollVote(msg, i)">
+                  <span class="poll-option-label">{{ opt }}</span>
+                  <span class="poll-option-count" v-if="pollVotes(msg.poll).total">{{ pollOptionCount(msg.poll, i) }}</span>
+                  <span class="poll-check" v-if="msg.poll.myVote === i">✓</span>
+                </button>
+                <div class="poll-footer" v-if="pollVotes(msg.poll).total">
+                  {{ pollVotes(msg.poll).voters }} {{ t('poll_voted') }} · {{ pollLeadLabel(msg.poll) }}
+                </div>
+              </div>
+              <span v-else v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
               <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
               <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
                 <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
@@ -501,8 +517,21 @@
             class="message-field"
           />
         </div>
-        <button class="attach-btn" title="Attach file" @click="$refs.fileInput.click()"><Icon name="paperclip" :size="19" /></button>
+        <button class="attach-btn" :title="t('poll_create') || 'Poll'" @click="pollDialog = !pollDialog"><Icon name="bar-chart" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
+        <!-- Создание голосования -->
+        <div v-if="pollDialog" class="poll-dialog">
+          <div class="poll-dialog-box">
+            <div class="poll-dialog-title">{{ t('poll_create') || 'Создать голосование' }}</div>
+            <input v-model="pollQuestion" class="duress-input" :placeholder="t('poll_question_ph') || 'Вопрос'" />
+            <input v-for="(o, i) in pollOptions" :key="i" v-model="pollOptions[i]" class="duress-input" :placeholder="t('poll_option_ph') + ' ' + (i + 1)" />
+            <div class="poll-dialog-row">
+              <button v-if="pollOptions.length < 10" class="btn-primary" @click="pollOptions.push('')">{{ t('poll_add_option') || '+ вариант' }}</button>
+              <button class="btn-primary" :disabled="!pollQuestion.trim() || pollOptions.filter(o => o.trim()).length < 2" @click="confirmPoll">{{ t('poll_send') || 'Отправить' }}</button>
+              <button class="btn-primary" @click="pollDialog = false">{{ t('cancel') || 'Отмена' }}</button>
+            </div>
+          </div>
+        </div>
         <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message"><Icon name="mic" :size="19" /></button>
         <AudioRecorder
           :show="showAudioRecorder"
@@ -2630,10 +2659,153 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          return { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
+          const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
+          // Голосование: poll-подконверт (валидация в parsePollEnvelope).
+          if (obj.poll && typeof obj.poll === 'object') {
+            env.poll = {
+              id: String(obj.poll.id || obj.id || ''),
+              question: typeof obj.poll.question === 'string' ? obj.poll.question : '',
+              options: Array.isArray(obj.poll.options) ? obj.poll.options.map(o => String(o)) : [],
+            };
+          }
+          return env;
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
+    },
+    // ── Голосования (poll) ─────────────────────────────────────────
+    // Конверт: {vault:1, type:'poll', poll:{id, question, options[]}}
+    // Голос:   {poll:1, poll_id, option} — сигнальное письмо (как реакции),
+    //          агрегируется из писем чата при загрузке.
+    parsePollEnvelope(env) {
+      if (!env || env.type !== 'poll' || !env.poll || !env.poll.question) return null;
+      const opts = (env.poll.options || []).map(o => String(o).slice(0, 100)).filter(Boolean);
+      if (opts.length < 2 || opts.length > 10) return null;
+      return {
+        id: String(env.poll.id || env.id || ''),
+        question: String(env.poll.question).slice(0, 200),
+        options: opts.slice(0, 10),
+        votes: {},   // email -> option index (последний голос)
+        myVote: null,
+      };
+    },
+    pollVotes(poll) {
+      const counts = new Array(poll.options.length).fill(0);
+      const voters = {};
+      for (const [email, opt] of Object.entries(poll.votes || {})) {
+        if (opt >= 0 && opt < counts.length) {
+          counts[opt] += 1;
+          voters[email] = true;
+        }
+      }
+      const total = counts.reduce((a, b) => a + b, 0);
+      return { counts, total, voters: Object.keys(voters).length };
+    },
+    pollOptionCount(poll, i) { return this.pollVotes(poll).counts[i] || 0; },
+    pollLead(poll) {
+      const v = this.pollVotes(poll);
+      let best = -1, bestN = -1;
+      v.counts.forEach((n, i) => { if (n > bestN) { best = i; bestN = n; } });
+      return bestN > 0 ? best : -1;
+    },
+    pollLeadLabel(poll) {
+      const v = this.pollVotes(poll);
+      const lead = this.pollLead(poll);
+      if (lead < 0 || v.total === 0) return '';
+      const pct = Math.round(v.counts[lead] * 100 / v.total);
+      return `${poll.options[lead]} — ${pct}%`;
+    },
+    // Подтвердить создание голосования (диалог).
+    confirmPoll() {
+      const q = this.pollQuestion.trim();
+      const opts = this.pollOptions.map(o => o.trim()).filter(Boolean);
+      if (!q || opts.length < 2) return;
+      this.pollDialog = false;
+      this.pollQuestion = '';
+      this.pollOptions = ['', ''];
+      this.sendPoll(q, opts);
+    },
+    // Свой голос: сигнальное письмо (механика sendReaction) + локальная запись.
+    castPollVote(msg, option) {
+      const poll = msg.poll;
+      if (!poll || poll.myVote !== null) return;
+      const prev = poll.myVote;
+      poll.myVote = option;
+      const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
+      (async () => {
+        try {
+          if (this.activeChatType === 'group' && this.currentGroup) {
+            const groupKey = this.groupKeys[this.currentGroup.id];
+            if (!groupKey) throw new Error('no group key');
+            const content = await crypto.encryptWithGroupKey(payload, groupKey);
+            await api.sendGroupReact(this.currentGroup.id, content);
+          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
+            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
+            const content = await crypto.encryptVault(payload);
+            await api.sendReaction(this.activeChat, content);
+          } else {
+            throw new Error('no peer key');
+          }
+          poll.votes[this.email] = option;
+          this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
+        } catch (e) {
+          console.error('[poll] vote failed:', e);
+          poll.myVote = prev;
+        }
+      })();
+    },
+    // Создание голосования: конверт type:'poll' (карточка у получателей).
+    async sendPoll(question, options) {
+      const opts = (options || []).map(o => String(o).trim()).filter(Boolean).slice(0, 10);
+      question = String(question || '').trim();
+      if (!question || opts.length < 2) return;
+      const pollId = this.newMessageId();
+      const pollEnv = {
+        vault: 1,
+        id: this.newMessageId(),
+        type: 'poll',
+        text: question, // fallback-текст для legacy-клиентов/истории
+        poll: { id: pollId, question, options: opts },
+        name: this.displayName || '',
+        key: crypto.publicKey || '',
+        ts: Date.now(),
+      };
+      try {
+        this.sending = true;
+        const envelope = JSON.stringify(pollEnv);
+        let content = envelope;
+        if (this.activeChatType === 'group') {
+          const groupKey = this.groupKeys[this.currentGroup.id];
+          if (!groupKey) { alert(this.t('err_group_key')); return; }
+          content = await crypto.encryptWithGroupKey(envelope, groupKey);
+        } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+          crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
+          content = await crypto.encryptVault(envelope);
+        }
+        const pendingMsg = {
+          id: pollId,
+          content: question,
+          from: 'me',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
+          poll: this.parsePollEnvelope(pollEnv),
+        };
+        if (pendingMsg.poll) pendingMsg.poll.myVote = null;
+        this.messages.push(pendingMsg);
+        this.scrollToBottom(true);
+        if (this.activeChatType === 'group') {
+          await api.sendGroupMessage(this.currentGroup.id, content);
+        } else {
+          await api.sendMessage(this.activeChat, content);
+        }
+        pendingMsg.status = 'sent';
+        this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
+      } catch (e) {
+        console.error('[poll] send failed:', e);
+        alert(this.t('poll_err') || 'Poll failed');
+      } finally {
+        this.sending = false;
+      }
     },
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) {
@@ -2917,6 +3089,7 @@ export default {
         // Единый проход: расшифровываем каждое письмо и классифицируем по
         // содержимому (реакция / правка / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
+        const wirePollVotes = {}; // poll_id -> [{voter, option}]
         const wireEdits = {}; // msg_id -> [{text, action, date}]
         // Квитанции получателя: {delivered:1|read:1, msg_ids:[...]} — для
         // меток статуса наших сообщений (🟢 доставлено / 🔵 просмотрено).
@@ -2977,6 +3150,15 @@ export default {
                   for (const rid of robj.msg_ids) {
                     (wireAcks[rid] = wireAcks[rid] || {})[level] = true;
                   }
+                  return null; // не сообщение
+                }
+                // 1г) Голос голосования: {poll:1, poll_id, option} — сигнальное
+                //     письмо (как реакция), агрегируется в карточку опроса.
+                if (robj && robj.poll === 1 && robj.poll_id) {
+                  (wirePollVotes[robj.poll_id] = wirePollVotes[robj.poll_id] || []).push({
+                    voter: isOut ? email : this.email,
+                    option: Number(robj.option) || 0,
+                  });
                   return null; // не сообщение
                 }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
@@ -3053,6 +3235,22 @@ export default {
                 // SOS (duress): в чате с префиксом — видно и после закрытия.
                 if (env.type === 'sos') {
                   content = '🚨 SOS: ' + (env.text || '');
+                }
+                // Голосование (poll): карточка вместо текста.
+                if (env.type === 'poll') {
+                  const p = this.parsePollEnvelope(env);
+                  if (p) return {
+                    id: p.id || msgId,
+                    content: p.question,
+                    attachment: null,
+                    from: isOut ? 'them' : 'me',
+                    time: m.date ? new Date(m.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+                    encrypted: true,
+                    vault: true,
+                    mid: m.message_id || '',
+                    email: m,
+                    poll: p,
+                  };
                 }
               } else {
                 // 3) Legacy: простой текст (старые письма без конверта).
@@ -3138,6 +3336,7 @@ export default {
         }
         this.applyReactions(merged0, chat, wireReactions);
         this.applyEdits(merged0, chat, wireEdits);
+        this.applyPollVotes(merged0, wirePollVotes);
         const merged = this.filterDeleted(this.mergePending(chat, merged0));
         for (const m of merged) if (m.expireAt) this.scheduleEphemeral(m, chat);
         if (!merged.length && hadMessages && !stale()) {
@@ -3310,6 +3509,7 @@ export default {
         //   2) классификация по СОДЕРЖИМОМУ: реакция / правка / квитанция
         //      чтения / meta (аватар) / сообщение (конверт или legacy).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
+        const wirePollVotes = {}; // poll_id -> [{voter, option}]
         const wireEdits = {}; // msg_id -> [{text, action, date}]
         const wireAcks = {}; // msg_id -> {email участника: true}
         const decrypted = [];
@@ -3448,6 +3648,7 @@ export default {
           }
           this.applyReactions(merged0, chat, wireReactions);
           this.applyEdits(merged0, chat, wireEdits);
+          this.applyPollVotes(merged0, wirePollVotes);
           const merged = this.filterDeleted(this.mergePending(chat, merged0));
           if (!merged.length && hadMessages && !stale()) {
             return;
@@ -6132,6 +6333,19 @@ export default {
       const m = String(raw).match(/<([^>]+)>/);
       return (m ? m[1] : raw).trim().toLowerCase();
     },
+    // Голоса голосований: агрегация из сигнальных писем в карточки poll.
+    // myVote определяется по наличию своего голоса в wire (email отправителя).
+    applyPollVotes(list, wirePollVotes) {
+      if (!list) return;
+      for (const m of list) {
+        if (!m || !m.poll) continue;
+        const votes = wirePollVotes && wirePollVotes[m.poll.id];
+        if (votes) {
+          for (const v of votes) m.poll.votes[v.voter] = v.option;
+        }
+        if (m.poll.votes[this.email] !== undefined) m.poll.myVote = m.poll.votes[this.email];
+      }
+    },
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
       const chatReactions = stored[chatKey] || {};
@@ -6338,6 +6552,10 @@ export default {
     duressLocked: false,
     duressPending: false,
     duressUnlockedThisSession: false,
+    // Голосования: диалог создания + агрегация голосов
+    pollDialog: false,
+    pollQuestion: '',
+    pollOptions: ['', ''],
     midTombstonesCache: [],
     // IMAP-курсоры: in-memory кэш + sqlite персист.
     cursorsCache: {},
@@ -8580,6 +8798,78 @@ body {
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
+/* ── Голосования ─────────────────────────────────────────── */
+.poll-card {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+.poll-title {
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.poll-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  transition: background 0.15s;
+}
+.poll-option:hover:not(:disabled) { background: rgba(99, 102, 241, 0.15); }
+.poll-option:disabled { cursor: default; opacity: 0.75; }
+.poll-option-mine { border-color: var(--accent-primary, #6366f1); background: rgba(99, 102, 241, 0.12); }
+.poll-option-lead { border-color: rgba(34, 197, 94, 0.5); }
+.poll-option-label { flex: 1; }
+.poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
+.poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
+.poll-footer { font-size: 12px; opacity: 0.7; }
+.poll-dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+.poll-dialog-box {
+  background: var(--bg-primary, #0b0f17);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 14px;
+  padding: 18px;
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.poll-dialog-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+.poll-dialog-box .duress-input {
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: inherit;
+  font-size: 14px;
+  outline: none;
+}
+.poll-dialog-box .duress-input:focus { border-color: var(--accent-primary, #6366f1); }
+.poll-dialog-row { display: flex; gap: 8px; margin-top: 4px; }
+.poll-dialog-row .btn-primary { flex: 0 0 auto; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; }
 
 .reply-btn {
   position: absolute;

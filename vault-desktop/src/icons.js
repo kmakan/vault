@@ -73,6 +73,11 @@ export const icons = {
   paperclip: [
     { type: 'path', d: 'm21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' },
   ],
+  'bar-chart': [
+    { type: 'line', x1: 12, y1: 20, x2: 12, y2: 10 },
+    { type: 'line', x1: 18, y1: 20, x2: 18, y2: 4 },
+    { type: 'line', x1: 6, y1: 20, x2: 6, y2: 16 },
+  ],
   smile: [
     { type: 'circle', cx: 12, cy: 12, r: 10 },
     { type: 'path', d: 'M8 14s1.5 2 4 2 4-2 4-2' },
