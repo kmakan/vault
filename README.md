@@ -3,7 +3,7 @@
 > **A private messenger that lives inside ordinary email.**
 > No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.146 · License: AGPL-3.0 · Status: Beta
+> Version: 0.1.147 · License: AGPL-3.0 · Status: Beta
 
 [English](#english) · [Русский](#русский)
 
@@ -36,6 +36,16 @@ if every relay in the world went down, your messenger would keep working.
   QR or link, membership survives an email change (key-fingerprint
   migration), pinned / edited / deleted-for-me / starred / disappearing
   messages, reactions, replies, read receipts.
+- **Polls** — create a poll in any chat or group (up to 10 options);
+  votes are E2E-encrypted signal letters, aggregated on every device.
+- **Forwarding** — resend any message to another chat or group with a
+  "forwarded from" attribution; the text is re-encrypted for the target.
+- **Drafts** — an unfinished message is saved per chat and restored when
+  you come back.
+- **Location sharing** — send your current point as an OpenStreetMap
+  link (Android).
+- **Chat folders** — organize chats into folders (chips above the list);
+  archive and per-chat mute included.
 - **Voice calls** — Opus 48 kHz, per-frame AEAD + DTLS-SRTP, P2P via
   WebRTC with email signaling and instant hangup over a control
   DataChannel. No call servers.
@@ -85,7 +95,7 @@ if every relay in the world went down, your messenger would keep working.
 ### Install (prebuilt binaries)
 
 **Android** — download the signed APK and open it:
-[vault-0.1.146.apk](https://github.com/kmakan/vault/releases/download/v0.1.146/vault-0.1.146.apk)
+[vault-0.1.147.apk](https://github.com/kmakan/vault/releases/download/v0.1.147/vault-0.1.147.apk)
 (21 MB, Android 7+). The system will ask to allow installs from this source —
 allow it. The APK is signed with the Vault release key, so future versions
 install over it without data loss; in-app updates: Settings → Help →
@@ -93,11 +103,11 @@ install over it without data loss; in-app updates: Settings → Help →
 
 **Linux (Debian/Ubuntu)** — deb package:
 ```bash
-sudo dpkg -i Vault_0.1.146_amd64.deb   # or: sudo apt install ./Vault_0.1.146_amd64.deb
+sudo dpkg -i Vault_0.1.147_amd64.deb   # or: sudo apt install ./Vault_0.1.147_amd64.deb
 ```
 **Linux (any distro)** — portable tar.gz:
 ```bash
-tar xzf vault-desktop-0.1.146-linux-x86_64.tar.gz
+tar xzf vault-desktop-0.1.147-linux-x86_64.tar.gz
 ./vault-desktop
 ```
 Runtime deps on Ubuntu 22.04+: `libwebkit2gtk-4.1-0` (pulled in automatically
