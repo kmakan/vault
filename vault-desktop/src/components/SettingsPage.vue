@@ -466,26 +466,38 @@ export default {
       }
     },
     async duressSave() {
-      if (!this.duressLockCode || this.duressLockCode.length < 4) {
-        alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
-        this.duressEnabled = false; // тумблер не врёт: замок НЕ включён
-        return;
-      }
-      if (this.duressPanicCode && this.duressPanicCode === this.duressLockCode) {
-        alert(this.t('duress_err_same') || 'Panic-код не должен совпадать с кодом разблокировки');
-        return;
-      }
-      if (this.duressDuressCode && (this.duressDuressCode === this.duressLockCode ||
-          this.duressDuressCode === this.duressPanicCode)) {
-        alert(this.t('duress_err_same') || 'Коды не должны совпадать');
-        return;
-      }
       try {
         const cfg = await duressApi.getConfig();
+        // Пустое поле кода = «без изменений» (hash сохраняется из cfg):
+        // иначе повторное сохранение (после очистки полей) валидилось по
+        // пустому коду, сбрасывало тумблер и стирало panic/duress-коды.
+        if (this.duressLockCode) {
+          if (this.duressLockCode.length < 4) {
+            alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+            return;
+          }
+          cfg.lock_hash = await duressApi.hashSecret(this.duressLockCode);
+        } else if (!cfg.lock_hash) {
+          alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+          this.duressEnabled = false; // замок реально не настроен
+          return;
+        }
+        if (this.duressPanicCode) {
+          if (this.duressPanicCode === this.duressLockCode) {
+            alert(this.t('duress_err_same') || 'Panic-код не должен совпадать с кодом разблокировки');
+            return;
+          }
+          cfg.panic_hash = await duressApi.hashSecret(this.duressPanicCode);
+        }
+        if (this.duressDuressCode) {
+          if (this.duressDuressCode === this.duressLockCode ||
+              this.duressDuressCode === this.duressPanicCode) {
+            alert(this.t('duress_err_same') || 'Коды не должны совпадать');
+            return;
+          }
+          cfg.duress_hash = await duressApi.hashSecret(this.duressDuressCode);
+        }
         cfg.lock_enabled = this.duressEnabled;
-        cfg.lock_hash = await duressApi.hashSecret(this.duressLockCode);
-        cfg.panic_hash = this.duressPanicCode ? await duressApi.hashSecret(this.duressPanicCode) : '';
-        cfg.duress_hash = this.duressDuressCode ? await duressApi.hashSecret(this.duressDuressCode) : '';
         cfg.sos_text = this.duressSosText || '';
         cfg.sos_geo = this.duressSosGeo;
         cfg.bio_enabled = this.isAndroid && this.duressBio;
