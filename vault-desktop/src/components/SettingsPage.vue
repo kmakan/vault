@@ -188,7 +188,6 @@
           <label class="toggle"><input type="checkbox" v-model="duressEnabled" @change="duressToggleLock" /><span class="slider"></span></label>
           <span style="margin-left:10px">{{ t('duress_lock_enable') || 'Блокировка приложения (PIN/пароль)' }}</span>
         </div>
-        <div v-if="diagText && /err|error|panic|fail|False|enabled=false/i.test(diagText)" class="duress-label" style="font-size:11px;color:#f87171">[diag] {{ diagText }}</div>
         <div v-if="duressEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
           <div>
             <div class="duress-label">{{ t('duress_lock_code') || 'Код разблокировки' }}</div>
@@ -330,7 +329,6 @@ export default {
       duressBio: false,
       isAndroid: /android/i.test(navigator.userAgent),
       duressContacts: [],
-      diagText: '…',
       duressRecipients: [],
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
@@ -414,14 +412,6 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
-      try {
-        const dc = await duressApi.getConfig();
-        let dbp = '';
-        try { dbp = await invoke('db_path_debug'); } catch (_) {}
-        this.diagText = `enabled=${dc && dc.lock_enabled}, hashLen=${(dc && dc.lock_hash || '').length}, db=${dbp}`;
-      } catch (e) {
-        this.diagText = 'get error: ' + (e && e.message || e);
-      }
     } catch (e) { /* ignore */ }
   },
   methods: {
@@ -476,26 +466,38 @@ export default {
       }
     },
     async duressSave() {
-      if (!this.duressLockCode || this.duressLockCode.length < 4) {
-        alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
-        this.duressEnabled = false; // тумблер не врёт: замок НЕ включён
-        return;
-      }
-      if (this.duressPanicCode && this.duressPanicCode === this.duressLockCode) {
-        alert(this.t('duress_err_same') || 'Panic-код не должен совпадать с кодом разблокировки');
-        return;
-      }
-      if (this.duressDuressCode && (this.duressDuressCode === this.duressLockCode ||
-          this.duressDuressCode === this.duressPanicCode)) {
-        alert(this.t('duress_err_same') || 'Коды не должны совпадать');
-        return;
-      }
       try {
         const cfg = await duressApi.getConfig();
+        // Пустое поле кода = «без изменений» (hash сохраняется из cfg):
+        // иначе повторное сохранение (после очистки полей) валидилось по
+        // пустому коду, сбрасывало тумблер и стирало panic/duress-коды.
+        if (this.duressLockCode) {
+          if (this.duressLockCode.length < 4) {
+            alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+            return;
+          }
+          cfg.lock_hash = await duressApi.hashSecret(this.duressLockCode);
+        } else if (!cfg.lock_hash) {
+          alert(this.t('duress_err_short') || 'Код разблокировки: минимум 4 символа');
+          this.duressEnabled = false; // замок реально не настроен
+          return;
+        }
+        if (this.duressPanicCode) {
+          if (this.duressPanicCode === this.duressLockCode) {
+            alert(this.t('duress_err_same') || 'Panic-код не должен совпадать с кодом разблокировки');
+            return;
+          }
+          cfg.panic_hash = await duressApi.hashSecret(this.duressPanicCode);
+        }
+        if (this.duressDuressCode) {
+          if (this.duressDuressCode === this.duressLockCode ||
+              this.duressDuressCode === this.duressPanicCode) {
+            alert(this.t('duress_err_same') || 'Коды не должны совпадать');
+            return;
+          }
+          cfg.duress_hash = await duressApi.hashSecret(this.duressDuressCode);
+        }
         cfg.lock_enabled = this.duressEnabled;
-        cfg.lock_hash = await duressApi.hashSecret(this.duressLockCode);
-        cfg.panic_hash = this.duressPanicCode ? await duressApi.hashSecret(this.duressPanicCode) : '';
-        cfg.duress_hash = this.duressDuressCode ? await duressApi.hashSecret(this.duressDuressCode) : '';
         cfg.sos_text = this.duressSosText || '';
         cfg.sos_geo = this.duressSosGeo;
         cfg.bio_enabled = this.isAndroid && this.duressBio;
@@ -503,27 +505,7 @@ export default {
         cfg.sos_recipients = [...this.duressRecipients];
         await duressApi.saveConfig(cfg);
         console.log('[duress] config saved, lock_enabled =', cfg.lock_enabled);
-        // чтение вернуло НЕ то, что писали, увидим в alert (разные БД?!).
-        const verify = await duressApi.getConfig();
-        console.log('[duress] verify after save: enabled=', verify && verify.lock_enabled,
-          ', hashLen=', (verify && verify.lock_hash || '').length);
-        alert((this.t('duress_saved') || 'Аварийная защита сохранена') +
-          `\n[diag] записано: enabled=${cfg.lock_enabled}, hashLen=${(cfg.lock_hash||'').length}` +
-          `\n[diag] перечитано: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}` +
-          `\nЕсли «перечитано» совпадает с «записано» — сохранение работает; перезапустите приложение.`);
-        this.diagText = `после сохранения: enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}`;
-        // Живая плашка App: обновляем сразу, не дожидаясь перезапуска
-        try {
-          this.$root.duressDiag = `enabled=${verify && verify.lock_enabled}, hashLen=${(verify && verify.lock_hash || '').length}, locked=${verify && verify.lock_enabled && !!verify.lock_hash}`;
-        } catch (_) {}
-        // Android: покажем и prefs нативного LockActivity (enabled/hashLen) —
-        // если они не пишутся, замок не сработает; это увидно сразу.
-        if (/android/i.test(navigator.userAgent)) {
-          try {
-            const prefsDbg = await invoke('android_duress_prefs_debug');
-            this.$root.duressDiag = 'native: ' + prefsDbg;
-          } catch (_) {}
-        }
+        alert(this.t('duress_saved') || 'Аварийная защита сохранена');
         // Очистить введённое в память
         this.duressLockCode = ''; this.duressPanicCode = ''; this.duressDuressCode = '';
       } catch (e) {
