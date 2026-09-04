@@ -6509,11 +6509,11 @@ export default {
     // ── Черновики ──────────────────────────────────────────────────
     // Текст недописанного сообщения сохраняется per-chat (kv) и
     // восстанавливается при возврате в чат.
-    // Черновики: сериализация RMW через очередь (_draftQueue в data) —
+    // Черновики: сериализация RMW через очередь (draftQueue в data) —
     // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
-    _draftRun(fn) {
-      this._draftQueue = this._draftQueue.then(fn, fn);
-      return this._draftQueue;
+    draftRun(fn) {
+      this.draftQueue = this.draftQueue.then(fn, fn);
+      return this.draftQueue;
     },
     async saveDraft() {
       const chatKey = this.activeChatType === 'group' && this.currentGroup
@@ -6521,7 +6521,7 @@ export default {
         : this.activeChat;
       if (!chatKey) return;
       const text = this.newMessage || '';
-      this._draftRun(async () => {
+      this.draftRun(async () => {
         try {
           const raw = await db.kvGet(this.email || 'anon', 'drafts');
           const drafts = raw ? JSON.parse(raw) : {};
@@ -6532,7 +6532,7 @@ export default {
       });
     },
     async restoreDraft(chatKey) {
-      return this._draftRun(async () => {
+      return this.draftRun(async () => {
         try {
           const raw = await db.kvGet(this.email || 'anon', 'drafts');
           const drafts = raw ? JSON.parse(raw) : {};
@@ -6766,7 +6766,7 @@ export default {
     // Пересылка: пересылаемое сообщение (объект) + список целей
     forwardTo: null,
     // Черновики: очередь сериализации kv (read-modify-write)
-    _draftQueue: Promise.resolve(),
+    draftQueue: Promise.resolve(),
     // Папки чатов: активная папка + диалог создания в контекстном меню
     activeFolder: '',
     folderDialogOpen: false,
