@@ -1401,9 +1401,8 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
             let envelope = serde_json::json!({
                 "vault": 1,
                 "id": format!("{}sos", now_ms()),
-                "type": "text",
+                "type": "sos",
                 "text": text,
-                "sos": true,
                 "ts": now_ms(),
             });
             let cipher = match crate::crypto::encrypt_vault_cmd(

@@ -3050,6 +3050,10 @@ export default {
                 if (env.type === 'profile') {
                   return null;
                 }
+                // SOS (duress): в чате с префиксом — видно и после закрытия.
+                if (env.type === 'sos') {
+                  content = '🚨 SOS: ' + (env.text || '');
+                }
               } else {
                 // 3) Legacy: простой текст (старые письма без конверта).
                 const pp = this.parseMessageContent(text);
@@ -3962,8 +3966,28 @@ export default {
         let text = rawText.replace('{coords}', coords);
         // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
         if (coords && !rawText.includes('{coords}')) text += coords;
+        // Сохранённые peer-ключи: encryptVault требует установленного ключа
+        // получателя — иначе шифрование падает и SOS молча теряется.
+        // При холодном старте (duress сразу после открытия) peerKeys могли
+        // ещё не загрузиться — читаем прямо из key_store.
+        if (!this.peerKeys || !Object.keys(this.peerKeys).length) {
+          try {
+            const stored = await crypto.loadPeerKeys();
+            this.peerPqKeys = this.peerPqKeys || {};
+            for (const pk of stored) {
+              this.peerKeys[pk.email] = pk.public_key;
+              if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
+            }
+          } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
+        }
         for (const rcpt of rcpts) {
           try {
+            const pk = this.peerKeys && this.peerKeys[rcpt];
+            if (!pk) {
+              console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
+              continue;
+            }
+            crypto.setPeerPublicKey(pk, this.peerPqKeys && this.peerPqKeys[rcpt]);
             const content = await crypto.encryptVault(JSON.stringify({
               vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
               type: 'sos', text, name: this.displayName || '', ts: Date.now(),

@@ -257,8 +257,33 @@ class VaultForegroundService : Service() {
         @JvmStatic
         fun notifyDuressEntered(context: android.content.Context) {
             try {
-                nativeSendDuressSos("")
-                android.util.Log.i("VaultRust", "[duress] SOS triggered from native lock")
+                // Координаты из lastKnownLocation (все провайдеры): SOS важнее
+                // точности, ожидание фикс-локации задержало бы отправку.
+                val geo = try {
+                    val lm = context.getSystemService(android.content.Context.LOCATION_SERVICE)
+                            as android.location.LocationManager
+                    val providers = listOf(
+                        android.location.LocationManager.GPS_PROVIDER,
+                        android.location.LocationManager.NETWORK_PROVIDER,
+                        android.location.LocationManager.PASSIVE_PROVIDER
+                    )
+                    var best: android.location.Location? = null
+                    for (p in providers) {
+                        try {
+                            val l = lm.getLastKnownLocation(p) ?: continue
+                            if (best == null || l.time > best.time) best = l
+                        } catch (_: SecurityException) { }
+                    }
+                    if (best != null) {
+                        java.lang.String.format(java.util.Locale.US,
+                            "%.5f, %.5f", best.latitude, best.longitude)
+                    } else ""
+                } catch (e: Throwable) {
+                    android.util.Log.w("VaultRust", "duress geo failed: " + e.message)
+                    ""
+                }
+                nativeSendDuressSos(geo)
+                android.util.Log.i("VaultRust", "[duress] SOS triggered from native lock (geo=" + geo + ")")
             } catch (e: Throwable) {
                 android.util.Log.e("VaultRust", "notifyDuressEntered: " + e.message)
             }
