@@ -524,6 +524,7 @@
             class="message-field"
           />
         </div>
+        <button class="attach-btn" :title="t('attach_file') || 'Прикрепить файл'" @click="fileInput && fileInput.click()"><Icon name="paperclip" :size="19" /></button>
         <button class="attach-btn" :title="t('poll_create') || 'Poll'" @click="pollDialog = !pollDialog"><Icon name="bar-chart" :size="19" /></button>
         <button class="attach-btn" v-if="isAndroid" :title="t('geo_send') || 'Send location'" @click="sendGeoMessage"><Icon name="map-pin" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />

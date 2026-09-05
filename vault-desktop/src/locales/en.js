@@ -57,6 +57,7 @@ export default {
   duress_bio: "Unlock with fingerprint",
   duress_save: "Save duress protection",
   duress_warn: "Remember your codes! Panic code wipes ALL data irreversibly. Duress code looks like a normal sign-in but silently alerts selected contacts.",
+  attach_file: "Attach file",
   relay_enable: "Push relay (faster delivery)",
   relay_base_url: "Relay URL (empty — our server)",
   relay_base_url_ph: "own relay: https://…",
