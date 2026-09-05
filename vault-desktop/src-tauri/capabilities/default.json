@@ -9,6 +9,13 @@
     "core:default",
     "shell:allow-open",
     "opener:default",
-    "notification:default"
+    "notification:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*/" },
+        { "url": "https://*/*" }
+      ]
+    }
   ]
 }

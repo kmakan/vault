@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icons/vault-letter.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Vault</title>
+    <script>
+      // Inline (ES5) fatal-error catcher: if the main bundle fails to PARSE
+      // on an old WebView, the bundle's own error handler never runs and the
+      // app looks like "buttons don't work" with zero feedback. This must be
+      // ES5-compatible (no arrow functions / template literals).
+      window.addEventListener('error', function (e) {
+        try {
+          var el = document.getElementById('vault-fatal');
+          if (!el) {
+            el = document.createElement('div');
+            el.id = 'vault-fatal';
+            el.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:99999;' +
+              'background:#7f1d1d;color:#fecaca;border:1px solid #ef4444;border-radius:8px;' +
+              'padding:10px 12px;font:12px/1.4 monospace;white-space:pre-wrap;word-break:break-word;' +
+              'max-height:40vh;overflow:auto;';
+            document.body.appendChild(el);
+          }
+          var msg = 'JS error: ' + (e.message || 'unknown');
+          if (e.filename) { msg = msg + '\n' + e.filename + ':' + e.lineno; }
+          el.textContent = msg.slice(0, 1000);
+        } catch (err) { /* ignore */ }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

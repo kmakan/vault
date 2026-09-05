@@ -509,8 +509,9 @@
         </div>
 
         <div class="message-input" v-if="activeChat">
+        <!-- Меню скрепки (как в Telegram): файл / гео / опрос — не переполняет ряд -->
+        <button class="attach-btn" :title="t('attach_file') || 'Прикрепить файл'" @click="attachMenu = !attachMenu; showEmojiPicker = false"><Icon name="paperclip" :size="19" /></button>
         <div class="input-wrapper">
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
           <EmojiPicker
             :show="showEmojiPicker"
             @select="insertEmoji"
@@ -523,10 +524,24 @@
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker; attachMenu = false" title="Emoji"><Icon name="smile" :size="19" /></button>
         </div>
-        <button class="attach-btn" :title="t('poll_create') || 'Poll'" @click="pollDialog = !pollDialog"><Icon name="bar-chart" :size="19" /></button>
-        <button class="attach-btn" v-if="isAndroid" :title="t('geo_send') || 'Send location'" @click="sendGeoMessage"><Icon name="map-pin" :size="19" /></button>
+        <!-- mic → send при непустом тексте (как в Telegram) -->
+        <button v-if="newMessage.trim()" class="send-btn-round" @click="sendMessage" :disabled="sending" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
+        <button v-else class="attach-btn" :title="t('voice_message') || 'Голосовое сообщение'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false"><Icon name="mic" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
+        <!-- Панель скрепки -->
+        <div v-if="attachMenu" class="attach-menu">
+          <button class="attach-menu-item" @click="attachMenu = false; fileInput && fileInput.click()">
+            <Icon name="paperclip" :size="17" /><span>{{ t('attach_file') || 'Файл' }}</span>
+          </button>
+          <button v-if="isAndroid" class="attach-menu-item" @click="attachMenu = false; sendGeoMessage()">
+            <Icon name="map-pin" :size="17" /><span>{{ t('geo_send') || 'Геолокация' }}</span>
+          </button>
+          <button class="attach-menu-item" @click="attachMenu = false; pollDialog = !pollDialog">
+            <Icon name="bar-chart" :size="17" /><span>{{ t('poll_create') || 'Голосование' }}</span>
+          </button>
+        </div>
         <!-- Создание голосования -->
         <div v-if="pollDialog" class="poll-dialog">
           <div class="poll-dialog-box">
@@ -995,6 +1010,7 @@ import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js'
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
+import * as relay from './relay-client.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -4745,6 +4761,12 @@ export default {
             // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
             // через ящик: его подтвердит поллинг).
             pendingMsg.status = 'sent';
+            // M2.1: дублируем конверт на push-релей (fire-and-forget; email
+            // — источник истины, ошибка релея ничего не ломает).
+            try {
+              const envObj = JSON.parse(envelope);
+              relay.relayPublish(this.email, this.activeChat, envObj, content);
+            } catch (e) { /* envelope не JSON — релей пропускаем */ }
           } catch (e) {
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
@@ -5000,6 +5022,45 @@ export default {
       } catch (e) {
         console.warn('[calls] fast load failed:', e);
       }
+    },
+    // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
+    // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
+    // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
+    // from приходит от отправителя (поле from) — дальше обычная расшифровка
+    // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
+    async relayConsume() {
+      const list = await relay.relayPoll(this.email);
+      if (!list.length) return;
+      const merged = [...this.emails];
+      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+      const fresh = [];
+      for (const env of list) {
+        const uid = 'rl-' + env.id;
+        if (seen.has(uid + '|RELAY')) continue;
+        seen.add(uid + '|RELAY');
+        fresh.push({
+          uid,
+          folder: 'RELAY',
+          from: (env.from || '').toLowerCase(),
+          to: this.email,
+          date: new Date((env.ts || 0) * 1000).toISOString(),
+          subject: '',
+          message_id: 'relay-' + env.id,
+          body: env.body, // тело уже декодировано в relay-client
+          is_read: false,
+        });
+      }
+      if (!fresh.length) return;
+      merged.push(...fresh);
+      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      if (merged.length > 2000) merged.length = 2000;
+      this.emails = merged;
+      // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
+      for (const f of fresh) {
+        this.cacheBody('RELAY:' + f.uid, f.body);
+      }
+      await this.processIncoming(fresh, { notify: true });
+      console.log('[relay] consumed envelopes: ' + fresh.length);
     },
     async processIncoming(fetched, { notify = false } = {}) {
       if (!fetched || !fetched.length || !this.cryptoReady) return;
@@ -6114,6 +6175,13 @@ export default {
         if (!this.isLoggedIn || this._pollingActive) return;
         this._pollingActive = true;
         try {
+          // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
+          // мержим в this.emails как виртуальные письма (uid: rl-<id>) —
+          // дальше их разберёт штатный processIncoming (дедуп по env.id
+          // в mergeHistory не даст дубликату email-письма задвоиться).
+          try {
+            await this.relayConsume();
+          } catch (e) { /* релей недоступен — почта продолжит доставку */ }
           // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
           // контактов (модель почтовый мессенджер — группа тоже источник контактов).
           try { await this.loadGroups(); } catch (e) { /* тихо */ }
@@ -10270,11 +10338,59 @@ body {
   background: var(--bg-hover);
 }
 
+.send-btn-round {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--accent-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.send-btn-round:hover { transform: scale(1.06); }
+.send-btn-round:disabled { opacity: 0.5; cursor: default; }
+
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  overflow: hidden;
+  z-index: 50;
+}
+
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.attach-menu-item:hover { background: var(--bg-hover); }
+
 .mic-btn {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 20px;
   padding: 8px;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
