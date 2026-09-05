@@ -54,10 +54,32 @@ export async function getRelays(account) {
   try { list = raw ? JSON.parse(raw) : []; } catch (e) { list = []; }
   if (!Array.isArray(list)) list = [];
   // our relay by default
+  let added = false;
   if (!list.some(r => r.url === DEFAULT_RELAY_URL)) {
     const legacyToken = await invoke('db_kv_get', { account, key: KV_MY_READ_TOKEN }).catch(() => null);
     list.unshift({ url: DEFAULT_RELAY_URL, myToken: legacyToken || '', label: 'Vault' });
+    added = true;
   }
+  // авто-миграция (один раз): legacy peer-токены {chatId: token} →
+  // per-relay формат {relayUrl: {chatId: token}} на наш релей. Без этого
+  // после апгрейда relayPublish не находил токены и дубль молча пропадал.
+  try {
+    const peersRaw = await invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null);
+    if (peersRaw) {
+      const peers = JSON.parse(peersRaw);
+      if (peers && typeof peers === 'object') {
+        const legacy = Object.entries(peers).filter(([, v]) => typeof v === 'string');
+        if (legacy.length) {
+          const next = {};
+          for (const [k, v] of Object.entries(peers)) if (typeof v !== 'string') next[k] = v;
+          next[DEFAULT_RELAY_URL] = {};
+          for (const [chat, tok] of legacy) next[DEFAULT_RELAY_URL][chat.toLowerCase()] = tok;
+          await invoke('db_kv_set', { account, key: KV_PEERS, value: JSON.stringify(next) });
+        }
+      }
+    }
+  } catch (e) { /* миграция опциональна */ }
+  if (added) await saveRelays(account, list);
   return list.filter(r => r.url && normalizeRelayUrl(r.url));
 }
 
