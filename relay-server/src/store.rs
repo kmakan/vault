@@ -15,6 +15,10 @@ pub struct Envelope {
     pub exp: u64,
     /// время публикации (unix-сек) — для порядка/очистки.
     pub ts: u64,
+    /// opaque-строка отправителя (клиентский email в открытом виде —
+    /// вариант §9.3; сервер ничего не валидирует, только ретранслирует).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 #[derive(Default)]

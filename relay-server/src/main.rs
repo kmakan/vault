@@ -54,6 +54,9 @@ pub struct PubRequest {
     pub exp: u64,
     /// зашифрованное тело письма, байт-в-байт.
     pub body: String,
+    /// opaque-строка отправителя (опционально; ретранслируется как есть).
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -123,6 +126,7 @@ pub async fn relay_pub(
         body: req.body,
         exp: req.exp.min(now() + 24 * 3600),
         ts: now(),
+        from: req.from.filter(|s| !s.is_empty()).map(|s| s.chars().take(254).collect()),
     };
     app.store.push(&to_tok.hash, envelope, MAX_QUEUE);
     app.metrics.pub_ok.fetch_add(1, Ordering::Relaxed);
@@ -307,9 +311,25 @@ async fn main() {
         .route("/relay/ws", get(relay_ws))
         .route("/metrics", get(metrics))
         .route("/health", get(health))
+        .layer(cors_layer())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");
+}
+
+/// CORS: WebView-клиенты (tauri.localhost / android) и веб-клиенты.
+/// Authorization в allowed-headers (браузер шлёт его с токеном).
+fn cors_layer() -> tower_http::cors::CorsLayer {
+    use axum::http::{HeaderValue, Method};
+    tower_http::cors::CorsLayer::new()
+        .allow_origin([
+            "tauri://localhost".parse::<HeaderValue>().expect("origin"),
+            "https://tauri.localhost".parse::<HeaderValue>().expect("origin"),
+            "http://tauri.localhost".parse::<HeaderValue>().expect("origin"),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
+        .max_age(std::time::Duration::from_secs(3600))
 }
 
 fn hex_or_generate(s: &str) -> [u8; 32] {

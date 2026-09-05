@@ -995,6 +995,7 @@ import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js'
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
+import * as relay from './relay-client.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -4745,6 +4746,12 @@ export default {
             // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
             // через ящик: его подтвердит поллинг).
             pendingMsg.status = 'sent';
+            // M2.1: дублируем конверт на push-релей (fire-and-forget; email
+            // — источник истины, ошибка релея ничего не ломает).
+            try {
+              const envObj = JSON.parse(envelope);
+              relay.relayPublish(this.email, this.activeChat, envObj, content);
+            } catch (e) { /* envelope не JSON — релей пропускаем */ }
           } catch (e) {
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
@@ -5000,6 +5007,45 @@ export default {
       } catch (e) {
         console.warn('[calls] fast load failed:', e);
       }
+    },
+    // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
+    // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
+    // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
+    // from приходит от отправителя (поле from) — дальше обычная расшифровка
+    // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
+    async relayConsume() {
+      const list = await relay.relayPoll(this.email);
+      if (!list.length) return;
+      const merged = [...this.emails];
+      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+      const fresh = [];
+      for (const env of list) {
+        const uid = 'rl-' + env.id;
+        if (seen.has(uid + '|RELAY')) continue;
+        seen.add(uid + '|RELAY');
+        fresh.push({
+          uid,
+          folder: 'RELAY',
+          from: (env.from || '').toLowerCase(),
+          to: this.email,
+          date: new Date((env.ts || 0) * 1000).toISOString(),
+          subject: '',
+          message_id: 'relay-' + env.id,
+          body: env.body, // тело уже декодировано в relay-client
+          is_read: false,
+        });
+      }
+      if (!fresh.length) return;
+      merged.push(...fresh);
+      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      if (merged.length > 2000) merged.length = 2000;
+      this.emails = merged;
+      // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
+      for (const f of fresh) {
+        this.cacheBody('RELAY:' + f.uid, f.body);
+      }
+      await this.processIncoming(fresh, { notify: true });
+      console.log('[relay] consumed envelopes: ' + fresh.length);
     },
     async processIncoming(fetched, { notify = false } = {}) {
       if (!fetched || !fetched.length || !this.cryptoReady) return;
@@ -6114,6 +6160,13 @@ export default {
         if (!this.isLoggedIn || this._pollingActive) return;
         this._pollingActive = true;
         try {
+          // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
+          // мержим в this.emails как виртуальные письма (uid: rl-<id>) —
+          // дальше их разберёт штатный processIncoming (дедуп по env.id
+          // в mergeHistory не даст дубликату email-письма задвоиться).
+          try {
+            await this.relayConsume();
+          } catch (e) { /* релей недоступен — почта продолжит доставку */ }
           // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
           // контактов (модель почтовый мессенджер — группа тоже источник контактов).
           try { await this.loadGroups(); } catch (e) { /* тихо */ }

@@ -229,6 +229,40 @@
           <div class="duress-warn">{{ t('duress_warn') || 'Запомните коды! Panic-код стирает ВСЕ данные безвозвратно. Duress-код выглядит как обычный вход, но тихо предупреждает выбранные контакты.' }}</div>
         </div>
       </div>
+
+      <!-- M2.1: Push-релей (ускорение доставки поверх почты) -->
+      <div class="setting-row" style="display:block;margin-top:18px">
+        <div style="margin-bottom:12px">
+          <label class="toggle"><input type="checkbox" v-model="relayEnabled" @change="relaySave" /><span class="slider"></span></label>
+          <span style="margin-left:10px">{{ t('relay_enable') || 'Push-релей (ускоренная доставка)' }}</span>
+        </div>
+        <div v-if="relayEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
+          <div>
+            <div class="duress-label">{{ t('relay_base_url') || 'Адрес релея (пусто — наш сервер)' }}</div>
+            <div style="display:flex;gap:8px">
+              <input v-model="relayBaseUrl" class="duress-input" style="flex:1" :placeholder="t('relay_base_url_ph') || 'свой релей: https://…/relay'" @change="relaySave" />
+              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayCheckHealth">{{ t('relay_check') || 'Проверить' }} {{ relayStatus }}</button>
+            </div>
+          </div>
+          <div>
+            <div class="duress-label">{{ t('relay_my_token') || 'Мой read-токен релея' }}</div>
+            <input v-model="relayMyToken" class="duress-input" type="password" :placeholder="t('relay_token_ph') || 'вставьте токен, выданный сервером'" @change="relaySave" />
+          </div>
+          <div>
+            <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников (email = read-токен)' }}</div>
+            <div v-for="(tok, addr) in relayPeerTokens" :key="addr" class="duress-contact">
+              <span>{{ addr }}</span>
+              <button class="duress-remove" @click="relayRemovePeer(addr)">×</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <input v-model="relayNewPeerAddr" class="duress-input" style="flex:1" :placeholder="t('relay_peer_addr_ph') || 'email собеседника'" />
+              <input v-model="relayNewPeerToken" class="duress-input" style="flex:2" :placeholder="t('relay_peer_token_ph') || 'его read-токен'" />
+              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer" @click="relayAddPeer">{{ t('add') || 'Добавить' }}</button>
+            </div>
+          </div>
+          <p class="duress-warn">{{ t('relay_note') || 'Токен — анонимная подписка на сервере ускоренной доставки. Почта остаётся основным каналом: релей лишь дублирует конверты, ускоряя доставку.' }}</p>
+        </div>
+      </div>
       </div>
 
       <!-- ЯЗЫК -->
@@ -302,6 +336,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { duressApi } from '../api.js';
 import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
+import * as relayClient from '../relay-client.js';
 import AvatarUpload from './AvatarUpload.vue';
 import Icon from './Icon.vue';
 import ThemeSelector from './ThemeSelector.vue';
@@ -330,6 +365,14 @@ export default {
       isAndroid: /android/i.test(navigator.userAgent),
       duressContacts: [],
       duressRecipients: [],
+      // M2.1: релей
+      relayEnabled: false,
+      relayMyToken: '',
+      relayPeerTokens: {},
+      relayNewPeerAddr: '',
+      relayNewPeerToken: '',
+      relayBaseUrl: '',
+      relayStatus: '',
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -412,9 +455,48 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
+      // M2.1: настройки релея (per-account: используем email пропса).
+      try {
+        const rs = await relayClient.getSettings(this.email || 'anon');
+        this.relayEnabled = rs.enabled;
+        this.relayMyToken = rs.myToken;
+        this.relayPeerTokens = rs.peers || {};
+        this.relayBaseUrl = rs.isDefault ? '' : rs.baseUrl;
+      } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
   },
   methods: {
+    // ── M2.1: релей ────────────────────────────────────────
+    async relaySave() {
+      try {
+        const acc = this.email || 'anon';
+        await relayClient.setEnabled(acc, this.relayEnabled);
+        await relayClient.setMyToken(acc, this.relayMyToken);
+        await relayClient.setBaseUrl(acc, this.relayBaseUrl);
+        this.relayStatus = this.relayEnabled ? '' : '';
+      } catch (e) { /* kv недоступен */ }
+    },
+    async relayCheckHealth() {
+      this.relayStatus = '…';
+      const ok = await relayClient.relayHealth(this.email || 'anon');
+      this.relayStatus = ok ? '✓' : '✗';
+      setTimeout(() => { this.relayStatus = ''; }, 3000);
+    },
+    async relayAddPeer() {
+      const addr = (this.relayNewPeerAddr || '').trim().toLowerCase();
+      const tok = (this.relayNewPeerToken || '').trim();
+      if (!addr || !tok || !addr.includes('@')) return;
+      await relayClient.setPeerToken(this.email || 'anon', addr, tok);
+      const rs = await relayClient.getSettings(this.email || 'anon');
+      this.relayPeerTokens = rs.peers || {};
+      this.relayNewPeerAddr = '';
+      this.relayNewPeerToken = '';
+    },
+    async relayRemovePeer(addr) {
+      await relayClient.setPeerToken(this.email || 'anon', addr, null);
+      const rs = await relayClient.getSettings(this.email || 'anon');
+      this.relayPeerTokens = rs.peers || {};
+    },
     // ── RELEASE-PREP: проверка обновлений ─────────────────
     // Rust-команда check_app_update сравнивает semver-численно и возвращает
     // latest.json только если версия новее текущей. Скачивание — через
