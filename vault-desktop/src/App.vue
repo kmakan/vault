@@ -622,7 +622,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" />
         </div>
       </div>
 
@@ -1086,6 +1086,7 @@ export default {
       callResendTimer: null,
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
+      ecoMode: false,
       _idleStop: false,
       // ЗВУКИ ЗВОНКА: WAV-ассеты. Desktop — cpal в Rust
       // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
@@ -1639,6 +1640,7 @@ export default {
           this.displayName = (await api.getDisplayName()) || this.email || '';
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
           this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+          this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 
           await api.getChats();
@@ -1652,7 +1654,8 @@ export default {
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
-          this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          if (this.ecoMode) { this.startPolling(60000); } // M2.3: экономный режим — без IDLE
+          else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -4109,6 +4112,29 @@ export default {
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
+    },
+    // M2.3: экономный режим — постоянный IMAP IDLE останавливается
+    // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
+    // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
+    async onEcoMode(on) {
+      this.ecoMode = !!on;
+      try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
+      if (!this.isLoggedIn) return;
+      if (this.ecoMode) {
+        // стоп JS IDLE-цикла
+        this._idleStop = true;
+        try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
+        // редкий поллинг-тик страхует (релей — основной канал)
+        this.stopPolling();
+        this.startPolling(60000);
+        this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
+      } else {
+        // классика: постоянный IDLE + обычный поллинг
+        this.stopPolling();
+        this.idleLoop();
+        this.startPolling();
+        this.showToast(this.t('eco_off_toast') || 'Классический режим: постоянное соединение включено');
+      }
     },
     async onBioSave(text) {
       await this.setBio(text);

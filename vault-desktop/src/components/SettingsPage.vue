@@ -91,6 +91,13 @@
           <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
         </div>
         <p v-if="experimentsCalls" class="setting-hint">{{ t('experiments_calls_hint') }}</p>
+        <!-- M2.3: экономный режим — приложение спит, релей будит пулем.
+             Классический: foreground-сервис + IMAP IDLE (сейчас). -->
+        <div class="setting-row">
+          <span>{{ t('eco_mode') || 'Экономный режим (батарея: релей вместо постоянного соединения)' }}</span>
+          <label class="toggle"><input type="checkbox" v-model="ecoMode" @change="ecoSave" /><span class="slider"></span></label>
+        </div>
+        <p class="setting-hint" style="margin-top:8px">{{ t('eco_mode_hint') || 'Выключает постоянный фоновый сервис: приложение спит, а релей присылает системный пуш на новое сообщение/звонок. Требует включённого релея (Приватность). Эксперимент.' }}</p>
       </div>
 
       <!-- ПОЧТА -->
@@ -354,7 +361,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -371,6 +378,8 @@ export default {
       duressRecipients: [],
       // M2.2: релеи (список)
       relayEnabled: false,
+      // M2.3: экономный режим
+      ecoMode: false,
       relayList: [],
       relayActive: 0,
       relayActiveUrl: '',
@@ -444,6 +453,7 @@ export default {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
       this.localAutoclean = (await db.kvGet('anon', 'autoclean-period')) || 'off';
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+      this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
       // Звонки: выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
@@ -478,6 +488,13 @@ export default {
       const active = rs.relays[rs.active];
       this.relayActiveUrl = active ? active.url : '';
       this.relayPeerTokens = (rs.peers && active && rs.peers[active.url]) || {};
+    },
+    async ecoSave() {
+      try {
+        await db.kvSet('anon', 'eco-mode', this.ecoMode ? '1' : '0');
+        // Применение — живое: сообщаем ядру (App слушает kv-событие простым полем)
+        this.$emit('eco-mode', this.ecoMode);
+      } catch (e) { /* kv */ }
     },
     async relaySave() {
       try {
