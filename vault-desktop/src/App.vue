@@ -528,18 +528,18 @@
         <button class="send-btn-round" @click="sendMessage" :disabled="sending || !newMessage.trim()" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <!-- Второй ряд: кнопки фич (файл, гео, голосование, голос) — с подписями -->
-        <div class="feature-row">
-          <button class="feature-btn" @click="fileInput && fileInput.click()">
-            <Icon name="paperclip" :size="17" /><span>{{ t('file_short') || 'Файл' }}</span>
+                <div class="feature-row">
+          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="fileInput && fileInput.click()">
+            <Icon name="paperclip" :size="18" />
           </button>
-          <button v-if="isAndroid" class="feature-btn" @click="sendGeoMessage">
-            <Icon name="map-pin" :size="17" /><span>{{ t('geo_send') || 'Гео' }}</span>
+          <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
+            <Icon name="map-pin" :size="18" />
           </button>
-          <button class="feature-btn" @click="pollDialog = !pollDialog">
-            <Icon name="bar-chart" :size="17" /><span>{{ t('poll_create_short') || 'Опрос' }}</span>
+          <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
+            <Icon name="bar-chart" :size="18" />
           </button>
-          <button class="feature-btn" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false">
-            <Icon name="mic" :size="17" /><span>{{ t('voice_message_short') || 'Голос' }}</span>
+          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false">
+            <Icon name="mic" :size="18" />
           </button>
         </div>
         <!-- Создание голосования -->
@@ -10286,24 +10286,21 @@ body {
 .feature-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-basis: 100%;
-  padding: 0 2px;
+  padding: 0 4px;
 }
 
 .feature-btn {
-  flex: 1;
-  min-width: 0;
+  width: 40px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 7px 8px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-full);
   color: var(--text-primary);
-  font-size: 13px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }

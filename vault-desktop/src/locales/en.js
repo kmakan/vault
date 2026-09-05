@@ -112,7 +112,7 @@ export default {
   chat_folder_new: 'New folder…',
   chat_folder_name_ph: 'Name',
   chat_folder_add: 'Create',
-  geo_send: 'Send location',
+  geo_send: 'Geo',
   geo_im_here: 'I am here:',
   geo_err: 'Location unavailable',
   forward_to: 'Forward',

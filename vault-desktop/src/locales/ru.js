@@ -112,7 +112,7 @@ export default {
   chat_folder_new: 'Новая папка…',
   chat_folder_name_ph: 'Название',
   chat_folder_add: 'Создать',
-  geo_send: 'Отправить гео',
+  geo_send: 'Гео',
   geo_im_here: 'Я здесь:',
   geo_err: 'Геолокация недоступна',
   forward_to: 'Переслать',

@@ -112,7 +112,7 @@ export default {
   chat_folder_new: '新建文件夹…',
   chat_folder_name_ph: '名称',
   chat_folder_add: '创建',
-  geo_send: '发送位置',
+  geo_send: '位置',
   geo_im_here: '我在这里:',
   geo_err: '无法获取位置',
   forward_to: '转发',
