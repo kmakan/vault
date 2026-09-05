@@ -509,8 +509,9 @@
         </div>
 
         <div class="message-input" v-if="activeChat">
+        <!-- Меню скрепки (как в Telegram): файл / гео / опрос — не переполняет ряд -->
+        <button class="attach-btn" :title="t('attach_file') || 'Прикрепить файл'" @click="attachMenu = !attachMenu; showEmojiPicker = false"><Icon name="paperclip" :size="19" /></button>
         <div class="input-wrapper">
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
           <EmojiPicker
             :show="showEmojiPicker"
             @select="insertEmoji"
@@ -523,11 +524,24 @@
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker; attachMenu = false" title="Emoji"><Icon name="smile" :size="19" /></button>
         </div>
-        <button class="attach-btn" :title="t('attach_file') || 'Прикрепить файл'" @click="fileInput && fileInput.click()"><Icon name="paperclip" :size="19" /></button>
-        <button class="attach-btn" :title="t('poll_create') || 'Poll'" @click="pollDialog = !pollDialog"><Icon name="bar-chart" :size="19" /></button>
-        <button class="attach-btn" v-if="isAndroid" :title="t('geo_send') || 'Send location'" @click="sendGeoMessage"><Icon name="map-pin" :size="19" /></button>
+        <!-- mic → send при непустом тексте (как в Telegram) -->
+        <button v-if="newMessage.trim()" class="send-btn-round" @click="sendMessage" :disabled="sending" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
+        <button v-else class="attach-btn" :title="t('voice_message') || 'Голосовое сообщение'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false"><Icon name="mic" :size="19" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
+        <!-- Панель скрепки -->
+        <div v-if="attachMenu" class="attach-menu">
+          <button class="attach-menu-item" @click="attachMenu = false; fileInput && fileInput.click()">
+            <Icon name="paperclip" :size="17" /><span>{{ t('attach_file') || 'Файл' }}</span>
+          </button>
+          <button v-if="isAndroid" class="attach-menu-item" @click="attachMenu = false; sendGeoMessage()">
+            <Icon name="map-pin" :size="17" /><span>{{ t('geo_send') || 'Геолокация' }}</span>
+          </button>
+          <button class="attach-menu-item" @click="attachMenu = false; pollDialog = !pollDialog">
+            <Icon name="bar-chart" :size="17" /><span>{{ t('poll_create') || 'Голосование' }}</span>
+          </button>
+        </div>
         <!-- Создание голосования -->
         <div v-if="pollDialog" class="poll-dialog">
           <div class="poll-dialog-box">
@@ -10324,11 +10338,59 @@ body {
   background: var(--bg-hover);
 }
 
+.send-btn-round {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--accent-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s, opacity 0.15s;
+}
+
+.send-btn-round:hover { transform: scale(1.06); }
+.send-btn-round:disabled { opacity: 0.5; cursor: default; }
+
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  overflow: hidden;
+  z-index: 50;
+}
+
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.attach-menu-item:hover { background: var(--bg-hover); }
+
 .mic-btn {
   background: transparent;
   border: none;
   cursor: pointer;
-  font-size: 20px;
   padding: 8px;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);

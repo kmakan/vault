@@ -57,6 +57,7 @@ export default {
   duress_bio: "使用指纹解锁",
   duress_save: "保存紧急保护",
   duress_warn: "请记住您的代码！恐慌代码会不可逆地抹除所有数据。胁迫代码看似正常登录，但会悄悄通知所选联系人。",
+  voice_message: "语音消息",
   attach_file: "添加文件",
   relay_enable: "推送中继（加速送达）",
   relay_base_url: "中继地址（留空使用我们的服务器）",
