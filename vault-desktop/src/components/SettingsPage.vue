@@ -230,26 +230,30 @@
         </div>
       </div>
 
-      <!-- M2.1: Push-релей (ускорение доставки поверх почты) -->
+      <!-- M2.2: Push-релеи (список с фолбэком, свои/community) -->
       <div class="setting-row" style="display:block;margin-top:18px">
         <div style="margin-bottom:12px">
           <label class="toggle"><input type="checkbox" v-model="relayEnabled" @change="relaySave" /><span class="slider"></span></label>
-          <span style="margin-left:10px">{{ t('relay_enable') || 'Push-релей (ускоренная доставка)' }}</span>
+          <span style="margin-left:10px">{{ t('relay_enable') || 'Push-релеи (ускоренная доставка)' }}</span>
         </div>
         <div v-if="relayEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
           <div>
-            <div class="duress-label">{{ t('relay_base_url') || 'Адрес релея (пусто — наш сервер)' }}</div>
-            <div style="display:flex;gap:8px">
-              <input v-model="relayBaseUrl" class="duress-input" style="flex:1" :placeholder="t('relay_base_url_ph') || 'свой релей: https://…/relay'" @change="relaySave" />
-              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayCheckHealth">{{ t('relay_check') || 'Проверить' }} {{ relayStatus }}</button>
+            <div class="duress-label">{{ t('relay_list') || 'Релеи (первый живой используется автоматически)' }}</div>
+            <div v-for="(r, i) in relayList" :key="r.url" class="duress-contact" style="align-items:center;gap:8px">
+              <span style="flex:1;font-size:12.5px">{{ r.label || r.url }}</span>
+              <span style="font-size:11px;opacity:.7">{{ r.myToken ? '✓' : '—' }}</span>
+              <span :style="{color: r._health === true ? '#22c55e' : r._health === false ? '#ef4444' : 'inherit', fontSize:'12px'}">{{ r._health === true ? '●' : r._health === false ? '○' : '' }}</span>
+              <button class="duress-remove" :title="t('relay_check') || 'Проверить'" @click="relayCheckOne(i)">↻</button>
+              <button class="duress-remove" @click="relayRemoveRelay(i)">×</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <input v-model="relayNewUrl" class="duress-input" style="flex:2" :placeholder="t('relay_base_url_ph') || 'https://…/relay'" />
+              <input v-model="relayNewToken" class="duress-input" style="flex:2" type="password" :placeholder="t('relay_token_ph') || 'мой read-токен этого релея'" />
+              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAddRelay">{{ t('add') || 'Добавить' }}</button>
             </div>
           </div>
-          <div>
-            <div class="duress-label">{{ t('relay_my_token') || 'Мой read-токен релея' }}</div>
-            <input v-model="relayMyToken" class="duress-input" type="password" :placeholder="t('relay_token_ph') || 'вставьте токен, выданный сервером'" @change="relaySave" />
-          </div>
-          <div>
-            <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников (email = read-токен)' }}</div>
+          <div v-if="relayActiveUrl">
+            <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников на активном релее (email = read-токен)' }}</div>
             <div v-for="(tok, addr) in relayPeerTokens" :key="addr" class="duress-contact">
               <span>{{ addr }}</span>
               <button class="duress-remove" @click="relayRemovePeer(addr)">×</button>
@@ -260,7 +264,7 @@
               <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer" @click="relayAddPeer">{{ t('add') || 'Добавить' }}</button>
             </div>
           </div>
-          <p class="duress-warn">{{ t('relay_note') || 'Токен — анонимная подписка на сервере ускоренной доставки. Почта остаётся основным каналом: релей лишь дублирует конверты, ускоряя доставку.' }}</p>
+          <p class="duress-warn">{{ t('relay_note') || 'Релеи — анонимные подписки: без email и содержимого. Если релей перестал отвечать, клиент сам переключится на следующий из списка. Почта остаётся основным каналом.' }}</p>
         </div>
       </div>
       </div>
@@ -365,14 +369,16 @@ export default {
       isAndroid: /android/i.test(navigator.userAgent),
       duressContacts: [],
       duressRecipients: [],
-      // M2.1: релей
+      // M2.2: релеи (список)
       relayEnabled: false,
-      relayMyToken: '',
+      relayList: [],
+      relayActive: 0,
+      relayActiveUrl: '',
       relayPeerTokens: {},
       relayNewPeerAddr: '',
       relayNewPeerToken: '',
-      relayBaseUrl: '',
-      relayStatus: '',
+      relayNewUrl: '',
+      relayNewToken: '',
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -455,47 +461,71 @@ export default {
           this.duressContacts = (all || []).map(c => c.email).filter(Boolean);
         }
       } catch (e) { /* ignore */ }
-      // M2.1: настройки релея (per-account: используем email пропса).
+      // M2.2: список релеев (per-account).
       try {
         const rs = await relayClient.getSettings(this.email || 'anon');
         this.relayEnabled = rs.enabled;
-        this.relayMyToken = rs.myToken;
-        this.relayPeerTokens = rs.peers || {};
-        this.relayBaseUrl = rs.isDefault ? '' : rs.baseUrl;
+        this.relayList = rs.relays.map(r => ({ ...r }));
+        this.relayActive = rs.active;
+        this.relayRefreshPeersView();
       } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
   },
   methods: {
-    // ── M2.1: релей ────────────────────────────────────────
+    // ── M2.2: релеи (список с фолбэком) ─────────────────────
+    async relayRefreshPeersView() {
+      const rs = await relayClient.getSettings(this.email || 'anon');
+      const active = rs.relays[rs.active];
+      this.relayActiveUrl = active ? active.url : '';
+      this.relayPeerTokens = (rs.peers && active && rs.peers[active.url]) || {};
+    },
     async relaySave() {
       try {
-        const acc = this.email || 'anon';
-        await relayClient.setEnabled(acc, this.relayEnabled);
-        await relayClient.setMyToken(acc, this.relayMyToken);
-        await relayClient.setBaseUrl(acc, this.relayBaseUrl);
-        this.relayStatus = this.relayEnabled ? '' : '';
+        await relayClient.setEnabled(this.email || 'anon', this.relayEnabled);
       } catch (e) { /* kv недоступен */ }
     },
-    async relayCheckHealth() {
-      this.relayStatus = '…';
-      const ok = await relayClient.relayHealth(this.email || 'anon');
-      this.relayStatus = ok ? '✓' : '✗';
-      setTimeout(() => { this.relayStatus = ''; }, 3000);
+    async relayAddRelay() {
+      const url = (this.relayNewUrl || '').trim();
+      const token = (this.relayNewToken || '').trim();
+      if (!url) return;
+      try {
+        await relayClient.addRelay(this.email || 'anon', url, token, '');
+        this.relayNewUrl = ''; this.relayNewToken = '';
+        const rs = await relayClient.getSettings(this.email || 'anon');
+        this.relayList = rs.relays.map(r => ({ ...r }));
+        this.relayActive = rs.active;
+        this.relayRefreshPeersView();
+      } catch (e) { alert(e && e.message || e); }
+    },
+    async relayRemoveRelay(i) {
+      const list = [...this.relayList];
+      const gone = list.splice(i, 1);
+      await relayClient.saveRelays(this.email || 'anon', list.map(({ _health, ...r }) => r));
+      this.relayList = list;
+      const rs = await relayClient.getSettings(this.email || 'anon');
+      this.relayActive = rs.active;
+      this.relayRefreshPeersView();
+    },
+    async relayCheckOne(i) {
+      const r = this.relayList[i];
+      if (!r) return;
+      r._health = null;
+      r._health = await relayClient.relayHealthUrl(r.url);
+      this.relayList = [...this.relayList];
     },
     async relayAddPeer() {
       const addr = (this.relayNewPeerAddr || '').trim().toLowerCase();
       const tok = (this.relayNewPeerToken || '').trim();
-      if (!addr || !tok || !addr.includes('@')) return;
-      await relayClient.setPeerToken(this.email || 'anon', addr, tok);
-      const rs = await relayClient.getSettings(this.email || 'anon');
-      this.relayPeerTokens = rs.peers || {};
+      if (!addr || !tok || !addr.includes('@') || !this.relayActiveUrl) return;
+      await relayClient.setPeerToken(this.email || 'anon', this.relayActiveUrl, addr, tok);
       this.relayNewPeerAddr = '';
       this.relayNewPeerToken = '';
+      this.relayRefreshPeersView();
     },
     async relayRemovePeer(addr) {
-      await relayClient.setPeerToken(this.email || 'anon', addr, null);
-      const rs = await relayClient.getSettings(this.email || 'anon');
-      this.relayPeerTokens = rs.peers || {};
+      if (!this.relayActiveUrl) return;
+      await relayClient.setPeerToken(this.email || 'anon', this.relayActiveUrl, addr, null);
+      this.relayRefreshPeersView();
     },
     // ── RELEASE-PREP: проверка обновлений ─────────────────
     // Rust-команда check_app_update сравнивает semver-численно и возвращает
