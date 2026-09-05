@@ -311,6 +311,9 @@ async fn main() {
         .route("/relay/ws", get(relay_ws))
         .route("/metrics", get(metrics))
         .route("/health", get(health))
+        // alias: клиентские baseUrl заканчиваются на /relay → зовут /relay/health
+        .route("/relay/health", get(health))
+        .route("/relay/metrics", get(metrics))
         .layer(cors_layer())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
