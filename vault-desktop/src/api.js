@@ -1044,6 +1044,10 @@ export class ApiClient {
   async idleStart(cursors = {}) {
     return await invoke('email_idle_start', { cursors });
   }
+  // M2.3: экономный режим — форс-стоп foreground-сервиса Android
+  async ecoSet(enabled) {
+    return await invoke('eco_set', { enabled });
+  }
   async idleStop() {
     return await invoke('email_idle_stop', {});
   }

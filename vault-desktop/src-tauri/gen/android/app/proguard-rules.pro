@@ -75,3 +75,10 @@
 }
 -keep class com.vault.vault.VaultForegroundService$Companion { *; }
 -keep class com.vault.vault.LockActivity { *; }
+# M2.3: ecoStop/ecoStart зовутся ТОЛЬКО из Rust (eco_set) — R8 удалял
+# без keep → JavaException NoSuchMethodError из JNI.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void ecoStop(android.content.Context);
+    public static void ecoStart(android.content.Context);
+}
+

@@ -87,9 +87,15 @@ class VaultForegroundService : Service() {
         wifiLock = null
         // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
-        // перезапуск через AlarmManager, чтобы сервис воскрес.
-        scheduleRestart(this)
+        // ЭКО-РЕЖИМ: сервис остановлен ПОЛЬЗОВАТЕЛЕМ — не воскрешаем.
+        if (ecoStoppedByUser) {
+            ecoStoppedByUser = false
+            Log.i("VaultRust", "eco: service stopped by user, no restart")
+        } else {
+            // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
+            // перезапуск через AlarmManager, чтобы сервис воскрес.
+            scheduleRestart(this)
+        }
         super.onDestroy()
     }
 
@@ -172,6 +178,36 @@ class VaultForegroundService : Service() {
     }
 
     companion object {
+        // M2.3: эко-режим — форс-стоп сервиса пользователем (без авторестарта)
+        @Volatile var ecoStoppedByUser: Boolean = false
+
+        @JvmStatic
+        fun ecoStop(context: Context) {
+            ecoStoppedByUser = true
+            try {
+                context.stopService(Intent(context, VaultForegroundService::class.java))
+                Log.i("VaultRust", "eco: foreground service stopped")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco stop failed: " + e.message)
+            }
+        }
+
+        @JvmStatic
+        fun ecoStart(context: Context) {
+            ecoStoppedByUser = false
+            try {
+                val svc = Intent(context, VaultForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc)
+                } else {
+                    context.startService(svc)
+                }
+                Log.i("VaultRust", "eco: foreground service started")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco start failed: " + e.message)
+            }
+        }
+
         init {
             // Сервис-процесс не касается MainActivity/Rust.kt — грузим .so
             // сами (идемпотентно: в activity-процессе библиотека уже

@@ -4124,12 +4124,15 @@ export default {
         // стоп JS IDLE-цикла
         this._idleStop = true;
         try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
+        // Android: погасить foreground-сервис (иконка из шапки, wakeLock снят)
+        try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
         // редкий поллинг-тик страхует (релей — основной канал)
         this.stopPolling();
         this.startPolling(60000);
         this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
       } else {
         // классика: постоянный IDLE + обычный поллинг
+        try { await api.ecoSet(false); } catch (e) { console.warn('[eco] svc start:', e); }
         this.stopPolling();
         this.idleLoop();
         this.startPolling();

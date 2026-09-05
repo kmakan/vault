@@ -237,12 +237,11 @@
         </div>
       </div>
 
-      <!-- M2.2: Push-релеи (список с фолбэком, свои/community) -->
-      <div class="setting-row" style="display:block;margin-top:18px">
-        <div style="margin-bottom:12px">
-          <label class="toggle"><input type="checkbox" v-model="relayEnabled" @change="relaySave" /><span class="slider"></span></label>
-          <span style="margin-left:10px">{{ t('relay_enable') || 'Push-релеи (ускоренная доставка)' }}</span>
-        </div>
+      <!-- M2.2: Push-релеи (список с фолбэком, свои/community) — стиль как у остальных строк -->
+      <div class="setting-row" style="display:flex;justify-content:space-between;align-items:center;margin-top:18px">
+        <span>{{ t('relay_enable') || 'Push-релеи (ускоренная доставка)' }}</span>
+        <label class="toggle"><input type="checkbox" v-model="relayEnabled" @change="relaySave" /><span class="slider"></span></label>
+      </div>
         <div v-if="relayEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
           <div>
             <div class="duress-label">{{ t('relay_list') || 'Релеи (первый живой используется автоматически)' }}</div>
@@ -273,7 +272,6 @@
           </div>
           <p class="duress-warn">{{ t('relay_note') || 'Релеи — анонимные подписки: без email и содержимого. Если релей перестал отвечать, клиент сам переключится на следующий из списка. Почта остаётся основным каналом.' }}</p>
         </div>
-      </div>
       </div>
 
       <!-- ЯЗЫК -->
