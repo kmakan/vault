@@ -509,8 +509,6 @@
         </div>
 
         <div class="message-input" v-if="activeChat">
-        <!-- Меню скрепки (как в Telegram): файл / гео / опрос — не переполняет ряд -->
-        <button class="attach-btn" :title="t('attach_file') || 'Прикрепить файл'" @click="attachMenu = !attachMenu; showEmojiPicker = false"><Icon name="paperclip" :size="19" /></button>
         <div class="input-wrapper">
           <EmojiPicker
             :show="showEmojiPicker"
@@ -526,20 +524,22 @@
           />
           <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker; attachMenu = false" title="Emoji"><Icon name="smile" :size="19" /></button>
         </div>
-        <!-- mic → send при непустом тексте (как в Telegram) -->
-        <button v-if="newMessage.trim()" class="send-btn-round" @click="sendMessage" :disabled="sending" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
-        <button v-else class="attach-btn" :title="t('voice_message') || 'Голосовое сообщение'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false"><Icon name="mic" :size="19" /></button>
+        <!-- Отправка: ВСЕГДА видна в первом ряду -->
+        <button class="send-btn-round" @click="sendMessage" :disabled="sending || !newMessage.trim()" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
-        <!-- Панель скрепки -->
-        <div v-if="attachMenu" class="attach-menu">
-          <button class="attach-menu-item" @click="attachMenu = false; fileInput && fileInput.click()">
-            <Icon name="paperclip" :size="17" /><span>{{ t('attach_file') || 'Файл' }}</span>
+        <!-- Второй ряд: кнопки фич (файл, гео, голосование, голос) — с подписями -->
+                <div class="feature-row">
+          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="fileInput && fileInput.click()">
+            <Icon name="paperclip" :size="18" />
           </button>
-          <button v-if="isAndroid" class="attach-menu-item" @click="attachMenu = false; sendGeoMessage()">
-            <Icon name="map-pin" :size="17" /><span>{{ t('geo_send') || 'Геолокация' }}</span>
+          <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
+            <Icon name="map-pin" :size="18" />
           </button>
-          <button class="attach-menu-item" @click="attachMenu = false; pollDialog = !pollDialog">
-            <Icon name="bar-chart" :size="17" /><span>{{ t('poll_create') || 'Голосование' }}</span>
+          <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
+            <Icon name="bar-chart" :size="18" />
+          </button>
+          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false">
+            <Icon name="mic" :size="18" />
           </button>
         </div>
         <!-- Создание голосования -->
@@ -569,15 +569,12 @@
             </div>
           </div>
         </div>
-        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message"><Icon name="mic" :size="19" /></button>
+        <!-- AudioRecorder: открыт новой mic-кнопкой в ряду (mic↔send) -->
         <AudioRecorder
           :show="showAudioRecorder"
           @send="sendAudioMessage"
           @close="showAudioRecorder = false"
         />
-          <button class="send-btn" @click="sendMessage" :disabled="sending">
-            <span class="send-icon"><Icon name="send" :size="16" /></span>
-          </button>
         </div>
       </div>
     </div>
@@ -9092,14 +9089,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 220px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .poll-title {
   font-weight: 600;
   font-size: 14px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
+  word-break: break-word;
 }
 .poll-option {
   display: flex;
@@ -9119,7 +9118,7 @@ body {
 .poll-option:disabled { cursor: default; opacity: 0.75; }
 .poll-option-mine { border-color: var(--accent-primary, #6366f1); background: rgba(99, 102, 241, 0.12); }
 .poll-option-lead { border-color: rgba(34, 197, 94, 0.5); }
-.poll-option-label { flex: 1; }
+.poll-option-label { flex: 1; word-break: break-word; }
 .poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
 .poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
 .poll-footer { font-size: 12px; opacity: 0.7; }
@@ -10271,18 +10270,47 @@ body {
 
 .message-input {
   flex-shrink: 0;
-  padding: 16px 24px;
-  /* Android: не уходить под системную навигацию (виртуальные кнопки/жесты) */
-  padding-bottom: calc(16px + var(--safe-bottom, 0px));
+  padding: 8px 10px;
+  padding-bottom: calc(6px + var(--safe-bottom, 0px));
   border-top: 1px solid var(--border-subtle);
+  /* Два ряда: ввод (+ отправка) и фичи */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-secondary);
+  position: relative;
+}
+
+/* Ряд фич занимает всю ширину (вторая строка flex-wrap) */
+.feature-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: var(--bg-secondary);
+  gap: 10px;
+  flex-basis: 100%;
+  padding: 0 4px;
 }
+
+.feature-btn {
+  width: 40px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.feature-btn:hover { background: var(--bg-hover); border-color: var(--accent-primary); }
+.feature-btn:active { transform: scale(0.97); }
 
 .input-wrapper {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   position: relative;
@@ -10329,7 +10357,8 @@ body {
   border: none;
   cursor: pointer;
   font-size: 20px;
-  padding: 8px;
+  padding: 6px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
 }
@@ -10340,8 +10369,8 @@ body {
 
 .send-btn-round {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
   cursor: pointer;
@@ -10387,43 +10416,7 @@ body {
 
 .attach-menu-item:hover { background: var(--bg-hover); }
 
-.mic-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
-}
 
-.mic-btn:hover {
-  background: var(--bg-hover);
-  transform: scale(1.1);
-}
-
-.send-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--transition-fast);
-  box-shadow: var(--shadow-md);
-}
-
-.send-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 20px var(--accent-glow);
-}
-
-.send-icon {
-  font-size: 18px;
-  color: white;
-}
 
 /* ═══════════════════════════════════════════════════════════════
    Empty State
@@ -10576,6 +10569,8 @@ body {
 }
 
 @media (max-width: 767px), (max-height: 479px) {
+  .message { max-width: 86%; }
+
   .sidebar {
     width: 100%;
   }
