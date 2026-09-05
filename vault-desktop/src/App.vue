@@ -5466,6 +5466,14 @@ export default {
         ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
       };
       const content = await crypto.encryptVault(JSON.stringify(body));
+      // M2.2: дублируем сигнал звонка на релей (критично для скорости
+      // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
+      // заберёт его relayConsume'ом (parseCallSignal работает и на
+      // relay-конвертах — тот же зашифрованный wire-формат). Дедуп по
+      // call_id (isCallSeen) — дубль через email безопасен.
+      try {
+        relay.relayPublish(this.email, peer, { id: body.id }, content);
+      } catch (e) { /* релей опционален — email путь живёт */ }
       // Ретрай ×3: Gmail-троттлинг рвёт SMTP в момент звонка
       // («media accept failed» = sendEmail упал, answer потерян навсегда).
       // Сигнал звонка критичен — повторяем с паузой.
@@ -6118,6 +6126,13 @@ export default {
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
       this._idleActive = true;
+      // M2.2: релей-конверты во время звонка/постоянно — быстрый канал
+      // (email IDLE ~1с для писем, но relay-очередь иначе ждала бы 30с тика).
+      const relayTick = setInterval(async () => {
+        if (!this.isLoggedIn) { clearInterval(relayTick); return; }
+        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
+      }, 5000);
+      this._relayTicker = relayTick;
       // Rust-монитор: запускаем параллельно с JS-циклом.
       // Идемпотентен на стороне Rust; курсоры берём из кэша активного
       // аккаунта, чтобы первый fetch не тянул старые письма.
