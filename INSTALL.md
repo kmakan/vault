@@ -9,9 +9,9 @@ you don't have to trust our binaries.
 ### Install the APK
 
 1. Download
-   [vault-0.1.147.apk](https://github.com/kmakan/vault/releases/download/v0.1.147/vault-0.1.147.apk)
+   [vault-0.1.149.apk](https://github.com/kmakan/vault/releases/download/v0.1.149/vault-0.1.149.apk)
    (21 MB, Android 7+) — also mirrored at
-   `https://vault-msg.ru/releases/vault-0.1.147.apk`.
+   `https://vault-msg.ru/releases/vault-0.1.149.apk`.
 2. Open the file. Android will warn about installing from an unknown source —
    allow it for your browser/file manager once.
 3. The APK is signed with the Vault release key: future versions install over
@@ -42,18 +42,18 @@ signing key). To install on a device: `adb install -r <apk>`.
 
 ```bash
 # Ubuntu/Debian
-wget https://github.com/kmakan/vault/releases/download/v0.1.147/Vault_0.1.147_amd64.deb
-sudo apt install ./Vault_0.1.147_amd64.deb
+wget https://github.com/kmakan/vault/releases/download/v0.1.149/Vault_0.1.149_amd64.deb
+sudo apt install ./Vault_0.1.149_amd64.deb
 
 # Fedora/RHEL
-sudo rpm -i Vault-0.1.147-1.x86_64.rpm
+sudo rpm -i Vault-0.1.149-1.x86_64.rpm
 ```
 
 ### Portable tar.gz (any distro)
 
 ```bash
-wget https://vault-msg.ru/releases/vault-desktop-0.1.147-linux-x86_64.tar.gz
-tar xzf vault-desktop-0.1.147-linux-x86_64.tar.gz
+wget https://vault-msg.ru/releases/vault-desktop-0.1.149-linux-x86_64.tar.gz
+tar xzf vault-desktop-0.1.149-linux-x86_64.tar.gz
 ./vault-desktop
 ```
 
@@ -117,8 +117,8 @@ Android: app-private storage; cloud backup and device transfer are disabled.
 ## Verification
 
 Each release lists SHA-256 checksums in the release notes
-([v0.1.147](https://github.com/kmakan/vault/releases/tag/v0.1.147)):
+([v0.1.149](https://github.com/kmakan/vault/releases/tag/v0.1.149)):
 
 ```bash
-sha256sum vault-0.1.147.apk
+sha256sum vault-0.1.149.apk
 ```

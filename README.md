@@ -3,7 +3,7 @@
 > **A private messenger that lives inside ordinary email.**
 > No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.147 · License: AGPL-3.0 · Status: Beta
+> Version: 0.1.149 · License: AGPL-3.0 · Status: Beta
 
 [English](#english) · [Русский](#русский)
 
@@ -49,6 +49,11 @@ if every relay in the world went down, your messenger would keep working.
 - **Voice calls** — Opus 48 kHz, per-frame AEAD + DTLS-SRTP, P2P via
   WebRTC with email signaling and instant hangup over a control
   DataChannel. No call servers.
+- **Push relay (optional)** — a self-hostable relay (open source, in this
+  repo under `relay-server/`) duplicates every envelope over HTTPS/WebSocket
+  to cut delivery from ~30-60 s to ~1 s. Email stays the primary transport:
+  if the relay is down, nothing is lost. Use our instance or point the app
+  to your own / a community relay (Settings → Privacy).
 - **Attachments** — encrypted files, images, audio messages; provider
   size limits detected automatically.
 - **Duress & panic controls** — a duress password opens an empty vault,
@@ -89,13 +94,14 @@ if every relay in the world went down, your messenger would keep working.
 - **Email metadata** — your providers see that two addresses exchange
   mail (not what, not that it is Vault).
 - **Latency** — plain email delivery is 30–60 s; IMAP IDLE brings it to
-  ~1 s while the app is alive. A push relay is planned.
+  ~1 s while the app is alive. The optional push relay cuts it to ~1 s
+  even when the app is in the background.
 - **Attachments** are capped by your mail provider (typically 25–30 MB).
 
 ### Install (prebuilt binaries)
 
 **Android** — download the signed APK and open it:
-[vault-0.1.147.apk](https://github.com/kmakan/vault/releases/download/v0.1.147/vault-0.1.147.apk)
+[vault-0.1.149.apk](https://github.com/kmakan/vault/releases/download/v0.1.149/vault-0.1.149.apk)
 (21 MB, Android 7+). The system will ask to allow installs from this source —
 allow it. The APK is signed with the Vault release key, so future versions
 install over it without data loss; in-app updates: Settings → Help →
@@ -103,11 +109,11 @@ install over it without data loss; in-app updates: Settings → Help →
 
 **Linux (Debian/Ubuntu)** — deb package:
 ```bash
-sudo dpkg -i Vault_0.1.147_amd64.deb   # or: sudo apt install ./Vault_0.1.147_amd64.deb
+sudo dpkg -i Vault_0.1.149_amd64.deb   # or: sudo apt install ./Vault_0.1.149_amd64.deb
 ```
 **Linux (any distro)** — portable tar.gz:
 ```bash
-tar xzf vault-desktop-0.1.147-linux-x86_64.tar.gz
+tar xzf vault-desktop-0.1.149-linux-x86_64.tar.gz
 ./vault-desktop
 ```
 Runtime deps on Ubuntu 22.04+: `libwebkit2gtk-4.1-0` (pulled in automatically
