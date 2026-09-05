@@ -179,12 +179,17 @@ class MainActivity : TauriActivity() {
     }
 
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
+    // M2.3: эко-режим — сервис не поднимаем (пользователь выключил фоновую работу).
     try {
-      val svc = Intent(this, VaultForegroundService::class.java)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        startForegroundService(svc)
+      if (!VaultForegroundService.ecoModeEnabled(this)) {
+        val svc = Intent(this, VaultForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          startForegroundService(svc)
+        } else {
+          startService(svc)
+        }
       } else {
-        startService(svc)
+        Log.i("VaultRust", "eco: skip foreground service on start")
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "startForegroundService failed: " + e.message)

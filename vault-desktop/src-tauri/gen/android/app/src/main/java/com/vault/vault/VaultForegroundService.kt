@@ -103,6 +103,10 @@ class VaultForegroundService : Service() {
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        if (ecoStoppedByUser) {
+            Log.i("VaultRust", "eco: task removed, no restart")
+            return
+        }
         Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
         scheduleRestart(this)
     }
@@ -184,6 +188,9 @@ class VaultForegroundService : Service() {
         @JvmStatic
         fun ecoStop(context: Context) {
             ecoStoppedByUser = true
+            // Персистим в prefs: MainActivity при следующем запуске НЕ поднимет сервис
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("eco_mode", true).apply()
             try {
                 context.stopService(Intent(context, VaultForegroundService::class.java))
                 Log.i("VaultRust", "eco: foreground service stopped")
@@ -195,6 +202,8 @@ class VaultForegroundService : Service() {
         @JvmStatic
         fun ecoStart(context: Context) {
             ecoStoppedByUser = false
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("eco_mode", false).apply()
             try {
                 val svc = Intent(context, VaultForegroundService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -206,6 +215,15 @@ class VaultForegroundService : Service() {
             } catch (e: Throwable) {
                 Log.w("VaultRust", "eco start failed: " + e.message)
             }
+        }
+
+        /// Eco-режим сохранён? (для MainActivity: не стартовать сервис при эко)
+        @JvmStatic
+        fun ecoModeEnabled(context: Context): Boolean {
+            return try {
+                context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("eco_mode", false)
+            } catch (e: Throwable) { false }
         }
 
         init {

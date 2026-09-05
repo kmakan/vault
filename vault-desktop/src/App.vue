@@ -1641,6 +1641,8 @@ export default {
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
           this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
           this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+          // Синхронизация эко в Kotlin-prefs: сервис мог подняться до загрузки JS
+          if (this.ecoMode) { try { await api.ecoSet(true); } catch (e) { /* prefs */ } }
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 
           await api.getChats();

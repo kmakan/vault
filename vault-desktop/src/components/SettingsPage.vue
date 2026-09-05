@@ -91,13 +91,6 @@
           <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
         </div>
         <p v-if="experimentsCalls" class="setting-hint">{{ t('experiments_calls_hint') }}</p>
-        <!-- M2.3: экономный режим — приложение спит, релей будит пулем.
-             Классический: foreground-сервис + IMAP IDLE (сейчас). -->
-        <div class="setting-row">
-          <span>{{ t('eco_mode') || 'Экономный режим (батарея: релей вместо постоянного соединения)' }}</span>
-          <label class="toggle"><input type="checkbox" v-model="ecoMode" @change="ecoSave" /><span class="slider"></span></label>
-        </div>
-        <p class="setting-hint" style="margin-top:8px">{{ t('eco_mode_hint') || 'Выключает постоянный фоновый сервис: приложение спит, а релей присылает системный пуш на новое сообщение/звонок. Требует включённого релея (Приватность). Эксперимент.' }}</p>
       </div>
 
       <!-- ПОЧТА -->
@@ -272,6 +265,13 @@
           </div>
           <p class="duress-warn">{{ t('relay_note') || 'Релеи — анонимные подписки: без email и содержимого. Если релей перестал отвечать, клиент сам переключится на следующий из списка. Почта остаётся основным каналом.' }}</p>
         </div>
+
+      <!-- M2.3: экономный режим — в Приватности рядом с релеем (эко зависит от него) -->
+      <div class="setting-row">
+        <span>{{ t('eco_mode') || 'Экономный режим (батарея)' }}</span>
+        <label class="toggle"><input type="checkbox" v-model="ecoMode" @change="ecoSave" /><span class="slider"></span></label>
+      </div>
+      <p class="setting-hint" style="margin-top:8px">{{ t('eco_mode_hint') || 'Выключает постоянное фоновое соединение: доставка через релей + редкая проверка почты. При выключении — классический режим с постоянным соединением.' }}</p>
       </div>
 
       <!-- ЯЗЫК -->
