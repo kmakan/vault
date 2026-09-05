@@ -569,15 +569,12 @@
             </div>
           </div>
         </div>
-        <button class="mic-btn" @click="showAudioRecorder = !showAudioRecorder" title="Voice message"><Icon name="mic" :size="19" /></button>
+        <!-- AudioRecorder: открыт новой mic-кнопкой в ряду (mic↔send) -->
         <AudioRecorder
           :show="showAudioRecorder"
           @send="sendAudioMessage"
           @close="showAudioRecorder = false"
         />
-          <button class="send-btn" @click="sendMessage" :disabled="sending">
-            <span class="send-icon"><Icon name="send" :size="16" /></span>
-          </button>
         </div>
       </div>
     </div>
@@ -10279,6 +10276,8 @@ body {
   align-items: center;
   gap: 12px;
   background: var(--bg-secondary);
+  /* якорь для .attach-menu (position:absolute; bottom:100%) */
+  position: relative;
 }
 
 .input-wrapper {
@@ -10387,43 +10386,7 @@ body {
 
 .attach-menu-item:hover { background: var(--bg-hover); }
 
-.mic-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
-}
 
-.mic-btn:hover {
-  background: var(--bg-hover);
-  transform: scale(1.1);
-}
-
-.send-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), #4f46e5);
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--transition-fast);
-  box-shadow: var(--shadow-md);
-}
-
-.send-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 20px var(--accent-glow);
-}
-
-.send-icon {
-  font-size: 18px;
-  color: white;
-}
 
 /* ═══════════════════════════════════════════════════════════════
    Empty State
