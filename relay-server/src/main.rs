@@ -8,7 +8,7 @@
 
 
 use axum::{
-    extract::{connect_info::ConnectInfo, Query, State, WebSocketUpgrade, ws::Message},
+    extract::{connect_info::ConnectInfo, Json, Query, State, WebSocketUpgrade, ws::Message},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json as AxumJson, Response},
     routing::{get, post},
@@ -32,6 +32,8 @@ pub struct AppState {
     pub metrics: Metrics,
     /// M2.4: rate-limit регистраций по IP: (счётчик, окно начала).
     pub registrations: std::sync::Mutex<std::collections::HashMap<String, (u32, u64)>>,
+    /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
+    pub unlimited_key: Option<String>,
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
     pub ntfy_url: String,
@@ -337,15 +339,30 @@ struct RegisterOk {
     token: String,
     topic: String,
     exp: u32,
+    unlimited: bool,
+}
+#[derive(Deserialize, Default)]
+struct RegisterReq {
+    /// Промо-ключ безлимита (тестеры/владелец): токен на 10 лет, без
+    /// rate-limit. Обычная выдача — 30 дней, 3/день/IP.
+    #[serde(default)]
+    promo: Option<String>,
 }
 async fn relay_register(
     State(app): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(req): Json<RegisterReq>,
 ) -> Response {
-    // простой in-memory rate-limit:
     let ip = addr.ip().to_string();
     let now = now();
-    {
+    let promo_ok = app
+        .unlimited_key
+        .as_deref()
+        .zip(req.promo.as_deref())
+        .map(|(k, p)| k == p)
+        .unwrap_or(false);
+    if !promo_ok {
+        // обычная выдача: rate-limit по IP (3/день)
         let mut rl = app.registrations.lock().unwrap();
         let (count, window_start) = rl.entry(ip).or_insert((0u32, now));
         if now.saturating_sub(*window_start) > 86400 {
@@ -361,14 +378,16 @@ async fn relay_register(
         }
         *count += 1;
     }
-    let exp: u32 = (now + 30 * 86400) as u32; // free: 30 дней, продлевается register
+    // free: 30 дней (продлевается тем же запросом); promo: 10 лет
+    let days: u32 = if promo_ok { 3650 } else { 30 };
+    let exp: u32 = now.saturating_add(u64::from(days) * 86400) as u32;
     let token = vault_relay::tokens::issue(&app.keys, vault_relay::tokens::Scope::Read, exp);
     let topic = vault_relay::tokens::parse(&app.keys, &token)
         .map(|t| t.hash)
         .unwrap_or_default();
     app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
-    tracing::info!("register: new read token issued (ip rate-limited)");
-    (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp })).into_response()
+    tracing::info!("register: token issued (unlimited={promo_ok}, days={days})");
+    (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp, unlimited: promo_ok })).into_response()
 }
 
 #[tokio::main]
@@ -385,6 +404,8 @@ async fn main() {
         .parse()
         .expect("bad VAULT_RELAY_ADDR");
     let ntfy_url = std::env::var("VAULT_RELAY_NTFY_URL").unwrap_or_default();
+    let unlimited_key = std::env::var("VAULT_RELAY_UNLIMITED_KEY").ok()
+        .filter(|s| !s.trim().is_empty());
     if !ntfy_url.is_empty() {
         tracing::info!("ntfy wake-up bridge: {ntfy_url}");
     }
@@ -395,6 +416,7 @@ async fn main() {
         metrics: Metrics::default(),
         registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
         ntfy_url,
+        unlimited_key,
     });
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}"

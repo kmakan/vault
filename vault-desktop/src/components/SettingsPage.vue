@@ -250,9 +250,12 @@
               <input v-model="relayNewToken" class="duress-input" style="flex:2" type="password" :placeholder="t('relay_token_ph') || 'мой read-токен этого релея'" />
               <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAddRelay">{{ t('add') || 'Добавить' }}</button>
             </div>
-            <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAutoRegister">
-              {{ t('relay_auto') || 'Получить токен автоматически (наш релей)' }}
-            </button>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input v-model="relayPromoKey" class="duress-input" style="flex:1" :placeholder="t('relay_promo_ph') || 'промо-ключ безлимита (если есть)'" />
+              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAutoRegister">
+                {{ t('relay_auto') || 'Получить токен автоматически (наш релей)' }}
+              </button>
+            </div>
             <div v-if="relayNtfyLink" class="duress-contact" style="align-items:center;gap:8px">
               <span style="flex:1;font-size:12.5px">{{ t('relay_ntfy_hint') || 'Для пушей при закрытом приложении подпишите ntfy-клиент на ваш topic:' }}</span>
               <a :href="relayNtfyLink" style="color:#f59e0b;font-size:12.5px">ntfy://…</a>
@@ -394,6 +397,7 @@ export default {
       relayNewUrl: '',
       relayNewToken: '',
       relayNtfyLink: '',
+      relayPromoKey: '',
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -525,7 +529,13 @@ export default {
     async relayAutoRegister() {
       try {
         const base = 'https://vault-msg.ru';
-        const r = await fetch(base + '/relay/register', { method: 'POST' });
+        const promo = (this.relayPromoKey || '').trim();
+        const r = await fetch(base + '/relay/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(promo ? { promo } : {}),
+        });
+        const dataUnlimited = (await r.clone().json().catch(() => ({}))).unlimited;
         if (!r.ok) { alert('register: HTTP ' + r.status); return; }
         const d = await r.json();
         const url = base + '/relay';
@@ -539,7 +549,10 @@ export default {
         this.relayList = rs2.relays.map(r => ({ ...r }));
         this.relayActive = rs2.active;
         this.relayNtfyLink = 'ntfy://' + 'ntfy.vault-msg.ru/' + d.topic;
-        alert('Токен получен. Теперь установите ntfy-клиент и откройте ссылку ntfy://… из настроек, чтобы получать уведомления при закрытом приложении.');
+        this.relayPromoKey = '';
+        alert(dataUnlimited
+          ? 'Безлимитный токен получен (10 лет). Установите ntfy-клиент и откройте ссылку ntfy://… для пушей при закрытом приложении.'
+          : 'Токен получен (30 дней, продлевается бесплатно той же кнопкой). Установите ntfy-клиент и откройте ссылку ntfy://… для пушей при закрытом приложении.');
       } catch (e) { alert('register failed: ' + (e && e.message || e)); }
     },
     async relayRemoveRelay(i) {
