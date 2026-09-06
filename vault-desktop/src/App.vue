@@ -1651,7 +1651,7 @@ export default {
           this.isLoggedIn = true;
           // Эко (M2.3-b ФИНАЛ): глушим сервис полностью — пуши несёт
           // ntfy-клиент. Активация после isLoggedIn (иначе ранний return).
-          if (this.ecoMode) { this.onEcoMode(true).catch(() => {}); }
+          if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); }
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
@@ -4119,7 +4119,7 @@ export default {
     // M2.3: экономный режим — постоянный IMAP IDLE останавливается
     // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
     // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
-    async onEcoMode(on) {
+    async onEcoMode(on, silent = false) {
       this.ecoMode = !!on;
       try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
       if (!this.isLoggedIn) return;
@@ -4137,7 +4137,7 @@ export default {
         // редкий поллинг-тик страхует (релей — основной канал)
         this.stopPolling();
         this.startPolling(60000);
-        this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
+        if (!silent) this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
       } else {
         // классика: постоянный IDLE + обычный поллинг
         try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
