@@ -250,6 +250,13 @@
               <input v-model="relayNewToken" class="duress-input" style="flex:2" type="password" :placeholder="t('relay_token_ph') || 'мой read-токен этого релея'" />
               <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAddRelay">{{ t('add') || 'Добавить' }}</button>
             </div>
+            <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAutoRegister">
+              {{ t('relay_auto') || 'Получить токен автоматически (наш релей)' }}
+            </button>
+            <div v-if="relayNtfyLink" class="duress-contact" style="align-items:center;gap:8px">
+              <span style="flex:1;font-size:12.5px">{{ t('relay_ntfy_hint') || 'Для пушей при закрытом приложении подпишите ntfy-клиент на ваш topic:' }}</span>
+              <a :href="relayNtfyLink" style="color:#f59e0b;font-size:12.5px">ntfy://…</a>
+            </div>
           </div>
           <div v-if="relayActiveUrl">
             <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников на активном релее (email = read-токен)' }}</div>
@@ -386,6 +393,7 @@ export default {
       relayNewPeerToken: '',
       relayNewUrl: '',
       relayNewToken: '',
+      relayNtfyLink: '',
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -511,6 +519,28 @@ export default {
         this.relayActive = rs.active;
         this.relayRefreshPeersView();
       } catch (e) { alert(e && e.message || e); }
+    },
+    // M2.4: авто-получение read-токена на нашем релее (freemium, rate-limit
+    // 3/день на сервере). Токен = адрес очереди + ntfy-topic.
+    async relayAutoRegister() {
+      try {
+        const base = 'https://vault-msg.ru';
+        const r = await fetch(base + '/relay/register', { method: 'POST' });
+        if (!r.ok) { alert('register: HTTP ' + r.status); return; }
+        const d = await r.json();
+        const url = base + '/relay';
+        const rs = await relayClient.getSettings(this.email || 'anon');
+        const list = rs.relays.filter(x => x.url !== url);
+        list.unshift({ url, myToken: d.token, label: 'Vault' });
+        await relayClient.saveRelays(this.email || 'anon', list);
+        await relayClient.setEnabled(this.email || 'anon', true);
+        this.relayEnabled = true;
+        const rs2 = await relayClient.getSettings(this.email || 'anon');
+        this.relayList = rs2.relays.map(r => ({ ...r }));
+        this.relayActive = rs2.active;
+        this.relayNtfyLink = 'ntfy://' + 'ntfy.vault-msg.ru/' + d.topic;
+        alert('Токен получен. Теперь установите ntfy-клиент и откройте ссылку ntfy://… из настроек, чтобы получать уведомления при закрытом приложении.');
+      } catch (e) { alert('register failed: ' + (e && e.message || e)); }
     },
     async relayRemoveRelay(i) {
       const list = [...this.relayList];

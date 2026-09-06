@@ -55,6 +55,13 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- M2.3-b: ntfy-пуш «Click: vault://open» открывает приложение. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vault" android:host="open" />
+            </intent-filter>
         </activity>
 
         <!-- Фоновый приём звонков (27.08). -->

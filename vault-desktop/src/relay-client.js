@@ -193,14 +193,13 @@ let pubChain = Promise.resolve();
 export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
   const job = async () => {
     try {
-      const { enabled } = await getSettings(account);
-      if (!enabled) return { ok: false, why: 'disabled' };
+      const { enabled, peers, active, relays } = await getSettings(account);
+      if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
       const relay = await pickLiveRelay(account);
-      if (!relay) return { ok: false, why: 'no-live-relay' };
-      const { peers } = await getSettings(account);
+      if (!relay) { console.log('[relay] publish skip: no-live-relay'); return { ok: false, why: 'no-live-relay' }; }
       const relayPeers = peers[relay.url] || {};
       const to = relayPeers[String(chatId).toLowerCase()];
-      if (!to) return { ok: false, why: 'no-peer-token' };
+      if (!to) { console.log('[relay] publish skip: no-peer-token for', chatId, 'keys:', Object.keys(relayPeers)); return { ok: false, why: 'no-peer-token' }; }
       const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
       const res = await rfetch(relay.url + '/pub', {
         method: 'POST',
@@ -215,9 +214,11 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });
-      if (!res.ok) return { ok: false, why: 'http-' + res.status };
+      if (!res.ok) { console.log('[relay] publish http', res.status); return { ok: false, why: 'http-' + res.status }; }
+      console.log('[relay] published to', chatId);
       return { ok: true };
     } catch (e) {
+      console.log('[relay] publish error:', e && e.message || e);
       return { ok: false, why: (e && e.message) || 'error' };
     }
   };

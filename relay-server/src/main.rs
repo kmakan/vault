@@ -8,7 +8,7 @@
 
 
 use axum::{
-    extract::{Query, State, WebSocketUpgrade, ws::Message},
+    extract::{connect_info::ConnectInfo, Query, State, WebSocketUpgrade, ws::Message},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json as AxumJson, Response},
     routing::{get, post},
@@ -30,6 +30,8 @@ pub struct AppState {
     /// конфиг политики §9.1: разрешён ли publish без токена.
     pub allow_anonymous_pub: bool,
     pub metrics: Metrics,
+    /// M2.4: rate-limit регистраций по IP: (счётчик, окно начала).
+    pub registrations: std::sync::Mutex<std::collections::HashMap<String, (u32, u64)>>,
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
     pub ntfy_url: String,
@@ -42,6 +44,7 @@ pub struct Metrics {
     pub poll_hits: AtomicU64,
     pub ws_sessions: AtomicU64,
     pub rejected: AtomicU64,
+    pub register_ok: AtomicU64,
 }
 
 // ───────────────────────── Публикация (§5.1) ─────────────────────────
@@ -287,7 +290,7 @@ fn ntfy_publish(base: &str, topic: &str, total: usize) {
     };
     let body = format!("Новое сообщение ({total})");
     let req = format!(
-        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nTags: bell\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nTags: bell\r\nClick: vault://open\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
@@ -326,6 +329,48 @@ pub async fn health() -> Response {
     AxumJson(serde_json::json!({"ok":true,"service":"vault-relay"})).into_response()
 }
 
+/// M2.4: авто-выдача read-токена новому пользователю (freemium).
+/// Rate-limit по IP: 3 регистрации в сутки — иначе скопом выметут лимиты.
+/// Токен = адрес очереди получателя + его ntfy-topic (hex(mac)).
+#[derive(serde::Serialize)]
+struct RegisterOk {
+    token: String,
+    topic: String,
+    exp: u32,
+}
+async fn relay_register(
+    State(app): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+) -> Response {
+    // простой in-memory rate-limit:
+    let ip = addr.ip().to_string();
+    let now = now();
+    {
+        let mut rl = app.registrations.lock().unwrap();
+        let (count, window_start) = rl.entry(ip).or_insert((0u32, now));
+        if now.saturating_sub(*window_start) > 86400 {
+            *count = 0;
+            *window_start = now;
+        }
+        if *count >= 3 {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                AxumJson(serde_json::json!({"error":"rate limited, try tomorrow"})),
+            )
+                .into_response();
+        }
+        *count += 1;
+    }
+    let exp: u32 = (now + 30 * 86400) as u32; // free: 30 дней, продлевается register
+    let token = vault_relay::tokens::issue(&app.keys, vault_relay::tokens::Scope::Read, exp);
+    let topic = vault_relay::tokens::parse(&app.keys, &token)
+        .map(|t| t.hash)
+        .unwrap_or_default();
+    app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
+    tracing::info!("register: new read token issued (ip rate-limited)");
+    (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp })).into_response()
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().init();
@@ -348,6 +393,7 @@ async fn main() {
         keys: ServerKeys::new(server_key),
         allow_anonymous_pub,
         metrics: Metrics::default(),
+        registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
         ntfy_url,
     });
     tracing::info!(
@@ -361,11 +407,17 @@ async fn main() {
         .route("/health", get(health))
         // alias: клиентские baseUrl заканчиваются на /relay → зовут /relay/health
         .route("/relay/health", get(health))
+        .route("/relay/register", post(relay_register))
         .route("/relay/metrics", get(metrics))
         .layer(cors_layer())
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
-    axum::serve(listener, app).await.expect("serve");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("serve");
 }
 
 /// CORS: WebView-клиенты (tauri.localhost / android) и веб-клиенты.
