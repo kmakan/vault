@@ -82,3 +82,10 @@
     public static void ecoStart(android.content.Context);
 }
 
+
+# УВЕДОМЛЕНИЯ: small-icon ic_notification зовётся из JS строкой
+# (notify.js opts.icon) — Java-коллера нет, R8 вырезал drawable →
+# уведомления показывались системным «!». Держим весь класс drawable
+# (полей немного, перечислять по одному R8 не умеет).
+-keep class com.vault.vault.R$drawable { *; }
+-keep class com.vault.vault.R$drawable* { *; }
