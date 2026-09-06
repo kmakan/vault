@@ -54,10 +54,12 @@ if every relay in the world went down, your messenger would keep working.
   to cut delivery from ~30-60 s to ~1 s. Email stays the primary transport:
   if the relay is down, nothing is lost. Use our instance or point the app
   to your own / a community relay (Settings → Privacy).
-- **Notifications when the app is closed** — pair the app with any
-  [ntfy](https://ntfy.sh) client (UnifiedPush): the relay wakes your device
-  with a push the moment a letter arrives, and the icon disappears from the
-  status bar when you close the app. No Google services involved.
+- **Notifications when the app is closed (optional)** — by default Vault
+  keeps a persistent service (status-bar icon) exactly like before. If you
+  prefer no icon and lower battery use, enable Eco mode (Settings → Privacy)
+  and pair the app with any [ntfy](https://ntfy.sh) client (UnifiedPush):
+  the relay wakes your device with a push the moment a letter arrives.
+  No Google services involved.
 - **Attachments** — encrypted files, images, audio messages; provider
   size limits detected automatically.
 - **Duress & panic controls** — a duress password opens an empty vault,
