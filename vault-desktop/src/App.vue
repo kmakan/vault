@@ -1656,7 +1656,7 @@ export default {
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
-          if (this.ecoMode) { this.startPolling(60000); } // M2.3: экономный режим — без IDLE
+          if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
           else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
@@ -4128,6 +4128,8 @@ export default {
         try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
         // Android: погасить foreground-сервис (иконка из шапки, wakeLock снят)
         try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
+        // релей-тикер — единственный канал приёма в эко: гарантируем, что жив
+        this.startRelayTicker();
         // редкий поллинг-тик страхует (релей — основной канал)
         this.stopPolling();
         this.startPolling(60000);
@@ -6151,16 +6153,25 @@ export default {
     // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
     // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
     // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
+    // M2.3: релей-тикер — ЕДИНСТВЕННЫЙ канал приёма в эко-режиме (IDLE погашен).
+    // Живёт независимо от idleLoop: запускается при логине/эко-включении.
+    startRelayTicker() {
+      if (this._relayTicker) return;
+      this._relayTicker = setInterval(async () => {
+        if (!this.isLoggedIn) {
+          clearInterval(this._relayTicker);
+          this._relayTicker = null;
+          return;
+        }
+        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
+      }, 5000);
+    },
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
       this._idleActive = true;
       // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
       // но relay-очередь иначе ждала бы 30с тика поллинга).
-      const relayTick = setInterval(async () => {
-        if (!this.isLoggedIn) { clearInterval(relayTick); return; }
-        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
-      }, 5000);
-      this._relayTicker = relayTick;
+      this.startRelayTicker();
       // Rust-монитор: запускаем параллельно с JS-циклом.
       // Идемпотентен на стороне Rust; курсоры берём из кэша активного
       // аккаунта, чтобы первый fetch не тянул старые письма.
