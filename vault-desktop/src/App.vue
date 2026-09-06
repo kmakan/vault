@@ -1649,10 +1649,8 @@ export default {
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP.
           this.isLoggedIn = true;
-          // M2.3-b: эко = push-режим. Активация ТОЛЬКО после isLoggedIn
-          // (onEcoMode ранится при !isLoggedIn). Если есть релей-токен —
-          // сервис поднимается в push-режиме (ntfy-подписка, уведомления
-          // при убитом приложении); без релея — ecoSet(true) (полный стоп).
+          // Эко (M2.3-b ФИНАЛ): глушим сервис полностью — пуши несёт
+          // ntfy-клиент. Активация после isLoggedIn (иначе ранний return).
           if (this.ecoMode) { this.onEcoMode(true).catch(() => {}); }
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
@@ -4129,27 +4127,11 @@ export default {
         // стоп JS IDLE-цикла
         this._idleStop = true;
         try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
-        // M2.3-b: сервис НЕ убиваем — переводим в push-режим: тихая ntfy-
-        // подписка (без IMAP/wakeLock), при пуше — системное уведомление
-        // «Новое сообщение» даже при убитой activity.
-        let pushArmed = false;
-        try {
-          const { relays } = await (await import('./relay-client.js')).getSettings(this.email);
-          const tok = (relays[0] || {}).myToken || '';
-          if (tok) {
-            // topic = hex(mac) = последние 32 байта b64url-декода токена
-            const raw = atob(tok.replace(/-/g,'+').replace(/_/g,'/'));
-            const mac = raw.slice(raw.length - 32);
-            const topic = [...mac].map(c => c.charCodeAt(0).toString(16).padStart(2,'0')).join('');
-            const base = (relays[0] || {}).ntfyBase || 'https://ntfy.vault-msg.ru';
-            await api.pushSet(true, topic, base);
-            pushArmed = true;
-          }
-        } catch (e) { console.warn('[eco] push-set failed:', e); }
-        // Нет релея/токена — старый эко: полный стоп сервиса (нет пушей)
-        if (!pushArmed) {
-          try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
-        }
+        // M2.3-b ФИНАЛ: пуши при закрытом приложении несёт ntfy-клиент
+        // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
+        // глушим его полностью: иконка исчезает из шторки, батарея целая.
+        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
+        try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
         // релей-тикер — канал приёма при живом JS (activity открыта)
         this.startRelayTicker();
         // редкий поллинг-тик страхует (релей — основной канал)

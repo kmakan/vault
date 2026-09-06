@@ -92,15 +92,11 @@ class VaultForegroundService : Service() {
         wifiLock = null
         // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // ЭКО-РЕЖИМ: сервис остановлен ПОЛЬЗОВАТЕЛЕМ — не воскрешаем.
-        if (ecoStoppedByUser) {
-            ecoStoppedByUser = false
-            Log.i("VaultRust", "eco: service stopped by user, no restart")
-        } else {
-            // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
-            // перезапуск через AlarmManager, чтобы сервис воскрес.
-            scheduleRestart(this)
-        }
+        // M2.3-b ФИНАЛ: сервис не воскрешаем НИКОГДА. Пуши при закрытом
+        // приложении несёт ntfy-клиент (отдельное приложение-почтальон),
+        // иконка в шторке исчезает вместе с приложением — как у мессенджеров.
+        ecoStoppedByUser = false
+        Log.i("VaultRust", "service destroyed: no resurrection, push via ntfy client")
         super.onDestroy()
     }
 
@@ -150,8 +146,10 @@ class VaultForegroundService : Service() {
                 Log.w("VaultRust", "nativeStartMonitor failed: " + e.message)
             }
         }
-        // Пересоздавать сервис, если система его прибьёт.
-        return START_STICKY
+        // M2.3-b ФИНАЛ: пуши при закрытом приложении делает ntfy-клиент
+        // (UnifiedPush). Сервис нужен только при живой activity (звонки/
+        // IMAP) — после смахивания НЕ воскресаем: иконка уходит из шторки.
+        return START_NOT_STICKY
     }
 
     // ── M2.3-b: ntfy-стрим (долгий HTTP GET, построчный JSON) ──────────────
