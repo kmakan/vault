@@ -30,6 +30,9 @@ pub struct AppState {
     /// конфиг политики §9.1: разрешён ли publish без токена.
     pub allow_anonymous_pub: bool,
     pub metrics: Metrics,
+    /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
+    /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
+    pub ntfy_url: String,
 }
 
 #[derive(Default)]
@@ -130,6 +133,19 @@ pub async fn relay_pub(
     };
     app.store.push(&to_tok.hash, envelope, MAX_QUEUE);
     app.metrics.pub_ok.fetch_add(1, Ordering::Relaxed);
+    // M2.3-b: ntfy wake-up получателю (at-most-once, тише ошибки):
+    // topic = хэш read-токена (opaque). Содержимое НЕ раскрывается —
+    // «есть новое» + счётчик. Телефон, подписанный на topic, просыпается
+    // от системного пуша и забирает конверты poll'ом (дедуп по id).
+    if !app.ntfy_url.is_empty() {
+        let ntfy_url = app.ntfy_url.clone();
+        let topic = to_tok.hash.clone();
+        let total = app.store.len(&to_tok.hash);
+        // Fire-and-forget: не блокируем ответ отправителю.
+        tokio::task::spawn_blocking(move || {
+            ntfy_publish(&ntfy_url, &topic, total);
+        });
+    }
     (StatusCode::OK, AxumJson(PubOk { ok: true, mid })).into_response()
 }
 
@@ -257,6 +273,33 @@ fn err(code: StatusCode, msg: &str) -> Response {
     (code, AxumJson(serde_json::json!({"error": msg}))).into_response()
 }
 
+/// M2.3-b: минимальный HTTP-клиент для локального ntfy (без зависимостей).
+/// ntfy живёт на том же сервере (nginx terminates TLS наружу) — plain HTTP.
+fn ntfy_publish(base: &str, topic: &str, total: usize) {
+    use std::io::{Read, Write};
+    let base = base.trim_end_matches('/');
+    // base = http://127.0.0.1:8092 или https://... — поддержим только http
+    let rest = base.strip_prefix("http://").unwrap_or("");
+    let (host_port, _) = rest.split_once('/').unwrap_or((rest, ""));
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => (h.to_string(), p.to_string()),
+        _ => (host_port.to_string(), "80".to_string()),
+    };
+    let body = format!("Новое сообщение ({total})");
+    let req = format!(
+        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nTags: bell\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
+        .and_then(|mut s| {
+            s.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+            s.write_all(req.as_bytes())?;
+            let mut buf = [0u8; 256];
+            let _ = s.read(&mut buf);
+            Ok(())
+        });
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -296,11 +339,16 @@ async fn main() {
         .unwrap_or_else(|_| "127.0.0.1:8091".into())
         .parse()
         .expect("bad VAULT_RELAY_ADDR");
+    let ntfy_url = std::env::var("VAULT_RELAY_NTFY_URL").unwrap_or_default();
+    if !ntfy_url.is_empty() {
+        tracing::info!("ntfy wake-up bridge: {ntfy_url}");
+    }
     let state = Arc::new(AppState {
         store: Store::new(),
         keys: ServerKeys::new(server_key),
         allow_anonymous_pub,
         metrics: Metrics::default(),
+        ntfy_url,
     });
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}"

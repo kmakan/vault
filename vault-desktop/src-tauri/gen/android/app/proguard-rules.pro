@@ -89,3 +89,16 @@
 # (полей немного, перечислять по одному R8 не умеет).
 -keep class com.vault.vault.R$drawable { *; }
 -keep class com.vault.vault.R$drawable* { *; }
+
+# M2.3-b: pushModeStart зовётся ТОЛЬКО из Rust (eco_set/push_set) — R8 вырезал
+# бы метод (как ecoStop/showMessage раньше). Держим.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void pushModeStart(android.content.Context, java.lang.String, java.lang.String);
+    public static void pushModeStop(android.content.Context);
+    public static void ecoStop(android.content.Context);
+    public static void ecoStart(android.content.Context);
+}
+
+# M2.3-b: VaultBootReceiver создаётся системой по имени из манифеста — R8
+# может переименовать/вырезать. Держим целиком.
+-keep class com.vault.vault.VaultBootReceiver { *; }
