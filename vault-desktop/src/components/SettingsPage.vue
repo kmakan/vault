@@ -230,58 +230,73 @@
         </div>
       </div>
 
-      <!-- M2.2: Push-релеи (список с фолбэком, свои/community) — стиль как у остальных строк -->
-      <div class="setting-row" style="display:flex;justify-content:space-between;align-items:center;margin-top:18px">
-        <span>{{ t('relay_enable') || 'Push-релеи (ускоренная доставка)' }}</span>
+      <!-- M2.2/M2.4: Push-релеи. Модель: одна кнопка «подключить»,
+           всё остальное (свой релей, промо, токены) спрятано в «Расширенные». -->
+      <div class="setting-row">
+        <span>{{ t('relay_enable') || 'Ускоренная доставка через релей' }}</span>
         <label class="toggle"><input type="checkbox" v-model="relayEnabled" @change="relaySave" /><span class="slider"></span></label>
       </div>
-        <div v-if="relayEnabled" style="display:flex;flex-direction:column;gap:12px;padding-left:2px">
-          <div>
-            <div class="duress-label">{{ t('relay_list') || 'Релеи (первый живой используется автоматически)' }}</div>
-            <div v-for="(r, i) in relayList" :key="r.url" class="duress-contact" style="align-items:center;gap:8px">
-              <span style="flex:1;font-size:12.5px">{{ r.label || r.url }}</span>
-              <span style="font-size:11px;opacity:.7">{{ r.myToken ? '✓' : '—' }}</span>
-              <span :style="{color: r._health === true ? '#22c55e' : r._health === false ? '#ef4444' : 'inherit', fontSize:'12px'}">{{ r._health === true ? '●' : r._health === false ? '○' : '' }}</span>
-              <button class="duress-remove" :title="t('relay_check') || 'Проверить'" @click="relayCheckOne(i)">↻</button>
-              <button class="duress-remove" @click="relayRemoveRelay(i)">×</button>
-            </div>
-            <div style="display:flex;gap:8px;margin-top:6px">
-              <input v-model="relayNewUrl" class="duress-input" style="flex:2" :placeholder="t('relay_base_url_ph') || 'https://…/relay'" />
-              <input v-model="relayNewToken" class="duress-input" style="flex:2" type="password" :placeholder="t('relay_token_ph') || 'мой read-токен этого релея'" />
-              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAddRelay">{{ t('add') || 'Добавить' }}</button>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input v-model="relayPromoKey" class="duress-input" style="flex:1" :placeholder="t('relay_promo_ph') || 'промо-ключ безлимита (если есть)'" />
-              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;white-space:nowrap" @click="relayAutoRegister">
-                {{ t('relay_auto') || 'Получить токен автоматически (наш релей)' }}
-              </button>
-            </div>
-            <div v-if="relayNtfyLink" class="duress-contact" style="align-items:center;gap:8px">
-              <span style="flex:1;font-size:12.5px">{{ t('relay_ntfy_hint') || 'Для пушей при закрытом приложении подпишите ntfy-клиент на ваш topic:' }}</span>
-              <a :href="relayNtfyLink" style="color:#f59e0b;font-size:12.5px">ntfy://…</a>
-            </div>
-          </div>
-          <div v-if="relayActiveUrl">
-            <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников на активном релее (email = read-токен)' }}</div>
-            <div v-for="(tok, addr) in relayPeerTokens" :key="addr" class="duress-contact">
-              <span>{{ addr }}</span>
-              <button class="duress-remove" @click="relayRemovePeer(addr)">×</button>
-            </div>
-            <div style="display:flex;gap:8px;margin-top:6px">
-              <input v-model="relayNewPeerAddr" class="duress-input" style="flex:1" :placeholder="t('relay_peer_addr_ph') || 'email собеседника'" />
-              <input v-model="relayNewPeerToken" class="duress-input" style="flex:2" :placeholder="t('relay_peer_token_ph') || 'его read-токен'" />
-              <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer" @click="relayAddPeer">{{ t('add') || 'Добавить' }}</button>
-            </div>
-          </div>
-          <p class="duress-warn">{{ t('relay_note') || 'Релеи — анонимные подписки: без email и содержимого. Если релей перестал отвечать, клиент сам переключится на следующий из списка. Почта остаётся основным каналом.' }}</p>
+      <p class="setting-hint" style="margin-top:6px">{{ t('relay_enable_hint') || 'Дублирует сообщения и звонки для мгновенной доставки. Почта остаётся основным каналом: без релея всё работает как раньше.' }}</p>
+
+      <div v-if="relayEnabled" style="display:flex;flex-direction:column;gap:14px;margin-top:12px">
+        <!-- Главное: подключение к нашему релею в один тап -->
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn-primary" style="padding:10px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAutoRegister">
+            {{ relayList.some(r => r.myToken) ? (t('relay_renew') || 'Продлить/обновить токен') : (t('relay_auto') || 'Подключить наш релей') }}
+          </button>
+          <input v-if="relayPromoOpen" v-model="relayPromoKey" class="duress-input" :placeholder="t('relay_promo_ph') || 'промо-ключ безлимита (для тестеров)'" />
+          <button v-if="!relayPromoOpen" style="background:none;border:none;color:#8b8b9e;cursor:pointer;padding:0;font-size:12px;align-self:flex-start;text-decoration:underline" @click="relayPromoOpen = true">
+            {{ t('relay_have_promo') || 'У меня есть промо-ключ безлимита' }}
+          </button>
         </div>
 
-      <!-- M2.3: экономный режим — в Приватности рядом с релеем (эко зависит от него) -->
-      <div class="setting-row">
-        <span>{{ t('eco_mode') || 'Экономный режим (батарея)' }}</span>
+        <div v-if="relayNtfyLink" style="display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:8px;background:rgba(245,158,11,.08)">
+          <span style="font-size:12.5px">{{ t('relay_ntfy_step1') || '1. Установите ntfy-клиент:' }} <a href="https://f-droid.org/packages/io.heckel.ntfy/" style="color:#f59e0b">F-Droid</a> / <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" style="color:#f59e0b">Play</a></span>
+          <span style="font-size:12.5px">{{ t('relay_ntfy_step2') || '2. Нажмите здесь для подписки на уведомления:' }} <a :href="relayNtfyLink" style="color:#f59e0b">ntfy://…</a></span>
+        </div>
+
+        <!-- Расширенные: свой релей и токены собеседников -->
+        <details>
+          <summary style="cursor:pointer;font-size:13px;opacity:.75;margin-bottom:8px">{{ t('relay_advanced') || 'Расширенные настройки (свой релей, токены собеседников)' }}</summary>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div>
+              <div class="duress-label">{{ t('relay_list') || 'Мои релеи' }}</div>
+              <div v-for="(r, i) in relayList" :key="r.url" class="duress-contact" style="align-items:center;gap:8px">
+                <span style="flex:1;font-size:12.5px">{{ r.label || r.url }}</span>
+                <span style="font-size:11px;opacity:.7">{{ r.myToken ? '✓' : '—' }}</span>
+                <span :style="{color: r._health === true ? '#22c55e' : r._health === false ? '#ef4444' : 'inherit', fontSize:'12px'}">{{ r._health === true ? '●' : r._health === false ? '○' : '' }}</span>
+                <button class="duress-remove" :title="t('relay_check') || 'Проверить'" @click="relayCheckOne(i)">↻</button>
+                <button class="duress-remove" @click="relayRemoveRelay(i)">×</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                <input v-model="relayNewUrl" class="duress-input" :placeholder="t('relay_base_url_ph') || 'Адрес своего релея: https://…/relay'" />
+                <input v-model="relayNewToken" class="duress-input" type="password" :placeholder="t('relay_token_ph') || 'Мой read-токен этого релея'" />
+                <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAddRelay">{{ t('add') || 'Добавить' }}</button>
+              </div>
+            </div>
+            <div v-if="relayActiveUrl">
+              <div class="duress-label">{{ t('relay_peer_tokens') || 'Токены собеседников (для мгновенной доставки им)' }}</div>
+              <div v-for="(tok, addr) in relayPeerTokens" :key="addr" class="duress-contact">
+                <span>{{ addr }}</span>
+                <button class="duress-remove" @click="relayRemovePeer(addr)">×</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                <input v-model="relayNewPeerAddr" class="duress-input" :placeholder="t('relay_peer_addr_ph') || 'Email собеседника'" />
+                <input v-model="relayNewPeerToken" class="duress-input" type="password" :placeholder="t('relay_peer_token_ph') || 'Его read-токен'" />
+                <button class="btn-primary" style="padding:8px 14px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAddPeer">{{ t('add') || 'Добавить' }}</button>
+              </div>
+            </div>
+            <p class="duress-warn">{{ t('relay_note') || 'Релеи — анонимные подписки: без email и содержимого. Почта остаётся основным каналом.' }}</p>
+          </div>
+        </details>
+      </div>
+
+      <!-- M2.3: экономный режим -->
+      <div class="setting-row" style="margin-top:18px;flex-wrap:wrap;row-gap:8px">
+        <span style="flex:1;min-width:60%">{{ t('eco_mode') || 'Экономный режим' }}</span>
         <label class="toggle"><input type="checkbox" v-model="ecoMode" @change="ecoSave" /><span class="slider"></span></label>
       </div>
-      <p class="setting-hint" style="margin-top:8px">{{ t('eco_mode_hint') || 'Выключает постоянное фоновое соединение: доставка через релей + редкая проверка почты. При выключении — классический режим с постоянным соединением.' }}</p>
+      <p class="setting-hint" style="margin-top:6px">{{ t('eco_mode_hint') || 'Выключает постоянное соединение и иконку в шторке. Уведомления о сообщениях приходят через ntfy. Выключить — вернуть классический режим.' }}</p>
       </div>
 
       <!-- ЯЗЫК -->
@@ -397,6 +412,7 @@ export default {
       relayNewUrl: '',
       relayNewToken: '',
       relayNtfyLink: '',
+      relayPromoOpen: false,
       relayPromoKey: '',
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.

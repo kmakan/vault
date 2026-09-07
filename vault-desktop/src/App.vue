@@ -5274,12 +5274,15 @@ export default {
         // задержанные/догоняющие письма спамом не считаем) и только когда
         // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
         // пользователь на списке контактов — иначе уведомление теряется).
-        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
+        // Тумблер эко = разделитель путей уведомлений: классика — локальный
+        // пуш из email; эко — системный пуш ntfy (JS не дублирует).
+        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey) && !this.ecoMode) {
           // пуш должен был быть.
           console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
+            chatKey,
             // Дедуп уведомления — по ГЛОБАЛЬНОМУ Message-ID (dk), а не
             // uid|folder: копия в INBOX и [Gmail]/All Mail не дадут два
             // пуша, при этом повторная доставка того же письма монитору

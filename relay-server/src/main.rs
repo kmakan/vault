@@ -34,6 +34,7 @@ pub struct AppState {
     pub registrations: std::sync::Mutex<std::collections::HashMap<String, (u32, u64)>>,
     /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
     pub unlimited_key: Option<String>,
+
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
     pub ntfy_url: String,
@@ -146,7 +147,8 @@ pub async fn relay_pub(
         let ntfy_url = app.ntfy_url.clone();
         let topic = to_tok.hash.clone();
         let total = app.store.len(&to_tok.hash);
-        // Fire-and-forget: не блокируем ответ отправителю.
+        // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
+        // дедуп путей уведомлений — тумблером эко (один путь, не оба).
         tokio::task::spawn_blocking(move || {
             ntfy_publish(&ntfy_url, &topic, total);
         });
