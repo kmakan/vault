@@ -1824,6 +1824,15 @@ export default {
         try {
           window.__VAULT_DRAIN = () => {
             const q = window.__VAULT_CHAT_QUEUE || [];
+            // Холодный старт: Kotlin (onWebViewCreate) кладёт выбранный чат
+            // в localStorage ДО загрузки JS — забираем в очередь и чистим.
+            try {
+              const pending = localStorage.getItem('vault-pending-chat');
+              if (pending) {
+                localStorage.removeItem('vault-pending-chat');
+                q.push(pending);
+              }
+            } catch (e) { /* ignore */ }
             while (q.length) {
               const chat = q.shift();
               this.openChatByKey(chat);
@@ -4830,16 +4839,27 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory(this.activeChat);
           try {
-            await api.sendMessage(this.activeChat, content);
-            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
-            // через ящик: его подтвердит поллинг).
-            pendingMsg.status = 'sent';
-            // M2.1: дублируем конверт на push-релей (fire-and-forget; email
-            // — источник истины, ошибка релея ничего не ломает).
+            // Релей-копия ПЕРВОЙ (мгновенная доставка ~1-2с), SMTP —
+            // медленный основной канал: не блокируем статус «отправлено»
+            // на Gmail-коннекте (держит до минуты, тротлит) — письмо
+            // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
               const envObj = JSON.parse(envelope);
               relay.relayPublish(this.email, this.activeChat, envObj, content);
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
+            api.sendMessage(this.activeChat, content).then(() => {
+              pendingMsg.status = 'sent';
+              const b = this.pendingOutgoing[this.activeChat];
+              if (b && b[pendingMsg.id]) {
+                b[pendingMsg.id] = pendingMsg;
+                this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: b };
+              }
+              this.saveCurrentHistory(this.activeChat);
+            }).catch(e => {
+              pendingMsg.status = 'failed';
+              pendingMsg.failedTo = [e && e.message || String(e)];
+              console.error('Failed to send message:', e);
+            });
           } catch (e) {
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
@@ -5566,22 +5586,28 @@ export default {
       try {
         relay.relayPublish(this.email, peer, { id: body.id }, content);
       } catch (e) { /* релей опционален — email путь живёт */ }
-      // Ретрай ×3: Gmail-троттлинг рвёт SMTP в момент звонка
-      // («media accept failed» = sendEmail упал, answer потерян навсегда).
-      // Сигнал звонка критичен — повторяем с паузой.
-      let lastErr;
-      for (let i = 0; i < 3; i++) {
-        try {
-          await api.sendReadReceipt(peer, content); // stealth: пустая тема
-          if (i > 0) console.log('[call] envelope sent on retry', i);
-          return;
-        } catch (e) {
-          lastErr = e;
-          console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
-          await new Promise(r => setTimeout(r, 3000));
+      // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный
+      // дублирующий канал: НЕ ждём его завершения, чтобы не блокировать
+      // звонковую state machine (раньше accept-цепочка могла ждать до
+      // 3×3с ретраев, а при зависшем Gmail — минуту). Ретраи оставляем
+      // внутри фоновой задачи.
+      (async () => {
+        let lastErr;
+        for (let i = 0; i < 3; i++) {
+          try {
+            await api.sendReadReceipt(peer, content); // stealth: пустая тема
+            if (i > 0) console.log('[call] envelope sent on retry', i);
+            return;
+          } catch (e) {
+            lastErr = e;
+            console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
-      }
-      throw lastErr;
+        console.error('[call] SMTP envelope failed after retries:', lastErr && lastErr.message);
+      })();
+      // SMTP ушёл в фон — ошибки канала не роняют звонок (релей-копия уже
+      // доставлена; письмо — догоняющий дубль). Больше не бросаем lastErr.
     },
     // Входящий сигнал → state machine. MVP: один звонок одновременно.
     async handleCallSignal(sig, from) {
@@ -5823,6 +5849,12 @@ export default {
       // Флаг для обработки call_accept: если offer создан здесь
       // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
       this.currentCall.hasLocalOffer = !!offerSdp;
+      // ГУДКИ СРАЗУ: раньше ждали SMTP-отправки call_request (Gmail
+      // держит коннект до минуты, ретраи ×3 с паузами) — звонящий сидел
+      // в тишине и не понимал, идёт ли звонок. Релей-копия уходит за ~1с
+      // (relayPublish в sendCallEnvelope не блокирует), SMTP-письмо —
+      // медленный дублирующий канал, пусть идёт в фоне.
+      this.playCallSound('outgoing', true);
       try {
         // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
         await this.sendCallEnvelope(peer, {
@@ -5836,9 +5868,8 @@ export default {
         this.hangup('error');
         return;
       }
-      // Гудки исходящего: тёплый мажорный ringback, цикл до
-      // accept/cancel/timeout. Запускаем ПОСЛЕ успешной отправки сигнала.
-      this.playCallSound('outgoing', true);
+      // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
+      // попадаем только когда сигналы ушли/идут в фоне.)
       // РЕТРАНСЛЯЦИЯ: email-сигнал может потеряться в транзите
       // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
       // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
