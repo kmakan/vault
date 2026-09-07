@@ -46,6 +46,29 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
+    // Вызывается из onResume/onNewIntent (activity), JS сам выберет чат.
+    @JvmStatic
+    fun dispatchOpenChat(chat: String) {
+      val esc = chat.replace("\\", "\\\\").replace("'", "\\'")
+      val js = "window.__vaultOpenChat && window.__vaultOpenChat('$esc')"
+      val wv = liveWebView
+      if (wv == null) {
+        // WebView ещё не создан (холодный старт) — запомним, dispatch
+        // произойдёт в onWebViewCreate.
+        pendingOpenChat = chat
+        Log.i("VaultRust", "dispatchOpenChat: deferred (no WebView yet)")
+        return
+      }
+      wv.post {
+        wv.evaluateJavascript(js, null)
+        Log.i("VaultRust", "dispatchOpenChat($chat): JS dispatched")
+      }
+    }
+
+    @JvmStatic
+    var pendingOpenChat: String? = null
+
     // WebView живёт в activity-процессе. Статик-ссылка
     // ставится в onWebViewCreate, снимается в onDestroy.
     private var liveWebView: WebView? = null
@@ -226,12 +249,29 @@ class MainActivity : TauriActivity() {
     } catch (e: Throwable) {
       Log.w("VaultRust", "geolocation webview setup failed: " + e.message)
     }
+    // M2.4: отложенный ntfy-клик (холодный старт) — кладём chat в
+    // localStorage: JS-фронт читает его при инициализации (когда window.
+    // __vaultOpenChat уже определён) и открывает чат.
+    pendingOpenChat?.let { chat ->
+      pendingOpenChat = null
+      webView.evaluateJavascript(
+        "try { localStorage.setItem('vault-pending-chat', '" + chat.replace("'", "\\'") + "'); } catch (e) {}", null
+      )
+    }
     // JS-мост: фронт вызывает window.__vaultRequestGeo() при включении гео-опции SOS —
     // он проксирует в статический requestGeoPermission() (companion), который
     // запрашивает runtime-разрешение у activity.
     webView.evaluateJavascript(
       "window.__vaultRequestGeo = function() { window.__vaultGeoBridge && window.__vaultGeoBridge(); };", null
     )
+  }
+
+  // M2.4: отложенный ntfy-клик (холодный старт) — открываем чат.
+  private fun dispatchPendingOpenChat() {
+    pendingOpenChat?.let { chat ->
+      pendingOpenChat = null
+      dispatchOpenChat(chat)
+    }
   }
 
   override fun onPause() {
@@ -271,6 +311,8 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    // M2.4: ntfy Click vault://open?chat=<email> → открыть чат.
+    handleVaultDeepLink(intent)
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
     try { nativePauseMonitor(true) } catch (_: Throwable) {}
     // Замок: вернулись в приложение — если PIN установлен и сессия
@@ -288,6 +330,25 @@ class MainActivity : TauriActivity() {
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "lock onResume failed: " + e.message)
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleVaultDeepLink(intent)
+  }
+
+  private fun handleVaultDeepLink(intent: Intent?) {
+    try {
+      val data = intent?.data ?: return
+      if (data.scheme != "vault") return
+      val chat = data.getQueryParameter("chat") ?: return
+      if (chat.isEmpty()) return
+      Log.i("VaultRust", "deep link: open chat $chat")
+      dispatchOpenChat(chat)
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "deep link failed: " + e.message)
     }
   }
 
