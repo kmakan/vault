@@ -263,10 +263,8 @@
               <div class="duress-label">{{ t('relay_list') || 'Мои релеи' }}</div>
               <div v-for="(r, i) in relayList" :key="r.url" class="duress-contact" style="align-items:center;gap:8px">
                 <span style="flex:1;font-size:12.5px">{{ r.label || r.url }}</span>
-                <span style="font-size:11px;opacity:.7">{{ r.myToken ? '✓' : '—' }}</span>
-                <span :style="{color: r._health === true ? '#22c55e' : r._health === false ? '#ef4444' : 'inherit', fontSize:'12px'}">{{ r._health === true ? '●' : r._health === false ? '○' : '' }}</span>
-                <button class="duress-remove" :title="t('relay_check') || 'Проверить'" @click="relayCheckOne(i)">↻</button>
-                <button class="duress-remove" @click="relayRemoveRelay(i)">×</button>
+                <span :style="{color: r._health === true ? '#22c55e' : r._health === false ? '#ef4444' : 'inherit', fontSize:'12px'}" :title="t('relay_check') || 'Статус соединения'">{{ r._health === true ? '●' : r._health === false ? '○' : '·' }}</span>
+                <button class="duress-remove" :title="t('relay_remove') || 'Удалить'" @click="relayRemoveRelay(i)">×</button>
               </div>
               <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
                 <input v-model="relayNewUrl" class="duress-input" :placeholder="t('relay_base_url_ph') || 'Адрес своего релея: https://…/relay'" />
@@ -579,13 +577,6 @@ export default {
       const rs = await relayClient.getSettings(this.email || 'anon');
       this.relayActive = rs.active;
       this.relayRefreshPeersView();
-    },
-    async relayCheckOne(i) {
-      const r = this.relayList[i];
-      if (!r) return;
-      r._health = null;
-      r._health = await relayClient.relayHealthUrl(r.url);
-      this.relayList = [...this.relayList];
     },
     async relayAddPeer() {
       const addr = (this.relayNewPeerAddr || '').trim().toLowerCase();
