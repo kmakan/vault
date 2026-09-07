@@ -65,6 +65,7 @@ pub struct PubRequest {
     pub body: String,
     /// opaque-строка отправителя (опционально; ретранслируется как есть).
     #[serde(default)]
+    pub tok: Option<String>,
     pub from: Option<String>,
 }
 
@@ -136,6 +137,7 @@ pub async fn relay_pub(
         exp: req.exp.min(now() + 24 * 3600),
         ts: now(),
         from: req.from.filter(|s| !s.is_empty()).map(|s| s.chars().take(254).collect()),
+        tok: req.tok.filter(|s| !s.is_empty()).map(|s| s.chars().take(254).collect()),
     };
     app.store.push(&to_tok.hash, envelope, MAX_QUEUE);
     app.metrics.pub_ok.fetch_add(1, Ordering::Relaxed);

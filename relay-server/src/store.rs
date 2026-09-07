@@ -19,6 +19,9 @@ pub struct Envelope {
     /// вариант §9.3; сервер ничего не валидирует, только ретранслирует).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// M2.4 автообмен: read-токен отправителя (адрес его очереди).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tok: Option<String>,
 }
 
 #[derive(Default)]

@@ -2739,6 +2739,16 @@ export default {
       // PQ: свой ML-KEM ek — получатель сохранит контакт и сможет
       // ответить гибридом (конверт несёт оба публичных ключа).
       if (crypto.pqEk) env.pq = crypto.pqEk;
+      // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
+      // адрес моей очереди. Получатель молча сохранит его и сможет
+      // слать мне мгновенные пуши. Пользователь ничего не вводит.
+      if (this.relayEnabled) {
+        try {
+          const { relays } = await (await import('./relay-client.js')).getSettings(this.email);
+          const myTok = (relays[0] || {}).myToken || '';
+          if (myTok) env.tok = myTok;
+        } catch (e) { /* релей опционален */ }
+      }
       // Исчезающие сообщения: ttl в секундах от момента ПРОСМОТРА
       // получателем. 0 = обычное сообщение. Получатель ставит локальный
       // таймер удаления после показа (expireEphemeral).
@@ -5140,6 +5150,22 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
+              // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
+              // (адрес его relay-очереди) — сохраняем молча, чтобы
+              // отвечать ему мгновенными пушами. Ноль ручного ввода.
+              if (env.tok && relayClient && this.relayEnabled) {
+                try {
+                  const rs = await relayClient.getSettings(this.email);
+                  const relay = rs.relays[rs.active] || rs.relays[0];
+                  if (relay) {
+                    const known = (rs.peers[relay.url] || {})[String(from).toLowerCase()];
+                    if (known !== env.tok) {
+                      await relayClient.setPeerToken(this.email, relay.url, from, env.tok);
+                      console.log('[relay] peer token auto-learned:', from);
+                    }
+                  }
+                } catch (e) { /* релей опционален */ }
+              }
               // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — это я сам
               // (старый адрес после смены почты / копия в свой ящик).
               // Не профиль, не сообщение, не «смена почты» — иначе свой же

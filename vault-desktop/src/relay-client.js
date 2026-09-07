@@ -211,6 +211,9 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
           exp,
           body: btoa(unescape(encodeURIComponent(encryptedBody))),
           from: account,
+          // M2.4 автообмен: мой read-токен (адрес моей очереди) — получатель
+          // запомнит и сможет слать мне пуши. Пользователь ничего не вводит.
+          tok: relay.myToken || '',
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });
