@@ -1501,6 +1501,10 @@ export default {
         console.log('[call] native REJECT tapped');
         this.rejectCall();
       };
+      // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
+      // (index.html уже определил __vaultOpenChat с очередью — не трогаем.)
+      // Отложенные deep-link чаты дрейнятся в loadStoredPeerKeys()
+      // (после загрузки ключей собеседников).
     } catch (e) { /* не критично */ }
     // Событие «медиа подключено» из Rust: ICE/DTLS установлены и
     // пользователь видел «минуту тишины» при работающем таймере.
@@ -1815,6 +1819,19 @@ export default {
           this.peerKeysLoaded[pk.email] = true;
           if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
         }
+        // M2.4: отложенные ntfy-клики (холодный старт) — ключи загружены,
+        // можно открывать чаты. Drain также доступен глобально (__vaultOpenChat).
+        try {
+          window.__VAULT_DRAIN = () => {
+            const q = window.__VAULT_CHAT_QUEUE || [];
+            while (q.length) {
+              const chat = q.shift();
+              this.openChatByKey(chat);
+              if (this.isMobile) this.mobileChatOpen = true;
+            }
+          };
+          window.__VAULT_DRAIN();
+        } catch (e) { /* ignore */ }
       } catch (error) {
         console.error('Failed to load peer keys:', error);
       }
@@ -2186,6 +2203,17 @@ export default {
       // при открытии чата — сразу к последнему
       // сообщению (вниз).
       this.scrollToBottom(true);
+    },
+
+    // M2.4: открыть чат по ключу (email) — из ntfy-пуша (vault://open?chat=).
+    async openChatByKey(key) {
+      const email = String(key || '').toLowerCase();
+      if (!email) return;
+      try {
+        await this.selectChat(email);
+        if (this.isMobile) this.mobileChatOpen = true;
+        this.showSettings = false;
+      } catch (e) { console.warn('[notify] openChatByKey failed:', e); }
     },
     // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
     // своя отправка); force=false — только если пользователь уже у низа
