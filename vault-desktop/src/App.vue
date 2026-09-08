@@ -2531,6 +2531,16 @@ export default {
       }
       // Из писем добавляем только то, чего ещё нет в истории (новое).
       const extra = list.filter(m => m && m.id && !ids.has(m.id));
+      // МИГРАЦИЯ 0.1.151 (только группы): старые сборки теряли env.poll и
+      // писали в историю текст вопроса (id конверта). Свежая карточка из
+      // писем (id poll-а, есть .poll) заменяет такую запись, иначе после
+      // фикса в чате дубль: старый текст + новая карточка.
+      if (extra.length && String(chatKey).startsWith('group:')) {
+        const pollQs = new Set(extra.filter(m => m && m.poll && m.poll.question).map(m => m.poll.question));
+        if (pollQs.size) {
+          hist = hist.filter(h => !(!h || h.poll || typeof h.content !== 'string' || !pollQs.has(h.content)));
+        }
+      }
       // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
       // вставки, и
       // «16:37 20:31 18:06 18:07 20:38»).
@@ -3779,6 +3789,16 @@ export default {
               });
               continue;
             }
+            // Голос голосования: {poll:1, poll_id, option} — сигнальное
+            // письмо (как реакции). В групповом проходе классификации не
+            // было: голоса участников падали в чат сырым JSON.
+            if (obj && obj.poll === 1 && obj.poll_id) {
+              (wirePollVotes[obj.poll_id] = wirePollVotes[obj.poll_id] || []).push({
+                voter: msg.sender_id,
+                option: Number(obj.option) || 0,
+              });
+              continue; // голос не рендерится как сообщение
+            }
             if (obj && obj.meta === 1 && obj.avatar) {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
                 metaLatest = { avatar: obj.avatar, created_at: msg.created_at };
@@ -3790,6 +3810,32 @@ export default {
             if (env) {
               if ((env.name || env.avatar) && msg.sender_id) {
                 api.saveProfile(msg.sender_id, env.name, env.avatar, env.ts || 0);
+              }
+              // Голосование (poll): карточка вместо текста — как в 1:1.
+              // До этого env.poll выбрасывался в `plaintext = env.text`, и
+              // poll-конверт рендерился текстом вопроса без карточки/кнопок.
+              if (env.type === 'poll') {
+                const p = this.parsePollEnvelope(env);
+                if (p) {
+                  const gPollTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
+                  decrypted.push({
+                    id: p.id || msg.message_id || '',
+                    content: p.question,
+                    attachment: null,
+                    from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    time: new Date(msg.created_at).toLocaleTimeString(),
+                    status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+                    encrypted: true,
+                    mid: msg.message_id || '',
+                    sender_id: msg.sender_id,
+                    created_at: msg.created_at,
+                    poll: p,
+                    ttl: (env && env.ttl) || 0,
+                    expireAt: env && env.ttl ? gPollTs + env.ttl * 1000 : 0,
+                  });
+                  continue;
+                }
+                // p === null (некорректный poll) — падаем ниже, отрисуется как текст.
               }
               plaintext = env.text; // содержимое конверта
             }
@@ -5483,6 +5529,9 @@ export default {
         y = Math.max(8, Math.min(rr.bottom + 4, window.innerHeight - 130));
       }
       this.chatMenu = { show: true, target, x, y };
+      // Финальный клампинг по фактическому размеру меню (оценка выше —
+      // статическая, реальных пунктов может быть больше/меньше).
+      this.clampMenuAfterRender('chatMenu', x, y);
     },
     closeChatMenu() {
       this.chatMenu = { show: false, target: null };
@@ -7211,7 +7260,36 @@ export default {
       const urls = [...content.matchAll(/https?:\/\/[^\s\]\)"']{2,}/g)]
         .map(m => m[0])
         .filter((v, i, a) => a.indexOf(v) === i);
-      this.messageMenu = { x: event.clientX, y: event.clientY, msg, phones, urls };
+      // Android WebView при долгом нажатии иногда присылает clientX/Y=0
+      // (как в openChatMenu) — берём координаты пузыря, иначе меню в углу.
+      let x = event.clientX, y = event.clientY;
+      if (!x && !y && event.target && event.target.getBoundingClientRect) {
+        const r = event.target.getBoundingClientRect();
+        x = r.left + 12;
+        y = r.bottom + 4;
+      }
+      this.messageMenu = { x, y, msg, phones, urls };
+      // Клампинг по фактическому размеру (после рендера): без него меню
+      // уходит за нижний/правый край — последнее сообщение при полном
+      // экране на десктопе, на телефоне — за оба края.
+      this.clampMenuAfterRender('messageMenu', x, y);
+    },
+    // Измерить отрендеренное .message-menu и втянуть в экран. Меню
+    // динамическое (пункты скрываются), поэтому размер берём из DOM,
+    // а не оцениваем. Оверлей один на экране (v-if + inset:0 перехватывает
+    // ввод), так что querySelector находит именно открытое меню.
+    async clampMenuAfterRender(key, x, y) {
+      await this.$nextTick();
+      const mm = this[key];
+      if (!mm || mm.x !== x || mm.y !== y || (key === 'chatMenu' && !mm.show)) return;
+      const el = document.querySelector('.message-menu');
+      if (!el) return;
+      const M = 8;
+      const w = el.offsetWidth + 2;  // + границы
+      const h = el.offsetHeight + 2;
+      const nx = Math.max(M, Math.min(x, window.innerWidth - w - M));
+      const ny = Math.max(M, Math.min(y, window.innerHeight - h - M));
+      if (nx !== x || ny !== y) this[key] = { ...mm, x: nx, y: ny };
     },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
@@ -9535,6 +9613,20 @@ body {
 .message-content .msg-link:hover {
   text-decoration: none;
   opacity: 0.85;
+}
+/* Ссылки в СВОЁМ пузыре: фон — градиент accent-primary→#4f46e5, той же
+   гаммы, что accent-primary ссылки — шрифт сливался с фоном (координаты
+   после отправки). Светлый тон + подчёркивание. */
+.message.own .message-content .msg-link {
+  color: #e0e7ff;
+  text-decoration: underline;
+}
+.message.own .message-content .msg-link:hover {
+  color: #ffffff;
+  opacity: 1;
+}
+.message.own .message-content .msg-phone {
+  color: #e0e7ff;
 }
 .message-content .msg-phone {
   color: var(--accent-secondary, #8b5cf6);
