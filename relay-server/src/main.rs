@@ -295,8 +295,13 @@ fn ntfy_publish(base: &str, topic: &str, total: usize) {
         _ => (host_port.to_string(), "80".to_string()),
     };
     let body = format!("Новое сообщение ({total})");
+    // Icon: PNG-иконка Vault вместо дефолтной ntfy-иконки в шторке
+    // (ntfy-клиент скачивает URL и ставит largeIcon). Tags: bell убран —
+    // рядом с приложением колокольчик лишний (иконка самого ntfy-клиента
+    // в списке приложений не меняется — это largeIcon только в уведомлении).
+    let icon = "https://vault-msg.ru/vault-notif-icon-192.png";
     let req = format!(
-        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nTags: bell\r\nClick: vault://open\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nIcon: {icon}\r\nClick: vault://open\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
