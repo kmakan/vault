@@ -102,3 +102,9 @@
 # M2.3-b: VaultBootReceiver создаётся системой по имени из манифеста — R8
 # может переименовать/вырезать. Держим целиком.
 -keep class com.vault.vault.VaultBootReceiver { *; }
+
+# M2.4 deep-link: анонимный JS-мост VaultDeepLink (addJavascriptInterface) —
+# без keep R8 вырезает take(), ntfy-клик не открывает чат (грабля как с ecoStop).
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

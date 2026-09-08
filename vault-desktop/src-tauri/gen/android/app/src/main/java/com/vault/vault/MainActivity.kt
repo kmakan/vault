@@ -249,14 +249,26 @@ class MainActivity : TauriActivity() {
     } catch (e: Throwable) {
       Log.w("VaultRust", "geolocation webview setup failed: " + e.message)
     }
-    // M2.4: отложенный ntfy-клик (холодный старт) — кладём chat в
-    // localStorage: JS-фронт читает его при инициализации (когда window.
-    // __vaultOpenChat уже определён) и открывает чат.
+    // M2.4: отложенный ntfy-клик (холодный старт). ГОНКА ФИКС: раньше писали
+    // в localStorage прямо здесь — но страница ещё не загружена, LS=null,
+    // setItem тихо падал в try-catch. Теперь: (1) пробуем LS (вдруг страница
+    // уже готова), (2) регистрируем JS-мост __vaultTakePendingChat() —
+    // фронт ВЫЗЫВАЕТ его сам, когда DOM и очередь готовы (главная инициализация
+    // App.vue). Мост синхронный через evaluateJavascript-поллинг: кладём
+    // значение в window.__vaultPendingChat, фронт читает и чистит.
     pendingOpenChat?.let { chat ->
-      pendingOpenChat = null
       webView.evaluateJavascript(
         "try { localStorage.setItem('vault-pending-chat', '" + chat.replace("'", "\\'") + "'); } catch (e) {}", null
       )
+      // Мост: фронт дергает __vaultTakePendingChat() — получит chat или null.
+      webView.addJavascriptInterface(object {
+        @android.webkit.JavascriptInterface
+        fun take(): String? {
+          val v = pendingOpenChat
+          pendingOpenChat = null
+          return v
+        }
+      }, "VaultDeepLink")
     }
     // JS-мост: фронт вызывает window.__vaultRequestGeo() при включении гео-опции SOS —
     // он проксирует в статический requestGeoPermission() (companion), который

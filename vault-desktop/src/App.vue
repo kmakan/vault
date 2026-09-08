@@ -1824,8 +1824,14 @@ export default {
         try {
           window.__VAULT_DRAIN = () => {
             const q = window.__VAULT_CHAT_QUEUE || [];
-            // Холодный старт: Kotlin (onWebViewCreate) кладёт выбранный чат
-            // в localStorage ДО загрузки JS — забираем в очередь и чистим.
+            // Холодный старт: Kotlin держит выбранный чат в native-мосте
+            // VaultDeepLink.take() (localStorage мог быть недоступен до
+            // загрузки страницы). Забираем его оттуда...
+            try {
+              const native = window.VaultDeepLink && window.VaultDeepLink.take && window.VaultDeepLink.take();
+              if (native) q.push(native);
+            } catch (e) { /* не Android / моста нет */ }
+            // ...и из localStorage (запасной путь).
             try {
               const pending = localStorage.getItem('vault-pending-chat');
               if (pending) {
