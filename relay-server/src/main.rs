@@ -34,6 +34,18 @@ pub struct AppState {
     pub registrations: std::sync::Mutex<std::collections::HashMap<String, (u32, u64)>>,
     /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
     pub unlimited_key: Option<String>,
+    /// §0 company.md: суточный лимит бесплатных конвертов на издателя.
+    /// Ключ — hash токена издателя (или IP при анонимном pub без tok),
+    /// значение — (день UTC = now/86400, счётчик). In-memory: рестарт
+    /// обнуляет счётчики — приемлемо (лимит щедрый, abuse-сценарий редок).
+    pub daily_pub: std::sync::Mutex<std::collections::HashMap<String, (u64, u32)>>,
+    /// Сколько конвертов в сутки бесплатно (0 = лимит выключен).
+    pub free_daily_limit: u32,
+    /// Привязка токена к аккаунту: token_hash → fingerprint (один токен =
+    /// один аккаунт — защита от шаринга premium-токена между аккаунтами).
+    /// In-memory: после рестарта перепривяжется к первому использовавшему;
+    /// при монетизации — персист в relay.db вместе со счётчиками.
+    pub token_bindings: std::sync::Mutex<std::collections::HashMap<String, String>>,
 
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
@@ -48,6 +60,8 @@ pub struct Metrics {
     pub ws_sessions: AtomicU64,
     pub rejected: AtomicU64,
     pub register_ok: AtomicU64,
+    /// §0: сколько раз упрели в суточный лимит (429).
+    pub limit_hit: AtomicU64,
 }
 
 // ───────────────────────── Публикация (§5.1) ─────────────────────────
@@ -67,6 +81,12 @@ pub struct PubRequest {
     #[serde(default)]
     pub tok: Option<String>,
     pub from: Option<String>,
+    /// fingerprint аккаунта отправителя (первые байты публичного ключа,
+    /// не секрет). Привязка токена к аккаунту — один токен = один
+    /// аккаунт, premium нельзя расшарить (§ монетизация). Отсутствует
+    /// у легаси-клиентов — тогда привязку не проверяем.
+    #[serde(default)]
+    pub fp: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -83,6 +103,7 @@ const MAX_QUEUE: usize = 200;
 /// read-токен в `to` — единственная адресация.
 pub async fn relay_pub(
     State(app): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     AxumJson(req): AxumJson<PubRequest>,
 ) -> Response {
@@ -130,6 +151,50 @@ pub async fn relay_pub(
     if !vault_relay::rate::allow_pub(&req.to) {
         return err(StatusCode::TOO_MANY_REQUESTS, "rate limit");
     }
+    // Привязка токена отправителя (tok в теле) к его fp: чужой fp =
+    // токен скопирован на другой аккаунт → 403, письмо уйдёт почтой
+    // (клиент не считает это ошибкой доставки). Работает независимо от
+    // суточного лимита — защита от шаринга актуальна и для premium.
+    if let Some(sender_tok) = req.tok.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(t) = vault_relay::parse(&app.keys, sender_tok) {
+            if !check_token_binding(&app, &t.hash, &req.fp) {
+                app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                return err(StatusCode::FORBIDDEN, "token bound to another account");
+            }
+        }
+    }
+    // §0 company.md: суточный бесплатный лимит конвертов на ИЗДАТЕЛЯ.
+    // Идентичность издателя: tok в теле (read-токен отправителя, шлёт клиент
+    // M2.4) → его hash; иначе Authorization (write-токен) → hash; иначе IP.
+    // Premium (unlimited) токен отличается expiry: promo выдаётся на 10 лет
+    // (>now+365д) — такие издатели лимита не имеют. Почта не ограничивается
+    // никогда: 429 = только «ускорение» выключено, письмо уйдёт как обычно.
+    if app.free_daily_limit > 0 {
+        let (pub_key, premium) = publisher_key(&app, &headers, &req, &addr);
+        if !premium {
+            let day = now() / 86400;
+            let mut map = app.daily_pub.lock().unwrap();
+            let entry = map.entry(pub_key).or_insert((day, 0));
+            if entry.0 != day {
+                *entry = (day, 0);
+            }
+            if entry.1 >= app.free_daily_limit {
+                app.metrics.limit_hit.fetch_add(1, Ordering::Relaxed);
+                let retry_after = (day + 1) * 86400 - now();
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [("retry-after", retry_after.to_string())],
+                    AxumJson(serde_json::json!({
+                        "error": "daily relay limit reached",
+                        "limit": app.free_daily_limit,
+                        "retry_after": retry_after,
+                    })),
+                )
+                    .into_response();
+            }
+            entry.1 += 1;
+        }
+    }
     let mid = uuid::Uuid::new_v4().to_string();
     let envelope = vault_relay::store::Envelope {
         id: req.id,
@@ -176,6 +241,12 @@ pub async fn relay_poll(
     };
     if tok.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
+    }
+    // Привязка токена к аккаунту: чужой fingerprint = токен скопировали
+    // на другое устройство → 403 (клиент перерегистрируется).
+    if !check_token_binding(&app, &tok.hash, &poll_fp(&headers)) {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::FORBIDDEN, "token bound to another account");
     }
     if !vault_relay::rate::allow_poll(&tok.hash) {
         return err(StatusCode::TOO_MANY_REQUESTS, "rate limit");
@@ -270,11 +341,62 @@ fn require_read(app: &Arc<AppState>, headers: &HeaderMap) -> Option<vault_relay:
     (t.scope == Scope::Read).then_some(t)
 }
 
+/// Привязка токена к fingerprint аккаунта (анти-шаринг для монетизации).
+/// Первый持有: если у токена нет привязки — привязываем к текущему fp.
+/// Чужой fp с тем же токеном → false (= 403 «token bound to another
+/// account»). fp не пришёл (легаси-клиент) → true (привязку не трогаем).
+fn check_token_binding(app: &Arc<AppState>, token_hash: &str, fp: &Option<String>) -> bool {
+    let Some(fp) = fp.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return true;
+    };
+    let mut bindings = app.token_bindings.lock().unwrap();
+    match bindings.get(token_hash) {
+        Some(existing) => existing == fp,
+        None => {
+            bindings.insert(token_hash.to_string(), fp.to_string());
+            true
+        }
+    }
+}
+
+/// §0: идентичность издателя для суточного лимита + признак Premium.
+/// Приоритет: tok в теле (read-токен отправителя) → Authorization → IP.
+/// Premium = токен с expiry > now+365д (promo-выдача на 10 лет).
+fn publisher_key(
+    app: &Arc<AppState>,
+    headers: &HeaderMap,
+    req: &PubRequest,
+    addr: &std::net::SocketAddr,
+) -> (String, bool) {
+    let auth = auth_header(headers);
+    let candidates = req
+        .tok
+        .iter()
+        .map(|s| s.as_str())
+        .chain(auth.iter().map(|s| s.as_str()))
+        .filter(|s| !s.is_empty());
+    for tok in candidates {
+        if let Some(t) = vault_relay::parse(&app.keys, tok) {
+            let premium = u64::from(t.expiry) > now() + 365 * 86400;
+            return (format!("t:{}", t.hash), premium);
+        }
+    }
+    (format!("ip:{}", addr.ip()), false)
+}
+
 fn auth_header(headers: &HeaderMap) -> Option<String> {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("VaultRelay "))
+        .map(|s| s.to_string())
+}
+
+/// fp в заголовке X-Vault-Fp (poll); fallback: пустой = легаси-клиент.
+fn poll_fp(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-vault-fp")
+        .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
 }
 
@@ -325,13 +447,15 @@ fn now() -> u64 {
 pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
     let m = &app.metrics;
     let body = format!(
-        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\n",
+        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nlimit_hit {}\n",
         m.pub_ok.load(Ordering::Relaxed),
         m.pub_anon.load(Ordering::Relaxed),
         m.poll_hits.load(Ordering::Relaxed),
         m.ws_sessions.load(Ordering::Relaxed),
         m.rejected.load(Ordering::Relaxed),
         app.store.total(),
+        m.register_ok.load(Ordering::Relaxed),
+        m.limit_hit.load(Ordering::Relaxed),
     );
     ([("content-type", "text/plain")], body).into_response()
 }
@@ -356,6 +480,10 @@ struct RegisterReq {
     /// rate-limit. Обычная выдача — 30 дней, 3/день/IP.
     #[serde(default)]
     promo: Option<String>,
+    /// Fingerprint аккаунта, получающего токен: привязка «один токен =
+    /// один аккаунт» (анти-шаринг при монетизации). Не обязателен.
+    #[serde(default)]
+    fp: Option<String>,
 }
 async fn relay_register(
     State(app): State<Arc<AppState>>,
@@ -394,6 +522,12 @@ async fn relay_register(
     let topic = vault_relay::tokens::parse(&app.keys, &token)
         .map(|t| t.hash)
         .unwrap_or_default();
+    // Привязка токена к fingerprint сразу при выдаче (если клиент прислал).
+    if !check_token_binding(&app, &topic, &req.fp) {
+        // Новый токен уже занят другим аккаунтом — невозможно (токен свежий),
+        // но на всякий случай не отдаём его чужому fp.
+        return err(StatusCode::CONFLICT, "token already bound");
+    }
     app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
     tracing::info!("register: token issued (unlimited={promo_ok}, days={days})");
     (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp, unlimited: promo_ok })).into_response()
@@ -415,6 +549,12 @@ async fn main() {
     let ntfy_url = std::env::var("VAULT_RELAY_NTFY_URL").unwrap_or_default();
     let unlimited_key = std::env::var("VAULT_RELAY_UNLIMITED_KEY").ok()
         .filter(|s| !s.trim().is_empty());
+    // §0 company.md: бесплатный суточный лимит конвертов на издателя
+    // (по умолчанию 100; 0 = выключен; Premium-токены без лимита).
+    let free_daily_limit = std::env::var("VAULT_RELAY_FREE_DAILY_LIMIT")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(100);
     if !ntfy_url.is_empty() {
         tracing::info!("ntfy wake-up bridge: {ntfy_url}");
     }
@@ -426,9 +566,12 @@ async fn main() {
         registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
         ntfy_url,
         unlimited_key,
+        daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
+        free_daily_limit,
+        token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     tracing::info!(
-        "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}"
+        "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}"
     );
     let app = Router::new()
         .route("/relay/pub", post(relay_pub))
@@ -462,7 +605,11 @@ fn cors_layer() -> tower_http::cors::CorsLayer {
             "http://tauri.localhost".parse::<HeaderValue>().expect("origin"),
         ])
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+            "x-vault-fp".parse::<axum::http::HeaderName>().expect("hdr"),
+        ])
         .max_age(std::time::Duration::from_secs(3600))
 }
 
