@@ -213,7 +213,11 @@ export async function pickLiveRelay(account) {
 // создавать два параллельных запроса (порядок доставки важнее скорости).
 let pubChain = Promise.resolve();
 
-export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
+// opts.wake (default true): нужно ли будить получателя ntfy-пушем.
+// call-сигналы НЕ-request (accept/answer/end/reject) шлют wake=false —
+// получатель уже в приложении на звонке, лишний ntfy-пуш приходил
+// ПОСЛЕ принятия звонка и после завершения (жалоба «два уведомления»).
+export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts = {}) {
   const job = async () => {
     try {
       const { enabled, peers, active, relays } = await getSettings(account);
@@ -247,6 +251,8 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
           // §0/анти-шаринг: отпечаток моего ключа — сервер привязывает
           // токен к аккаунту, чужой fp с этим токеном → 403.
           fp: (await myFingerprint(account)) || undefined,
+          // ntfy wake-up нужен не всегда (call-сигналы после request — нет).
+          wake: opts.wake === false ? false : true,
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });

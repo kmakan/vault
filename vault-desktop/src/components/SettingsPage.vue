@@ -389,7 +389,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -530,6 +530,10 @@ export default {
     async relaySave() {
       try {
         await relayClient.setEnabled(this.email || 'anon', this.relayEnabled);
+        // Живое применение: App кэширует relayEnabled для гейтов
+        // автообмена токенами (env.tok) — иначе после выключения здесь
+        // конверты продолжали бы нести токен до перезапуска.
+        this.$emit('relay-enabled', this.relayEnabled);
       } catch (e) { /* kv недоступен */ }
     },
     async relayAddRelay() {

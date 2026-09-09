@@ -87,6 +87,17 @@ pub struct PubRequest {
     /// у легаси-клиентов — тогда привязку не проверяем.
     #[serde(default)]
     pub fp: Option<String>,
+    /// ntfy wake-up получателю нужен не всегда (default true): call-сигналы
+    /// после call_request (accept/answer/end/reject) адресат забирает,
+    /// уже будучи активным на звонке — пуш «Новое сообщение» приходил
+    /// ПОСЛЕ принятия/завершения звонка (жалоба «лишние уведомления»).
+    /// Легаси-клиенты поле не шлют → true (как было).
+    #[serde(default = "default_true")]
+    pub wake: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -210,7 +221,9 @@ pub async fn relay_pub(
     // topic = хэш read-токена (opaque). Содержимое НЕ раскрывается —
     // «есть новое» + счётчик. Телефон, подписанный на topic, просыпается
     // от системного пуша и забирает конверты poll'ом (дедуп по id).
-    if !app.ntfy_url.is_empty() {
+    // wake=false (call-сигналы после request) — пуши НЕ шлём: адресат
+    // уже активен на звонке, уведомление было бы лишним.
+    if !app.ntfy_url.is_empty() && req.wake {
         let ntfy_url = app.ntfy_url.clone();
         let topic = to_tok.hash.clone();
         let total = app.store.len(&to_tok.hash);

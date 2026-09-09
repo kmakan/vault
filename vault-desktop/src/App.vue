@@ -625,7 +625,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" />
         </div>
       </div>
 
@@ -1184,6 +1184,12 @@ export default {
       // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
       // или суточный лимит исчерпан — показываем конверт).
       relayDeliveryMode: 'relay',
+      // M2.4: релей включён (кэш relay-enabled kv; обновляется при логине
+      // и из настроек). Раньше этот флаг забыли объявить в data() —
+      // this.relayEnabled был undefined, автообмен токенами не работал:
+      // конверты не несли tok и входящие tok не сохранялись (телефон
+      // не знал токен собеседника → исходящие шли только почтой).
+      relayEnabled: false,
       // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
       ecoAutonomous: false,
       relayOfflineSince: null,
@@ -1655,6 +1661,12 @@ export default {
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
           this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
           this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+          // M2.4: кэш relay-enabled для гейтов автообмена токенами
+          // (env.tok в исходящих / сохранение входящих tok).
+          try {
+            const rs = await relay.getSettings(this.email);
+            this.relayEnabled = rs.enabled;
+          } catch (e) { /* релей опционален */ }
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 
           await api.getChats();
@@ -2813,8 +2825,8 @@ export default {
       // слать мне мгновенные пуши. Пользователь ничего не вводит.
       if (this.relayEnabled) {
         try {
-          const { relays } = await (await import('./relay-client.js')).getSettings(this.email);
-          const myTok = (relays[0] || {}).myToken || '';
+          const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
+          const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
           if (myTok) env.tok = myTok;
         } catch (e) { /* релей опционален */ }
       }
@@ -4231,6 +4243,11 @@ export default {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
     },
+    // M2.4: тумблер релея в настройках — живое обновление кэша
+    // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
+    onRelayEnabled(on) {
+      this.relayEnabled = !!on;
+    },
     // M2.3: экономный режим — постоянный IMAP IDLE останавливается
     // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
     // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
@@ -5289,14 +5306,14 @@ export default {
               // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
               // (адрес его relay-очереди) — сохраняем молча, чтобы
               // отвечать ему мгновенными пушами. Ноль ручного ввода.
-              if (env.tok && relayClient && this.relayEnabled) {
+              if (env.tok && this.relayEnabled) {
                 try {
-                  const rs = await relayClient.getSettings(this.email);
-                  const relay = rs.relays[rs.active] || rs.relays[0];
-                  if (relay) {
-                    const known = (rs.peers[relay.url] || {})[String(from).toLowerCase()];
+                  const rs = await relay.getSettings(this.email);
+                  const r = rs.relays[rs.active] || rs.relays[0];
+                  if (r) {
+                    const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
                     if (known !== env.tok) {
-                      await relayClient.setPeerToken(this.email, relay.url, from, env.tok);
+                      await relay.setPeerToken(this.email, r.url, from, env.tok);
                       console.log('[relay] peer token auto-learned:', from);
                     }
                   }
@@ -5653,7 +5670,7 @@ export default {
       return null;
     },
     // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
-    async sendCallEnvelope(peer, payload) {
+    async sendCallEnvelope(peer, payload, opts = {}) {
       const body = {
         vault: 1,
         id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
@@ -5674,9 +5691,21 @@ export default {
       // заберёт его relayConsume'ом (parseCallSignal работает и на
       // relay-конвертах — тот же зашифрованный wire-формат). Дедуп по
       // call_id (isCallSeen) — дубль через email безопасен.
-      try {
-        relay.relayPublish(this.email, peer, { id: body.id }, content);
-      } catch (e) { /* релей опционален — email путь живёт */ }
+      //
+      // ntfy wake-семантика (fix 09.09): будим пушем ТОЛЬКО call_request —
+      // остальные сигналы (accept/answer/end/reject) адресат получает,
+      // когда уже активен на звонке, и каждый ntfy-wake рисовал лишнее
+      // «Новое сообщение» ПОСЛЕ принятия/завершения звонка.
+      // viaRelay=false — ретранслируем ТОЛЬКО почтой (call_request
+      // повторяется каждые 15с: релей-копия уже лежит в очереди, повтор
+      // жёг суточный лимит издателя и плодил дубль-пуши).
+      const viaRelay = opts.viaRelay !== false;
+      const wake = payload.type === 'call_request';
+      if (viaRelay) {
+        try {
+          relay.relayPublish(this.email, peer, { id: body.id }, content, { wake });
+        } catch (e) { /* релей опционален — email путь живёт */ }
+      }
       // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный
       // дублирующий канал: НЕ ждём его завершения, чтобы не блокировать
       // звонковую state machine (раньше accept-цепочка могла ждать до
@@ -5975,11 +6004,14 @@ export default {
         try {
           // Offer внутри — ретрансляция несёт и его.
           // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
+          // Релей-копия НЕ повторяется (viaRelay=false): конверт уже
+          // лежит в relay-очереди получателя с первого отправления —
+          // повтор только жёг суточный лимит и плодил ntfy-пуши.
         await this.sendCallEnvelope(peer, {
           type: 'call_request', call_id, sdp: offerSdp,
           kemct: this._pendingKemct || undefined,
           sender_ek: this._pendingSenderEk || undefined,
-        });
+        }, { viaRelay: false });
         this._pendingKemct = null; this._pendingSenderEk = null;
           console.log('[call] call_request retransmitted', call_id);
         } catch (e) {
@@ -6273,7 +6305,9 @@ export default {
           return;
         }
         try {
-          await this.sendCallEnvelope(peer, payload);
+          // Релей-копия уже доставлена первым отправлением — повтор
+          // только почтой (лимит + лишние пуши).
+          await this.sendCallEnvelope(peer, payload, { viaRelay: false });
           console.log('[call] signal retransmitted:', payload.type, call_id);
         } catch (e) {
           console.warn('[call] signal retransmit failed:', e && e.message || e);
@@ -6291,9 +6325,12 @@ export default {
     // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
     // у приёмника безопасны (ветка remote_late / guard по state).
     sendTerminalRepeat(peer, type, call_id) {
-      this.sendCallEnvelope(peer, { type, call_id }).catch(() => {});
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 3000);
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 7000);
+      // Повторы — только почтой: релей-копия call_end ушла первым
+      // отправлением; wake=false и так стоит (терминальный сигнал),
+      // повтор на релей жёг бы лимит издателя.
+      this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {});
+      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 3000);
+      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 7000);
     },
     // Watchdog «Соединение…»: если через 90с после accept медиа
     // не соединилось (событие call-media-connected не пришло) — звонок не
