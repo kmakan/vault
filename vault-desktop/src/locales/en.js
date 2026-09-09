@@ -81,6 +81,7 @@ export default {
   relay_delivery_email_hint: "Fast delivery (relay) unavailable — messages go by email. Nothing is lost.",
   relay_limit_banner: "Free relay limit reached until 00:00 UTC — delivery goes by email, nothing is lost",
   relay_limit_toast: "Relay unavailable or limit reached — delivery goes by email, nothing is lost.",
+  relay_offline_toast: "Relay unavailable — switched to autonomous mode (delivery by email, nothing is lost)",
   relay_check: "Test",
   relay_my_token: "My relay read-token",
   relay_token_ph: "paste the token issued by the server",

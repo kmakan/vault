@@ -81,6 +81,7 @@ export default {
   relay_delivery_email_hint: "加速配送（中继）不可用 — 消息通过邮件发送，不会丢失。",
   relay_limit_banner: "免费中继额度已用完（至 00:00 UTC）— 通过邮件配送，不会丢失",
   relay_limit_toast: "中继不可用或额度已用完 — 通过邮件配送，不会丢失。",
+  relay_offline_toast: "中继不可用 — 已切换到自主模式（邮件配送，不会丢失）",
   relay_check: "测试",
   relay_my_token: "我的中继读取令牌",
   relay_token_ph: "粘贴服务器颁发的令牌",

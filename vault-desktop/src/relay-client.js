@@ -321,7 +321,14 @@ export async function relayPoll(account) {
           headers: { ...authHeader(r.myToken), 'X-Vault-Fp': fp || '' },
           connectTimeout: POLL_TIMEOUT_MS,
         });
-        if (res.status === 204 || res.status === 402) return [];
+        if (res.status === 204 || res.status === 402) {
+          // 402 = подписка истекла: на нашем релее тихо перерегистрируемся
+          // (выдача бесплатна) — иначе эко-режим теряет канал приёма.
+          if (res.status === 402 && r.url === DEFAULT_RELAY_URL) {
+            await reRegisterOurRelay(account).catch(() => {});
+          }
+          return [];
+        }
         if (res.status === 403) {
           // Токен привязан к чужому аккаунту: на нашем релее тихо
           // перерегистрируемся (свежий токен = свежая привязка к этому fp).

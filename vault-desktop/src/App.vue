@@ -1184,6 +1184,9 @@ export default {
       // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
       // или суточный лимит исчерпан — показываем конверт).
       relayDeliveryMode: 'relay',
+      // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
+      ecoAutonomous: false,
+      relayOfflineSince: null,
       peerKeys: {},
       // PQ: ML-KEM ek контактов {email: b64}
       peerPqKeys: {},
@@ -4233,6 +4236,10 @@ export default {
     // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
     async onEcoMode(on, silent = false) {
       this.ecoMode = !!on;
+      // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
+      // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
+      this.ecoAutonomous = false;
+      this.relayOfflineSince = null;
       try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
       if (!this.isLoggedIn) return;
       if (this.ecoMode) {
@@ -6332,8 +6339,15 @@ export default {
     // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
     // M2.3: релей-тикер — ЕДИНСТВЕННЫЙ канал приёма в эко-режиме (IDLE погашен).
     // Живёт независимо от idleLoop: запускается при логине/эко-включении.
+    // УСТОЙЧИВОСТЬ К БЛОКИРОВКАМ (relay-resilience): каждые 60с health-чек
+    // активного релея. В эко-режиме мёртвый релей (3 подряд неудачи) →
+    // АВТОНОМНЫЙ режим: поднимаем foreground-службу + IDLE + поллинг 30с —
+    // приложение работает как классика, единственная разница — иконка в
+    // шторке. При оживании релея — тихо возвращаемся в эко.
     startRelayTicker() {
       if (this._relayTicker) return;
+      this._relayFails = 0;
+      this._lastRelayHealth = Date.now();
       this._relayTicker = setInterval(async () => {
         if (!this.isLoggedIn) {
           clearInterval(this._relayTicker);
@@ -6341,7 +6355,52 @@ export default {
           return;
         }
         try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
+        // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
+        if (Date.now() - this._lastRelayHealth >= 60000) {
+          this._lastRelayHealth = Date.now();
+          let healthy = false;
+          try { healthy = await relay.relayHealth(this.email); } catch (e) { healthy = false; }
+          if (healthy) {
+            this._relayFails = 0;
+            if (this.relayOfflineSince) {
+              console.log('[relay] healthy again → leaving offline mode');
+              this.relayOfflineSince = null;
+              if (this.ecoMode && !this.ecoAutonomous) {
+                // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
+                this.onEcoMode(true, true).catch(() => {});
+              }
+            }
+          } else {
+            this._relayFails++;
+            console.warn(`[relay] health fail #${this._relayFails}`);
+            // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
+            if (this._relayFails >= 3 && this.ecoMode && !this.ecoAutonomous) {
+              console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
+              this.enterRelayOfflineRescue();
+            }
+          }
+        }
       }, 5000);
+    },
+    // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
+    // уведомления локальные — работа мессенджера НЕ отличается от классики.
+    // Отличия только: иконка в шторке есть, скорость = почтовая.
+    async enterRelayOfflineRescue() {
+      this.ecoAutonomous = true;
+      this.relayOfflineSince = Date.now();
+      this.relayDeliveryMode = 'email';
+      try {
+        // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
+        // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
+        await api.pushSet(false, '', '');
+        await api.ecoSet(false);
+      } catch (e) { console.warn('[relay-rescue] svc start:', e); }
+      // IDLE + обычный поллинг — как в классике.
+      this._idleStop = false;
+      this.idleLoop();
+      this.stopPolling();
+      this.startPolling();
+      this.showToast(this.t('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
     },
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
