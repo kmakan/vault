@@ -414,9 +414,22 @@ export class ApiClient {
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
     return out;
   }
-  async sendGroupMessage(groupId, content) {
+  async sendGroupMessage(groupId, content, envelopeObj) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    // Релей-дубль КАЖДОМУ участнику с peer-токеном: до этого фикса группы
+    // ездили только почтой (30-60с), а в эко-режиме ntfy-пуш не приходил
+    // ВООБЩЕ — relay-конверт был единственным источником ntfy-wake.
+    // Все групповые пути (текст/poll/forward/аудио/вложения) идут через
+    // эту точку — один вызов закрывает их все. Не блокирует SMTP ниже.
+    if (envelopeObj && envelopeObj.id) {
+      try {
+        const members = (g.members || [])
+          .map(m => String(m.email || '').toLowerCase())
+          .filter(e => e && e !== this.email);
+        (await import('./relay-client.js')).relayGroupPublish(this.email, members, envelopeObj, content);
+      } catch (e) { /* релей опционален — почта доставит */ }
+    }
     // STEALTH: пустая тема (как 1:1). Получатель классифицирует по
     // содержимому (расшифровка групповым ключом), а не по теме.
     // Per-member try/catch: сбой SMTP одного адресата (троттлинг, таймаут)
@@ -1044,6 +1057,14 @@ export class ApiClient {
   async idleStart(cursors = {}) {
     return await invoke('email_idle_start', { cursors });
   }
+  // M2.3: экономный режим — форс-стоп foreground-сервиса Android
+  async ecoSet(enabled) {
+    return await invoke('eco_set', { enabled });
+  }
+  // M2.3-b: push-режим (сервис в ntfy-подписке)
+  async pushSet(enabled, topic, ntfyBase) {
+    return await invoke('push_set', { enabled, topic, ntfyBase });
+  }
   async idleStop() {
     return await invoke('email_idle_stop', {});
   }
@@ -1128,8 +1149,12 @@ export class ApiClient {
     // Фаза 3 перепроектирования звонков: JS сообщает монитору-владельцу
   // решение/статус звонка. Монитор хранит call_state в monitor.db и не ставит
   // missed поверх принятого/отклонённого звонка.
+  // Команда call_report_state существует ТОЛЬКО на Android (#[cfg] в lib.rs);
+  // на десктопе вызов падал «Command not found» — гейтим по платформе.
   async reportCallState(callId, state) {
     try {
+      // Команда только на Android: userAgent-гейт (api.js не имеет App-контекста)
+      if (!/android/i.test(navigator.userAgent || '')) return;
       await invoke('call_report_state', { callId, state });
     } catch (e) {
       console.warn('[call] report state failed:', e);

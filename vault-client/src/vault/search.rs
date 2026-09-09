@@ -45,7 +45,7 @@ pub struct MessageIndex {
 }
 
 impl MessageIndex {
-    /// Создать индекс с默认ным путём (~/.vault/message_index.json)
+    /// Создать индекс с путём по умолчанию (~/.vault/message_index.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
