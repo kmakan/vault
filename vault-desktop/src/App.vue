@@ -250,6 +250,9 @@
                 </template>
                 <template v-else>
                   <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
+                  <span v-if="relayDeliveryMode === 'email'" class="relay-delivery-badge" :title="t('relay_delivery_email_hint')" @click="relayExplainDelivery">
+                    <Icon name="mail" :size="11" /><span>{{ t('relay_delivery_email') }}</span>
+                  </span>
                 </template>
               </div>
             </div>
@@ -622,7 +625,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" />
         </div>
       </div>
 
@@ -1086,6 +1089,7 @@ export default {
       callResendTimer: null,
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
+      ecoMode: false,
       _idleStop: false,
       // ЗВУКИ ЗВОНКА: WAV-ассеты. Desktop — cpal в Rust
       // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
@@ -1176,6 +1180,13 @@ export default {
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
+      // §1 company.md: индикатор канала доставки в шапке чата.
+      // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
+      // или суточный лимит исчерпан — показываем конверт).
+      relayDeliveryMode: 'relay',
+      // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
+      ecoAutonomous: false,
+      relayOfflineSince: null,
       peerKeys: {},
       // PQ: ML-KEM ek контактов {email: b64}
       peerPqKeys: {},
@@ -1500,6 +1511,10 @@ export default {
         console.log('[call] native REJECT tapped');
         this.rejectCall();
       };
+      // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
+      // (index.html уже определил __vaultOpenChat с очередью — не трогаем.)
+      // Отложенные deep-link чаты дрейнятся в loadStoredPeerKeys()
+      // (после загрузки ключей собеседников).
     } catch (e) { /* не критично */ }
     // Событие «медиа подключено» из Rust: ICE/DTLS установлены и
     // пользователь видел «минуту тишины» при работающем таймере.
@@ -1639,6 +1654,7 @@ export default {
           this.displayName = (await api.getDisplayName()) || this.email || '';
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
           this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+          this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 
           await api.getChats();
@@ -1647,12 +1663,16 @@ export default {
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP.
           this.isLoggedIn = true;
+          // Эко (M2.3-b ФИНАЛ): глушим сервис полностью — пуши несёт
+          // ntfy-клиент. Активация после isLoggedIn (иначе ранний return).
+          if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); }
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
-          this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
+          else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -1682,6 +1702,12 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
+    // §1: пояснение индикатора доставки человеческим языком.
+    relayExplainDelivery() {
+      if (this.relayDeliveryMode === 'email') {
+        this.showToast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
+      }
+    },
     // ── Звуки звонка: WAV-ассеты вместо осциллятора ──
     // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
     // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
@@ -1809,6 +1835,34 @@ export default {
           this.peerKeysLoaded[pk.email] = true;
           if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
         }
+        // M2.4: отложенные ntfy-клики (холодный старт) — ключи загружены,
+        // можно открывать чаты. Drain также доступен глобально (__vaultOpenChat).
+        try {
+          window.__VAULT_DRAIN = () => {
+            const q = window.__VAULT_CHAT_QUEUE || [];
+            // Холодный старт: Kotlin держит выбранный чат в native-мосте
+            // VaultDeepLink.take() (localStorage мог быть недоступен до
+            // загрузки страницы). Забираем его оттуда...
+            try {
+              const native = window.VaultDeepLink && window.VaultDeepLink.take && window.VaultDeepLink.take();
+              if (native) q.push(native);
+            } catch (e) { /* не Android / моста нет */ }
+            // ...и из localStorage (запасной путь).
+            try {
+              const pending = localStorage.getItem('vault-pending-chat');
+              if (pending) {
+                localStorage.removeItem('vault-pending-chat');
+                q.push(pending);
+              }
+            } catch (e) { /* ignore */ }
+            while (q.length) {
+              const chat = q.shift();
+              this.openChatByKey(chat);
+              if (this.isMobile) this.mobileChatOpen = true;
+            }
+          };
+          window.__VAULT_DRAIN();
+        } catch (e) { /* ignore */ }
       } catch (error) {
         console.error('Failed to load peer keys:', error);
       }
@@ -2181,6 +2235,17 @@ export default {
       // сообщению (вниз).
       this.scrollToBottom(true);
     },
+
+    // M2.4: открыть чат по ключу (email) — из ntfy-пуша (vault://open?chat=).
+    async openChatByKey(key) {
+      const email = String(key || '').toLowerCase();
+      if (!email) return;
+      try {
+        await this.selectChat(email);
+        if (this.isMobile) this.mobileChatOpen = true;
+        this.showSettings = false;
+      } catch (e) { console.warn('[notify] openChatByKey failed:', e); }
+    },
     // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
     // своя отправка); force=false — только если пользователь уже у низа
     // (поллинг не должен выдёргивать из чтения истории).
@@ -2482,6 +2547,16 @@ export default {
       }
       // Из писем добавляем только то, чего ещё нет в истории (новое).
       const extra = list.filter(m => m && m.id && !ids.has(m.id));
+      // МИГРАЦИЯ 0.1.151 (только группы): старые сборки теряли env.poll и
+      // писали в историю текст вопроса (id конверта). Свежая карточка из
+      // писем (id poll-а, есть .poll) заменяет такую запись, иначе после
+      // фикса в чате дубль: старый текст + новая карточка.
+      if (extra.length && String(chatKey).startsWith('group:')) {
+        const pollQs = new Set(extra.filter(m => m && m.poll && m.poll.question).map(m => m.poll.question));
+        if (pollQs.size) {
+          hist = hist.filter(h => !(!h || h.poll || typeof h.content !== 'string' || !pollQs.has(h.content)));
+        }
+      }
       // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
       // вставки, и
       // «16:37 20:31 18:06 18:07 20:38»).
@@ -2733,6 +2808,16 @@ export default {
       // PQ: свой ML-KEM ek — получатель сохранит контакт и сможет
       // ответить гибридом (конверт несёт оба публичных ключа).
       if (crypto.pqEk) env.pq = crypto.pqEk;
+      // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
+      // адрес моей очереди. Получатель молча сохранит его и сможет
+      // слать мне мгновенные пуши. Пользователь ничего не вводит.
+      if (this.relayEnabled) {
+        try {
+          const { relays } = await (await import('./relay-client.js')).getSettings(this.email);
+          const myTok = (relays[0] || {}).myToken || '';
+          if (myTok) env.tok = myTok;
+        } catch (e) { /* релей опционален */ }
+      }
       // Исчезающие сообщения: ttl в секундах от момента ПРОСМОТРА
       // получателем. 0 = обычное сообщение. Получатель ставит локальный
       // таймер удаления после показа (expireEphemeral).
@@ -3720,6 +3805,16 @@ export default {
               });
               continue;
             }
+            // Голос голосования: {poll:1, poll_id, option} — сигнальное
+            // письмо (как реакции). В групповом проходе классификации не
+            // было: голоса участников падали в чат сырым JSON.
+            if (obj && obj.poll === 1 && obj.poll_id) {
+              (wirePollVotes[obj.poll_id] = wirePollVotes[obj.poll_id] || []).push({
+                voter: msg.sender_id,
+                option: Number(obj.option) || 0,
+              });
+              continue; // голос не рендерится как сообщение
+            }
             if (obj && obj.meta === 1 && obj.avatar) {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
                 metaLatest = { avatar: obj.avatar, created_at: msg.created_at };
@@ -3731,6 +3826,32 @@ export default {
             if (env) {
               if ((env.name || env.avatar) && msg.sender_id) {
                 api.saveProfile(msg.sender_id, env.name, env.avatar, env.ts || 0);
+              }
+              // Голосование (poll): карточка вместо текста — как в 1:1.
+              // До этого env.poll выбрасывался в `plaintext = env.text`, и
+              // poll-конверт рендерился текстом вопроса без карточки/кнопок.
+              if (env.type === 'poll') {
+                const p = this.parsePollEnvelope(env);
+                if (p) {
+                  const gPollTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
+                  decrypted.push({
+                    id: p.id || msg.message_id || '',
+                    content: p.question,
+                    attachment: null,
+                    from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    time: new Date(msg.created_at).toLocaleTimeString(),
+                    status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+                    encrypted: true,
+                    mid: msg.message_id || '',
+                    sender_id: msg.sender_id,
+                    created_at: msg.created_at,
+                    poll: p,
+                    ttl: (env && env.ttl) || 0,
+                    expireAt: env && env.ttl ? gPollTs + env.ttl * 1000 : 0,
+                  });
+                  continue;
+                }
+                // p === null (некорректный poll) — падаем ниже, отрисуется как текст.
               }
               plaintext = env.text; // содержимое конверта
             }
@@ -4109,6 +4230,42 @@ export default {
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
+    },
+    // M2.3: экономный режим — постоянный IMAP IDLE останавливается
+    // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
+    // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
+    async onEcoMode(on, silent = false) {
+      this.ecoMode = !!on;
+      // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
+      // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
+      this.ecoAutonomous = false;
+      this.relayOfflineSince = null;
+      try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
+      if (!this.isLoggedIn) return;
+      if (this.ecoMode) {
+        // стоп JS IDLE-цикла
+        this._idleStop = true;
+        try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
+        // M2.3-b ФИНАЛ: пуши при закрытом приложении несёт ntfy-клиент
+        // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
+        // глушим его полностью: иконка исчезает из шторки, батарея целая.
+        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
+        try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
+        // релей-тикер — канал приёма при живом JS (activity открыта)
+        this.startRelayTicker();
+        // редкий поллинг-тик страхует (релей — основной канал)
+        this.stopPolling();
+        this.startPolling(60000);
+        if (!silent) this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
+      } else {
+        // классика: постоянный IDLE + обычный поллинг
+        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
+        try { await api.ecoSet(false); } catch (e) { console.warn('[eco] svc start:', e); }
+        this.stopPolling();
+        this.idleLoop();
+        this.startPolling();
+        this.showToast(this.t('eco_off_toast') || 'Классический режим: постоянное соединение включено');
+      }
     },
     async onBioSave(text) {
       await this.setBio(text);
@@ -4754,16 +4911,43 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory(this.activeChat);
           try {
-            await api.sendMessage(this.activeChat, content);
-            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
-            // через ящик: его подтвердит поллинг).
-            pendingMsg.status = 'sent';
-            // M2.1: дублируем конверт на push-релей (fire-and-forget; email
-            // — источник истины, ошибка релея ничего не ломает).
+            // Релей-копия ПЕРВОЙ (мгновенная доставка ~1-2с), SMTP —
+            // медленный основной канал: не блокируем статус «отправлено»
+            // на Gmail-коннекте (держит до минуты, тротлит) — письмо
+            // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
               const envObj = JSON.parse(envelope);
-              relay.relayPublish(this.email, this.activeChat, envObj, content);
+              const pub = relay.relayPublish(this.email, this.activeChat, envObj, content);
+              // §1: обновляем индикатор доставки по результату pub.
+              pub.then(r => {
+                if (r && r.why === 'daily-limit') {
+                  this.relayDeliveryMode = 'email';
+                  // Баннер один раз за день (kv-флаг) — не спамим тостами.
+                  invoke('db_kv_get', { account: this.email, key: 'relay-limit-banner' }).then(v => {
+                    const today = String(Math.floor(Date.now() / 86400000));
+                    if (v !== today) {
+                      this.showToast(this.t('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                      invoke('db_kv_set', { account: this.email, key: 'relay-limit-banner', value: today });
+                    }
+                  }).catch(() => {});
+                } else if (r && r.ok) {
+                  this.relayDeliveryMode = 'relay';
+                }
+              }).catch(() => {});
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
+            api.sendMessage(this.activeChat, content).then(() => {
+              pendingMsg.status = 'sent';
+              const b = this.pendingOutgoing[this.activeChat];
+              if (b && b[pendingMsg.id]) {
+                b[pendingMsg.id] = pendingMsg;
+                this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: b };
+              }
+              this.saveCurrentHistory(this.activeChat);
+            }).catch(e => {
+              pendingMsg.status = 'failed';
+              pendingMsg.failedTo = [e && e.message || String(e)];
+              console.error('Failed to send message:', e);
+            });
           } catch (e) {
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
@@ -5102,6 +5286,22 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
+              // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
+              // (адрес его relay-очереди) — сохраняем молча, чтобы
+              // отвечать ему мгновенными пушами. Ноль ручного ввода.
+              if (env.tok && relayClient && this.relayEnabled) {
+                try {
+                  const rs = await relayClient.getSettings(this.email);
+                  const relay = rs.relays[rs.active] || rs.relays[0];
+                  if (relay) {
+                    const known = (rs.peers[relay.url] || {})[String(from).toLowerCase()];
+                    if (known !== env.tok) {
+                      await relayClient.setPeerToken(this.email, relay.url, from, env.tok);
+                      console.log('[relay] peer token auto-learned:', from);
+                    }
+                  }
+                } catch (e) { /* релей опционален */ }
+              }
               // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — это я сам
               // (старый адрес после смены почты / копия в свой ящик).
               // Не профиль, не сообщение, не «смена почты» — иначе свой же
@@ -5236,12 +5436,15 @@ export default {
         // задержанные/догоняющие письма спамом не считаем) и только когда
         // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
         // пользователь на списке контактов — иначе уведомление теряется).
-        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
+        // Тумблер эко = разделитель путей уведомлений: классика — локальный
+        // пуш из email; эко — системный пуш ntfy (JS не дублирует).
+        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey) && !this.ecoMode) {
           // пуш должен был быть.
           console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
           notifyNewMessage({
             title,
             body: this.t('notif_new_message') || 'New message',
+            chatKey,
             // Дедуп уведомления — по ГЛОБАЛЬНОМУ Message-ID (dk), а не
             // uid|folder: копия в INBOX и [Gmail]/All Mail не дадут два
             // пуша, при этом повторная доставка того же письма монитору
@@ -5362,6 +5565,9 @@ export default {
         y = Math.max(8, Math.min(rr.bottom + 4, window.innerHeight - 130));
       }
       this.chatMenu = { show: true, target, x, y };
+      // Финальный клампинг по фактическому размеру меню (оценка выше —
+      // статическая, реальных пунктов может быть больше/меньше).
+      this.clampMenuAfterRender('chatMenu', x, y);
     },
     closeChatMenu() {
       this.chatMenu = { show: false, target: null };
@@ -5463,22 +5669,36 @@ export default {
         ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
       };
       const content = await crypto.encryptVault(JSON.stringify(body));
-      // Ретрай ×3: Gmail-троттлинг рвёт SMTP в момент звонка
-      // («media accept failed» = sendEmail упал, answer потерян навсегда).
-      // Сигнал звонка критичен — повторяем с паузой.
-      let lastErr;
-      for (let i = 0; i < 3; i++) {
-        try {
-          await api.sendReadReceipt(peer, content); // stealth: пустая тема
-          if (i > 0) console.log('[call] envelope sent on retry', i);
-          return;
-        } catch (e) {
-          lastErr = e;
-          console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
-          await new Promise(r => setTimeout(r, 3000));
+      // M2.2: дублируем сигнал звонка на релей (критично для скорости
+      // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
+      // заберёт его relayConsume'ом (parseCallSignal работает и на
+      // relay-конвертах — тот же зашифрованный wire-формат). Дедуп по
+      // call_id (isCallSeen) — дубль через email безопасен.
+      try {
+        relay.relayPublish(this.email, peer, { id: body.id }, content);
+      } catch (e) { /* релей опционален — email путь живёт */ }
+      // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный
+      // дублирующий канал: НЕ ждём его завершения, чтобы не блокировать
+      // звонковую state machine (раньше accept-цепочка могла ждать до
+      // 3×3с ретраев, а при зависшем Gmail — минуту). Ретраи оставляем
+      // внутри фоновой задачи.
+      (async () => {
+        let lastErr;
+        for (let i = 0; i < 3; i++) {
+          try {
+            await api.sendReadReceipt(peer, content); // stealth: пустая тема
+            if (i > 0) console.log('[call] envelope sent on retry', i);
+            return;
+          } catch (e) {
+            lastErr = e;
+            console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
+            await new Promise(r => setTimeout(r, 3000));
+          }
         }
-      }
-      throw lastErr;
+        console.error('[call] SMTP envelope failed after retries:', lastErr && lastErr.message);
+      })();
+      // SMTP ушёл в фон — ошибки канала не роняют звонок (релей-копия уже
+      // доставлена; письмо — догоняющий дубль). Больше не бросаем lastErr.
     },
     // Входящий сигнал → state machine. MVP: один звонок одновременно.
     async handleCallSignal(sig, from) {
@@ -5720,6 +5940,12 @@ export default {
       // Флаг для обработки call_accept: если offer создан здесь
       // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
       this.currentCall.hasLocalOffer = !!offerSdp;
+      // ГУДКИ СРАЗУ: раньше ждали SMTP-отправки call_request (Gmail
+      // держит коннект до минуты, ретраи ×3 с паузами) — звонящий сидел
+      // в тишине и не понимал, идёт ли звонок. Релей-копия уходит за ~1с
+      // (relayPublish в sendCallEnvelope не блокирует), SMTP-письмо —
+      // медленный дублирующий канал, пусть идёт в фоне.
+      this.playCallSound('outgoing', true);
       try {
         // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
         await this.sendCallEnvelope(peer, {
@@ -5733,9 +5959,8 @@ export default {
         this.hangup('error');
         return;
       }
-      // Гудки исходящего: тёплый мажорный ringback, цикл до
-      // accept/cancel/timeout. Запускаем ПОСЛЕ успешной отправки сигнала.
-      this.playCallSound('outgoing', true);
+      // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
+      // попадаем только когда сигналы ушли/идут в фоне.)
       // РЕТРАНСЛЯЦИЯ: email-сигнал может потеряться в транзите
       // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
       // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
@@ -6112,9 +6337,77 @@ export default {
     // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
     // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
     // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
+    // M2.3: релей-тикер — ЕДИНСТВЕННЫЙ канал приёма в эко-режиме (IDLE погашен).
+    // Живёт независимо от idleLoop: запускается при логине/эко-включении.
+    // УСТОЙЧИВОСТЬ К БЛОКИРОВКАМ (relay-resilience): каждые 60с health-чек
+    // активного релея. В эко-режиме мёртвый релей (3 подряд неудачи) →
+    // АВТОНОМНЫЙ режим: поднимаем foreground-службу + IDLE + поллинг 30с —
+    // приложение работает как классика, единственная разница — иконка в
+    // шторке. При оживании релея — тихо возвращаемся в эко.
+    startRelayTicker() {
+      if (this._relayTicker) return;
+      this._relayFails = 0;
+      this._lastRelayHealth = Date.now();
+      this._relayTicker = setInterval(async () => {
+        if (!this.isLoggedIn) {
+          clearInterval(this._relayTicker);
+          this._relayTicker = null;
+          return;
+        }
+        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
+        // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
+        if (Date.now() - this._lastRelayHealth >= 60000) {
+          this._lastRelayHealth = Date.now();
+          let healthy = false;
+          try { healthy = await relay.relayHealth(this.email); } catch (e) { healthy = false; }
+          if (healthy) {
+            this._relayFails = 0;
+            if (this.relayOfflineSince) {
+              console.log('[relay] healthy again → leaving offline mode');
+              this.relayOfflineSince = null;
+              if (this.ecoMode && !this.ecoAutonomous) {
+                // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
+                this.onEcoMode(true, true).catch(() => {});
+              }
+            }
+          } else {
+            this._relayFails++;
+            console.warn(`[relay] health fail #${this._relayFails}`);
+            // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
+            if (this._relayFails >= 3 && this.ecoMode && !this.ecoAutonomous) {
+              console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
+              this.enterRelayOfflineRescue();
+            }
+          }
+        }
+      }, 5000);
+    },
+    // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
+    // уведомления локальные — работа мессенджера НЕ отличается от классики.
+    // Отличия только: иконка в шторке есть, скорость = почтовая.
+    async enterRelayOfflineRescue() {
+      this.ecoAutonomous = true;
+      this.relayOfflineSince = Date.now();
+      this.relayDeliveryMode = 'email';
+      try {
+        // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
+        // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
+        await api.pushSet(false, '', '');
+        await api.ecoSet(false);
+      } catch (e) { console.warn('[relay-rescue] svc start:', e); }
+      // IDLE + обычный поллинг — как в классике.
+      this._idleStop = false;
+      this.idleLoop();
+      this.stopPolling();
+      this.startPolling();
+      this.showToast(this.t('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
+    },
     async idleLoop() {
       if (this._idleActive || !this.isLoggedIn) return;
       this._idleActive = true;
+      // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
+      // но relay-очередь иначе ждала бы 30с тика поллинга).
+      this.startRelayTicker();
       // Rust-монитор: запускаем параллельно с JS-циклом.
       // Идемпотентен на стороне Rust; курсоры берём из кэша активного
       // аккаунта, чтобы первый fetch не тянул старые письма.
@@ -7055,7 +7348,36 @@ export default {
       const urls = [...content.matchAll(/https?:\/\/[^\s\]\)"']{2,}/g)]
         .map(m => m[0])
         .filter((v, i, a) => a.indexOf(v) === i);
-      this.messageMenu = { x: event.clientX, y: event.clientY, msg, phones, urls };
+      // Android WebView при долгом нажатии иногда присылает clientX/Y=0
+      // (как в openChatMenu) — берём координаты пузыря, иначе меню в углу.
+      let x = event.clientX, y = event.clientY;
+      if (!x && !y && event.target && event.target.getBoundingClientRect) {
+        const r = event.target.getBoundingClientRect();
+        x = r.left + 12;
+        y = r.bottom + 4;
+      }
+      this.messageMenu = { x, y, msg, phones, urls };
+      // Клампинг по фактическому размеру (после рендера): без него меню
+      // уходит за нижний/правый край — последнее сообщение при полном
+      // экране на десктопе, на телефоне — за оба края.
+      this.clampMenuAfterRender('messageMenu', x, y);
+    },
+    // Измерить отрендеренное .message-menu и втянуть в экран. Меню
+    // динамическое (пункты скрываются), поэтому размер берём из DOM,
+    // а не оцениваем. Оверлей один на экране (v-if + inset:0 перехватывает
+    // ввод), так что querySelector находит именно открытое меню.
+    async clampMenuAfterRender(key, x, y) {
+      await this.$nextTick();
+      const mm = this[key];
+      if (!mm || mm.x !== x || mm.y !== y || (key === 'chatMenu' && !mm.show)) return;
+      const el = document.querySelector('.message-menu');
+      if (!el) return;
+      const M = 8;
+      const w = el.offsetWidth + 2;  // + границы
+      const h = el.offsetHeight + 2;
+      const nx = Math.max(M, Math.min(x, window.innerWidth - w - M));
+      const ny = Math.max(M, Math.min(y, window.innerHeight - h - M));
+      if (nx !== x || ny !== y) this[key] = { ...mm, x: nx, y: ny };
     },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
@@ -8903,6 +9225,21 @@ body {
   color: var(--text-muted);
 }
 
+/* §1: индикатор канала доставки — конверт «почта», когда релей недоступен
+   или суточный лимит исчерпан. Спокойный янтарный, не пугает. */
+.relay-delivery-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--accent-warning, #d97706);
+  cursor: pointer;
+  opacity: 0.9;
+}
+.relay-delivery-badge:active {
+  opacity: 1;
+}
+
 .chat-actions {
   display: flex;
   gap: 4px;
@@ -9379,6 +9716,20 @@ body {
 .message-content .msg-link:hover {
   text-decoration: none;
   opacity: 0.85;
+}
+/* Ссылки в СВОЁМ пузыре: фон — градиент accent-primary→#4f46e5, той же
+   гаммы, что accent-primary ссылки — шрифт сливался с фоном (координаты
+   после отправки). Светлый тон + подчёркивание. */
+.message.own .message-content .msg-link {
+  color: #e0e7ff;
+  text-decoration: underline;
+}
+.message.own .message-content .msg-link:hover {
+  color: #ffffff;
+  opacity: 1;
+}
+.message.own .message-content .msg-phone {
+  color: #e0e7ff;
 }
 .message-content .msg-phone {
   color: var(--accent-secondary, #8b5cf6);

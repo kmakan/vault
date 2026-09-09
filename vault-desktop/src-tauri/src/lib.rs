@@ -21,6 +21,91 @@ mod storage;
 #[cfg(target_os = "android")]
 mod service_monitor;
 
+/// M2.3-b: push-режим — сервис остаётся жить в режиме ntfy-подписки
+/// (без IMAP/wakeLock). topic = hex-hash read-токена (вычисляет JS),
+/// ntfy_base = https://ntfy.vault-msg.ru (или свой).
+#[tauri::command]
+fn push_set(enabled: bool, topic: String, ntfy_base: String) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        use jni::objects::JValue;
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let call = if enabled {
+            let jtopic = env.new_string(&topic).map_err(|e| e.to_string())?;
+            let jbase = env.new_string(&ntfy_base).map_err(|e| e.to_string())?;
+            env.call_static_method(
+                &cls,
+                "pushModeStart",
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+                &[(&activity).into(), (&jtopic).into(), (&jbase).into()],
+            )
+        } else {
+            env.call_static_method(
+                &cls,
+                "pushModeStop",
+                "(Landroid/content/Context;)V",
+                &[(&activity).into()],
+            )
+        };
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("push_set: {err}"));
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (enabled, topic, ntfy_base);
+        Ok(true)
+    }
+}
+
+/// M2.3: экономный режим — форс-стоп/запуск foreground-сервиса.
+/// eco=true: сервис остановлен пользователем (без AlarmManager-воскрешения),
+/// wakeLock/wifiLock сняты, иконка из шапки исчезает. eco=false: сервис поднят.
+#[tauri::command]
+fn eco_set(enabled: bool) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let method = if enabled { "ecoStop" } else { "ecoStart" };
+        let call = env.call_static_method(
+            &cls,
+            method,
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        );
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("{method}: {err}"));
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = enabled;
+        Ok(true) // desktop: фоновой службы нет
+    }
+}
+
 /// Общий вход инициализации ndk-context: MainActivity
 /// (audio_android) и headless-монитор FGS (service_monitor) делят один
 /// флаг — двойная инициализация паниковала бы (panic=abort).
@@ -1492,6 +1577,8 @@ pub fn run() {
             // ставит missed поверх принятого звонка.
             #[cfg(target_os = "android")]
             service_monitor::call_report_state,
+            eco_set,
+            push_set,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

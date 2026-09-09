@@ -1044,6 +1044,14 @@ export class ApiClient {
   async idleStart(cursors = {}) {
     return await invoke('email_idle_start', { cursors });
   }
+  // M2.3: экономный режим — форс-стоп foreground-сервиса Android
+  async ecoSet(enabled) {
+    return await invoke('eco_set', { enabled });
+  }
+  // M2.3-b: push-режим (сервис в ntfy-подписке)
+  async pushSet(enabled, topic, ntfyBase) {
+    return await invoke('push_set', { enabled, topic, ntfyBase });
+  }
   async idleStop() {
     return await invoke('email_idle_stop', {});
   }

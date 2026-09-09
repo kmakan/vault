@@ -75,3 +75,36 @@
 }
 -keep class com.vault.vault.VaultForegroundService$Companion { *; }
 -keep class com.vault.vault.LockActivity { *; }
+# M2.3: ecoStop/ecoStart зовутся ТОЛЬКО из Rust (eco_set) — R8 удалял
+# без keep → JavaException NoSuchMethodError из JNI.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void ecoStop(android.content.Context);
+    public static void ecoStart(android.content.Context);
+}
+
+
+# УВЕДОМЛЕНИЯ: small-icon ic_notification зовётся из JS строкой
+# (notify.js opts.icon) — Java-коллера нет, R8 вырезал drawable →
+# уведомления показывались системным «!». Держим весь класс drawable
+# (полей немного, перечислять по одному R8 не умеет).
+-keep class com.vault.vault.R$drawable { *; }
+-keep class com.vault.vault.R$drawable* { *; }
+
+# M2.3-b: pushModeStart зовётся ТОЛЬКО из Rust (eco_set/push_set) — R8 вырезал
+# бы метод (как ecoStop/showMessage раньше). Держим.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void pushModeStart(android.content.Context, java.lang.String, java.lang.String);
+    public static void pushModeStop(android.content.Context);
+    public static void ecoStop(android.content.Context);
+    public static void ecoStart(android.content.Context);
+}
+
+# M2.3-b: VaultBootReceiver создаётся системой по имени из манифеста — R8
+# может переименовать/вырезать. Держим целиком.
+-keep class com.vault.vault.VaultBootReceiver { *; }
+
+# M2.4 deep-link: анонимный JS-мост VaultDeepLink (addJavascriptInterface) —
+# без keep R8 вырезает take(), ntfy-клик не открывает чат (грабля как с ecoStop).
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
