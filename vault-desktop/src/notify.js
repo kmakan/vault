@@ -76,11 +76,25 @@ export async function initNotifications() {
 //   title — имя/email отправителя, body — превью (может быть пустым для
 //   зашифрованных сообщений, чтобы не утекал контент), id — uid письма для
 //   дедупликации. Возвращает true, если уведомление показано.
-export function notifyNewMessage({ title, body, id } = {}) {
+// Дедуп-окно по чату: одно сообщение может прийти дважды (релей-конверт и
+// его email-оригинал с разными id) → второе уведомление за 90с по тому же
+// чату подавляем. Спам-защита и спокойная шторка.
+const CHAT_WINDOW_MS = 90 * 1000;
+const chatLastNotify = new Map();
+
+export function notifyNewMessage({ title, body, id, chatKey } = {}) {
   // молчаливые отказы — главная причина «пуша нет».
   if (!notificationsEnabled()) { console.log('[notify] SKIP: disabled by setting'); return false; }
   if (!permissionReady) { console.log('[notify] SKIP: permission not ready'); return false; }
   if (id != null && notifiedIds.has(String(id))) { console.log('[notify] SKIP: already notified id=' + id); return false; }
+  if (chatKey) {
+    const last = chatLastNotify.get(chatKey) || 0;
+    if (Date.now() - last < CHAT_WINDOW_MS) {
+      console.log('[notify] SKIP: chat window ' + chatKey);
+      return false;
+    }
+    chatLastNotify.set(chatKey, Date.now());
+  }
   if (id != null) {
     notifiedIds.add(String(id));
     persistNotified();

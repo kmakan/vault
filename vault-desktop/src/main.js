@@ -23,4 +23,22 @@ console.log = (...a) => { __dl('log', a); origLog(...a); };
 console.warn = (...a) => { __dl('warn', a); origWarn(...a); };
 console.error = (...a) => { __dl('error', a); origErr(...a); };
 
-createApp(App).mount('#app');
+// Глобальный обработчик ошибок Vue: без него краш рендера (ошибка в
+// шаблоне/computed во время звонка) оставлял ПУСТОЙ #app — «все элементы
+// пропали» (0.1.156, входящий звонок). Теперь: (1) ошибка логируется с
+// полным стеком в debug-мост, (2) Vue не роняет всё дерево —
+// app.config.errorHandler перехватывает до отмонтирования.
+const app = createApp(App);
+app.config.errorHandler = (err, instance, info) => {
+  const msg = err && err.stack ? err.stack : String(err);
+  console.error('[vue] render/error:', msg, '| component:', info);
+  try { invoke('debug_log', { msg: `[error] [vue] ${info}: ${msg}` }).catch(() => {}); } catch (_) {}
+};
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = e.reason && e.reason.stack ? e.reason.stack : String(e.reason);
+  console.error('[promise] unhandled:', msg);
+});
+window.addEventListener('error', (e) => {
+  if (e.error) console.error('[window]', e.error.stack || String(e.error));
+});
+app.mount('#app');

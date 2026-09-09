@@ -41,7 +41,7 @@ plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data)
 - Защита от повторного использования (nonce)
 
 **Недостатки:**
-- Требует安全管理 nonce
+- Требует безопасного управления nonce
 - Сложная генерация ключей
 
 ---
