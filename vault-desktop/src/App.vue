@@ -250,6 +250,9 @@
                 </template>
                 <template v-else>
                   <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
+                  <span v-if="relayDeliveryMode === 'email'" class="relay-delivery-badge" :title="t('relay_delivery_email_hint')" @click="relayExplainDelivery">
+                    <Icon name="mail" :size="11" /><span>{{ t('relay_delivery_email') }}</span>
+                  </span>
                 </template>
               </div>
             </div>
@@ -1177,6 +1180,10 @@ export default {
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
+      // §1 company.md: индикатор канала доставки в шапке чата.
+      // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
+      // или суточный лимит исчерпан — показываем конверт).
+      relayDeliveryMode: 'relay',
       peerKeys: {},
       // PQ: ML-KEM ek контактов {email: b64}
       peerPqKeys: {},
@@ -1692,6 +1699,12 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
+    // §1: пояснение индикатора доставки человеческим языком.
+    relayExplainDelivery() {
+      if (this.relayDeliveryMode === 'email') {
+        this.showToast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
+      }
+    },
     // ── Звуки звонка: WAV-ассеты вместо осциллятора ──
     // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
     // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
@@ -4897,7 +4910,23 @@ export default {
             // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
               const envObj = JSON.parse(envelope);
-              relay.relayPublish(this.email, this.activeChat, envObj, content);
+              const pub = relay.relayPublish(this.email, this.activeChat, envObj, content);
+              // §1: обновляем индикатор доставки по результату pub.
+              pub.then(r => {
+                if (r && r.why === 'daily-limit') {
+                  this.relayDeliveryMode = 'email';
+                  // Баннер один раз за день (kv-флаг) — не спамим тостами.
+                  invoke('db_kv_get', { account: this.email, key: 'relay-limit-banner' }).then(v => {
+                    const today = String(Math.floor(Date.now() / 86400000));
+                    if (v !== today) {
+                      this.showToast(this.t('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                      invoke('db_kv_set', { account: this.email, key: 'relay-limit-banner', value: today });
+                    }
+                  }).catch(() => {});
+                } else if (r && r.ok) {
+                  this.relayDeliveryMode = 'relay';
+                }
+              }).catch(() => {});
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
             api.sendMessage(this.activeChat, content).then(() => {
               pendingMsg.status = 'sent';
@@ -9135,6 +9164,21 @@ body {
 .chat-status {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* §1: индикатор канала доставки — конверт «почта», когда релей недоступен
+   или суточный лимит исчерпан. Спокойный янтарный, не пугает. */
+.relay-delivery-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  color: var(--accent-warning, #d97706);
+  cursor: pointer;
+  opacity: 0.9;
+}
+.relay-delivery-badge:active {
+  opacity: 1;
 }
 
 .chat-actions {

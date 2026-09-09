@@ -551,10 +551,16 @@ export default {
       try {
         const base = 'https://vault-msg.ru';
         const promo = (this.relayPromoKey || '').trim();
+        // fp — привязка «один токен = один аккаунт» (анти-шаринг).
+        let fp = '';
+        try {
+          const crypto = await import('../crypto.js');
+          fp = await crypto.default.fingerprint();
+        } catch (e) { /* опционально */ }
         const r = await fetch(base + '/relay/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(promo ? { promo } : {}),
+          body: JSON.stringify({ ...(promo ? { promo } : {}), fp: fp || '' }),
         });
         const dataUnlimited = (await r.clone().json().catch(() => ({}))).unlimited;
         if (!r.ok) { alert('register: HTTP ' + r.status); return; }

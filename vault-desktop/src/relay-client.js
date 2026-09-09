@@ -23,6 +23,7 @@ const KV_PEERS = 'relay-peer-tokens'; // { relayUrl: { chatId(lower): token } }
 const KV_ENABLED = 'relay-enabled';
 const KV_RELAYS = 'relay-list'; // JSON: [{url, myToken, label}] — порядок = приоритет
 const KV_ACTIVE = 'relay-active'; // индекс активного релея в списке (auto-managed)
+const KV_LIMIT_DAY = 'relay-limit-day'; // UTC-день исчерпания лимита (тихий фолбэк)
 
 let http = null;
 try {
@@ -125,6 +126,28 @@ export async function setEnabled(account, on) {
   await invoke('db_kv_set', { account, key: KV_ENABLED, value: on ? '1' : '0' });
 }
 
+// ───────────────────────── Fingerprint (анти-шаринг токена) ─────────────────────────
+// fp = отпечаток публичного ключа аккаунта (короткий, не секретен): один
+// токен = один аккаунт. Сервер привязывает токен к первому fp, чужой → 403.
+
+// Кэш: fp читается лениво, один раз на сессию (крипто-команда не дешёвая).
+let cachedFp = null;
+let cachedFpAccount = null;
+
+export async function myFingerprint(account) {
+  if (cachedFp && cachedFpAccount === account) return cachedFp;
+  try {
+    const crypto = await import('./crypto.js');
+    const fp = await crypto.default.fingerprint();
+    cachedFp = fp;
+    cachedFpAccount = account;
+    return fp;
+  } catch (e) {
+    console.log('[relay] fingerprint unavailable:', e && e.message || e);
+    return null;
+  }
+}
+
 // Токены собеседников: { relayUrl: { chatId: token } } — на КАЖДЫЙ релей свой набор.
 export async function setPeerToken(account, relayUrl, chatId, token) {
   const raw = await invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null);
@@ -195,6 +218,13 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
     try {
       const { enabled, peers, active, relays } = await getSettings(account);
       if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
+      // Тихий фолбэк при исчерпании суточного лимита (§0): до конца
+      // UTC-дня pub не дёргаем вовсе, письмо — единственный путь.
+      const limitDay = await invoke('db_kv_get', { account, key: KV_LIMIT_DAY }).catch(() => null);
+      const today = Math.floor(Date.now() / 86400000);
+      if (limitDay && parseInt(limitDay, 10) === today) {
+        return { ok: false, why: 'daily-limit' };
+      }
       const relay = await pickLiveRelay(account);
       if (!relay) { console.log('[relay] publish skip: no-live-relay'); return { ok: false, why: 'no-live-relay' }; }
       const relayPeers = peers[relay.url] || {};
@@ -214,9 +244,29 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
           // M2.4 автообмен: мой read-токен (адрес моей очереди) — получатель
           // запомнит и сможет слать мне пуши. Пользователь ничего не вводит.
           tok: relay.myToken || '',
+          // §0/анти-шаринг: отпечаток моего ключа — сервер привязывает
+          // токен к аккаунту, чужой fp с этим токеном → 403.
+          fp: (await myFingerprint(account)) || undefined,
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });
+      if (res.status === 429) {
+        // Лимит исчерпан: тихо уходим на почту до конца UTC-дня, баннер
+        // покажет App.vue (relayOnLimitReply hook ниже), письмо уже ушло.
+        await invoke('db_kv_set', { account, key: KV_LIMIT_DAY, value: String(today) }).catch(() => {});
+        console.log('[relay] daily limit hit → email-only until next UTC day');
+        return { ok: false, why: 'daily-limit' };
+      }
+      if (res.status === 403) {
+        // Токен привязан к другому аккаунту (скопирован). На нашем релее —
+        // тихая авто-перерегистрация: получим свежий токен, привязанный
+        // к этому fp. Сторонний релей — уведомим пользователя.
+        if (relay.url === DEFAULT_RELAY_URL) {
+          const fresh = await reRegisterOurRelay(account);
+          if (fresh) return relayPublish(account, chatId, envelopeObj, encryptedBody);
+        }
+        return { ok: false, why: 'token-bound-elsewhere' };
+      }
       if (!res.ok) { console.log('[relay] publish http', res.status); return { ok: false, why: 'http-' + res.status }; }
       console.log('[relay] published to', chatId);
       return { ok: true };
@@ -229,6 +279,32 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody) {
   return pubChain;
 }
 
+// Тихая перерегистрация на нашем релее (после 403 или для продления):
+// выдаёт свежий read-токен, привязанный к текущему fp, и обновляет
+// kv-список. Возвращает true при успехе.
+export async function reRegisterOurRelay(account) {
+  try {
+    const fp = await myFingerprint(account);
+    const r = await rfetch(DEFAULT_RELAY_URL + '/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fp: fp || '' }),
+      connectTimeout: PUB_TIMEOUT_MS,
+    });
+    if (!r.ok) { console.log('[relay] re-register http', r.status); return false; }
+    const d = await r.json();
+    const rs = await getSettings(account);
+    const list = rs.relays.filter(x => x.url !== DEFAULT_RELAY_URL);
+    list.unshift({ url: DEFAULT_RELAY_URL, myToken: d.token, label: 'Vault' });
+    await saveRelays(account, list);
+    console.log('[relay] token re-registered (bound to this account)');
+    return true;
+  } catch (e) {
+    console.log('[relay] re-register error:', e && e.message || e);
+    return false;
+  }
+}
+
 // ───────────────────────── Poll (приём) ─────────────────────────
 
 // Опрос ВСЕХ живых релеев (каждый держит свою очередь): объединяем конверты.
@@ -237,14 +313,22 @@ export async function relayPoll(account) {
   try {
     const { enabled, relays } = await getSettings(account);
     if (!enabled || !relays.length) return [];
+    const fp = await myFingerprint(account);
     const results = await Promise.all(relays.filter(r => r.myToken).map(async (r) => {
       try {
         const res = await rfetch(r.url + '/poll?wait=0', {
           method: 'GET',
-          headers: authHeader(r.myToken),
+          headers: { ...authHeader(r.myToken), 'X-Vault-Fp': fp || '' },
           connectTimeout: POLL_TIMEOUT_MS,
         });
         if (res.status === 204 || res.status === 402) return [];
+        if (res.status === 403) {
+          // Токен привязан к чужому аккаунту: на нашем релее тихо
+          // перерегистрируемся (свежий токен = свежая привязка к этому fp).
+          if (r.url === DEFAULT_RELAY_URL && await reRegisterOurRelay(account)) return [];
+          console.log('[relay] poll 403: token bound to another account');
+          return [];
+        }
         if (!res.ok) return [];
         const list = await res.json();
         for (const env of list) {
