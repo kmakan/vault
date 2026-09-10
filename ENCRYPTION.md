@@ -165,7 +165,7 @@ Master Secret = KDF(DH_secret || PQ_secret)
 - Масштабируемость до 1000+ участников
 - Forward secrecy для групп
 
-#### 3.排除 Lists (Exclude Lists)
+#### 3. Exclude Lists (списки исключений)
 
 ```
 1. Создаётся список исключённых участников

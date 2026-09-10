@@ -1136,8 +1136,12 @@ export class ApiClient {
     // Фаза 3 перепроектирования звонков: JS сообщает монитору-владельцу
   // решение/статус звонка. Монитор хранит call_state в monitor.db и не ставит
   // missed поверх принятого/отклонённого звонка.
+  // Команда call_report_state существует ТОЛЬКО на Android (#[cfg] в lib.rs);
+  // на десктопе вызов падал «Command not found» — гейтим по платформе.
   async reportCallState(callId, state) {
     try {
+      // Команда только на Android: userAgent-гейт (api.js не имеет App-контекста)
+      if (!/android/i.test(navigator.userAgent || '')) return;
       await invoke('call_report_state', { callId, state });
     } catch (e) {
       console.warn('[call] report state failed:', e);

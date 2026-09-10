@@ -2,7 +2,7 @@
 
 ## 1. Что такое MLS
 
-**MLS** (Messaging Layer Security) — IETF-стандарт (RFC 9420) для安全な групповой коммуникации.
+**MLS** (Messaging Layer Security) — IETF-стандарт (RFC 9420) для безопасной групповой коммуникации.
 Разработан для масштабируемых групп с тысячами участников.
 
 ### Ключевые идеи
@@ -62,8 +62,8 @@ tls_codec = "0.4"
 **Преимущества:**
 - Полная реализация RFC 9420
 - Поддержка X25519, Ed25519, AES-128-GCM
-- TreeKEM с рахис- tree
-- Active社区 (FRANKLY Project)
+- TreeKEM с ratchet-деревом
+- Активное сообщество (FRANKLY Project)
 
 **Ограничения:**
 - Нет встроенной post-quantum поддержки
@@ -273,7 +273,7 @@ impl MlsGroupManager {
 
 - [RFC 9420 - MLS](https://datatracker.ietf.org/doc/rfc9420/)
 - [openmls - Rust MLS](https://github.com/openmls/openmls)
-- [TreeKEM论文](https://eprint.iacr.org/2018/1045.pdf)
+- [TreeKEM, статья (eprint)](https://eprint.iacr.org/2018/1045.pdf)
 - [MLS Protocol](https://messaginglayersecurity.info/)
 
 ---

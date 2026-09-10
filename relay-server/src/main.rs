@@ -355,7 +355,7 @@ fn require_read(app: &Arc<AppState>, headers: &HeaderMap) -> Option<vault_relay:
 }
 
 /// Привязка токена к fingerprint аккаунта (анти-шаринг для монетизации).
-/// Первый持有: если у токена нет привязки — привязываем к текущему fp.
+/// Первый владелец: если у токена нет привязки — привязываем к текущему fp.
 /// Чужой fp с тем же токеном → false (= 403 «token bound to another
 /// account»). fp не пришёл (легаси-клиент) → true (привязку не трогаем).
 fn check_token_binding(app: &Arc<AppState>, token_hash: &str, fp: &Option<String>) -> bool {
