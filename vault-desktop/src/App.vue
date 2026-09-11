@@ -1015,6 +1015,7 @@ import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 import * as DraftsFeature from './features/drafts.js';
+import * as DuressFeature from './features/duress.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1761,6 +1762,13 @@ export default {
     draftRun(fn) { return DraftsFeature.draftRun(fn); },
     saveDraft() { return DraftsFeature.saveDraft(this); },
     restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
+    // ── Duress-замок — логика в features/duress.js; LockScreen-события
+    // (unlock/duress/panic) приходят из шаблона в эти обёртки.
+    async checkDuressLock() { return DuressFeature.checkDuressLock(this); },
+    onLockUnlock() { return DuressFeature.onLockUnlock(this); },
+    onLockDuress() { return DuressFeature.onLockDuress(this); },
+    async onLockPanic() { return DuressFeature.onLockPanic(this); },
+    async sendDuressSos() { return DuressFeature.sendDuressSos(this); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -4246,172 +4254,7 @@ export default {
     // --- Key Recovery
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
     // ── Duress-замок ────────────────────────────────────────
-    // При старте: если замок включён — показываем LockScreen вместо UI.
-    async checkDuressLock() {
-      // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
-      if (/android/i.test(navigator.userAgent)) {
-        this.duressLocked = false;
-        console.log('[duress] android branch: native LockActivity handles the lock');
-        return;
-      }
-      try {
-        const cfg = await invoke('duress_get_config');
-        const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
-        this.duressLocked = enabled;
-        console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
-          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
-      } catch (e) {
-        console.warn('[duress] check failed:', e);
-      }
-      // Android: «выход» из приложения НЕ убивает процесс — FGS и
-      // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
-      // замок не показывался. Ловим возврат из фона: если замок включён и в этой
-      // сессии ещё не разблокирован (duressUnlockedThisSession false) — показать.
-      if (!this._duressVisibilityBound) {
-        this._duressVisibilityBound = true;
-        const relock = async () => {
-          if (this.duressUnlockedThisSession) return;
-          try {
-            const cfg = await invoke('duress_get_config');
-            if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-              this.duressLocked = true;
-              console.log('[duress] relock on resume → locked=true');
-            }
-          } catch (e) { /* ignore */ }
-        };
-        document.addEventListener('visibilitychange', () => {
-          // Уход из видимости (сворачивание, скрытие в трей, переключение
-          // окна) = конец «доверенного периода»: флаг сессии снимаем, чтобы
-          // relock при возврате ПОКАЗАЛ замок. Банковский паттерн: замок
-          // должен появляться после КАЖДОГО ухода, а не только после смерти
-          // процесса (иначе минимизация не блокирует).
-          if (document.visibilityState === 'hidden') {
-            this.duressUnlockedThisSession = false;
-          } else {
-            relock();
-          }
-        });
-        window.addEventListener('focus', relock);
-        // Desktop close-to-tray: Rust эмитит событие ПЕРЕД скрытием
-        // окна в трей. Здесь сбрасываем флаг «разблокирован в этой сессии» и
-        // сразу поднимаем замок: при возврате из трея LockScreen уже на экране
-        // (WebView скрытого окна может не слать visibilitychange).
-        (async () => {
-          const { listen } = await import('@tauri-apps/api/event');
-          await listen('vault://window-hidden', () => {
-            this.duressUnlockedThisSession = false;
-            invoke('duress_get_config').then((cfg) => {
-              if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-                this.duressLocked = true;
-                console.log('[duress] tray-hide → armed lock for next show');
-              }
-            }).catch(() => {});
-          });
-        })();
-      }
-      // Повтор через секунду: restoreSession/монтирование UI может перерисовать
-      // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
-      setTimeout(async () => {
-        try {
-          const cfg = await invoke('duress_get_config');
-          if (cfg && cfg.lock_enabled && cfg.lock_hash && !this.isLoggedIn === false) {
-            // уже залогинен — замок всё равно показываем (замок = при запуске)
-          }
-          if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-            this.duressLocked = true;
-            console.log('[duress] lock re-check → locked=true');
-          }
-        } catch (e) { /* ignore */ }
-      }, 1200);
-    },
-    onLockUnlock() {
-      this.duressLocked = false;
-      this.duressUnlockedThisSession = true; // до ухода в фон замок не ре-армить
-    },
-    // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
-    // монтирования тихо отправляем SOS-письмо выбранным контактам.
-    async onLockDuress() {
-      this.duressLocked = false;
-      this.duressPending = true;
-      this.$nextTick(() => this.sendDuressSos());
-    },
-    // Panic-PIN: Rust уже стёр данные — выходим на login (локально пусто).
-    async onLockPanic() {
-      this.duressLocked = false;
-      try {
-        await api.logout();
-      } catch (e) { /* ignore */ }
-      this.isLoggedIn = false;
-      this.email = null;
-      this.showToast(this.t('panic_done') || 'Данные стёрты', 4000);
-    },
-    // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
-    // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
-    async sendDuressSos() {
-      try {
-        const cfg = await invoke('duress_get_config');
-        if (!cfg || !cfg.sos_enabled_rcpts) { /* compat */ }
-        const rcpts = (cfg.sos_recipients || []).filter(Boolean);
-        if (!rcpts.length) return;
-        // Гео: если включено — координаты через WebView geolocation
-        // (на Android нативный запрос разрешения идёт при включении флага).
-        let coords = '';
-        if (cfg.sos_geo) {
-          coords = await new Promise((resolve) => {
-            let done = false;
-            const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
-            const timer = setTimeout(() => finish(''), 5000);
-            try {
-              navigator.geolocation.getCurrentPosition(
-                (pos) => finish(`, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
-                () => finish(''),
-                { timeout: 4500, maximumAge: 600000 },
-              );
-            } catch (e) { finish(''); }
-          });
-        }
-        const rawText = cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}';
-        let text = rawText.replace('{coords}', coords);
-        // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
-        if (coords && !rawText.includes('{coords}')) text += coords;
-        // Сохранённые peer-ключи: encryptVault требует установленного ключа
-        // получателя — иначе шифрование падает и SOS молча теряется.
-        // При холодном старте (duress сразу после открытия) peerKeys могли
-        // ещё не загрузиться — читаем прямо из key_store.
-        if (!this.peerKeys || !Object.keys(this.peerKeys).length) {
-          try {
-            const stored = await crypto.loadPeerKeys();
-            this.peerPqKeys = this.peerPqKeys || {};
-            for (const pk of stored) {
-              this.peerKeys[pk.email] = pk.public_key;
-              if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
-            }
-          } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
-        }
-        for (const rcpt of rcpts) {
-          try {
-            const pk = this.peerKeys && this.peerKeys[rcpt];
-            if (!pk) {
-              console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
-              continue;
-            }
-            crypto.setPeerPublicKey(pk, this.peerPqKeys && this.peerPqKeys[rcpt]);
-            const content = await crypto.encryptVault(JSON.stringify({
-              vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-              type: 'sos', text, name: this.displayName || '', ts: Date.now(),
-            }));
-            await api.sendEmail('local', { to: rcpt, subject: '', body: content });
-          } catch (e) {
-            console.warn('[duress] SOS to', rcpt, 'failed:', e);
-          }
-        }
-        console.log('[duress] SOS sent to', rcpts.length, 'recipients');
-      } catch (e) {
-        console.warn('[duress] sendSos failed:', e);
-      } finally {
-        this.duressPending = false;
-      }
-    },
+    // (логика в features/duress.js; обёртки см. в блоке feature-обёрток выше)
     showToast(message, ms = 5000) {
       this.toastMessage = message;
       if (this.toastTimer) clearTimeout(this.toastTimer);
