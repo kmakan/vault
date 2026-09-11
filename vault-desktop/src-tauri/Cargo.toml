@@ -1,6 +1,6 @@
 [package]
 name = "vault-desktop"
-version = "0.1.150"
+version = "0.1.158"
 edition = "2021"
 
 [lib]

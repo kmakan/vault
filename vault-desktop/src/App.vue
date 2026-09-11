@@ -1293,6 +1293,32 @@ export default {
       editContactAvatar: '',
       // User identity
       userId: null,
+      // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
+      // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
+      // поллинг «воскресил» бы удалённое. Хранится в sqlite (почтовый мессенджер-style),
+      // с in-memory кэшем для синхронной фильтрации (filterDeleted).
+      // См. initLocalDb() — загрузка при входе.
+      // (были ошибочно в methods — Vue 3 игнорирует не-функции там,
+      //  поля становились нерактивными: кнопка «Опрос» и duress-замок не работали)
+      tombstonesCache: [],
+      // Duress-замок: LockScreen поверх UI; duressPending — тихий SOS.
+      duressLocked: false,
+      duressPending: false,
+      duressUnlockedThisSession: false,
+      // Голосования: диалог создания + агрегация голосов
+      pollDialog: false,
+      pollQuestion: '',
+      pollOptions: ['', ''],
+      // Пересылка: пересылаемое сообщение (объект) + список целей
+      forwardTo: null,
+      // Папки чатов: активная папка + диалог создания в контекстном меню
+      activeFolder: '',
+      folderDialogOpen: false,
+      chatFolderNewName: '',
+      chatFoldersNames: [],
+      midTombstonesCache: [],
+      // IMAP-курсоры: in-memory кэш + sqlite персист.
+      cursorsCache: {},
     }
   },
   computed: {
@@ -7146,31 +7172,8 @@ export default {
       stored[chatKey] = chatEdits;
       this.saveStoredEdits(stored);
     },
-    // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
-    // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится в sqlite (почтовый мессенджер-style),
-    // с in-memory кэшем для синхронной фильтрации (filterDeleted).
-    // См. initLocalDb() — загрузка при входе.
-    tombstonesCache: [],
-    // Duress-замок: LockScreen поверх UI; duressPending — тихий SOS.
-    duressLocked: false,
-    duressPending: false,
-    duressUnlockedThisSession: false,
-    // Голосования: диалог создания + агрегация голосов
-    pollDialog: false,
-    pollQuestion: '',
-    pollOptions: ['', ''],
-    // Пересылка: пересылаемое сообщение (объект) + список целей
-    forwardTo: null,
-    // Черновики: очередь сериализации kv (read-modify-write)
-    // Папки чатов: активная папка + диалог создания в контекстном меню
-    activeFolder: '',
-    folderDialogOpen: false,
-    chatFolderNewName: '',
-    chatFoldersNames: [],
-    midTombstonesCache: [],
-    // IMAP-курсоры: in-memory кэш + sqlite персист.
-    cursorsCache: {},
+    // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
+    //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
     async initLocalDb() {
       const accEmail = this.email || 'anon';  // tombstones/body-cache: account = email
