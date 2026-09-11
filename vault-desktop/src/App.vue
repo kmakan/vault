@@ -1014,13 +1014,13 @@ import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
+import * as DraftsFeature from './features/drafts.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
 // и клик по логотипу в шапке откроет его во внешнем браузере.
 const APP_SITE_URL = '';
-// Черновики: очередь сериализации kv-RMW (модуль-уровень).
-let DRAFT_QUEUE = Promise.resolve();
+// Черновики: очередь сериализации kv-RMW переехала в features/drafts.js.
 
 export default {
   name: 'ChatApp',
@@ -1756,6 +1756,11 @@ export default {
     chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
     async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
     async createChatFolder() { return FoldersFeature.createChatFolder(this); },
+    // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
+    // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
+    draftRun(fn) { return DraftsFeature.draftRun(fn); },
+    saveDraft() { return DraftsFeature.saveDraft(this); },
+    restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -6755,39 +6760,7 @@ export default {
       return (m ? m[1] : raw).trim().toLowerCase();
     },
     // ── Черновики ──────────────────────────────────────────────────
-    // Текст недописанного сообщения сохраняется per-chat (kv) и
-    // восстанавливается при возврате в чат.
-    // Черновики: сериализация RMW через очередь на статике конструктора —
-    // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
-    draftRun(fn) {
-      DRAFT_QUEUE = DRAFT_QUEUE.then(fn, fn);
-      return DRAFT_QUEUE;
-    },
-    async saveDraft() {
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      if (!chatKey) return;
-      const text = this.newMessage || '';
-      this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          if (text.trim()) drafts[chatKey] = text;
-          else delete drafts[chatKey];
-          await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
-        } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
-      });
-    },
-    async restoreDraft(chatKey) {
-      return this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          this.newMessage = drafts[chatKey] || '';
-        } catch (e) { /* ignore */ }
-      });
-    },
+    // (логика в features/drafts.js; обёртки см. в блоке feature-обёрток выше)
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
       const chatReactions = stored[chatKey] || {};
