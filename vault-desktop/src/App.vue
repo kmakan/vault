@@ -1013,6 +1013,7 @@ import LockScreen from './components/LockScreen.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
+import * as FoldersFeature from './features/folders.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1746,6 +1747,15 @@ export default {
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
     doForward(key) { return ForwardFeature.doForward(this, key); },
+    // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
+    // грузит единый kv-блоб (flags + folder names), архив/mute меняются
+    // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
+    async loadChatFlags() { return FoldersFeature.loadChatFlags(this); },
+    async saveChatFlags() { return FoldersFeature.saveChatFlags(this); },
+    flagKey(target) { return FoldersFeature.flagKey(target); },
+    chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
+    async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
+    async createChatFolder() { return FoldersFeature.createChatFolder(this); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -5390,27 +5400,8 @@ export default {
       }
     },
     // архив + mute per-chat ─────────────────────
-    async loadChatFlags() {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-flags');
-        this.chatFlags = raw ? JSON.parse(raw) : {};
-      } catch (e) { this.chatFlags = {}; }
-      try {
-        const fr = await db.kvGet(this.email || 'anon', 'chat-folders');
-        this.chatFoldersNames = fr ? JSON.parse(fr) : [];
-      } catch (e) { this.chatFoldersNames = []; }
-    },
-    async saveChatFlags() {
-      try {
-        await db.kvSet(this.email || 'anon', 'chat-flags', JSON.stringify(this.chatFlags));
-      } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
-    },
-    flagKey(target) {
-      return target.type === 'group' ? 'group:' + target.id : target.email.toLowerCase();
-    },
-    chatFlagOf(key) {
-      return this.chatFlags[key] || {};
-    },
+    // (загрузка/сохранение kv-блобов и папки — features/folders.js;
+    //  обёртки см. в блоке feature-обёрток выше)
     isMuted(key) {
       // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
       // может прийти в каноническом регистре контакта — нормализуем.
@@ -5488,27 +5479,7 @@ export default {
       await this.saveChatFlags();
     },
     // ── Папки чатов (kv chat-folders + chatFlags[key].folder) ──────────
-    async setChatFolder(name) {
-      const key = this.flagKey(this.chatMenu.target);
-      const f = { ...(this.chatFlags[key] || {}) };
-      if (name) f.folder = name.slice(0, 24);
-      else delete f.folder;
-      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
-      else this.chatFlags[key] = f;
-      this.closeChatMenu();
-      await this.saveChatFlags();
-    },
-    async createChatFolder() {
-      const name = (this.chatFolderNewName || '').trim().slice(0, 24);
-      if (!name) return;
-      if (!this.chatFoldersNames.includes(name)) {
-        this.chatFoldersNames = [...this.chatFoldersNames, name];
-        await db.kvSet(this.email || 'anon', 'chat-folders', JSON.stringify(this.chatFoldersNames));
-      }
-      await this.setChatFolder(name);
-      this.folderDialogOpen = false;
-      this.chatFolderNewName = '';
-    },
+    // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
     // call_id обработанного звонка (request/accept/end/reject). После
     // перезапуска не даёт старым конвертам снова дёргать state machine.
