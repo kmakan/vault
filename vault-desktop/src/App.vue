@@ -491,7 +491,7 @@
             </template>
             <template v-if="messageMenu.urls && messageMenu.urls.length">
               <div class="message-menu-sep"></div>
-              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openExternal(u).catch(() => {}); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
+              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openUrl(u); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
             </template>
           </div>
         </div>
@@ -525,14 +525,14 @@
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker; attachMenu = false" title="Emoji"><Icon name="smile" :size="19" /></button>
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
         </div>
         <!-- Отправка: ВСЕГДА видна в первом ряду -->
         <button class="send-btn-round" @click="sendMessage" :disabled="sending || !newMessage.trim()" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <!-- Второй ряд: кнопки фич (файл, гео, голосование, голос) — с подписями -->
                 <div class="feature-row">
-          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="fileInput && fileInput.click()">
+          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="$refs.fileInput && $refs.fileInput.click()">
             <Icon name="paperclip" :size="18" />
           </button>
           <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
@@ -541,7 +541,7 @@
           <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
             <Icon name="bar-chart" :size="18" />
           </button>
-          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false">
+          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder">
             <Icon name="mic" :size="18" />
           </button>
         </div>
@@ -1828,6 +1828,12 @@ export default {
     // Полноэкранный просмотр изображения-вложения
     openImageViewer(attachment) {
       this.viewingImage = attachment;
+    },
+    // Открыть ссылку из меню сообщения внешним браузером (через tauri
+    // opener-плагин; модульный импорт недоступен шаблону Options API,
+    // поэтому тонкая обёртка-метод — шаблон зовёт openUrl).
+    openUrl(url) {
+      openExternal(String(url)).catch(() => {});
     },
     closeImageViewer() {
       this.viewingImage = null;
