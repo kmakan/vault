@@ -1011,6 +1011,7 @@ import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServe
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
 import * as relay from './relay-client.js';
+import * as PollFeature from './features/poll.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1740,6 +1741,17 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
+    // ── Голосования (poll) — логика в features/poll.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    parsePollEnvelope(env) { return PollFeature.parsePollEnvelope(env); },
+    pollVotes(poll) { return PollFeature.pollVotes(poll); },
+    pollOptionCount(poll, i) { return PollFeature.pollOptionCount(poll, i); },
+    pollLead(poll) { return PollFeature.pollLead(poll); },
+    pollLeadLabel(poll) { return PollFeature.pollLeadLabel(poll); },
+    confirmPoll() { return PollFeature.confirmPoll(this); },
+    castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
+    async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
+    applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -2875,7 +2887,7 @@ export default {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
           const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
-          // Голосование: poll-подконверт (валидация в parsePollEnvelope).
+          // Голосование: poll-подконверт (валидация в features/poll.js).
           if (obj.poll && typeof obj.poll === 'object') {
             env.poll = {
               id: String(obj.poll.id || obj.id || ''),
@@ -2887,48 +2899,6 @@ export default {
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
-    },
-    // ── Голосования (poll) ─────────────────────────────────────────
-    // Конверт: {vault:1, type:'poll', poll:{id, question, options[]}}
-    // Голос:   {poll:1, poll_id, option} — сигнальное письмо (как реакции),
-    //          агрегируется из писем чата при загрузке.
-    parsePollEnvelope(env) {
-      if (!env || env.type !== 'poll' || !env.poll || !env.poll.question) return null;
-      const opts = (env.poll.options || []).map(o => String(o).slice(0, 100)).filter(Boolean);
-      if (opts.length < 2 || opts.length > 10) return null;
-      return {
-        id: String(env.poll.id || env.id || ''),
-        question: String(env.poll.question).slice(0, 200),
-        options: opts.slice(0, 10),
-        votes: {},   // email -> option index (последний голос)
-        myVote: null,
-      };
-    },
-    pollVotes(poll) {
-      const counts = new Array(poll.options.length).fill(0);
-      const voters = {};
-      for (const [email, opt] of Object.entries(poll.votes || {})) {
-        if (opt >= 0 && opt < counts.length) {
-          counts[opt] += 1;
-          voters[email] = true;
-        }
-      }
-      const total = counts.reduce((a, b) => a + b, 0);
-      return { counts, total, voters: Object.keys(voters).length };
-    },
-    pollOptionCount(poll, i) { return this.pollVotes(poll).counts[i] || 0; },
-    pollLead(poll) {
-      const v = this.pollVotes(poll);
-      let best = -1, bestN = -1;
-      v.counts.forEach((n, i) => { if (n > bestN) { best = i; bestN = n; } });
-      return bestN > 0 ? best : -1;
-    },
-    pollLeadLabel(poll) {
-      const v = this.pollVotes(poll);
-      const lead = this.pollLead(poll);
-      if (lead < 0 || v.total === 0) return '';
-      const pct = Math.round(v.counts[lead] * 100 / v.total);
-      return `${poll.options[lead]} — ${pct}%`;
     },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
@@ -2954,16 +2924,6 @@ export default {
         ' — https://www.openstreetmap.org/?mlat=' + coords.split(',')[0].trim() +
         '&mlon=' + coords.split(',')[1].trim() + '#map=17/' + coords.split(',')[0].trim() + '/' + coords.split(',')[1].trim();
       this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
-    },
-    // Подтвердить создание голосования (диалог).
-    confirmPoll() {
-      const q = this.pollQuestion.trim();
-      const opts = this.pollOptions.map(o => o.trim()).filter(Boolean);
-      if (!q || opts.length < 2) return;
-      this.pollDialog = false;
-      this.pollQuestion = '';
-      this.pollOptions = ['', ''];
-      this.sendPoll(q, opts);
     },
     // ── Пересылка (forward) ────────────────────────────────────────
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
@@ -3011,88 +2971,6 @@ export default {
       } catch (e) {
         console.error('[forward] failed:', e);
         alert(this.t('forward_err') || 'Forward failed');
-      } finally {
-        this.sending = false;
-      }
-    },
-    // Свой голос: сигнальное письмо (механика sendReaction) + локальная запись.
-    castPollVote(msg, option) {
-      const poll = msg.poll;
-      if (!poll || poll.myVote !== null) return;
-      const prev = poll.myVote;
-      poll.myVote = option;
-      const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) throw new Error('no group key');
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          } else {
-            throw new Error('no peer key');
-          }
-          poll.votes[this.email] = option;
-          this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-        } catch (e) {
-          console.error('[poll] vote failed:', e);
-          poll.myVote = prev;
-        }
-      })();
-    },
-    // Создание голосования: конверт type:'poll' (карточка у получателей).
-    async sendPoll(question, options) {
-      const opts = (options || []).map(o => String(o).trim()).filter(Boolean).slice(0, 10);
-      question = String(question || '').trim();
-      if (!question || opts.length < 2) return;
-      const pollId = this.newMessageId();
-      const pollEnv = {
-        vault: 1,
-        id: this.newMessageId(),
-        type: 'poll',
-        text: question, // fallback-текст для legacy-клиентов/истории
-        poll: { id: pollId, question, options: opts },
-        name: this.displayName || '',
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      try {
-        this.sending = true;
-        const envelope = JSON.stringify(pollEnv);
-        let content = envelope;
-        if (this.activeChatType === 'group') {
-          const groupKey = this.groupKeys[this.currentGroup.id];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          content = await crypto.encryptWithGroupKey(envelope, groupKey);
-        } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-          crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-          content = await crypto.encryptVault(envelope);
-        }
-        const pendingMsg = {
-          id: pollId,
-          content: question,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-          poll: this.parsePollEnvelope(pollEnv),
-        };
-        if (pendingMsg.poll) pendingMsg.poll.myVote = null;
-        this.messages.push(pendingMsg);
-        this.scrollToBottom(true);
-        if (this.activeChatType === 'group') {
-          await api.sendGroupMessage(this.currentGroup.id, content);
-        } else {
-          await api.sendMessage(this.activeChat, content);
-        }
-        pendingMsg.status = 'sent';
-        this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-      } catch (e) {
-        console.error('[poll] send failed:', e);
-        alert(this.t('poll_err') || 'Poll failed');
       } finally {
         this.sending = false;
       }
@@ -6968,19 +6846,6 @@ export default {
           this.newMessage = drafts[chatKey] || '';
         } catch (e) { /* ignore */ }
       });
-    },
-    // Голоса голосований: агрегация из сигнальных писем в карточки poll.
-    // myVote определяется по наличию своего голоса в wire (email отправителя).
-    applyPollVotes(list, wirePollVotes) {
-      if (!list) return;
-      for (const m of list) {
-        if (!m || !m.poll) continue;
-        const votes = wirePollVotes && wirePollVotes[m.poll.id];
-        if (votes) {
-          for (const v of votes) m.poll.votes[v.voter] = v.option;
-        }
-        if (m.poll.votes[this.email] !== undefined) m.poll.myVote = m.poll.votes[this.email];
-      }
     },
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
