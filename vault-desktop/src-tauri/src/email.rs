@@ -484,6 +484,11 @@ impl EmailClient {
             cursors.get("JUNK")
         );
         let mut new_cursors = cursors.clone();
+        // Дедуп по Message-ID внутри одного батча: одно письмо может лежать
+        // в двух папках (провайдер положил в INBOX, потом перенёс в Спам).
+        // Ключ дедупа — message_id + папка: копия из ДРУГОЙ папки не
+        // глотается, а отдаётся фронту — там она «оживит» запись, чей
+        // старый (INBOX, uid) стал мёртвым после переноса письма.
         let mut seen: HashSet<String> = HashSet::new();
         let mut messages: Vec<EmailMessage> = Vec::new();
 
@@ -500,7 +505,10 @@ impl EmailClient {
                 return; // empty folder — nothing new
             }
             for m in msgs {
-                if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                // Ключ дедупа = message_id + папка (folder — String
+                // с serde-default «INBOX», пустым не бывает).
+                let dedup_key = format!("{}|{}", m.message_id, m.folder);
+                if !m.message_id.is_empty() && !seen.insert(dedup_key) {
                     continue;
                 }
                 messages.push(m);
@@ -628,7 +636,7 @@ impl EmailClient {
         let _ = session.select(folder);
 
         let mut out = Vec::with_capacity(uids.len());
-        let mut empty_uid: Option<String> = None;
+        let mut empty_uids: Vec<String> = Vec::new();
         for uid in uids {
             let mut body = String::new();
             if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
@@ -639,28 +647,37 @@ impl EmailClient {
                     }
                 }
             }
+            // Пустое тело одного uid НЕ должно обрывать весь батч: провайдер
+            // переносит письмо INBOX→Спам после индексации, и uid в старой
+            // папке остаётся мёртвым навсегда. Раньше первый такой uid
+            // ронял весь запрос (break + bail!) — и тела всех остальных
+            // писем папки не загружались до полного рескана. Мёртвые uid
+            // пропускаем и собираем отдельно; живые тела отдаём.
             if body.is_empty() {
-                empty_uid = Some(uid.clone());
-                break;
+                empty_uids.push(uid.clone());
+                continue;
             }
             out.push((uid.clone(), body));
         }
         eprintln!(
-            "[fetch_bodies] folder={folder} requested={} returned={} empty_uid={:?}",
+            "[fetch_bodies] folder={folder} requested={} returned={} empty_uids={:?}",
             uids.len(),
             out.len(),
-            empty_uid
+            empty_uids
         );
 
         if folder != "INBOX" {
             let _ = session.select("INBOX");
         }
 
-        // Пустое тело = рассинхрон сессии (см. fetch_message_body): Err, чтобы
-        // lib.rs сделал reconnect и повторил весь батч.
-        // намертво кэшировался фронтом как пустые сообщения.
-        if let Some(uid) = empty_uid {
-            anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
+        // ВСЕ тела пустые = реальный рассинхрон сессии (см. fetch_message_body):
+        // Err, чтобы lib.rs сделал reconnect и повторил батч. Частично пустые —
+        // норма (письма переехали в другую папку), отдаём то, что есть.
+        if out.is_empty() && !empty_uids.is_empty() {
+            anyhow::bail!(
+                "Empty body for ALL {n} uids in {folder} (session desync?)",
+                n = empty_uids.len()
+            );
         }
         Ok(out)
     }

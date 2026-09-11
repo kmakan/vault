@@ -5030,9 +5030,32 @@ export default {
         // чатов вскоре будет в IndexedDB, для инвайтов/аватаров хватает).
         const merged = [...this.emails];
         const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+        // Кросс-папочные копии: письмо могло быть проиндексировано из INBOX,
+        // а потом провайдер перенёс его в Спам — старая ссылка (INBOX, uid)
+        // стала мёртвой (тела больше нет). Если в батче пришла копия с тем
+        // же message_id из другой папки — «оживляем» существующую запись:
+        // подставляем живые folder/uid, не плодя дублей в списке.
+        const byMid = new Map();
+        for (const m of merged) {
+          if (m.message_id) byMid.set(m.message_id, m);
+        }
         for (const m of fetched) {
           const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
+          if (seen.has(k)) continue;
+          if (m.message_id && byMid.has(m.message_id)) {
+            const old = byMid.get(m.message_id);
+            if ((old.folder || 'INBOX') !== (m.folder || 'INBOX')) {
+              old.folder = m.folder;
+              old.uid = m.uid;
+              if (m.id !== undefined) old.id = m.id;
+              old.message_id = m.message_id;
+              seen.add(k);
+            }
+            continue;
+          }
+          seen.add(k);
+          byMid.set(m.message_id, m);
+          merged.push(m);
         }
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
@@ -10602,7 +10625,9 @@ body {
 
 .message-field {
   flex: 1;
-  padding: 12px 12px 12px 0;
+  /* Отступ слева: зазор между эмодзи-кнопкой и подсказкой «Сообщение...»
+     (4px у кнопки + 8px здесь = 12px, симметрично правому краю пилюли). */
+  padding: 12px 12px 12px 8px;
   background: transparent;
   border: none;
   color: var(--text-primary);
