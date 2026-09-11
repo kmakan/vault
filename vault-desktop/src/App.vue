@@ -1012,6 +1012,7 @@ import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
+import * as ForwardFeature from './features/forward.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1323,20 +1324,9 @@ export default {
     }
   },
   computed: {
-    // Пересылка: список чатов-целей (контакты + группы).
+    // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
-      const list = [];
-      for (const c of this.contacts || []) {
-        if (c.email && c.email !== '__notes__' && c.email !== this.activeChat) {
-          list.push({ key: c.email, label: this.nameOf(c.email) || c.email });
-        }
-      }
-      for (const g of this.groups || []) {
-        if (!(this.activeChatType === 'group' && this.currentGroup && g.id === this.currentGroup.id)) {
-          list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + this.t('group') });
-        }
-      }
-      return list;
+      return ForwardFeature.forwardTargets(this);
     },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
     editingContactBio() {
@@ -1752,6 +1742,10 @@ export default {
     castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
     async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
     applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    startForward(msg) { return ForwardFeature.startForward(this, msg); },
+    doForward(key) { return ForwardFeature.doForward(this, key); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -2927,54 +2921,7 @@ export default {
     },
     // ── Пересылка (forward) ────────────────────────────────────────
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
-    startForward(msg) {
-      if (!msg) return;
-      this.forwardTo = msg;
-    },
-    async doForward(key) {
-      const msg = this.forwardTo;
-      this.forwardTo = null;
-      if (!msg || !key) return;
-      const fromName = msg.from === 'me'
-        ? (this.displayName || this.email)
-        : (this.nameOf(this.activeChat) || this.activeChat);
-      const fwdText = (this.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
-      try {
-        this.sending = true;
-        const ttl = await this.ephemeralTtlOf(key);
-        const envelope = await this.buildEnvelope(fwdText, ttl);
-        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
-        const pendingMsg = {
-          id: envelopeId || ('local-' + Date.now()),
-          content: fwdText,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-        };
-        if (key.startsWith('group:')) {
-          const gid = key.slice(6);
-          const groupKey = this.groupKeys[gid];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          const content = await crypto.encryptWithGroupKey(envelope, groupKey);
-          await api.sendGroupMessage(gid, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        } else {
-          if (!this.peerKeys[key]) { alert(this.t('poll_err')); return; }
-          crypto.setPeerPublicKey(this.peerKeys[key], this.peerPqKeys && this.peerPqKeys[key]);
-          const content = await crypto.encryptVault(envelope);
-          await api.sendMessage(key, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        }
-        this.showToast(this.t('forward_done') || 'Переслано', 2500);
-      } catch (e) {
-        console.error('[forward] failed:', e);
-        alert(this.t('forward_err') || 'Forward failed');
-      } finally {
-        this.sending = false;
-      }
-    },
+    // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) {
       if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
