@@ -53,17 +53,6 @@ export function pollLeadLabel(poll) {
   return `${poll.options[lead]} — ${pct}%`;
 }
 
-// Create a poll from the dialog inputs.
-export function confirmPoll(ctx) {
-  const q = ctx.pollQuestion.trim();
-  const opts = ctx.pollOptions.map(o => o.trim()).filter(Boolean);
-  if (!q || opts.length < 2) return;
-  ctx.pollDialog = false;
-  ctx.pollQuestion = '';
-  ctx.pollOptions = ['', ''];
-  sendPoll(ctx, q, opts);
-}
-
 // Cast a vote: local first (optimistic), signal email, rollback on failure.
 export function castPollVote(ctx, msg, option) {
   const poll = msg.poll;
