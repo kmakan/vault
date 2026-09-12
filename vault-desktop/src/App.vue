@@ -215,127 +215,53 @@
           @scroll-pinned="scrollPinnedToView"
           @unpin="unpinGroupMessage"
         >
-          <div
+          <MessageItem
             v-for="msg in filteredMessages"
             :key="msg.id"
-            :data-msg-id="msg.id"
-            :class="['message', { own: msg.from === 'me', 'call-event': !!msg.callEvent, 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
-            :draggable="activeChat === '__notes__'"
-            @dragstart="onNoteDragStart($event, msg)"
-            @dragover="onNoteDragOver($event, msg)"
-            @dragleave="onNoteDragLeave($event, msg)"
-            @drop="onNoteDrop($event, msg)"
-            @dragend="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
-            @click.stop="toggleReactionPicker(msg.id)"
-            @contextmenu.prevent="openMessageMenu($event, msg)"
-          >
-            <!-- Звонки: «пилюля» пропущенного/завершённого вызова
-                 Текст только через t.
-                 -->
-            <div v-if="msg.callEvent" class="call-pill" :class="'call-pill--' + msg.callEvent.kind">
-              <Icon :name="callPillIcon(msg)" :size="13" color="currentColor" />
-              <span class="call-pill-label">{{ callEventLabel(msg) }}</span>
-              <span class="call-pill-time">{{ msg.time }}</span>
-              <button v-if="canCallBack(msg)" class="call-back-btn" :title="t('call_back')" @click.stop="callBack()">
-                <Icon name="phone" :size="12" color="currentColor" />{{ t('call_back') }}
-              </button>
-            </div>
-            <template v-else>
-            <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
-            <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
-              <UserAvatar :email="senderEmail(msg.sender_id)" :avatarUrl="avatarOf(senderEmail(msg.sender_id))" :size="26" />
-              <span class="message-sender-name">{{ nameOf(senderEmail(msg.sender_id)) }}</span>
-            </div>
-            <div class="message-content">
-              <template v-if="msg.deleted">
-                <Icon name="ban" :size="13" /> <span class="message-deleted">{{ t('message_deleted') || 'Сообщение удалено' }}</span>
-              </template>
-              <template v-else>
-              <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
-              <!-- Голосование: карточка вместо текста (poll-конверт) -->
-              <div v-if="msg.poll" class="poll-card">
-                <div class="poll-title"><Icon name="bar-chart" :size="14" /> {{ msg.poll.question }}</div>
-                <button v-for="(opt, i) in msg.poll.options" :key="i"
-                        class="poll-option"
-                        :class="{ 'poll-option-mine': msg.poll.myVote === i, 'poll-option-lead': pollLead(msg.poll) === i }"
-                        :disabled="msg.poll.closed || msg.poll.myVote !== null"
-                        @click.stop="castPollVote(msg, i)">
-                  <span class="poll-option-label">{{ opt }}</span>
-                  <span class="poll-option-count" v-if="pollVotes(msg.poll).total">{{ pollOptionCount(msg.poll, i) }}</span>
-                  <span class="poll-check" v-if="msg.poll.myVote === i">✓</span>
-                </button>
-                <div class="poll-footer" v-if="pollVotes(msg.poll).total">
-                  {{ pollVotes(msg.poll).voters }} {{ t('poll_voted') }} · {{ pollLeadLabel(msg.poll) }}
-                </div>
-              </div>
-              <span v-else v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
-              <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
-              <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
-                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
-                     :alt="msg.attachment.name"
-                     class="attachment-image"
-                     @click="openImageViewer(msg.attachment)" />
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
-                <audio controls class="attachment-audio"
-                       :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isText" class="attachment-preview">
-                <pre class="attachment-text">{{ msg.attachment.textContent }}</pre>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment" class="attachment-preview">
-                <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
-                  <Icon name="file" :size="13" /> {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
-                  <span class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</span>
-                </div>
-              </div>
-              </template>
-            </div>
-            <!-- Reply button (visible on hover) -->
-            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)"><Icon name="reply" :size="13" /></button>
-            <!-- Copy button (visible on hover) -->
-            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)"><Icon name="copy" :size="13" /></button>
-            <!-- Pin — только админ группы (hover) -->
-            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)"><Icon name="pin" :size="13" /></button>
-            <!-- Edit/Delete — только свои сообщения (видны на hover) -->
-            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)"><Icon name="pencil" :size="13" /></button>
-            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)"><Icon name="trash" :size="13" /></button>
-            <!-- Reactions -->
-            <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
-              <span
-                v-for="(r, ri) in msg.reactions"
-                :key="ri"
-                class="reaction-badge"
-                @click.stop="toggleReaction(msg.id, r)"
-              >{{ r }}</span>
-            </div>
-            <div class="message-footer">
-              <!-- Пометка «Избранное»: звёздочка рядом с временем -->
-              <Icon v-if="isStarred(msg)" name="star" :size="11" cls="msg-starred-icon" />
-              <div class="message-time">{{ msg.time }}</div>
-              <!-- Статус — маленький цветной кружок (без текста, чтобы не
-                   путаться с языками): красный=отправка, жёлтый=отправлено,
-                   зелёный=доставлено, синий=просмотрено -->
-              <span
-                v-if="msg.from === 'me'"
-                class="message-status-dot"
-                :class="msg.status || 'sent'"
-                :title="statusTitle(msg)"
-              ></span>
-            </div>
-            <!-- Reaction picker popup -->
-            <div
-              v-if="reactionPickerMsgId === msg.id"
-              class="reaction-picker"
-              @click.stop
-            >
-              <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
-            </div>
-            </template>
-          </div>
+            :msg="msg"
+            :isGroup="activeChatType === 'group'"
+            :isAdmin="isGroupAdmin"
+            :notes="activeChat === '__notes__'"
+            :dragOverId="dragOverNoteId"
+            :dragOverPos="dragOverPos"
+            :reactionPickerId="reactionPickerMsgId"
+            :quickReactions="quickReactions"
+            :nameOf="nameOf"
+            :avatarOf="avatarOf"
+            :senderOf="senderEmail"
+            :linkify="linkify"
+            :replyBody="replyBody"
+            :replyQuote="replyQuote"
+            :hasReplyQuote="hasReplyQuote"
+            :statusTitle="statusTitle"
+            :isStarred="isStarred"
+            :callPillIcon="callPillIcon"
+            :callEventLabel="callEventLabel"
+            :canCallBack="canCallBack"
+            :pollLead="pollLead"
+            :pollVotes="pollVotes"
+            :pollOptionCount="pollOptionCount"
+            :pollLeadLabel="pollLeadLabel"
+            @context-menu="openMessageMenu"
+            @toggle-reaction-picker="toggleReactionPicker"
+            @toggle-reaction="toggleReaction"
+            @add-reaction="addReaction"
+            @note-drag-start="onNoteDragStart"
+            @note-drag-over="onNoteDragOver"
+            @note-drag-leave="onNoteDragLeave"
+            @note-drop="onNoteDrop"
+            @note-drag-end="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
+            @reply="setReply"
+            @copy-text="copyMessageText"
+            @pin="pinGroupMessage"
+            @edit="startEditMessage"
+            @delete="deleteMessage"
+            @poll-vote="castPollVote"
+            @open-image="openImageViewer"
+            @download="downloadAttachment"
+            @text-click="onMessageTextClick"
+            @call-back="callBack"
+          />
         </MessageList>
 
         <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
@@ -881,6 +807,7 @@ import FoldersBar from './components/FoldersBar.vue';
 import ContactList from './components/ContactList.vue';
 import ChatHeader from './components/ChatHeader.vue';
 import MessageList from './components/MessageList.vue';
+import MessageItem from './components/MessageItem.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
@@ -920,7 +847,8 @@ export default {
     FoldersBar,
     ContactList,
     ChatHeader,
-    MessageList
+    MessageList,
+    MessageItem
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
