@@ -144,103 +144,46 @@
     <div class="main-area" :class="{ 'mobile-hidden': isMobile && !mobileChatOpen }">
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
-        <div class="chat-header" v-if="activeChat">
-          <div class="chat-header-info">
-            <button v-if="isMobile" class="chat-back-btn" @click="closeMobileChat" :title="t('back') || 'Назад'">
-              <Icon name="chevron-left" :size="22" />
-            </button>
-            <!-- На узких экранах она ПЕРЕВОРАЧИВАЕТСЯ вертикально (media <768)
-                 сжималось и перекрывалось кнопками действий (звезда избранного
-                 добавила 6-ю кнопку справа).
-                 -->
-            <div class="chat-head-col">
-            <template v-if="activeChatType === 'group'">
-              <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
-              <div v-else class="group-avatar">
-                {{ (currentGroup && (groupIconMap[currentGroup.id] || currentGroup.name?.charAt(0).toUpperCase())) || '?' }}
-              </div>
-            </template>
-            <template v-else-if="activeChat === '__notes__'">
-              <div class="notes-self-avatar notes-self-avatar-lg">
-                <Icon name="pencil" :size="20" gradient cls="notes-self-icon" />
-              </div>
-            </template>
-            <template v-else>
-              <button class="chat-avatar-btn" :title="t('profile_title_of', { name: nameOf(activeChat) || activeChat })" @click="openContactCard(activeChat)">
-                <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
-              </button>
-            </template>
-            <div class="chat-header-text" :class="{ 'text-inline': activeChatType !== 'group' && activeChat !== '__notes__' }">
-              <h3>{{ activeChatName }}</h3>
-              <div class="chat-status">
-                <template v-if="activeChatType === 'group'">
-                  <span class="members-count" @click="showMembersList = true">
-                    <Icon name="users" :size="15" gradient cls="members-count-icon" />
-                    {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
-                  </span>
-                </template>
-                <template v-else-if="activeChat === '__notes__'">
-                  <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
-                </template>
-                <template v-else>
-                  <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
-                  <span v-if="relayDeliveryMode === 'email'" class="relay-delivery-badge" :title="t('relay_delivery_email_hint')" @click="relayExplainDelivery">
-                    <Icon name="mail" :size="11" /><span>{{ t('relay_delivery_email') }}</span>
-                  </span>
-                </template>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="chat-actions">
-            <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
-              <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="refreshGroupFull"><Icon name="refresh" :size="17" /></button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
-            </template>
-            <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <!-- Замок-индикатор был убран по просьбе пользователя. -->
-              <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
-              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
-            </template>
-            <!-- Исчезающие сообщения: таймер для этого чата.
-                 Единый стиль с chat-action-btn; состояние — цвет иконки
-                 (серый выкл / янтарный вкл) и заливка кнопки.
-                 -->
-            <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
-              <button class="chat-action-btn ephemeral-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
-                :title="t('ephemeral_title') + (currentEphemeralTtl ? t('ephemeral_on_suffix').replace('{ttl}', ephemeralLabel(currentEphemeralTtl)) : t('ephemeral_off_suffix'))"
-                @click="showEphemeralMenu = !showEphemeralMenu">
-                <Icon name="lock" :size="17" :color="currentEphemeralTtl > 0 ? '#f59e0b' : '#8b949e'" />
-              </button>
-              <div v-if="showEphemeralMenu" class="export-menu ephemeral-dropdown">
-                <button v-for="opt in ephemeralOptions" :key="opt.v"
-                  :class="{ active: currentEphemeralTtl === opt.v }"
-                  @click="applyEphemeral(opt.v)">
-                  {{ opt.label }}
-                </button>
-              </div>
-            </div>
-            <!-- Избранное: показать только помеченные сообщения чата.
-                 Активный режим — янтарная звезда (стиль исчезающих сообщений).
-                 -->
-            <button v-if="activeChat && activeChat !== '__notes__'" class="chat-action-btn" :class="{ 'starred-on': showStarredOnly }"
-              :title="(t('chat_starred') || 'Избранное') + (showStarredOnly ? ' — показать все сообщения' : '')"
-              @click="showStarredOnly = !showStarredOnly">
-              <Icon name="star" :size="17" :color="showStarredOnly ? '#f59e0b' : '#8b949e'" />
-            </button>
-            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
-            <div class="export-dropdown" v-if="activeChat">
-              <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
-                <Icon name="download" :size="17" cls="export-icon" />
-              </button>
-              <div v-if="showExportMenu" class="export-menu">
-                <button @click="exportAsJSON"><Icon name="copy" :size="14" /> JSON</button>
-                <button @click="exportAsTXT"><Icon name="pencil" :size="14" /> TXT</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Шапка чата: отдельный компонент (аватар/имя/статус/кнопки
+             действий); активный чат, меню и таймеры живут в App -->
+        <ChatHeader
+          :chat="activeChat"
+          :type="activeChatType"
+          :name="activeChatName"
+          :group="currentGroup"
+          :groupAvatar="currentGroup && groupAvatars[currentGroup.id]"
+          :groupIcon="currentGroup && groupIconMap[currentGroup.id]"
+          :isMobile="isMobile"
+          :isAdmin="isGroupAdmin"
+          :hasPeerKey="!!peerKeys[activeChat]"
+          :relayEmailDelivery="relayDeliveryMode === 'email'"
+          :expCalls="expCalls"
+          :ephemeralTtl="currentEphemeralTtl"
+          :ephemeralMenuOpen="showEphemeralMenu"
+          :ephemeralOptions="ephemeralOptions"
+          :starredOnly="showStarredOnly"
+          :exportMenuOpen="showExportMenu"
+          :nameOf="nameOf"
+          :avatarOf="avatarOf"
+          :membersLabel="membersLabel"
+          :ephemeralLabel="ephemeralLabel"
+          @back="closeMobileChat"
+          @open-card="openContactCard"
+          @members="showMembersList = true"
+          @relay-explain="relayExplainDelivery"
+          @add-member="openAddMemberPopup"
+          @refresh-group="refreshGroupFull"
+          @group-settings="showGroupSettings = !showGroupSettings"
+          @call="startCall"
+          @edit-contact="openContactEdit"
+          @ephemeral-menu="showEphemeralMenu = !showEphemeralMenu"
+          @ephemeral-apply="applyEphemeral"
+          @toggle-starred="showStarredOnly = !showStarredOnly"
+          @toggle-search="showChatSearch = !showChatSearch"
+          @export-menu="showExportMenu = !showExportMenu"
+          @export-json="exportAsJSON"
+          @export-txt="exportAsTXT"
+        />
 
         <!-- Chat search bar -->
         <div v-if="showChatSearch" class="chat-search-bar">
@@ -935,6 +878,7 @@ import PollDialog from './components/PollDialog.vue';
 import ForwardDialog from './components/ForwardDialog.vue';
 import FoldersBar from './components/FoldersBar.vue';
 import ContactList from './components/ContactList.vue';
+import ChatHeader from './components/ChatHeader.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
@@ -972,7 +916,8 @@ export default {
     PollDialog,
     ForwardDialog,
     FoldersBar,
-    ContactList
+    ContactList,
+    ChatHeader
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -8322,11 +8267,7 @@ body {
 }
 .contact-card-seen.online { color: #22c55e; }
 .contact-card-seen.online::before { background: #22c55e; opacity: 1; }
-.chat-avatar-btn {
-  padding: 0; border: none; background: none; cursor: pointer;
-  border-radius: 50%; flex-shrink: 0;
-}
-.chat-avatar-btn:hover { box-shadow: 0 0 0 2px rgba(245,158,11,.5); }
+/* .chat-avatar-btn — в ChatHeader.vue (scoped) */
 
 /* Статус «О себе» контакта */
 .contact-bio-view {
@@ -8535,142 +8476,8 @@ body {
   min-height: 0;
 }
 
-.chat-header {
-  flex-shrink: 0;
-  padding: 16px 24px;
-  /* Android edge-to-edge: на узких экранах чат занимает всю ширину и шапка
-     оказывается под статус-баром — отступ через safe-area-inset-top. */
-  padding-top: calc(16px + var(--safe-top, 0px));
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--bg-secondary);
-}
-
-.chat-header-info {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  /* flex:1 + min-width:0 — без них имя чата не сжимается и выталкивает
-     кнопки действий за экран (узкие экраны android). */
-  flex: 1;
-  min-width: 0;
-}
-
-/* На десктопе — ряд.
-   На мобильном (media <768 ниже) — колонка: имя и замок ПОД аватаром
-   чтобы не перекрываться кнопками действий (звезда добавила 6-ю кнопку).
-   */
-.chat-head-col {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-}
-
-.chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Аватар + email мелким шрифтом под ним (email убран из центра шапки,
-   чтобы длинные адреса не прижимались к кнопкам действий). */
-.chat-avatar-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  max-width: 96px;
-}
-
-.chat-avatar-email {
-  font-size: 10px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-header-info h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-status {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* §1: индикатор канала доставки — конверт «почта», когда релей недоступен
-   или суточный лимит исчерпан. Спокойный янтарный, не пугает. */
-.relay-delivery-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: 6px;
-  color: var(--accent-warning, #d97706);
-  cursor: pointer;
-  opacity: 0.9;
-}
-.relay-delivery-badge:active {
-  opacity: 1;
-}
-
-.chat-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.chat-actions button {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-
-.chat-actions button:hover {
-  background: var(--bg-hover);
-}
-
-/* Текстовые кнопки действий в шапке группового чата
-   («Добавить участника», «Настройки») — заметнее, чем голые эмодзи. */
-.chat-actions button.chat-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px 10px;
-  border: none; 
-  background: transparent;
-  border-radius: var(--radius-sm, 8px);
-  color: var(--text-secondary, #aaa);
-  white-space: nowrap;
-}
-
-.chat-actions button.chat-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary, #fff);
-  border-color: var(--border, rgba(255,255,255,0.2));
-}
+/* Стили шапки чата (chat-header, chat-head-col, chat-actions, chat-status,
+   relay-delivery-badge) — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Messages
@@ -9017,20 +8824,14 @@ body {
      (contextmenu) и запускает НАТИВНОЕ выделение слова. Ползунки
      выделения попадают на оверлей меню — всё исчезает. Отключаем
      нативное выделение на touch: копирование доступно через наше меню
-     (copyMessageText/copyMessageAll). */
+     (copyMessageText/copyMessageAll). Шапка чата (chat-header-text,
+     chat-enc-text) — в ChatHeader.vue (scoped, media hover:none). */
   .message-content,
   .message-sender,
-  .chat-header-text,
   .message-menu button {
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
-  }
-  /* Шапка чата: на узких экранах « Encrypted» не влезает рядом с кнопками
-     (телефон/карандаш/поиск) — оставляем только 🔒. На десктопе слово
-     показывается (места достаточно). */
-  .chat-enc-text {
-    display: none;
   }
 }
 
@@ -9270,19 +9071,8 @@ body {
   font-size: 13px;
 }
 
-/* Members count (кликабельный счётчик участников в шапке группы) */
-.members-count {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.members-count-icon {
-  display: block;
-  flex-shrink: 0;
-  filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.4));
-}
+/* Members count и список участников: счётчик — в ChatHeader.vue (scoped);
+   модалка списка (member-list/member-item/roles) остаётся здесь. */
 
 /* Members list (модалка со списком участников группы) */
 .member-list {
@@ -9352,11 +9142,7 @@ body {
   flex-shrink: 0;
 }
 
-/* Активный режим «показать только избранное» в шапке чата */
-.chat-action-btn.starred-on {
-  background: rgba(245, 158, 11, 0.15);
-  border-radius: 6px;
-}
+/* Активный режим «показать только избранное» — в ChatHeader.vue (scoped) */
 
 .message-footer {
   display: flex;
@@ -9865,68 +9651,7 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-/* Export dropdown */
-.export-dropdown {
-  position: relative;
-}
-
-.export-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-action-icon {
-  display: block;
-}
-
-.export-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--bg-secondary, #12122a);
-  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
-  border-radius: 8px;
-  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
-  overflow: hidden;
-  z-index: 50;
-  min-width: 120px;
-}
-
-/* Исчезающие сообщения: кнопка-таймер в шапке чата.
-   Неактивный — как остальные (без обводки, серый замок).
-   Активный — янтарный замок + янтарные обводка и заливка кнопки.
-   */
-.ephemeral-menu { position: relative; }
-.chat-actions button.chat-action-btn.ephemeral-on {
-  border: 1px solid rgba(245, 158, 11, 0.65);
-  background: rgba(245, 158, 11, 0.12);
-}
-.export-menu.ephemeral-dropdown { min-width: 150px; }
-.export-menu.ephemeral-dropdown button {
-  display: block; width: 100%; text-align: left;
-  padding: 9px 14px; background: none; border: none;
-  color: var(--text-primary, #e6edf3); font-size: 13px; cursor: pointer;
-}
-.export-menu.ephemeral-dropdown button:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
-.export-menu.ephemeral-dropdown button.active { color: var(--accent-warn, #f59e0b); }
-
-.export-menu button {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: none;
-  border: none;
-  color: var(--text-primary, #f1f5f9);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.export-menu button:hover {
-  background: var(--bg-hover, #1e1e4a);
-}
+/* Export dropdown и исчезающие сообщения — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Message Input
@@ -10243,100 +9968,7 @@ body {
   .main-area {
     width: 100%;
   }
-  /* Шапка чата на узком экране: все кнопки обязаны умещаться.
-     Текстовые подписи групповых кнопок скрываются (иконка + title
-     остаются), отступы уменьшаются, имя чата обрезается многоточием. */
-  .chat-header {
-    padding: 10px 12px;
-    /* safe-area сохраняется и в узкоэкранном режиме (иначе шапка чата
-       залезает под статус-бар Android). */
-    padding-top: calc(10px + var(--safe-top, 0px));
-    gap: 6px;
-  }
-  .chat-header-info {
-    gap: 10px;
-  }
-  /* встают под аватаром, ничего не перекрывается кнопками справа. */
-  .chat-head-col {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-  }
-  .chat-head-col .chat-header-text {
-    min-width: 0;
-    max-width: 100%;
-    align-items: flex-start;
-  }
-  .chat-head-col .chat-header-text.text-inline {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-  }
-  .chat-head-col .chat-header-text.text-inline .chat-status {
-    order: -1;      /* замок ПЕРЕД именем */
-    flex-shrink: 0;
-  }
-  .chat-head-col .chat-header-text.text-inline h3 {
-    flex: 1;
-    min-width: 0;
-    margin-bottom: 0;
-  }
-  .chat-header-text h3 {
-    font-size: 14px;
-    line-height: 1.25;
-    margin-bottom: 1px;
-  }
-  .chat-head-col .group-avatar,
-  .chat-head-col .chat-avatar-btn {
-    width: 32px;
-    height: 32px;
-  }
-  .chat-header-info h3 {
-    font-size: 15px;
-  }
-  /* Android: email под аватаром не помещается и перекрывает элементы — скрыт. */
-  .chat-avatar-email {
-    display: none;
-  }
-  .chat-status {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .chat-actions {
-    gap: 2px;
-  }
-  .chat-actions button {
-    padding: 6px;
-  }
-  .chat-actions button.chat-action-btn {
-    padding: 6px 8px;
-    border: none;
-  }
-  .chat-action-label {
-    display: none;
-  }
-}
-
-/* Кнопка «назад» в шапке чата (только мобильный режим). */
-.chat-back-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-full, 999px);
-  color: var(--text-secondary, #94a3b8);
-  cursor: pointer;
-}
-.chat-back-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary, #e2e8f0);
+  /* Шапка чата на узком экране — в ChatHeader.vue (scoped, media<768). */
 }
 
 /* Модалка настроек на мобильном: на всю ширину и высоту, чтобы сайдбар
