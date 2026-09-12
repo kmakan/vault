@@ -198,12 +198,10 @@
           <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
           <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
         </div>
-        <!-- Папки: горизонтальная лента созданных папок -->
-        <div v-if="chatFoldersList.length" class="folder-strip">
-          <button v-for="f in chatFoldersList" :key="f" class="folder-chip"
-                  :class="{ 'folder-chip-on': activeFolder === f }"
-                  @click="activeFolder = activeFolder === f ? '' : f">{{ f }}</button>
-        </div>
+        <!-- Папки: горизонтальная лента созданных папок — отдельный
+             компонент (список и активная папка живут в App:
+             features/folders.js + контекстное меню чата) -->
+        <FoldersBar :folders="chatFoldersList" :active="activeFolder" @select="f => activeFolder = f" />
       </div>
     </div>
     
@@ -999,6 +997,7 @@ import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
 import PollDialog from './components/PollDialog.vue';
 import ForwardDialog from './components/ForwardDialog.vue';
+import FoldersBar from './components/FoldersBar.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
@@ -1034,7 +1033,8 @@ export default {
     QRCodePanel,
     CallOverlay,
     PollDialog,
-    ForwardDialog
+    ForwardDialog,
+    FoldersBar
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -9116,31 +9116,7 @@ body {
 .poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
 .poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
 .poll-footer { font-size: 12px; opacity: 0.7; }
-/* Папки чатов: лента чипов */
-.folder-strip {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 4px 10px 6px;
-  scrollbar-width: thin;
-}
-.folder-chip {
-  flex: 0 0 auto;
-  background: rgba(148, 163, 184, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 999px;
-  color: inherit;
-  font-size: 12.5px;
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.folder-chip:hover { background: rgba(245, 158, 11, 0.12); }
-.folder-chip-on {
-  border-color: #f59e0b;
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.12);
-}
+/* Стили ленты папок (.folder-strip/.folder-chip) — в FoldersBar.vue */
 .chat-menu-folder-label {
   font-size: 11px;
   opacity: 0.6;
