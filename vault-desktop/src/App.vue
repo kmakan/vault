@@ -342,7 +342,7 @@
           <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
             <Icon name="map-pin" :size="18" />
           </button>
-          <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
+          <button v-if="activeChatType === 'group'" class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
             <Icon name="bar-chart" :size="18" />
           </button>
           <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder">
