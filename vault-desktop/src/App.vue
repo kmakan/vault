@@ -4832,6 +4832,7 @@ export default {
         if (!body || !crypto.isEncrypted(body)) continue;
         let chatKey = null; // email (1:1) или 'group:<id>'
         let title = '';
+        let envId = ''; // id конверта (общий для relay-копии и email-копии)
         // 1:1 — расшифровка пир-ключом.
         if (this.peerKeys[from]) {
           try {
@@ -4846,6 +4847,9 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
+              // env.id — ключ кросс-канального дедупа (relay-копия и
+              // email-копия одного сообщения несут ОДИН конверт).
+              if (env.id) envId = String(env.id);
               // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
               // (адрес его relay-очереди) — сохраняем молча, чтобы
               // отвечать ему мгновенными пушами. Ноль ручного ввода.
@@ -4951,7 +4955,13 @@ export default {
             if (!gk) continue;
             try {
               const env = this.parseEnvelope(await crypto.decryptWithGroupKey(body, gk));
-              if (env) { chatKey = 'group:' + g.id; title = g.name || ''; break; }
+              if (env) {
+                chatKey = 'group:' + g.id; title = g.name || '';
+                // env.id — ключ кросс-канального дедупа (relay-копия и
+                // email-копия одного сообщения несут ОДИН конверт).
+                if (env.id) envId = String(env.id);
+                break;
+              }
             } catch (e) { /* не из этой группы */ }
           }
         }
@@ -4965,6 +4975,11 @@ export default {
         // [Gmail]/All Mail имеют разные uid → два уведомления на письмо
         // (монитор + JS-поллинг гонят параллельно). Message-ID глобален.
         const dk = m.message_id ? 'mid:' + m.message_id : mid;
+        // Кросс-канальный дедуп: relay-конверт (uid rl-*) и email-копия несут
+        // ОДИН конверт с одним env.id. Без этого ключа бейдж группы рос дважды —
+        // relay-копия приходила за ~1с, email через 30-60с, и обе считались
+        // «новыми письмами» (uid разных каналов не пересекаются).
+        const ek = envId ? 'env:' + envId : null;
         // дедуп СЧЁТЧИКА
         // (processedUnreadIds) не имеет права блокировать УВЕДОМЛЕНИЕ.
         // В 2fa9103 здесь стоял `continue` — тихий поллинг (notify=false)
@@ -4973,10 +4988,11 @@ export default {
         // пропускалось: пуш не появлялся НИКОГДА. Теперь счётчик растёт
         // только для новых писем, а уведомление дедупится НЕЗАВИСИМО —
         // персист notifiedIds в notify.js (ключ dk = Message-ID).
-        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk));
+        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk) || (ek && this.processedUnreadIds.has(ek)));
         if (counted) {
           this.processedUnreadIds.add(mid);
           this.processedUnreadIds.add(dk);
+          if (ek) this.processedUnreadIds.add(ek);
           if (this.processedUnreadIds.size > 600) {
             // Держим хвост: выкидываем старые (Set в порядке вставки).
             for (const old of this.processedUnreadIds) {
