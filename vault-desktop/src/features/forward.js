@@ -55,7 +55,9 @@ export async function doForward(ctx, key) {
       const groupKey = ctx.groupKeys[gid];
       if (!groupKey) { alert(ctx.t('err_group_key')); return; }
       const content = await crypto.encryptWithGroupKey(envelope, groupKey);
-      await api.sendGroupMessage(gid, content);
+      // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+      const envObj = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+      await api.sendGroupMessage(gid, content, envObj);
       pendingMsg.status = 'sent';
       ctx.markPending(key, pendingMsg);
     } else {

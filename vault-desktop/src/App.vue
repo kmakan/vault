@@ -4387,7 +4387,9 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory('group:' + this.currentGroup.id);
           try {
-            const res = await api.sendGroupMessage(this.currentGroup.id, content);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            const envObjForRelay = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+            const res = await api.sendGroupMessage(this.currentGroup.id, content, envObjForRelay);
             // Частичный фейл (SMTP одного из участников): статус 'failed'
             // (красный) — сообщение остаётся в чате и НЕ исчезает через
             // 10 минут (mergePending уважает failed-записи). Полный успех —
@@ -6166,7 +6168,8 @@ export default {
       if (this.activeChat) {
         try {
           if (this.activeChatType === 'group' && this.currentGroup) {
-            await api.sendGroupMessage(this.currentGroup.id, wire);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
           } else {
             await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
           }
@@ -6345,7 +6348,8 @@ export default {
             if (this.activeChat) {
               try {
                 if (this.activeChatType === 'group' && this.currentGroup) {
-                  await api.sendGroupMessage(this.currentGroup.id, wire);
+                  // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+                  await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
                 } else {
                   await api.sendMessage(this.activeChat, wire, file.type);
                 }

@@ -213,6 +213,22 @@ export async function pickLiveRelay(account) {
 // создавать два параллельных запроса (порядок доставки важнее скорости).
 let pubChain = Promise.resolve();
 
+// Групповая отправка: дублируем конверт на релей КАЖДОМУ участнику,
+// чей peer-токен известен (relayPublish внутри по одному на адрес).
+// Пейсинг >0.11с между pub'ами: сервер релея ограничивает 10 rps
+// по адресату (§5.4) и считает суточный лимит издателя на каждый pub —
+// подряд идущие запросы отклонялись как rate limit.
+export async function relayGroupPublish(account, memberEmails, envelopeObj, encryptedBody) {
+  const { enabled } = await getSettings(account);
+  if (!enabled) return;
+  for (const member of memberEmails) {
+    try {
+      await relayPublish(account, member, envelopeObj, encryptedBody);
+    } catch (e) { /* релей опционален — почта доставит */ }
+    await new Promise(r => setTimeout(r, 120));
+  }
+}
+
 // opts.wake (default true): нужно ли будить получателя ntfy-пушем.
 // call-сигналы НЕ-request (accept/answer/end/reject) шлют wake=false —
 // получатель уже в приложении на звонке, лишний ntfy-пуш приходил

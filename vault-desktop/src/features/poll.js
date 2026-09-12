@@ -123,7 +123,7 @@ export async function sendPoll(ctx, question, options) {
     ctx.messages.push(pendingMsg);
     ctx.scrollToBottom(true);
     if (ctx.activeChatType === 'group') {
-      await api.sendGroupMessage(ctx.currentGroup.id, content);
+      await api.sendGroupMessage(ctx.currentGroup.id, content, { id: pollEnv.id, text: pollEnv.text });
     } else {
       await api.sendMessage(ctx.activeChat, content);
     }
