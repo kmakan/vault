@@ -199,21 +199,22 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false"><Icon name="x" :size="13" /></button>
         </div>
 
-        <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
-          <div v-if="activeChat && showStarredOnly && filteredMessages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="star" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('starred_empty') || 'Нет избранных сообщений' }}</div>
-          </div>
-          <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="lock" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое' }}</div>
-          </div>
-          <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
-          <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
-            <Icon name="pin" :size="14" cls="pinned-banner-icon" />
-            <span class="pinned-banner-text">{{ pinnedPreview || t('pinned_message') || 'Закреплённое сообщение' }}</span>
-            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage"><Icon name="x" :size="13" /></button>
-          </div>
+        <!-- Список сообщений: контейнер/пустые состояния/баннер закрепа —
+             отдельный компонент; карточки сообщений — слотом (следующий
+             шаг декомпозиции выделит их в MessageItem) -->
+        <MessageList
+          ref="messageList"
+          :chat="activeChat"
+          :type="activeChatType"
+          :list="filteredMessages"
+          :starredOnly="showStarredOnly"
+          :pinnedId="pinnedMsgId"
+          :pinnedPreview="pinnedPreview"
+          :isAdmin="isGroupAdmin"
+          @scroll="onMessagesScroll"
+          @scroll-pinned="scrollPinnedToView"
+          @unpin="unpinGroupMessage"
+        >
           <div
             v-for="msg in filteredMessages"
             :key="msg.id"
@@ -335,7 +336,7 @@
             </div>
             </template>
           </div>
-        </div>
+        </MessageList>
 
         <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
              вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
@@ -879,6 +880,7 @@ import ForwardDialog from './components/ForwardDialog.vue';
 import FoldersBar from './components/FoldersBar.vue';
 import ContactList from './components/ContactList.vue';
 import ChatHeader from './components/ChatHeader.vue';
+import MessageList from './components/MessageList.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
@@ -917,7 +919,8 @@ export default {
     ForwardDialog,
     FoldersBar,
     ContactList,
-    ChatHeader
+    ChatHeader,
+    MessageList
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -2196,7 +2199,7 @@ export default {
     // (поллинг не должен выдёргивать из чтения истории).
     scrollToBottom(force = false) {
       this.$nextTick(() => {
-        const el = this.$refs.messagesContainer;
+        const el = this.$refs.messageList && this.$refs.messageList.container;
         if (!el) return;
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
         if (force || nearBottom) {
@@ -2208,12 +2211,12 @@ export default {
     // ушёл от низа чата больше чем на 200px (поллинг/свои отправки его не
     // выдёргивают — только клик по стрелке).
     onMessagesScroll() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       this.showJumpToBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
     },
     jumpToBottom() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
       this.showJumpToBottom = false;
@@ -2279,7 +2282,7 @@ export default {
       this.pinGroupMessage({ id: this.pinnedMsgId, content: '' });
     },
     scrollPinnedToView() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       const t = el.querySelector('[data-msg-id="' + CSS.escape(this.pinnedMsgId) + '"]');
       if (!t) { this.jumpToBottom(); return; }
@@ -8483,55 +8486,11 @@ body {
    Messages
    ═══════════════════════════════════════════════════════════════ */
 
-.messages {
-  flex: 1;
-  /* flex-элемент с overflow:auto обязан иметь
-     min-height: 0, иначе он растягивается на высоту контента и скролл
-     (в т.ч. колесиком мыши) не появляется.
-     */
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative; /* offsetTop элементов считается от этого контейнера */
-}
-
-/* Закреплённое сообщение группы (баннер поверх списка) */
-.pinned-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  border-radius: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-  font-size: 13px;
-}
-.pinned-banner-icon { flex-shrink: 0; }
+/* Скролл-контейнер сообщений (messages/messages-empty/pinned-banner) —
+   в MessageList.vue (scoped); стили карточек .message* остаются здесь. */
 
 /* Reply-иконка в баре ответа/редактирования */
 .reply-bar-ic { flex-shrink: 0; }
-.pinned-banner-text {
-  flex: 1;
-  color: var(--text-primary, #f1f5f9);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pinned-banner-unpin {
-  background: transparent;
-  border: none;
-  color: var(--text-muted, #64748b);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-.pinned-banner-unpin:hover { background: rgba(255,255,255,0.1); color: var(--text-primary, #f1f5f9); }
 
 /* Подсветка позиции при перетаскивании заметок */
 .drag-over-before { box-shadow: 0 -2px 0 0 var(--accent-primary, #6366f1); }
@@ -8965,16 +8924,7 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-.messages-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 24px;
-  gap: 12px;
-}
+/* Пустое состояние списка — в MessageList.vue (scoped) */
 
 /* Attachment previews */
 .attachment-preview {
@@ -9807,30 +9757,8 @@ body {
 
 .attach-menu-item:hover { background: var(--bg-hover); }
 
-
-
-/* ═══════════════════════════════════════════════════════════════
-   Empty State
-   ═══════════════════════════════════════════════════════════════ */
-
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-}
-
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 16px;
-}
+/* Пустые состояния (empty-state/empty-icon/empty-text) — в MessageList.vue
+   (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Key Manager
