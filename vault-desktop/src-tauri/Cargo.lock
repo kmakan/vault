@@ -6881,7 +6881,7 @@ dependencies = [
 
 [[package]]
 name = "vault-desktop"
-version = "0.1.159"
+version = "0.1.161"
 dependencies = [
  "android_logger",
  "anyhow",
