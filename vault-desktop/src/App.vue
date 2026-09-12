@@ -228,7 +228,7 @@
             :quickReactions="quickReactions"
             :nameOf="nameOf"
             :avatarOf="avatarOf"
-            :senderOf="senderEmail"
+            :senderOf="msgSenderEmail"
             :linkify="linkify"
             :replyBody="replyBody"
             :replyQuote="replyQuote"
@@ -6404,6 +6404,15 @@ export default {
       if (!raw) return '';
       const m = String(raw).match(/<([^>]+)>/);
       return (m ? m[1] : raw).trim().toLowerCase();
+    },
+    // Адаптер для MessageItem: карточка зовёт senderOf(msg-объект), а
+    // senderEmail ждёт строку адреса. Письмо группы несёт sender_id
+    // (email автора) — достаём его; для локальных записей без sender_id
+    // (заметки/служебные) возвращаем пустую строку.
+    msgSenderEmail(msg) {
+      if (msg == null) return '';
+      const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
+      return this.senderEmail(raw);
     },
     // ── Черновики ──────────────────────────────────────────────────
     // (логика в features/drafts.js; обёртки см. в блоке feature-обёрток выше)
