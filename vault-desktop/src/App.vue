@@ -551,20 +551,14 @@
           @close="pollDialog = false"
           @confirm="(q, opts) => sendPoll(q, opts)"
         />
-        <!-- Пересылка: выбор чата -->
-        <div v-if="forwardTo" class="poll-dialog">
-          <div class="poll-dialog-box">
-            <div class="poll-dialog-title">{{ t('forward_to') || 'Переслать в чат' }}</div>
-            <div class="forward-list">
-              <button v-for="c in forwardTargets" :key="c.key" class="poll-option" @click="doForward(c.key)">
-                <span class="poll-option-label">{{ c.label }}</span>
-              </button>
-            </div>
-            <div class="poll-dialog-row">
-              <button class="btn-primary" @click="forwardTo = null">{{ t('cancel') || 'Отмена' }}</button>
-            </div>
-          </div>
-        </div>
+        <!-- Пересылка: выбор чата — отдельный компонент (список целей
+             считает features/forward.js, компонент только отображает) -->
+        <ForwardDialog
+          :show="!!forwardTo"
+          :targets="forwardTargets"
+          @close="forwardTo = null"
+          @select="key => doForward(key)"
+        />
         <!-- AudioRecorder: открыт новой mic-кнопкой в ряду (mic↔send) -->
         <AudioRecorder
           :show="showAudioRecorder"
@@ -1004,6 +998,7 @@ import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServe
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
 import PollDialog from './components/PollDialog.vue';
+import ForwardDialog from './components/ForwardDialog.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
@@ -1038,7 +1033,8 @@ export default {
     CipherTool,
     QRCodePanel,
     CallOverlay,
-    PollDialog
+    PollDialog,
+    ForwardDialog
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -9120,30 +9116,6 @@ body {
 .poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
 .poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
 .poll-footer { font-size: 12px; opacity: 0.7; }
-/* Стили диалога: временно здесь для inline-разметки пересылки ниже;
-   уходят в ForwardDialog.vue вместе с его шаблоном (шаг 2) */
-.poll-dialog {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 300;
-}
-.poll-dialog-box {
-  background: var(--bg-primary, #0b0f17);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 14px;
-  padding: 18px;
-  width: min(420px, 92vw);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.poll-dialog-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
-.poll-dialog-row { display: flex; gap: 8px; margin-top: 4px; }
-.poll-dialog-row .btn-primary { flex: 0 0 auto; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; }
 /* Папки чатов: лента чипов */
 .folder-strip {
   display: flex;
@@ -9173,13 +9145,6 @@ body {
   font-size: 11px;
   opacity: 0.6;
   padding: 4px 10px 2px;
-}
-.forward-list {
-  max-height: 260px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .reply-btn {
