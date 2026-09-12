@@ -50,6 +50,15 @@ pub struct AppState {
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
     pub ntfy_url: String,
+    /// Пара-фикс ntfy (0.1.164): когда получатель последний раз сам
+    /// забирал конверты (poll/ws). Если poll был недавно — процесс
+    /// получателя жив (эко-тикер 5с, классика 30-60с) и сам покажет
+    /// локальное уведомление; ntfy-будильник тогда НЕ шлём (дубль
+    /// «шторка+пуш»). Молчащий >90с получатель (приложение смахнуто,
+    /// эко-фон, мёртвый процесс) — будим ntfy, это единственный канал.
+    /// Ключ — hash read-токена (тот же, что ntfy-topic). In-memory:
+    /// рестарт релея = всем «молчащим», первый pub честно разбудит.
+    pub last_seen: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 #[derive(Default)]
@@ -221,17 +230,28 @@ pub async fn relay_pub(
     // topic = хэш read-токена (opaque). Содержимое НЕ раскрывается —
     // «есть новое» + счётчик. Телефон, подписанный на topic, просыпается
     // от системного пуша и забирает конверты poll'ом (дедуп по id).
+    // Пара-фикс (0.1.164): будим ТОЛЬКО молчащего получателя —
+    // poll/ws за последние 90с = живой клиент сам покажет уведомление
+    // (клиентская половина пары сняла эко-гейт локальной нотификации),
+    // и без гейта здесь мы бы послали дубль (шторка + пуш). Молчащий
+    // получатель — пуш обязателен, это его единственный канал.
     // wake=false (call-сигналы после request) — пуши НЕ шлём: адресат
     // уже активен на звонке, уведомление было бы лишним.
     if !app.ntfy_url.is_empty() && req.wake {
-        let ntfy_url = app.ntfy_url.clone();
-        let topic = to_tok.hash.clone();
-        let total = app.store.len(&to_tok.hash);
-        // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
-        // дедуп путей уведомлений — тумблером эко (один путь, не оба).
-        tokio::task::spawn_blocking(move || {
-            ntfy_publish(&ntfy_url, &topic, total);
-        });
+        let silent_for = {
+            let seen = app.last_seen.lock().unwrap();
+            seen.get(&to_tok.hash).map_or(u64::MAX, |t| now().saturating_sub(*t))
+        };
+        if silent_for >= 90 {
+            let ntfy_url = app.ntfy_url.clone();
+            let topic = to_tok.hash.clone();
+            let total = app.store.len(&to_tok.hash);
+            // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
+            // дедуп путей уведомлений — last_seen-гейт (один путь, не оба).
+            tokio::task::spawn_blocking(move || {
+                ntfy_publish(&ntfy_url, &topic, total);
+            });
+        }
     }
     (StatusCode::OK, AxumJson(PubOk { ok: true, mid })).into_response()
 }
@@ -265,6 +285,19 @@ pub async fn relay_poll(
         return err(StatusCode::TOO_MANY_REQUESTS, "rate limit");
     }
     let wait = q.wait.unwrap_or(0).min(25);
+    // Пара-фикс (0.1.164): получатель жив — отмечаем его «видимым» для
+    // ntfy-гейта (см. relay_pub). Даже 204-поллинг тикера = процесс жив.
+    {
+        let mut seen = app.last_seen.lock().unwrap();
+        let t = now();
+        let len_before = seen.len();
+        seen.insert(tok.hash.clone(), t);
+        // Гигиена карты: раз в ~500 записей выпарываем stale (>24ч) —
+        // карта не растёт бесконечно на несуществующих токенах.
+        if len_before % 500 == 499 {
+            seen.retain(|_, ts| t.saturating_sub(*ts) < 86400);
+        }
+    }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
     loop {
         if let Some(list) = app.store.drain(&tok.hash) {
@@ -293,18 +326,25 @@ pub async fn relay_ws(
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
     }
     let app2 = app.clone();
+    // Пара-фикс (0.1.164): живой WS-клиент тоже «не молчит» — ntfy-гейт
+    // не должен будить получателя с открытым WebSocket-подключением.
+    {
+        let mut seen = app.last_seen.lock().unwrap();
+        seen.insert(tok.hash.clone(), now());
+    }
     ws.on_upgrade(move |socket| async move {
         app2.metrics.ws_sessions.fetch_add(1, Ordering::Relaxed);
         ws_serve(app2, tok, socket).await;
     })
 }
 
-async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, mut socket: axum::extract::ws::WebSocket) {
+async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::extract::ws::WebSocket) {
     use futures_util::{SinkExt, StreamExt};
     let (mut tx, mut rx) = socket.split();
-    // hello: сколько ждёт получатель
-    let pending = app.store.len(&tok.hash);
-    let hello = serde_json::json!({"t":"hello","pending":pending});
+    // Пара-фикс (0.1.164): пока WS открыт, получатель жив — обновляем
+    // last_seen каждые 30с (loop ниже пингует store; здесь же touch).
+    let mut last_touch = now();
+    let hello = serde_json::json!({"t":"hello","pending":app.store.len(&tok.hash)});
     let _ = tx.send(Message::Text(hello.to_string())).await;
     // Не-ack'нутые id: при реконнекте вернутся снова (at-least-once).
     let mut inflight: HashMap<String, vault_relay::store::Envelope> = HashMap::new();
@@ -318,6 +358,14 @@ async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, mut socket: axum:
                     return;
                 }
                 inflight.insert(env.id.clone(), env);
+            }
+        }
+        // touch: открытый WS = получатель не молчит (см. ntfy-гейт в pub).
+        let t_now = now();
+        if t_now.saturating_sub(last_touch) >= 30 {
+            last_touch = t_now;
+            if let Ok(mut seen) = app.last_seen.lock() {
+                seen.insert(tok.hash.clone(), t_now);
             }
         }
         tokio::select! {
@@ -582,6 +630,7 @@ async fn main() {
         daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
         free_daily_limit,
         token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
+        last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}"
