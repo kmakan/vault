@@ -5017,8 +5017,13 @@ export default {
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {
+      // Мобильная навигация: кнопка «назад» возвращает к списку чатов
+      // (mobileChatOpen=false), но activeChat/activeChatType ещё хранят
+      // прошлый чат. Без проверки mobileChatOpen для групп новые групповые
+      // сообщения считались «видимыми» — ни бейджа, ни уведомления.
       if (chatKey.indexOf('group:') === 0) {
-        return this.activeChatType === 'group' && this.activeChat === chatKey;
+        return this.activeChatType === 'group' && this.activeChat === chatKey &&
+          (!this.isMobile || this.mobileChatOpen);
       }
       return this.activeChatType === 'chat' && this.activeChat === chatKey &&
         (!this.isMobile || this.mobileChatOpen);

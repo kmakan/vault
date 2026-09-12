@@ -40,6 +40,10 @@ function confirm() {
   const opts = options.value.map(o => o.trim()).filter(Boolean)
   if (!q || opts.length < 2) return
   emit('confirm', q, opts)
+  // Диалог закрывается сразу после отправки — раньше форма только
+  // очищалась (reset), pollDialog оставался true и диалог висел,
+  // пока пользователь не нажмёт «Отмена».
+  emit('close')
   reset()
 }
 
