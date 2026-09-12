@@ -24,6 +24,11 @@ body {
      иначе контент (поле ввода чата, тосты) уходит под виртуальные кнопки. */
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+  /* Ландшафт телефона: навбар оказывается у ЛЕВОГО/ПРАВОГО края, а не
+     снизу. Без этих отступов сайдбар и чат уходили за виртуальные кнопки
+     (env left=36px right=48px на Cubot X50 в landscape). */
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 /* Выпадающие списки: явный фон/текст опций по переменным темы. В WebKitGTK

@@ -108,205 +108,82 @@
         </div>
       </div>
       
-      <div class="contacts-list">
-        <div class="search-box">
-          <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
-        </div>
-
-        <!-- Заметки для себя: локальный чат с собой.
-             Не зависит от peer_keys, почты и шифрования — хранится только
-             в localStorage vault-notes-<email>. -->
-        <div
-          class="contact-item notes-self"
-          :class="{ active: activeChat === '__notes__' }"
-          @click="selectNotes"
-        >
-          <div class="notes-self-avatar">
-            <Icon name="pencil" :size="18" gradient cls="notes-self-icon" />
-          </div>
-          <div class="contact-info">
-            <div class="contact-name">{{ t('notes_self') || 'Заметки для себя' }}</div>
-            <div class="contact-email">{{ t('notes_self_hint') || 'Только на этом устройстве' }}</div>
-          </div>
-        </div>
-        <!-- Onboarding: no contacts and no peer keys yet -->
-        <div v-if="contacts.length === 0 && Object.keys(peerKeys).length === 0" class="contacts-empty">
-          <div class="contacts-empty-title">{{ t('contacts_empty_title') }}</div>
-          <div class="contacts-empty-hint">{{ t('contacts_empty_hint') }}</div>
-          <div class="contacts-empty-actions">
-            <button class="btn-primary" @click="showKeyManager = true"><Icon name="key" :size="15" /> {{ t('nav_keys') }}</button>
-            <button class="btn-secondary" @click="showQRCode = true"><Icon name="link" :size="15" /> {{ t('nav_add_contact') }}</button>
-          </div>
-        </div>
-        <div 
-          v-for="contact in filteredContacts" 
-          :key="contact.email"
-          :class="['contact-item', { active: activeChat === contact.email }]"
-          @click="selectChat(contact.email)"
-          @contextmenu="openChatMenu({ type: 'contact', email: contact.email }, $event)"
-        >
-          <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
-          <div class="contact-info">
-            <div class="contact-name">{{ nameOf(contact.email) }}</div>
-            <div class="contact-email">{{ contact.email }}</div>
-          </div>
-          <div class="contact-status">
-            <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
-            <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
-            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами (по id участника или QR)'"><Icon name="unlock" :size="13" /></span>
-            <span v-if="isRecentlySeen(contact.email)" class="status-dot online" :title="t('contact_seen_recently')"></span>
-            <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
-          </div>
-        </div>
-        
-        <!-- Email load error (debug aid) -->
-        <div v-if="emailError" class="email-error-hint">{{ emailError }}</div>
-
-        <!-- Groups Section -->
-        <div v-if="groups.length > 0" class="groups-section">
-          <div class="groups-header">
-            <Icon name="users" :size="14" cls="groups-header-icon" />
-            {{ t('nav_groups') || 'Groups' }}
-          </div>
-          <div 
-            v-for="group in filteredGroups" 
-            :key="group.id"
-            :class="['contact-item', { active: activeChat === `group:${group.id}` }]"
-            @click="selectGroup(group)"
-            @contextmenu="openChatMenu({ type: 'group', id: group.id }, $event)"
-          >
-            <img v-if="groupAvatars[group.id]" :src="groupAvatars[group.id]" class="group-avatar group-avatar-img" :alt="group.name" />
-            <div v-else class="group-avatar">
-              {{ groupIconMap[group.id] || group.name.charAt(0).toUpperCase() }}
-            </div>
-            <div class="contact-info">
-              <div class="contact-name">{{ group.name }}</div>
-              <div class="contact-email">{{ (group.members || []).length }} {{ membersLabel((group.members || []).length) }}</div>
-            </div>
-            <div class="contact-status">
-              <span v-if="unreadOf('group:' + group.id)" class="unread-badge">{{ unreadOf('group:' + group.id) }}</span>
-              <Icon v-if="isMuted('group:' + group.id)" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
-            </div>
-          </div>
-        </div>
-        <!-- переключатель архива (виден, когда есть архивные чаты) -->
-        <!-- v-if: показываем и когда showArchived=true, даже если архив
-             опустел — иначе после «из архива» последнего чата переключатель
-             исчезал и выйти из режима архива было нельзя
-             -->
-        <div v-if="hasArchivedChats || showArchived" class="archive-toggle" @click="showArchived = !showArchived">
-          <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
-          <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
-        </div>
-        <!-- Папки: горизонтальная лента созданных папок -->
-        <div v-if="chatFoldersList.length" class="folder-strip">
-          <button v-for="f in chatFoldersList" :key="f" class="folder-chip"
-                  :class="{ 'folder-chip-on': activeFolder === f }"
-                  @click="activeFolder = activeFolder === f ? '' : f">{{ f }}</button>
-        </div>
-      </div>
+      <ContactList
+        :search="searchQuery"
+        :contacts="filteredContacts"
+        :groups="filteredGroups"
+        :avatars="groupAvatars"
+        :groupIconMap="groupIconMap"
+        :folders="chatFoldersList"
+        :activeFolder="activeFolder"
+        :active="activeChat"
+        :error="emailError"
+        :empty="contacts.length === 0 && Object.keys(peerKeys).length === 0"
+        :showArchived="showArchived"
+        :hasArchived="hasArchivedChats"
+        :peerKeys="peerKeys"
+        :nameOf="nameOf"
+        :avatarOf="avatarOf"
+        :unreadOf="unreadOf"
+        :isMuted="isMuted"
+        :isRecentlySeen="isRecentlySeen"
+        :membersLabel="membersLabel"
+        @search="v => searchQuery = v"
+        @select-chat="selectChat"
+        @select-group="selectGroup"
+        @select-notes="selectNotes"
+        @menu="openChatMenu"
+        @delete="deleteContact"
+        @open-keys="showKeyManager = true"
+        @open-qr="showQRCode = true"
+        @archive-toggle="showArchived = !showArchived"
+        @folder="f => activeFolder = f"
+      />
     </div>
     
     <div class="main-area" :class="{ 'mobile-hidden': isMobile && !mobileChatOpen }">
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
-        <div class="chat-header" v-if="activeChat">
-          <div class="chat-header-info">
-            <button v-if="isMobile" class="chat-back-btn" @click="closeMobileChat" :title="t('back') || 'Назад'">
-              <Icon name="chevron-left" :size="22" />
-            </button>
-            <!-- На узких экранах она ПЕРЕВОРАЧИВАЕТСЯ вертикально (media <768)
-                 сжималось и перекрывалось кнопками действий (звезда избранного
-                 добавила 6-ю кнопку справа).
-                 -->
-            <div class="chat-head-col">
-            <template v-if="activeChatType === 'group'">
-              <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
-              <div v-else class="group-avatar">
-                {{ (currentGroup && (groupIconMap[currentGroup.id] || currentGroup.name?.charAt(0).toUpperCase())) || '?' }}
-              </div>
-            </template>
-            <template v-else-if="activeChat === '__notes__'">
-              <div class="notes-self-avatar notes-self-avatar-lg">
-                <Icon name="pencil" :size="20" gradient cls="notes-self-icon" />
-              </div>
-            </template>
-            <template v-else>
-              <button class="chat-avatar-btn" :title="t('profile_title_of', { name: nameOf(activeChat) || activeChat })" @click="openContactCard(activeChat)">
-                <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
-              </button>
-            </template>
-            <div class="chat-header-text" :class="{ 'text-inline': activeChatType !== 'group' && activeChat !== '__notes__' }">
-              <h3>{{ activeChatName }}</h3>
-              <div class="chat-status">
-                <template v-if="activeChatType === 'group'">
-                  <span class="members-count" @click="showMembersList = true">
-                    <Icon name="users" :size="15" gradient cls="members-count-icon" />
-                    {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
-                  </span>
-                </template>
-                <template v-else-if="activeChat === '__notes__'">
-                  <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
-                </template>
-                <template v-else>
-                  <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
-                  <span v-if="relayDeliveryMode === 'email'" class="relay-delivery-badge" :title="t('relay_delivery_email_hint')" @click="relayExplainDelivery">
-                    <Icon name="mail" :size="11" /><span>{{ t('relay_delivery_email') }}</span>
-                  </span>
-                </template>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="chat-actions">
-            <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
-              <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="refreshGroupFull"><Icon name="refresh" :size="17" /></button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
-            </template>
-            <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <!-- Замок-индикатор был убран по просьбе пользователя. -->
-              <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
-              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
-            </template>
-            <!-- Исчезающие сообщения: таймер для этого чата.
-                 Единый стиль с chat-action-btn; состояние — цвет иконки
-                 (серый выкл / янтарный вкл) и заливка кнопки.
-                 -->
-            <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
-              <button class="chat-action-btn ephemeral-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
-                :title="t('ephemeral_title') + (currentEphemeralTtl ? t('ephemeral_on_suffix').replace('{ttl}', ephemeralLabel(currentEphemeralTtl)) : t('ephemeral_off_suffix'))"
-                @click="showEphemeralMenu = !showEphemeralMenu">
-                <Icon name="lock" :size="17" :color="currentEphemeralTtl > 0 ? '#f59e0b' : '#8b949e'" />
-              </button>
-              <div v-if="showEphemeralMenu" class="export-menu ephemeral-dropdown">
-                <button v-for="opt in ephemeralOptions" :key="opt.v"
-                  :class="{ active: currentEphemeralTtl === opt.v }"
-                  @click="applyEphemeral(opt.v)">
-                  {{ opt.label }}
-                </button>
-              </div>
-            </div>
-            <!-- Избранное: показать только помеченные сообщения чата.
-                 Активный режим — янтарная звезда (стиль исчезающих сообщений).
-                 -->
-            <button v-if="activeChat && activeChat !== '__notes__'" class="chat-action-btn" :class="{ 'starred-on': showStarredOnly }"
-              :title="(t('chat_starred') || 'Избранное') + (showStarredOnly ? ' — показать все сообщения' : '')"
-              @click="showStarredOnly = !showStarredOnly">
-              <Icon name="star" :size="17" :color="showStarredOnly ? '#f59e0b' : '#8b949e'" />
-            </button>
-            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
-            <div class="export-dropdown" v-if="activeChat">
-              <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
-                <Icon name="download" :size="17" cls="export-icon" />
-              </button>
-              <div v-if="showExportMenu" class="export-menu">
-                <button @click="exportAsJSON"><Icon name="copy" :size="14" /> JSON</button>
-                <button @click="exportAsTXT"><Icon name="pencil" :size="14" /> TXT</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Шапка чата: отдельный компонент (аватар/имя/статус/кнопки
+             действий); активный чат, меню и таймеры живут в App -->
+        <ChatHeader
+          :chat="activeChat"
+          :type="activeChatType"
+          :name="activeChatName"
+          :group="currentGroup"
+          :groupAvatar="currentGroup && groupAvatars[currentGroup.id]"
+          :groupIcon="currentGroup && groupIconMap[currentGroup.id]"
+          :isMobile="isMobile"
+          :isAdmin="isGroupAdmin"
+          :hasPeerKey="!!peerKeys[activeChat]"
+          :relayEmailDelivery="relayDeliveryMode === 'email'"
+          :expCalls="expCalls"
+          :ephemeralTtl="currentEphemeralTtl"
+          :ephemeralMenuOpen="showEphemeralMenu"
+          :ephemeralOptions="ephemeralOptions"
+          :starredOnly="showStarredOnly"
+          :exportMenuOpen="showExportMenu"
+          :nameOf="nameOf"
+          :avatarOf="avatarOf"
+          :membersLabel="membersLabel"
+          :ephemeralLabel="ephemeralLabel"
+          @back="closeMobileChat"
+          @open-card="openContactCard"
+          @members="showMembersList = true"
+          @relay-explain="relayExplainDelivery"
+          @add-member="openAddMemberPopup"
+          @refresh-group="refreshGroupFull"
+          @group-settings="showGroupSettings = !showGroupSettings"
+          @call="startCall"
+          @edit-contact="openContactEdit"
+          @ephemeral-menu="showEphemeralMenu = !showEphemeralMenu"
+          @ephemeral-apply="applyEphemeral"
+          @toggle-starred="showStarredOnly = !showStarredOnly"
+          @toggle-search="showChatSearch = !showChatSearch"
+          @export-menu="showExportMenu = !showExportMenu"
+          @export-json="exportAsJSON"
+          @export-txt="exportAsTXT"
+        />
 
         <!-- Chat search bar -->
         <div v-if="showChatSearch" class="chat-search-bar">
@@ -322,143 +199,70 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false"><Icon name="x" :size="13" /></button>
         </div>
 
-        <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
-          <div v-if="activeChat && showStarredOnly && filteredMessages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="star" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('starred_empty') || 'Нет избранных сообщений' }}</div>
-          </div>
-          <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="lock" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое' }}</div>
-          </div>
-          <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
-          <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
-            <Icon name="pin" :size="14" cls="pinned-banner-icon" />
-            <span class="pinned-banner-text">{{ pinnedPreview || t('pinned_message') || 'Закреплённое сообщение' }}</span>
-            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage"><Icon name="x" :size="13" /></button>
-          </div>
-          <div
+        <!-- Список сообщений: контейнер/пустые состояния/баннер закрепа —
+             отдельный компонент; карточки сообщений — слотом (следующий
+             шаг декомпозиции выделит их в MessageItem) -->
+        <MessageList
+          ref="messageList"
+          :chat="activeChat"
+          :type="activeChatType"
+          :list="filteredMessages"
+          :starredOnly="showStarredOnly"
+          :pinnedId="pinnedMsgId"
+          :pinnedPreview="pinnedPreview"
+          :isAdmin="isGroupAdmin"
+          @scroll="onMessagesScroll"
+          @scroll-pinned="scrollPinnedToView"
+          @unpin="unpinGroupMessage"
+        >
+          <MessageItem
             v-for="msg in filteredMessages"
             :key="msg.id"
-            :data-msg-id="msg.id"
-            :class="['message', { own: msg.from === 'me', 'call-event': !!msg.callEvent, 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
-            :draggable="activeChat === '__notes__'"
-            @dragstart="onNoteDragStart($event, msg)"
-            @dragover="onNoteDragOver($event, msg)"
-            @dragleave="onNoteDragLeave($event, msg)"
-            @drop="onNoteDrop($event, msg)"
-            @dragend="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
-            @click.stop="toggleReactionPicker(msg.id)"
-            @contextmenu.prevent="openMessageMenu($event, msg)"
-          >
-            <!-- Звонки: «пилюля» пропущенного/завершённого вызова
-                 Текст только через t.
-                 -->
-            <div v-if="msg.callEvent" class="call-pill" :class="'call-pill--' + msg.callEvent.kind">
-              <Icon :name="callPillIcon(msg)" :size="13" color="currentColor" />
-              <span class="call-pill-label">{{ callEventLabel(msg) }}</span>
-              <span class="call-pill-time">{{ msg.time }}</span>
-              <button v-if="canCallBack(msg)" class="call-back-btn" :title="t('call_back')" @click.stop="callBack()">
-                <Icon name="phone" :size="12" color="currentColor" />{{ t('call_back') }}
-              </button>
-            </div>
-            <template v-else>
-            <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
-            <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
-              <UserAvatar :email="senderEmail(msg.sender_id)" :avatarUrl="avatarOf(senderEmail(msg.sender_id))" :size="26" />
-              <span class="message-sender-name">{{ nameOf(senderEmail(msg.sender_id)) }}</span>
-            </div>
-            <div class="message-content">
-              <template v-if="msg.deleted">
-                <Icon name="ban" :size="13" /> <span class="message-deleted">{{ t('message_deleted') || 'Сообщение удалено' }}</span>
-              </template>
-              <template v-else>
-              <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
-              <!-- Голосование: карточка вместо текста (poll-конверт) -->
-              <div v-if="msg.poll" class="poll-card">
-                <div class="poll-title"><Icon name="bar-chart" :size="14" /> {{ msg.poll.question }}</div>
-                <button v-for="(opt, i) in msg.poll.options" :key="i"
-                        class="poll-option"
-                        :class="{ 'poll-option-mine': msg.poll.myVote === i, 'poll-option-lead': pollLead(msg.poll) === i }"
-                        :disabled="msg.poll.closed || msg.poll.myVote !== null"
-                        @click.stop="castPollVote(msg, i)">
-                  <span class="poll-option-label">{{ opt }}</span>
-                  <span class="poll-option-count" v-if="pollVotes(msg.poll).total">{{ pollOptionCount(msg.poll, i) }}</span>
-                  <span class="poll-check" v-if="msg.poll.myVote === i">✓</span>
-                </button>
-                <div class="poll-footer" v-if="pollVotes(msg.poll).total">
-                  {{ pollVotes(msg.poll).voters }} {{ t('poll_voted') }} · {{ pollLeadLabel(msg.poll) }}
-                </div>
-              </div>
-              <span v-else v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
-              <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
-              <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
-                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
-                     :alt="msg.attachment.name"
-                     class="attachment-image"
-                     @click="openImageViewer(msg.attachment)" />
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
-                <audio controls class="attachment-audio"
-                       :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isText" class="attachment-preview">
-                <pre class="attachment-text">{{ msg.attachment.textContent }}</pre>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment" class="attachment-preview">
-                <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
-                  <Icon name="file" :size="13" /> {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
-                  <span class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</span>
-                </div>
-              </div>
-              </template>
-            </div>
-            <!-- Reply button (visible on hover) -->
-            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)"><Icon name="reply" :size="13" /></button>
-            <!-- Copy button (visible on hover) -->
-            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)"><Icon name="copy" :size="13" /></button>
-            <!-- Pin — только админ группы (hover) -->
-            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)"><Icon name="pin" :size="13" /></button>
-            <!-- Edit/Delete — только свои сообщения (видны на hover) -->
-            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)"><Icon name="pencil" :size="13" /></button>
-            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)"><Icon name="trash" :size="13" /></button>
-            <!-- Reactions -->
-            <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
-              <span
-                v-for="(r, ri) in msg.reactions"
-                :key="ri"
-                class="reaction-badge"
-                @click.stop="toggleReaction(msg.id, r)"
-              >{{ r }}</span>
-            </div>
-            <div class="message-footer">
-              <!-- Пометка «Избранное»: звёздочка рядом с временем -->
-              <Icon v-if="isStarred(msg)" name="star" :size="11" cls="msg-starred-icon" />
-              <div class="message-time">{{ msg.time }}</div>
-              <!-- Статус — маленький цветной кружок (без текста, чтобы не
-                   путаться с языками): красный=отправка, жёлтый=отправлено,
-                   зелёный=доставлено, синий=просмотрено -->
-              <span
-                v-if="msg.from === 'me'"
-                class="message-status-dot"
-                :class="msg.status || 'sent'"
-                :title="statusTitle(msg)"
-              ></span>
-            </div>
-            <!-- Reaction picker popup -->
-            <div
-              v-if="reactionPickerMsgId === msg.id"
-              class="reaction-picker"
-              @click.stop
-            >
-              <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
-            </div>
-            </template>
-          </div>
-        </div>
+            :msg="msg"
+            :isGroup="activeChatType === 'group'"
+            :isAdmin="isGroupAdmin"
+            :notes="activeChat === '__notes__'"
+            :dragOverId="dragOverNoteId"
+            :dragOverPos="dragOverPos"
+            :reactionPickerId="reactionPickerMsgId"
+            :quickReactions="quickReactions"
+            :nameOf="nameOf"
+            :avatarOf="avatarOf"
+            :senderOf="msgSenderEmail"
+            :linkify="linkify"
+            :replyBody="replyBody"
+            :replyQuote="replyQuote"
+            :hasReplyQuote="hasReplyQuote"
+            :statusTitle="statusTitle"
+            :isStarred="isStarred"
+            :callPillIcon="callPillIcon"
+            :callEventLabel="callEventLabel"
+            :canCallBack="canCallBack"
+            :pollLead="pollLead"
+            :pollVotes="pollVotes"
+            :pollOptionCount="pollOptionCount"
+            :pollLeadLabel="pollLeadLabel"
+            @context-menu="openMessageMenu"
+            @toggle-reaction-picker="toggleReactionPicker"
+            @toggle-reaction="toggleReaction"
+            @add-reaction="addReaction"
+            @note-drag-start="onNoteDragStart"
+            @note-drag-over="onNoteDragOver"
+            @note-drag-leave="onNoteDragLeave"
+            @note-drop="onNoteDrop"
+            @note-drag-end="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
+            @reply="setReply"
+            @copy-text="copyMessageText"
+            @pin="pinGroupMessage"
+            @edit="startEditMessage"
+            @delete="deleteMessage"
+            @poll-vote="castPollVote"
+            @open-image="openImageViewer"
+            @download="downloadAttachment"
+            @text-click="onMessageTextClick"
+            @call-back="callBack"
+          />
+        </MessageList>
 
         <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
              вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
@@ -538,40 +342,27 @@
           <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
             <Icon name="map-pin" :size="18" />
           </button>
-          <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
+          <button v-if="activeChatType === 'group'" class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
             <Icon name="bar-chart" :size="18" />
           </button>
           <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder">
             <Icon name="mic" :size="18" />
           </button>
         </div>
-        <!-- Создание голосования -->
-        <div v-if="pollDialog" class="poll-dialog">
-          <div class="poll-dialog-box">
-            <div class="poll-dialog-title">{{ t('poll_create') || 'Создать голосование' }}</div>
-            <input v-model="pollQuestion" class="duress-input" :placeholder="t('poll_question_ph') || 'Вопрос'" />
-            <input v-for="(o, i) in pollOptions" :key="i" v-model="pollOptions[i]" class="duress-input" :placeholder="t('poll_option_ph') + ' ' + (i + 1)" />
-            <div class="poll-dialog-row">
-              <button v-if="pollOptions.length < 10" class="btn-primary" @click="pollOptions.push('')">{{ t('poll_add_option') || '+ вариант' }}</button>
-              <button class="btn-primary" :disabled="!pollQuestion.trim() || pollOptions.filter(o => o.trim()).length < 2" @click="confirmPoll">{{ t('poll_send') || 'Отправить' }}</button>
-              <button class="btn-primary" @click="pollDialog = false">{{ t('cancel') || 'Отмена' }}</button>
-            </div>
-          </div>
-        </div>
-        <!-- Пересылка: выбор чата -->
-        <div v-if="forwardTo" class="poll-dialog">
-          <div class="poll-dialog-box">
-            <div class="poll-dialog-title">{{ t('forward_to') || 'Переслать в чат' }}</div>
-            <div class="forward-list">
-              <button v-for="c in forwardTargets" :key="c.key" class="poll-option" @click="doForward(c.key)">
-                <span class="poll-option-label">{{ c.label }}</span>
-              </button>
-            </div>
-            <div class="poll-dialog-row">
-              <button class="btn-primary" @click="forwardTo = null">{{ t('cancel') || 'Отмена' }}</button>
-            </div>
-          </div>
-        </div>
+      <!-- Голосование: создание — отдельный компонент (состояние формы внутри) -->
+        <PollDialog
+          :show="pollDialog"
+          @close="pollDialog = false"
+          @confirm="(q, opts) => sendPoll(q, opts)"
+        />
+        <!-- Пересылка: выбор чата — отдельный компонент (список целей
+             считает features/forward.js, компонент только отображает) -->
+        <ForwardDialog
+          :show="!!forwardTo"
+          :targets="forwardTargets"
+          @close="forwardTo = null"
+          @select="key => doForward(key)"
+        />
         <!-- AudioRecorder: открыт новой mic-кнопкой в ряду (mic↔send) -->
         <AudioRecorder
           :show="showAudioRecorder"
@@ -1010,14 +801,25 @@ import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js'
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
+import PollDialog from './components/PollDialog.vue';
+import ForwardDialog from './components/ForwardDialog.vue';
+import FoldersBar from './components/FoldersBar.vue';
+import ContactList from './components/ContactList.vue';
+import ChatHeader from './components/ChatHeader.vue';
+import MessageList from './components/MessageList.vue';
+import MessageItem from './components/MessageItem.vue';
 import * as relay from './relay-client.js';
+import * as PollFeature from './features/poll.js';
+import * as ForwardFeature from './features/forward.js';
+import * as FoldersFeature from './features/folders.js';
+import * as DraftsFeature from './features/drafts.js';
+import * as DuressFeature from './features/duress.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
 // и клик по логотипу в шапке откроет его во внешнем браузере.
 const APP_SITE_URL = '';
-// Черновики: очередь сериализации kv-RMW (модуль-уровень).
-let DRAFT_QUEUE = Promise.resolve();
+// Черновики: очередь сериализации kv-RMW переехала в features/drafts.js.
 
 export default {
   name: 'ChatApp',
@@ -1039,7 +841,14 @@ export default {
     AvatarUpload,
     CipherTool,
     QRCodePanel,
-    CallOverlay
+    CallOverlay,
+    PollDialog,
+    ForwardDialog,
+    FoldersBar,
+    ContactList,
+    ChatHeader,
+    MessageList,
+    MessageItem
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -1305,10 +1114,9 @@ export default {
       duressLocked: false,
       duressPending: false,
       duressUnlockedThisSession: false,
-      // Голосования: диалог создания + агрегация голосов
+      // Голосования: флаг диалога создания (форма — внутри PollDialog.vue);
+      // агрегация голосов — методы poll* ниже
       pollDialog: false,
-      pollQuestion: '',
-      pollOptions: ['', ''],
       // Пересылка: пересылаемое сообщение (объект) + список целей
       forwardTo: null,
       // Папки чатов: активная папка + диалог создания в контекстном меню
@@ -1322,20 +1130,9 @@ export default {
     }
   },
   computed: {
-    // Пересылка: список чатов-целей (контакты + группы).
+    // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
-      const list = [];
-      for (const c of this.contacts || []) {
-        if (c.email && c.email !== '__notes__' && c.email !== this.activeChat) {
-          list.push({ key: c.email, label: this.nameOf(c.email) || c.email });
-        }
-      }
-      for (const g of this.groups || []) {
-        if (!(this.activeChatType === 'group' && this.currentGroup && g.id === this.currentGroup.id)) {
-          list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + this.t('group') });
-        }
-      }
-      return list;
+      return ForwardFeature.forwardTargets(this);
     },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
     editingContactBio() {
@@ -1740,6 +1537,41 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
+    // ── Голосования (poll) — логика в features/poll.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    parsePollEnvelope(env) { return PollFeature.parsePollEnvelope(env); },
+    pollVotes(poll) { return PollFeature.pollVotes(poll); },
+    pollOptionCount(poll, i) { return PollFeature.pollOptionCount(poll, i); },
+    pollLead(poll) { return PollFeature.pollLead(poll); },
+    pollLeadLabel(poll) { return PollFeature.pollLeadLabel(poll); },
+    castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
+    async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
+    applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    startForward(msg) { return ForwardFeature.startForward(this, msg); },
+    doForward(key) { return ForwardFeature.doForward(this, key); },
+    // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
+    // грузит единый kv-блоб (flags + folder names), архив/mute меняются
+    // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
+    async loadChatFlags() { return FoldersFeature.loadChatFlags(this); },
+    async saveChatFlags() { return FoldersFeature.saveChatFlags(this); },
+    flagKey(target) { return FoldersFeature.flagKey(target); },
+    chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
+    async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
+    async createChatFolder() { return FoldersFeature.createChatFolder(this); },
+    // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
+    // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
+    draftRun(fn) { return DraftsFeature.draftRun(fn); },
+    saveDraft() { return DraftsFeature.saveDraft(this); },
+    restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
+    // ── Duress-замок — логика в features/duress.js; LockScreen-события
+    // (unlock/duress/panic) приходят из шаблона в эти обёртки.
+    async checkDuressLock() { return DuressFeature.checkDuressLock(this); },
+    onLockUnlock() { return DuressFeature.onLockUnlock(this); },
+    onLockDuress() { return DuressFeature.onLockDuress(this); },
+    async onLockPanic() { return DuressFeature.onLockPanic(this); },
+    async sendDuressSos() { return DuressFeature.sendDuressSos(this); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
@@ -2295,7 +2127,7 @@ export default {
     // (поллинг не должен выдёргивать из чтения истории).
     scrollToBottom(force = false) {
       this.$nextTick(() => {
-        const el = this.$refs.messagesContainer;
+        const el = this.$refs.messageList && this.$refs.messageList.container;
         if (!el) return;
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
         if (force || nearBottom) {
@@ -2307,12 +2139,12 @@ export default {
     // ушёл от низа чата больше чем на 200px (поллинг/свои отправки его не
     // выдёргивают — только клик по стрелке).
     onMessagesScroll() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       this.showJumpToBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
     },
     jumpToBottom() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
       this.showJumpToBottom = false;
@@ -2378,7 +2210,7 @@ export default {
       this.pinGroupMessage({ id: this.pinnedMsgId, content: '' });
     },
     scrollPinnedToView() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       const t = el.querySelector('[data-msg-id="' + CSS.escape(this.pinnedMsgId) + '"]');
       if (!t) { this.jumpToBottom(); return; }
@@ -2875,7 +2707,7 @@ export default {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
           const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
-          // Голосование: poll-подконверт (валидация в parsePollEnvelope).
+          // Голосование: poll-подконверт (валидация в features/poll.js).
           if (obj.poll && typeof obj.poll === 'object') {
             env.poll = {
               id: String(obj.poll.id || obj.id || ''),
@@ -2887,48 +2719,6 @@ export default {
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
-    },
-    // ── Голосования (poll) ─────────────────────────────────────────
-    // Конверт: {vault:1, type:'poll', poll:{id, question, options[]}}
-    // Голос:   {poll:1, poll_id, option} — сигнальное письмо (как реакции),
-    //          агрегируется из писем чата при загрузке.
-    parsePollEnvelope(env) {
-      if (!env || env.type !== 'poll' || !env.poll || !env.poll.question) return null;
-      const opts = (env.poll.options || []).map(o => String(o).slice(0, 100)).filter(Boolean);
-      if (opts.length < 2 || opts.length > 10) return null;
-      return {
-        id: String(env.poll.id || env.id || ''),
-        question: String(env.poll.question).slice(0, 200),
-        options: opts.slice(0, 10),
-        votes: {},   // email -> option index (последний голос)
-        myVote: null,
-      };
-    },
-    pollVotes(poll) {
-      const counts = new Array(poll.options.length).fill(0);
-      const voters = {};
-      for (const [email, opt] of Object.entries(poll.votes || {})) {
-        if (opt >= 0 && opt < counts.length) {
-          counts[opt] += 1;
-          voters[email] = true;
-        }
-      }
-      const total = counts.reduce((a, b) => a + b, 0);
-      return { counts, total, voters: Object.keys(voters).length };
-    },
-    pollOptionCount(poll, i) { return this.pollVotes(poll).counts[i] || 0; },
-    pollLead(poll) {
-      const v = this.pollVotes(poll);
-      let best = -1, bestN = -1;
-      v.counts.forEach((n, i) => { if (n > bestN) { best = i; bestN = n; } });
-      return bestN > 0 ? best : -1;
-    },
-    pollLeadLabel(poll) {
-      const v = this.pollVotes(poll);
-      const lead = this.pollLead(poll);
-      if (lead < 0 || v.total === 0) return '';
-      const pct = Math.round(v.counts[lead] * 100 / v.total);
-      return `${poll.options[lead]} — ${pct}%`;
     },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
@@ -2955,148 +2745,9 @@ export default {
         '&mlon=' + coords.split(',')[1].trim() + '#map=17/' + coords.split(',')[0].trim() + '/' + coords.split(',')[1].trim();
       this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
     },
-    // Подтвердить создание голосования (диалог).
-    confirmPoll() {
-      const q = this.pollQuestion.trim();
-      const opts = this.pollOptions.map(o => o.trim()).filter(Boolean);
-      if (!q || opts.length < 2) return;
-      this.pollDialog = false;
-      this.pollQuestion = '';
-      this.pollOptions = ['', ''];
-      this.sendPoll(q, opts);
-    },
     // ── Пересылка (forward) ────────────────────────────────────────
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
-    startForward(msg) {
-      if (!msg) return;
-      this.forwardTo = msg;
-    },
-    async doForward(key) {
-      const msg = this.forwardTo;
-      this.forwardTo = null;
-      if (!msg || !key) return;
-      const fromName = msg.from === 'me'
-        ? (this.displayName || this.email)
-        : (this.nameOf(this.activeChat) || this.activeChat);
-      const fwdText = (this.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
-      try {
-        this.sending = true;
-        const ttl = await this.ephemeralTtlOf(key);
-        const envelope = await this.buildEnvelope(fwdText, ttl);
-        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
-        const pendingMsg = {
-          id: envelopeId || ('local-' + Date.now()),
-          content: fwdText,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-        };
-        if (key.startsWith('group:')) {
-          const gid = key.slice(6);
-          const groupKey = this.groupKeys[gid];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          const content = await crypto.encryptWithGroupKey(envelope, groupKey);
-          await api.sendGroupMessage(gid, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        } else {
-          if (!this.peerKeys[key]) { alert(this.t('poll_err')); return; }
-          crypto.setPeerPublicKey(this.peerKeys[key], this.peerPqKeys && this.peerPqKeys[key]);
-          const content = await crypto.encryptVault(envelope);
-          await api.sendMessage(key, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        }
-        this.showToast(this.t('forward_done') || 'Переслано', 2500);
-      } catch (e) {
-        console.error('[forward] failed:', e);
-        alert(this.t('forward_err') || 'Forward failed');
-      } finally {
-        this.sending = false;
-      }
-    },
-    // Свой голос: сигнальное письмо (механика sendReaction) + локальная запись.
-    castPollVote(msg, option) {
-      const poll = msg.poll;
-      if (!poll || poll.myVote !== null) return;
-      const prev = poll.myVote;
-      poll.myVote = option;
-      const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) throw new Error('no group key');
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          } else {
-            throw new Error('no peer key');
-          }
-          poll.votes[this.email] = option;
-          this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-        } catch (e) {
-          console.error('[poll] vote failed:', e);
-          poll.myVote = prev;
-        }
-      })();
-    },
-    // Создание голосования: конверт type:'poll' (карточка у получателей).
-    async sendPoll(question, options) {
-      const opts = (options || []).map(o => String(o).trim()).filter(Boolean).slice(0, 10);
-      question = String(question || '').trim();
-      if (!question || opts.length < 2) return;
-      const pollId = this.newMessageId();
-      const pollEnv = {
-        vault: 1,
-        id: this.newMessageId(),
-        type: 'poll',
-        text: question, // fallback-текст для legacy-клиентов/истории
-        poll: { id: pollId, question, options: opts },
-        name: this.displayName || '',
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      try {
-        this.sending = true;
-        const envelope = JSON.stringify(pollEnv);
-        let content = envelope;
-        if (this.activeChatType === 'group') {
-          const groupKey = this.groupKeys[this.currentGroup.id];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          content = await crypto.encryptWithGroupKey(envelope, groupKey);
-        } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-          crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-          content = await crypto.encryptVault(envelope);
-        }
-        const pendingMsg = {
-          id: pollId,
-          content: question,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-          poll: this.parsePollEnvelope(pollEnv),
-        };
-        if (pendingMsg.poll) pendingMsg.poll.myVote = null;
-        this.messages.push(pendingMsg);
-        this.scrollToBottom(true);
-        if (this.activeChatType === 'group') {
-          await api.sendGroupMessage(this.currentGroup.id, content);
-        } else {
-          await api.sendMessage(this.activeChat, content);
-        }
-        pendingMsg.status = 'sent';
-        this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-      } catch (e) {
-        console.error('[poll] send failed:', e);
-        alert(this.t('poll_err') || 'Poll failed');
-      } finally {
-        this.sending = false;
-      }
-    },
+    // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) {
       if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
@@ -4406,172 +4057,7 @@ export default {
     // --- Key Recovery
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
     // ── Duress-замок ────────────────────────────────────────
-    // При старте: если замок включён — показываем LockScreen вместо UI.
-    async checkDuressLock() {
-      // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
-      if (/android/i.test(navigator.userAgent)) {
-        this.duressLocked = false;
-        console.log('[duress] android branch: native LockActivity handles the lock');
-        return;
-      }
-      try {
-        const cfg = await invoke('duress_get_config');
-        const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
-        this.duressLocked = enabled;
-        console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
-          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
-      } catch (e) {
-        console.warn('[duress] check failed:', e);
-      }
-      // Android: «выход» из приложения НЕ убивает процесс — FGS и
-      // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
-      // замок не показывался. Ловим возврат из фона: если замок включён и в этой
-      // сессии ещё не разблокирован (duressUnlockedThisSession false) — показать.
-      if (!this._duressVisibilityBound) {
-        this._duressVisibilityBound = true;
-        const relock = async () => {
-          if (this.duressUnlockedThisSession) return;
-          try {
-            const cfg = await invoke('duress_get_config');
-            if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-              this.duressLocked = true;
-              console.log('[duress] relock on resume → locked=true');
-            }
-          } catch (e) { /* ignore */ }
-        };
-        document.addEventListener('visibilitychange', () => {
-          // Уход из видимости (сворачивание, скрытие в трей, переключение
-          // окна) = конец «доверенного периода»: флаг сессии снимаем, чтобы
-          // relock при возврате ПОКАЗАЛ замок. Банковский паттерн: замок
-          // должен появляться после КАЖДОГО ухода, а не только после смерти
-          // процесса (иначе минимизация не блокирует).
-          if (document.visibilityState === 'hidden') {
-            this.duressUnlockedThisSession = false;
-          } else {
-            relock();
-          }
-        });
-        window.addEventListener('focus', relock);
-        // Desktop close-to-tray: Rust эмитит событие ПЕРЕД скрытием
-        // окна в трей. Здесь сбрасываем флаг «разблокирован в этой сессии» и
-        // сразу поднимаем замок: при возврате из трея LockScreen уже на экране
-        // (WebView скрытого окна может не слать visibilitychange).
-        (async () => {
-          const { listen } = await import('@tauri-apps/api/event');
-          await listen('vault://window-hidden', () => {
-            this.duressUnlockedThisSession = false;
-            invoke('duress_get_config').then((cfg) => {
-              if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-                this.duressLocked = true;
-                console.log('[duress] tray-hide → armed lock for next show');
-              }
-            }).catch(() => {});
-          });
-        })();
-      }
-      // Повтор через секунду: restoreSession/монтирование UI может перерисовать
-      // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
-      setTimeout(async () => {
-        try {
-          const cfg = await invoke('duress_get_config');
-          if (cfg && cfg.lock_enabled && cfg.lock_hash && !this.isLoggedIn === false) {
-            // уже залогинен — замок всё равно показываем (замок = при запуске)
-          }
-          if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-            this.duressLocked = true;
-            console.log('[duress] lock re-check → locked=true');
-          }
-        } catch (e) { /* ignore */ }
-      }, 1200);
-    },
-    onLockUnlock() {
-      this.duressLocked = false;
-      this.duressUnlockedThisSession = true; // до ухода в фон замок не ре-армить
-    },
-    // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
-    // монтирования тихо отправляем SOS-письмо выбранным контактам.
-    async onLockDuress() {
-      this.duressLocked = false;
-      this.duressPending = true;
-      this.$nextTick(() => this.sendDuressSos());
-    },
-    // Panic-PIN: Rust уже стёр данные — выходим на login (локально пусто).
-    async onLockPanic() {
-      this.duressLocked = false;
-      try {
-        await api.logout();
-      } catch (e) { /* ignore */ }
-      this.isLoggedIn = false;
-      this.email = null;
-      this.showToast(this.t('panic_done') || 'Данные стёрты', 4000);
-    },
-    // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
-    // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
-    async sendDuressSos() {
-      try {
-        const cfg = await invoke('duress_get_config');
-        if (!cfg || !cfg.sos_enabled_rcpts) { /* compat */ }
-        const rcpts = (cfg.sos_recipients || []).filter(Boolean);
-        if (!rcpts.length) return;
-        // Гео: если включено — координаты через WebView geolocation
-        // (на Android нативный запрос разрешения идёт при включении флага).
-        let coords = '';
-        if (cfg.sos_geo) {
-          coords = await new Promise((resolve) => {
-            let done = false;
-            const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
-            const timer = setTimeout(() => finish(''), 5000);
-            try {
-              navigator.geolocation.getCurrentPosition(
-                (pos) => finish(`, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
-                () => finish(''),
-                { timeout: 4500, maximumAge: 600000 },
-              );
-            } catch (e) { finish(''); }
-          });
-        }
-        const rawText = cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}';
-        let text = rawText.replace('{coords}', coords);
-        // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
-        if (coords && !rawText.includes('{coords}')) text += coords;
-        // Сохранённые peer-ключи: encryptVault требует установленного ключа
-        // получателя — иначе шифрование падает и SOS молча теряется.
-        // При холодном старте (duress сразу после открытия) peerKeys могли
-        // ещё не загрузиться — читаем прямо из key_store.
-        if (!this.peerKeys || !Object.keys(this.peerKeys).length) {
-          try {
-            const stored = await crypto.loadPeerKeys();
-            this.peerPqKeys = this.peerPqKeys || {};
-            for (const pk of stored) {
-              this.peerKeys[pk.email] = pk.public_key;
-              if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
-            }
-          } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
-        }
-        for (const rcpt of rcpts) {
-          try {
-            const pk = this.peerKeys && this.peerKeys[rcpt];
-            if (!pk) {
-              console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
-              continue;
-            }
-            crypto.setPeerPublicKey(pk, this.peerPqKeys && this.peerPqKeys[rcpt]);
-            const content = await crypto.encryptVault(JSON.stringify({
-              vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-              type: 'sos', text, name: this.displayName || '', ts: Date.now(),
-            }));
-            await api.sendEmail('local', { to: rcpt, subject: '', body: content });
-          } catch (e) {
-            console.warn('[duress] SOS to', rcpt, 'failed:', e);
-          }
-        }
-        console.log('[duress] SOS sent to', rcpts.length, 'recipients');
-      } catch (e) {
-        console.warn('[duress] sendSos failed:', e);
-      } finally {
-        this.duressPending = false;
-      }
-    },
+    // (логика в features/duress.js; обёртки см. в блоке feature-обёрток выше)
     showToast(message, ms = 5000) {
       this.toastMessage = message;
       if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -4901,7 +4387,9 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory('group:' + this.currentGroup.id);
           try {
-            const res = await api.sendGroupMessage(this.currentGroup.id, content);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            const envObjForRelay = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+            const res = await api.sendGroupMessage(this.currentGroup.id, content, envObjForRelay);
             // Частичный фейл (SMTP одного из участников): статус 'failed'
             // (красный) — сообщение остаётся в чате и НЕ исчезает через
             // 10 минут (mergePending уважает failed-записи). Полный успех —
@@ -5152,9 +4640,32 @@ export default {
         // чатов вскоре будет в IndexedDB, для инвайтов/аватаров хватает).
         const merged = [...this.emails];
         const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+        // Кросс-папочные копии: письмо могло быть проиндексировано из INBOX,
+        // а потом провайдер перенёс его в Спам — старая ссылка (INBOX, uid)
+        // стала мёртвой (тела больше нет). Если в батче пришла копия с тем
+        // же message_id из другой папки — «оживляем» существующую запись:
+        // подставляем живые folder/uid, не плодя дублей в списке.
+        const byMid = new Map();
+        for (const m of merged) {
+          if (m.message_id) byMid.set(m.message_id, m);
+        }
         for (const m of fetched) {
           const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
+          if (seen.has(k)) continue;
+          if (m.message_id && byMid.has(m.message_id)) {
+            const old = byMid.get(m.message_id);
+            if ((old.folder || 'INBOX') !== (m.folder || 'INBOX')) {
+              old.folder = m.folder;
+              old.uid = m.uid;
+              if (m.id !== undefined) old.id = m.id;
+              old.message_id = m.message_id;
+              seen.add(k);
+            }
+            continue;
+          }
+          seen.add(k);
+          byMid.set(m.message_id, m);
+          merged.push(m);
         }
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
@@ -5321,6 +4832,7 @@ export default {
         if (!body || !crypto.isEncrypted(body)) continue;
         let chatKey = null; // email (1:1) или 'group:<id>'
         let title = '';
+        let envId = ''; // id конверта (общий для relay-копии и email-копии)
         // 1:1 — расшифровка пир-ключом.
         if (this.peerKeys[from]) {
           try {
@@ -5335,6 +4847,9 @@ export default {
             }
             const env = this.parseEnvelope(plain);
             if (env) {
+              // env.id — ключ кросс-канального дедупа (relay-копия и
+              // email-копия одного сообщения несут ОДИН конверт).
+              if (env.id) envId = String(env.id);
               // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
               // (адрес его relay-очереди) — сохраняем молча, чтобы
               // отвечать ему мгновенными пушами. Ноль ручного ввода.
@@ -5440,7 +4955,13 @@ export default {
             if (!gk) continue;
             try {
               const env = this.parseEnvelope(await crypto.decryptWithGroupKey(body, gk));
-              if (env) { chatKey = 'group:' + g.id; title = g.name || ''; break; }
+              if (env) {
+                chatKey = 'group:' + g.id; title = g.name || '';
+                // env.id — ключ кросс-канального дедупа (relay-копия и
+                // email-копия одного сообщения несут ОДИН конверт).
+                if (env.id) envId = String(env.id);
+                break;
+              }
             } catch (e) { /* не из этой группы */ }
           }
         }
@@ -5454,6 +4975,11 @@ export default {
         // [Gmail]/All Mail имеют разные uid → два уведомления на письмо
         // (монитор + JS-поллинг гонят параллельно). Message-ID глобален.
         const dk = m.message_id ? 'mid:' + m.message_id : mid;
+        // Кросс-канальный дедуп: relay-конверт (uid rl-*) и email-копия несут
+        // ОДИН конверт с одним env.id. Без этого ключа бейдж группы рос дважды —
+        // relay-копия приходила за ~1с, email через 30-60с, и обе считались
+        // «новыми письмами» (uid разных каналов не пересекаются).
+        const ek = envId ? 'env:' + envId : null;
         // дедуп СЧЁТЧИКА
         // (processedUnreadIds) не имеет права блокировать УВЕДОМЛЕНИЕ.
         // В 2fa9103 здесь стоял `continue` — тихий поллинг (notify=false)
@@ -5462,10 +4988,11 @@ export default {
         // пропускалось: пуш не появлялся НИКОГДА. Теперь счётчик растёт
         // только для новых писем, а уведомление дедупится НЕЗАВИСИМО —
         // персист notifiedIds в notify.js (ключ dk = Message-ID).
-        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk));
+        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk) || (ek && this.processedUnreadIds.has(ek)));
         if (counted) {
           this.processedUnreadIds.add(mid);
           this.processedUnreadIds.add(dk);
+          if (ek) this.processedUnreadIds.add(ek);
           if (this.processedUnreadIds.size > 600) {
             // Держим хвост: выкидываем старые (Set в порядке вставки).
             for (const old of this.processedUnreadIds) {
@@ -5485,9 +5012,14 @@ export default {
         // задержанные/догоняющие письма спамом не считаем) и только когда
         // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
         // пользователь на списке контактов — иначе уведомление теряется).
-        // Тумблер эко = разделитель путей уведомлений: классика — локальный
-        // пуш из email; эко — системный пуш ntfy (JS не дублирует).
-        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey) && !this.ecoMode) {
+        // Пара-фикс (0.1.164): гейт `!this.ecoMode` СНЯТ. Локальная нотификация
+        // в эко-режиме при живом процессе — единственный путь уведомления
+        // (ntfy-клиента может не быть), а дублей нет: серверный last_seen-гейт
+        // (relay_pub) не шлёт ntfy-будильник получателю, который сам поллил
+        // за последние 90с — эко-тикер поллит каждые 5с. Пара изменений
+        // (сервер+клиент) деплоится строго вместе: сервер без клиента = ноль
+        // уведомлений в эко+фон, клиент без сервера = дубли в эко+открыто.
+        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
           // пуш должен был быть.
           console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
           notifyNewMessage({
@@ -5508,8 +5040,13 @@ export default {
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {
+      // Мобильная навигация: кнопка «назад» возвращает к списку чатов
+      // (mobileChatOpen=false), но activeChat/activeChatType ещё хранят
+      // прошлый чат. Без проверки mobileChatOpen для групп новые групповые
+      // сообщения считались «видимыми» — ни бейджа, ни уведомления.
       if (chatKey.indexOf('group:') === 0) {
-        return this.activeChatType === 'group' && this.activeChat === chatKey;
+        return this.activeChatType === 'group' && this.activeChat === chatKey &&
+          (!this.isMobile || this.mobileChatOpen);
       }
       return this.activeChatType === 'chat' && this.activeChat === chatKey &&
         (!this.isMobile || this.mobileChatOpen);
@@ -5542,27 +5079,8 @@ export default {
       }
     },
     // архив + mute per-chat ─────────────────────
-    async loadChatFlags() {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-flags');
-        this.chatFlags = raw ? JSON.parse(raw) : {};
-      } catch (e) { this.chatFlags = {}; }
-      try {
-        const fr = await db.kvGet(this.email || 'anon', 'chat-folders');
-        this.chatFoldersNames = fr ? JSON.parse(fr) : [];
-      } catch (e) { this.chatFoldersNames = []; }
-    },
-    async saveChatFlags() {
-      try {
-        await db.kvSet(this.email || 'anon', 'chat-flags', JSON.stringify(this.chatFlags));
-      } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
-    },
-    flagKey(target) {
-      return target.type === 'group' ? 'group:' + target.id : target.email.toLowerCase();
-    },
-    chatFlagOf(key) {
-      return this.chatFlags[key] || {};
-    },
+    // (загрузка/сохранение kv-блобов и папки — features/folders.js;
+    //  обёртки см. в блоке feature-обёрток выше)
     isMuted(key) {
       // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
       // может прийти в каноническом регистре контакта — нормализуем.
@@ -5640,27 +5158,7 @@ export default {
       await this.saveChatFlags();
     },
     // ── Папки чатов (kv chat-folders + chatFlags[key].folder) ──────────
-    async setChatFolder(name) {
-      const key = this.flagKey(this.chatMenu.target);
-      const f = { ...(this.chatFlags[key] || {}) };
-      if (name) f.folder = name.slice(0, 24);
-      else delete f.folder;
-      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
-      else this.chatFlags[key] = f;
-      this.closeChatMenu();
-      await this.saveChatFlags();
-    },
-    async createChatFolder() {
-      const name = (this.chatFolderNewName || '').trim().slice(0, 24);
-      if (!name) return;
-      if (!this.chatFoldersNames.includes(name)) {
-        this.chatFoldersNames = [...this.chatFoldersNames, name];
-        await db.kvSet(this.email || 'anon', 'chat-folders', JSON.stringify(this.chatFoldersNames));
-      }
-      await this.setChatFolder(name);
-      this.folderDialogOpen = false;
-      this.chatFolderNewName = '';
-    },
+    // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
     // call_id обработанного звонка (request/accept/end/reject). После
     // перезапуска не даёт старым конвертам снова дёргать state machine.
@@ -6691,7 +6189,8 @@ export default {
       if (this.activeChat) {
         try {
           if (this.activeChatType === 'group' && this.currentGroup) {
-            await api.sendGroupMessage(this.currentGroup.id, wire);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
           } else {
             await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
           }
@@ -6870,7 +6369,8 @@ export default {
             if (this.activeChat) {
               try {
                 if (this.activeChatType === 'group' && this.currentGroup) {
-                  await api.sendGroupMessage(this.currentGroup.id, wire);
+                  // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+                  await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
                 } else {
                   await api.sendMessage(this.activeChat, wire, file.type);
                 }
@@ -6935,53 +6435,17 @@ export default {
       const m = String(raw).match(/<([^>]+)>/);
       return (m ? m[1] : raw).trim().toLowerCase();
     },
+    // Адаптер для MessageItem: карточка зовёт senderOf(msg-объект), а
+    // senderEmail ждёт строку адреса. Письмо группы несёт sender_id
+    // (email автора) — достаём его; для локальных записей без sender_id
+    // (заметки/служебные) возвращаем пустую строку.
+    msgSenderEmail(msg) {
+      if (msg == null) return '';
+      const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
+      return this.senderEmail(raw);
+    },
     // ── Черновики ──────────────────────────────────────────────────
-    // Текст недописанного сообщения сохраняется per-chat (kv) и
-    // восстанавливается при возврате в чат.
-    // Черновики: сериализация RMW через очередь на статике конструктора —
-    // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
-    draftRun(fn) {
-      DRAFT_QUEUE = DRAFT_QUEUE.then(fn, fn);
-      return DRAFT_QUEUE;
-    },
-    async saveDraft() {
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      if (!chatKey) return;
-      const text = this.newMessage || '';
-      this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          if (text.trim()) drafts[chatKey] = text;
-          else delete drafts[chatKey];
-          await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
-        } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
-      });
-    },
-    async restoreDraft(chatKey) {
-      return this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          this.newMessage = drafts[chatKey] || '';
-        } catch (e) { /* ignore */ }
-      });
-    },
-    // Голоса голосований: агрегация из сигнальных писем в карточки poll.
-    // myVote определяется по наличию своего голоса в wire (email отправителя).
-    applyPollVotes(list, wirePollVotes) {
-      if (!list) return;
-      for (const m of list) {
-        if (!m || !m.poll) continue;
-        const votes = wirePollVotes && wirePollVotes[m.poll.id];
-        if (votes) {
-          for (const v of votes) m.poll.votes[v.voter] = v.option;
-        }
-        if (m.poll.votes[this.email] !== undefined) m.poll.myVote = m.poll.votes[this.email];
-      }
-    },
+    // (логика в features/drafts.js; обёртки см. в блоке feature-обёрток выше)
     applyReactions(list, chatKey, wireReactions) {
       const stored = this.loadStoredReactions();
       const chatReactions = stored[chatKey] || {};
@@ -8324,6 +7788,12 @@ body {
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
+  /* Ландшафт Android edge-to-edge: навбар у бокового края — контент
+     сайдбара без этих отступов уходит за виртуальные кнопки.
+     На десктопе и в портрете inset = 0 — правило ничего не меняет. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .sidebar-header {
@@ -8773,11 +8243,7 @@ body {
 }
 .contact-card-seen.online { color: #22c55e; }
 .contact-card-seen.online::before { background: #22c55e; opacity: 1; }
-.chat-avatar-btn {
-  padding: 0; border: none; background: none; cursor: pointer;
-  border-radius: 50%; flex-shrink: 0;
-}
-.chat-avatar-btn:hover { box-shadow: 0 0 0 2px rgba(245,158,11,.5); }
+/* .chat-avatar-btn — в ChatHeader.vue (scoped) */
 
 /* Статус «О себе» контакта */
 .contact-bio-view {
@@ -8894,199 +8360,16 @@ body {
    Search Box
    ═══════════════════════════════════════════════════════════════ */
 
-.email-error-hint {
-  margin: 8px 10px;
-  padding: 6px 8px;
-  font-size: 11px;
-  color: var(--text-secondary, #94a3b8);
-  background: var(--bg-tertiary, #1a1a3e);
-  border: 1px solid var(--danger, #ef4444);
-  border-radius: 6px;
-  word-break: break-word;
-}
-
-.search-box {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.search-box input {
-  width: 100%;
-  padding: 10px 14px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-full);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: all var(--transition-fast);
-}
-
-.search-box input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-box input:focus {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
+/* Стили списка чатов (search-box, contact-*, contacts-empty*, groups-*,
+   email-error-hint, archive-toggle) — в ContactList.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Contacts List
    ═══════════════════════════════════════════════════════════════ */
+/* (стили списка — в ContactList.vue; здесь остаются шаренные
+   с шапкой чата .group-avatar*, .notes-self-avatar*, .status-dot) */
 
-.contacts-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* Android: последний контакт не прятался под системной навигацией */
-  padding-bottom: var(--safe-bottom, 0px);
-}
-
-.contacts-empty {
-  padding: 24px 20px;
-  text-align: center;
-}
-
-.contacts-empty-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.contacts-empty-hint {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  margin-bottom: 16px;
-}
-
-.contacts-empty-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.contacts-empty-actions .btn-primary,
-.contacts-empty-actions .btn-secondary {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.contact-item {
-  display: flex;
-  align-items: center;
-  padding: 14px 20px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  border-left: 3px solid transparent;
-}
-
-.contact-item:hover {
-  background: var(--bg-hover);
-}
-
-.contact-item.active {
-  background: var(--bg-active);
-  border-left-color: var(--accent-primary);
-}
-
-.contact-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 14px;
-  flex-shrink: 0;
-}
-
-.avatar-initial {
-  font-size: 18px;
-  font-weight: 600;
-  color: white;
-}
-
-.contact-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.contact-name {
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.contact-email {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.contact-status {
-  margin-left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Бейдж непрочитанных сообщений на контакте/группе — оранжевый кружок
-   с белой цифрой. Появляется только когда есть >0. */
-.unread-badge {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-/* Бейдж «нет ключа» — контакт виден (напр. из участников группы), но для
-   чата 1-на-1 нужно сначала обменяться ключами (🔗). */
-.contact-no-key {
-  font-size: 12px;
-  opacity: 0.7;
-  cursor: help;
-}
-
-/* Удаление контакта — появляется при наведении на контакт */
-.contact-delete {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  opacity: 0;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.contact-item:hover .contact-delete {
-  opacity: 0.55;
-}
-
-.contact-item:hover .contact-delete:hover {
-  opacity: 1;
-  background: rgba(220, 60, 60, 0.18);
-}
+/* Бейджи статуса списка чатов — в ContactList.vue (scoped) */
 
 .status-dot {
   display: block;
@@ -9101,29 +8384,7 @@ body {
   box-shadow: 0 0 8px var(--status-online);
 }
 
-/* Groups */
-.groups-section {
-  margin-top: 16px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-
-.groups-header {
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.groups-header-icon {
-  display: block;
-  flex-shrink: 0;
-}
+/* Секция групп и заголовок — в ContactList.vue (scoped) */
 
 .group-avatar {
   width: 36px;
@@ -9178,6 +8439,12 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  /* Ландшафт Android edge-to-edge: то же, что у .sidebar — навбар у
+     бокового края (left/right insets), иначе поле ввода и шапка чата
+     уезжают за виртуальные кнопки. На десктопе inset = 0. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .chat-area {
@@ -9191,196 +8458,18 @@ body {
   min-height: 0;
 }
 
-.chat-header {
-  flex-shrink: 0;
-  padding: 16px 24px;
-  /* Android edge-to-edge: на узких экранах чат занимает всю ширину и шапка
-     оказывается под статус-баром — отступ через safe-area-inset-top. */
-  padding-top: calc(16px + var(--safe-top, 0px));
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--bg-secondary);
-}
-
-.chat-header-info {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  /* flex:1 + min-width:0 — без них имя чата не сжимается и выталкивает
-     кнопки действий за экран (узкие экраны android). */
-  flex: 1;
-  min-width: 0;
-}
-
-/* На десктопе — ряд.
-   На мобильном (media <768 ниже) — колонка: имя и замок ПОД аватаром
-   чтобы не перекрываться кнопками действий (звезда добавила 6-ю кнопку).
-   */
-.chat-head-col {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-}
-
-.chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Аватар + email мелким шрифтом под ним (email убран из центра шапки,
-   чтобы длинные адреса не прижимались к кнопкам действий). */
-.chat-avatar-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  max-width: 96px;
-}
-
-.chat-avatar-email {
-  font-size: 10px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-header-info h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-status {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-/* §1: индикатор канала доставки — конверт «почта», когда релей недоступен
-   или суточный лимит исчерпан. Спокойный янтарный, не пугает. */
-.relay-delivery-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: 6px;
-  color: var(--accent-warning, #d97706);
-  cursor: pointer;
-  opacity: 0.9;
-}
-.relay-delivery-badge:active {
-  opacity: 1;
-}
-
-.chat-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.chat-actions button {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-
-.chat-actions button:hover {
-  background: var(--bg-hover);
-}
-
-/* Текстовые кнопки действий в шапке группового чата
-   («Добавить участника», «Настройки») — заметнее, чем голые эмодзи. */
-.chat-actions button.chat-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px 10px;
-  border: none; 
-  background: transparent;
-  border-radius: var(--radius-sm, 8px);
-  color: var(--text-secondary, #aaa);
-  white-space: nowrap;
-}
-
-.chat-actions button.chat-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary, #fff);
-  border-color: var(--border, rgba(255,255,255,0.2));
-}
+/* Стили шапки чата (chat-header, chat-head-col, chat-actions, chat-status,
+   relay-delivery-badge) — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Messages
    ═══════════════════════════════════════════════════════════════ */
 
-.messages {
-  flex: 1;
-  /* flex-элемент с overflow:auto обязан иметь
-     min-height: 0, иначе он растягивается на высоту контента и скролл
-     (в т.ч. колесиком мыши) не появляется.
-     */
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative; /* offsetTop элементов считается от этого контейнера */
-}
-
-/* Закреплённое сообщение группы (баннер поверх списка) */
-.pinned-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  border-radius: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-  font-size: 13px;
-}
-.pinned-banner-icon { flex-shrink: 0; }
+/* Скролл-контейнер сообщений (messages/messages-empty/pinned-banner) —
+   в MessageList.vue (scoped); стили карточек .message* остаются здесь. */
 
 /* Reply-иконка в баре ответа/редактирования */
 .reply-bar-ic { flex-shrink: 0; }
-.pinned-banner-text {
-  flex: 1;
-  color: var(--text-primary, #f1f5f9);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pinned-banner-unpin {
-  background: transparent;
-  border: none;
-  color: var(--text-muted, #64748b);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-.pinned-banner-unpin:hover { background: rgba(255,255,255,0.1); color: var(--text-primary, #f1f5f9); }
 
 /* Подсветка позиции при перетаскивании заметок */
 .drag-over-before { box-shadow: 0 -2px 0 0 var(--accent-primary, #6366f1); }
@@ -9505,74 +8594,11 @@ body {
 .poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
 .poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
 .poll-footer { font-size: 12px; opacity: 0.7; }
-.poll-dialog {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 300;
-}
-.poll-dialog-box {
-  background: var(--bg-primary, #0b0f17);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 14px;
-  padding: 18px;
-  width: min(420px, 92vw);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.poll-dialog-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
-.poll-dialog-box .duress-input {
-  background: rgba(148, 163, 184, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 8px;
-  padding: 9px 11px;
-  color: inherit;
-  font-size: 14px;
-  outline: none;
-}
-.poll-dialog-box .duress-input:focus { border-color: var(--accent-primary, #6366f1); }
-.poll-dialog-row { display: flex; gap: 8px; margin-top: 4px; }
-.poll-dialog-row .btn-primary { flex: 0 0 auto; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; }
-/* Папки чатов: лента чипов */
-.folder-strip {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 4px 10px 6px;
-  scrollbar-width: thin;
-}
-.folder-chip {
-  flex: 0 0 auto;
-  background: rgba(148, 163, 184, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 999px;
-  color: inherit;
-  font-size: 12.5px;
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.folder-chip:hover { background: rgba(245, 158, 11, 0.12); }
-.folder-chip-on {
-  border-color: #f59e0b;
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.12);
-}
+/* Стили ленты папок (.folder-strip/.folder-chip) — в FoldersBar.vue */
 .chat-menu-folder-label {
   font-size: 11px;
   opacity: 0.6;
   padding: 4px 10px 2px;
-}
-.forward-list {
-  max-height: 260px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .reply-btn {
@@ -9736,20 +8762,14 @@ body {
      (contextmenu) и запускает НАТИВНОЕ выделение слова. Ползунки
      выделения попадают на оверлей меню — всё исчезает. Отключаем
      нативное выделение на touch: копирование доступно через наше меню
-     (copyMessageText/copyMessageAll). */
+     (copyMessageText/copyMessageAll). Шапка чата (chat-header-text,
+     chat-enc-text) — в ChatHeader.vue (scoped, media hover:none). */
   .message-content,
   .message-sender,
-  .chat-header-text,
   .message-menu button {
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
-  }
-  /* Шапка чата: на узких экранах « Encrypted» не влезает рядом с кнопками
-     (телефон/карандаш/поиск) — оставляем только 🔒. На десктопе слово
-     показывается (места достаточно). */
-  .chat-enc-text {
-    display: none;
   }
 }
 
@@ -9838,21 +8858,7 @@ body {
   background: var(--bg-hover, #1e1e4a);
 }
 
-/* переключатель архива в списке чатов */
-.archive-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--bg-tertiary, #1e1e3a);
-  color: var(--text-secondary, #94a3b8);
-  font-size: 13px;
-  cursor: pointer;
-  user-select: none;
-}
-.archive-toggle:hover { background: var(--bg-hover, #26264f); color: var(--text-primary, #f1f5f9); }
+/* переключатель архива — в ContactList.vue (scoped) */
 /* иконка mute у чата в списке */
 .chat-mute-icon { color: var(--text-secondary, #64748b); flex-shrink: 0; }
 
@@ -9897,16 +8903,7 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-.messages-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 24px;
-  gap: 12px;
-}
+/* Пустое состояние списка — в MessageList.vue (scoped) */
 
 /* Attachment previews */
 .attachment-preview {
@@ -10003,19 +9000,8 @@ body {
   font-size: 13px;
 }
 
-/* Members count (кликабельный счётчик участников в шапке группы) */
-.members-count {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.members-count-icon {
-  display: block;
-  flex-shrink: 0;
-  filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.4));
-}
+/* Members count и список участников: счётчик — в ChatHeader.vue (scoped);
+   модалка списка (member-list/member-item/roles) остаётся здесь. */
 
 /* Members list (модалка со списком участников группы) */
 .member-list {
@@ -10085,11 +9071,7 @@ body {
   flex-shrink: 0;
 }
 
-/* Активный режим «показать только избранное» в шапке чата */
-.chat-action-btn.starred-on {
-  background: rgba(245, 158, 11, 0.15);
-  border-radius: 6px;
-}
+/* Активный режим «показать только избранное» — в ChatHeader.vue (scoped) */
 
 .message-footer {
   display: flex;
@@ -10598,68 +9580,7 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-/* Export dropdown */
-.export-dropdown {
-  position: relative;
-}
-
-.export-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-action-icon {
-  display: block;
-}
-
-.export-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--bg-secondary, #12122a);
-  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
-  border-radius: 8px;
-  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
-  overflow: hidden;
-  z-index: 50;
-  min-width: 120px;
-}
-
-/* Исчезающие сообщения: кнопка-таймер в шапке чата.
-   Неактивный — как остальные (без обводки, серый замок).
-   Активный — янтарный замок + янтарные обводка и заливка кнопки.
-   */
-.ephemeral-menu { position: relative; }
-.chat-actions button.chat-action-btn.ephemeral-on {
-  border: 1px solid rgba(245, 158, 11, 0.65);
-  background: rgba(245, 158, 11, 0.12);
-}
-.export-menu.ephemeral-dropdown { min-width: 150px; }
-.export-menu.ephemeral-dropdown button {
-  display: block; width: 100%; text-align: left;
-  padding: 9px 14px; background: none; border: none;
-  color: var(--text-primary, #e6edf3); font-size: 13px; cursor: pointer;
-}
-.export-menu.ephemeral-dropdown button:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
-.export-menu.ephemeral-dropdown button.active { color: var(--accent-warn, #f59e0b); }
-
-.export-menu button {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: none;
-  border: none;
-  color: var(--text-primary, #f1f5f9);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.export-menu button:hover {
-  background: var(--bg-hover, #1e1e4a);
-}
+/* Export dropdown и исчезающие сообщения — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Message Input
@@ -10737,7 +9658,9 @@ body {
 
 .message-field {
   flex: 1;
-  padding: 12px 12px 12px 0;
+  /* Отступ слева: зазор между эмодзи-кнопкой и подсказкой «Сообщение...»
+     (4px у кнопки + 8px здесь = 12px, симметрично правому краю пилюли). */
+  padding: 12px 12px 12px 8px;
   background: transparent;
   border: none;
   color: var(--text-primary);
@@ -10813,30 +9736,8 @@ body {
 
 .attach-menu-item:hover { background: var(--bg-hover); }
 
-
-
-/* ═══════════════════════════════════════════════════════════════
-   Empty State
-   ═══════════════════════════════════════════════════════════════ */
-
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-}
-
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 16px;
-}
+/* Пустые состояния (empty-state/empty-icon/empty-text) — в MessageList.vue
+   (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Key Manager
@@ -10974,100 +9875,7 @@ body {
   .main-area {
     width: 100%;
   }
-  /* Шапка чата на узком экране: все кнопки обязаны умещаться.
-     Текстовые подписи групповых кнопок скрываются (иконка + title
-     остаются), отступы уменьшаются, имя чата обрезается многоточием. */
-  .chat-header {
-    padding: 10px 12px;
-    /* safe-area сохраняется и в узкоэкранном режиме (иначе шапка чата
-       залезает под статус-бар Android). */
-    padding-top: calc(10px + var(--safe-top, 0px));
-    gap: 6px;
-  }
-  .chat-header-info {
-    gap: 10px;
-  }
-  /* встают под аватаром, ничего не перекрывается кнопками справа. */
-  .chat-head-col {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-  }
-  .chat-head-col .chat-header-text {
-    min-width: 0;
-    max-width: 100%;
-    align-items: flex-start;
-  }
-  .chat-head-col .chat-header-text.text-inline {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-  }
-  .chat-head-col .chat-header-text.text-inline .chat-status {
-    order: -1;      /* замок ПЕРЕД именем */
-    flex-shrink: 0;
-  }
-  .chat-head-col .chat-header-text.text-inline h3 {
-    flex: 1;
-    min-width: 0;
-    margin-bottom: 0;
-  }
-  .chat-header-text h3 {
-    font-size: 14px;
-    line-height: 1.25;
-    margin-bottom: 1px;
-  }
-  .chat-head-col .group-avatar,
-  .chat-head-col .chat-avatar-btn {
-    width: 32px;
-    height: 32px;
-  }
-  .chat-header-info h3 {
-    font-size: 15px;
-  }
-  /* Android: email под аватаром не помещается и перекрывает элементы — скрыт. */
-  .chat-avatar-email {
-    display: none;
-  }
-  .chat-status {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .chat-actions {
-    gap: 2px;
-  }
-  .chat-actions button {
-    padding: 6px;
-  }
-  .chat-actions button.chat-action-btn {
-    padding: 6px 8px;
-    border: none;
-  }
-  .chat-action-label {
-    display: none;
-  }
-}
-
-/* Кнопка «назад» в шапке чата (только мобильный режим). */
-.chat-back-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-full, 999px);
-  color: var(--text-secondary, #94a3b8);
-  cursor: pointer;
-}
-.chat-back-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary, #e2e8f0);
+  /* Шапка чата на узком экране — в ChatHeader.vue (scoped, media<768). */
 }
 
 /* Модалка настроек на мобильном: на всю ширину и высоту, чтобы сайдбар

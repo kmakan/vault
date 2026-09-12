@@ -414,9 +414,22 @@ export class ApiClient {
     // они обрабатываются отдельно через попап согласия (fetchPendingInvites).
     return out;
   }
-  async sendGroupMessage(groupId, content) {
+  async sendGroupMessage(groupId, content, envelopeObj) {
     const g = await invoke('groups_get', { groupId });
     if (!g) throw new Error('Group not found');
+    // Релей-дубль КАЖДОМУ участнику с peer-токеном: до этого фикса группы
+    // ездили только почтой (30-60с), а в эко-режиме ntfy-пуш не приходил
+    // ВООБЩЕ — relay-конверт был единственным источником ntfy-wake.
+    // Все групповые пути (текст/poll/forward/аудио/вложения) идут через
+    // эту точку — один вызов закрывает их все. Не блокирует SMTP ниже.
+    if (envelopeObj && envelopeObj.id) {
+      try {
+        const members = (g.members || [])
+          .map(m => String(m.email || '').toLowerCase())
+          .filter(e => e && e !== this.email);
+        (await import('./relay-client.js')).relayGroupPublish(this.email, members, envelopeObj, content);
+      } catch (e) { /* релей опционален — почта доставит */ }
+    }
     // STEALTH: пустая тема (как 1:1). Получатель классифицирует по
     // содержимому (расшифровка групповым ключом), а не по теме.
     // Per-member try/catch: сбой SMTP одного адресата (троттлинг, таймаут)
