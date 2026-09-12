@@ -7763,6 +7763,12 @@ body {
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
+  /* Ландшафт Android edge-to-edge: навбар у бокового края — контент
+     сайдбара без этих отступов уходит за виртуальные кнопки.
+     На десктопе и в портрете inset = 0 — правило ничего не меняет. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .sidebar-header {
@@ -8408,6 +8414,12 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  /* Ландшафт Android edge-to-edge: то же, что у .sidebar — навбар у
+     бокового края (left/right insets), иначе поле ввода и шапка чата
+     уезжают за виртуальные кнопки. На десктопе inset = 0. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .chat-area {
