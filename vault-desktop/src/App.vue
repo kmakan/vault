@@ -840,6 +840,7 @@ import * as FoldersFeature from './features/folders.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as IncomingFeature from './features/incoming.js';
+import * as ReactionsFeature from './features/reactions.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1588,6 +1589,15 @@ export default {
     castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
     async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
     applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ── Реакции (логика в features/reactions.js) ──
+    reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this); },
+    loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this); },
+    saveStoredReactions(data) { return ReactionsFeature.saveStoredReactions(this, data); },
+    applyReactions(list, chatKey, wireReactions) { return ReactionsFeature.applyReactions(this, list, chatKey, wireReactions); },
+    sendReactionEmail(msgId, emoji, action) { return ReactionsFeature.sendReactionEmail(this, msgId, emoji, action); },
+    toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this, msgId); },
+    addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this, msgId, emoji); },
+    toggleReaction(msgId, emoji) { return ReactionsFeature.toggleReaction(this, msgId, emoji); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -6327,30 +6337,7 @@ export default {
       // Reset input
       event.target.value = '';
     },
-    // Reactions
-    // --- Персистентность реакций ---
-    // localStorage "vault-reactions-<email>": {chatKey: {msg_id: [{emoji, user}]}}.
-    // Поллинг перерисовывает сообщения из почты — без хранилища реакции
-    // исчезали через 30 сек даже у отправителя.
-    reactionsStorageKey() {
-      return 'vault-reactions-' + (this.email || 'anon');
-    },
-    loadStoredReactions() {
-      try {
-        return JSON.parse(localStorage.getItem(this.reactionsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredReactions(data) {
-      try {
-        localStorage.setItem(this.reactionsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save reactions:', e);
-      }
-    },
-    // Мерж сохранённых реакций + реакций из писем (wireReactions: msg_id ->
-    // [{emoji, user, action}]). Результат пишется в хранилище и в msg.reactions.
+    // Мерж сохранённых реакций + реакций из писем — features/reactions.js.
     // Отправитель письма — мы сами: sender_id это сырой заголовок From
     // («Имя <email>» или просто email). userId — рудимент серверной эпохи,
     // в serverless он всегда null, поэтому сравниваем по своему email
@@ -6378,35 +6365,6 @@ export default {
       if (msg == null) return '';
       const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
       return this.senderEmail(raw);
-    },
-    // ── Черновики ──────────────────────────────────────────────────
-    // (логика в features/drafts.js; обёртки см. в блоке feature-обёрток выше)
-    applyReactions(list, chatKey, wireReactions) {
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      // Применяем реакции из писем (add/remove) к хранилищу.
-      if (wireReactions && Object.keys(wireReactions).length) {
-        for (const [msgId, reactions] of Object.entries(wireReactions)) {
-          const cur = chatReactions[msgId] || [];
-          for (const r of reactions) {
-            const idx = cur.findIndex(x => x.emoji === r.emoji && x.user === r.user);
-            if (r.action === 'remove') {
-              if (idx >= 0) cur.splice(idx, 1);
-            } else if (idx < 0) {
-              cur.push({ emoji: r.emoji, user: r.user });
-            }
-          }
-          if (cur.length) chatReactions[msgId] = cur;
-          else delete chatReactions[msgId];
-        }
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-      }
-      // Проставляем на сообщения (массив эмодзи для рендера).
-      for (const msg of list) {
-        const rs = chatReactions[msg.id];
-        msg.reactions = rs ? [...new Set(rs.map(r => r.emoji))] : [];
-      }
     },
     // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
     // Паттерн applyReactions: мерж писем в localStorage-хранилище
@@ -6684,82 +6642,6 @@ export default {
           msg.content = latest.text;
           msg.edited = true;
         }
-      }
-    },
-    // Отправить реакцию письмом (транспорт E2E). Ошибки — не критичны.
-    sendReactionEmail(msgId, emoji, action) {
-      const payload = JSON.stringify({ react: 1, msg_id: msgId, emoji, action });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send reaction email:', e);
-        }
-      })();
-    },
-    toggleReactionPicker(msgId) {
-      // Пилюли звонков — не сообщения: реакции на них не нужны.
-      const m = (this.messages || []).find(x => x && x.id === msgId);
-      if (m && m.callEvent) return;
-      // Если пользователь выделял текст (копирование) — клик не должен
-      // открывать пикер реакций.
-      try {
-        const sel = window.getSelection && window.getSelection();
-        if (sel && String(sel).length > 0) return;
-      } catch (e) { /* ignore */ }
-      this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
-    },
-    addReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg) return
-      if (!msg.reactions) msg.reactions = []
-      if (!msg.reactions.includes(emoji)) {
-        msg.reactions.push(emoji)
-      }
-      // Персистентность: сохранить сразу (переживёт поллинг).
-      const chatKey = this.activeChatType === 'group' ? this.activeChat : this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      if (!cur.some(r => r.emoji === emoji && r.user === this.email)) {
-        cur.push({ emoji, user: this.email });
-      }
-      chatReactions[msgId] = cur;
-      stored[chatKey] = chatReactions;
-      this.saveStoredReactions(stored);
-      // Транспорт: отправить реакцию собеседнику/группе.
-      this.sendReactionEmail(msgId, emoji, 'add');
-      this.reactionPickerMsgId = null
-    },
-    toggleReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg || !msg.reactions) return
-      const idx = msg.reactions.indexOf(emoji)
-      if (idx >= 0) {
-        msg.reactions.splice(idx, 1)
-      }
-      // Убрать из хранилища и уведомить собеседника.
-      const chatKey = this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      const ri = cur.findIndex(r => r.emoji === emoji && r.user === this.email);
-      if (ri >= 0) {
-        cur.splice(ri, 1);
-        if (cur.length) chatReactions[msgId] = cur;
-        else delete chatReactions[msgId];
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-        this.sendReactionEmail(msgId, emoji, 'remove');
       }
     },
     // --- Копирование сообщений ---
