@@ -843,6 +843,7 @@ import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
+import * as RelayFeature from './features/relay.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1632,6 +1633,16 @@ export default {
     msgTs(m) { return HistoryFeature.msgTs(m); },
     showHistoryFirst(chatKey, isStale) { return HistoryFeature.showHistoryFirst(this, chatKey, isStale); },
     saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this, chatKey); },
+    // ── Релей/режимы приёма (логика в features/relay.js) ──
+    relayConsume() { return RelayFeature.relayConsume(this); },
+    loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(this, silent); },
+    startRelayTicker() { return RelayFeature.startRelayTicker(this); },
+    enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(this); },
+    idleLoop() { return RelayFeature.idleLoop(this); },
+    startPolling(intervalMs = 30000) { return RelayFeature.startPolling(this, intervalMs); },
+    stopPolling() { return RelayFeature.stopPolling(this); },
+    onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
+    onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -3787,45 +3798,6 @@ export default {
     },
     // M2.4: тумблер релея в настройках — живое обновление кэша
     // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
-    onRelayEnabled(on) {
-      this.relayEnabled = !!on;
-    },
-    // M2.3: экономный режим — постоянный IMAP IDLE останавливается
-    // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
-    // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
-    async onEcoMode(on, silent = false) {
-      this.ecoMode = !!on;
-      // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
-      // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
-      this.ecoAutonomous = false;
-      this.relayOfflineSince = null;
-      try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
-      if (!this.isLoggedIn) return;
-      if (this.ecoMode) {
-        // стоп JS IDLE-цикла
-        this._idleStop = true;
-        try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
-        // M2.3-b ФИНАЛ: пуши при закрытом приложении несёт ntfy-клиент
-        // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
-        // глушим его полностью: иконка исчезает из шторки, батарея целая.
-        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
-        try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
-        // релей-тикер — канал приёма при живом JS (activity открыта)
-        this.startRelayTicker();
-        // редкий поллинг-тик страхует (релей — основной канал)
-        this.stopPolling();
-        this.startPolling(60000);
-        if (!silent) this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
-      } else {
-        // классика: постоянный IDLE + обычный поллинг
-        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
-        try { await api.ecoSet(false); } catch (e) { console.warn('[eco] svc start:', e); }
-        this.stopPolling();
-        this.idleLoop();
-        this.startPolling();
-        this.showToast(this.t('eco_off_toast') || 'Классический режим: постоянное соединение включено');
-      }
-    },
     async onBioSave(text) {
       await this.setBio(text);
       this.showToast('Профиль сохранён — статус уйдёт контактам');
@@ -4598,76 +4570,6 @@ export default {
     // конкурирует за lock основного клиента. Используется ИЗ IDLE-цикла:
     // входящий call_request доходит, даже когда обычный поллинг пропускается
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
-    async loadEmailsFast(silent = true) {
-      try {
-        const accounts = await api.getEmailAccounts();
-        const fetched = [];
-        for (const account of accounts) {
-          try {
-            const cursors = this.loadCursors(account.id);
-            const res = await api.fetchEmailsIncrementalFast(account.id, cursors);
-            fetched.push(...(res.messages || []));
-            this.saveCursors(account.id, res.cursors);
-          } catch (e) {
-            console.warn('[calls] fast fetch failed:', e);
-          }
-        }
-        if (!fetched.length) return;
-        const merged = [...this.emails];
-        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-        for (const m of fetched) {
-          const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
-        }
-        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        if (merged.length > 2000) merged.length = 2000;
-        this.emails = merged;
-        console.log(`[Emails] fast loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
-        await this.processIncoming(fetched, { notify: silent });
-      } catch (e) {
-        console.warn('[calls] fast load failed:', e);
-      }
-    },
-    // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
-    // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
-    // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
-    // from приходит от отправителя (поле from) — дальше обычная расшифровка
-    // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
-    async relayConsume() {
-      const list = await relay.relayPoll(this.email);
-      if (!list.length) return;
-      const merged = [...this.emails];
-      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-      const fresh = [];
-      for (const env of list) {
-        const uid = 'rl-' + env.id;
-        if (seen.has(uid + '|RELAY')) continue;
-        seen.add(uid + '|RELAY');
-        fresh.push({
-          uid,
-          folder: 'RELAY',
-          from: (env.from || '').toLowerCase(),
-          to: this.email,
-          date: new Date((env.ts || 0) * 1000).toISOString(),
-          subject: '',
-          message_id: 'relay-' + env.id,
-          body: env.body, // тело уже декодировано в relay-client
-          is_read: false,
-        });
-      }
-      if (!fresh.length) return;
-      merged.push(...fresh);
-      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      if (merged.length > 2000) merged.length = 2000;
-      this.emails = merged;
-      // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
-      for (const f of fresh) {
-        this.cacheBody('RELAY:' + f.uid, f.body);
-      }
-      await this.processIncoming(fresh, { notify: true });
-      console.log('[relay] consumed envelopes: ' + fresh.length);
-    },
     // Входящие конверты (router) — логика в features/incoming.js; Этап 4
     // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
     async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts); },
@@ -5592,188 +5494,6 @@ export default {
     // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
     // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
     // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
-    // M2.3: релей-тикер — ЕДИНСТВЕННЫЙ канал приёма в эко-режиме (IDLE погашен).
-    // Живёт независимо от idleLoop: запускается при логине/эко-включении.
-    // УСТОЙЧИВОСТЬ К БЛОКИРОВКАМ (relay-resilience): каждые 60с health-чек
-    // активного релея. В эко-режиме мёртвый релей (3 подряд неудачи) →
-    // АВТОНОМНЫЙ режим: поднимаем foreground-службу + IDLE + поллинг 30с —
-    // приложение работает как классика, единственная разница — иконка в
-    // шторке. При оживании релея — тихо возвращаемся в эко.
-    startRelayTicker() {
-      if (this._relayTicker) return;
-      this._relayFails = 0;
-      this._lastRelayHealth = Date.now();
-      this._relayTicker = setInterval(async () => {
-        if (!this.isLoggedIn) {
-          clearInterval(this._relayTicker);
-          this._relayTicker = null;
-          return;
-        }
-        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
-        // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
-        if (Date.now() - this._lastRelayHealth >= 60000) {
-          this._lastRelayHealth = Date.now();
-          let healthy = false;
-          try { healthy = await relay.relayHealth(this.email); } catch (e) { healthy = false; }
-          if (healthy) {
-            this._relayFails = 0;
-            if (this.relayOfflineSince) {
-              console.log('[relay] healthy again → leaving offline mode');
-              this.relayOfflineSince = null;
-              if (this.ecoMode && !this.ecoAutonomous) {
-                // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
-                this.onEcoMode(true, true).catch(() => {});
-              }
-            }
-          } else {
-            this._relayFails++;
-            console.warn(`[relay] health fail #${this._relayFails}`);
-            // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
-            if (this._relayFails >= 3 && this.ecoMode && !this.ecoAutonomous) {
-              console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
-              this.enterRelayOfflineRescue();
-            }
-          }
-        }
-      }, 5000);
-    },
-    // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
-    // уведомления локальные — работа мессенджера НЕ отличается от классики.
-    // Отличия только: иконка в шторке есть, скорость = почтовая.
-    async enterRelayOfflineRescue() {
-      this.ecoAutonomous = true;
-      this.relayOfflineSince = Date.now();
-      this.relayDeliveryMode = 'email';
-      try {
-        // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
-        // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
-        await api.pushSet(false, '', '');
-        await api.ecoSet(false);
-      } catch (e) { console.warn('[relay-rescue] svc start:', e); }
-      // IDLE + обычный поллинг — как в классике.
-      this._idleStop = false;
-      this.idleLoop();
-      this.stopPolling();
-      this.startPolling();
-      this.showToast(this.t('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
-    },
-    async idleLoop() {
-      if (this._idleActive || !this.isLoggedIn) return;
-      this._idleActive = true;
-      // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
-      // но relay-очередь иначе ждала бы 30с тика поллинга).
-      this.startRelayTicker();
-      // Rust-монитор: запускаем параллельно с JS-циклом.
-      // Идемпотентен на стороне Rust; курсоры берём из кэша активного
-      // аккаунта, чтобы первый fetch не тянул старые письма.
-      api.idleStart(this.loadCursors(this.email) || {}).catch(e =>
-        console.warn('[idle-monitor] start failed:', e));
-      let lastSafety = Date.now();
-      let idleFailed = false;
-      try {
-        while (this.isLoggedIn && !this._idleStop) {
-          let changed = false;
-          try {
-            const r = await api.idleWait(2000, 'INBOX');
-            changed = !!(r && r.changed);
-          } catch (e) {
-            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг:', e && e.message || e);
-            idleFailed = true;
-            break;
-          }
-          const elapsed = Date.now() - lastSafety;
-          // Gmail кладёт call_* письма в СПАМ, а IDLE-push приходит только от
-          // INBOX: страховочный фетч JUNK делаем чаще (7с), чтобы answer/accept
-          // из Спама не ждали 10с и не опаздывали к 90с-таймауту.
-          if (changed || elapsed >= 7000) {
-            lastSafety = Date.now();
-            // Быстрый фетч для звонков: ОТДЕЛЬНЫЙ IMAP-клиент в Rust
-            // (email_fetch_incremental_fast) — основной клиент может быть занят
-            // зависшими операциями/троттлингом (lock busy → поллинг молча
-            // пропускается, call_request невидим часами). Звонки доходят
-            // всегда, независимо от состояния основного клиента.
-            try { await this.loadEmailsFast(true); } catch (e) { /* тихо */ }
-          }
-        }
-      } finally {
-        this._idleActive = false;
-        this._idleStop = false;
-      }
-      // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
-      // (hangup сам вернёт обычный 30с-поллинг).
-      if (this.isLoggedIn && this.callState !== 'idle') this.startPolling(3000);
-      // IDLE умер (провайдер/сеть): обычный поллинг продолжает работать;
-      // пробуем вернуть IDLE через 60с (провайдер мог временно отключить).
-      if (this.isLoggedIn && idleFailed) {
-        setTimeout(() => { if (this.isLoggedIn) this.idleLoop(); }, 60000);
-      }
-    },
-    startPolling(intervalMs = 30000) {
-      if (this.pollTimer) return;
-      this.pollTimer = setInterval(async () => {
-        // Анти-наложение: setInterval запускает новый тик каждые 30с
-        // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
-        // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
-        // стартует поверх, lock занят почти всегда, и открытие чата падает с
-        // «Timed out waiting for email client lock» (чаты пустые). Пропускаем
-        // тик, пока предыдущий ещё выполняется.
-        if (!this.isLoggedIn || this._pollingActive) return;
-        this._pollingActive = true;
-        try {
-          // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
-          // мержим в this.emails как виртуальные письма (uid: rl-<id>) —
-          // дальше их разберёт штатный processIncoming (дедуп по env.id
-          // в mergeHistory не даст дубликату email-письма задвоиться).
-          try {
-            await this.relayConsume();
-          } catch (e) { /* релей недоступен — почта продолжит доставку */ }
-          // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
-          // контактов (модель почтовый мессенджер — группа тоже источник контактов).
-          try { await this.loadGroups(); } catch (e) { /* тихо */ }
-          // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
-          // инвайты (попап согласия) и обновляет список писем.
-          await this.loadEmails(true);
-          // Новые письма могли прийти в любой момент — перерисовываем
-          // открытый чат, чтобы не приходилось переоткрывать его вручную.
-          if (this.activeChat === '__notes__') {
-            // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
-            // перезаписал бы пустым списком из IMAP).
-          } else if (this.activeChat && this.activeChatType === 'chat') {
-            await this.loadMessages(this.activeChat);
-            // Не выдёргиваем из чтения истории: прокручиваем только если
-            // пользователь уже у низа чата.
-            this.scrollToBottom(false);
-          } else if (this.activeChatType === 'group' && this.currentGroup) {
-            // Группы тоже обновляем поллингом: новые сообщения и реакции
-            // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-            await this.loadGroupMessages(this.currentGroup.id);
-            this.scrollToBottom(false);
-          }
-        } catch (e) {
-          // "Not connected" — сессия IMAP умерла; пробуем тихо восстановить её
-          // из сохранённых (зашифрованных на устройстве) учётных данных —
-          // без релога и остановки поллинга.
-          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-            try {
-              const ok = await api.restoreSession();
-              if (!ok) this.stopPolling();
-            } catch (_) {
-              this.stopPolling();
-            }
-          } else {
-            console.error('Polling loadEmails failed:', e);
-          }
-        } finally {
-          this._pollingActive = false;
-        }
-      }, intervalMs);
-    },
-    stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = null;
-      }
-    },
     // Emoji
     insertEmoji(emoji) {
       this.newMessage += emoji
