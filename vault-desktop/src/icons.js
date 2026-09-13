@@ -138,6 +138,11 @@ export const icons = {
   check: [
     { type: 'path', d: 'M20 6 9 17l-5-5' },
   ],
+  // Плеер голосовых (t_c1c44344): простой янтарный треугольник,
+  // стоп — существующая иконка 'square' (единый стиль stroke).
+  play: [
+    { type: 'path', d: 'M8 5.5v13a.6.6 0 0 0 .92.5l10.2-6.5a.6.6 0 0 0 0-1L8.92 5A.6.6 0 0 0 8 5.5z' },
+  ],
   send: [
     { type: 'path', d: 'M22 2 11 13' },
     { type: 'path', d: 'M22 2 15 22l-4-9-9-4z' },
@@ -207,6 +212,10 @@ export const icons = {
     { type: 'circle', cx: 12, cy: 12, r: 10 },
     { type: 'path', d: 'M2 12h20' },
     { type: 'path', d: 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' },
+  ],
+  megaphone: [
+    { type: 'path', d: 'M3 11l18-5v12L3 14v-3z' },
+    { type: 'path', d: 'M11.6 16.8a3 3 0 1 1-5.8-1.6' },
   ],
   palette: [
     { type: 'circle', cx: 12, cy: 12, r: 10 },

@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Фоновый плеер голосовых (t_c1c44344): медиа в фоне разрешено
+         только FGS с типом mediaPlayback. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Режим звонка (28.08): FGS-тип phoneCall даёт исключение из запрета
          на запуск activity из фона (BAL) — экран звонка открывается,
          даже когда приложение свёрнуто. -->
@@ -23,6 +26,8 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Вибрация при входящем звонке. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- M2.3-b: пуш-режим — старт сервиса после перезагрузки телефона. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Биометрия замка (02.09): снятие по отпечатку (BiometricPrompt). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- Исключение из оптимизации батареи (запрашивается в runtime). -->
@@ -53,13 +58,20 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- M2.3-b: ntfy-пуш «Click: vault://open» открывает приложение. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vault" android:host="open" />
+            </intent-filter>
         </activity>
 
         <!-- Фоновый приём звонков (27.08). -->
         <service
             android:name=".VaultForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync|phoneCall" />
+            android:foregroundServiceType="dataSync|mediaPlayback|phoneCall" />
 
         <provider
           android:name="androidx.core.content.FileProvider"
@@ -74,5 +86,12 @@
             android:name=".LockActivity"
             android:exported="false"
             android:excludeFromRecents="true" />
+        <receiver
+            android:name=".VaultBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

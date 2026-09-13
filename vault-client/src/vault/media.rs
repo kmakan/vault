@@ -707,7 +707,7 @@ mod tests {
     fn test_empty_file_rejected() {
         let (_dir, path) = temp_dir();
         let thumb_dir = path.join("thumbs");
-        let mut mgr = ThumbnailManager::with_dir(thumb_dir);
+        let _mgr = ThumbnailManager::with_dir(thumb_dir);
 
         let empty_path = write_test_image(&path, "empty.png", b"");
         let info = MediaInfo::from_file(&empty_path).unwrap();

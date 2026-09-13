@@ -71,6 +71,11 @@ pub struct EmailMessage {
     /// разными UID). Пусто, если заголовок отсутствует.
     #[serde(default)]
     pub message_id: String,
+    /// Размер письма в байтах (RFC822.SIZE из IMAP-заголовочного фетча).
+    /// 0 = неизвестно. Download-on-demand: письма крупнее порога не
+    /// фетчатся телом автоматически — пользователь качает по требованию.
+    #[serde(default)]
+    pub size: u32,
 }
 
 fn default_inbox() -> String {
@@ -273,7 +278,7 @@ impl EmailClient {
                 .collect::<Vec<_>>()
                 .join(",");
             let data = session
-                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
                 .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
             for fetch in data.iter() {
                 let uid = fetch.uid.unwrap_or_default().to_string();
@@ -301,6 +306,7 @@ impl EmailClient {
                         is_read,
                         folder: folder.to_string(),
                         message_id,
+                        size: fetch.size.unwrap_or(0),
                     });
                 }
             }
@@ -389,10 +395,16 @@ impl EmailClient {
 
         let uid_list = match last_uid {
             None => session.uid_search("ALL")?,
-            // Gmail bug: UID SEARCH X:* (где X > max UID) не возвращает
-            // пусто — возвращает последний известный UID. Фильтруем на
-            // клиенте: отбрасываем uid ≤ last_uid.
-            Some(last) => session.uid_search(&format!("{}:*", last + 1))?,
+            // Диапазон X:* на Gmail НЕНАДЁЖЕН: при скоплении нескольких
+            // писем после курсора (17 писем за день офлайна) он возвращал
+            // ТОЛЬКО максимальный uid — середина диапазона (все письма
+            // между курсором и max) терялась навсегда, чат пустел
+            // (кейс 13.09: группа «Четыре», uid 1551-1567, получен один).
+            // Надёжный путь: полный список ALL + клиентский фильтр
+            // uid > last. Папка уже выбрана, ALL — один RTT, объём
+            // копеечный (uid-числа). Self-валиддность проверок ниже
+            // (UIDVALIDITY reset, max == last) сохраняется.
+            Some(_last) => session.uid_search("ALL")?,
         };
         let raw_uids: Vec<u32> = uid_list.iter().copied().collect();
         let raw_max = raw_uids.iter().copied().max().unwrap_or(0);
@@ -435,7 +447,7 @@ impl EmailClient {
                 .collect::<Vec<_>>()
                 .join(",");
             let data = session
-                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
                 .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
             for fetch in data.iter() {
                 let uid = fetch.uid.unwrap_or_default().to_string();
@@ -456,6 +468,7 @@ impl EmailClient {
                         is_read,
                         folder: folder.to_string(),
                         message_id: extract_header(&header_str, "Message-ID:").unwrap_or_default(),
+                        size: fetch.size.unwrap_or(0),
                     });
                 }
             }
@@ -484,6 +497,11 @@ impl EmailClient {
             cursors.get("JUNK")
         );
         let mut new_cursors = cursors.clone();
+        // Дедуп по Message-ID внутри одного батча: одно письмо может лежать
+        // в двух папках (провайдер положил в INBOX, потом перенёс в Спам).
+        // Ключ дедупа — message_id + папка: копия из ДРУГОЙ папки не
+        // глотается, а отдаётся фронту — там она «оживит» запись, чей
+        // старый (INBOX, uid) стал мёртвым после переноса письма.
         let mut seen: HashSet<String> = HashSet::new();
         let mut messages: Vec<EmailMessage> = Vec::new();
 
@@ -500,7 +518,10 @@ impl EmailClient {
                 return; // empty folder — nothing new
             }
             for m in msgs {
-                if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                // Ключ дедупа = message_id + папка (folder — String
+                // с serde-default «INBOX», пустым не бывает).
+                let dedup_key = format!("{}|{}", m.message_id, m.folder);
+                if !m.message_id.is_empty() && !seen.insert(dedup_key) {
                     continue;
                 }
                 messages.push(m);
@@ -628,7 +649,7 @@ impl EmailClient {
         let _ = session.select(folder);
 
         let mut out = Vec::with_capacity(uids.len());
-        let mut empty_uid: Option<String> = None;
+        let mut empty_uids: Vec<String> = Vec::new();
         for uid in uids {
             let mut body = String::new();
             if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
@@ -639,41 +660,68 @@ impl EmailClient {
                     }
                 }
             }
+            // Пустое тело одного uid НЕ должно обрывать весь батч: провайдер
+            // переносит письмо INBOX→Спам после индексации, и uid в старой
+            // папке остаётся мёртвым навсегда. Раньше первый такой uid
+            // ронял весь запрос (break + bail!) — и тела всех остальных
+            // писем папки не загружались до полного рескана. Мёртвые uid
+            // пропускаем и собираем отдельно; живые тела отдаём.
             if body.is_empty() {
-                empty_uid = Some(uid.clone());
-                break;
+                empty_uids.push(uid.clone());
+                continue;
             }
             out.push((uid.clone(), body));
         }
         eprintln!(
-            "[fetch_bodies] folder={folder} requested={} returned={} empty_uid={:?}",
+            "[fetch_bodies] folder={folder} requested={} returned={} empty_uids={:?}",
             uids.len(),
             out.len(),
-            empty_uid
+            empty_uids
         );
 
         if folder != "INBOX" {
             let _ = session.select("INBOX");
         }
 
-        // Пустое тело = рассинхрон сессии (см. fetch_message_body): Err, чтобы
-        // lib.rs сделал reconnect и повторил весь батч.
-        // намертво кэшировался фронтом как пустые сообщения.
-        if let Some(uid) = empty_uid {
-            anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
+        // ВСЕ тела пустые = реальный рассинхрон сессии (см. fetch_message_body):
+        // Err, чтобы lib.rs сделал reconnect и повторил батч. Частично пустые —
+        // норма (письма переехали в другую папку), отдаём то, что есть.
+        if out.is_empty() && !empty_uids.is_empty() {
+            anyhow::bail!(
+                "Empty body for ALL {n} uids in {folder} (session desync?)",
+                n = empty_uids.len()
+            );
         }
         Ok(out)
     }
 
     pub async fn send_email(&mut self, to: &str, subject: &str, body: &str) -> Result<()> {
+        self.send_email_with_id(to, subject, body, None).await
+    }
+
+    /// Отправка с явным Message-ID (download-on-demand): мета-сообщение
+    /// ссылается на data-письмо по Message-ID, поэтому тот должен быть
+    /// известен ДО отправки. Нейтральный вид (<vault-...@dom>) не выдаёт
+    /// больше информации, чем UUID, генерируемый провайдером.
+    pub async fn send_email_with_id(
+        &mut self,
+        to: &str,
+        subject: &str,
+        body: &str,
+        message_id: Option<&str>,
+    ) -> Result<()> {
         let from_mailbox: Mailbox = self.config.email.parse().context("Invalid sender email")?;
         let to_mailbox: Mailbox = to.parse().context("Invalid recipient email")?;
 
-        let email = Message::builder()
+        let mut builder = Message::builder()
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .header(ContentType::TEXT_PLAIN)
+            .header(ContentType::TEXT_PLAIN);
+        if let Some(mid) = message_id {
+            builder = builder.message_id(Some(mid.to_string()));
+        }
+        let email = builder
             .body(fold_lines(body))
             .context("Failed to build email")?;
 

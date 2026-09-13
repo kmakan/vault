@@ -4,4 +4,4 @@ pub mod rate;
 pub mod store;
 pub mod tokens;
 
-pub use tokens::{issue, parse, Scope, ServerKeys, Token};
+pub use tokens::{channel_tokens, issue, parse, Scope, ServerKeys, Token};

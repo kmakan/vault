@@ -19,6 +19,9 @@ pub struct Envelope {
     /// вариант §9.3; сервер ничего не валидирует, только ретранслирует).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// M2.4 автообмен: read-токен отправителя (адрес его очереди).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tok: Option<String>,
 }
 
 #[derive(Default)]
@@ -66,6 +69,20 @@ impl Store {
             return Some(Vec::new());
         }
         Some(deque.drain(..).collect())
+    }
+
+    /// Peek (канал, M2): прочитать живые конверты, НЕ забирая — очередь канала
+    /// общая, каждый подписчик должен получить каждый пост (fan-out на
+    /// read-стороне, design channels §4.1). Дедуп — на клиенте по env.id.
+    /// `since` — вернуть только посты новее unix-секунды (клиентский курсор:
+    /// общий peek без него переотдавал бы всю 24ч-историю на каждый поллинг).
+    /// Удаление — только по TTL (retain) и вытеснению при переполнении.
+    pub fn peek(&self, token_hash: &str, since: u64) -> Option<Vec<Envelope>> {
+        let mut q = self.queues.lock().expect("store lock");
+        let deque = q.get_mut(token_hash)?;
+        let now = now_unix();
+        deque.retain(|e| e.exp > now);
+        Some(deque.iter().filter(|e| e.ts > since).cloned().collect())
     }
 
     /// Сколько конвертов ждёт токен (hello-кадр WS).

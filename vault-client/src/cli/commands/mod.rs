@@ -220,6 +220,13 @@ pub enum Command {
         value: String,
     },
 
+    // ── Push-релей ────────────────────────────────────────────
+    /// /relay — статус; /relay on|off — вкл/выкл; /relay register —
+    /// свежий myToken на нашем релее (30 дней free, 3 рег/день по IP).
+    Relay {
+        action: Option<String>,
+    },
+
     // ── Unknown ──────────────────────────────────────────────
     Unknown(String),
 }
@@ -770,6 +777,13 @@ impl Command {
 
                 // Settings
                 "settings" | "cfg" => Command::Settings,
+                "relay" => Command::Relay {
+                    action: if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.to_string())
+                    },
+                },
                 "set" => {
                     let mut parts = args.splitn(2, ' ');
                     match (parts.next(), parts.next()) {
@@ -799,11 +813,32 @@ fn parse_connect(args: &str) -> Command {
             password: parts[1].to_string(),
             server: default_imap_server(parts[0]),
         },
-        _ => Command::Connect {
-            email: parts[0].to_string(),
-            password: parts[1].to_string(),
-            server: parts[2].to_string(),
-        },
+        _ => {
+            // The password is everything after the email; a third token is
+            // the IMAP server only when it looks like a host. App passwords
+            // (e.g. Google) come as space-separated groups, so
+            // `/connect user@gmail.com abcd efgh ijkl mnop` must keep the
+            // full 16 chars in one password.
+            let last = parts[parts.len() - 1];
+            let looks_like_server = last.contains('.') || last == "localhost";
+            if looks_like_server && parts.len() >= 3 {
+                let password = parts[1..parts.len() - 1].join(" ");
+                if password.is_empty() {
+                    return Command::Unknown("Missing password".into());
+                }
+                Command::Connect {
+                    email: parts[0].to_string(),
+                    password,
+                    server: last.to_string(),
+                }
+            } else {
+                Command::Connect {
+                    email: parts[0].to_string(),
+                    password: parts[1..].join(" "),
+                    server: default_imap_server(parts[0]),
+                }
+            }
+        }
     }
 }
 
@@ -820,16 +855,35 @@ fn parse_reply(args: &str) -> Command {
 }
 
 fn default_imap_server(email: &str) -> String {
+    provider_hosts(email).0.to_string()
+}
+
+/// Каталог провайдеров (порт IMAP везде 993/SSL; SMTP-порты как в Desktop
+/// mailProviders.js: mail-семейство и Яндекс — 465/SMTPS, остальные — 587).
+/// bk.ru/list.ru/inbox.ru — алиасы Mail.ru Group: imap.bk.ru не существует.
+pub fn provider_hosts(email: &str) -> (&'static str, &'static str, u16) {
     if email.ends_with("@gmail.com") || email.ends_with("@googlemail.com") {
-        "imap.gmail.com".to_string()
+        ("imap.gmail.com", "smtp.gmail.com", 587)
     } else if email.ends_with("@outlook.com") || email.ends_with("@hotmail.com") {
-        "outlook.office365.com".to_string()
-    } else if email.ends_with("@yandex.ru") || email.ends_with("@yandex.com") {
-        "imap.yandex.com".to_string()
-    } else if email.ends_with("@mail.ru") {
-        "imap.mail.ru".to_string()
+        ("outlook.office365.com", "smtp.office365.com", 587)
+    } else if email.ends_with("@yandex.ru")
+        || email.ends_with("@yandex.com")
+        || email.ends_with("@ya.ru")
+        || email.ends_with("@ya.com")
+    {
+        ("imap.yandex.com", "smtp.yandex.com", 465)
+    } else if email.ends_with("@mail.ru")
+        || email.ends_with("@bk.ru")
+        || email.ends_with("@list.ru")
+        || email.ends_with("@inbox.ru")
+    {
+        ("imap.mail.ru", "smtp.mail.ru", 465)
+    } else if email.ends_with("@zoho.com") {
+        ("imap.zoho.com", "smtp.zoho.com", 587)
+    } else if email.ends_with("@ro.ru") {
+        ("mail.rambler.ru", "smtp.rambler.ru", 465)
     } else {
-        "imap.gmail.com".to_string()
+        ("imap.gmail.com", "smtp.gmail.com", 587)
     }
 }
 
@@ -933,6 +987,7 @@ impl fmt::Display for Command {
             Command::Thumb { file_path, size } => write!(f, "thumb {} {}", file_path, size),
             Command::ThumbInfo { file_path } => write!(f, "thumbinfo {}", file_path),
             Command::Settings => write!(f, "settings"),
+            Command::Relay { .. } => write!(f, "relay"),
             Command::Set { key, .. } => write!(f, "set {}", key),
             Command::Unknown(s) => write!(f, "{}", s),
         }
@@ -1099,6 +1154,68 @@ mod tests {
             Command::parse("/connect user@gmail.com"),
             Command::Unknown(_)
         ));
+    }
+
+    #[test]
+    fn test_connect_multiword_password() {
+        // Google app passwords are four 4-char groups; everything after the
+        // email belongs to the password when no server is given.
+        let cmd = Command::parse("/connect user@gmail.com abcd efgh ijkl mnop");
+        match cmd {
+            Command::Connect {
+                email,
+                password,
+                server,
+            } => {
+                assert_eq!(email, "user@gmail.com");
+                assert_eq!(password, "abcd efgh ijkl mnop");
+                assert_eq!(server, "imap.gmail.com");
+            }
+            _ => panic!("Expected Connect"),
+        }
+    }
+
+    #[test]
+    fn test_connect_password_and_server() {
+        // Explicit server still works, with or without spaces in the password.
+        let cmd = Command::parse("/connect u@zoho.com secret pass imap.zoho.com");
+        match cmd {
+            Command::Connect {
+                email,
+                password,
+                server,
+            } => {
+                assert_eq!(email, "u@zoho.com");
+                assert_eq!(password, "secret pass");
+                assert_eq!(server, "imap.zoho.com");
+            }
+            _ => panic!("Expected Connect"),
+        }
+        let cmd = Command::parse("/connect u@zoho.com pass123 imap.zoho.com");
+        match cmd {
+            Command::Connect {
+                password, server, ..
+            } => {
+                assert_eq!(password, "pass123");
+                assert_eq!(server, "imap.zoho.com");
+            }
+            _ => panic!("Expected Connect"),
+        }
+    }
+
+    #[test]
+    fn test_connect_password_with_dots_not_server() {
+        // A password token containing dots must not be eaten as a server.
+        let cmd = Command::parse("/connect user@gmail.com pass.word");
+        match cmd {
+            Command::Connect {
+                password, server, ..
+            } => {
+                assert_eq!(password, "pass.word");
+                assert_eq!(server, "imap.gmail.com");
+            }
+            _ => panic!("Expected Connect"),
+        }
     }
 
     #[test]

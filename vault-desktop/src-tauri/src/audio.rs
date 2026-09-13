@@ -611,6 +611,11 @@ async fn read_remote_loop(
 
 #[cfg(not(target_os = "android"))]
 static RINGTONE: Mutex<Option<cpal::Stream>> = Mutex::new(None);
+/// Поколение текущего RINGTONE-потока: инкремент на каждый новый звук.
+/// Self-stop тред once-звука сверяет поколение — не убить новый звук,
+/// начавшийся пока он спал (missed 1.6с + рингтон следующего звонка).
+#[cfg(not(target_os = "android"))]
+static RINGTONE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(not(target_os = "android"))]
 const SND_INCOMING: &[u8] = include_bytes!("../sounds/ring_incoming.wav");
@@ -713,6 +718,17 @@ macro_rules! build_sound_stream {
         let pcm: Arc<Vec<f32>> = Arc::new($pcm);
         let looped = $looped;
         let mut pos: usize = 0;
+        // Длина звука нужна self-stop треду ПОСЛЕ move pcm в audio-колбэк —
+        // считаем заранее (сэмплы и частота известны до построения потока).
+        let pcm_len = pcm.len();
+        let out_rate = $cfg.sample_rate() as u64;
+        // Rate-limit ошибок потока: cpal+PipeWire на некоторых конфигурациях
+        // сыпет «buffer underrun» в КАЖДОМ колбэке (наблюдалось 48k+ строк за
+        // один звонок, лог-файл распухал на мегабайты). Первая ошибка пишется
+        // сразу, последующие — не чаще раза в 5 секунд. Счётчик атомарный:
+        // колбэки приходят из аудио-треда.
+        let err_count = std::sync::atomic::AtomicUsize::new(0);
+        let err_last = std::sync::atomic::AtomicI64::new(0);
         let stream = $device
             .build_output_stream(
                 $cfg.clone().into(),
@@ -734,12 +750,48 @@ macro_rules! build_sound_stream {
                         *out = (v * 0.9).to_sample::<$fmt>();
                     }
                 },
-                |e| eprintln!("[sound] stream error: {e}"),
-                None,
+                move |e| {
+                    let c = err_count.fetch_add(1, Ordering::Relaxed);
+                    if c == 0 {
+                        eprintln!("[sound] stream error: {e}");
+                    } else {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        let last = err_last.load(Ordering::Relaxed);
+                        if now - last >= 5 {
+                            err_last.store(now, Ordering::Relaxed);
+                            eprintln!("[sound] stream error ×{}: {e}", c + 1);
+                        }
+                    }
+                },
+                // Таймаут колбэка: PipeWire-ALSA с default может ставить
+                // период, в который колбэк не укладывается → underrun-каскад.
+                Some(std::time::Duration::from_millis(100)),
             )
             .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?; // cpal 0.18: поток НЕ играет без play()
+        // Поколение: фиксируем ДО публикации потока, чтобы self-stop тред
+        // сверял именно с нашим номером.
+        let gen = RINGTONE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         *RINGTONE.lock().unwrap() = Some(stream);
+        // Одноразовые звуки: поток сам не останавливается (после конца
+        // пишет тишину вечно и держит устройство открытым). Останавливаем
+        // из отдельного треда по длине звука; сверка поколения защищает
+        // новый звук, начавшийся за это время.
+        if !looped {
+            let dur_ms = pcm_len as u64 * 1000 / out_rate.max(1) + 250;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(dur_ms));
+                if RINGTONE_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                    return; // уже начался другой звук — не трогаем
+                }
+                if let Some(s) = RINGTONE.lock().unwrap().take() {
+                    drop(s);
+                }
+            });
+        }
         Ok(())
     }};
 }

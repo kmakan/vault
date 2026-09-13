@@ -5,6 +5,7 @@ mod crypto;
 mod crypto_pq;
 mod duress;
 mod email;
+mod channels;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
@@ -21,6 +22,97 @@ mod storage;
 #[cfg(target_os = "android")]
 mod service_monitor;
 
+/// M2.3-b: push-режим — сервис остаётся жить в режиме ntfy-подписки
+/// (без IMAP/wakeLock). topic = hex-hash read-токена (вычисляет JS),
+/// ntfy_base = https://ntfy.vault-msg.ru (или свой).
+#[tauri::command]
+fn push_set(enabled: bool, topic: String, ntfy_base: String) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        use jni::objects::JValue;
+        let ctx = ndk_context::android_context();
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let call = if enabled {
+            let jtopic = env.new_string(&topic).map_err(|e| e.to_string())?;
+            let jbase = env.new_string(&ntfy_base).map_err(|e| e.to_string())?;
+            env.call_static_method(
+                &cls,
+                "pushModeStart",
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+                &[(&activity).into(), (&jtopic).into(), (&jbase).into()],
+            )
+        } else {
+            env.call_static_method(
+                &cls,
+                "pushModeStop",
+                "(Landroid/content/Context;)V",
+                &[(&activity).into()],
+            )
+        };
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("push_set: {err}"));
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (enabled, topic, ntfy_base);
+        Ok(true)
+    }
+}
+
+/// M2.3: экономный режим — форс-стоп/запуск foreground-сервиса.
+/// eco=true: сервис остановлен пользователем (без AlarmManager-воскрешения),
+/// wakeLock/wifiLock сняты, иконка из шапки исчезает. eco=false: сервис поднят.
+#[tauri::command]
+fn eco_set(enabled: bool) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let ctx = ndk_context::android_context();
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = crate::audio::audio_android::find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        let method = if enabled { "ecoStop" } else { "ecoStart" };
+        let call = env.call_static_method(
+            &cls,
+            method,
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        );
+        if let Err(err) = call {
+            let _ = env.exception_clear();
+            return Err(format!("{method}: {err}"));
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = enabled;
+        Ok(true) // desktop: фоновой службы нет
+    }
+}
+
 /// Общий вход инициализации ndk-context: MainActivity
 /// (audio_android) и headless-монитор FGS (service_monitor) делят один
 /// флаг — двойная инициализация паниковала бы (panic=abort).
@@ -28,6 +120,8 @@ mod service_monitor;
 pub(crate) fn service_monitor_ensure_ctx(env: &mut jni::JNIEnv, context: &jni::objects::JObject) {
     service_monitor::ensure_ndk_context(env, context);
 }
+
+pub mod voicenote;
 
 use credential_store::StoredCredentials;
 use storage::sqlite::Storage;
@@ -679,6 +773,46 @@ async fn email_send(
     }
 }
 
+/// Отправка data-письма download-on-demand с заданным Message-ID.
+/// Тело — большой зашифрованный конверт (десятки МБ base64), поэтому таймаут
+/// больше, чем у обычных писем (120с против 45с).
+#[tauri::command]
+async fn email_send_dod(
+    to: String,
+    subject: String,
+    body: String,
+    message_id: String,
+    state: State<'_, EmailState>,
+) -> Result<bool, String> {
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
+        .await
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut client = EmailClient::new(cfg);
+    let mid = if message_id.trim().is_empty() {
+        None
+    } else {
+        Some(message_id.as_str())
+    };
+    match t_timeout(
+        Duration::from_secs(120),
+        client.send_email_with_id(&to, &subject, &body, mid),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => {
+            eprintln!("[email] dod send error: {e}");
+            Err(format!("SMTP send failed: {e}"))
+        }
+        Err(_) => {
+            eprintln!("[email] dod send timed out (120s)");
+            Err("SMTP send timed out".to_string())
+        }
+    }
+}
+
 #[tauri::command]
 async fn email_disconnect(
     state: State<'_, EmailState>,
@@ -882,6 +1016,54 @@ fn groups_delete(group_id: String) -> Result<(), String> {
 #[tauri::command]
 fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, String> {
     groups::rename_group(&group_id, &new_name).map_err(|e| e.to_string())
+}
+
+// ── Broadcast channels (M2, docs/design/channels-protocol.md) ─────────────
+
+#[tauri::command]
+fn channels_load() -> Result<Vec<channels::Channel>, String> {
+    channels::load_channels()
+        .map(|c| c.into_values().collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_create(
+    name: String,
+    owner: String,
+    owner_fpr: String,
+    about: String,
+) -> Result<channels::Channel, String> {
+    channels::create_channel(&name, &owner, &owner_fpr, &about).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_import(
+    channel_id: String,
+    name: String,
+    key: String,
+    owner: String,
+    owner_fpr: String,
+) -> Result<channels::Channel, String> {
+    channels::import_channel(&channel_id, &name, &key, &owner, &owner_fpr).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_update(
+    channel_id: String,
+    patch: channels::ChannelPatch,
+) -> Result<channels::Channel, String> {
+    channels::update_channel(&channel_id, &patch).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_add_known_subscriber(channel_id: String, email: String) -> Result<(), String> {
+    channels::add_known_subscriber(&channel_id, &email).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_delete(channel_id: String) -> Result<(), String> {
+    channels::delete_channel(&channel_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1418,6 +1600,7 @@ pub fn run() {
             email_idle_start,
             email_idle_stop,
             email_send,
+            email_send_dod,
             recovery_generate_mnemonic,
             recovery_validate_mnemonic,
             recovery_wrap_backup,
@@ -1428,6 +1611,12 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            channels_load,
+            channels_create,
+            channels_import,
+            channels_update,
+            channels_add_known_subscriber,
+            channels_delete,
             groups_rename_member,
             groups_save_member_fingerprints,
             android_open_url,
@@ -1492,6 +1681,10 @@ pub fn run() {
             // ставит missed поверх принятого звонка.
             #[cfg(target_os = "android")]
             service_monitor::call_report_state,
+            eco_set,
+            push_set,
+            voicenote::voicenote_play,
+            voicenote::voicenote_stop,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

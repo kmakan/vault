@@ -94,7 +94,7 @@ async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<Str
 
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let body = client
-                .fetch_message_body(&msg.id)
+                .fetch_message_body(&msg.id, "INBOX")
                 .await
                 .context("fetch body failed")?;
             return Ok(body);

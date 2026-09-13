@@ -37,14 +37,14 @@ impl Folder {
     }
 }
 
-/// Менеджер папок с持久化 в JSON-файл
+/// Менеджер папок с сохранением в JSON-файл
 pub struct FolderStore {
     path: PathBuf,
     folders: HashMap<String, Folder>,
 }
 
 impl FolderStore {
-    /// Создать хранилище с默认ным путём (~/.vault/folders.json)
+    /// Создать хранилище с путём по умолчанию (~/.vault/folders.json)
     pub fn new() -> Self {
         let path = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))

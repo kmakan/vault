@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 
 const WORDLIST: &str = include_str!("bip39_english.txt");
-const PBKDF2_ITERS: u32 = 2048; 
+const PBKDF2_ITERS: u32 = 2048;
 const PASSPHRASE: &str = "Vault recovery";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

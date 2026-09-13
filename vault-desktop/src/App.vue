@@ -101,6 +101,7 @@
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
             <Icon name="user-plus" :size="22" gradient cls="group-create-icon" />
           </button>
+          <button :title="t('nav_channels') || 'Каналы'" @click="showChannelPanel = true"><Icon name="megaphone" :size="20" /></button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true"><Icon name="link" :size="20" /></button>
           <button :title="t('nav_keys')" @click="showKeyManager = true"><Icon name="key" :size="20" /></button>
           <button :title="t('cipher_title')" @click="showCipher = true"><Icon name="shield" :size="20" /></button>
@@ -108,202 +109,90 @@
         </div>
       </div>
       
-      <div class="contacts-list">
-        <div class="search-box">
-          <input type="text" :placeholder="t('contacts_search')" v-model="searchQuery" />
-        </div>
-
-        <!-- Заметки для себя: локальный чат с собой.
-             Не зависит от peer_keys, почты и шифрования — хранится только
-             в localStorage vault-notes-<email>. -->
-        <div
-          class="contact-item notes-self"
-          :class="{ active: activeChat === '__notes__' }"
-          @click="selectNotes"
-        >
-          <div class="notes-self-avatar">
-            <Icon name="pencil" :size="18" gradient cls="notes-self-icon" />
-          </div>
-          <div class="contact-info">
-            <div class="contact-name">{{ t('notes_self') || 'Заметки для себя' }}</div>
-            <div class="contact-email">{{ t('notes_self_hint') || 'Только на этом устройстве' }}</div>
-          </div>
-        </div>
-        <!-- Onboarding: no contacts and no peer keys yet -->
-        <div v-if="contacts.length === 0 && Object.keys(peerKeys).length === 0" class="contacts-empty">
-          <div class="contacts-empty-title">{{ t('contacts_empty_title') }}</div>
-          <div class="contacts-empty-hint">{{ t('contacts_empty_hint') }}</div>
-          <div class="contacts-empty-actions">
-            <button class="btn-primary" @click="showKeyManager = true"><Icon name="key" :size="15" /> {{ t('nav_keys') }}</button>
-            <button class="btn-secondary" @click="showQRCode = true"><Icon name="link" :size="15" /> {{ t('nav_add_contact') }}</button>
-          </div>
-        </div>
-        <div 
-          v-for="contact in filteredContacts" 
-          :key="contact.email"
-          :class="['contact-item', { active: activeChat === contact.email }]"
-          @click="selectChat(contact.email)"
-          @contextmenu="openChatMenu({ type: 'contact', email: contact.email }, $event)"
-        >
-          <UserAvatar :email="contact.email" :avatarUrl="avatarOf(contact.email)" :size="36" />
-          <div class="contact-info">
-            <div class="contact-name">{{ nameOf(contact.email) }}</div>
-            <div class="contact-email">{{ contact.email }}</div>
-          </div>
-          <div class="contact-status">
-            <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
-            <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
-            <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами (по id участника или QR)'"><Icon name="unlock" :size="13" /></span>
-            <span v-if="isRecentlySeen(contact.email)" class="status-dot online" :title="t('contact_seen_recently')"></span>
-            <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="deleteContact(contact.email)"><Icon name="trash" :size="14" /></button>
-          </div>
-        </div>
-        
-        <!-- Email load error (debug aid) -->
-        <div v-if="emailError" class="email-error-hint">{{ emailError }}</div>
-
-        <!-- Groups Section -->
-        <div v-if="groups.length > 0" class="groups-section">
-          <div class="groups-header">
-            <Icon name="users" :size="14" cls="groups-header-icon" />
-            {{ t('nav_groups') || 'Groups' }}
-          </div>
-          <div 
-            v-for="group in filteredGroups" 
-            :key="group.id"
-            :class="['contact-item', { active: activeChat === `group:${group.id}` }]"
-            @click="selectGroup(group)"
-            @contextmenu="openChatMenu({ type: 'group', id: group.id }, $event)"
-          >
-            <img v-if="groupAvatars[group.id]" :src="groupAvatars[group.id]" class="group-avatar group-avatar-img" :alt="group.name" />
-            <div v-else class="group-avatar">
-              {{ groupIconMap[group.id] || group.name.charAt(0).toUpperCase() }}
-            </div>
-            <div class="contact-info">
-              <div class="contact-name">{{ group.name }}</div>
-              <div class="contact-email">{{ (group.members || []).length }} {{ membersLabel((group.members || []).length) }}</div>
-            </div>
-            <div class="contact-status">
-              <span v-if="unreadOf('group:' + group.id)" class="unread-badge">{{ unreadOf('group:' + group.id) }}</span>
-              <Icon v-if="isMuted('group:' + group.id)" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
-            </div>
-          </div>
-        </div>
-        <!-- переключатель архива (виден, когда есть архивные чаты) -->
-        <!-- v-if: показываем и когда showArchived=true, даже если архив
-             опустел — иначе после «из архива» последнего чата переключатель
-             исчезал и выйти из режима архива было нельзя
-             -->
-        <div v-if="hasArchivedChats || showArchived" class="archive-toggle" @click="showArchived = !showArchived">
-          <Icon :name="showArchived ? 'eye-off' : 'archive'" :size="14" />
-          <span>{{ showArchived ? (t('chat_hide_archive') || 'Скрыть архив') : (t('chat_show_archive') || 'Показать архив') }}</span>
-        </div>
-        <!-- Папки: горизонтальная лента созданных папок -->
-        <div v-if="chatFoldersList.length" class="folder-strip">
-          <button v-for="f in chatFoldersList" :key="f" class="folder-chip"
-                  :class="{ 'folder-chip-on': activeFolder === f }"
-                  @click="activeFolder = activeFolder === f ? '' : f">{{ f }}</button>
-        </div>
-      </div>
+      <ContactList
+        :search="searchQuery"
+        :contacts="filteredContacts"
+        :groups="filteredGroups"
+        :channels="channels"
+        :channelAvatars="channelAvatars"
+        :avatars="groupAvatars"
+        :groupIconMap="groupIconMap"
+        :folders="chatFoldersList"
+        :activeFolder="activeFolder"
+        :active="activeChat"
+        :error="emailError"
+        :empty="contacts.length === 0 && Object.keys(peerKeys).length === 0"
+        :showArchived="showArchived"
+        :hasArchived="hasArchivedChats"
+        :peerKeys="peerKeys"
+        :nameOf="nameOf"
+        :avatarOf="avatarOf"
+        :unreadOf="unreadOf"
+        :isMuted="isMuted"
+        :isRecentlySeen="isRecentlySeen"
+        :isOnline="isOnline"
+        :membersLabel="membersLabel"
+        :channelUnread="id => channelUnread[id] || 0"
+        @search="v => searchQuery = v"
+        @select-chat="selectChat"
+        @select-group="selectGroup"
+        @select-channel="selectChannel"
+        @select-notes="selectNotes"
+        @menu="openChatMenu"
+        @delete="deleteContact"
+        @open-keys="showKeyManager = true"
+        @open-qr="showQRCode = true"
+        @archive-toggle="showArchived = !showArchived"
+        @folder="f => activeFolder = f"
+      />
     </div>
     
     <div class="main-area" :class="{ 'mobile-hidden': isMobile && !mobileChatOpen }">
       <!-- CHAT VIEW -->
       <div v-if="currentView !== 'email'" class="chat-area">
-        <div class="chat-header" v-if="activeChat">
-          <div class="chat-header-info">
-            <button v-if="isMobile" class="chat-back-btn" @click="closeMobileChat" :title="t('back') || 'Назад'">
-              <Icon name="chevron-left" :size="22" />
-            </button>
-            <!-- На узких экранах она ПЕРЕВОРАЧИВАЕТСЯ вертикально (media <768)
-                 сжималось и перекрывалось кнопками действий (звезда избранного
-                 добавила 6-ю кнопку справа).
-                 -->
-            <div class="chat-head-col">
-            <template v-if="activeChatType === 'group'">
-              <img v-if="currentGroup && groupAvatars[currentGroup.id]" :src="groupAvatars[currentGroup.id]" class="group-avatar group-avatar-img" :alt="currentGroup.name" />
-              <div v-else class="group-avatar">
-                {{ (currentGroup && (groupIconMap[currentGroup.id] || currentGroup.name?.charAt(0).toUpperCase())) || '?' }}
-              </div>
-            </template>
-            <template v-else-if="activeChat === '__notes__'">
-              <div class="notes-self-avatar notes-self-avatar-lg">
-                <Icon name="pencil" :size="20" gradient cls="notes-self-icon" />
-              </div>
-            </template>
-            <template v-else>
-              <button class="chat-avatar-btn" :title="t('profile_title_of', { name: nameOf(activeChat) || activeChat })" @click="openContactCard(activeChat)">
-                <UserAvatar :email="activeChat" :avatarUrl="avatarOf(activeChat)" :size="40" />
-              </button>
-            </template>
-            <div class="chat-header-text" :class="{ 'text-inline': activeChatType !== 'group' && activeChat !== '__notes__' }">
-              <h3>{{ activeChatName }}</h3>
-              <div class="chat-status">
-                <template v-if="activeChatType === 'group'">
-                  <span class="members-count" @click="showMembersList = true">
-                    <Icon name="users" :size="15" gradient cls="members-count-icon" />
-                    {{ (currentGroup?.members || []).length }} {{ membersLabel((currentGroup?.members || []).length) }}
-                  </span>
-                </template>
-                <template v-else-if="activeChat === '__notes__'">
-                  <span>{{ t('notes_self_status') || 'Локально · только на этом устройстве' }}</span>
-                </template>
-                <template v-else>
-                  <Icon v-if="peerKeys[activeChat]" name="lock" :size="11" /><Icon v-else name="alert" :size="11" /><span class="chat-enc-text">{{ peerKeys[activeChat] ? ' Encrypted' : ' No key' }}</span>
-                </template>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="chat-actions">
-            <template v-if="activeChatType === 'group'">
-              <button v-if="isGroupAdmin" class="chat-action-btn" @click="openAddMemberPopup" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
-              <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="refreshGroupFull"><Icon name="refresh" :size="17" /></button>
-              <button class="chat-action-btn" @click="showGroupSettings = !showGroupSettings" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
-            </template>
-            <template v-else-if="activeChat && activeChat !== '__notes__'">
-              <!-- Замок-индикатор был убран по просьбе пользователя. -->
-              <button v-if="expCalls && peerKeys[activeChat]" class="chat-action-btn" @click="startCall" :title="t('call_start') || 'Позвонить'"><Icon name="phone" :size="17" /></button>
-              <button class="chat-action-btn" @click="openContactEdit(activeChat)" :title="t('contact_edit') || 'Локальные имя и аватар контакта'"><Icon name="pencil" :size="17" /></button>
-            </template>
-            <!-- Исчезающие сообщения: таймер для этого чата.
-                 Единый стиль с chat-action-btn; состояние — цвет иконки
-                 (серый выкл / янтарный вкл) и заливка кнопки.
-                 -->
-            <div v-if="activeChat && activeChat !== '__notes__'" class="ephemeral-menu">
-              <button class="chat-action-btn ephemeral-btn" :class="{ 'ephemeral-on': currentEphemeralTtl > 0 }"
-                :title="t('ephemeral_title') + (currentEphemeralTtl ? t('ephemeral_on_suffix').replace('{ttl}', ephemeralLabel(currentEphemeralTtl)) : t('ephemeral_off_suffix'))"
-                @click="showEphemeralMenu = !showEphemeralMenu">
-                <Icon name="lock" :size="17" :color="currentEphemeralTtl > 0 ? '#f59e0b' : '#8b949e'" />
-              </button>
-              <div v-if="showEphemeralMenu" class="export-menu ephemeral-dropdown">
-                <button v-for="opt in ephemeralOptions" :key="opt.v"
-                  :class="{ active: currentEphemeralTtl === opt.v }"
-                  @click="applyEphemeral(opt.v)">
-                  {{ opt.label }}
-                </button>
-              </div>
-            </div>
-            <!-- Избранное: показать только помеченные сообщения чата.
-                 Активный режим — янтарная звезда (стиль исчезающих сообщений).
-                 -->
-            <button v-if="activeChat && activeChat !== '__notes__'" class="chat-action-btn" :class="{ 'starred-on': showStarredOnly }"
-              :title="(t('chat_starred') || 'Избранное') + (showStarredOnly ? ' — показать все сообщения' : '')"
-              @click="showStarredOnly = !showStarredOnly">
-              <Icon name="star" :size="17" :color="showStarredOnly ? '#f59e0b' : '#8b949e'" />
-            </button>
-            <button @click="showChatSearch = !showChatSearch" :title="t('nav_search') || 'Search'"><Icon name="search" :size="17" /></button>
-            <div class="export-dropdown" v-if="activeChat">
-              <button class="export-btn" @click="showExportMenu = !showExportMenu" :title="t('chat_export') || 'Export'">
-                <Icon name="download" :size="17" cls="export-icon" />
-              </button>
-              <div v-if="showExportMenu" class="export-menu">
-                <button @click="exportAsJSON"><Icon name="copy" :size="14" /> JSON</button>
-                <button @click="exportAsTXT"><Icon name="pencil" :size="14" /> TXT</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Шапка чата: отдельный компонент (аватар/имя/статус/кнопки
+             действий); активный чат, меню и таймеры живут в App -->
+        <ChatHeader
+          :chat="activeChat"
+          :type="activeChatType"
+          :name="activeChatName"
+          :group="currentGroup"
+          :channel="activeChatType === 'channel' ? currentChannel : null"
+          :channelAvatar="currentChannel ? (channelAvatars[currentChannel.id] || '') : ''"
+          :groupAvatar="currentGroup && groupAvatars[currentGroup.id]"
+          :groupIcon="currentGroup && groupIconMap[currentGroup.id]"
+          :isMobile="isMobile"
+          :isAdmin="isGroupAdmin"
+          :hasPeerKey="!!peerKeys[activeChat]"
+          :relayEmailDelivery="relayDeliveryMode === 'email'"
+          :expCalls="expCalls"
+          :ephemeralTtl="currentEphemeralTtl"
+          :ephemeralMenuOpen="showEphemeralMenu"
+          :ephemeralOptions="ephemeralOptions"
+          :starredOnly="showStarredOnly"
+          :exportMenuOpen="showExportMenu"
+          :nameOf="nameOf"
+          :avatarOf="avatarOf"
+          :membersLabel="membersLabel"
+          :ephemeralLabel="ephemeralLabel"
+          @back="closeMobileChat"
+          @open-card="openContactCard"
+          @members="showMembersList = true"
+          @relay-explain="relayExplainDelivery"
+          @add-member="openAddMemberPopup"
+          @refresh-group="refreshGroupFull"
+          @group-settings="showGroupSettings = !showGroupSettings"
+          @channel-link="copyChannelLink"
+          @call="startCall"
+          @edit-contact="openContactEdit"
+          @ephemeral-menu="showEphemeralMenu = !showEphemeralMenu"
+          @ephemeral-apply="applyEphemeral"
+          @toggle-starred="showStarredOnly = !showStarredOnly"
+          @toggle-search="showChatSearch = !showChatSearch"
+          @export-menu="showExportMenu = !showExportMenu"
+          @export-json="exportAsJSON"
+          @export-txt="exportAsTXT"
+        />
 
         <!-- Chat search bar -->
         <div v-if="showChatSearch" class="chat-search-bar">
@@ -319,143 +208,83 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false"><Icon name="x" :size="13" /></button>
         </div>
 
-        <div class="messages" ref="messagesContainer" @scroll="onMessagesScroll">
-          <div v-if="activeChat && showStarredOnly && filteredMessages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="star" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('starred_empty') || 'Нет избранных сообщений' }}</div>
-          </div>
-          <div v-else-if="activeChat && messages.length === 0" class="messages-empty">
-            <div class="empty-icon"><Icon name="lock" :size="28" gradient /></div>
-            <div class="empty-text">{{ t('chat_empty') || 'Нет сообщений — отправьте первое' }}</div>
-          </div>
-          <!-- Закреплённое сообщение группы (баннер; открепить может админ) -->
-          <div v-if="activeChatType === 'group' && pinnedMsgId" class="pinned-banner" @click="scrollPinnedToView">
-            <Icon name="pin" :size="14" cls="pinned-banner-icon" />
-            <span class="pinned-banner-text">{{ pinnedPreview || t('pinned_message') || 'Закреплённое сообщение' }}</span>
-            <button v-if="isGroupAdmin" class="pinned-banner-unpin" :title="t('unpin_message') || 'Открепить'" @click.stop="unpinGroupMessage"><Icon name="x" :size="13" /></button>
-          </div>
-          <div
+        <!-- Ignore-баннер: чат открыт с заблокированным. Отправка заблокирована
+             (E2E-модель: сервер доставляет всё, получатель решает, что показать).
+             Разблок — здесь же или из контекстного меню чата в списке. -->
+        <div v-if="activeChatIgnored" class="ignore-banner">
+          <Icon name="ban" :size="14" />
+          <span>{{ t('ignore_banner') || 'Заблокирован — новые сообщения скрыты' }}</span>
+          <button class="ignore-banner-unblock" @click="unblockActiveChat()">{{ t('chat_unblock') || 'Разблокировать' }}</button>
+        </div>
+
+        <!-- Список сообщений: контейнер/пустые состояния/баннер закрепа —
+             отдельный компонент; карточки сообщений — слотом (следующий
+             шаг декомпозиции выделит их в MessageItem) -->
+        <MessageList
+          ref="messageList"
+          :chat="activeChat"
+          :type="activeChatType"
+          :list="filteredMessages"
+          :starredOnly="showStarredOnly"
+          :pinnedId="pinnedMsgId"
+          :pinnedPreview="pinnedPreview"
+          :isAdmin="isGroupAdmin"
+          @scroll="onMessagesScroll"
+          @scroll-pinned="scrollPinnedToView"
+          @unpin="unpinGroupMessage"
+        >
+          <MessageItem
             v-for="msg in filteredMessages"
             :key="msg.id"
-            :data-msg-id="msg.id"
-            :class="['message', { own: msg.from === 'me', 'call-event': !!msg.callEvent, 'drag-over-before': dragOverNoteId === msg.id && dragOverPos === 'before', 'drag-over-after': dragOverNoteId === msg.id && dragOverPos === 'after' }]"
-            :draggable="activeChat === '__notes__'"
-            @dragstart="onNoteDragStart($event, msg)"
-            @dragover="onNoteDragOver($event, msg)"
-            @dragleave="onNoteDragLeave($event, msg)"
-            @drop="onNoteDrop($event, msg)"
-            @dragend="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
-            @click.stop="toggleReactionPicker(msg.id)"
-            @contextmenu.prevent="openMessageMenu($event, msg)"
-          >
-            <!-- Звонки: «пилюля» пропущенного/завершённого вызова
-                 Текст только через t.
-                 -->
-            <div v-if="msg.callEvent" class="call-pill" :class="'call-pill--' + msg.callEvent.kind">
-              <Icon :name="callPillIcon(msg)" :size="13" color="currentColor" />
-              <span class="call-pill-label">{{ callEventLabel(msg) }}</span>
-              <span class="call-pill-time">{{ msg.time }}</span>
-              <button v-if="canCallBack(msg)" class="call-back-btn" :title="t('call_back')" @click.stop="callBack()">
-                <Icon name="phone" :size="12" color="currentColor" />{{ t('call_back') }}
-              </button>
-            </div>
-            <template v-else>
-            <!-- Отправитель в групповом чате (имя/аватар из профиля) -->
-            <div v-if="activeChatType === 'group' && msg.from !== 'me'" class="message-sender">
-              <UserAvatar :email="senderEmail(msg.sender_id)" :avatarUrl="avatarOf(senderEmail(msg.sender_id))" :size="26" />
-              <span class="message-sender-name">{{ nameOf(senderEmail(msg.sender_id)) }}</span>
-            </div>
-            <div class="message-content">
-              <template v-if="msg.deleted">
-                <Icon name="ban" :size="13" /> <span class="message-deleted">{{ t('message_deleted') || 'Сообщение удалено' }}</span>
-              </template>
-              <template v-else>
-              <div v-if="hasReplyQuote(msg.content)" class="reply-quote">{{ replyQuote(msg.content) }}</div>
-              <!-- Голосование: карточка вместо текста (poll-конверт) -->
-              <div v-if="msg.poll" class="poll-card">
-                <div class="poll-title"><Icon name="bar-chart" :size="14" /> {{ msg.poll.question }}</div>
-                <button v-for="(opt, i) in msg.poll.options" :key="i"
-                        class="poll-option"
-                        :class="{ 'poll-option-mine': msg.poll.myVote === i, 'poll-option-lead': pollLead(msg.poll) === i }"
-                        :disabled="msg.poll.closed || msg.poll.myVote !== null"
-                        @click.stop="castPollVote(msg, i)">
-                  <span class="poll-option-label">{{ opt }}</span>
-                  <span class="poll-option-count" v-if="pollVotes(msg.poll).total">{{ pollOptionCount(msg.poll, i) }}</span>
-                  <span class="poll-check" v-if="msg.poll.myVote === i">✓</span>
-                </button>
-                <div class="poll-footer" v-if="pollVotes(msg.poll).total">
-                  {{ pollVotes(msg.poll).voters }} {{ t('poll_voted') }} · {{ pollLeadLabel(msg.poll) }}
-                </div>
-              </div>
-              <span v-else v-html="linkify(replyBody(msg.content))" @click="onMessageTextClick"></span>
-              <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
-              <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
-                <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
-                     :alt="msg.attachment.name"
-                     class="attachment-image"
-                     @click="openImageViewer(msg.attachment)" />
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
-                <audio controls class="attachment-audio"
-                       :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment && msg.attachment.isText" class="attachment-preview">
-                <pre class="attachment-text">{{ msg.attachment.textContent }}</pre>
-                <button class="attachment-dl-btn" @click.stop="downloadAttachment(msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
-              </div>
-              <div v-else-if="msg.attachment" class="attachment-preview">
-                <div class="attachment-file" @click.stop="downloadAttachment(msg.attachment)">
-                  <Icon name="file" :size="13" /> {{ msg.attachment.name }} ({{ (msg.attachment.size / 1024).toFixed(1) }}KB)
-                  <span class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</span>
-                </div>
-              </div>
-              </template>
-            </div>
-            <!-- Reply button (visible on hover) -->
-            <button class="reply-btn" :title="t('chat_reply_to') || 'Reply'" @click.stop="setReply(msg)"><Icon name="reply" :size="13" /></button>
-            <!-- Copy button (visible on hover) -->
-            <button class="copy-btn" :title="t('copy_text') || 'Копировать текст'" @click.stop="copyMessageText(msg)"><Icon name="copy" :size="13" /></button>
-            <!-- Pin — только админ группы (hover) -->
-            <button v-if="activeChatType === 'group' && isGroupAdmin" class="pin-btn" :title="t('pin_message') || 'Закрепить'" @click.stop="pinGroupMessage(msg)"><Icon name="pin" :size="13" /></button>
-            <!-- Edit/Delete — только свои сообщения (видны на hover) -->
-            <button v-if="msg.from === 'me' && !msg.deleted" class="edit-btn" :title="t('edit_message') || 'Редактировать'" @click.stop="startEditMessage(msg)"><Icon name="pencil" :size="13" /></button>
-            <button v-if="msg.from === 'me' && !msg.deleted" class="delete-btn" :title="t('delete_message') || 'Удалить'" @click.stop="deleteMessage(msg)"><Icon name="trash" :size="13" /></button>
-            <!-- Reactions -->
-            <div class="message-reactions" v-if="msg.reactions && msg.reactions.length">
-              <span
-                v-for="(r, ri) in msg.reactions"
-                :key="ri"
-                class="reaction-badge"
-                @click.stop="toggleReaction(msg.id, r)"
-              >{{ r }}</span>
-            </div>
-            <div class="message-footer">
-              <!-- Пометка «Избранное»: звёздочка рядом с временем -->
-              <Icon v-if="isStarred(msg)" name="star" :size="11" cls="msg-starred-icon" />
-              <div class="message-time">{{ msg.time }}</div>
-              <!-- Статус — маленький цветной кружок (без текста, чтобы не
-                   путаться с языками): красный=отправка, жёлтый=отправлено,
-                   зелёный=доставлено, синий=просмотрено -->
-              <span
-                v-if="msg.from === 'me'"
-                class="message-status-dot"
-                :class="msg.status || 'sent'"
-                :title="statusTitle(msg)"
-              ></span>
-            </div>
-            <!-- Reaction picker popup -->
-            <div
-              v-if="reactionPickerMsgId === msg.id"
-              class="reaction-picker"
-              @click.stop
-            >
-              <button v-for="emoji in quickReactions" :key="emoji" class="reaction-emoji" @click="addReaction(msg.id, emoji)">{{ emoji }}</button>
-            </div>
-            </template>
-          </div>
-        </div>
+            :msg="msg"
+            :isGroup="activeChatType === 'group'"
+            :isAdmin="isGroupAdmin"
+            :notes="activeChat === '__notes__'"
+            :dragOverId="dragOverNoteId"
+            :dragOverPos="dragOverPos"
+            :reactionPickerId="reactionPickerMsgId"
+            :quickReactions="quickReactions"
+            :nameOf="nameOf"
+            :avatarOf="avatarOf"
+            :senderOf="msgSenderEmail"
+            :linkify="linkify"
+            :replyBody="replyBody"
+            :replyQuote="replyQuote"
+            :hasReplyQuote="hasReplyQuote"
+            :statusTitle="statusTitle"
+            :isStarred="isStarred"
+            :callPillIcon="callPillIcon"
+            :callEventLabel="callEventLabel"
+            :canCallBack="canCallBack"
+            :pollLead="pollLead"
+            :pollVotes="pollVotes"
+            :pollOptionCount="pollOptionCount"
+            :pollLeadLabel="pollLeadLabel"
+            :isAndroidClient="isAndroidClient"
+            :voicePlayingId="voicePlayingId"
+            @context-menu="openMessageMenu"
+            @toggle-reaction-picker="toggleReactionPicker"
+            @toggle-reaction="toggleReaction"
+            @add-reaction="addReaction"
+            @note-drag-start="onNoteDragStart"
+            @note-drag-over="onNoteDragOver"
+            @note-drag-leave="onNoteDragLeave"
+            @note-drop="onNoteDrop"
+            @note-drag-end="draggedNoteId = null; dragOverNoteId = null; dragOverPos = null"
+            @reply="setReply"
+            @copy-text="copyMessageText"
+            @pin="pinGroupMessage"
+            @edit="startEditMessage"
+            @delete="deleteMessage"
+            @poll-vote="castPollVote"
+            @open-image="openImageViewer"
+            @download="downloadAttachment"
+            @dod-download="downloadDodAttachment"
+            @text-click="onMessageTextClick"
+            @call-back="callBack"
+            @voice-play="toggleVoiceNote"
+          />
+        </MessageList>
 
         <!-- Стрелка «вниз к последним сообщениям» (длинные чаты) — поверх чата,
              вне scroll-контейнера, чтобы не уезжала вместе с контентом -->
@@ -481,6 +310,13 @@
                  только своё устройство, у собеседника остаётся.
                  -->
             <button @click="deleteMessageForMe(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_for_me') || 'Удалить у меня' }}</button>
+            <!-- Ignore-лист: блок отправителя чужого сообщения (1:1 — адрес
+                 чата, группа — сам участник). E2E: скрывает новые сообщения
+                 этого человека у получателя; контент серверу не виден. -->
+            <button v-if="!messageMenu.msg.callEvent && messageMenu.msg.from !== 'me'" @click="blockSenderOfMessage(messageMenu.msg); messageMenu = null">
+              <Icon name="ban" :size="14" />
+              {{ isIgnored(msgSenderEmail(messageMenu.msg) || (activeChatType === 'chat' ? activeChat : '')) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
+            </button>
             <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
             <template v-if="messageMenu.phones && messageMenu.phones.length">
               <div class="message-menu-sep"></div>
@@ -488,7 +324,7 @@
             </template>
             <template v-if="messageMenu.urls && messageMenu.urls.length">
               <div class="message-menu-sep"></div>
-              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openExternal(u).catch(() => {}); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
+              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openUrl(u); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
             </template>
           </div>
         </div>
@@ -508,7 +344,7 @@
           <button class="reply-bar-close" @click="cancelEdit" title="Cancel edit"><Icon name="x" :size="13" /></button>
         </div>
 
-        <div class="message-input" v-if="activeChat">
+        <div class="message-input" v-if="activeChat && (activeChatType !== 'channel' || (currentChannel && currentChannel.is_owner))">
         <div class="input-wrapper">
           <EmojiPicker
             :show="showEmojiPicker"
@@ -522,53 +358,40 @@
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker; attachMenu = false" title="Emoji"><Icon name="smile" :size="19" /></button>
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
         </div>
         <!-- Отправка: ВСЕГДА видна в первом ряду -->
         <button class="send-btn-round" @click="sendMessage" :disabled="sending || !newMessage.trim()" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
         <input ref="fileInput" type="file" multiple style="display:none" @change="handleFileSelect" accept="image/*,.pdf,.doc,.docx,.txt,.zip" />
         <!-- Второй ряд: кнопки фич (файл, гео, голосование, голос) — с подписями -->
                 <div class="feature-row">
-          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="fileInput && fileInput.click()">
+          <button class="feature-btn" :title="t('attach_file') || 'Файл'" @click="$refs.fileInput && $refs.fileInput.click()">
             <Icon name="paperclip" :size="18" />
           </button>
           <button v-if="isAndroid" class="feature-btn" :title="t('geo_send') || 'Гео'" @click="sendGeoMessage">
             <Icon name="map-pin" :size="18" />
           </button>
-          <button class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
+          <button v-if="activeChatType === 'group'" class="feature-btn" :title="t('poll_create') || 'Опрос'" @click="pollDialog = !pollDialog">
             <Icon name="bar-chart" :size="18" />
           </button>
-          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder; attachMenu = false">
+          <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder">
             <Icon name="mic" :size="18" />
           </button>
         </div>
-        <!-- Создание голосования -->
-        <div v-if="pollDialog" class="poll-dialog">
-          <div class="poll-dialog-box">
-            <div class="poll-dialog-title">{{ t('poll_create') || 'Создать голосование' }}</div>
-            <input v-model="pollQuestion" class="duress-input" :placeholder="t('poll_question_ph') || 'Вопрос'" />
-            <input v-for="(o, i) in pollOptions" :key="i" v-model="pollOptions[i]" class="duress-input" :placeholder="t('poll_option_ph') + ' ' + (i + 1)" />
-            <div class="poll-dialog-row">
-              <button v-if="pollOptions.length < 10" class="btn-primary" @click="pollOptions.push('')">{{ t('poll_add_option') || '+ вариант' }}</button>
-              <button class="btn-primary" :disabled="!pollQuestion.trim() || pollOptions.filter(o => o.trim()).length < 2" @click="confirmPoll">{{ t('poll_send') || 'Отправить' }}</button>
-              <button class="btn-primary" @click="pollDialog = false">{{ t('cancel') || 'Отмена' }}</button>
-            </div>
-          </div>
-        </div>
-        <!-- Пересылка: выбор чата -->
-        <div v-if="forwardTo" class="poll-dialog">
-          <div class="poll-dialog-box">
-            <div class="poll-dialog-title">{{ t('forward_to') || 'Переслать в чат' }}</div>
-            <div class="forward-list">
-              <button v-for="c in forwardTargets" :key="c.key" class="poll-option" @click="doForward(c.key)">
-                <span class="poll-option-label">{{ c.label }}</span>
-              </button>
-            </div>
-            <div class="poll-dialog-row">
-              <button class="btn-primary" @click="forwardTo = null">{{ t('cancel') || 'Отмена' }}</button>
-            </div>
-          </div>
-        </div>
+      <!-- Голосование: создание — отдельный компонент (состояние формы внутри) -->
+        <PollDialog
+          :show="pollDialog"
+          @close="pollDialog = false"
+          @confirm="(q, opts) => sendPoll(q, opts)"
+        />
+        <!-- Пересылка: выбор чата — отдельный компонент (список целей
+             считает features/forward.js, компонент только отображает) -->
+        <ForwardDialog
+          :show="!!forwardTo"
+          :targets="forwardTargets"
+          @close="forwardTo = null"
+          @select="key => doForward(key)"
+        />
         <!-- AudioRecorder: открыт новой mic-кнопкой в ряду (mic↔send) -->
         <AudioRecorder
           :show="showAudioRecorder"
@@ -611,7 +434,7 @@
         @reject="rejectCall"
         @cancel="cancelCall"
         @end="endCall"
-        @toggle-mute="toggleMute"
+        @toggle-mute="toggleCallMute"
         @toggle-speaker="toggleSpeaker"
       />
 
@@ -622,7 +445,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" />
         </div>
       </div>
 
@@ -807,8 +630,8 @@
           <div v-if="contactCardBio" class="contact-bio-view">«{{ contactCardBio }}»</div>
           <p v-else class="contact-bio-empty">{{ contactCardEmail === email ? t('contact_bio_self') : t('contact_bio_empty') }}</p>
           <div class="contact-card-footer">
-            <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) }">
-              {{ isRecentlySeen(contactCardEmail) ? t('contact_seen_recently') : t('contact_offline') }}
+            <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) || isOnline(contactCardEmail) }">
+              {{ (isRecentlySeen(contactCardEmail) || isOnline(contactCardEmail)) ? t('contact_seen_recently') : t('contact_offline') }}
             </span>
             <button class="btn btn-primary btn-sm" @click="startEditFromCard">{{ t('contact_edit_local') }}</button>
           </div>
@@ -853,9 +676,11 @@
             :group="currentGroup"
             :currentUser="email"
             :profiles="mergedProfiles"
+            :ignoredUsers="ignoredUsers"
             @close="showGroupSettings = false"
             @role-change="changeMemberRole"
             @remove="removeMember"
+            @block="blockUser"
             @unblock="unblockUser"
             @leave="leaveGroup"
             @delete="deleteGroup"
@@ -934,6 +759,70 @@
         </div>
       </div>
     </div>
+    <!-- CREATE CHANNEL modal (M2): имя + описание, ссылка после создания -->
+    <div v-if="showCreateChannel" class="modal-overlay" @click.self="showCreateChannel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('channel_create_title') || 'Новый канал' }}</h3>
+          <button class="modal-close-x" @click="showCreateChannel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('channel_name') || 'Название канала' }}</label>
+          <input v-model="newChannelName" :placeholder="(t('channel_name') || 'Название') + '...'" class="modal-input" @keyup.enter="createChannelAndClose" />
+          <label>{{ t('channel_about') || 'Описание' }}</label>
+          <input v-model="newChannelAbout" :placeholder="(t('channel_about') || 'Описание') + '...'" class="modal-input" />
+          <p class="channel-modal-hint">{{ t('channel_create_hint') || 'Канал — широковещательный чат: вы публикуете посты, подписчики только читают и не видят друг друга.' }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showCreateChannel = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="createChannelAndClose" :disabled="!newChannelName.trim() || postingChannel">
+            {{ t('channel_create') || 'Создать канал' }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- CHANNELS panel (M2): единая точка входа вместо двух кнопок в шапке
+         (7 кнопок не влезали в 320px сайдбар и залезали за край). -->
+    <div v-if="showChannelPanel" class="modal-overlay" @click.self="showChannelPanel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('nav_channels') || 'Каналы' }}</h3>
+          <button class="modal-close-x" @click="showChannelPanel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <div v-if="!channels.length" class="channels-panel-empty">{{ t('channel_panel_empty') || 'Пока нет каналов — создайте свой или подпишитесь по ссылке.' }}</div>
+          <div v-for="ch in channels" :key="ch.id" class="channels-panel-row"
+               @click="selectChannel(ch); showChannelPanel = false">
+            <Icon name="megaphone" :size="16" />
+            <span class="channels-panel-name">{{ ch.name }}</span>
+            <span class="channels-panel-tag">{{ ch.is_owner ? (t('channel_owner_tag') || 'автор') : (t('channel_sub_tag') || 'подписка') }}</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showJoinChannel = true; showChannelPanel = false">{{ t('channel_join') || 'Присоединиться к каналу' }}</button>
+          <button class="btn-primary" @click="showCreateChannel = true; showChannelPanel = false">{{ t('channel_create') || 'Создать канал' }}</button>
+        </div>
+      </div>
+    </div>
+    <!-- JOIN CHANNEL modal (M2): вставка vault://join-channel ссылки/QR -->
+    <div v-if="showJoinChannel" class="modal-overlay" @click.self="showJoinChannel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('channel_join') || 'Присоединиться к каналу' }}</h3>
+          <button class="modal-close-x" @click="showJoinChannel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('channel_link_label') || 'Ссылка канала (vault://join-channel…)' }}</label>
+          <textarea v-model="joinChannelLink" rows="3" class="modal-input" placeholder="vault://join-channel?c=chn_…"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showJoinChannel = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="joinChannelAndClose" :disabled="!joinChannelLink.trim()">
+            {{ t('channel_subscribe') || 'Подписаться' }}
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- контекстное меню чата (долгое нажатие / правый клик).
          мобильном скрыт при экране списка — меню открывалось «за экраном».
          -->
@@ -946,6 +835,23 @@
         <button @click="toggleMute()">
           <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
           {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
+        </button>
+        <!-- Ignore-лист (E2E-блокировка): только для 1:1-чатов. Группа —
+             общий контент, блокировать там отдельного участника можно из
+             меню его сообщения. -->
+        <button v-if="chatMenu.target.type === 'contact'" @click="toggleIgnoreContact()">
+          <Icon name="ban" :size="14" />
+          {{ isIgnored(chatMenu.target.email) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
+        </button>
+        <!-- Канал (M2): ссылка подписки (владелец) + удаление подписки -->
+        <button v-if="chatMenu.target.type === 'channel' && channelById(chatMenu.target.id)?.is_owner" @click="renameChannel(chatMenu.target.id)">
+          <Icon name="pencil" :size="14" /> {{ t('group_rename') || 'Переименовать' }}
+        </button>
+        <button v-if="chatMenu.target.type === 'channel' && channelById(chatMenu.target.id)?.is_owner" @click="copyChannelLinkById(chatMenu.target.id)">
+          <Icon name="link" :size="14" /> {{ t('channel_copy_link') || 'Ссылка для подписки' }}
+        </button>
+        <button v-if="chatMenu.target.type === 'channel'" @click="deleteChannelConfirmed()">
+          <Icon name="trash" :size="14" /> {{ t('channel_delete') || 'Удалить канал' }}
         </button>
         <div class="message-menu-sep"></div>
         <div class="chat-menu-folder-label">{{ t('chat_folder') || 'Папка' }}</div>
@@ -1007,14 +913,34 @@ import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js'
 import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail, getAttachmentLimitMb } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
+import PollDialog from './components/PollDialog.vue';
+import ForwardDialog from './components/ForwardDialog.vue';
+import FoldersBar from './components/FoldersBar.vue';
+import ContactList from './components/ContactList.vue';
+import ChatHeader from './components/ChatHeader.vue';
+import MessageList from './components/MessageList.vue';
+import MessageItem from './components/MessageItem.vue';
 import * as relay from './relay-client.js';
+import * as PollFeature from './features/poll.js';
+import * as ForwardFeature from './features/forward.js';
+import * as FoldersFeature from './features/folders.js';
+import * as DraftsFeature from './features/drafts.js';
+import * as DuressFeature from './features/duress.js';
+import * as IncomingFeature from './features/incoming.js';
+import * as ReactionsFeature from './features/reactions.js';
+import * as EditsFeature from './features/edits.js';
+import * as HistoryFeature from './features/history.js';
+import * as RelayFeature from './features/relay.js';
+import * as CallsFeature from './features/calls.js';
+import * as ProfilesFeature from './features/profiles.js';
+import * as PresenceFeature from './features/presence.js';
+import * as ChannelsFeature from './features/channels.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
 // и клик по логотипу в шапке откроет его во внешнем браузере.
 const APP_SITE_URL = '';
-// Черновики: очередь сериализации kv-RMW (модуль-уровень).
-let DRAFT_QUEUE = Promise.resolve();
+// Черновики: очередь сериализации kv-RMW переехала в features/drafts.js.
 
 export default {
   name: 'ChatApp',
@@ -1036,7 +962,14 @@ export default {
     AvatarUpload,
     CipherTool,
     QRCodePanel,
-    CallOverlay
+    CallOverlay,
+    PollDialog,
+    ForwardDialog,
+    FoldersBar,
+    ContactList,
+    ChatHeader,
+    MessageList,
+    MessageItem
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
@@ -1057,6 +990,13 @@ export default {
       // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
       // непрочитанных остаётся). Персист в sqlite kv 'chat-flags'.
       chatFlags: {},
+      // Глобальный ignore-лист (E2E-честная блокировка): объект
+      // { email: tsБлокировки }. Сообщения/звонки/уведомления от этих
+      // отправителей скрываются у НАШЕГО получателя (сервер в serverless
+      // блокировать не может — контент ему не виден). Новое НЕ попадает в
+      // историю (после разблокировки не появляется), старое — остаётся.
+      // Персист в sqlite kv 'ignored-users'.
+      ignoredUsers: {},
       showArchived: false,
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
       chatMenu: { show: false, target: null },
@@ -1086,6 +1026,7 @@ export default {
       callResendTimer: null,
       // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
+      ecoMode: false,
       _idleStop: false,
       // ЗВУКИ ЗВОНКА: WAV-ассеты. Desktop — cpal в Rust
       // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
@@ -1127,6 +1068,16 @@ export default {
       emailBodyCache: {},
       bodyCacheOrder: [],       // ключи кэша, старые первые (для trimming'а)
       bodyCacheSaveTimer: null, // debounce записи в localStorage
+      // Download-on-demand: кэш скачанных data-писем (Message-ID -> base64)
+      // на время сессии. Скачанные данные персистятся в истории сообщения
+      // (saveCurrentHistory в fetchDodAttachment) — после перезапуска файл
+      // уже в карточке, IMAP не тревожится.
+      dodCache: {},
+      // Фоновый плеер голосовых (t_c1c44344): id трека, играющего в
+      // нативном MediaPlayer (Android). Пустая строка — ничего не играет.
+      voicePlayingId: '',
+      // Платформа (Android → нативный плейбек в фоне; desktop → <audio>).
+      isAndroidClient: /Android/i.test(typeof navigator !== 'undefined' ? navigator.userAgent : ''),
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
@@ -1176,6 +1127,19 @@ export default {
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
+      // §1 company.md: индикатор канала доставки в шапке чата.
+      // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
+      // или суточный лимит исчерпан — показываем конверт).
+      relayDeliveryMode: 'relay',
+      // M2.4: релей включён (кэш relay-enabled kv; обновляется при логине
+      // и из настроек). Раньше этот флаг забыли объявить в data() —
+      // this.relayEnabled был undefined, автообмен токенами не работал:
+      // конверты не несли tok и входящие tok не сохранялись (телефон
+      // не знал токен собеседника → исходящие шли только почтой).
+      relayEnabled: false,
+      // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
+      ecoAutonomous: false,
+      relayOfflineSince: null,
       peerKeys: {},
       // PQ: ML-KEM ek контактов {email: b64}
       peerPqKeys: {},
@@ -1187,6 +1151,19 @@ export default {
       searchQuery: '',
       // Groups
       groups: [],
+      channels: [],            // M2 broadcast-каналы (features/channels.js)
+      channelPosts: {},        // channelId -> [{ts, body, images, sender}]
+      channelUnread: {},        // channelId -> count
+      channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
+      // UI (t_a14ac823): активный канал + модалки создания/подписки
+      currentChannel: null,
+      showChannelPanel: false,
+      showCreateChannel: false,
+      showJoinChannel: false,
+      newChannelName: '',
+      newChannelAbout: '',
+      joinChannelLink: '',
+      postingChannel: false,
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
       groupIconMap: {},  // group_id → эмодзи-иконка (выбор при создании)
@@ -1276,23 +1253,37 @@ export default {
       editContactAvatar: '',
       // User identity
       userId: null,
+      // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
+      // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
+      // поллинг «воскресил» бы удалённое. Хранится в sqlite (почтовый мессенджер-style),
+      // с in-memory кэшем для синхронной фильтрации (filterDeleted).
+      // См. initLocalDb() — загрузка при входе.
+      // (были ошибочно в methods — Vue 3 игнорирует не-функции там,
+      //  поля становились нерактивными: кнопка «Опрос» и duress-замок не работали)
+      tombstonesCache: [],
+      // Duress-замок: LockScreen поверх UI; duressPending — тихий SOS.
+      duressLocked: false,
+      duressPending: false,
+      duressUnlockedThisSession: false,
+      // Голосования: флаг диалога создания (форма — внутри PollDialog.vue);
+      // агрегация голосов — методы poll* ниже
+      pollDialog: false,
+      // Пересылка: пересылаемое сообщение (объект) + список целей
+      forwardTo: null,
+      // Папки чатов: активная папка + диалог создания в контекстном меню
+      activeFolder: '',
+      folderDialogOpen: false,
+      chatFolderNewName: '',
+      chatFoldersNames: [],
+      midTombstonesCache: [],
+      // IMAP-курсоры: in-memory кэш + sqlite персист.
+      cursorsCache: {},
     }
   },
   computed: {
-    // Пересылка: список чатов-целей (контакты + группы).
+    // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
-      const list = [];
-      for (const c of this.contacts || []) {
-        if (c.email && c.email !== '__notes__' && c.email !== this.activeChat) {
-          list.push({ key: c.email, label: this.nameOf(c.email) || c.email });
-        }
-      }
-      for (const g of this.groups || []) {
-        if (!(this.activeChatType === 'group' && this.currentGroup && g.id === this.currentGroup.id)) {
-          list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + this.t('group') });
-        }
-      }
-      return list;
+      return ForwardFeature.forwardTargets(this);
     },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
     editingContactBio() {
@@ -1428,6 +1419,7 @@ export default {
     activeChatName() {
       if (this.activeChat === '__notes__') return this.t('notes_self') || 'Заметки для себя';
       if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
+      if (this.activeChatType === 'channel') return this.currentChannel?.name || this.activeChat;
       if (!this.activeChat) return '';
       // Локальное имя контакта (если задано) — выше реального.
       const lp = this.localProfileOf(this.activeChat);
@@ -1469,6 +1461,13 @@ export default {
     mailProviderHint() {
       const p = findProvider(this.mailProvider);
       return (p && p.hint) || '';
+    },
+    // Заблокирован ли открытый сейчас 1:1-чат (баннер в chat-area).
+    // ВАЖНО: это computed — в methods он резолвится в шаблоне как
+    // функция-ссылка (truthy) и баннер висел всегда (баг 13.09).
+    activeChatIgnored() {
+      return this.activeChatType === 'chat'
+        && !!this.activeChat && this.isIgnored(this.activeChat);
     }
   },
   watch: {
@@ -1500,6 +1499,16 @@ export default {
         console.log('[call] native REJECT tapped');
         this.rejectCall();
       };
+      // Фоновый плеер голосовых: нативный MediaPlayer (Kotlin) сигнализирует
+      // завершение трека — кнопка возвращается в «play» (троттлинг JS-таймеров
+      // в фоне не позволяет надёжно слушать duration JS-событиями).
+      window.__vaultVoiceNoteDone = () => {
+        this.voicePlayingId = '';
+      };
+      // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
+      // (index.html уже определил __vaultOpenChat с очередью — не трогаем.)
+      // Отложенные deep-link чаты дрейнятся в loadStoredPeerKeys()
+      // (после загрузки ключей собеседников).
     } catch (e) { /* не критично */ }
     // Событие «медиа подключено» из Rust: ICE/DTLS установлены и
     // пользователь видел «минуту тишины» при работающем таймере.
@@ -1639,20 +1648,36 @@ export default {
           this.displayName = (await api.getDisplayName()) || this.email || '';
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
           this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+          this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+          // M2.4: кэш relay-enabled для гейтов автообмена токенами
+          // (env.tok в исходящих / сохранение входящих tok).
+          try {
+            const rs = await relay.getSettings(this.email);
+            this.relayEnabled = rs.enabled;
+          } catch (e) { /* релей опционален */ }
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP.
           this.isLoggedIn = true;
+          // Эко (M2.3-b ФИНАЛ): глушим сервис полностью — пуши несёт
+          // ntfy-клиент. Активация после isLoggedIn (иначе ранний return).
+          if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); }
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
+          this.loadIgnoredUsers(); // ignore-лист (E2E-блокировка) из sqlite kv_store
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
-          this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
+          else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          // Presence (M2): heartbeat-таймер, если тумблер включён (kv,
+          // per-account). Восстанавливается на входе, глушится на выходе.
+          try { if (await PresenceFeature.isEnabled(this)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -1682,58 +1707,213 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
   },
   methods: {
-    // ── Звуки звонка: WAV-ассеты вместо осциллятора ──
-    // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
-    // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
-    // /sounds/*.wav (cpal там паникует; WebView разрешает autoplay —
-    // wry ставит mediaPlaybackRequiresUserGesture=false).
-    //
-    // КРИТИЧНО: эти функции
-    // ДОЛЖНЫ быть в methods, НЕ в computed. В computed Vue 3 превращает
-    // их в геттеры: this.playCallSound(...) вызывает тело БЕЗ аргументов,
-    // и this.isAndroid() бросает TypeError (computed возвращает false,
-    // false() — не функция). Синхронный бросок рвал acceptCall ДО
-    // отправки call_accept, incoming_ringing — ДО рингтона и таймера,
-    // startCall — ДО гудков и ретрансляции. Плюс: функция НИКОГДА не
-    // должна бросать — звук вторичен, сигнализация звонка важнее.
-    playCallSound(name, looped) {
-      try {
-        // Настройки звонков: пользователь мог выбрать другой рингтон
-        // (Настройки → Звонки). Маппим incoming/outgoing на выбранный вариант.
-        const ringIn = this.callRingtoneIncoming || 'incoming';
-        const ringOut = this.callRingtoneOutgoing || 'outgoing';
-        if (name === 'incoming') name = ringIn;
-        else if (name === 'outgoing') name = ringOut;
-        if (this.isAndroid) {
-          this.stopCallSound();
-          const el = new Audio('/sounds/ring_' + name + '.wav');
-          el.loop = !!looped;
-          el.volume = 0.85;
-          el.play().catch(e => console.warn('[call] sound play failed:', e));
-          this.callSoundEl = el;
-          // Одноразовые звуки: освобождаем элемент по окончании.
-          if (!looped) {
-            el.onended = () => { if (this.callSoundEl === el) this.callSoundEl = null; };
-          }
-        } else {
-          api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
-        }
-      } catch (e) {
-        // Звук не критичен — глотаем, чтобы не рвать state machine звонка.
-        console.warn('[call] sound failed:', e && e.message || e);
-      }
+    // ── Голосования (poll) — логика в features/poll.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    parsePollEnvelope(env) { return PollFeature.parsePollEnvelope(env); },
+    pollVotes(poll) { return PollFeature.pollVotes(poll); },
+    pollOptionCount(poll, i) { return PollFeature.pollOptionCount(poll, i); },
+    pollLead(poll) { return PollFeature.pollLead(poll); },
+    pollLeadLabel(poll) { return PollFeature.pollLeadLabel(poll); },
+    castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
+    async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
+    applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ── Реакции (логика в features/reactions.js) ──
+    reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this); },
+    loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this); },
+    saveStoredReactions(data) { return ReactionsFeature.saveStoredReactions(this, data); },
+    applyReactions(list, chatKey, wireReactions) { return ReactionsFeature.applyReactions(this, list, chatKey, wireReactions); },
+    sendReactionEmail(msgId, emoji, action) { return ReactionsFeature.sendReactionEmail(this, msgId, emoji, action); },
+    toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this, msgId); },
+    addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this, msgId, emoji); },
+    toggleReaction(msgId, emoji) { return ReactionsFeature.toggleReaction(this, msgId, emoji); },
+    // ── Правки/удаления + tombstones (логика в features/edits.js) ──
+    editsStorageKey() { return EditsFeature.editsStorageKey(this); },
+    loadStoredEdits() { return EditsFeature.loadStoredEdits(this); },
+    saveStoredEdits(data) { return EditsFeature.saveStoredEdits(this, data); },
+    recordLocalEdit(chatKey, msgId, text, action) { return EditsFeature.recordLocalEdit(this, chatKey, msgId, text, action); },
+    tombstonesKey() { return EditsFeature.tombstonesKey(this); },
+    loadTombstones() { return EditsFeature.loadTombstones(this); },
+    addTombstone(msgId) { return EditsFeature.addTombstone(this, msgId); },
+    isTombstoned(msgId) { return EditsFeature.isTombstoned(this, msgId); },
+    midTombstonesKey() { return EditsFeature.midTombstonesKey(this); },
+    loadMidTombstones() { return EditsFeature.loadMidTombstones(this); },
+    addMidTombstone(mid) { return EditsFeature.addMidTombstone(this, mid); },
+    isMidTombstoned(mid) { return EditsFeature.isMidTombstoned(this, mid); },
+    filterDeleted(list) { return EditsFeature.filterDeleted(this, list); },
+    applyEdits(list, chatKey, wireEdits) { return EditsFeature.applyEdits(this, list, chatKey, wireEdits); },
+    sendEditEmail(msgId, text, action) { return EditsFeature.sendEditEmail(this, msgId, text, action); },
+    // ── История/кэши/оптимистичные исходящие (логика в features/history.js) ──
+    bodyCacheKey() { return HistoryFeature.bodyCacheKey(this); },
+    chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this, chat); },
+    loadBodyCache() { return HistoryFeature.loadBodyCache(this); },
+    cacheBody(key, body) { return HistoryFeature.cacheBody(this, key, body); },
+    persistBodyCache() { return HistoryFeature.persistBodyCache(this); },
+    loadChatCache(chat) { return HistoryFeature.loadChatCache(this, chat); },
+    saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this, chat, list); },
+    markPending(chatKey, msg) { return HistoryFeature.markPending(this, chatKey, msg); },
+    mergePending(chatKey, list) { return HistoryFeature.mergePending(this, chatKey, list); },
+    loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this, chatKey); },
+    normalizeStaleSending(hist) { return HistoryFeature.normalizeStaleSending(this, hist); },
+    mergeHistory(chatKey, list) { return HistoryFeature.mergeHistory(this, chatKey, list); },
+    msgTs(m) { return HistoryFeature.msgTs(m); },
+    showHistoryFirst(chatKey, isStale) { return HistoryFeature.showHistoryFirst(this, chatKey, isStale); },
+    saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this, chatKey); },
+    // ── Релей/режимы приёма (логика в features/relay.js) ──
+    relayConsume() { return RelayFeature.relayConsume(this); },
+    loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(this, silent); },
+    startRelayTicker() { return RelayFeature.startRelayTicker(this); },
+    enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(this); },
+    idleLoop() { return RelayFeature.idleLoop(this); },
+    startPolling(intervalMs = 30000) { return RelayFeature.startPolling(this, intervalMs); },
+    stopPolling() { return RelayFeature.stopPolling(this); },
+    onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
+    onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
+    onPresenceEnabled(on) { this.presenceSetEnabled(on); },
+    // ── Звонки (логика в features/calls.js) ──
+    async isCallSeen(callId) { return CallsFeature.isCallSeen(this, callId); },
+    async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this, callId); },
+    parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
+    async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
+    async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
+    async startCall() { return CallsFeature.startCall(this); },
+    async acceptCall() { return CallsFeature.acceptCall(this); },
+    async rejectCall() { return CallsFeature.rejectCall(this); },
+    async endCall() { return CallsFeature.endCall(this); },
+    async hangup(reason) { return CallsFeature.hangup(this, reason); },
+    async cancelCall(reason) { return CallsFeature.cancelCall(this, reason); },
+    async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this, peer, kind, ts, durationSec, callId); },
+    callEventLabel(msg) { return CallsFeature.callEventLabel(this, msg); },
+    callPillIcon(msg) { return CallsFeature.callPillIcon(msg); },
+    canCallBack(msg) { return CallsFeature.canCallBack(this, msg); },
+    callBack() { return CallsFeature.callBack(this); },
+    toggleCallMute() { return CallsFeature.toggleCallMute(this); },
+    toggleSpeaker() { return CallsFeature.toggleSpeaker(this); },
+    startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this, peer, payload, call_id); },
+    stopSignalResend() { return CallsFeature.stopSignalResend(this); },
+    sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this, peer, type, call_id); },
+    armMediaFallback() { return CallsFeature.armMediaFallback(this); },
+    startCallClock() { return CallsFeature.startCallClock(this); },
+    stopCallClock() { return CallsFeature.stopCallClock(this); },
+    startFastPolling() { return CallsFeature.startFastPolling(this); },
+    stopFastPolling() { return CallsFeature.stopFastPolling(this); },
+    playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
+    stopCallSound() { return CallsFeature.stopCallSound(this); },
+    // ── Профили контактов (логика в features/profiles.js) ──
+    aliasesOf(email) { return ProfilesFeature.aliasesOf(this, email); },
+    profileOf(email) { return ProfilesFeature.profileOf(this, email); },
+    localProfileOf(email) { return ProfilesFeature.localProfileOf(this, email); },
+    nameOf(email) { return ProfilesFeature.nameOf(this, email); },
+    avatarOf(email) { return ProfilesFeature.avatarOf(this, email); },
+    loadLocalProfiles() { return ProfilesFeature.loadLocalProfiles(this); },
+    saveLocalProfiles() { return ProfilesFeature.saveLocalProfiles(this); },
+    async loadProfiles() { return ProfilesFeature.loadProfiles(this); },
+    async getBio() { return ProfilesFeature.getBio(this); },
+    async setBio(text) { return ProfilesFeature.setBio(this, text); },
+    async onBioSave(text) { return ProfilesFeature.onBioSave(this, text); },
+    async onProfileSave() { return ProfilesFeature.onProfileSave(this); },
+    async broadcastProfile() { return ProfilesFeature.broadcastProfile(this); },
+    async openContactCard(email) { return ProfilesFeature.openContactCard(this, email); },
+    startEditFromCard() { return ProfilesFeature.startEditFromCard(this); },
+    openContactEdit(email) { return ProfilesFeature.openContactEdit(this, email); },
+    handleContactAvatarSelect(event) { return ProfilesFeature.handleContactAvatarSelect(this, event); },
+    saveContactEdit() { return ProfilesFeature.saveContactEdit(this); },
+    resetContactEdit() { return ProfilesFeature.resetContactEdit(this); },
+    async shrinkAvatar(dataUrl) { return ProfilesFeature.shrinkAvatar(dataUrl); },
+    compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
+    noteSeen(email, ts) { return ProfilesFeature.noteSeen(this, email, ts); },
+    isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this, email); },
+    // ── Presence (t_e858bdb9) — heartbeat-зелёная точка; логика в
+    // features/presence.js. Тумблер живёт в настройках (Приватность).
+    isOnline(email) { return PresenceFeature.isOnline(this, email); },
+    presenceSetEnabled(on) {
+      PresenceFeature.setEnabled(this, on).catch(e =>
+        console.warn('[presence] setEnabled failed:', e && e.message || e));
     },
-    stopCallSound() {
+    // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
+    // шаблонные биндинги явными (гейт check-template резолвит имена).
+    startForward(msg) { return ForwardFeature.startForward(this, msg); },
+    doForward(key) { return ForwardFeature.doForward(this, key); },
+    // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
+    // грузит единый kv-блоб (flags + folder names), архив/mute меняются
+    // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
+    async loadChatFlags() { return FoldersFeature.loadChatFlags(this); },
+    async saveChatFlags() { return FoldersFeature.saveChatFlags(this); },
+    flagKey(target) { return FoldersFeature.flagKey(target); },
+    chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
+    async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
+    async createChatFolder() { return FoldersFeature.createChatFolder(this); },
+    // ── Ignore-лист (E2E-честная блокировка отправителя). Логика — здесь,
+    // не в features/: точек интеграции мало, а data-инвариант (объект
+    // email→ts) связан с тремя путями доставки (почта/релей/история).
+    // Загрузка из sqlite kv 'ignored-users' (вызывается при входе рядом с
+    // loadChatFlags). Повреждённый блоб — тихо пустой список.
+    async loadIgnoredUsers() {
       try {
-        if (this.callSoundEl) {
-          try { this.callSoundEl.pause(); } catch (_) {}
-          this.callSoundEl = null;
+        const raw = await db.kvGet(this.email || 'anon', 'ignored-users');
+        this.ignoredUsers = raw ? (JSON.parse(raw) || {}) : {};
+      } catch (e) { this.ignoredUsers = {}; }
+    },
+    async saveIgnoredUsers() {
+      try {
+        await db.kvSet(this.email || 'anon', 'ignored-users', JSON.stringify(this.ignoredUsers));
+      } catch (e) { /* kv недоступен — список живёт в памяти до перезапуска */ }
+    },
+    // Заблокирован ли отправитель для НАС (смена почты не помогает:
+    // проверяем и сам email, и все алиасы того же peer-ключа).
+    isIgnored(email) {
+      const key = String(email || '').toLowerCase();
+      if (!key || !this.ignoredUsers) return false;
+      if (this.ignoredUsers[key]) return true;
+      // Алиасы: отправитель сменил адрес, ключ тот же — блок следует за ним.
+      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
+      if (!pk) return false;
+      for (const k of Object.keys(this.ignoredUsers)) {
+        if (this.peerKeys[k] === pk) return true;
+      }
+      return false;
+    },
+    // Заблокировать отправителя: с этого момента его новые сообщения,
+    // звонки и уведомления скрыты у получателя. Возвращает false, если
+    // email пустой или это наш собственный адрес.
+    async ignoreUser(email) {
+      const key = String(email || '').toLowerCase().trim();
+      if (!key || key === (this.email || '').toLowerCase()) return false;
+      if (!this.isIgnored(key)) {
+        this.ignoredUsers[key] = Date.now();
+        await this.saveIgnoredUsers();
+      }
+      return true;
+    },
+    // Снять блокировку: новые сообщения снова показываются. Прошлое (то,
+    // что скрылось, пока блок был активен) не возвращается — его не было
+    // в истории. Снимаем и сам адрес, и алиасы того же ключа.
+    async unignoreUser(email) {
+      const key = String(email || '').toLowerCase().trim();
+      if (!key) return;
+      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
+      for (const k of Object.keys(this.ignoredUsers)) {
+        if (k === key || (pk && this.peerKeys[k] === pk)) {
+          delete this.ignoredUsers[k];
         }
-        if (!this.isAndroid) {
-          api.mediaSoundStop().catch(() => {});
-        }
-      } catch (e) {
-        console.warn('[call] sound stop failed:', e && e.message || e);
+      }
+      await this.saveIgnoredUsers();
+    },
+    // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
+    // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
+    draftRun(fn) { return DraftsFeature.draftRun(fn); },
+    saveDraft() { return DraftsFeature.saveDraft(this); },
+    restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
+    // ── Duress-замок — логика в features/duress.js; LockScreen-события
+    // (unlock/duress/panic) приходят из шаблона в эти обёртки.
+    async checkDuressLock() { return DuressFeature.checkDuressLock(this); },
+    onLockUnlock() { return DuressFeature.onLockUnlock(this); },
+    onLockDuress() { return DuressFeature.onLockDuress(this); },
+    async onLockPanic() { return DuressFeature.onLockPanic(this); },
+    async sendDuressSos() { return DuressFeature.sendDuressSos(this); },
+    // §1: пояснение индикатора доставки человеческим языком.
+    relayExplainDelivery() {
+      if (this.relayDeliveryMode === 'email') {
+        this.showToast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
       }
     },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
@@ -1761,9 +1941,115 @@ export default {
       if (!attachment || !attachment.data) return;
       downloadBase64(attachment.data, attachment.name, attachment.type);
     },
+    // ── Фоновый плеер голосовых (t_c1c44344, Android) ──────────────────
+    // Кнопка в карточке голосового: play — отправить расшифрованное
+    // тело в нативный MediaPlayer (FGS mediaPlayback, играет при
+    // свёрнутом приложении); стоп — погасить. Один трек одновременно.
+    async toggleVoiceNote(msg, attachment) {
+      if (!this.isAndroidClient) return;
+      if (!attachment || !attachment.data) return;
+      if (this.voicePlayingId === msg.id) {
+        try { await invoke('voicenote_stop'); } catch (e) { console.warn('[voicenote] stop failed:', e); }
+        this.voicePlayingId = '';
+        return;
+      }
+      try {
+        await invoke('voicenote_play', {
+          id: String(msg.id),
+          data: attachment.data,
+          mime: attachment.type || 'audio/webm',
+        });
+        this.voicePlayingId = String(msg.id);
+      } catch (e) {
+        console.warn('[voicenote] play failed:', e);
+        this.showToast(this.t('voice_play_failed') || 'Не удалось воспроизвести', 3000);
+      }
+    },
+    // ── Download-on-demand (M1) ─────────────────────────────────────
+    // Клик по карточке DoD-вложения: найти data-письмо по Message-ID из
+    // меты (dod), скачать его тело, расшифровать, отдать attachment.data.
+    // Расшифровка — пир-ключом (1:1) или групповым (группа активного чата);
+    // письмо ищем во ВСЕХ папках this.emails (uid зависит от папки).
+    async fetchDodAttachment(msg, attachment) {
+      if (!attachment || !attachment.isDod || !attachment.dod) return;
+      if (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading') return;
+      attachment.dodStatus = 'loading';
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      try {
+        // 1) письмо по Message-ID (сначала кэш тел — вдруг уже качали)
+        const cached = this.dodCache[attachment.dod];
+        if (cached) {
+          attachment.data = cached;
+          attachment.dodStatus = 'ready';
+          this.$forceUpdate();
+          return;
+        }
+        const target = (this.emails || []).find(m => (m.message_id || '').trim() === attachment.dod.trim());
+        if (!target) throw new Error(this.t('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
+        // 2) тело (может быть тяжёлым — десятки МБ; fetch_message_body
+        //    одиночный, таймауты внутри)
+        const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
+        if (!body) throw new Error('empty body');
+        // 3) расшифровка: групповой ключ, затем пир-ключ отправителя
+        let plain = null;
+        const groupKey = this.groupKeys[this.currentGroup && this.currentGroup.id];
+        if (this.activeChatType === 'group' && groupKey) {
+          try { plain = await crypto.decryptWithGroupKey(body, groupKey); } catch (e) { plain = null; }
+        }
+        if (plain === null) {
+          const senderEmail = this.activeChatType === 'group'
+            ? (msg && msg.sender_id && this.senderEmail(msg.sender_id)) || ''
+            : this.activeChat;
+          if (senderEmail && this.peerKeys[senderEmail]) {
+            crypto.setPeerPublicKey(this.peerKeys[senderEmail], this.peerPqKeys && this.peerPqKeys[senderEmail]);
+            plain = await crypto.decryptVault(body);
+          }
+        }
+        if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
+        // 4) конверт → {vault_dod_data:1, ref, data}
+        const env = this.parseEnvelope(plain);
+        const raw = env ? env.text : plain;
+        const obj = JSON.parse(raw);
+        if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');
+        if (String(obj.ref || '') !== attachment.dod.trim()) throw new Error('ref mismatch');
+        // 5) готово: подставить в карточку, закэшировать, открыть как
+        //    обычное вложение (картинка/аудио/файл — isImage/isAudio уже
+        //    выставлены parseMessageContent при dodStatus='ready' ниже).
+        attachment.data = obj.data;
+        this.dodCache[attachment.dod] = obj.data;
+        attachment.dodStatus = 'ready';
+        attachment.isImage = !!(attachment.type && attachment.type.startsWith('image/'));
+        attachment.isAudio = !!(attachment.type && attachment.type.startsWith('audio/'));
+        attachment.isText = false;
+        this.showToast((this.t('dod_ready') || 'Файл загружен:') + ' ' + attachment.name, 4000);
+      } catch (e) {
+        console.warn('[dod] fetch failed:', e);
+        attachment.dodStatus = 'error';
+        this.showToast((this.t('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
+      }
+      this.$forceUpdate();
+      // Персистим в историю, чтобы статус/данные пережили перезапуск.
+      try { this.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
+    },
+    // Кнопка «Скачать» на DoD-карточке: сначала fetch, затем download.
+    async downloadDodAttachment(msg, attachment) {
+      if (attachment.dodStatus !== 'ready') {
+        await this.fetchDodAttachment(msg, attachment);
+        if (attachment.dodStatus !== 'ready') return;
+      }
+      if (attachment.data) downloadBase64(attachment.data, attachment.name, attachment.type);
+    },
     // Полноэкранный просмотр изображения-вложения
     openImageViewer(attachment) {
       this.viewingImage = attachment;
+    },
+    // Открыть ссылку из меню сообщения внешним браузером (через tauri
+    // opener-плагин; модульный импорт недоступен шаблону Options API,
+    // поэтому тонкая обёртка-метод — шаблон зовёт openUrl).
+    openUrl(url) {
+      openExternal(String(url)).catch(() => {});
     },
     closeImageViewer() {
       this.viewingImage = null;
@@ -1809,6 +2095,34 @@ export default {
           this.peerKeysLoaded[pk.email] = true;
           if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
         }
+        // M2.4: отложенные ntfy-клики (холодный старт) — ключи загружены,
+        // можно открывать чаты. Drain также доступен глобально (__vaultOpenChat).
+        try {
+          window.__VAULT_DRAIN = () => {
+            const q = window.__VAULT_CHAT_QUEUE || [];
+            // Холодный старт: Kotlin держит выбранный чат в native-мосте
+            // VaultDeepLink.take() (localStorage мог быть недоступен до
+            // загрузки страницы). Забираем его оттуда...
+            try {
+              const native = window.VaultDeepLink && window.VaultDeepLink.take && window.VaultDeepLink.take();
+              if (native) q.push(native);
+            } catch (e) { /* не Android / моста нет */ }
+            // ...и из localStorage (запасной путь).
+            try {
+              const pending = localStorage.getItem('vault-pending-chat');
+              if (pending) {
+                localStorage.removeItem('vault-pending-chat');
+                q.push(pending);
+              }
+            } catch (e) { /* ignore */ }
+            while (q.length) {
+              const chat = q.shift();
+              this.openChatByKey(chat);
+              if (this.isMobile) this.mobileChatOpen = true;
+            }
+          };
+          window.__VAULT_DRAIN();
+        } catch (e) { /* ignore */ }
       } catch (error) {
         console.error('Failed to load peer keys:', error);
       }
@@ -1886,6 +2200,7 @@ export default {
         await this.loadBodyCache(); 
         await this.loadContacts();
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
         this.startPolling()
         this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
@@ -1902,6 +2217,7 @@ export default {
     },
     async handleLogout() {
       this.stopPolling();
+      PresenceFeature.stopHeartbeats(this); // M2: heartbeat больше не отправляем
       try { await api.logout(); } catch (e) { /* ignore */ }
       // Сбрасываем всё состояние сессии к экрану логина.
       this.isLoggedIn = false;
@@ -1968,6 +2284,7 @@ export default {
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
         this.loadEmails().catch(() => {});
@@ -2044,15 +2361,6 @@ export default {
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
     // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
-    aliasesOf(email) {
-      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
-      if (!key) return [String(email || '').toLowerCase()];
-      const out = new Set([String(email || '').toLowerCase()]);
-      for (const [k, v] of Object.entries(this.peerKeys)) {
-        if (v === key) out.add(String(k).toLowerCase());
-      }
-      return [...out];
-    },
     // Канонический адрес: какой контакт показывается для этого ключа
     // (после дедупликации в loadContacts). Если email — алиас, возвращаем
     // показываемый адрес (самый новый по added_at).
@@ -2111,6 +2419,185 @@ export default {
       } catch (error) {
         console.error('Failed to load groups:', error);
       }
+    },
+    // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
+    channelPostsToMessages(ch) {
+      // kv-лог постов → формат MessageItem (own = наш пост/эхо).
+      const posts = this.channelPosts[ch.id] || [];
+      return posts.map(p => ({
+        id: p.id || ('post-' + p.ts),
+        content: p.body || '',
+        from: (p.sender && p.sender === (ch.owner || this.email)) || (!p.sender && ch.is_owner) ? 'me' : p.sender,
+        sender_id: p.sender || ch.owner || '',
+        time: new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        ts: p.ts,
+        encrypted: true,
+        vault: true,
+      }));
+    },
+    async selectChannel(ch) {
+      this.saveDraft();
+      this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
+      this.activeChat = 'channel:' + ch.id;
+      this.activeChatType = 'channel';
+      this.currentChannel = ch;
+      this.currentGroup = null;
+      this.showStarredOnly = false;
+      this.loadSeq++;
+      this.messages = this.channelPostsToMessages(ch);
+      this.channelUnread[ch.id] = 0; // канал открыт — сбрасываем счётчик
+      // last_ts монотонный (Rust-гейт): пишем максимум visible-постов,
+      // иначе последующие непрочитанные перестанут считаться.
+      const maxTs = (this.channelPosts[ch.id] || []).reduce((m, p) => Math.max(m, p.ts || 0), 0);
+      if (maxTs) ChannelsFeature.updateChannel(ch.id, { last_ts: maxTs }).catch(() => {});
+      this.openMobileChat();
+      await this.$nextTick();
+      this.scrollToBottom(true);
+    },
+    async createChannelAndClose() {
+      const name = this.newChannelName.trim();
+      if (!name || this.postingChannel) return;
+      this.postingChannel = true;
+      try {
+        const ch = await ChannelsFeature.createChannel(name, this.newChannelAbout.trim(), this.email || '', this.fingerprint || '');
+        await this.loadChannels();
+        this.showCreateChannel = false;
+        this.newChannelName = '';
+        this.newChannelAbout = '';
+        const fresh = this.channels.find(c => c.id === ch.id) || ch;
+        await this.selectChannel(fresh);
+        this.showToast(this.t('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
+      } catch (e) {
+        console.error('[channels] create:', e);
+        this.showToast(this.t('channel_create_failed') || 'Не удалось создать канал', 3000);
+      } finally { this.postingChannel = false; }
+    },
+    async joinChannelAndClose() {
+      const parsed = ChannelsFeature.parseJoinLink(this.joinChannelLink.trim());
+      if (!parsed) {
+        this.showToast(this.t('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
+        return;
+      }
+      try {
+        await ChannelsFeature.importChannel(parsed.id, parsed.name, parsed.key, parsed.owner, parsed.ownerFpr);
+        await this.loadChannels();
+        this.showJoinChannel = false;
+        this.joinChannelLink = '';
+        const ch = this.channels.find(c => c.id === parsed.id);
+        if (ch) await this.selectChannel(ch);
+      } catch (e) {
+        console.error('[channels] join:', e);
+        this.showToast(this.t('channel_join_failed') || 'Не удалось подписаться', 3000);
+      }
+    },
+    copyChannelLink() {
+      const ch = this.currentChannel;
+      if (!ch) return;
+      const link = ChannelsFeature.buildJoinLink(ch);
+      try { navigator.clipboard.writeText(link); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      catch (e) { console.warn('[channels] clipboard:', e); }
+    },
+    copyChannelLinkById(id) {
+      const ch = this.channelById(id);
+      this.closeChatMenu();
+      if (!ch) return;
+      try { navigator.clipboard.writeText(ChannelsFeature.buildJoinLink(ch)); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      catch (e) { console.warn('[channels] clipboard:', e); }
+    },
+    // Отправка поста владельцем (composer → post-конверт). Тело шифруется
+    // broadcast-ключом канала (тот же симметричный путь, что группы).
+    async sendChannelPost() {
+      const ch = this.currentChannel;
+      const text = this.newMessage.trim();
+      if (!ch || !ch.is_owner || !text || this.postingChannel) return;
+      this.postingChannel = true;
+      try {
+        const payload = ChannelsFeature.buildPostPayload(ch.id, text, []);
+        const content = await crypto.encryptWithGroupKey(payload, ch.key);
+        const env = JSON.parse(payload);
+        // optimistic local (владельческое эхо-письмо может и не вернуться)
+        this.noteChannelPost(ch.id, env.ts, env, this.email);
+        this.channelUnread[ch.id] = 0; // собственный пост — не «непрочитанное»
+        this.messages = this.channelPostsToMessages(ch);
+        this.newMessage = '';
+        await this.$nextTick();
+        this.scrollToBottom(true);
+        const res = await ChannelsFeature.sendChannelPost(ch, content, env, this.email);
+        ChannelsFeature.updateChannel(ch.id, { last_ts: env.ts }).catch(() => {});
+        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+        }
+      } catch (e) {
+        console.error('[channels] post:', e);
+        this.showToast(this.t('channel_post_failed') || 'Пост не отправлен', 3000);
+      } finally { this.postingChannel = false; }
+    },
+    async deleteChannelConfirmed() {
+      const t2 = this.chatMenu.target;
+      if (!t2 || t2.type !== 'channel') return;
+      if (!confirm(this.t('channel_delete_confirm') || 'Удалить канал и всю его локальную историю?')) return;
+      this.closeChatMenu();
+      try {
+        await ChannelsFeature.deleteChannel(t2.id);
+        if (this.activeChat === 'channel:' + t2.id) {
+          this.activeChat = '';
+          this.activeChatType = 'chat';
+          this.currentChannel = null;
+          this.messages = [];
+        }
+        await this.loadChannels();
+      } catch (e) { console.error('[channels] delete:', e); }
+    },
+    async loadChannels() {
+      try {
+        this.channels = await ChannelsFeature.loadChannels();
+        // last_ts > 0 у подписчика = есть непрочитанное (считаем по post-логу kv)
+        for (const ch of this.channels) {
+          const posts = JSON.parse((await db.kvGet(this.email || 'anon', 'channel-posts:' + ch.id)) || '[]');
+          this.channelPosts[ch.id] = posts;
+          this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
+          this.channelAvatars[ch.id] = (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '';
+        }
+      } catch (e) { console.error('Failed to load channels:', e); }
+    },
+    // Владелец переименовывает канал: локальный патч + meta-конверт
+    // подписчикам (name/about летят тем же транспортом, что посты).
+    async renameChannel(id) {
+      const ch = this.channelById(id);
+      this.closeChatMenu();
+      if (!ch || !ch.is_owner) return;
+      const name = prompt(this.t('channel_rename_prompt') || 'Новое название канала', ch.name || '');
+      if (!name || !name.trim() || name.trim() === ch.name) return;
+      ch.name = name.trim();
+      try {
+        await ChannelsFeature.updateChannel(id, { name: ch.name });
+        const res = await ChannelsFeature.sendChannelMeta(ch, this.email);
+        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+        }
+      } catch (e) { console.error('[channels] rename:', e); }
+    },
+    // Router helpers (features/incoming.js вызывает через ctx)
+    channelById(id) { return this.channels.find(c => c.id === id) || null; },
+    // Новый пост канала: сохраняем в kv-лог (аналог истории, только локально),
+    // инкремент непрочитанных.
+    noteChannelPost(chId, ts, payload, senderEmail) {
+      const ch = this.channelById(chId);
+      if (!ch) return;
+      const posts = this.channelPosts[chId] || [];
+      const body = (payload && payload.post && payload.post.body) || '';
+      const images = (payload && payload.post && payload.post.images) || [];
+      if (posts.some(p => p.id === payload.id)) return; // дедуп post.id
+      posts.push({ id: payload.id, ts, body, images, sender: senderEmail || '' });
+      posts.sort((a, b) => a.ts - b.ts);
+      this.channelPosts[chId] = posts.slice(-200); // локальный лог компактный
+      this.channelUnread[chId] = (this.channelUnread[chId] || 0) + 1;
+      db.kvSet(this.email || 'anon', 'channel-posts:' + chId, JSON.stringify(this.channelPosts[chId])).catch(() => {});
+    },
+    noteChannelHello(chId, senderEmail) {
+      console.log('[channel] hello from', senderEmail, '→ chan', chId);
     },
     setPeerKey(email, key, pq = null) {
       this.peerKeys[email] = key;
@@ -2181,12 +2668,23 @@ export default {
       // сообщению (вниз).
       this.scrollToBottom(true);
     },
+
+    // M2.4: открыть чат по ключу (email) — из ntfy-пуша (vault://open?chat=).
+    async openChatByKey(key) {
+      const email = String(key || '').toLowerCase();
+      if (!email) return;
+      try {
+        await this.selectChat(email);
+        if (this.isMobile) this.mobileChatOpen = true;
+        this.showSettings = false;
+      } catch (e) { console.warn('[notify] openChatByKey failed:', e); }
+    },
     // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
     // своя отправка); force=false — только если пользователь уже у низа
     // (поллинг не должен выдёргивать из чтения истории).
     scrollToBottom(force = false) {
       this.$nextTick(() => {
-        const el = this.$refs.messagesContainer;
+        const el = this.$refs.messageList && this.$refs.messageList.container;
         if (!el) return;
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
         if (force || nearBottom) {
@@ -2198,12 +2696,12 @@ export default {
     // ушёл от низа чата больше чем на 200px (поллинг/свои отправки его не
     // выдёргивают — только клик по стрелке).
     onMessagesScroll() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       this.showJumpToBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
     },
     jumpToBottom() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
       this.showJumpToBottom = false;
@@ -2269,240 +2767,11 @@ export default {
       this.pinGroupMessage({ id: this.pinnedMsgId, content: '' });
     },
     scrollPinnedToView() {
-      const el = this.$refs.messagesContainer;
+      const el = this.$refs.messageList && this.$refs.messageList.container;
       if (!el) return;
       const t = el.querySelector('[data-msg-id="' + CSS.escape(this.pinnedMsgId) + '"]');
       if (!t) { this.jumpToBottom(); return; }
       el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
-    },
-    // --- Персистентный кэш тел: SQLite
-    bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
-    chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
-    // Загрузка кэша тел писем из SQLite — вызывается после логина/восстановления
-    // сессии.
-    async loadBodyCache() {
-      try {
-        const rows = await db.bodyCacheLoadAll(this.email || 'anon');
-        const bodies = {};
-        const order = [];
-        for (const [key, body] of rows || []) {
-          bodies[key] = body;
-          order.push(key);
-        }
-        this.emailBodyCache = bodies;
-        this.bodyCacheOrder = order;
-      } catch (e) {
-        console.warn('loadBodyCache (sqlite) failed:', JSON.stringify(e), String(e));
-        this.emailBodyCache = {};
-        this.bodyCacheOrder = [];
-      }
-    },
-    // Запись тела в кэш: SQLite (db_body_cache_set) + память. Лимит ~400 тел:
-    // старые вытесняются (FIFO по bodyCacheOrder).
-    cacheBody(key, body) {
-      this.emailBodyCache[key] = body;
-      const i = this.bodyCacheOrder.indexOf(key);
-      if (i >= 0) this.bodyCacheOrder.splice(i, 1);
-      this.bodyCacheOrder.push(key);
-      while (this.bodyCacheOrder.length > 400) {
-        const old = this.bodyCacheOrder.shift();
-        delete this.emailBodyCache[old];
-      }
-      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
-      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
-    },
-    persistBodyCache() {
-      // SQLite-персистенция (debounce сохранён в cacheBody): каждое тело — своя
-      // строка body_cache(account, cache_key, body). localStorage не используется.
-      const acc = this.email || 'anon';
-      try {
-        for (const k of Object.keys(this.emailBodyCache)) {
-          db.bodyCacheSet(acc, k, this.emailBodyCache[k]).catch(() => {});
-        }
-      } catch (e) {
-        // Кэш не критичен — молча пропускаем.
-      }
-    },
-    // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
-    // Хранится в SQLite kv_store.
-    async loadChatCache(chat) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-cache:' + chat);
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
-    },
-    saveChatCache(chat, list) {
-      try {
-        // email-объект письма не персистим (тяжёлый и не нужен для рендера).
-        // attachment персистим: без него из кэша пропадают плеер аудио,
-        // кнопка «скачать» и текст вложения.
-        const slim = (list || []).map(m => ({
-          id: m.id, content: m.content, from: m.from, time: m.time,
-          encrypted: m.encrypted, vault: m.vault, status: m.status,
-          ts: m.ts || this.msgTs(m) || undefined,
-          reactions: m.reactions || undefined,
-          deleted: m.deleted || undefined,
-          edited: m.edited || undefined,
-          // sender_id нужен групповому рендеру (аватар/имя отправителя над
-          // чужим сообщением) — без него из кэша блок отправителя исчезал,
-          // хотя при свежем фетче появлялся («аватарки то есть, то нет»).
-          sender_id: m.sender_id || undefined,
-          attachment: m.attachment || undefined,
-          // Пилюли звонков: без этого поля из кэша пропадают
-          // «Пропущенный звонок» и т.п.
-          callEvent: m.callEvent || undefined,
-        }));
-        db.kvSet(this.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
-      } catch (e) { /* quota — не критично */ }
-    },
-    // --- Оптимистичные исходящие (pendingOutgoing) ---
-    // Отправка SMTP медленная (до минуты), а поллинг каждые 30 с перестраивает
-    // messages из IMAP. Без этого сообщение «появлялось и исчезало» у
-    // отправителя: оптимистичная запись стиралась, пока письмо не сделает
-    // круг SMTP → ящик → INBOX/Sent. Здесь:
-    //  - markPending: регистрируем оптимистичное сообщение;
-    //  - mergePending: при перестроении списка подмешиваем ещё не
-    //    подтверждённые записи (их нет в IMAP-списке), а подтверждённые
-    //    (id уже отрисован из письма) — удаляем из реестра.
-    markPending(chatKey, msg) {
-      if (!msg || !msg.id) return;
-      const bucket = this.pendingOutgoing[chatKey] || {};
-      bucket[msg.id] = msg;
-      this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: bucket };
-    },
-    mergePending(chatKey, list) {
-      const bucket = this.pendingOutgoing[chatKey];
-      if (!bucket || !Object.keys(bucket).length) return list;
-      const now = Date.now();
-      const out = [...list];
-      const seen = new Set(list.map(m => m.id));
-      const remaining = {};
-      for (const [id, msg] of Object.entries(bucket)) {
-        if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
-        // Удалённое сообщение не возвращается из pending (tombstone).
-        if (this.isTombstoned(id)) continue;
-        // Страховка: не держим запись дольше 10 минут (если SMTP молча не
-        // отправил письмо, сообщение не должно висеть «отправленным» вечно).
-        // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
-        // должен видеть, что сообщение не дошло.
-        if (msg.status !== 'failed' && msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
-        remaining[id] = msg;
-        out.push(msg);
-      }
-      if (Object.keys(remaining).length) {
-        this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: remaining };
-      } else {
-        const copy = { ...this.pendingOutgoing };
-        delete copy[chatKey];
-        this.pendingOutgoing = copy;
-      }
-      // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
-      // сообщений и вложений нет email-объекта, сортировка по email.date давала
-      // 0 и рвала хронологию.
-      out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return out;
-    },
-    // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
-    // удалён навсегда) или deleted-метка из истории — фильтруются при
-    // каждом построении чата (история + письма + pending). Message-ID
-    // tombstones (mid) отсекают письма, вернувшиеся из другой папки/All
-    // Mail с новым uid (DC-аналог rfc724_mid).
-    filterDeleted(list) {
-      const tombs = this.loadTombstones();
-      const mids = this.loadMidTombstones();
-      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
-    },
-    // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
-    // из IndexedDB.
-    // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
-    // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
-    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает.
-    // Локальная история чата: SQLite (db.history_load) — единственный
-    // источник. localStorage-копии НЕТ: WebKitGTK-localStorage ограничен
-    // ~5 МБ (body-cache уже 3–7 МБ), история живёт в sqlite vault.db
-    async loadLocalHistory(chatKey) {
-      let hist = null;
-      try {
-        hist = await loadHistory(this.email, chatKey);
-      } catch (e) { /* sqlite недоступен — чат откроется из писем */ }
-      hist = this.normalizeStaleSending(hist);
-      // Сигнальные call_*-конверты: старые сборки сохраняли их в
-      // историю как сырой JSON — не рендерим нигде.
-      if (hist && hist.length) {
-        hist = hist.filter(m => {
-          const c = (m && m.content) || '';
-          return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
-        });
-      }
-      return hist;
-    },
-    // 'sending' — переходный статус, он не должен долго жить в истории: его
-    // персистят оптимистично ДО отправки, а финальный пишут после. После
-    // вечно горела красным. Повышаем до 'sent' (письмо либо принято SMTP, либо
-    // умерло вместе с процессом — квитанции получателей уточнят статус позже).
-    normalizeStaleSending(hist) {
-      if (!hist || !hist.length) return hist;
-      const now = Date.now();
-      for (const m of hist) {
-        if (m && m.from === 'me' && m.status === 'sending') {
-          const t = this.msgTs(m);
-          if (t && now - t > 60 * 1000) m.status = 'sent';
-        }
-      }
-      return hist;
-    },
-    // полученные когда-либо, остаются в чате навсегда, с датами), а письма
-    // из IMAP только ДОБАВЛЯЮТ новое.
-    // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
-    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами.
-    async mergeHistory(chatKey, list) {
-      let hist = await this.loadLocalHistory(chatKey); // let: фильтр call_* ниже
-      if (!hist || !hist.length) return list;
-      // Звонки: сигнальные call_*-конверты, попавшие в историю
-      // старыми сборками (до фильтра в loadMessages), не рендерим — они
-      // «застревали» в чате как сырой JSON и не удалялись.
-      hist = hist.filter(m => {
-        const c = (m && m.content) || '';
-        return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type": "call_') !== -1));
-      });
-      const ids = new Set();
-      for (const m of hist) if (m && m.id) ids.add(m.id);
-      // Исчезающие: старые записи истории могли быть сохранены БЕЗ
-      // ttl/expireAt. Письмо то же
-      // обновляем таймер из свежераспарсенного env.
-      for (const h of hist) {
-        if (!h || !h.id) continue;
-        const fresh = list.find((x) => x && x.id === h.id && x.expireAt);
-        if (fresh && !h.expireAt) {
-          h.ttl = fresh.ttl;
-          h.expireAt = fresh.expireAt;
-        }
-      }
-      // Из писем добавляем только то, чего ещё нет в истории (новое).
-      const extra = list.filter(m => m && m.id && !ids.has(m.id));
-      // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
-      // вставки, и
-      // «16:37 20:31 18:06 18:07 20:38»).
-      if (!extra.length) {
-        hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        return this.filterDeleted(hist);
-      }
-      const merged = [...hist, ...extra];
-      merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return this.filterDeleted(merged);
-    },
-    // Машинная временная метка сообщения для сортировки чата.
-    msgTs(m) {
-      if (!m) return 0;
-      if (m.ts) return m.ts;
-      if (m.email && m.email.date) return new Date(m.email.date).getTime();
-      if (m.created_at) return new Date(m.created_at).getTime();
-      // Оптимистичные исходящие (вложения/голос) персистились без ts —
-      // только _pendingAt; без этого фолбэка они сортировались в начало.
-      if (m._pendingAt) return m._pendingAt;
-      return 0;
     },
     async selectGroup(group) {
       this.saveDraft(); // черновик прошлого чата
@@ -2663,9 +2932,18 @@ export default {
           const label = isAudio
             ? `🎙️ ${parsed.name}`
             : (isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`);
+          // Download-on-demand: данные НЕ в конверте — во втором письме
+          // (dod = его Message-ID). Карточка рендерится сразу (имя/размер
+          // из меты), содержимое подтягивается по клику — fetchDodAttachment.
+          const isDod = typeof parsed.dod === 'string' && parsed.dod.length > 0;
           return {
             text: label,
-            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage, isAudio, isText, textContent },
+            attachment: {
+              name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data,
+              isImage: isImage && !isDod, isAudio: isAudio && !isDod, isText: isText && !isDod,
+              textContent: isDod ? '' : textContent,
+              isDod, dod: isDod ? parsed.dod : '', dodStatus: 'idle', // idle|loading|ready|error
+            },
           };
         }
       } catch { /* not JSON — plain text message */ }
@@ -2686,24 +2964,6 @@ export default {
     // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
     // 200KB, а вот пустой аватар = собеседник никогда не увидит картинку).
-    async shrinkAvatar(dataUrl) {
-      if (!dataUrl) return '';
-      if (dataUrl.length <= 8192) return dataUrl;
-      try {
-        const img = new Image();
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
-        const canvas = document.createElement('canvas');
-        canvas.width = 64; canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, 64, 64);
-        const small = canvas.toDataURL('image/jpeg', 0.7);
-        // Берём сжатый только если он реально получился и меньше оригинала.
-        if (small && small.length > 0 && small.length < dataUrl.length) return small;
-        return dataUrl; // сжатие не помогло — шлём оригинал, не роняем аватар
-      } catch (e) {
-        return dataUrl; // canvas недоступен — шлём оригинал, не роняем аватар
-      }
-    },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text, ttl = 0) {
       const dn = this.displayName || (await api.getDisplayName()) || '';
@@ -2733,6 +2993,16 @@ export default {
       // PQ: свой ML-KEM ek — получатель сохранит контакт и сможет
       // ответить гибридом (конверт несёт оба публичных ключа).
       if (crypto.pqEk) env.pq = crypto.pqEk;
+      // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
+      // адрес моей очереди. Получатель молча сохранит его и сможет
+      // слать мне мгновенные пуши. Пользователь ничего не вводит.
+      if (this.relayEnabled) {
+        try {
+          const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
+          const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
+          if (myTok) env.tok = myTok;
+        } catch (e) { /* релей опционален */ }
+      }
       // Исчезающие сообщения: ttl в секундах от момента ПРОСМОТРА
       // получателем. 0 = обычное сообщение. Получатель ставит локальный
       // таймер удаления после показа (expireEphemeral).
@@ -2746,7 +3016,7 @@ export default {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
           const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
-          // Голосование: poll-подконверт (валидация в parsePollEnvelope).
+          // Голосование: poll-подконверт (валидация в features/poll.js).
           if (obj.poll && typeof obj.poll === 'object') {
             env.poll = {
               id: String(obj.poll.id || obj.id || ''),
@@ -2758,48 +3028,6 @@ export default {
         }
       } catch { /* not an envelope — legacy plaintext */ }
       return null;
-    },
-    // ── Голосования (poll) ─────────────────────────────────────────
-    // Конверт: {vault:1, type:'poll', poll:{id, question, options[]}}
-    // Голос:   {poll:1, poll_id, option} — сигнальное письмо (как реакции),
-    //          агрегируется из писем чата при загрузке.
-    parsePollEnvelope(env) {
-      if (!env || env.type !== 'poll' || !env.poll || !env.poll.question) return null;
-      const opts = (env.poll.options || []).map(o => String(o).slice(0, 100)).filter(Boolean);
-      if (opts.length < 2 || opts.length > 10) return null;
-      return {
-        id: String(env.poll.id || env.id || ''),
-        question: String(env.poll.question).slice(0, 200),
-        options: opts.slice(0, 10),
-        votes: {},   // email -> option index (последний голос)
-        myVote: null,
-      };
-    },
-    pollVotes(poll) {
-      const counts = new Array(poll.options.length).fill(0);
-      const voters = {};
-      for (const [email, opt] of Object.entries(poll.votes || {})) {
-        if (opt >= 0 && opt < counts.length) {
-          counts[opt] += 1;
-          voters[email] = true;
-        }
-      }
-      const total = counts.reduce((a, b) => a + b, 0);
-      return { counts, total, voters: Object.keys(voters).length };
-    },
-    pollOptionCount(poll, i) { return this.pollVotes(poll).counts[i] || 0; },
-    pollLead(poll) {
-      const v = this.pollVotes(poll);
-      let best = -1, bestN = -1;
-      v.counts.forEach((n, i) => { if (n > bestN) { best = i; bestN = n; } });
-      return bestN > 0 ? best : -1;
-    },
-    pollLeadLabel(poll) {
-      const v = this.pollVotes(poll);
-      const lead = this.pollLead(poll);
-      if (lead < 0 || v.total === 0) return '';
-      const pct = Math.round(v.counts[lead] * 100 / v.total);
-      return `${poll.options[lead]} — ${pct}%`;
     },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
@@ -2826,148 +3054,9 @@ export default {
         '&mlon=' + coords.split(',')[1].trim() + '#map=17/' + coords.split(',')[0].trim() + '/' + coords.split(',')[1].trim();
       this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
     },
-    // Подтвердить создание голосования (диалог).
-    confirmPoll() {
-      const q = this.pollQuestion.trim();
-      const opts = this.pollOptions.map(o => o.trim()).filter(Boolean);
-      if (!q || opts.length < 2) return;
-      this.pollDialog = false;
-      this.pollQuestion = '';
-      this.pollOptions = ['', ''];
-      this.sendPoll(q, opts);
-    },
     // ── Пересылка (forward) ────────────────────────────────────────
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
-    startForward(msg) {
-      if (!msg) return;
-      this.forwardTo = msg;
-    },
-    async doForward(key) {
-      const msg = this.forwardTo;
-      this.forwardTo = null;
-      if (!msg || !key) return;
-      const fromName = msg.from === 'me'
-        ? (this.displayName || this.email)
-        : (this.nameOf(this.activeChat) || this.activeChat);
-      const fwdText = (this.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
-      try {
-        this.sending = true;
-        const ttl = await this.ephemeralTtlOf(key);
-        const envelope = await this.buildEnvelope(fwdText, ttl);
-        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
-        const pendingMsg = {
-          id: envelopeId || ('local-' + Date.now()),
-          content: fwdText,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-        };
-        if (key.startsWith('group:')) {
-          const gid = key.slice(6);
-          const groupKey = this.groupKeys[gid];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          const content = await crypto.encryptWithGroupKey(envelope, groupKey);
-          await api.sendGroupMessage(gid, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        } else {
-          if (!this.peerKeys[key]) { alert(this.t('poll_err')); return; }
-          crypto.setPeerPublicKey(this.peerKeys[key], this.peerPqKeys && this.peerPqKeys[key]);
-          const content = await crypto.encryptVault(envelope);
-          await api.sendMessage(key, content);
-          pendingMsg.status = 'sent';
-          this.markPending(key, pendingMsg);
-        }
-        this.showToast(this.t('forward_done') || 'Переслано', 2500);
-      } catch (e) {
-        console.error('[forward] failed:', e);
-        alert(this.t('forward_err') || 'Forward failed');
-      } finally {
-        this.sending = false;
-      }
-    },
-    // Свой голос: сигнальное письмо (механика sendReaction) + локальная запись.
-    castPollVote(msg, option) {
-      const poll = msg.poll;
-      if (!poll || poll.myVote !== null) return;
-      const prev = poll.myVote;
-      poll.myVote = option;
-      const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) throw new Error('no group key');
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          } else {
-            throw new Error('no peer key');
-          }
-          poll.votes[this.email] = option;
-          this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-        } catch (e) {
-          console.error('[poll] vote failed:', e);
-          poll.myVote = prev;
-        }
-      })();
-    },
-    // Создание голосования: конверт type:'poll' (карточка у получателей).
-    async sendPoll(question, options) {
-      const opts = (options || []).map(o => String(o).trim()).filter(Boolean).slice(0, 10);
-      question = String(question || '').trim();
-      if (!question || opts.length < 2) return;
-      const pollId = this.newMessageId();
-      const pollEnv = {
-        vault: 1,
-        id: this.newMessageId(),
-        type: 'poll',
-        text: question, // fallback-текст для legacy-клиентов/истории
-        poll: { id: pollId, question, options: opts },
-        name: this.displayName || '',
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      try {
-        this.sending = true;
-        const envelope = JSON.stringify(pollEnv);
-        let content = envelope;
-        if (this.activeChatType === 'group') {
-          const groupKey = this.groupKeys[this.currentGroup.id];
-          if (!groupKey) { alert(this.t('err_group_key')); return; }
-          content = await crypto.encryptWithGroupKey(envelope, groupKey);
-        } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
-          crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-          content = await crypto.encryptVault(envelope);
-        }
-        const pendingMsg = {
-          id: pollId,
-          content: question,
-          from: 'me',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          ts: Date.now(), encrypted: true, vault: true, status: 'sending',
-          poll: this.parsePollEnvelope(pollEnv),
-        };
-        if (pendingMsg.poll) pendingMsg.poll.myVote = null;
-        this.messages.push(pendingMsg);
-        this.scrollToBottom(true);
-        if (this.activeChatType === 'group') {
-          await api.sendGroupMessage(this.currentGroup.id, content);
-        } else {
-          await api.sendMessage(this.activeChat, content);
-        }
-        pendingMsg.status = 'sent';
-        this.saveCurrentHistory(this.activeChatType === 'group' ? 'group:' + this.currentGroup.id : this.activeChat);
-      } catch (e) {
-        console.error('[poll] send failed:', e);
-        alert(this.t('poll_err') || 'Poll failed');
-      } finally {
-        this.sending = false;
-      }
-    },
+    // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) {
       if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
@@ -3117,58 +3206,6 @@ export default {
         this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
       } catch (e) { /* тихо */ }
     },
-    // Транспорт правок (паттерн sendReactionEmail):
-    // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
-    // группа — encryptWithGroupKey, письма VaultGroupEdit: <id>.
-    sendEditEmail(msgId, text, action) {
-      // Метки письма (аналог DC Chat-Edit/Chat-Delete + rfc724_mid, но в
-      // зашифрованном теле — стелс): msg_id (сопоставление с оригиналом),
-      // sender (проверка «автор оригинала» на стороне получателя), ts
-      // (последняя по времени правка авторитетна).
-      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action, sender: this.email, ts: Date.now() });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupEdit(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendEdit(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send edit email:', e);
-        }
-      })();
-    },
-    // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
-    // в localStorage, см. loadLocalHistory).
-    showHistoryFirst(chatKey, isStale) {
-      return this.loadLocalHistory(chatKey).then(hist => {
-        if (hist && hist.length && !isStale()) {
-          // История в sqlite — в порядке вставки; показываем сразу по времени.
-          hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-          // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
-          // сырые сообщения — сигналы не
-          // рендерятся ни в истории, ни в чате.
-          this.messages = hist.filter(m => {
-            const c = (m && m.content) || '';
-            return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type":"profile"') !== -1));
-          });
-        }
-      });
-    },
-    saveCurrentHistory(chatKey) {
-      // SQLite (db.history_save) — единственный источник истории. Сбои
-      // sqlite не критичны: чат пересоберётся из писем IMAP при поллинге.
-      try {
-        saveHistory(this.email, chatKey, this.messages);
-      } catch (e) {
-        console.warn('saveHistory (sqlite) failed:', e);
-      }
-    },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
       // результаты этого (медленного) фетча применять нельзя — иначе
@@ -3190,11 +3227,16 @@ export default {
       // ВСЕМ адресам с его ключом (алиасы), иначе история старого адреса
       // не видна в чате нового адреса.
       const aliases = this.aliasesOf(email);
+      // Ignore-лист: у заблокированного чат открывается пустым (показываем
+      // только локальную историю ДО блокировки, новые письма не расшифровываем
+      // и не кэшируем). Старые письма в this.messages остаются после
+      // showHistoryFirst — блок скрывает именно НОВОЕ.
+      const ignored = this.isIgnored(email);
       const relatedAll = this.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
-          return aliases.some(a => f.includes(a) || t.includes(a));
+          return !ignored && aliases.some(a => f.includes(a) || t.includes(a));
         })
         // Свежие сверху. Расшифровываем только последние 30: фетч тела идёт
         // по одному письму (с переключением папки) — на всю переписку это
@@ -3226,9 +3268,15 @@ export default {
           // навсегда (так пропадали приглашения и аудио после гонки доставки).
           const missing = msgs.filter(m => {
             const b = this.emailBodyCache[`${folder}:${m.uid || m.id}`];
-            return b === undefined || b === '';
+            if (b !== undefined && b !== '') return false;
+            // Download-on-demand: письма крупнее порога НЕ фетчим телом
+            // автоматически — открытие чата не должно качать десятки МБ.
+            // Карточка DoD-вложения знает размер из меты, тело подтянется
+            // по клику (fetchDodAttachment). size=0 (неизвестен) — фетчим
+            // как раньше (провайдер без RFC822.SIZE или старый кэш).
+            if ((m.size || 0) > 2 * 1024 * 1024) return false;
+            return true;
           });
-          console.log('[loadMessages] folder=' + folder + ' total=' + msgs.length + ' missing=' + missing.length);
           if (missing.length) {
             // Ошибка батча (IMAP-рассинхрон, одно пустое тело роняет весь
             // запрос в Rust) НЕ должна обнулять чат: без try/catch падал
@@ -3247,6 +3295,7 @@ export default {
             }
           }
         }
+        console.log('[loadMessages] folder pass done (DoD-sized letters skipped)');
         // Единый проход: расшифровываем каждое письмо и классифицируем по
         // содержимому (реакция / правка / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
@@ -3322,10 +3371,24 @@ export default {
                   });
                   return null; // не сообщение
                 }
+                // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
+                //     («я онлайн»); отмечаем активность, в чат не показываем.
+                if (PresenceFeature.ingestSignal(this, robj, isOut ? email : this.email, new Date(m.date || Date.now()).getTime())) {
+                  return null; // не сообщение
+                }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
               const env = this.parseEnvelope(text);
+              // Download-on-demand: data-письмо — ТРАНСПОРТ, не сообщение.
+              // Его содержимое (десятки МБ) подтянется по клику с карточки
+              // мета-вложения (fetchDodAttachment по Message-ID из меты).
+              if (env && typeof env.text === 'string' && env.text.startsWith('{')) {
+                try {
+                  const dodObj = JSON.parse(env.text);
+                  if (dodObj && dodObj.vault_dod_data === 1) return null;
+                } catch (e) { /* не dod — продолжаем */ }
+              }
               // (внутри try), а return ниже был ВНЕ неё → ReferenceError молча
               // ловился catch'ем и сообщение шло без ttl. Выносим в msgTtl.
               var msgTtl = 0;
@@ -3678,6 +3741,10 @@ export default {
         if (groupKey) {
           for (const msg of raw || []) {
             if (!crypto.isEncrypted(msg.content)) continue; // не наше
+            // Ignore-лист: сообщения заблокированного УЧАСТНИКА не
+            // расшифровываем и не рендерим в группе (фильтр до расшифровки —
+            // по sender_id письма, он приходит из заголовка From).
+            if (!this.isOwnSender(msg.sender_id) && this.isIgnored(msg.sender_id)) continue;
             let plaintext;
             try {
               plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
@@ -3720,6 +3787,22 @@ export default {
               });
               continue;
             }
+            // Голос голосования: {poll:1, poll_id, option} — сигнальное
+            // письмо (как реакции). В групповом проходе классификации не
+            // было: голоса участников падали в чат сырым JSON.
+            if (obj && obj.poll === 1 && obj.poll_id) {
+              (wirePollVotes[obj.poll_id] = wirePollVotes[obj.poll_id] || []).push({
+                voter: msg.sender_id,
+                option: Number(obj.option) || 0,
+              });
+              continue; // голос не рендерится как сообщение
+            }
+            // Presence: {presence:1, ts} — heartbeat участника; активность
+            // без карточки в чате (группы: peer-ключ есть только у 1:1, но
+            // сигнал может прийти и по групповому каналу от старых клиентов).
+            if (PresenceFeature.ingestSignal(this, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
+              continue; // presence не рендерится как сообщение
+            }
             if (obj && obj.meta === 1 && obj.avatar) {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
                 metaLatest = { avatar: obj.avatar, created_at: msg.created_at };
@@ -3732,7 +3815,41 @@ export default {
               if ((env.name || env.avatar) && msg.sender_id) {
                 api.saveProfile(msg.sender_id, env.name, env.avatar, env.ts || 0);
               }
+              // Голосование (poll): карточка вместо текста — как в 1:1.
+              // До этого env.poll выбрасывался в `plaintext = env.text`, и
+              // poll-конверт рендерился текстом вопроса без карточки/кнопок.
+              if (env.type === 'poll') {
+                const p = this.parsePollEnvelope(env);
+                if (p) {
+                  const gPollTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
+                  decrypted.push({
+                    id: p.id || msg.message_id || '',
+                    content: p.question,
+                    attachment: null,
+                    from: this.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    time: new Date(msg.created_at).toLocaleTimeString(),
+                    status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
+                    encrypted: true,
+                    mid: msg.message_id || '',
+                    sender_id: msg.sender_id,
+                    created_at: msg.created_at,
+                    poll: p,
+                    ttl: (env && env.ttl) || 0,
+                    expireAt: env && env.ttl ? gPollTs + env.ttl * 1000 : 0,
+                  });
+                  continue;
+                }
+                // p === null (некорректный poll) — падаем ниже, отрисуется как текст.
+              }
               plaintext = env.text; // содержимое конверта
+              // Download-on-demand: data-письмо — транспорт, не сообщение
+              // группы (содержимое подтянется по клику с мета-карточки).
+              if (typeof plaintext === 'string' && plaintext.startsWith('{')) {
+                try {
+                  const dodObj = JSON.parse(plaintext);
+                  if (dodObj && dodObj.vault_dod_data === 1) continue;
+                } catch (e) { /* не dod */ }
+              }
             }
             const { text, attachment } = this.parseMessageContent(plaintext);
             if (env && !this.isOwnSender(msg.sender_id)) {
@@ -3934,44 +4051,6 @@ export default {
     // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
     // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
     // и не рендерит как сообщение (см. processIncoming).
-    async broadcastProfile() {
-      const peers = Object.keys(this.peerKeys || {});
-      if (!peers.length) return;
-      const name = this.displayName || this.email || '';
-      // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,
-      // this.profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
-      let avatar = (this.profiles[this.email] || {}).avatar || '';
-      try {
-        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-        const kp = kvProfiles[String(this.email).toLowerCase()];
-        if (kp && kp.avatar) avatar = kp.avatar;
-      } catch (e) { /* ignore */ }
-      const bio = await this.getBio();
-      const body = {
-        vault: 1,
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
-        type: 'profile',
-        text: '',
-        name,
-        avatar,
-        bio: (bio || '').slice(0, 200),
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      // Шифруем для КАЖДОГО получателя его ключом. Без этого
-      // encryptVault использует глобальный peerPublicKey (последний открытый
-      // чат) — письмо расшифровывает только один из всех контактов, остальные
-      // получают «AAD auth failed». Это была причина нестабильности: «с третьего
-      // раза сработало» — потому что последний открытый чат менялся случайно.
-      for (const peer of peers) {
-        const peerKey = this.peerKeys[peer];
-        if (!peerKey) continue;
-        crypto.setPeerPublicKey(peerKey, this.peerPqKeys && this.peerPqKeys[peer]);
-        const content = await crypto.encryptVault(JSON.stringify(body));
-        try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
-      }
-      console.log('[profile] broadcast to', peers.length, 'contacts');
-    },
     // Выбор аватара в диалоге «Новая группа»: центр-кроп 128×128 JPEG
     // (те же параметры, что у аватара группы в GroupSettings).
     onNewGroupAvatarSelected(e) {
@@ -4054,6 +4133,7 @@ export default {
         await this.loadBodyCache();
         await this.loadContacts();
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
         this.loadEmails().catch(() => {});
@@ -4064,76 +4144,17 @@ export default {
         this.loginLoading = false;
       }
     },
-    // --- Зелёная точка
-    // Отмечаем активность контакта: входящее письмо от него.
-    noteSeen(email, ts) {
-      if (!email || typeof email !== 'string' || !email.includes('@')) return;
-      const t = Number(ts) || Date.now();
-      if ((this.lastSeenMap[email] || 0) < t) {
-        this.lastSeenMap = { ...this.lastSeenMap, [email]: t };
-      }
-    },
-    isRecentlySeen(email) {
-      const t = this.lastSeenMap[email];
-      if (!t) return false;
-      return Date.now() - t < 10 * 60 * 1000; // 10 минут
-    },
-
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() {
       try { return (await db.kvGet('anon', 'media-quality')) || 'high'; } catch { return 'high'; }
     },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
-    compressImage(dataUrl, maxSide, quality) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          const side = Math.max(img.width, img.height);
-          if (side <= maxSide) { resolve(null); return; } // сжатие не нужно
-          const scale = maxSide / side;
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        };
-        img.onerror = () => reject(new Error('image decode failed'));
-        img.src = dataUrl;
-      });
-    },
-
-    // --- Статус «О себе»: свой bio в kv_store, уходит в profile-конверте
-    async getBio() {
-      try { return (await db.kvGet(this.email || 'anon', 'bio')) || ''; } catch { return ''; }
-    },
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
     },
-    async onBioSave(text) {
-      await this.setBio(text);
-      this.showToast('Профиль сохранён — статус уйдёт контактам');
-    },
-    async setBio(text) {
-      const v = String(text || '').slice(0, 200);
-      await db.kvSet(this.email || 'anon', 'bio', v);
-      this.myBio = v;
-      return v;
-    },
-    // «Сохранить профиль»: ОДНО письмо с именем+аватаром+статусом и
-    // одним ts.
-    // на приёме более позднее письмо с неполным набором перетирало _ts и
-    // блокировало/возвращало старые значения (чехарда имени/аватара).
-    async onProfileSave() {
-      try {
-        await this.broadcastProfile();
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
-      } catch (e) {
-        console.error('[profile] broadcast on save failed:', e);
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён');
-      }
-    },
-
+    // M2.4: тумблер релея в настройках — живое обновление кэша
+    // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
     // --- Исчезающие сообщения
     // TTL хранится per-chat в kv_store ('ephemeral:<chatId>'), уходит в
     // конверте (env.ttl, секунды). У получателя таймер стартует при ПОКАЗЕ
@@ -4200,172 +4221,7 @@ export default {
     // --- Key Recovery
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
     // ── Duress-замок ────────────────────────────────────────
-    // При старте: если замок включён — показываем LockScreen вместо UI.
-    async checkDuressLock() {
-      // не показываем — двойной запрос кода. Desktop оставляем JS-вариант.
-      if (/android/i.test(navigator.userAgent)) {
-        this.duressLocked = false;
-        console.log('[duress] android branch: native LockActivity handles the lock');
-        return;
-      }
-      try {
-        const cfg = await invoke('duress_get_config');
-        const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
-        this.duressLocked = enabled;
-        console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
-          ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
-      } catch (e) {
-        console.warn('[duress] check failed:', e);
-      }
-      // Android: «выход» из приложения НЕ убивает процесс — FGS и
-      // keep-alive WebView живут, mounted НЕ выполняется при повторном открытии,
-      // замок не показывался. Ловим возврат из фона: если замок включён и в этой
-      // сессии ещё не разблокирован (duressUnlockedThisSession false) — показать.
-      if (!this._duressVisibilityBound) {
-        this._duressVisibilityBound = true;
-        const relock = async () => {
-          if (this.duressUnlockedThisSession) return;
-          try {
-            const cfg = await invoke('duress_get_config');
-            if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-              this.duressLocked = true;
-              console.log('[duress] relock on resume → locked=true');
-            }
-          } catch (e) { /* ignore */ }
-        };
-        document.addEventListener('visibilitychange', () => {
-          // Уход из видимости (сворачивание, скрытие в трей, переключение
-          // окна) = конец «доверенного периода»: флаг сессии снимаем, чтобы
-          // relock при возврате ПОКАЗАЛ замок. Банковский паттерн: замок
-          // должен появляться после КАЖДОГО ухода, а не только после смерти
-          // процесса (иначе минимизация не блокирует).
-          if (document.visibilityState === 'hidden') {
-            this.duressUnlockedThisSession = false;
-          } else {
-            relock();
-          }
-        });
-        window.addEventListener('focus', relock);
-        // Desktop close-to-tray: Rust эмитит событие ПЕРЕД скрытием
-        // окна в трей. Здесь сбрасываем флаг «разблокирован в этой сессии» и
-        // сразу поднимаем замок: при возврате из трея LockScreen уже на экране
-        // (WebView скрытого окна может не слать visibilitychange).
-        (async () => {
-          const { listen } = await import('@tauri-apps/api/event');
-          await listen('vault://window-hidden', () => {
-            this.duressUnlockedThisSession = false;
-            invoke('duress_get_config').then((cfg) => {
-              if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-                this.duressLocked = true;
-                console.log('[duress] tray-hide → armed lock for next show');
-              }
-            }).catch(() => {});
-          });
-        })();
-      }
-      // Повтор через секунду: restoreSession/монтирование UI может перерисовать
-      // поздно; дублирующая проверка гарантирует замок при уже сохранённом конфиге.
-      setTimeout(async () => {
-        try {
-          const cfg = await invoke('duress_get_config');
-          if (cfg && cfg.lock_enabled && cfg.lock_hash && !this.isLoggedIn === false) {
-            // уже залогинен — замок всё равно показываем (замок = при запуске)
-          }
-          if (cfg && cfg.lock_enabled && cfg.lock_hash) {
-            this.duressLocked = true;
-            console.log('[duress] lock re-check → locked=true');
-          }
-        } catch (e) { /* ignore */ }
-      }, 1200);
-    },
-    onLockUnlock() {
-      this.duressLocked = false;
-      this.duressUnlockedThisSession = true; // до ухода в фон замок не ре-армить
-    },
-    // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
-    // монтирования тихо отправляем SOS-письмо выбранным контактам.
-    async onLockDuress() {
-      this.duressLocked = false;
-      this.duressPending = true;
-      this.$nextTick(() => this.sendDuressSos());
-    },
-    // Panic-PIN: Rust уже стёр данные — выходим на login (локально пусто).
-    async onLockPanic() {
-      this.duressLocked = false;
-      try {
-        await api.logout();
-      } catch (e) { /* ignore */ }
-      this.isLoggedIn = false;
-      this.email = null;
-      this.showToast(this.t('panic_done') || 'Данные стёрты', 4000);
-    },
-    // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
-    // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
-    async sendDuressSos() {
-      try {
-        const cfg = await invoke('duress_get_config');
-        if (!cfg || !cfg.sos_enabled_rcpts) { /* compat */ }
-        const rcpts = (cfg.sos_recipients || []).filter(Boolean);
-        if (!rcpts.length) return;
-        // Гео: если включено — координаты через WebView geolocation
-        // (на Android нативный запрос разрешения идёт при включении флага).
-        let coords = '';
-        if (cfg.sos_geo) {
-          coords = await new Promise((resolve) => {
-            let done = false;
-            const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
-            const timer = setTimeout(() => finish(''), 5000);
-            try {
-              navigator.geolocation.getCurrentPosition(
-                (pos) => finish(`, мои координаты: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
-                () => finish(''),
-                { timeout: 4500, maximumAge: 600000 },
-              );
-            } catch (e) { finish(''); }
-          });
-        }
-        const rawText = cfg.sos_text || this.t('sos_default') || 'Телефон не у меня{coords}';
-        let text = rawText.replace('{coords}', coords);
-        // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
-        if (coords && !rawText.includes('{coords}')) text += coords;
-        // Сохранённые peer-ключи: encryptVault требует установленного ключа
-        // получателя — иначе шифрование падает и SOS молча теряется.
-        // При холодном старте (duress сразу после открытия) peerKeys могли
-        // ещё не загрузиться — читаем прямо из key_store.
-        if (!this.peerKeys || !Object.keys(this.peerKeys).length) {
-          try {
-            const stored = await crypto.loadPeerKeys();
-            this.peerPqKeys = this.peerPqKeys || {};
-            for (const pk of stored) {
-              this.peerKeys[pk.email] = pk.public_key;
-              if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
-            }
-          } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
-        }
-        for (const rcpt of rcpts) {
-          try {
-            const pk = this.peerKeys && this.peerKeys[rcpt];
-            if (!pk) {
-              console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
-              continue;
-            }
-            crypto.setPeerPublicKey(pk, this.peerPqKeys && this.peerPqKeys[rcpt]);
-            const content = await crypto.encryptVault(JSON.stringify({
-              vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-              type: 'sos', text, name: this.displayName || '', ts: Date.now(),
-            }));
-            await api.sendEmail('local', { to: rcpt, subject: '', body: content });
-          } catch (e) {
-            console.warn('[duress] SOS to', rcpt, 'failed:', e);
-          }
-        }
-        console.log('[duress] SOS sent to', rcpts.length, 'recipients');
-      } catch (e) {
-        console.warn('[duress] sendSos failed:', e);
-      } finally {
-        this.duressPending = false;
-      }
-    },
+    // (логика в features/duress.js; обёртки см. в блоке feature-обёрток выше)
     showToast(message, ms = 5000) {
       this.toastMessage = message;
       if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -4555,6 +4411,15 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
+      // Канал (M2): отдельный путь — пост-конверт с broadcast-ключом,
+      // composer только владельца (UI-гейт + проверка в sendChannelPost).
+      if (this.activeChatType === 'channel') { this.sendChannelPost(); return; }
+      // Ignore-гвард: в чате с заблокированным писать нельзя (E2E-модель
+      // блокировки получателя: мы решаем, что показывать и кому отвечать).
+      if (this.activeChatType === 'chat' && this.isIgnored(this.activeChat)) {
+        this.showToast(this.t('ignore_cannot_write') || 'Чат заблокирован — сначала разблокируйте');
+        return;
+      }
       // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
       // игнорируем — иначе уходит 2+ письма с разными id и получатели видят
       // «одно сообщение несколько раз».
@@ -4695,7 +4560,9 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory('group:' + this.currentGroup.id);
           try {
-            const res = await api.sendGroupMessage(this.currentGroup.id, content);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            const envObjForRelay = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+            const res = await api.sendGroupMessage(this.currentGroup.id, content, envObjForRelay);
             // Частичный фейл (SMTP одного из участников): статус 'failed'
             // (красный) — сообщение остаётся в чате и НЕ исчезает через
             // 10 минут (mergePending уважает failed-записи). Полный успех —
@@ -4754,16 +4621,43 @@ export default {
           // пользователь может удалить. История = источник своих сообщений.
           this.saveCurrentHistory(this.activeChat);
           try {
-            await api.sendMessage(this.activeChat, content);
-            // SMTP принял письмо — «отправлено» (до «доставлено» ждём круг
-            // через ящик: его подтвердит поллинг).
-            pendingMsg.status = 'sent';
-            // M2.1: дублируем конверт на push-релей (fire-and-forget; email
-            // — источник истины, ошибка релея ничего не ломает).
+            // Релей-копия ПЕРВОЙ (мгновенная доставка ~1-2с), SMTP —
+            // медленный основной канал: не блокируем статус «отправлено»
+            // на Gmail-коннекте (держит до минуты, тротлит) — письмо
+            // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
               const envObj = JSON.parse(envelope);
-              relay.relayPublish(this.email, this.activeChat, envObj, content);
+              const pub = relay.relayPublish(this.email, this.activeChat, envObj, content);
+              // §1: обновляем индикатор доставки по результату pub.
+              pub.then(r => {
+                if (r && r.why === 'daily-limit') {
+                  this.relayDeliveryMode = 'email';
+                  // Баннер один раз за день (kv-флаг) — не спамим тостами.
+                  invoke('db_kv_get', { account: this.email, key: 'relay-limit-banner' }).then(v => {
+                    const today = String(Math.floor(Date.now() / 86400000));
+                    if (v !== today) {
+                      this.showToast(this.t('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                      invoke('db_kv_set', { account: this.email, key: 'relay-limit-banner', value: today });
+                    }
+                  }).catch(() => {});
+                } else if (r && r.ok) {
+                  this.relayDeliveryMode = 'relay';
+                }
+              }).catch(() => {});
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
+            api.sendMessage(this.activeChat, content).then(() => {
+              pendingMsg.status = 'sent';
+              const b = this.pendingOutgoing[this.activeChat];
+              if (b && b[pendingMsg.id]) {
+                b[pendingMsg.id] = pendingMsg;
+                this.pendingOutgoing = { ...this.pendingOutgoing, [this.activeChat]: b };
+              }
+              this.saveCurrentHistory(this.activeChat);
+            }).catch(e => {
+              pendingMsg.status = 'failed';
+              pendingMsg.failedTo = [e && e.message || String(e)];
+              console.error('Failed to send message:', e);
+            });
           } catch (e) {
             // а через 10 минут запись молча исчезала.
             pendingMsg.status = 'failed';
@@ -4919,9 +4813,32 @@ export default {
         // чатов вскоре будет в IndexedDB, для инвайтов/аватаров хватает).
         const merged = [...this.emails];
         const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
+        // Кросс-папочные копии: письмо могло быть проиндексировано из INBOX,
+        // а потом провайдер перенёс его в Спам — старая ссылка (INBOX, uid)
+        // стала мёртвой (тела больше нет). Если в батче пришла копия с тем
+        // же message_id из другой папки — «оживляем» существующую запись:
+        // подставляем живые folder/uid, не плодя дублей в списке.
+        const byMid = new Map();
+        for (const m of merged) {
+          if (m.message_id) byMid.set(m.message_id, m);
+        }
         for (const m of fetched) {
           const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
+          if (seen.has(k)) continue;
+          if (m.message_id && byMid.has(m.message_id)) {
+            const old = byMid.get(m.message_id);
+            if ((old.folder || 'INBOX') !== (m.folder || 'INBOX')) {
+              old.folder = m.folder;
+              old.uid = m.uid;
+              if (m.id !== undefined) old.id = m.id;
+              old.message_id = m.message_id;
+              seen.add(k);
+            }
+            continue;
+          }
+          seen.add(k);
+          byMid.set(m.message_id, m);
+          merged.push(m);
         }
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
@@ -4989,275 +4906,19 @@ export default {
     // конкурирует за lock основного клиента. Используется ИЗ IDLE-цикла:
     // входящий call_request доходит, даже когда обычный поллинг пропускается
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
-    async loadEmailsFast(silent = true) {
-      try {
-        const accounts = await api.getEmailAccounts();
-        const fetched = [];
-        for (const account of accounts) {
-          try {
-            const cursors = this.loadCursors(account.id);
-            const res = await api.fetchEmailsIncrementalFast(account.id, cursors);
-            fetched.push(...(res.messages || []));
-            this.saveCursors(account.id, res.cursors);
-          } catch (e) {
-            console.warn('[calls] fast fetch failed:', e);
-          }
-        }
-        if (!fetched.length) return;
-        const merged = [...this.emails];
-        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-        for (const m of fetched) {
-          const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
-        }
-        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        if (merged.length > 2000) merged.length = 2000;
-        this.emails = merged;
-        console.log(`[Emails] fast loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
-        await this.processIncoming(fetched, { notify: silent });
-      } catch (e) {
-        console.warn('[calls] fast load failed:', e);
-      }
-    },
-    // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
-    // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
-    // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
-    // from приходит от отправителя (поле from) — дальше обычная расшифровка
-    // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
-    async relayConsume() {
-      const list = await relay.relayPoll(this.email);
-      if (!list.length) return;
-      const merged = [...this.emails];
-      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-      const fresh = [];
-      for (const env of list) {
-        const uid = 'rl-' + env.id;
-        if (seen.has(uid + '|RELAY')) continue;
-        seen.add(uid + '|RELAY');
-        fresh.push({
-          uid,
-          folder: 'RELAY',
-          from: (env.from || '').toLowerCase(),
-          to: this.email,
-          date: new Date((env.ts || 0) * 1000).toISOString(),
-          subject: '',
-          message_id: 'relay-' + env.id,
-          body: env.body, // тело уже декодировано в relay-client
-          is_read: false,
-        });
-      }
-      if (!fresh.length) return;
-      merged.push(...fresh);
-      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      if (merged.length > 2000) merged.length = 2000;
-      this.emails = merged;
-      // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
-      for (const f of fresh) {
-        this.cacheBody('RELAY:' + f.uid, f.body);
-      }
-      await this.processIncoming(fresh, { notify: true });
-      console.log('[relay] consumed envelopes: ' + fresh.length);
-    },
-    async processIncoming(fetched, { notify = false } = {}) {
-      if (!fetched || !fetched.length || !this.cryptoReady) return;
-      const myEmail = (this.email || '').toLowerCase();
-      const pool = fetched.slice(0, 50);
-      // Тела: добираем недостающие батчем по папкам (как sendDeliveredReceipts).
-      const byFolder = {};
-      for (const m of pool) {
-        const f = m.folder || 'INBOX';
-        (byFolder[f] = byFolder[f] || []).push(m);
-      }
-      for (const [folder, msgs] of Object.entries(byFolder)) {
-        const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
-        if (!missing.length) continue;
-        try {
-          const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
-          for (const m of missing) {
-            const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
-            if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
-          }
-        } catch (e) { /* тела не обязательны — классификация тихо пропустит */ }
-      }
-      for (const m of pool) {
-        const from = this.senderEmail(m.from);
-        // Пропускаем исходящие (от себя) и пустые from.
-        if (!from || from === myEmail) continue;
-        const body = this.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
-        if (!body || !crypto.isEncrypted(body)) continue;
-        let chatKey = null; // email (1:1) или 'group:<id>'
-        let title = '';
-        // 1:1 — расшифровка пир-ключом.
-        if (this.peerKeys[from]) {
-          try {
-            crypto.setPeerPublicKey(this.peerKeys[from], this.peerPqKeys && this.peerPqKeys[from]);
-            const plain = await crypto.decryptVault(body);
-            // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
-            // бейджи, не в уведомления) — уходят в state machine звонка.
-            const callSig = this.parseCallSignal(plain);
-            if (callSig) {
-              this.handleCallSignal(callSig, from).catch(e => console.warn('[call] signal failed:', e));
-              continue;
-            }
-            const env = this.parseEnvelope(plain);
-            if (env) {
-              // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — это я сам
-              // (старый адрес после смены почты / копия в свой ящик).
-              // Не профиль, не сообщение, не «смена почты» — иначе свой же
-              // аватар перезаписывается старым из собственного письма.
-              if (env.key && crypto.publicKey && env.key === crypto.publicKey) {
-                this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX'));
-                continue;
-              }
-              // Смена почты: письмо могло прийти со старого адреса
-              // контакта (алиаса) — чат ведём по каноническому (показываемому).
-              chatKey = this.canonicalOf(from) || from;
-              // Имя для заголовка: локальное переопределение пользователя →
-              // свежее из профиля письма (env.name) → nameOf(). НЕ contact.name —
-              {
-                const lpn = this.localProfileOf(from);
-                title = (lpn && lpn.name) || env.name || this.nameOf(from);
-              }
-              // Профиль отправителя: имя/аватар/«О себе» — сохраняем
-              // СРАЗУ при поллинге, не дожидаясь открытия чата.
-              if (env.type === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
-                api.saveProfile(from, env.name, env.avatar, env.ts || 0,
-                  typeof env.bio === 'string' ? env.bio : undefined);
-                if (env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
-              }
-            }
-          } catch (e) { /* не наше письмо */ }
-        } else if (crypto.isEncrypted(body)) {
-          // Смена почты: отправитель сменил адрес, но ключ тот же.
-          // Ключ под НОВЫМ email ещё не зарегистрирован — ищем его среди
-          // известных peerKeys (fingerprint-матчинг) и привязываем новый адрес.
-          try {
-            let matched = null;
-            for (const [knownEmail, knownKey] of Object.entries(this.peerKeys)) {
-              if (String(knownEmail).toLowerCase() === from) continue;
-              crypto.setPeerPublicKey(knownKey);
-              try {
-                const plain = await crypto.decryptVault(body);
-                const env = this.parseEnvelope(plain);
-                // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
-                // НЕ «смена почты» собеседника.
-                if (env && env.key === knownKey && !(crypto.publicKey && env.key === crypto.publicKey)) {
-                  matched = { knownEmail, plain, env }; break;
-                }
-              } catch (e) { /* не этим ключом */ }
-            }
-            if (matched) {
-              console.log('[identity] fingerprint match:', matched.knownEmail, '→', from, '— смена почты (poll)');
-              // Переносим историю чата со старого адреса на новый.
-              await this.migrateChatHistory(matched.knownEmail, from);
-              this.setPeerKey(from, matched.env.key, matched.env.pq || null);
-              // Профиль со старого адреса переносим на новый.
-              const oldProf = this.profiles[matched.knownEmail];
-              if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);
-              if (matched.env.type === 'profile' || matched.env.name || matched.env.avatar || typeof matched.env.bio === 'string') {
-                api.saveProfile(from, matched.env.name, matched.env.avatar, matched.env.ts || 0,
-                  typeof matched.env.bio === 'string' ? matched.env.bio : undefined);
-              }
-              chatKey = this.canonicalOf(from) || from;
-              const lp = this.localProfileOf(from);
-              title = (lp && lp.name) || from;
-              if (matched.env.type === 'profile') { this.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); continue; }
-            }
-          } catch (e) { /* не наше письмо */ }
-        }
-        // Группы — ключом группы, где отправитель участник (1:1-ключ не пройдёт).
-        // MEMBERSHIP ПО FINGERPRINT: отправитель может быть участником
-        // под СТАРЫМ адресом (сменил почту). Если from не найден среди email,
-        // но pubkey конверта совпадает с peerKey одного из участников —
-        // мигрируем адрес в составе группы (groups_rename_member) и считаем
-        // участником. Без этого письмо от сменившего почту молча терялось
-        if (!chatKey) {
-          for (const g of this.groups) {
-            let members = (g.members || []).map(x => String(x.email || '').toLowerCase());
-            if (!members.includes(from)) {
-              const migrated = await this.tryMigrateGroupMember(g, from);
-              if (!migrated) continue;
-              members = (g.members || []).map(x => String(x.email || '').toLowerCase());
-            }
-            if (!members.includes(from)) continue;
-            let gk = this.groupKeys[g.id];
-            if (!gk && this.cryptoReady) {
-              try {
-                const kd = await api.getMyGroupKey(g.id);
-                if (kd && kd.group_key) { this.groupKeys[g.id] = kd.group_key; gk = kd.group_key; }
-              } catch (e) { /* ключ недоступен */ }
-            }
-            if (!gk) continue;
-            try {
-              const env = this.parseEnvelope(await crypto.decryptWithGroupKey(body, gk));
-              if (env) { chatKey = 'group:' + g.id; title = g.name || ''; break; }
-            } catch (e) { /* не из этой группы */ }
-          }
-        }
-        // Квитанции/инвайты/meta/legacy — не сообщения, не считаем и не шлём.
-        if (!chatKey) continue;
-        // Дедуп: письмо уже учтено ранее (повторный фетч) — пропускаем,
-        // иначе счётчик непрочитанных рос бы на каждом поллинге.
-        const mid = m.uid + '|' + (m.folder || 'INBOX');
-        // Дедуп по Message-ID: одно и то же письмо
-        // приходит с РАЗНЫМИ ключами uid|folder — копия из INBOX и копия из
-        // [Gmail]/All Mail имеют разные uid → два уведомления на письмо
-        // (монитор + JS-поллинг гонят параллельно). Message-ID глобален.
-        const dk = m.message_id ? 'mid:' + m.message_id : mid;
-        // дедуп СЧЁТЧИКА
-        // (processedUnreadIds) не имеет права блокировать УВЕДОМЛЕНИЕ.
-        // В 2fa9103 здесь стоял `continue` — тихий поллинг (notify=false)
-        // первым «съедал» письмо, заносил mid:<Message-ID> в персистный
-        // дедуп, и последующее push-событие монитора (notify=true) молча
-        // пропускалось: пуш не появлялся НИКОГДА. Теперь счётчик растёт
-        // только для новых писем, а уведомление дедупится НЕЗАВИСИМО —
-        // персист notifiedIds в notify.js (ключ dk = Message-ID).
-        const counted = !(this.processedUnreadIds.has(mid) || this.processedUnreadIds.has(dk));
-        if (counted) {
-          this.processedUnreadIds.add(mid);
-          this.processedUnreadIds.add(dk);
-          if (this.processedUnreadIds.size > 600) {
-            // Держим хвост: выкидываем старые (Set в порядке вставки).
-            for (const old of this.processedUnreadIds) {
-              this.processedUnreadIds.delete(old);
-              if (this.processedUnreadIds.size <= 500) break;
-            }
-          }
-          await this.saveUnreadSeen();
-        }
-        const fresh = Date.now() - new Date(m.date || 0).getTime() < 15 * 60 * 1000;
-        // Счётчик непрочитанных: для новых писем, кроме видимого сейчас чата.
-        if (counted && !this.chatVisible(chatKey)) {
-          this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
-          await this.saveUnreadCounts();
-        }
-        // Уведомление: только тихий поллинг, только свежие письма (старые
-        // задержанные/догоняющие письма спамом не считаем) и только когда
-        // чат НЕ виден (на mobile activeChat может хранить прошлый чат, пока
-        // пользователь на списке контактов — иначе уведомление теряется).
-        if (notify && fresh && !this.chatVisible(chatKey) && !this.isMuted(chatKey)) {
-          // пуш должен был быть.
-          console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
-          notifyNewMessage({
-            title,
-            body: this.t('notif_new_message') || 'New message',
-            // Дедуп уведомления — по ГЛОБАЛЬНОМУ Message-ID (dk), а не
-            // uid|folder: копия в INBOX и [Gmail]/All Mail не дадут два
-            // пуша, при этом повторная доставка того же письма монитору
-            // после тихого поллинга пуш НЕ отменит.
-            id: dk,
-          });
-        } else if (notify) {
-          console.log('[notify] SKIP fresh=' + fresh + ' visible=' + this.chatVisible(chatKey) + ' muted=' + this.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');
-        }
-      }
-    },
+    // Входящие конверты (router) — логика в features/incoming.js; Этап 4
+    // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
+    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts); },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {
+      // Мобильная навигация: кнопка «назад» возвращает к списку чатов
+      // (mobileChatOpen=false), но activeChat/activeChatType ещё хранят
+      // прошлый чат. Без проверки mobileChatOpen для групп новые групповые
+      // сообщения считались «видимыми» — ни бейджа, ни уведомления.
       if (chatKey.indexOf('group:') === 0) {
-        return this.activeChatType === 'group' && this.activeChat === chatKey;
+        return this.activeChatType === 'group' && this.activeChat === chatKey &&
+          (!this.isMobile || this.mobileChatOpen);
       }
       return this.activeChatType === 'chat' && this.activeChat === chatKey &&
         (!this.isMobile || this.mobileChatOpen);
@@ -5290,27 +4951,8 @@ export default {
       }
     },
     // архив + mute per-chat ─────────────────────
-    async loadChatFlags() {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-flags');
-        this.chatFlags = raw ? JSON.parse(raw) : {};
-      } catch (e) { this.chatFlags = {}; }
-      try {
-        const fr = await db.kvGet(this.email || 'anon', 'chat-folders');
-        this.chatFoldersNames = fr ? JSON.parse(fr) : [];
-      } catch (e) { this.chatFoldersNames = []; }
-    },
-    async saveChatFlags() {
-      try {
-        await db.kvSet(this.email || 'anon', 'chat-flags', JSON.stringify(this.chatFlags));
-      } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
-    },
-    flagKey(target) {
-      return target.type === 'group' ? 'group:' + target.id : target.email.toLowerCase();
-    },
-    chatFlagOf(key) {
-      return this.chatFlags[key] || {};
-    },
+    // (загрузка/сохранение kv-блобов и папки — features/folders.js;
+    //  обёртки см. в блоке feature-обёрток выше)
     isMuted(key) {
       // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
       // может прийти в каноническом регистре контакта — нормализуем.
@@ -5362,6 +5004,9 @@ export default {
         y = Math.max(8, Math.min(rr.bottom + 4, window.innerHeight - 130));
       }
       this.chatMenu = { show: true, target, x, y };
+      // Финальный клампинг по фактическому размеру меню (оценка выше —
+      // статическая, реальных пунктов может быть больше/меньше).
+      this.clampMenuAfterRender('chatMenu', x, y);
     },
     closeChatMenu() {
       this.chatMenu = { show: false, target: null };
@@ -5384,848 +5029,57 @@ export default {
       this.closeChatMenu();
       await this.saveChatFlags();
     },
-    // ── Папки чатов (kv chat-folders + chatFlags[key].folder) ──────────
-    async setChatFolder(name) {
-      const key = this.flagKey(this.chatMenu.target);
-      const f = { ...(this.chatFlags[key] || {}) };
-      if (name) f.folder = name.slice(0, 24);
-      else delete f.folder;
-      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
-      else this.chatFlags[key] = f;
-      this.closeChatMenu();
-      await this.saveChatFlags();
-    },
-    async createChatFolder() {
-      const name = (this.chatFolderNewName || '').trim().slice(0, 24);
-      if (!name) return;
-      if (!this.chatFoldersNames.includes(name)) {
-        this.chatFoldersNames = [...this.chatFoldersNames, name];
-        await db.kvSet(this.email || 'anon', 'chat-folders', JSON.stringify(this.chatFoldersNames));
-      }
-      await this.setChatFolder(name);
-      this.folderDialogOpen = false;
-      this.chatFolderNewName = '';
-    },
-    // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
-    // call_id обработанного звонка (request/accept/end/reject). После
-    // перезапуска не даёт старым конвертам снова дёргать state machine.
-    async isCallSeen(callId) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
-        const set = raw ? new Set(JSON.parse(raw)) : new Set();
-        return set.has(callId);
-      } catch (e) { return false; }
-    },
-    async rememberCallSeen(callId) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
-        const set = raw ? new Set(JSON.parse(raw)) : new Set();
-        set.add(callId);
-        // Храним последние 100 call_id (старые не нужны)
-        if (set.size > 100) {
-          const arr = Array.from(set);
-          arr.splice(0, arr.length - 100);
-          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(arr));
-        } else {
-          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(Array.from(set)));
-        }
-      } catch (e) { /* тихо */ }
-    },
-    // ── Звонки (M3, feature/calls) — Фаза 1: сигнализация конвертами call_* ──
-    // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
-    // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
-    // state machine звонка. Медиа (webrtc-rs) подключается в Фазе 2.
-    parseCallSignal(decrypted) {
-      if (!decrypted || typeof decrypted !== 'string') return null;
-      try {
-        const obj = JSON.parse(decrypted);
-        if (obj && obj.vault === 1 && typeof obj.type === 'string'
-            && obj.type.indexOf('call_') === 0 && obj.call_id) {
-          return obj;
-        }
-      } catch (e) { /* не сигнал */ }
-      return null;
-    },
-    // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
-    async sendCallEnvelope(peer, payload) {
-      const body = {
-        vault: 1,
-        id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
-        type: payload.type,
-        call_id: payload.call_id,
-        ts: Date.now(),
-        ...(payload.sdp ? { sdp: payload.sdp } : {}),
-        ...(payload.role ? { role: payload.role } : {}),
-        // PQ: kemct звонящего едет в call_request; принимающий
-        // собирает гибридный media_key декапсуляцией. sender_ek — чтобы
-        // contact сохранялся и для ответного гибрида.
-        ...(payload.kemct ? { kemct: payload.kemct } : {}),
-        ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
-      };
-      const content = await crypto.encryptVault(JSON.stringify(body));
-      // Ретрай ×3: Gmail-троттлинг рвёт SMTP в момент звонка
-      // («media accept failed» = sendEmail упал, answer потерян навсегда).
-      // Сигнал звонка критичен — повторяем с паузой.
-      let lastErr;
-      for (let i = 0; i < 3; i++) {
-        try {
-          await api.sendReadReceipt(peer, content); // stealth: пустая тема
-          if (i > 0) console.log('[call] envelope sent on retry', i);
-          return;
-        } catch (e) {
-          lastErr = e;
-          console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
-          await new Promise(r => setTimeout(r, 3000));
-        }
-      }
-      throw lastErr;
-    },
-    // Входящий сигнал → state machine. MVP: один звонок одновременно.
-    async handleCallSignal(sig, from) {
-      const { call_id, type } = sig;
-      if (!call_id || !from) return;
-      console.log('[call] signal', type, call_id, 'from', from, 'state=' + this.callState,
-        'current=' + (this.currentCall ? this.currentCall.call_id : 'null'));
-      // после перезапуска приложение
-      // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
-      // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
-      // state machine в incoming_ringing, и НОВЫЙ звонок, пришедший в это
-      // время, молча отбрасывался (callState !== 'idle') — вызовы пропадали.
-      // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты и на вход
-      // в аккаунт после перезапуска окна (пользователь мог перезапустить
-      // окно, и собеседник залогинился позже звонка) — конверты старше 10
-      // минут неактуальны — игнорируем (и запоминаем call_id).
-      if (sig.ts && Date.now() - sig.ts > 600000) {
-        console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
-        const alreadySeen = await this.isCallSeen(call_id);
-        await this.rememberCallSeen(call_id);
-        // Пропущенные вызовы: звонок пришёл, пока нас не было
-        // (офлайн/перезапуск) — записываем «Пропущенный звонок» в историю
-        // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
-        // иначе повторный фетч Спада после рестарта плодил дубли пилюль.
-        if (type === 'call_request' && !alreadySeen) {
-          await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
-        }
-        return;
-      }
-      // ДЕДУП + ПОВТОРНЫЙ ПОКАЗ: call_id уже показанного звонка
-      // из повторного фетча гасится — НО только если звонок ещё «жив» в системе
-      // (not cancelled). Ретрансляция call_request (каждые 15с) того же call_id
-      // после ЛОКАЛЬНОГО отклонения обязана СНОВА поднять экран звонка? НЕТ:
-      // юзер уже решил судьбу звонка — гасим. А вот РЕТРАНСЛЯЦИИ ДО отклонения
-      // дедупятся через currentCall check (4800) — они безопасны.
-      // Зомби-гвард: терминальные cancel/end/reject запоминаются
-      // request, приехавший ПОЗЖЕ своего cancel, гасится здесь.
-      if (type === 'call_request' && !(this.currentCall && this.currentCall.call_id === call_id)) {
-        if (await this.isCallSeen(call_id)) return;
-        await this.rememberCallSeen(call_id);
-      }
-      // Чужой звонок во время активного — отвечаем занято (call_reject).
-      if (this.callState !== 'idle' && this.currentCall
-          && this.currentCall.call_id !== call_id && type === 'call_request') {
-        await this.sendCallEnvelope(from, { type: 'call_reject', call_id });
-        // Пропущенные вызовы: мы говорили по другому звонку
-        await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
-        return;
-      }
-      switch (type) {
-        case 'call_request':
-          // РЕТРАНСЛЯЦИЯ: звонящий повторяет call_request каждые 15с
-          // (письма теряются в транзите). Если тот же call_id УЖЕ звонит у
-          // нас — это дубль: игнорируем.
-          // reset» ниже → hangup('preempt') → повторный SET incoming_ringing:
-          // рингтон перезапускался, а драг-жест свайпа сбрасывался посреди
-          // движения (пользователь видел «трубка вернулась в центр»).
-          if (this.currentCall && this.currentCall.call_id === call_id) return;
-          // ГАРАНТИЯ ПОКАЗА: НОВЫЙ call_request ВСЕГДА вытесняет любое
-          // состояние, кроме реального разговора (active) — даже если state
-          // machine зависла в ringing от старого конверта без currentCall.
-          if (this.callState !== 'idle' && this.callState !== 'active') {
-            console.warn('[call] forcing reset before new request (state=' + this.callState + ')');
-            await this.hangup('preempt');
-          }
-          if (this.callState !== 'idle') return;
-          // OFFER В call_request: звонящий создаёт offer ДО набора
-          // он едет в первом письме. Сохраняем: при accept сразу создадим
-          // answer (1 hop вместо 2). Если sdp нет (старая версия/fallback) —
-          // acceptCall создаст offer сам (старая схема).
-          this.currentCall = {
-            call_id, peer: from, offerSdp: sig.sdp || null,
-            // PQ: kemct звонящего — в mediaAcceptIncoming при accept.
-            kemct: sig.kemct || null, senderEk: sig.sender_ek || null,
-          };
-          this.lastCallId = call_id;
-          this.callState = 'incoming_ringing';
-          this.callMuted = false;
-          this.callStartedAt = Date.now();
-          console.log('[call] incoming_ringing SET for', call_id, 'from', from);
-          // Звук входящего: WAV-рингтон «кристальный чайм».
-          // Desktop — cpal в Rust (слышен при свёрнутом окне).
-          // Android: рингтон играет НАТИВНЫЙ MediaPlayer в сервисе
-          // (запускается в mediaShowIncomingCall) — HTML5 Audio в WebView
-          // глохнет в фоне и играл ОДИН раз. Поэтому HTML5-луп входящего
-          // на Android пропускаем, чтобы не было двойного звука.
-          if (!this.isAndroid) {
-            this.playCallSound('incoming', true);
-          }
-          // Full-screen уведомление: Android — системный звонок
-          // поверх локскрина (рингтон+вибрация канала уведомлений).
-          // Desktop — no-op. Снимается в hangup().
-          api.mediaShowIncomingCall(this.callPeerName || from);
-          this.startFastPolling();
-          // Таймер гудка 180с: было 90с, но call_accept/answer по
-          // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
-          // того, как собеседник успевал ответить.
-          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 180000);
-          break;
-        case 'call_accept':
-          if (this.currentCall && this.currentCall.call_id === call_id
-              && this.callState === 'outgoing_ringing') {
-            // Собеседник принял — таймер отмены больше не нужен.
-            clearTimeout(this.callRingTimer);
-            this.callRingTimer = null;
-            if (this.callResendTimer) {
-              clearInterval(this.callResendTimer);
-              this.callResendTimer = null;
-            }
-            // Гудки исходящего → чайм соединения. stop не нужен
-            // play сам останавливает предыдущий звук (Rust/HTML5).
-            this.playCallSound('connect', false);
-            this.callState = 'active';
-            // Таймер НЕ запускаем: ждём событие call-media-connected
-            // из Rust (реальный звук). Предохранитель 120с — если событие
-            // потерялось, показываем таймер хоть когда-нибудь.
-            this.callMediaConnected = false;
-            this.armMediaFallback();
-            // OFFER В call_request: если мы создали offer при наборе
-            // (hasLocalOffer) — sdp в call_accept это ANSWER: ставим remote,
-            // DTLS-SRTP устанавливается. Fallback (старая схема): sdp это
-            // offer принимающего — принимаем его и шлём answer.
-            if (sig.sdp) {
-              if (this.currentCall && this.currentCall.hasLocalOffer) {
-                try {
-                  await api.mediaSetRemote(call_id, sig.sdp);
-                  console.log('[call] remote answer set — DTLS handshake should follow');
-                } catch (e) {
-                  console.error('[call] media set remote (answer) failed:', e && e.message || e);
-                }
-              } else {
-                try {
-                  const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '', sig.kemct || null);
-                  console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
-                  const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
-                  await this.sendCallEnvelope(from, answerPayload);
-                  console.log('[call] answer sent OK — waiting for DTLS');
-                  // Ретрансляция answer: если письмо потеряется
-                  // принимающий зависнет в «Соединение…». Повторяем каждые
-                  // 10с до соединения медиа.
-                  this.startSignalResend(from, answerPayload, call_id);
-                } catch (e) {
-                  console.error('[call] media accept failed:', e && e.message || e);
-                }
-              }
-            }
-          }
-          break;
-        case 'call_reject':
-        case 'call_end':
-        case 'call_cancel':
-          // call_cancel — собеседник отменил/завершил звонок (или у него
-          // сработал таймаут): кладём трубку автоматически.
-          // Гонка: пользователь мог уже повесить трубку вручную
-          // (state=idle) до того, как call_end дошёл — проверяем и по
-          // lastCallId, чтобы не оставить трубку у собеседника.
-          if (this.currentCall && this.currentCall.call_id === call_id) {
-            // remote_reject — отдельно от remote: звонящий увидит
-            // «Вызов отклонён», а не «Нет ответа».
-            this.hangup(type === 'call_reject' ? 'remote_reject' : 'remote');
-          } else if (this.lastCallId === call_id && this.callState === 'idle') {
-            console.log('[call] remote end after local hangup — ensuring cleanup');
-            this.hangup('remote_late');
-          }
-          // ЗАПОМНИТЬ ТЕРМИНАЛЬНЫЙ call_id ВСЕГДА
-          // доставки (INBOX/All Mail/Спам — разные копии, порядок не
-          // гарантирован). Без помни later call_request поднимал звонок,
-          // которого уже нет (запомненные терминалы гасят его в guard
-          // isCallSeen ниже). Свежие cancel не попадали в stale-ветку —
-          // потому и не запоминались.
-          await this.rememberCallSeen(call_id);
-          if (this.lastCallId !== call_id) this.lastCallId = call_id;
-          break;
-        case 'call_sdp':
-          // Фаза 2: SDP-обмен после call_accept. offer — сторона получателя
-          // (создаёт answer и шлёт обратно), answer — сторона звонящего
-          // (завершает handshake, DTLS-SRTP устанавливается).
-          console.log('[call] sdp received', call_id, 'role=' + sig.role, 'state=' + this.callState);
-          if (!this.currentCall || this.currentCall.call_id !== call_id
-              || this.callState !== 'active') {
-            console.warn('[call] sdp DROPPED by guard:', call_id, 'role=' + sig.role,
-                'state=' + this.callState, 'current=' + (this.currentCall && this.currentCall.call_id));
-            break;
-          }
-          if (sig.role === 'answer') {
-            // Фаза 2.3 (схема: offer от принимающего): звонящий получает ANSWER от принимающего
-            // и завершает handshake (DTLS-SRTP).
-            try {
-              await api.mediaSetRemote(call_id, sig.sdp);
-              console.log('[call] remote answer set — DTLS handshake should follow');
-            } catch (e) {
-              console.error('[call] media set remote failed:', e);
-            }
-          }
-          break;
-        default:
-          break;
-      }
-    },
-    // Кнопка «Позвонить» в шапке чата (1:1, есть ключ собеседника).
-    async startCall() {
-      const peer = this.activeChat;
-      if (!peer || peer === '__notes__' || this.activeChatType !== 'chat') return;
-      if (this.callState !== 'idle' || !this.peerKeys[peer]) return;
-      const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-      this.currentCall = { call_id, peer };
-      this.lastCallId = call_id;
-      this.callState = 'outgoing_ringing';
-      this.callMuted = false;
-      this.startFastPolling();
-      // для call_accept может превысить 180с, и звонок сгорал до ответа;
-      // окончательно решает call_reject/call_cancel от собеседника).
-      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 300000);
-      // ВАЖНО: сигнал call_request отправляем ДО гудков. cpal-гудок
-      // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
-      // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
-      // call_cancel при hangup проходил). Сначала сигнал, потом звук
-      // (запустится на ~1с позже — некритично).
-      //
-      // OFFER В call_request: классическая схема
-      // WebRTC — offer звонящего едет в ПЕРВОМ письме.
-      // почтовых hops (call_request → accept+offer → answer), после свайпа
-      // принять до звука проходило 2 hops (20-60с). Теперь после accept
-      // Offer создаётся
-      // ДО отправки (ICE gathering ~4с); если не получится — fallback на
-      // старую схему (offer принимающего внутри call_accept).
-      let offerSdp = null;
-      try {
-        const r = await api.mediaStartOutgoing(call_id, this.peerKeys[peer] || '', (this.peerPqKeys && this.peerPqKeys[peer]) || null);
-        offerSdp = r.sdp;
-        // PQ: kemct из SdpResult — поедет в call_request-конверте
-        // принимающий передаст в mediaAcceptIncoming для гибридного ключа.
-        if (r.kemct) this._pendingKemct = r.kemct;
-        if (r.sender_ek) this._pendingSenderEk = r.sender_ek;
-        console.log('[call] offer created at dial time,', (offerSdp || '').length, 'bytes');
-      } catch (e) {
-        console.error('[call] offer at dial failed (fallback callee-offer):', e);
-      }
-      // Флаг для обработки call_accept: если offer создан здесь
-      // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
-      this.currentCall.hasLocalOffer = !!offerSdp;
-      try {
-        // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-        await this.sendCallEnvelope(peer, {
-          type: 'call_request', call_id, sdp: offerSdp,
-          kemct: this._pendingKemct || undefined,
-          sender_ek: this._pendingSenderEk || undefined,
-        });
-        this._pendingKemct = null; this._pendingSenderEk = null;
-      } catch (e) {
-        console.error('call_request failed:', e);
-        this.hangup('error');
-        return;
-      }
-      // Гудки исходящего: тёплый мажорный ringback, цикл до
-      // accept/cancel/timeout. Запускаем ПОСЛЕ успешной отправки сигнала.
-      this.playCallSound('outgoing', true);
-      // РЕТРАНСЛЯЦИЯ: email-сигнал может потеряться в транзите
-      // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
-      // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
-      // call_id (isCallSeen), дубликаты безопасны. Останавливается в hangup.
-      this.callResendTimer = setInterval(async () => {
-        if (this.callState !== 'outgoing_ringing' || !this.currentCall
-            || this.currentCall.call_id !== call_id) {
-          clearInterval(this.callResendTimer);
-          this.callResendTimer = null;
-          return;
-        }
-        try {
-          // Offer внутри — ретрансляция несёт и его.
-          // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-        await this.sendCallEnvelope(peer, {
-          type: 'call_request', call_id, sdp: offerSdp,
-          kemct: this._pendingKemct || undefined,
-          sender_ek: this._pendingSenderEk || undefined,
-        });
-        this._pendingKemct = null; this._pendingSenderEk = null;
-          console.log('[call] call_request retransmitted', call_id);
-        } catch (e) {
-          console.warn('[call] call_request retransmit failed:', e && e.message || e);
-        }
-      }, 15000);
-    },
-    async acceptCall() {
-      const c = this.currentCall;
-      if (!c || this.callState !== 'incoming_ringing') return;
-      // Ответили — рингтон и таймер отмены в сторону, чайм соединения.
-      // stop не нужен: play сам останавливает предыдущий звук.
-      clearTimeout(this.callRingTimer);
-      this.callRingTimer = null;
-      this.playCallSound('connect', false);
-      // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
-      setTimeout(() => {
-        if (this.callState === 'active' && !this.callMediaConnected) {
-          this.playCallSound('outgoing', true);
-        }
-      }, 1200);
-      this.callState = 'active';
-      // Фаза 3: сообщаем монитору-владельцу, что звонок принят
-      // иначе headless-таймаут поставит missed поверх принятого.
-      api.reportCallState(c.call_id, 'accept');
-      // Таймер НЕ запускаем: ждём событие call-media-connected
-      // из Rust (реальный звук). Предохранитель 120с — см. armMediaFallback.
-      this.callMediaConnected = false;
-      this.armMediaFallback();
-      // OFFER В call_request: если offer звонящего пришёл в первом
-      // письме — сразу создаём ANSWER и шлём его внутри call_accept. После
-      // accept+offer → answer). Fallback (старая версия звонящего без
-      // offer): создаём offer сами внутри call_accept.
-      try {
-        let acceptPayload;
-        if (c.offerSdp) {
-          const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, this.peerKeys[c.peer] || '', c.kemct || null);
-          console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
-          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
-        } else {
-          const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '', (this.peerPqKeys && this.peerPqKeys[c.peer]) || null);
-          console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
-          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
-        }
-        await this.sendCallEnvelope(c.peer, acceptPayload);
-        console.log('[call] call_accept + sdp sent OK');
-        // Ретрансляция call_accept: письмо может потеряться
-        // тогда звонящий будет гудеть вечно. Повторяем каждые 10с, пока
-        // медиа не соединится (stopSignalResend в media-connected/hangup).
-        this.startSignalResend(c.peer, acceptPayload, c.call_id);
-      } catch (e) {
-        console.error('[call] media start (callee) failed:', e);
-        // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
-        // показываем ошибку в UI — на Android иначе не
-        // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
-        this.showToast('media start failed: ' + (e && e.message || e), 10000);
-        try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
-        catch (e2) { console.error('call_accept failed:', e2); }
-      }
-    },
-    async rejectCall() {
-      const c = this.currentCall;
-      if (c) {
-        // Повтор call_reject — см. sendTerminalRepeat.
-        this.sendTerminalRepeat(c.peer, 'call_reject', c.call_id);
-        // Фаза 3: решение монитору-владельцу (нет missed поверх).
-        api.reportCallState(c.call_id, 'reject');
-      }
-      this.hangup('reject');
-    },
-    async endCall() {
-      const c = this.currentCall;
-      if (c && this.callState === 'active') {
-        // «hangup» по WebRTC DataChannel
-        // собеседник получает за миллисекунды.
-        // email 30-60с, и собеседник сидел с «активным» звонком.
-        api.mediaSendHangup(c.call_id);
-        // Email-сигнал остаётся как fallback (DC мог не открыться):
-        // 3 попытки: сразу, +3с, +7с.
-        this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
-      }
-      this.hangup('end');
-    },
-    // Локальный сброс состояния (после сигнала, отмены или таймаута).
-    async hangup(reason) {
-      const c = this.currentCall;
-      const callId = c ? c.call_id : null;
-      const wasActive = this.callState === 'active';
-      const wasIncoming = this.callState === 'incoming_ringing';
-      const wasOutgoing = this.callState === 'outgoing_ringing';
-      console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
-      // Снять full-screen уведомление входящего: любой исход
-      // (принят/отклонён/таймаут/завершён) гасит системный звонок.
-      api.mediaDismissIncomingCall();
-      // «пилюлей» (Пропущенный звонок / Нет ответа / Звонок завершён · 03:24).
-      // fire-and-forget: hangup не ждёт sqlite.
-      if (c && callId) {
-        const dur = wasActive ? this.callClockSec : 0;
-        let kind = null;
-        if (wasActive) {
-          kind = 'ended';
-        } else if (wasIncoming) {
-          if (reason === 'reject') kind = 'declined';
-          else if (reason === 'timeout' || reason === 'remote'
-              || reason === 'remote_late' || reason === 'preempt') kind = 'missed';
-        } else if (wasOutgoing) {
-          if (reason === 'timeout') kind = 'no_answer';
-          else if (reason === 'remote_reject') kind = 'declined';
-          // call_cancel от собеседника = у него сгорел таймер гудка → нет ответа.
-          else if (reason === 'remote' || reason === 'remote_late') kind = 'no_answer';
-          else if (reason === 'cancel') kind = 'canceled';
-        }
-        if (kind) this.recordCallEvent(c.peer, kind, Date.now(), dur, callId);
-      }
-      clearTimeout(this.callRingTimer);
-      this.callRingTimer = null;
-      // Ретрансляция call_request — тоже останавливаем.
-      if (this.callResendTimer) {
-        clearInterval(this.callResendTimer);
-        this.callResendTimer = null;
-      }
-      // Ретрансляция call_accept/answer.
-      this.stopSignalResend();
-      // Предохранитель «Соединение…».
-      clearTimeout(this._mediaFallbackTimer);
-      // Grace-таймер ICE disconnected.
-      if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
-      this.stopCallClock();
-      // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
-      // headless-логика не ставила missed поверх реального решения.
-      if (callId) {
-        const st = (wasIncoming && (reason === 'reject' || reason === 'timeout'
-          || reason === 'cancel' || reason === 'preempt')) ? 'rejected'
-          : 'ended';
-        api.reportCallState(callId, st);
-      }
-      this.callState = 'idle';
-      this.currentCall = null;
-      this.callMuted = false;
-      this.callSpeaker = false;
-      this.callMediaConnected = false;
-      this.stopFastPolling();
-      // Финальный звук: play сам останавливает предыдущий поток
-      // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
-      // только если звука не будет вовсе.
-      if (wasActive) {
-        this.playCallSound('end', false);
-      } else if (wasIncoming && (reason === 'timeout' || reason === 'reject'
-          || reason === 'cancel' || reason === 'remote' || reason === 'preempt')) {
-        this.playCallSound('missed', false);
-      } else if (wasOutgoing && (reason === 'remote' || reason === 'timeout')) {
-        // Звонящий: собеседник отклонил/отменил или гудки сгорели — отбой.
-        this.playCallSound('end', false);
+    // Ignore-лист из chat-меню (1:1-чат): блокировка E2E-честная — скрывает
+    // новые сообщения/звонки у получателя, серверу невидим. После разблока
+    // прошлое НЕ возвращается (его не было в истории).
+    async toggleIgnoreContact() {
+      const email = this.chatMenu.target && this.chatMenu.target.email;
+      if (!email) return;
+      const wasIgnored = this.isIgnored(email);
+      if (wasIgnored) {
+        await this.unignoreUser(email);
+        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
       } else {
-        this.stopCallSound();
-      }
-      // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
-      if (callId) {
-        try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
-      }
-    },
-    // ── Пропущенные вызовы ──
-    // пропущенный/нет ответа/отклонён/завершён + время + кнопка «Перезвонить».
-    // Пилюля — обычное сообщение с полем callEvent; персистится в sqlite
-    // вместе с историей (saveCurrentHistory) и в chat-cache (slim-маппер
-    // сохраняет callEvent). Текст рендерится через t() — язык из настроек.
-    async recordCallEvent(peer, kind, ts, durationSec, callId) {
-      if (!peer || !callId) return;
-      const chatKey = this.canonicalOf(peer) || peer;
-      const tsNum = Number(ts) || Date.now();
-      const msg = {
-        id: 'call-' + callId,
-        content: '',
-        from: 'them',
-        time: new Date(tsNum).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        ts: tsNum,
-        encrypted: true,
-        vault: true,
-        callEvent: { kind, duration: Number(durationSec) || 0, call_id: callId },
-      };
-      // Дедуп: один call_id — одна пилюля (повторный фетч/ретрансляция).
-      const exists = (this.messages || []).some(m => m && m.id === msg.id);
-      if (!exists && this.activeChat === chatKey && this.activeChatType === 'chat') {
-        this.messages.push(msg);
-        this.messages.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.saveCurrentHistory(chatKey);
-        this.saveChatCache(chatKey, this.messages);
-        this.scrollToBottom(true);
-      } else if (!exists) {
-        // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,
-        // чтобы она появилась при следующем открытии чата.
-        try {
-          const hist = await loadHistory(this.email, chatKey);
-          if (Array.isArray(hist) && !hist.some(m => m && m.id === msg.id)) {
-            hist.push(msg);
-            hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-            await saveHistory(this.email, chatKey, hist);
-          }
-        } catch (e) { /* sqlite недоступен — не критично */ }
-      }
-      // Бейдж непрочитанных: пропущенный входящий — как непрочитанное
-      // сообщение, если чат сейчас не виден.
-      if (kind === 'missed' && !this.chatVisible(chatKey)) {
-        this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
-        await this.saveUnreadCounts();
-      }
-    },
-    callEventLabel(msg) {
-      const ev = msg && msg.callEvent;
-      if (!ev) return '';
-      const key = {
-        missed: 'call_missed',
-        no_answer: 'call_no_answer',
-        declined: 'call_declined',
-        canceled: 'call_canceled',
-        ended: 'call_ended',
-      }[ev.kind] || 'call_missed';
-      let label = this.t(key);
-      if (ev.kind === 'ended' && ev.duration > 0) {
-        const m = Math.floor(ev.duration / 60);
-        const s = ev.duration % 60;
-        label += ' · ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-      }
-      return label;
-    },
-    callPillIcon(msg) {
-      const kind = msg && msg.callEvent && msg.callEvent.kind;
-      if (kind === 'ended') return 'phone';
-      return 'phone-off';
-    },
-    canCallBack(msg) {
-      // Перезвонить можно, если звонок не активен и у собеседника есть ключ.
-      return !!(msg && msg.callEvent && this.expCalls
-          && this.callState === 'idle'
-          && this.activeChatType === 'chat'
-          && this.peerKeys[this.activeChat]);
-    },
-    callBack() {
-      this.startCall();
-    },
-    async cancelCall(reason) {
-      const c = this.currentCall;
-      // таймер гудка (ringing)
-      // может сработать ПОЗЖЕ, чем call_accept дошёл по почте (SMTP с
-      // Android + доставка + IMAP ≈ 90-180с). Если звонок уже active —
-      // НЕ рвём живой звонок.
-      if (reason === 'timeout' && this.callState === 'active') {
-        console.warn('[call] stale ring timeout ignored — call is active');
-        return;
-      }
-      // Отмена/таймаут — сообщаем собеседнику (call_cancel при ringing,
-      // call_end при active), чтобы у него трубка легла сама.
-      // ВАЖНО: fire-and-forget (НЕ await!) — между await-отправкой и
-      // hangup есть окно гонки: обработка call_accept успевает сменить
-      // state на active, и hangup рвёт живой звонок.
-      // Повтор сигнала: 3 попытки — см. sendTerminalRepeat.
-      if (c) {
-        const type = this.callState === 'active' ? 'call_end' : 'call_cancel';
-        this.sendTerminalRepeat(c.peer, type, c.call_id);
-      }
-      this.hangup(reason || 'cancel');
-    },
-    toggleMute() {
-      this.callMuted = !this.callMuted;
-      const c = this.currentCall;
-      if (c) {
-        api.mediaSetMuted(c.call_id, this.callMuted).catch((e) => console.error('[call] set muted failed:', e));
-      }
-    },
-    // Динамик: Android — speakerphone (earpiece ↔ динамик)
-    // desktop — no-op в Rust (вывод и так на динамики).
-    toggleSpeaker() {
-      this.callSpeaker = !this.callSpeaker;
-      const c = this.currentCall;
-      if (c) {
-        api.mediaSetSpeaker(c.call_id, this.callSpeaker).catch((e) => console.error('[call] set speaker failed:', e));
-      }
-    },
-    // РЕТРАНСЛЯЦИЯ КРИТИЧНЫХ СИГНАЛОВ: call_accept и SDP-answer
-    // повторяются каждые 10с, пока медиа не соединится или звонок не
-    // завершится. Email-письма теряются в транзите (наблюдали: call_accept
-    // сбрасывается»). Дубликаты безопасны: приёмник игнорирует их по
-    // состоянию (call_accept — только в outgoing_ringing, call_sdp —
-    // только в active с тем же call_id).
-    startSignalResend(peer, payload, call_id) {
-      this.stopSignalResend();
-      this._signalResendTimer = setInterval(async () => {
-        if (this.callState !== 'active' || !this.currentCall
-            || this.currentCall.call_id !== call_id || this.callMediaConnected) {
-          this.stopSignalResend();
-          return;
+        await this.ignoreUser(email);
+        // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
+        // иначе выглядело бы, что блок не работает.
+        if (this.activeChatType === 'chat' && this.activeChat === email) {
+          await this.loadMessages(this.activeChat);
         }
-        try {
-          await this.sendCallEnvelope(peer, payload);
-          console.log('[call] signal retransmitted:', payload.type, call_id);
-        } catch (e) {
-          console.warn('[call] signal retransmit failed:', e && e.message || e);
-        }
-      }, 10000);
+        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
+      }
+      this.closeChatMenu();
     },
-    stopSignalResend() {
-      if (this._signalResendTimer) {
-        clearInterval(this._signalResendTimer);
-        this._signalResendTimer = null;
+    // Разблок из баннера открытого чата: новые сообщения снова показываются.
+    async unblockActiveChat() {
+      if (this.activeChatType !== 'chat' || !this.activeChat) return;
+      await this.unignoreUser(this.activeChat);
+      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
+      // истории (фильтр до расшифровки), возвращать их нечем. Просто
+      // перерисовываем: баннер уходит, новые сообщения начинают приходить.
+      await this.loadMessages(this.activeChat);
+    },
+    // Ignore из меню сообщения: 1:1 — адрес чата, группа — sender_id автора
+    // (msgSenderEmail). Тост объясняет, что именно произошло.
+    async blockSenderOfMessage(msg) {
+      if (!msg || msg.from === 'me') return;
+      const sender = this.msgSenderEmail(msg)
+        || (this.activeChatType === 'chat' ? this.activeChat : '');
+      if (!sender) return;
+      if (this.isIgnored(sender)) {
+        await this.unignoreUser(sender);
+        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      } else {
+        await this.ignoreUser(sender);
+        // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
+        if (this.activeChatType === 'chat' && this.activeChat === sender) {
+          await this.loadMessages(this.activeChat);
+        }
+        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
       }
     },
-    // Повтор терминального сигнала (call_end/call_cancel/call_reject):
-    // если письмо потеряется, собеседник останется с поднятой трубкой
-    // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
-    // у приёмника безопасны (ветка remote_late / guard по state).
-    sendTerminalRepeat(peer, type, call_id) {
-      this.sendCallEnvelope(peer, { type, call_id }).catch(() => {});
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 3000);
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }).catch(() => {}); }, 7000);
-    },
-    // Watchdog «Соединение…»: если через 90с после accept медиа
-    // не соединилось (событие call-media-connected не пришло) — звонок не
-    // состоялся: accept/answer потерялись в почте или собеседник уже ушёл.
-    // красной кнопкой висел вечно. Теперь кладём трубку сами.
-    armMediaFallback() {
-      clearTimeout(this._mediaFallbackTimer);
-      this._mediaFallbackTimer = setTimeout(() => {
-        if (this.callState === 'active' && !this.callMediaConnected) {
-          console.warn('[call] media not connected in 90s — auto hangup');
-          this.showToast(this.t('call_connect_failed'), 4000);
-          // Сообщаем собеседнику, чтобы у него тоже легла трубка
-          // (он может висеть в таком же «Соединение…»).
-          const c = this.currentCall;
-          if (c) this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
-          this.hangup('connect_timeout');
-        }
-      }, 90000);
-    },
-    startCallClock() {
-      this.callClockSec = 0;
-      clearInterval(this.callClockTimer);
-      this.callClockTimer = setInterval(() => { this.callClockSec++; }, 1000);
-    },
-    stopCallClock() {
-      clearInterval(this.callClockTimer);
-      this.callClockTimer = null;
-    },
-    // Быстрый путь сигнализации (Фаза 1.5): IDLE-цикл теперь ПОСТОЯННЫЙ
-    // дополнительно ничего делать не нужно, IDLE уже ловит
-    // сигналы за ~1с. Оставляем как гарантию, что цикл запущен.
-    startFastPolling() {
-      this.idleLoop();
-    },
-    stopFastPolling() {
-      // IDLE-цикл постоянный — не останавливаем.
-    },
-    // IMAP IDLE-цикл: крутится ПОСТОЯННО, не только на
-    // время звонка. Таймаут ожидания 2с; при событии «новое письмо» — сразу
-    // инкрементальный фетч (разбирает call_* сигналы). Страховочный фетч
-    // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
-    // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
-    // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
-    async idleLoop() {
-      if (this._idleActive || !this.isLoggedIn) return;
-      this._idleActive = true;
-      // Rust-монитор: запускаем параллельно с JS-циклом.
-      // Идемпотентен на стороне Rust; курсоры берём из кэша активного
-      // аккаунта, чтобы первый fetch не тянул старые письма.
-      api.idleStart(this.loadCursors(this.email) || {}).catch(e =>
-        console.warn('[idle-monitor] start failed:', e));
-      let lastSafety = Date.now();
-      let idleFailed = false;
-      try {
-        while (this.isLoggedIn && !this._idleStop) {
-          let changed = false;
-          try {
-            const r = await api.idleWait(2000, 'INBOX');
-            changed = !!(r && r.changed);
-          } catch (e) {
-            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг:', e && e.message || e);
-            idleFailed = true;
-            break;
-          }
-          const elapsed = Date.now() - lastSafety;
-          // Gmail кладёт call_* письма в СПАМ, а IDLE-push приходит только от
-          // INBOX: страховочный фетч JUNK делаем чаще (7с), чтобы answer/accept
-          // из Спама не ждали 10с и не опаздывали к 90с-таймауту.
-          if (changed || elapsed >= 7000) {
-            lastSafety = Date.now();
-            // Быстрый фетч для звонков: ОТДЕЛЬНЫЙ IMAP-клиент в Rust
-            // (email_fetch_incremental_fast) — основной клиент может быть занят
-            // зависшими операциями/троттлингом (lock busy → поллинг молча
-            // пропускается, call_request невидим часами). Звонки доходят
-            // всегда, независимо от состояния основного клиента.
-            try { await this.loadEmailsFast(true); } catch (e) { /* тихо */ }
-          }
-        }
-      } finally {
-        this._idleActive = false;
-        this._idleStop = false;
-      }
-      // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
-      // (hangup сам вернёт обычный 30с-поллинг).
-      if (this.isLoggedIn && this.callState !== 'idle') this.startPolling(3000);
-      // IDLE умер (провайдер/сеть): обычный поллинг продолжает работать;
-      // пробуем вернуть IDLE через 60с (провайдер мог временно отключить).
-      if (this.isLoggedIn && idleFailed) {
-        setTimeout(() => { if (this.isLoggedIn) this.idleLoop(); }, 60000);
-      }
-    },
-    startPolling(intervalMs = 30000) {
-      if (this.pollTimer) return;
-      this.pollTimer = setInterval(async () => {
-        // Анти-наложение: setInterval запускает новый тик каждые 30с
-        // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
-        // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
-        // стартует поверх, lock занят почти всегда, и открытие чата падает с
-        // «Timed out waiting for email client lock» (чаты пустые). Пропускаем
-        // тик, пока предыдущий ещё выполняется.
-        if (!this.isLoggedIn || this._pollingActive) return;
-        this._pollingActive = true;
-        try {
-          // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
-          // мержим в this.emails как виртуальные письма (uid: rl-<id>) —
-          // дальше их разберёт штатный processIncoming (дедуп по env.id
-          // в mergeHistory не даст дубликату email-письма задвоиться).
-          try {
-            await this.relayConsume();
-          } catch (e) { /* релей недоступен — почта продолжит доставку */ }
-          // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
-          // контактов (модель почтовый мессенджер — группа тоже источник контактов).
-          try { await this.loadGroups(); } catch (e) { /* тихо */ }
-          // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
-          // инвайты (попап согласия) и обновляет список писем.
-          await this.loadEmails(true);
-          // Новые письма могли прийти в любой момент — перерисовываем
-          // открытый чат, чтобы не приходилось переоткрывать его вручную.
-          if (this.activeChat === '__notes__') {
-            // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
-            // перезаписал бы пустым списком из IMAP).
-          } else if (this.activeChat && this.activeChatType === 'chat') {
-            await this.loadMessages(this.activeChat);
-            // Не выдёргиваем из чтения истории: прокручиваем только если
-            // пользователь уже у низа чата.
-            this.scrollToBottom(false);
-          } else if (this.activeChatType === 'group' && this.currentGroup) {
-            // Группы тоже обновляем поллингом: новые сообщения и реакции
-            // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-            await this.loadGroupMessages(this.currentGroup.id);
-            this.scrollToBottom(false);
-          }
-        } catch (e) {
-          // "Not connected" — сессия IMAP умерла; пробуем тихо восстановить её
-          // из сохранённых (зашифрованных на устройстве) учётных данных —
-          // без релога и остановки поллинга.
-          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-            try {
-              const ok = await api.restoreSession();
-              if (!ok) this.stopPolling();
-            } catch (_) {
-              this.stopPolling();
-            }
-          } else {
-            console.error('Polling loadEmails failed:', e);
-          }
-        } finally {
-          this._pollingActive = false;
-        }
-      }, intervalMs);
-    },
-    stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = null;
-      }
-    },
+    // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // Emoji
     insertEmoji(emoji) {
       this.newMessage += emoji
@@ -6329,7 +5183,8 @@ export default {
       if (this.activeChat) {
         try {
           if (this.activeChatType === 'group' && this.currentGroup) {
-            await api.sendGroupMessage(this.currentGroup.id, wire);
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
           } else {
             await api.sendMessage(this.activeChat, wire, audioData.mimeType || 'audio/webm');
           }
@@ -6406,14 +5261,31 @@ export default {
               if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
             }
 
-            // Encode attachment as structured JSON for server storage
-            const attachmentPayload = JSON.stringify({
-              vault_attachment: true,
-              name: fileName,
-              type: fileType,
-              size: fileSize,
-              data: base64,
-            });
+            // Encode attachment as structured JSON for server storage.
+            // Download-on-demand (M1): файлы крупнее порога уходят ДВУМЯ
+            // письмами — мета-конверт (эта карточка, без данных) + data-письмо
+            // (полный base64) с нейтральным Message-ID. Получатель качает
+            // тело по требованию (клик), а не автоматически при открытии
+            // чата. Малые файлы идут как раньше — одним конвертом.
+            const DOD_THRESHOLD = 1024 * 1024;
+            const useDod = fileSize > DOD_THRESHOLD;
+            let dodMid = '';
+            if (useDod) dodMid = `<vault-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}@${(this.email || 'localhost').split('@')[1] || 'localhost'}>`;
+            const attachmentPayload = useDod
+              ? JSON.stringify({
+                  vault_attachment: true,
+                  name: fileName,
+                  type: fileType,
+                  size: fileSize,
+                  dod: dodMid,
+                })
+              : JSON.stringify({
+                  vault_attachment: true,
+                  name: fileName,
+                  type: fileType,
+                  size: fileSize,
+                  data: base64,
+                });
 
             const displayContent = isImage
               ? `📎 ${fileName}`
@@ -6506,9 +5378,46 @@ export default {
             this.scrollToBottom(true);
 
             if (this.activeChat) {
+              // DoD: data-письмо уходит ПЕРВЫМ. Если мета не уйдёт и её
+              // переотправят — data-дубль безвреден (один Message-ID
+              // дедуплируется на приёме), а обратный порядок дал бы
+              // карточку без данных. Сбой data = мета бесполезна → failed.
+              if (useDod) {
+                const dataPayload = JSON.stringify({ vault_dod_data: 1, ref: dodMid, data: base64 });
+                try {
+                  if (this.activeChatType === 'group' && this.currentGroup) {
+                    const groupKey = this.groupKeys[this.currentGroup.id];
+                    if (!groupKey) throw new Error('group key unavailable');
+                    const dataWire = await crypto.encryptWithGroupKey(await this.buildEnvelope(dataPayload), groupKey);
+                    const members = await api.getGroupMembers(this.currentGroup.id);
+                    const failedData = [];
+                    for (const member of members || []) {
+                      if (member.email === this.email) continue;
+                      try { await api.sendDodEmail(member.email, dataWire, dodMid); }
+                      catch (e) { failedData.push(member.email); }
+                    }
+                    if (failedData.length) {
+                      console.warn('DoD data partial fail:', failedData);
+                      this.showToast((this.t('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
+                    }
+                  } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+                    crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
+                    const dataWire = await crypto.encryptVault(await this.buildEnvelope(dataPayload));
+                    await api.sendDodEmail(this.activeChat, dataWire, dodMid);
+                  } else {
+                    throw new Error('crypto not ready');
+                  }
+                } catch (err) {
+                  console.error('DoD data send failed:', err);
+                  msg.status = 'failed';
+                  this.saveCurrentHistory(chatKey);
+                  return;
+                }
+              }
               try {
                 if (this.activeChatType === 'group' && this.currentGroup) {
-                  await api.sendGroupMessage(this.currentGroup.id, wire);
+                  // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+                  await api.sendGroupMessage(this.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
                 } else {
                   await api.sendMessage(this.activeChat, wire, file.type);
                 }
@@ -6530,30 +5439,7 @@ export default {
       // Reset input
       event.target.value = '';
     },
-    // Reactions
-    // --- Персистентность реакций ---
-    // localStorage "vault-reactions-<email>": {chatKey: {msg_id: [{emoji, user}]}}.
-    // Поллинг перерисовывает сообщения из почты — без хранилища реакции
-    // исчезали через 30 сек даже у отправителя.
-    reactionsStorageKey() {
-      return 'vault-reactions-' + (this.email || 'anon');
-    },
-    loadStoredReactions() {
-      try {
-        return JSON.parse(localStorage.getItem(this.reactionsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredReactions(data) {
-      try {
-        localStorage.setItem(this.reactionsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save reactions:', e);
-      }
-    },
-    // Мерж сохранённых реакций + реакций из писем (wireReactions: msg_id ->
-    // [{emoji, user, action}]). Результат пишется в хранилище и в msg.reactions.
+    // Мерж сохранённых реакций + реакций из писем — features/reactions.js.
     // Отправитель письма — мы сами: sender_id это сырой заголовок From
     // («Имя <email>» или просто email). userId — рудимент серверной эпохи,
     // в serverless он всегда null, поэтому сравниваем по своему email
@@ -6573,100 +5459,14 @@ export default {
       const m = String(raw).match(/<([^>]+)>/);
       return (m ? m[1] : raw).trim().toLowerCase();
     },
-    // ── Черновики ──────────────────────────────────────────────────
-    // Текст недописанного сообщения сохраняется per-chat (kv) и
-    // восстанавливается при возврате в чат.
-    // Черновики: сериализация RMW через очередь на статике конструктора —
-    // параллельные saveDraft/restoreDraft затирали друг друга (гонка kv).
-    draftRun(fn) {
-      DRAFT_QUEUE = DRAFT_QUEUE.then(fn, fn);
-      return DRAFT_QUEUE;
-    },
-    async saveDraft() {
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      if (!chatKey) return;
-      const text = this.newMessage || '';
-      this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          if (text.trim()) drafts[chatKey] = text;
-          else delete drafts[chatKey];
-          await db.kvSet(this.email || 'anon', 'drafts', JSON.stringify(drafts));
-        } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
-      });
-    },
-    async restoreDraft(chatKey) {
-      return this.draftRun(async () => {
-        try {
-          const raw = await db.kvGet(this.email || 'anon', 'drafts');
-          const drafts = raw ? JSON.parse(raw) : {};
-          this.newMessage = drafts[chatKey] || '';
-        } catch (e) { /* ignore */ }
-      });
-    },
-    // Голоса голосований: агрегация из сигнальных писем в карточки poll.
-    // myVote определяется по наличию своего голоса в wire (email отправителя).
-    applyPollVotes(list, wirePollVotes) {
-      if (!list) return;
-      for (const m of list) {
-        if (!m || !m.poll) continue;
-        const votes = wirePollVotes && wirePollVotes[m.poll.id];
-        if (votes) {
-          for (const v of votes) m.poll.votes[v.voter] = v.option;
-        }
-        if (m.poll.votes[this.email] !== undefined) m.poll.myVote = m.poll.votes[this.email];
-      }
-    },
-    applyReactions(list, chatKey, wireReactions) {
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      // Применяем реакции из писем (add/remove) к хранилищу.
-      if (wireReactions && Object.keys(wireReactions).length) {
-        for (const [msgId, reactions] of Object.entries(wireReactions)) {
-          const cur = chatReactions[msgId] || [];
-          for (const r of reactions) {
-            const idx = cur.findIndex(x => x.emoji === r.emoji && x.user === r.user);
-            if (r.action === 'remove') {
-              if (idx >= 0) cur.splice(idx, 1);
-            } else if (idx < 0) {
-              cur.push({ emoji: r.emoji, user: r.user });
-            }
-          }
-          if (cur.length) chatReactions[msgId] = cur;
-          else delete chatReactions[msgId];
-        }
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-      }
-      // Проставляем на сообщения (массив эмодзи для рендера).
-      for (const msg of list) {
-        const rs = chatReactions[msg.id];
-        msg.reactions = rs ? [...new Set(rs.map(r => r.emoji))] : [];
-      }
-    },
-    // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
-    // Паттерн applyReactions: мерж писем в localStorage-хранилище
-    // edit-письмо в пути. Последняя по дате правка авторитетна:
-    // delete → msg.deleted, edit → msg.content = новый текст + msg.edited.
-    editsStorageKey() {
-      return 'vault-edits-' + (this.email || 'anon');
-    },
-    loadStoredEdits() {
-      try {
-        return JSON.parse(localStorage.getItem(this.editsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredEdits(data) {
-      try {
-        localStorage.setItem(this.editsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save edits:', e);
-      }
+    // Адаптер для MessageItem: карточка зовёт senderOf(msg-объект), а
+    // senderEmail ждёт строку адреса. Письмо группы несёт sender_id
+    // (email автора) — достаём его; для локальных записей без sender_id
+    // (заметки/служебные) возвращаем пустую строку.
+    msgSenderEmail(msg) {
+      if (msg == null) return '';
+      const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
+      return this.senderEmail(raw);
     },
     // --- Квитанции чтения («просмотрено») ---
     // Получатель при открытии чата шлёт отправителю квитанцию {read:1,
@@ -6806,41 +5606,8 @@ export default {
       }
       db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
     },
-    // Локальная (оптимистичная) запись правки — до доставки письма.
-    recordLocalEdit(chatKey, msgId, text, action) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      const cur = chatEdits[msgId] || [];
-      cur.push({ text: text || '', action, date: Date.now(), sender: this.email });
-      chatEdits[msgId] = cur;
-      stored[chatKey] = chatEdits;
-      this.saveStoredEdits(stored);
-    },
-    // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
-    // оригинал может вернуться из IMAP (Sent/INBOX/спам) — без пометки
-    // поллинг «воскресил» бы удалённое. Хранится в sqlite (почтовый мессенджер-style),
-    // с in-memory кэшем для синхронной фильтрации (filterDeleted).
-    // См. initLocalDb() — загрузка при входе.
-    tombstonesCache: [],
-    // Duress-замок: LockScreen поверх UI; duressPending — тихий SOS.
-    duressLocked: false,
-    duressPending: false,
-    duressUnlockedThisSession: false,
-    // Голосования: диалог создания + агрегация голосов
-    pollDialog: false,
-    pollQuestion: '',
-    pollOptions: ['', ''],
-    // Пересылка: пересылаемое сообщение (объект) + список целей
-    forwardTo: null,
-    // Черновики: очередь сериализации kv (read-modify-write)
-    // Папки чатов: активная папка + диалог создания в контекстном меню
-    activeFolder: '',
-    folderDialogOpen: false,
-    chatFolderNewName: '',
-    chatFoldersNames: [],
-    midTombstonesCache: [],
-    // IMAP-курсоры: in-memory кэш + sqlite персист.
-    cursorsCache: {},
+    // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
+    //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
     async initLocalDb() {
       const accEmail = this.email || 'anon';  // tombstones/body-cache: account = email
@@ -6856,172 +5623,6 @@ export default {
         this.cursorsCache = await db.cursorsLoad(accLocal);
       } catch (e) {
         console.warn('initLocalDb cursors failed:', e);
-      }
-    },
-    tombstonesKey() {
-      return 'vault-tombstones-' + (this.email || 'anon');
-    },
-    loadTombstones() {
-      return this.tombstonesCache || [];
-    },
-    addTombstone(msgId) {
-      if (!msgId) return;
-      const list = this.tombstonesCache;
-      if (!list.includes(msgId)) {
-        list.push(msgId);
-        // sqlite persist (async, fire-and-forget)
-        db.tombstoneAdd(this.email || 'anon', msgId, '');
-      }
-    },
-    isTombstoned(msgId) {
-      if (!msgId) return false;
-      return (this.tombstonesCache || []).includes(msgId);
-    },
-    // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
-    // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
-    // или повторной доставке с новым UID. В отличие от msg_id-tombstones
-    // (которые привязаны к uid-папки), mid-tombstones работают ГЛОБАЛЬНО:
-    // письмо, вернувшееся из All Mail любого провайдера, будет отфильтровано.
-    midTombstonesKey() {
-      return 'vault-mid-tombstones-' + (this.email || 'anon');
-    },
-    loadMidTombstones() {
-      return this.midTombstonesCache || [];
-    },
-    addMidTombstone(mid) {
-      if (!mid) return;
-      const list = this.midTombstonesCache;
-      if (!list.includes(mid)) {
-        list.push(mid);
-        db.tombstoneAdd(this.email || 'anon', '', mid);
-      }
-    },
-    isMidTombstoned(mid) {
-      if (!mid) return false;
-      return (this.midTombstonesCache || []).includes(mid);
-    },
-    applyEdits(list, chatKey, wireEdits) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      // Мерж правок из писем в хранилище. Дедупликация по
-      // дате+тексту+действию+отправителю (один и тот же edit-конверт
-      // доходит в нескольких копиях — Sent отправителя + INBOX получателя).
-      if (wireEdits && Object.keys(wireEdits).length) {
-        for (const [msgId, edits] of Object.entries(wireEdits)) {
-          const cur = chatEdits[msgId] || [];
-          for (const e of edits) {
-            const dup = cur.some(x => x.text === e.text && x.action === e.action
-              && String(x.date || 0) === String(e.date || 0) && (x.sender || '') === (e.sender || ''));
-            if (!dup) cur.push(e);
-          }
-          chatEdits[msgId] = cur;
-        }
-        stored[chatKey] = chatEdits;
-        this.saveStoredEdits(stored);
-      }
-      // Проставляем на сообщения. Проверка отправителя (аналог почтовый мессенджер
-      // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
-      // чужие правки игнорируются. Старые правки без sender — применяем
-      // (обратная совместимость).
-      for (const msg of list) {
-        const edits = chatEdits[msg.id];
-        if (!edits || !edits.length) continue;
-        const mine = edits.filter(e => {
-          if (!e.sender) return true;
-          if (msg.sender_id) return e.sender === msg.sender_id;
-          // 1:1 без sender_id: моё сообщение правит только мой email,
-          // чужое — только не мой (в 1:1 другой участник один).
-          if (msg.from === 'me') return e.sender === this.email;
-          return e.sender !== this.email;
-        });
-        if (!mine.length) continue;
-        const latest = mine.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
-        if (latest.action === 'delete') {
-          // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
-          this.addTombstone(msg.id);
-          this.addMidTombstone(msg.mid);
-          msg.deleted = true;
-          msg.content = '';
-        } else if (latest.text) {
-          msg.content = latest.text;
-          msg.edited = true;
-        }
-      }
-    },
-    // Отправить реакцию письмом (транспорт E2E). Ошибки — не критичны.
-    sendReactionEmail(msgId, emoji, action) {
-      const payload = JSON.stringify({ react: 1, msg_id: msgId, emoji, action });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send reaction email:', e);
-        }
-      })();
-    },
-    toggleReactionPicker(msgId) {
-      // Пилюли звонков — не сообщения: реакции на них не нужны.
-      const m = (this.messages || []).find(x => x && x.id === msgId);
-      if (m && m.callEvent) return;
-      // Если пользователь выделял текст (копирование) — клик не должен
-      // открывать пикер реакций.
-      try {
-        const sel = window.getSelection && window.getSelection();
-        if (sel && String(sel).length > 0) return;
-      } catch (e) { /* ignore */ }
-      this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
-    },
-    addReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg) return
-      if (!msg.reactions) msg.reactions = []
-      if (!msg.reactions.includes(emoji)) {
-        msg.reactions.push(emoji)
-      }
-      // Персистентность: сохранить сразу (переживёт поллинг).
-      const chatKey = this.activeChatType === 'group' ? this.activeChat : this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      if (!cur.some(r => r.emoji === emoji && r.user === this.email)) {
-        cur.push({ emoji, user: this.email });
-      }
-      chatReactions[msgId] = cur;
-      stored[chatKey] = chatReactions;
-      this.saveStoredReactions(stored);
-      // Транспорт: отправить реакцию собеседнику/группе.
-      this.sendReactionEmail(msgId, emoji, 'add');
-      this.reactionPickerMsgId = null
-    },
-    toggleReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg || !msg.reactions) return
-      const idx = msg.reactions.indexOf(emoji)
-      if (idx >= 0) {
-        msg.reactions.splice(idx, 1)
-      }
-      // Убрать из хранилища и уведомить собеседника.
-      const chatKey = this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      const ri = cur.findIndex(r => r.emoji === emoji && r.user === this.email);
-      if (ri >= 0) {
-        cur.splice(ri, 1);
-        if (cur.length) chatReactions[msgId] = cur;
-        else delete chatReactions[msgId];
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-        this.sendReactionEmail(msgId, emoji, 'remove');
       }
     },
     // --- Копирование сообщений ---
@@ -7055,7 +5656,36 @@ export default {
       const urls = [...content.matchAll(/https?:\/\/[^\s\]\)"']{2,}/g)]
         .map(m => m[0])
         .filter((v, i, a) => a.indexOf(v) === i);
-      this.messageMenu = { x: event.clientX, y: event.clientY, msg, phones, urls };
+      // Android WebView при долгом нажатии иногда присылает clientX/Y=0
+      // (как в openChatMenu) — берём координаты пузыря, иначе меню в углу.
+      let x = event.clientX, y = event.clientY;
+      if (!x && !y && event.target && event.target.getBoundingClientRect) {
+        const r = event.target.getBoundingClientRect();
+        x = r.left + 12;
+        y = r.bottom + 4;
+      }
+      this.messageMenu = { x, y, msg, phones, urls };
+      // Клампинг по фактическому размеру (после рендера): без него меню
+      // уходит за нижний/правый край — последнее сообщение при полном
+      // экране на десктопе, на телефоне — за оба края.
+      this.clampMenuAfterRender('messageMenu', x, y);
+    },
+    // Измерить отрендеренное .message-menu и втянуть в экран. Меню
+    // динамическое (пункты скрываются), поэтому размер берём из DOM,
+    // а не оцениваем. Оверлей один на экране (v-if + inset:0 перехватывает
+    // ввод), так что querySelector находит именно открытое меню.
+    async clampMenuAfterRender(key, x, y) {
+      await this.$nextTick();
+      const mm = this[key];
+      if (!mm || mm.x !== x || mm.y !== y || (key === 'chatMenu' && !mm.show)) return;
+      const el = document.querySelector('.message-menu');
+      if (!el) return;
+      const M = 8;
+      const w = el.offsetWidth + 2;  // + границы
+      const h = el.offsetHeight + 2;
+      const nx = Math.max(M, Math.min(x, window.innerWidth - w - M));
+      const ny = Math.max(M, Math.min(y, window.innerHeight - h - M));
+      if (nx !== x || ny !== y) this[key] = { ...mm, x: nx, y: ny };
     },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
@@ -7380,7 +6010,8 @@ export default {
       }
       // Состав группы перечитываем с диска: groups_rename_member правил
       // groups.json в Rust-стороне, локальный members мог разойтись.
-      try { await this.loadGroups(); } catch (e) { /* не критично */ }
+      try { await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ } } catch (e) { /* не критично */ }
       const parts = [];
       if (sent.length) parts.push((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
       if (skipped.length) parts.push((this.t('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
@@ -7400,6 +6031,7 @@ export default {
         const accepts = await api.fetchPendingAccepts();
         if (accepts.length) {
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
           if (this.currentGroup) {
             await this.loadGroupMessages(this.currentGroup.id);
             await this.refreshGroupMembers();
@@ -7422,6 +6054,7 @@ export default {
           await this.loadStoredPeerKeys();
           await this.loadContacts();
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         }
       } catch (e) {
         console.error('processInvites: contact accepts failed:', e);
@@ -7506,6 +6139,7 @@ export default {
           this.groupAvatars[inv.group_id] = inv.group_avatar;
         }
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         if (this.currentGroup?.id === inv.group_id) {
           await this.loadGroupMessages(inv.group_id);
         }
@@ -7654,151 +6288,18 @@ export default {
       }
     },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---
-    profileOf(email) {
-      return this.profiles[email] || null;
+    // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —
+    // это глобальный ignore-лист получателя (E2E-модель), а не декоративный
+    // group.blocked (который никто не читал и который не персистился).
+    async blockUser(email) {
+      if (!this.currentGroup || !email) return;
+      await this.ignoreUser(email);
+      this.showToast(this.t('ignore_on_toast') || 'Заблокирован: новые сообщения и звонки скрыты');
     },
-    // Локальные переопределения (per-account): пользователь сам решает, как
-    // называть контакт и какой аватар ему ставить. Приоритет выше, чем у
-    // синхронизированного профиля собеседника.
-    localProfileOf(email) {
-      return this.localProfiles[email] || null;
-    },
-    nameOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.name) return lp.name;
-      const p = this.profileOf(email);
-      // name == email — это НЕ имя, а fallback старых клиентов (они слали
-      // email как name). Не показываем его как имя.
-      if (p && p.name && p.name !== email) return p.name;
-      // Регистр email может отличаться (заголовки From: «Имя <Mail@X>» vs
-      // ключ в kv_store lowercase). Ищем по нижнему регистру.
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
-      }
-      // Смена почты: профиль может лежать под СТАРЫМ адресом
-      // все алиасы (один pubkey → несколько адресов) дадут имя.
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.name && ap.name !== alias) return ap.name;
-      }
-      return email;
-    },
-    avatarOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.avatar) return lp.avatar;
-      const p = this.profileOf(email);
-      if (p && p.avatar) return p.avatar;
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
-      }
-      // Смена почты: аватар может лежать под СТАРЫМ адресом (алиасом).
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.avatar) return ap.avatar;
-      }
-      return null;
-    },
-    loadLocalProfiles() {
-      try {
-        // SQLite kv_store.
-        db.kvGet(this.email || 'anon', 'local-profiles').then(v => {
-          if (v) this.localProfiles = JSON.parse(v);
-        }).catch(() => {});
-        this.localProfiles = this.localProfiles || {};
-      } catch (e) {
-        this.localProfiles = {};
-      }
-    },
-    saveLocalProfiles() {
-      try {
-        db.kvSet(this.email || 'anon', 'local-profiles', JSON.stringify(this.localProfiles)).catch(() => {});
-      } catch (e) {
-        console.error('Failed to save local profiles:', e);
-      }
-    },
-    // Модалка редактирования контакта (локальные имя/аватар).
-    // Карточка контакта: тап по аватару в шапке чата.
-    async openContactCard(email) {
-      if (!email || email === '__notes__') return;
-      // вью-данные (bio мог прийти поллингом, но this.profiles не обновился).
-      await this.loadProfiles().catch(() => {});
-      this.contactCardEmail = email;
-      this.showContactCard = true;
-    },
-    // Из карточки → локальная правка имени/аватара (старый попап).
-    startEditFromCard() {
-      const email = this.contactCardEmail;
-      this.showContactCard = false;
-      this.openContactEdit(email);
-    },
-    openContactEdit(email) {
+    async unblockUser(email) {
       if (!email) return;
-      this.editingContact = email;
-      const lp = this.localProfileOf(email);
-      this.editContactName = (lp && lp.name) || '';
-      this.editContactAvatar = (lp && lp.avatar) || '';
-      this.showContactEdit = true;
-    },
-    async handleContactAvatarSelect(event) {
-      const file = event.target.files && event.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        // Сжимаем до 64×64, как и свои аватары (localStorage не резиновый).
-        this.editContactAvatar = await this.shrinkAvatar(e.target.result);
-      };
-      reader.readAsDataURL(file);
-      event.target.value = '';
-    },
-    saveContactEdit() {
-      const email = this.editingContact;
-      if (!email) return;
-      const name = this.editContactName.trim();
-      const avatar = this.editContactAvatar || '';
-      if (!name && !avatar) {
-        // Пусто = сброс к реальным имени/аватару собеседника.
-        delete this.localProfiles[email];
-      } else {
-        this.localProfiles[email] = { name, avatar };
-      }
-      this.saveLocalProfiles();
-      // Обновляем отображение в списке контактов (contact.name берётся из
-      // peer-key label — подменяем на локальное имя, если задано).
-      const c = this.contacts.find(x => x.email === email);
-      if (c) c.name = name || this.nameOf(email);
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    resetContactEdit() {
-      if (this.editingContact) {
-        delete this.localProfiles[this.editingContact];
-        this.saveLocalProfiles();
-        const c = this.contacts.find(x => x.email === this.editingContact);
-        if (c) c.name = this.nameOf(this.editingContact);
-      }
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    async loadProfiles() {
-      try {
-        this.profiles = await api.getProfilesAll();
-      } catch (e) {
-        this.profiles = {};
-      }
-    },
-    blockUser(email) {
-      if (!this.currentGroup) return;
-      if (!this.currentGroup.blocked.includes(email)) {
-        this.currentGroup.blocked.push(email);
-      }
-    },
-    unblockUser(email) {
-      if (!this.currentGroup) return;
-      this.currentGroup.blocked = this.currentGroup.blocked.filter(e => e !== email);
+      await this.unignoreUser(email);
+      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
     },
     async leaveGroup() {
       if (!this.currentGroup) return;
@@ -7956,10 +6457,16 @@ body {
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
+  /* Ландшафт Android edge-to-edge: навбар у бокового края — контент
+     сайдбара без этих отступов уходит за виртуальные кнопки.
+     На десктопе и в портрете inset = 0 — правило ничего не меняет. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .sidebar-header {
-  padding: 20px 24px;
+  padding: 20px 16px;
   /* Android edge-to-edge: контент рисуется под статус-бар. Добавляем
      safe-area-inset-top, чтобы иконки не залезали под него и не прилипали.
      На десктопе inset = 0 — правило ничего не меняет. */
@@ -7967,6 +6474,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .app-logo {
@@ -8191,7 +6699,8 @@ body {
 
 .header-actions {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .header-actions button {
@@ -8199,7 +6708,7 @@ body {
   border: none;
   cursor: pointer;
   font-size: 18px;
-  padding: 8px;
+  padding: 8px 7px;
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
   display: flex;
@@ -8405,11 +6914,7 @@ body {
 }
 .contact-card-seen.online { color: #22c55e; }
 .contact-card-seen.online::before { background: #22c55e; opacity: 1; }
-.chat-avatar-btn {
-  padding: 0; border: none; background: none; cursor: pointer;
-  border-radius: 50%; flex-shrink: 0;
-}
-.chat-avatar-btn:hover { box-shadow: 0 0 0 2px rgba(245,158,11,.5); }
+/* .chat-avatar-btn — в ChatHeader.vue (scoped) */
 
 /* Статус «О себе» контакта */
 .contact-bio-view {
@@ -8526,199 +7031,16 @@ body {
    Search Box
    ═══════════════════════════════════════════════════════════════ */
 
-.email-error-hint {
-  margin: 8px 10px;
-  padding: 6px 8px;
-  font-size: 11px;
-  color: var(--text-secondary, #94a3b8);
-  background: var(--bg-tertiary, #1a1a3e);
-  border: 1px solid var(--danger, #ef4444);
-  border-radius: 6px;
-  word-break: break-word;
-}
-
-.search-box {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.search-box input {
-  width: 100%;
-  padding: 10px 14px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-full);
-  color: var(--text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: all var(--transition-fast);
-}
-
-.search-box input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-box input:focus {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-glow);
-}
+/* Стили списка чатов (search-box, contact-*, contacts-empty*, groups-*,
+   email-error-hint, archive-toggle) — в ContactList.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Contacts List
    ═══════════════════════════════════════════════════════════════ */
+/* (стили списка — в ContactList.vue; здесь остаются шаренные
+   с шапкой чата .group-avatar*, .notes-self-avatar*, .status-dot) */
 
-.contacts-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* Android: последний контакт не прятался под системной навигацией */
-  padding-bottom: var(--safe-bottom, 0px);
-}
-
-.contacts-empty {
-  padding: 24px 20px;
-  text-align: center;
-}
-
-.contacts-empty-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.contacts-empty-hint {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  margin-bottom: 16px;
-}
-
-.contacts-empty-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.contacts-empty-actions .btn-primary,
-.contacts-empty-actions .btn-secondary {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.contact-item {
-  display: flex;
-  align-items: center;
-  padding: 14px 20px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  border-left: 3px solid transparent;
-}
-
-.contact-item:hover {
-  background: var(--bg-hover);
-}
-
-.contact-item.active {
-  background: var(--bg-active);
-  border-left-color: var(--accent-primary);
-}
-
-.contact-avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 14px;
-  flex-shrink: 0;
-}
-
-.avatar-initial {
-  font-size: 18px;
-  font-weight: 600;
-  color: white;
-}
-
-.contact-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.contact-name {
-  font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.contact-email {
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.contact-status {
-  margin-left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-/* Бейдж непрочитанных сообщений на контакте/группе — оранжевый кружок
-   с белой цифрой. Появляется только когда есть >0. */
-.unread-badge {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
-  display: inline-block;
-  flex-shrink: 0;
-}
-
-/* Бейдж «нет ключа» — контакт виден (напр. из участников группы), но для
-   чата 1-на-1 нужно сначала обменяться ключами (🔗). */
-.contact-no-key {
-  font-size: 12px;
-  opacity: 0.7;
-  cursor: help;
-}
-
-/* Удаление контакта — появляется при наведении на контакт */
-.contact-delete {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  opacity: 0;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.contact-item:hover .contact-delete {
-  opacity: 0.55;
-}
-
-.contact-item:hover .contact-delete:hover {
-  opacity: 1;
-  background: rgba(220, 60, 60, 0.18);
-}
+/* Бейджи статуса списка чатов — в ContactList.vue (scoped) */
 
 .status-dot {
   display: block;
@@ -8733,29 +7055,7 @@ body {
   box-shadow: 0 0 8px var(--status-online);
 }
 
-/* Groups */
-.groups-section {
-  margin-top: 16px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-
-.groups-header {
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.groups-header-icon {
-  display: block;
-  flex-shrink: 0;
-}
+/* Секция групп и заголовок — в ContactList.vue (scoped) */
 
 .group-avatar {
   width: 36px;
@@ -8810,6 +7110,12 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  /* Ландшафт Android edge-to-edge: то же, что у .sidebar — навбар у
+     бокового края (left/right insets), иначе поле ввода и шапка чата
+     уезжают за виртуальные кнопки. На десктопе inset = 0. */
+  box-sizing: border-box;
+  padding-left: var(--safe-left, 0px);
+  padding-right: var(--safe-right, 0px);
 }
 
 .chat-area {
@@ -8823,181 +7129,18 @@ body {
   min-height: 0;
 }
 
-.chat-header {
-  flex-shrink: 0;
-  padding: 16px 24px;
-  /* Android edge-to-edge: на узких экранах чат занимает всю ширину и шапка
-     оказывается под статус-баром — отступ через safe-area-inset-top. */
-  padding-top: calc(16px + var(--safe-top, 0px));
-  border-bottom: 1px solid var(--border-subtle);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--bg-secondary);
-}
-
-.chat-header-info {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  /* flex:1 + min-width:0 — без них имя чата не сжимается и выталкивает
-     кнопки действий за экран (узкие экраны android). */
-  flex: 1;
-  min-width: 0;
-}
-
-/* На десктопе — ряд.
-   На мобильном (media <768 ниже) — колонка: имя и замок ПОД аватаром
-   чтобы не перекрываться кнопками действий (звезда добавила 6-ю кнопку).
-   */
-.chat-head-col {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
-}
-
-.chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-full);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Аватар + email мелким шрифтом под ним (email убран из центра шапки,
-   чтобы длинные адреса не прижимались к кнопкам действий). */
-.chat-avatar-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  max-width: 96px;
-}
-
-.chat-avatar-email {
-  font-size: 10px;
-  line-height: 1.2;
-  color: var(--text-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-header-info h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-status {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.chat-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.chat-actions button {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
-}
-
-.chat-actions button:hover {
-  background: var(--bg-hover);
-}
-
-/* Текстовые кнопки действий в шапке группового чата
-   («Добавить участника», «Настройки») — заметнее, чем голые эмодзи. */
-.chat-actions button.chat-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px 10px;
-  border: none; 
-  background: transparent;
-  border-radius: var(--radius-sm, 8px);
-  color: var(--text-secondary, #aaa);
-  white-space: nowrap;
-}
-
-.chat-actions button.chat-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary, #fff);
-  border-color: var(--border, rgba(255,255,255,0.2));
-}
+/* Стили шапки чата (chat-header, chat-head-col, chat-actions, chat-status,
+   relay-delivery-badge) — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Messages
    ═══════════════════════════════════════════════════════════════ */
 
-.messages {
-  flex: 1;
-  /* flex-элемент с overflow:auto обязан иметь
-     min-height: 0, иначе он растягивается на высоту контента и скролл
-     (в т.ч. колесиком мыши) не появляется.
-     */
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative; /* offsetTop элементов считается от этого контейнера */
-}
-
-/* Закреплённое сообщение группы (баннер поверх списка) */
-.pinned-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(99, 102, 241, 0.12);
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  border-radius: 10px;
-  cursor: pointer;
-  flex-shrink: 0;
-  font-size: 13px;
-}
-.pinned-banner-icon { flex-shrink: 0; }
+/* Скролл-контейнер сообщений (messages/messages-empty/pinned-banner) —
+   в MessageList.vue (scoped); стили карточек .message* остаются здесь. */
 
 /* Reply-иконка в баре ответа/редактирования */
 .reply-bar-ic { flex-shrink: 0; }
-.pinned-banner-text {
-  flex: 1;
-  color: var(--text-primary, #f1f5f9);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pinned-banner-unpin {
-  background: transparent;
-  border: none;
-  color: var(--text-muted, #64748b);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-.pinned-banner-unpin:hover { background: rgba(255,255,255,0.1); color: var(--text-primary, #f1f5f9); }
 
 /* Подсветка позиции при перетаскивании заметок */
 .drag-over-before { box-shadow: 0 -2px 0 0 var(--accent-primary, #6366f1); }
@@ -9122,74 +7265,11 @@ body {
 .poll-option-count { font-weight: 600; font-size: 12.5px; opacity: 0.8; }
 .poll-check { color: var(--accent-primary, #6366f1); font-weight: 700; }
 .poll-footer { font-size: 12px; opacity: 0.7; }
-.poll-dialog {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 300;
-}
-.poll-dialog-box {
-  background: var(--bg-primary, #0b0f17);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 14px;
-  padding: 18px;
-  width: min(420px, 92vw);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.poll-dialog-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
-.poll-dialog-box .duress-input {
-  background: rgba(148, 163, 184, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 8px;
-  padding: 9px 11px;
-  color: inherit;
-  font-size: 14px;
-  outline: none;
-}
-.poll-dialog-box .duress-input:focus { border-color: var(--accent-primary, #6366f1); }
-.poll-dialog-row { display: flex; gap: 8px; margin-top: 4px; }
-.poll-dialog-row .btn-primary { flex: 0 0 auto; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; }
-/* Папки чатов: лента чипов */
-.folder-strip {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 4px 10px 6px;
-  scrollbar-width: thin;
-}
-.folder-chip {
-  flex: 0 0 auto;
-  background: rgba(148, 163, 184, 0.08);
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  border-radius: 999px;
-  color: inherit;
-  font-size: 12.5px;
-  padding: 4px 12px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.folder-chip:hover { background: rgba(245, 158, 11, 0.12); }
-.folder-chip-on {
-  border-color: #f59e0b;
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.12);
-}
+/* Стили ленты папок (.folder-strip/.folder-chip) — в FoldersBar.vue */
 .chat-menu-folder-label {
   font-size: 11px;
   opacity: 0.6;
   padding: 4px 10px 2px;
-}
-.forward-list {
-  max-height: 260px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .reply-btn {
@@ -9353,20 +7433,14 @@ body {
      (contextmenu) и запускает НАТИВНОЕ выделение слова. Ползунки
      выделения попадают на оверлей меню — всё исчезает. Отключаем
      нативное выделение на touch: копирование доступно через наше меню
-     (copyMessageText/copyMessageAll). */
+     (copyMessageText/copyMessageAll). Шапка чата (chat-header-text,
+     chat-enc-text) — в ChatHeader.vue (scoped, media hover:none). */
   .message-content,
   .message-sender,
-  .chat-header-text,
   .message-menu button {
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
-  }
-  /* Шапка чата: на узких экранах « Encrypted» не влезает рядом с кнопками
-     (телефон/карандаш/поиск) — оставляем только 🔒. На десктопе слово
-     показывается (места достаточно). */
-  .chat-enc-text {
-    display: none;
   }
 }
 
@@ -9379,6 +7453,20 @@ body {
 .message-content .msg-link:hover {
   text-decoration: none;
   opacity: 0.85;
+}
+/* Ссылки в СВОЁМ пузыре: фон — градиент accent-primary→#4f46e5, той же
+   гаммы, что accent-primary ссылки — шрифт сливался с фоном (координаты
+   после отправки). Светлый тон + подчёркивание. */
+.message.own .message-content .msg-link {
+  color: #e0e7ff;
+  text-decoration: underline;
+}
+.message.own .message-content .msg-link:hover {
+  color: #ffffff;
+  opacity: 1;
+}
+.message.own .message-content .msg-phone {
+  color: #e0e7ff;
 }
 .message-content .msg-phone {
   color: var(--accent-secondary, #8b5cf6);
@@ -9441,21 +7529,7 @@ body {
   background: var(--bg-hover, #1e1e4a);
 }
 
-/* переключатель архива в списке чатов */
-.archive-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--bg-tertiary, #1e1e3a);
-  color: var(--text-secondary, #94a3b8);
-  font-size: 13px;
-  cursor: pointer;
-  user-select: none;
-}
-.archive-toggle:hover { background: var(--bg-hover, #26264f); color: var(--text-primary, #f1f5f9); }
+/* переключатель архива — в ContactList.vue (scoped) */
 /* иконка mute у чата в списке */
 .chat-mute-icon { color: var(--text-secondary, #64748b); flex-shrink: 0; }
 
@@ -9500,16 +7574,39 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-.messages-empty {
-  flex: 1;
+/* Ignore-баннер над списком сообщений (чат с заблокированным) */
+.ignore-banner {
+  flex-shrink: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 24px;
-  gap: 12px;
+  gap: 10px;
+  padding: 8px 24px;
+  background: rgba(239, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  font-size: 13px;
+  color: var(--text-primary, #f1f5f9);
 }
+
+.ignore-banner .vault-icon { flex-shrink: 0; color: #ef4444; }
+
+.ignore-banner span { flex: 1; color: var(--text-secondary, #94a3b8); }
+
+.ignore-banner-unblock {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: var(--text-primary, #f1f5f9);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  white-space: nowrap;
+}
+
+.ignore-banner-unblock:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* Пустое состояние списка — в MessageList.vue (scoped) */
 
 /* Attachment previews */
 .attachment-preview {
@@ -9571,6 +7668,29 @@ body {
   height: 36px;
 }
 
+/* Фоновый плеер голосовых (t_c1c44344, Android): карточка-кнопка в стиле
+   attachment-file — янтарная иконка play/square + подпись. */
+.voicenote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+}
+
+.voicenote-btn .voicenote-label {
+  opacity: 0.9;
+}
+
+.voicenote-btn.playing {
+  background: rgba(245, 158, 11, 0.16);
+}
+
 /* Image viewer (полноэкранный просмотр вложения-изображения) */
 .image-viewer-overlay {
   display: flex;
@@ -9606,19 +7726,8 @@ body {
   font-size: 13px;
 }
 
-/* Members count (кликабельный счётчик участников в шапке группы) */
-.members-count {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.members-count-icon {
-  display: block;
-  flex-shrink: 0;
-  filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.4));
-}
+/* Members count и список участников: счётчик — в ChatHeader.vue (scoped);
+   модалка списка (member-list/member-item/roles) остаётся здесь. */
 
 /* Members list (модалка со списком участников группы) */
 .member-list {
@@ -9688,11 +7797,7 @@ body {
   flex-shrink: 0;
 }
 
-/* Активный режим «показать только избранное» в шапке чата */
-.chat-action-btn.starred-on {
-  background: rgba(245, 158, 11, 0.15);
-  border-radius: 6px;
-}
+/* Активный режим «показать только избранное» — в ChatHeader.vue (scoped) */
 
 .message-footer {
   display: flex;
@@ -10012,6 +8117,44 @@ body {
   padding: 20px 24px;
 }
 
+/* Подсказка в модалках каналов (M2) */
+.channel-modal-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #64748b);
+}
+/* Панель «Каналы» (M2): единая точка входа */
+.channels-panel-empty {
+  padding: 10px 2px;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+}
+.channels-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.channels-panel-row:hover {
+  background: var(--bg-hover);
+}
+.channels-panel-name {
+  flex: 1;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channels-panel-tag {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .modal-body label {
   display: block;
   font-size: 12px;
@@ -10201,68 +8344,7 @@ body {
   color: var(--text-primary, #f1f5f9);
 }
 
-/* Export dropdown */
-.export-dropdown {
-  position: relative;
-}
-
-.export-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat-action-icon {
-  display: block;
-}
-
-.export-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--bg-secondary, #12122a);
-  border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
-  border-radius: 8px;
-  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.4));
-  overflow: hidden;
-  z-index: 50;
-  min-width: 120px;
-}
-
-/* Исчезающие сообщения: кнопка-таймер в шапке чата.
-   Неактивный — как остальные (без обводки, серый замок).
-   Активный — янтарный замок + янтарные обводка и заливка кнопки.
-   */
-.ephemeral-menu { position: relative; }
-.chat-actions button.chat-action-btn.ephemeral-on {
-  border: 1px solid rgba(245, 158, 11, 0.65);
-  background: rgba(245, 158, 11, 0.12);
-}
-.export-menu.ephemeral-dropdown { min-width: 150px; }
-.export-menu.ephemeral-dropdown button {
-  display: block; width: 100%; text-align: left;
-  padding: 9px 14px; background: none; border: none;
-  color: var(--text-primary, #e6edf3); font-size: 13px; cursor: pointer;
-}
-.export-menu.ephemeral-dropdown button:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
-.export-menu.ephemeral-dropdown button.active { color: var(--accent-warn, #f59e0b); }
-
-.export-menu button {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  background: none;
-  border: none;
-  color: var(--text-primary, #f1f5f9);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.export-menu button:hover {
-  background: var(--bg-hover, #1e1e4a);
-}
+/* Export dropdown и исчезающие сообщения — в ChatHeader.vue (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Message Input
@@ -10340,7 +8422,9 @@ body {
 
 .message-field {
   flex: 1;
-  padding: 12px 12px 12px 0;
+  /* Отступ слева: зазор между эмодзи-кнопкой и подсказкой «Сообщение...»
+     (4px у кнопки + 8px здесь = 12px, симметрично правому краю пилюли). */
+  padding: 12px 12px 12px 8px;
   background: transparent;
   border: none;
   color: var(--text-primary);
@@ -10416,30 +8500,8 @@ body {
 
 .attach-menu-item:hover { background: var(--bg-hover); }
 
-
-
-/* ═══════════════════════════════════════════════════════════════
-   Empty State
-   ═══════════════════════════════════════════════════════════════ */
-
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-}
-
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
-
-.empty-text {
-  font-size: 16px;
-}
+/* Пустые состояния (empty-state/empty-icon/empty-text) — в MessageList.vue
+   (scoped) */
 
 /* ═══════════════════════════════════════════════════════════════
    Key Manager
@@ -10577,100 +8639,7 @@ body {
   .main-area {
     width: 100%;
   }
-  /* Шапка чата на узком экране: все кнопки обязаны умещаться.
-     Текстовые подписи групповых кнопок скрываются (иконка + title
-     остаются), отступы уменьшаются, имя чата обрезается многоточием. */
-  .chat-header {
-    padding: 10px 12px;
-    /* safe-area сохраняется и в узкоэкранном режиме (иначе шапка чата
-       залезает под статус-бар Android). */
-    padding-top: calc(10px + var(--safe-top, 0px));
-    gap: 6px;
-  }
-  .chat-header-info {
-    gap: 10px;
-  }
-  /* встают под аватаром, ничего не перекрывается кнопками справа. */
-  .chat-head-col {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-  }
-  .chat-head-col .chat-header-text {
-    min-width: 0;
-    max-width: 100%;
-    align-items: flex-start;
-  }
-  .chat-head-col .chat-header-text.text-inline {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-  }
-  .chat-head-col .chat-header-text.text-inline .chat-status {
-    order: -1;      /* замок ПЕРЕД именем */
-    flex-shrink: 0;
-  }
-  .chat-head-col .chat-header-text.text-inline h3 {
-    flex: 1;
-    min-width: 0;
-    margin-bottom: 0;
-  }
-  .chat-header-text h3 {
-    font-size: 14px;
-    line-height: 1.25;
-    margin-bottom: 1px;
-  }
-  .chat-head-col .group-avatar,
-  .chat-head-col .chat-avatar-btn {
-    width: 32px;
-    height: 32px;
-  }
-  .chat-header-info h3 {
-    font-size: 15px;
-  }
-  /* Android: email под аватаром не помещается и перекрывает элементы — скрыт. */
-  .chat-avatar-email {
-    display: none;
-  }
-  .chat-status {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .chat-actions {
-    gap: 2px;
-  }
-  .chat-actions button {
-    padding: 6px;
-  }
-  .chat-actions button.chat-action-btn {
-    padding: 6px 8px;
-    border: none;
-  }
-  .chat-action-label {
-    display: none;
-  }
-}
-
-/* Кнопка «назад» в шапке чата (только мобильный режим). */
-.chat-back-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-full, 999px);
-  color: var(--text-secondary, #94a3b8);
-  cursor: pointer;
-}
-.chat-back-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary, #e2e8f0);
+  /* Шапка чата на узком экране — в ChatHeader.vue (scoped, media<768). */
 }
 
 /* Модалка настроек на мобильном: на всю ширину и высоту, чтобы сайдбар
