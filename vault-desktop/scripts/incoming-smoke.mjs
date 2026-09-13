@@ -1,10 +1,11 @@
 // Node-смоук features/incoming.js — семантика router без Vue/Tauri.
 // Мокаем api/crypto/relay/notify через подмену импортов (заглушки в tmp-модулях).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ROOT = '/home/maksim/whisper/vault-desktop';
+const ROOT = path.resolve(import.meta.dirname, '..');
 
 // ── Заглушки импортов incoming.js ──────────────────────────────
 const MOCKS = '/tmp/incoming-smoke-mocks';

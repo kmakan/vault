@@ -4,22 +4,22 @@
 # (письмом SMTP в ящик получателя + POST на relay),
 # затем проверяет: (1) relay-конверт = байт-в-байт телу письма,
 # (2) relay не отвечает за потерю email (главный тест §10).
-# Использует тестовые аккаунты koanmak (отправитель) → icemaksim (получатель).
+# Использует тестовые аккаунты отправителя и получателя.
 
 set -euo pipefail
 
 RELAY="https://vault-msg.ru/relay"
-RTOK_ICEMAKSIM="$1"   # read-токен получателя (передаётся получателем)
+RTOK_RECEIVER="$1"   # read-токен получателя (передаётся получателем)
 ENVELOPE_BODY="$2"     # зашифрованный конверт (base64, как тело письма)
 
 echo "=== [1] relay: publish того же конверта, что уйдёт письмом ==="
 MID=$(curl -s -X POST "$RELAY/pub" -H "Content-Type: application/json" \
-  -d "{\"v\":1,\"to\":\"$RTOK_ICEMAKSIM\",\"id\":\"itest-$(date +%s)\",\"exp\":$(($(date +%s)+3600)),\"body\":\"$ENVELOPE_BODY\"}" \
+  -d "{\"v\":1,\"to\":\"$RTOK_RECEIVER\",\"id\":\"itest-$(date +%s)\",\"exp\":$(($(date +%s)+3600)),\"body\":\"$ENVELOPE_BODY\"}" \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['mid'])")
 echo "relay mid: $MID"
 
 echo "=== [2] relay: получатель забирает мгновенно (push-путь) ==="
-GOT=$(curl -s "$RELAY/poll?wait=0" -H "Authorization: VaultRelay $RTOK_ICEMAKSIM")
+GOT=$(curl -s "$RELAY/poll?wait=0" -H "Authorization: VaultRelay $RTOK_RECEIVER")
 echo "$GOT" | python3 -c "
 import json,sys
 d = json.load(sys.stdin)
