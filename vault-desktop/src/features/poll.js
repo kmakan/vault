@@ -53,12 +53,17 @@ export function pollLeadLabel(poll) {
   return `${poll.options[lead]} — ${pct}%`;
 }
 
-// Cast a vote: local first (optimistic), signal email, rollback on failure.
+// Cast a vote: optimistic (myVote + счётчик сразу), signal email, rollback on failure.
 export function castPollVote(ctx, msg, option) {
   const poll = msg.poll;
   if (!poll || poll.myVote !== null) return;
   const prev = poll.myVote;
+  const prevSelfVote = poll.votes[ctx.email];
   poll.myVote = option;
+  // ОПТИМИСТИЧНЫЙ счётчик: раньше poll.votes[email] присваивался только
+  // ПОСЛЕ отправки письма (1-3с SMTP) — у голосующего цифра «запаздывала»,
+  // выглядя нереактивной. Ставим голос сразу, откатываем оба при ошибке.
+  poll.votes[ctx.email] = option;
   const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
   (async () => {
     try {
@@ -74,11 +79,12 @@ export function castPollVote(ctx, msg, option) {
       } else {
         throw new Error('no peer key');
       }
-      poll.votes[ctx.email] = option;
       ctx.saveCurrentHistory(ctx.activeChatType === 'group' ? 'group:' + ctx.currentGroup.id : ctx.activeChat);
     } catch (e) {
       console.error('[poll] vote failed:', e);
       poll.myVote = prev;
+      if (prevSelfVote === undefined) delete poll.votes[ctx.email];
+      else poll.votes[ctx.email] = prevSelfVote;
     }
   })();
 }
