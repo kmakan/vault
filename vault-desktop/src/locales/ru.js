@@ -367,6 +367,13 @@ export default {
   notes_self_status: 'Локально · только на этом устройстве',
 // Общие действия
   download: 'Скачать',
+  dod_download: 'Скачать',
+  dod_loading: 'Загрузка…',
+  dod_retry: 'Ошибка — повторить',
+  dod_ready: 'Файл загружен:',
+  dod_error: 'Не удалось загрузить файл:',
+  dod_letter_not_found: 'Письмо с данными файла не найдено (оно могло не дойти или быть удалено)',
+  dod_partial_fail: 'Данные файла не доставлены:',
   chat_export: 'Экспорт чата',
   edit_message: 'Редактировать',
   delete_message: 'Удалить',

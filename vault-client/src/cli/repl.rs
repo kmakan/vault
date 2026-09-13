@@ -171,6 +171,55 @@ fn extract_sender_from_body(body: &str) -> Option<String> {
     None
 }
 
+/// Format a decrypted envelope `text` payload for display, recognising
+/// Desktop wire sub-formats: attachment meta / DoD meta / DoD data letters.
+/// `Some(human)` replaces the raw JSON (which can be megabytes of base64);
+/// `None` means "not one of the recognised sub-formats — show as-is".
+fn format_attachment_text(inner: &str) -> Option<String> {
+    let obj: serde_json::Value = serde_json::from_str(inner).ok()?;
+
+    // DoD data letter: {vault_dod_data:1, ref, data} — the full base64 blob.
+    // Showing it raw would dump tens of MB into the terminal.
+    if obj.get("vault_dod_data").and_then(|v| v.as_i64()) == Some(1) {
+        let size = obj
+            .get("data")
+            .and_then(|v| v.as_str())
+            .map(|d| d.len() * 3 / 4) // base64 → approx decoded bytes
+            .unwrap_or(0);
+        return Some(format!(
+            "[file data letter — {}]",
+            crate::cli::output::format_size(size)
+        ));
+    }
+
+    // Attachment meta (also DoD meta when `dod` names the data letter).
+    if obj.get("vault_attachment").and_then(|v| v.as_bool()) == Some(true) {
+        let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let type_ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let size = obj.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+        let dod = obj
+            .get("dod")
+            .and_then(|v| v.as_str())
+            .filter(|d| !d.is_empty());
+        return Some(match dod {
+            Some(_) => format!(
+                "[attachment: {} ({}), {} — download on demand, open in the app]",
+                name,
+                type_,
+                crate::cli::output::format_size(size as usize)
+            ),
+            None => format!(
+                "[attachment: {} ({}), {}]",
+                name,
+                type_,
+                crate::cli::output::format_size(size as usize)
+            ),
+        });
+    }
+
+    None
+}
+
 /// Dispatch a command and return true if should quit
 async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
     match cmd {
@@ -659,6 +708,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                             }
                                             _ => inner.clone(), // legacy: not JSON or old format
                                         };
+                                    // Attachments / DoD letters: human-readable
+                                    // placeholder instead of the raw JSON payload
+                                    // (data letters carry megabytes of base64).
+                                    let displayed =
+                                        format_attachment_text(&displayed).unwrap_or(displayed);
                                     println!("  {}", displayed);
 
                                     // Record read receipt locally only (no email sent —
@@ -812,14 +866,22 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                         .and_then(|v| v.as_i64())
                                                         == Some(1) =>
                                                 {
-                                                    let short: String = obj
+                                                    let text = obj
                                                         .get("text")
                                                         .and_then(|v| v.as_str())
-                                                        .unwrap_or("")
-                                                        .chars()
-                                                        .take(40)
-                                                        .collect();
-                                                    format!("[encrypted] {}...", short)
+                                                        .unwrap_or("");
+                                                    // Attachment / DoD placeholders stay short
+                                                    // in previews; plain text gets truncated.
+                                                    match format_attachment_text(text) {
+                                                        Some(human) => human,
+                                                        None => {
+                                                            let short: String = text
+                                                                .chars()
+                                                                .take(40)
+                                                                .collect();
+                                                            format!("[encrypted] {}...", short)
+                                                        }
+                                                    }
                                                 }
                                                 _ => {
                                                     let short: String =
@@ -2392,5 +2454,46 @@ mod tests {
 
         // decrypt_vault must fail AAD auth → Err (treat as non-vault mail).
         assert!(crypto.decrypt_vault(&non_vault).is_err());
+    }
+
+    #[test]
+    fn test_format_attachment_text_attachment_meta() {
+        // Desktop attachment meta: {vault_attachment, name, type, size, data}
+        let meta = r#"{"vault_attachment":true,"name":"report.pdf","type":"application/pdf","size":204800,"data":"AAAA"}"#;
+        let out = format_attachment_text(meta).unwrap();
+        assert!(out.contains("report.pdf"));
+        assert!(out.contains("application/pdf"));
+        assert!(out.contains("200.0 KB"));
+        assert!(!out.contains("download on demand"));
+    }
+
+    #[test]
+    fn test_format_attachment_text_dod_meta() {
+        // DoD meta: data lives in a second letter named by `dod` (Message-ID).
+        let meta = r#"{"vault_attachment":true,"name":"video.mp4","type":"video/mp4","size":15728640,"dod":"<vault-abc@bk.ru>"}"#;
+        let out = format_attachment_text(meta).unwrap();
+        assert!(out.contains("video.mp4"));
+        assert!(out.contains("15.0 MB"));
+        assert!(out.contains("download on demand"));
+    }
+
+    #[test]
+    fn test_format_attachment_text_dod_data_letter() {
+        // DoD data letter: full base64 payload — must collapse to a placeholder,
+        // never the raw blob.
+        let data = "A".repeat(3_000_000); // ~2.25 MB decoded
+        let letter = format!(r#"{{"vault_dod_data":1,"ref":"<vault-abc@bk.ru>","data":"{}"}}"#, data);
+        let out = format_attachment_text(&letter).unwrap();
+        assert!(out.contains("file data letter"));
+        assert!(!out.contains(&data[..100]));
+        assert!(out.contains("MB"));
+    }
+
+    #[test]
+    fn test_format_attachment_text_plain_text_untouched() {
+        // Plain text (and any non-attachment JSON) is not rewritten.
+        assert!(format_attachment_text("Hello!").is_none());
+        let not_attachment = r#"{"vault":1,"text":"hi"}"#;
+        assert!(format_attachment_text(not_attachment).is_none());
     }
 }

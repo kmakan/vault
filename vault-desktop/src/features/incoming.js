@@ -36,6 +36,8 @@ export async function processIncoming(ctx, fetched, { notify = false } = {}) {
 }
 
 // Тела: добираем недостающие батчем по папкам (как sendDeliveredReceipts).
+// Download-on-demand: письма крупнее 2МБ пропускаем — их содержимое
+// подтягивается по клику с карточки вложения, а не в фоне поллинга.
 async function ensureBodies(ctx, pool) {
   const byFolder = {};
   for (const m of pool) {
@@ -43,7 +45,10 @@ async function ensureBodies(ctx, pool) {
     (byFolder[f] = byFolder[f] || []).push(m);
   }
   for (const [folder, msgs] of Object.entries(byFolder)) {
-    const missing = msgs.filter(m => ctx.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+    const missing = msgs.filter(m =>
+      ctx.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined
+      && (m.size || 0) <= 2 * 1024 * 1024
+    );
     if (!missing.length) continue;
     try {
       const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));

@@ -71,6 +71,11 @@ pub struct EmailMessage {
     /// разными UID). Пусто, если заголовок отсутствует.
     #[serde(default)]
     pub message_id: String,
+    /// Размер письма в байтах (RFC822.SIZE из IMAP-заголовочного фетча).
+    /// 0 = неизвестно. Download-on-demand: письма крупнее порога не
+    /// фетчатся телом автоматически — пользователь качает по требованию.
+    #[serde(default)]
+    pub size: u32,
 }
 
 fn default_inbox() -> String {
@@ -273,7 +278,7 @@ impl EmailClient {
                 .collect::<Vec<_>>()
                 .join(",");
             let data = session
-                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
                 .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
             for fetch in data.iter() {
                 let uid = fetch.uid.unwrap_or_default().to_string();
@@ -301,6 +306,7 @@ impl EmailClient {
                         is_read,
                         folder: folder.to_string(),
                         message_id,
+                        size: fetch.size.unwrap_or(0),
                     });
                 }
             }
@@ -441,7 +447,7 @@ impl EmailClient {
                 .collect::<Vec<_>>()
                 .join(",");
             let data = session
-                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER)")
+                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
                 .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
             for fetch in data.iter() {
                 let uid = fetch.uid.unwrap_or_default().to_string();
@@ -462,6 +468,7 @@ impl EmailClient {
                         is_read,
                         folder: folder.to_string(),
                         message_id: extract_header(&header_str, "Message-ID:").unwrap_or_default(),
+                        size: fetch.size.unwrap_or(0),
                     });
                 }
             }
@@ -689,14 +696,32 @@ impl EmailClient {
     }
 
     pub async fn send_email(&mut self, to: &str, subject: &str, body: &str) -> Result<()> {
+        self.send_email_with_id(to, subject, body, None).await
+    }
+
+    /// Отправка с явным Message-ID (download-on-demand): мета-сообщение
+    /// ссылается на data-письмо по Message-ID, поэтому тот должен быть
+    /// известен ДО отправки. Нейтральный вид (<vault-...@dom>) не выдаёт
+    /// больше информации, чем UUID, генерируемый провайдером.
+    pub async fn send_email_with_id(
+        &mut self,
+        to: &str,
+        subject: &str,
+        body: &str,
+        message_id: Option<&str>,
+    ) -> Result<()> {
         let from_mailbox: Mailbox = self.config.email.parse().context("Invalid sender email")?;
         let to_mailbox: Mailbox = to.parse().context("Invalid recipient email")?;
 
-        let email = Message::builder()
+        let mut builder = Message::builder()
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .header(ContentType::TEXT_PLAIN)
+            .header(ContentType::TEXT_PLAIN);
+        if let Some(mid) = message_id {
+            builder = builder.message_id(Some(mid.to_string()));
+        }
+        let email = builder
             .body(fold_lines(body))
             .context("Failed to build email")?;
 

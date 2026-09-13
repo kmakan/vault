@@ -366,6 +366,13 @@ export default {
   notes_self_status: '本地 · 仅此设备',
 // 通用操作
   download: '下载',
+  dod_download: '下载',
+  dod_loading: '加载中…',
+  dod_retry: '失败 — 重试',
+  dod_ready: '文件已下载：',
+  dod_error: '下载文件失败：',
+  dod_letter_not_found: '未找到数据邮件（可能未送达或已被删除）',
+  dod_partial_fail: '文件数据未发送至：',
   chat_export: '导出聊天',
   edit_message: '编辑',
   delete_message: '删除',

@@ -764,6 +764,42 @@ async fn email_send(
     }
 }
 
+/// Отправка data-письма download-on-demand с заданным Message-ID.
+/// Тело — большой зашифрованный конверт (десятки МБ base64), поэтому таймаут
+/// больше, чем у обычных писем (120с против 45с).
+#[tauri::command]
+async fn email_send_dod(
+    to: String,
+    subject: String,
+    body: String,
+    message_id: String,
+    state: State<'_, EmailState>,
+) -> Result<bool, String> {
+    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
+        .await
+        .map_err(|_| "Timed out waiting for config lock".to_string())?
+        .clone()
+        .ok_or_else(|| "Not connected to email server".to_string())?;
+    let mut client = EmailClient::new(cfg);
+    let mid = if message_id.trim().is_empty() { None } else { Some(message_id.as_str()) };
+    match t_timeout(
+        Duration::from_secs(120),
+        client.send_email_with_id(&to, &subject, &body, mid),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(true),
+        Ok(Err(e)) => {
+            eprintln!("[email] dod send error: {e}");
+            Err(format!("SMTP send failed: {e}"))
+        }
+        Err(_) => {
+            eprintln!("[email] dod send timed out (120s)");
+            Err("SMTP send timed out".to_string())
+        }
+    }
+}
+
 #[tauri::command]
 async fn email_disconnect(
     state: State<'_, EmailState>,
@@ -1503,6 +1539,7 @@ pub fn run() {
             email_idle_start,
             email_idle_stop,
             email_send,
+            email_send_dod,
             recovery_generate_mnemonic,
             recovery_validate_mnemonic,
             recovery_wrap_backup,

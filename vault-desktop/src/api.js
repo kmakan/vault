@@ -394,7 +394,12 @@ export class ApiClient {
     }
     const bodiesByFolder = {};
     for (const [folder, list] of Object.entries(byFolder)) {
-      const uids = list.map(m => m.uid || m.id);
+      // Download-on-demand: письма крупнее 2МБ телом не фетчим — карточка
+      // DoD-вложения получает данные по клику (fetchDodAttachment), а не
+      // при открытии группы. size=0 (неизвестен) — фетчим как раньше.
+      const fetchable = list.filter(m => (m.size || 0) <= 2 * 1024 * 1024);
+      if (!fetchable.length) continue;
+      const uids = fetchable.map(m => m.uid || m.id);
       try {
         bodiesByFolder[folder] = await this.fetchEmailBodies(folder, uids);
       } catch (e) {
@@ -1184,6 +1189,19 @@ async mediaSoundStop() {
       to: data.to,
       subject: data.subject || '',
       body: data.body || '',
+    });
+    return { ok };
+  }
+
+  // Download-on-demand: data-письмо с заданным Message-ID. Мета-сообщение
+  // ссылается на него по mid — получатель найдёт тело по Message-ID и
+  // скачает по требованию (клик по карточке), а не при открытии чата.
+  async sendDodEmail(to, body, messageId) {
+    const ok = await invoke('email_send_dod', {
+      to,
+      subject: '',
+      body,
+      messageId,
     });
     return { ok };
   }

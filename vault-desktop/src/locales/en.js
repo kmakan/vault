@@ -366,6 +366,13 @@ export default {
   notes_self_status: 'Local · this device only',
 // General actions
   download: 'Download',
+  dod_download: 'Download',
+  dod_loading: 'Loading…',
+  dod_retry: 'Failed — retry',
+  dod_ready: 'File downloaded:',
+  dod_error: 'Failed to download file:',
+  dod_letter_not_found: 'The data letter was not found (it may not have arrived or was deleted)',
+  dod_partial_fail: 'File data was not delivered to:',
   chat_export: 'Export chat',
   edit_message: 'Edit',
   delete_message: 'Delete',

@@ -52,7 +52,16 @@
       </div>
       <span v-else v-html="linkify(replyBody(msg.content))" @click="$emit('text-click')"></span>
       <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
-      <div v-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
+      <div v-else-if="msg.attachment && msg.attachment.isDod" class="attachment-preview attachment-dod">
+        <div class="attachment-file" @click.stop="$emit('dod-download', msg, msg.attachment)">
+          <Icon :name="msg.attachment.isImage ? 'image' : 'file'" :size="13" />
+          {{ msg.attachment.name }} ({{ dodSizeLabel(msg.attachment) }})
+          <span v-if="msg.attachment.dodStatus === 'loading'" class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('dod_loading') || 'Загрузка…' }}</span>
+          <span v-else-if="msg.attachment.dodStatus === 'error'" class="attachment-dl-btn dod-error"><Icon name="download" :size="13" /> {{ t('dod_retry') || 'Повторить' }}</span>
+          <span v-else class="attachment-dl-btn"><Icon name="download" :size="13" /> {{ t('dod_download') || 'Скачать' }}</span>
+        </div>
+      </div>
+      <div v-else-if="msg.attachment && msg.attachment.isImage" class="attachment-preview">
         <img :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"
              :alt="msg.attachment.name"
              class="attachment-image"
@@ -131,6 +140,13 @@ import UserAvatar from './UserAvatar.vue'
 // features/*.js и дёргается событиями.
 const { t } = useI18n()
 
+// Download-on-demand: человекочитаемый размер для карточки (МБ для
+// крупных — DoD-файлы всегда >1МБ по порогу отправки).
+function dodSizeLabel(att) {
+  const mb = (att.size || 0) / 1024 / 1024;
+  return mb >= 1 ? mb.toFixed(1) + 'MB' : ((att.size || 0) / 1024).toFixed(1) + 'KB';
+}
+
 defineProps({
   msg: { type: Object, required: true },
   isGroup: { type: Boolean, default: false },
@@ -163,7 +179,7 @@ defineEmits([
   'context-menu', 'toggle-reaction-picker', 'toggle-reaction', 'add-reaction',
   'note-drag-start', 'note-drag-over', 'note-drag-leave', 'note-drop', 'note-drag-end',
   'reply', 'copy-text', 'pin', 'edit', 'delete', 'poll-vote',
-  'open-image', 'download', 'text-click', 'call-back',
+  'open-image', 'download', 'text-click', 'call-back', 'dod-download',
 ])
 </script>
 

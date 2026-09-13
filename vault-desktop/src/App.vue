@@ -268,6 +268,7 @@
             @poll-vote="castPollVote"
             @open-image="openImageViewer"
             @download="downloadAttachment"
+            @dod-download="downloadDodAttachment"
             @text-click="onMessageTextClick"
             @call-back="callBack"
           />
@@ -979,6 +980,11 @@ export default {
       emailBodyCache: {},
       bodyCacheOrder: [],       // ключи кэша, старые первые (для trimming'а)
       bodyCacheSaveTimer: null, // debounce записи в localStorage
+      // Download-on-demand: кэш скачанных data-писем (Message-ID -> base64)
+      // на время сессии. Скачанные данные персистятся в истории сообщения
+      // (saveCurrentHistory в fetchDodAttachment) — после перезапуска файл
+      // уже в карточке, IMAP не тревожится.
+      dodCache: {},
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
@@ -1810,6 +1816,82 @@ export default {
       if (!attachment || !attachment.data) return;
       downloadBase64(attachment.data, attachment.name, attachment.type);
     },
+    // ── Download-on-demand (M1) ─────────────────────────────────────
+    // Клик по карточке DoD-вложения: найти data-письмо по Message-ID из
+    // меты (dod), скачать его тело, расшифровать, отдать attachment.data.
+    // Расшифровка — пир-ключом (1:1) или групповым (группа активного чата);
+    // письмо ищем во ВСЕХ папках this.emails (uid зависит от папки).
+    async fetchDodAttachment(msg, attachment) {
+      if (!attachment || !attachment.isDod || !attachment.dod) return;
+      if (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading') return;
+      attachment.dodStatus = 'loading';
+      const chatKey = this.activeChatType === 'group' && this.currentGroup
+        ? 'group:' + this.currentGroup.id
+        : this.activeChat;
+      try {
+        // 1) письмо по Message-ID (сначала кэш тел — вдруг уже качали)
+        const cached = this.dodCache[attachment.dod];
+        if (cached) {
+          attachment.data = cached;
+          attachment.dodStatus = 'ready';
+          this.$forceUpdate();
+          return;
+        }
+        const target = (this.emails || []).find(m => (m.message_id || '').trim() === attachment.dod.trim());
+        if (!target) throw new Error(this.t('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
+        // 2) тело (может быть тяжёлым — десятки МБ; fetch_message_body
+        //    одиночный, таймауты внутри)
+        const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
+        if (!body) throw new Error('empty body');
+        // 3) расшифровка: групповой ключ, затем пир-ключ отправителя
+        let plain = null;
+        const groupKey = this.groupKeys[this.currentGroup && this.currentGroup.id];
+        if (this.activeChatType === 'group' && groupKey) {
+          try { plain = await crypto.decryptWithGroupKey(body, groupKey); } catch (e) { plain = null; }
+        }
+        if (plain === null) {
+          const senderEmail = this.activeChatType === 'group'
+            ? (msg && msg.sender_id && this.senderEmail(msg.sender_id)) || ''
+            : this.activeChat;
+          if (senderEmail && this.peerKeys[senderEmail]) {
+            crypto.setPeerPublicKey(this.peerKeys[senderEmail], this.peerPqKeys && this.peerPqKeys[senderEmail]);
+            plain = await crypto.decryptVault(body);
+          }
+        }
+        if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
+        // 4) конверт → {vault_dod_data:1, ref, data}
+        const env = this.parseEnvelope(plain);
+        const raw = env ? env.text : plain;
+        const obj = JSON.parse(raw);
+        if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');
+        if (String(obj.ref || '') !== attachment.dod.trim()) throw new Error('ref mismatch');
+        // 5) готово: подставить в карточку, закэшировать, открыть как
+        //    обычное вложение (картинка/аудио/файл — isImage/isAudio уже
+        //    выставлены parseMessageContent при dodStatus='ready' ниже).
+        attachment.data = obj.data;
+        this.dodCache[attachment.dod] = obj.data;
+        attachment.dodStatus = 'ready';
+        attachment.isImage = !!(attachment.type && attachment.type.startsWith('image/'));
+        attachment.isAudio = !!(attachment.type && attachment.type.startsWith('audio/'));
+        attachment.isText = false;
+        this.showToast((this.t('dod_ready') || 'Файл загружен:') + ' ' + attachment.name, 4000);
+      } catch (e) {
+        console.warn('[dod] fetch failed:', e);
+        attachment.dodStatus = 'error';
+        this.showToast((this.t('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
+      }
+      this.$forceUpdate();
+      // Персистим в историю, чтобы статус/данные пережили перезапуск.
+      try { this.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
+    },
+    // Кнопка «Скачать» на DoD-карточке: сначала fetch, затем download.
+    async downloadDodAttachment(msg, attachment) {
+      if (attachment.dodStatus !== 'ready') {
+        await this.fetchDodAttachment(msg, attachment);
+        if (attachment.dodStatus !== 'ready') return;
+      }
+      if (attachment.data) downloadBase64(attachment.data, attachment.name, attachment.type);
+    },
     // Полноэкранный просмотр изображения-вложения
     openImageViewer(attachment) {
       this.viewingImage = attachment;
@@ -2519,9 +2601,18 @@ export default {
           const label = isAudio
             ? `🎙️ ${parsed.name}`
             : (isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`);
+          // Download-on-demand: данные НЕ в конверте — во втором письме
+          // (dod = его Message-ID). Карточка рендерится сразу (имя/размер
+          // из меты), содержимое подтягивается по клику — fetchDodAttachment.
+          const isDod = typeof parsed.dod === 'string' && parsed.dod.length > 0;
           return {
             text: label,
-            attachment: { name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data, isImage, isAudio, isText, textContent },
+            attachment: {
+              name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data,
+              isImage: isImage && !isDod, isAudio: isAudio && !isDod, isText: isText && !isDod,
+              textContent: isDod ? '' : textContent,
+              isDod, dod: isDod ? parsed.dod : '', dodStatus: 'idle', // idle|loading|ready|error
+            },
           };
         }
       } catch { /* not JSON — plain text message */ }
@@ -2846,9 +2937,15 @@ export default {
           // навсегда (так пропадали приглашения и аудио после гонки доставки).
           const missing = msgs.filter(m => {
             const b = this.emailBodyCache[`${folder}:${m.uid || m.id}`];
-            return b === undefined || b === '';
+            if (b !== undefined && b !== '') return false;
+            // Download-on-demand: письма крупнее порога НЕ фетчим телом
+            // автоматически — открытие чата не должно качать десятки МБ.
+            // Карточка DoD-вложения знает размер из меты, тело подтянется
+            // по клику (fetchDodAttachment). size=0 (неизвестен) — фетчим
+            // как раньше (провайдер без RFC822.SIZE или старый кэш).
+            if ((m.size || 0) > 2 * 1024 * 1024) return false;
+            return true;
           });
-          console.log('[loadMessages] folder=' + folder + ' total=' + msgs.length + ' missing=' + missing.length);
           if (missing.length) {
             // Ошибка батча (IMAP-рассинхрон, одно пустое тело роняет весь
             // запрос в Rust) НЕ должна обнулять чат: без try/catch падал
@@ -2867,6 +2964,7 @@ export default {
             }
           }
         }
+        console.log('[loadMessages] folder pass done (DoD-sized letters skipped)');
         // Единый проход: расшифровываем каждое письмо и классифицируем по
         // содержимому (реакция / правка / конверт / legacy-текст).
         const wireReactions = {}; // msg_id -> [{emoji, user, action}]
@@ -2946,6 +3044,15 @@ export default {
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
               const env = this.parseEnvelope(text);
+              // Download-on-demand: data-письмо — ТРАНСПОРТ, не сообщение.
+              // Его содержимое (десятки МБ) подтянется по клику с карточки
+              // мета-вложения (fetchDodAttachment по Message-ID из меты).
+              if (env && typeof env.text === 'string' && env.text.startsWith('{')) {
+                try {
+                  const dodObj = JSON.parse(env.text);
+                  if (dodObj && dodObj.vault_dod_data === 1) return null;
+                } catch (e) { /* не dod — продолжаем */ }
+              }
               // (внутри try), а return ниже был ВНЕ неё → ReferenceError молча
               // ловился catch'ем и сообщение шло без ttl. Выносим в msgTtl.
               var msgTtl = 0;
@@ -3393,6 +3500,14 @@ export default {
                 // p === null (некорректный poll) — падаем ниже, отрисуется как текст.
               }
               plaintext = env.text; // содержимое конверта
+              // Download-on-demand: data-письмо — транспорт, не сообщение
+              // группы (содержимое подтянется по клику с мета-карточки).
+              if (typeof plaintext === 'string' && plaintext.startsWith('{')) {
+                try {
+                  const dodObj = JSON.parse(plaintext);
+                  if (dodObj && dodObj.vault_dod_data === 1) continue;
+                } catch (e) { /* не dod */ }
+              }
             }
             const { text, attachment } = this.parseMessageContent(plaintext);
             if (env && !this.isOwnSender(msg.sender_id)) {
@@ -4800,14 +4915,31 @@ export default {
               if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
             }
 
-            // Encode attachment as structured JSON for server storage
-            const attachmentPayload = JSON.stringify({
-              vault_attachment: true,
-              name: fileName,
-              type: fileType,
-              size: fileSize,
-              data: base64,
-            });
+            // Encode attachment as structured JSON for server storage.
+            // Download-on-demand (M1): файлы крупнее порога уходят ДВУМЯ
+            // письмами — мета-конверт (эта карточка, без данных) + data-письмо
+            // (полный base64) с нейтральным Message-ID. Получатель качает
+            // тело по требованию (клик), а не автоматически при открытии
+            // чата. Малые файлы идут как раньше — одним конвертом.
+            const DOD_THRESHOLD = 1024 * 1024;
+            const useDod = fileSize > DOD_THRESHOLD;
+            let dodMid = '';
+            if (useDod) dodMid = `<vault-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}@${(this.email || 'localhost').split('@')[1] || 'localhost'}>`;
+            const attachmentPayload = useDod
+              ? JSON.stringify({
+                  vault_attachment: true,
+                  name: fileName,
+                  type: fileType,
+                  size: fileSize,
+                  dod: dodMid,
+                })
+              : JSON.stringify({
+                  vault_attachment: true,
+                  name: fileName,
+                  type: fileType,
+                  size: fileSize,
+                  data: base64,
+                });
 
             const displayContent = isImage
               ? `📎 ${fileName}`
@@ -4900,6 +5032,42 @@ export default {
             this.scrollToBottom(true);
 
             if (this.activeChat) {
+              // DoD: data-письмо уходит ПЕРВЫМ. Если мета не уйдёт и её
+              // переотправят — data-дубль безвреден (один Message-ID
+              // дедуплируется на приёме), а обратный порядок дал бы
+              // карточку без данных. Сбой data = мета бесполезна → failed.
+              if (useDod) {
+                const dataPayload = JSON.stringify({ vault_dod_data: 1, ref: dodMid, data: base64 });
+                try {
+                  if (this.activeChatType === 'group' && this.currentGroup) {
+                    const groupKey = this.groupKeys[this.currentGroup.id];
+                    if (!groupKey) throw new Error('group key unavailable');
+                    const dataWire = await crypto.encryptWithGroupKey(await this.buildEnvelope(dataPayload), groupKey);
+                    const members = await api.getGroupMembers(this.currentGroup.id);
+                    const failedData = [];
+                    for (const member of members || []) {
+                      if (member.email === this.email) continue;
+                      try { await api.sendDodEmail(member.email, dataWire, dodMid); }
+                      catch (e) { failedData.push(member.email); }
+                    }
+                    if (failedData.length) {
+                      console.warn('DoD data partial fail:', failedData);
+                      this.showToast((this.t('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
+                    }
+                  } else if (this.cryptoReady && this.peerKeys[this.activeChat]) {
+                    crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
+                    const dataWire = await crypto.encryptVault(await this.buildEnvelope(dataPayload));
+                    await api.sendDodEmail(this.activeChat, dataWire, dodMid);
+                  } else {
+                    throw new Error('crypto not ready');
+                  }
+                } catch (err) {
+                  console.error('DoD data send failed:', err);
+                  msg.status = 'failed';
+                  this.saveCurrentHistory(chatKey);
+                  return;
+                }
+              }
               try {
                 if (this.activeChatType === 'group' && this.currentGroup) {
                   // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
