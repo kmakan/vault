@@ -842,6 +842,7 @@ import * as DuressFeature from './features/duress.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
+import * as HistoryFeature from './features/history.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1615,6 +1616,22 @@ export default {
     filterDeleted(list) { return EditsFeature.filterDeleted(this, list); },
     applyEdits(list, chatKey, wireEdits) { return EditsFeature.applyEdits(this, list, chatKey, wireEdits); },
     sendEditEmail(msgId, text, action) { return EditsFeature.sendEditEmail(this, msgId, text, action); },
+    // ── История/кэши/оптимистичные исходящие (логика в features/history.js) ──
+    bodyCacheKey() { return HistoryFeature.bodyCacheKey(this); },
+    chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this, chat); },
+    loadBodyCache() { return HistoryFeature.loadBodyCache(this); },
+    cacheBody(key, body) { return HistoryFeature.cacheBody(this, key, body); },
+    persistBodyCache() { return HistoryFeature.persistBodyCache(this); },
+    loadChatCache(chat) { return HistoryFeature.loadChatCache(this, chat); },
+    saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this, chat, list); },
+    markPending(chatKey, msg) { return HistoryFeature.markPending(this, chatKey, msg); },
+    mergePending(chatKey, list) { return HistoryFeature.mergePending(this, chatKey, list); },
+    loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this, chatKey); },
+    normalizeStaleSending(hist) { return HistoryFeature.normalizeStaleSending(this, hist); },
+    mergeHistory(chatKey, list) { return HistoryFeature.mergeHistory(this, chatKey, list); },
+    msgTs(m) { return HistoryFeature.msgTs(m); },
+    showHistoryFirst(chatKey, isStale) { return HistoryFeature.showHistoryFirst(this, chatKey, isStale); },
+    saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this, chatKey); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -2340,235 +2357,6 @@ export default {
       if (!t) { this.jumpToBottom(); return; }
       el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
     },
-    // --- Персистентный кэш тел: SQLite
-    bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
-    chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
-    // Загрузка кэша тел писем из SQLite — вызывается после логина/восстановления
-    // сессии.
-    async loadBodyCache() {
-      try {
-        const rows = await db.bodyCacheLoadAll(this.email || 'anon');
-        const bodies = {};
-        const order = [];
-        for (const [key, body] of rows || []) {
-          bodies[key] = body;
-          order.push(key);
-        }
-        this.emailBodyCache = bodies;
-        this.bodyCacheOrder = order;
-      } catch (e) {
-        console.warn('loadBodyCache (sqlite) failed:', JSON.stringify(e), String(e));
-        this.emailBodyCache = {};
-        this.bodyCacheOrder = [];
-      }
-    },
-    // Запись тела в кэш: SQLite (db_body_cache_set) + память. Лимит ~400 тел:
-    // старые вытесняются (FIFO по bodyCacheOrder).
-    cacheBody(key, body) {
-      this.emailBodyCache[key] = body;
-      const i = this.bodyCacheOrder.indexOf(key);
-      if (i >= 0) this.bodyCacheOrder.splice(i, 1);
-      this.bodyCacheOrder.push(key);
-      while (this.bodyCacheOrder.length > 400) {
-        const old = this.bodyCacheOrder.shift();
-        delete this.emailBodyCache[old];
-      }
-      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
-      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
-    },
-    persistBodyCache() {
-      // SQLite-персистенция (debounce сохранён в cacheBody): каждое тело — своя
-      // строка body_cache(account, cache_key, body). localStorage не используется.
-      const acc = this.email || 'anon';
-      try {
-        for (const k of Object.keys(this.emailBodyCache)) {
-          db.bodyCacheSet(acc, k, this.emailBodyCache[k]).catch(() => {});
-        }
-      } catch (e) {
-        // Кэш не критичен — молча пропускаем.
-      }
-    },
-    // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
-    // Хранится в SQLite kv_store.
-    async loadChatCache(chat) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-cache:' + chat);
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
-    },
-    saveChatCache(chat, list) {
-      try {
-        // email-объект письма не персистим (тяжёлый и не нужен для рендера).
-        // attachment персистим: без него из кэша пропадают плеер аудио,
-        // кнопка «скачать» и текст вложения.
-        const slim = (list || []).map(m => ({
-          id: m.id, content: m.content, from: m.from, time: m.time,
-          encrypted: m.encrypted, vault: m.vault, status: m.status,
-          ts: m.ts || this.msgTs(m) || undefined,
-          reactions: m.reactions || undefined,
-          deleted: m.deleted || undefined,
-          edited: m.edited || undefined,
-          // sender_id нужен групповому рендеру (аватар/имя отправителя над
-          // чужим сообщением) — без него из кэша блок отправителя исчезал,
-          // хотя при свежем фетче появлялся («аватарки то есть, то нет»).
-          sender_id: m.sender_id || undefined,
-          attachment: m.attachment || undefined,
-          // Пилюли звонков: без этого поля из кэша пропадают
-          // «Пропущенный звонок» и т.п.
-          callEvent: m.callEvent || undefined,
-        }));
-        db.kvSet(this.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
-      } catch (e) { /* quota — не критично */ }
-    },
-    // --- Оптимистичные исходящие (pendingOutgoing) ---
-    // Отправка SMTP медленная (до минуты), а поллинг каждые 30 с перестраивает
-    // messages из IMAP. Без этого сообщение «появлялось и исчезало» у
-    // отправителя: оптимистичная запись стиралась, пока письмо не сделает
-    // круг SMTP → ящик → INBOX/Sent. Здесь:
-    //  - markPending: регистрируем оптимистичное сообщение;
-    //  - mergePending: при перестроении списка подмешиваем ещё не
-    //    подтверждённые записи (их нет в IMAP-списке), а подтверждённые
-    //    (id уже отрисован из письма) — удаляем из реестра.
-    markPending(chatKey, msg) {
-      if (!msg || !msg.id) return;
-      const bucket = this.pendingOutgoing[chatKey] || {};
-      bucket[msg.id] = msg;
-      this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: bucket };
-    },
-    mergePending(chatKey, list) {
-      const bucket = this.pendingOutgoing[chatKey];
-      if (!bucket || !Object.keys(bucket).length) return list;
-      const now = Date.now();
-      const out = [...list];
-      const seen = new Set(list.map(m => m.id));
-      const remaining = {};
-      for (const [id, msg] of Object.entries(bucket)) {
-        if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
-        // Удалённое сообщение не возвращается из pending (tombstone).
-        if (this.isTombstoned(id)) continue;
-        // Страховка: не держим запись дольше 10 минут (если SMTP молча не
-        // отправил письмо, сообщение не должно висеть «отправленным» вечно).
-        // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
-        // должен видеть, что сообщение не дошло.
-        if (msg.status !== 'failed' && msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
-        remaining[id] = msg;
-        out.push(msg);
-      }
-      if (Object.keys(remaining).length) {
-        this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: remaining };
-      } else {
-        const copy = { ...this.pendingOutgoing };
-        delete copy[chatKey];
-        this.pendingOutgoing = copy;
-      }
-      // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
-      // сообщений и вложений нет email-объекта, сортировка по email.date давала
-      // 0 и рвала хронологию.
-      out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return out;
-    },
-    // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
-    // из IndexedDB.
-    // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
-    // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
-    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает.
-    // Локальная история чата: SQLite (db.history_load) — единственный
-    // источник. localStorage-копии НЕТ: WebKitGTK-localStorage ограничен
-    // ~5 МБ (body-cache уже 3–7 МБ), история живёт в sqlite vault.db
-    async loadLocalHistory(chatKey) {
-      let hist = null;
-      try {
-        hist = await loadHistory(this.email, chatKey);
-      } catch (e) { /* sqlite недоступен — чат откроется из писем */ }
-      hist = this.normalizeStaleSending(hist);
-      // Сигнальные call_*-конверты: старые сборки сохраняли их в
-      // историю как сырой JSON — не рендерим нигде.
-      if (hist && hist.length) {
-        hist = hist.filter(m => {
-          const c = (m && m.content) || '';
-          return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
-        });
-      }
-      return hist;
-    },
-    // 'sending' — переходный статус, он не должен долго жить в истории: его
-    // персистят оптимистично ДО отправки, а финальный пишут после. После
-    // вечно горела красным. Повышаем до 'sent' (письмо либо принято SMTP, либо
-    // умерло вместе с процессом — квитанции получателей уточнят статус позже).
-    normalizeStaleSending(hist) {
-      if (!hist || !hist.length) return hist;
-      const now = Date.now();
-      for (const m of hist) {
-        if (m && m.from === 'me' && m.status === 'sending') {
-          const t = this.msgTs(m);
-          if (t && now - t > 60 * 1000) m.status = 'sent';
-        }
-      }
-      return hist;
-    },
-    // полученные когда-либо, остаются в чате навсегда, с датами), а письма
-    // из IMAP только ДОБАВЛЯЮТ новое.
-    // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
-    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами.
-    async mergeHistory(chatKey, list) {
-      let hist = await this.loadLocalHistory(chatKey); // let: фильтр call_* ниже
-      if (!hist || !hist.length) return list;
-      // Звонки: сигнальные call_*-конверты, попавшие в историю
-      // старыми сборками (до фильтра в loadMessages), не рендерим — они
-      // «застревали» в чате как сырой JSON и не удалялись.
-      hist = hist.filter(m => {
-        const c = (m && m.content) || '';
-        return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type": "call_') !== -1));
-      });
-      const ids = new Set();
-      for (const m of hist) if (m && m.id) ids.add(m.id);
-      // Исчезающие: старые записи истории могли быть сохранены БЕЗ
-      // ttl/expireAt. Письмо то же
-      // обновляем таймер из свежераспарсенного env.
-      for (const h of hist) {
-        if (!h || !h.id) continue;
-        const fresh = list.find((x) => x && x.id === h.id && x.expireAt);
-        if (fresh && !h.expireAt) {
-          h.ttl = fresh.ttl;
-          h.expireAt = fresh.expireAt;
-        }
-      }
-      // Из писем добавляем только то, чего ещё нет в истории (новое).
-      const extra = list.filter(m => m && m.id && !ids.has(m.id));
-      // МИГРАЦИЯ 0.1.151 (только группы): старые сборки теряли env.poll и
-      // писали в историю текст вопроса (id конверта). Свежая карточка из
-      // писем (id poll-а, есть .poll) заменяет такую запись, иначе после
-      // фикса в чате дубль: старый текст + новая карточка.
-      if (extra.length && String(chatKey).startsWith('group:')) {
-        const pollQs = new Set(extra.filter(m => m && m.poll && m.poll.question).map(m => m.poll.question));
-        if (pollQs.size) {
-          hist = hist.filter(h => !(!h || h.poll || typeof h.content !== 'string' || !pollQs.has(h.content)));
-        }
-      }
-      // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
-      // вставки, и
-      // «16:37 20:31 18:06 18:07 20:38»).
-      if (!extra.length) {
-        hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        return this.filterDeleted(hist);
-      }
-      const merged = [...hist, ...extra];
-      merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return this.filterDeleted(merged);
-    },
-    // Машинная временная метка сообщения для сортировки чата.
-    msgTs(m) {
-      if (!m) return 0;
-      if (m.ts) return m.ts;
-      if (m.email && m.email.date) return new Date(m.email.date).getTime();
-      if (m.created_at) return new Date(m.created_at).getTime();
-      // Оптимистичные исходящие (вложения/голос) персистились без ts —
-      // только _pendingAt; без этого фолбэка они сортировались в начало.
-      if (m._pendingAt) return m._pendingAt;
-      return 0;
-    },
     async selectGroup(group) {
       this.saveDraft(); // черновик прошлого чата
       this.messages = [];
@@ -3010,32 +2798,6 @@ export default {
         const arr = raw ? JSON.parse(raw) : [];
         this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
       } catch (e) { /* тихо */ }
-    },
-    // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
-    // в localStorage, см. loadLocalHistory).
-    showHistoryFirst(chatKey, isStale) {
-      return this.loadLocalHistory(chatKey).then(hist => {
-        if (hist && hist.length && !isStale()) {
-          // История в sqlite — в порядке вставки; показываем сразу по времени.
-          hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-          // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
-          // сырые сообщения — сигналы не
-          // рендерятся ни в истории, ни в чате.
-          this.messages = hist.filter(m => {
-            const c = (m && m.content) || '';
-            return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type":"profile"') !== -1));
-          });
-        }
-      });
-    },
-    saveCurrentHistory(chatKey) {
-      // SQLite (db.history_save) — единственный источник истории. Сбои
-      // sqlite не критичны: чат пересоберётся из писем IMAP при поллинге.
-      try {
-        saveHistory(this.email, chatKey, this.messages);
-      } catch (e) {
-        console.warn('saveHistory (sqlite) failed:', e);
-      }
     },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
