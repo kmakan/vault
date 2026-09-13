@@ -840,6 +840,12 @@ import * as FoldersFeature from './features/folders.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as IncomingFeature from './features/incoming.js';
+import * as ReactionsFeature from './features/reactions.js';
+import * as EditsFeature from './features/edits.js';
+import * as HistoryFeature from './features/history.js';
+import * as RelayFeature from './features/relay.js';
+import * as CallsFeature from './features/calls.js';
+import * as ProfilesFeature from './features/profiles.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1588,6 +1594,110 @@ export default {
     castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
     async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
     applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ── Реакции (логика в features/reactions.js) ──
+    reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this); },
+    loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this); },
+    saveStoredReactions(data) { return ReactionsFeature.saveStoredReactions(this, data); },
+    applyReactions(list, chatKey, wireReactions) { return ReactionsFeature.applyReactions(this, list, chatKey, wireReactions); },
+    sendReactionEmail(msgId, emoji, action) { return ReactionsFeature.sendReactionEmail(this, msgId, emoji, action); },
+    toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this, msgId); },
+    addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this, msgId, emoji); },
+    toggleReaction(msgId, emoji) { return ReactionsFeature.toggleReaction(this, msgId, emoji); },
+    // ── Правки/удаления + tombstones (логика в features/edits.js) ──
+    editsStorageKey() { return EditsFeature.editsStorageKey(this); },
+    loadStoredEdits() { return EditsFeature.loadStoredEdits(this); },
+    saveStoredEdits(data) { return EditsFeature.saveStoredEdits(this, data); },
+    recordLocalEdit(chatKey, msgId, text, action) { return EditsFeature.recordLocalEdit(this, chatKey, msgId, text, action); },
+    tombstonesKey() { return EditsFeature.tombstonesKey(this); },
+    loadTombstones() { return EditsFeature.loadTombstones(this); },
+    addTombstone(msgId) { return EditsFeature.addTombstone(this, msgId); },
+    isTombstoned(msgId) { return EditsFeature.isTombstoned(this, msgId); },
+    midTombstonesKey() { return EditsFeature.midTombstonesKey(this); },
+    loadMidTombstones() { return EditsFeature.loadMidTombstones(this); },
+    addMidTombstone(mid) { return EditsFeature.addMidTombstone(this, mid); },
+    isMidTombstoned(mid) { return EditsFeature.isMidTombstoned(this, mid); },
+    filterDeleted(list) { return EditsFeature.filterDeleted(this, list); },
+    applyEdits(list, chatKey, wireEdits) { return EditsFeature.applyEdits(this, list, chatKey, wireEdits); },
+    sendEditEmail(msgId, text, action) { return EditsFeature.sendEditEmail(this, msgId, text, action); },
+    // ── История/кэши/оптимистичные исходящие (логика в features/history.js) ──
+    bodyCacheKey() { return HistoryFeature.bodyCacheKey(this); },
+    chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this, chat); },
+    loadBodyCache() { return HistoryFeature.loadBodyCache(this); },
+    cacheBody(key, body) { return HistoryFeature.cacheBody(this, key, body); },
+    persistBodyCache() { return HistoryFeature.persistBodyCache(this); },
+    loadChatCache(chat) { return HistoryFeature.loadChatCache(this, chat); },
+    saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this, chat, list); },
+    markPending(chatKey, msg) { return HistoryFeature.markPending(this, chatKey, msg); },
+    mergePending(chatKey, list) { return HistoryFeature.mergePending(this, chatKey, list); },
+    loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this, chatKey); },
+    normalizeStaleSending(hist) { return HistoryFeature.normalizeStaleSending(this, hist); },
+    mergeHistory(chatKey, list) { return HistoryFeature.mergeHistory(this, chatKey, list); },
+    msgTs(m) { return HistoryFeature.msgTs(m); },
+    showHistoryFirst(chatKey, isStale) { return HistoryFeature.showHistoryFirst(this, chatKey, isStale); },
+    saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this, chatKey); },
+    // ── Релей/режимы приёма (логика в features/relay.js) ──
+    relayConsume() { return RelayFeature.relayConsume(this); },
+    loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(this, silent); },
+    startRelayTicker() { return RelayFeature.startRelayTicker(this); },
+    enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(this); },
+    idleLoop() { return RelayFeature.idleLoop(this); },
+    startPolling(intervalMs = 30000) { return RelayFeature.startPolling(this, intervalMs); },
+    stopPolling() { return RelayFeature.stopPolling(this); },
+    onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
+    onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
+    // ── Звонки (логика в features/calls.js) ──
+    async isCallSeen(callId) { return CallsFeature.isCallSeen(this, callId); },
+    async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this, callId); },
+    parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
+    async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
+    async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
+    async startCall() { return CallsFeature.startCall(this); },
+    async acceptCall() { return CallsFeature.acceptCall(this); },
+    async rejectCall() { return CallsFeature.rejectCall(this); },
+    async endCall() { return CallsFeature.endCall(this); },
+    async hangup(reason) { return CallsFeature.hangup(this, reason); },
+    async cancelCall(reason) { return CallsFeature.cancelCall(this, reason); },
+    async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this, peer, kind, ts, durationSec, callId); },
+    callEventLabel(msg) { return CallsFeature.callEventLabel(this, msg); },
+    callPillIcon(msg) { return CallsFeature.callPillIcon(msg); },
+    canCallBack(msg) { return CallsFeature.canCallBack(this, msg); },
+    callBack() { return CallsFeature.callBack(this); },
+    toggleCallMute() { return CallsFeature.toggleCallMute(this); },
+    toggleSpeaker() { return CallsFeature.toggleSpeaker(this); },
+    startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this, peer, payload, call_id); },
+    stopSignalResend() { return CallsFeature.stopSignalResend(this); },
+    sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this, peer, type, call_id); },
+    armMediaFallback() { return CallsFeature.armMediaFallback(this); },
+    startCallClock() { return CallsFeature.startCallClock(this); },
+    stopCallClock() { return CallsFeature.stopCallClock(this); },
+    startFastPolling() { return CallsFeature.startFastPolling(this); },
+    stopFastPolling() { return CallsFeature.stopFastPolling(this); },
+    playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
+    stopCallSound() { return CallsFeature.stopCallSound(this); },
+    // ── Профили контактов (логика в features/profiles.js) ──
+    aliasesOf(email) { return ProfilesFeature.aliasesOf(this, email); },
+    profileOf(email) { return ProfilesFeature.profileOf(this, email); },
+    localProfileOf(email) { return ProfilesFeature.localProfileOf(this, email); },
+    nameOf(email) { return ProfilesFeature.nameOf(this, email); },
+    avatarOf(email) { return ProfilesFeature.avatarOf(this, email); },
+    loadLocalProfiles() { return ProfilesFeature.loadLocalProfiles(this); },
+    saveLocalProfiles() { return ProfilesFeature.saveLocalProfiles(this); },
+    async loadProfiles() { return ProfilesFeature.loadProfiles(this); },
+    async getBio() { return ProfilesFeature.getBio(this); },
+    async setBio(text) { return ProfilesFeature.setBio(this, text); },
+    async onBioSave(text) { return ProfilesFeature.onBioSave(this, text); },
+    async onProfileSave() { return ProfilesFeature.onProfileSave(this); },
+    async broadcastProfile() { return ProfilesFeature.broadcastProfile(this); },
+    async openContactCard(email) { return ProfilesFeature.openContactCard(this, email); },
+    startEditFromCard() { return ProfilesFeature.startEditFromCard(this); },
+    openContactEdit(email) { return ProfilesFeature.openContactEdit(this, email); },
+    handleContactAvatarSelect(event) { return ProfilesFeature.handleContactAvatarSelect(this, event); },
+    saveContactEdit() { return ProfilesFeature.saveContactEdit(this); },
+    resetContactEdit() { return ProfilesFeature.resetContactEdit(this); },
+    async shrinkAvatar(dataUrl) { return ProfilesFeature.shrinkAvatar(dataUrl); },
+    compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
+    noteSeen(email, ts) { return ProfilesFeature.noteSeen(this, email, ts); },
+    isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this, email); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -1673,60 +1783,6 @@ export default {
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
         this.showToast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
-      }
-    },
-    // ── Звуки звонка: WAV-ассеты вместо осциллятора ──
-    // Desktop: cpal в Rust (media_sound_play) — слышно при свёрнутом окне,
-    // не зависит от autoplay WebKitGTK. Android: HTML5 Audio из
-    // /sounds/*.wav (cpal там паникует; WebView разрешает autoplay —
-    // wry ставит mediaPlaybackRequiresUserGesture=false).
-    //
-    // КРИТИЧНО: эти функции
-    // ДОЛЖНЫ быть в methods, НЕ в computed. В computed Vue 3 превращает
-    // их в геттеры: this.playCallSound(...) вызывает тело БЕЗ аргументов,
-    // и this.isAndroid() бросает TypeError (computed возвращает false,
-    // false() — не функция). Синхронный бросок рвал acceptCall ДО
-    // отправки call_accept, incoming_ringing — ДО рингтона и таймера,
-    // startCall — ДО гудков и ретрансляции. Плюс: функция НИКОГДА не
-    // должна бросать — звук вторичен, сигнализация звонка важнее.
-    playCallSound(name, looped) {
-      try {
-        // Настройки звонков: пользователь мог выбрать другой рингтон
-        // (Настройки → Звонки). Маппим incoming/outgoing на выбранный вариант.
-        const ringIn = this.callRingtoneIncoming || 'incoming';
-        const ringOut = this.callRingtoneOutgoing || 'outgoing';
-        if (name === 'incoming') name = ringIn;
-        else if (name === 'outgoing') name = ringOut;
-        if (this.isAndroid) {
-          this.stopCallSound();
-          const el = new Audio('/sounds/ring_' + name + '.wav');
-          el.loop = !!looped;
-          el.volume = 0.85;
-          el.play().catch(e => console.warn('[call] sound play failed:', e));
-          this.callSoundEl = el;
-          // Одноразовые звуки: освобождаем элемент по окончании.
-          if (!looped) {
-            el.onended = () => { if (this.callSoundEl === el) this.callSoundEl = null; };
-          }
-        } else {
-          api.mediaSoundPlay(name, !!looped).catch(e => console.warn('[call] sound play failed:', e));
-        }
-      } catch (e) {
-        // Звук не критичен — глотаем, чтобы не рвать state machine звонка.
-        console.warn('[call] sound failed:', e && e.message || e);
-      }
-    },
-    stopCallSound() {
-      try {
-        if (this.callSoundEl) {
-          try { this.callSoundEl.pause(); } catch (_) {}
-          this.callSoundEl = null;
-        }
-        if (!this.isAndroid) {
-          api.mediaSoundStop().catch(() => {});
-        }
-      } catch (e) {
-        console.warn('[call] sound stop failed:', e && e.message || e);
       }
     },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
@@ -2071,15 +2127,6 @@ export default {
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
     // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
-    aliasesOf(email) {
-      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
-      if (!key) return [String(email || '').toLowerCase()];
-      const out = new Set([String(email || '').toLowerCase()]);
-      for (const [k, v] of Object.entries(this.peerKeys)) {
-        if (v === key) out.add(String(k).toLowerCase());
-      }
-      return [...out];
-    },
     // Канонический адрес: какой контакт показывается для этого ключа
     // (после дедупликации в loadContacts). Если email — алиас, возвращаем
     // показываемый адрес (самый новый по added_at).
@@ -2313,245 +2360,6 @@ export default {
       if (!t) { this.jumpToBottom(); return; }
       el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
     },
-    // --- Персистентный кэш тел: SQLite
-    bodyCacheKey() { return 'vault-body-cache:' + (this.email || 'anon'); },
-    chatCacheKey(chat) { return 'vault-chat-cache:' + (this.email || 'anon') + ':' + chat; },
-    // Загрузка кэша тел писем из SQLite — вызывается после логина/восстановления
-    // сессии.
-    async loadBodyCache() {
-      try {
-        const rows = await db.bodyCacheLoadAll(this.email || 'anon');
-        const bodies = {};
-        const order = [];
-        for (const [key, body] of rows || []) {
-          bodies[key] = body;
-          order.push(key);
-        }
-        this.emailBodyCache = bodies;
-        this.bodyCacheOrder = order;
-      } catch (e) {
-        console.warn('loadBodyCache (sqlite) failed:', JSON.stringify(e), String(e));
-        this.emailBodyCache = {};
-        this.bodyCacheOrder = [];
-      }
-    },
-    // Запись тела в кэш: SQLite (db_body_cache_set) + память. Лимит ~400 тел:
-    // старые вытесняются (FIFO по bodyCacheOrder).
-    cacheBody(key, body) {
-      this.emailBodyCache[key] = body;
-      const i = this.bodyCacheOrder.indexOf(key);
-      if (i >= 0) this.bodyCacheOrder.splice(i, 1);
-      this.bodyCacheOrder.push(key);
-      while (this.bodyCacheOrder.length > 400) {
-        const old = this.bodyCacheOrder.shift();
-        delete this.emailBodyCache[old];
-      }
-      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
-      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
-    },
-    persistBodyCache() {
-      // SQLite-персистенция (debounce сохранён в cacheBody): каждое тело — своя
-      // строка body_cache(account, cache_key, body). localStorage не используется.
-      const acc = this.email || 'anon';
-      try {
-        for (const k of Object.keys(this.emailBodyCache)) {
-          db.bodyCacheSet(acc, k, this.emailBodyCache[k]).catch(() => {});
-        }
-      } catch (e) {
-        // Кэш не критичен — молча пропускаем.
-      }
-    },
-    // Кэш отрисованных сообщений чата (без тяжёлых полей email-объектов).
-    // Хранится в SQLite kv_store.
-    async loadChatCache(chat) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'chat-cache:' + chat);
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
-    },
-    saveChatCache(chat, list) {
-      try {
-        // email-объект письма не персистим (тяжёлый и не нужен для рендера).
-        // attachment персистим: без него из кэша пропадают плеер аудио,
-        // кнопка «скачать» и текст вложения.
-        const slim = (list || []).map(m => ({
-          id: m.id, content: m.content, from: m.from, time: m.time,
-          encrypted: m.encrypted, vault: m.vault, status: m.status,
-          ts: m.ts || this.msgTs(m) || undefined,
-          reactions: m.reactions || undefined,
-          deleted: m.deleted || undefined,
-          edited: m.edited || undefined,
-          // sender_id нужен групповому рендеру (аватар/имя отправителя над
-          // чужим сообщением) — без него из кэша блок отправителя исчезал,
-          // хотя при свежем фетче появлялся («аватарки то есть, то нет»).
-          sender_id: m.sender_id || undefined,
-          attachment: m.attachment || undefined,
-          // Пилюли звонков: без этого поля из кэша пропадают
-          // «Пропущенный звонок» и т.п.
-          callEvent: m.callEvent || undefined,
-        }));
-        db.kvSet(this.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
-      } catch (e) { /* quota — не критично */ }
-    },
-    // --- Оптимистичные исходящие (pendingOutgoing) ---
-    // Отправка SMTP медленная (до минуты), а поллинг каждые 30 с перестраивает
-    // messages из IMAP. Без этого сообщение «появлялось и исчезало» у
-    // отправителя: оптимистичная запись стиралась, пока письмо не сделает
-    // круг SMTP → ящик → INBOX/Sent. Здесь:
-    //  - markPending: регистрируем оптимистичное сообщение;
-    //  - mergePending: при перестроении списка подмешиваем ещё не
-    //    подтверждённые записи (их нет в IMAP-списке), а подтверждённые
-    //    (id уже отрисован из письма) — удаляем из реестра.
-    markPending(chatKey, msg) {
-      if (!msg || !msg.id) return;
-      const bucket = this.pendingOutgoing[chatKey] || {};
-      bucket[msg.id] = msg;
-      this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: bucket };
-    },
-    mergePending(chatKey, list) {
-      const bucket = this.pendingOutgoing[chatKey];
-      if (!bucket || !Object.keys(bucket).length) return list;
-      const now = Date.now();
-      const out = [...list];
-      const seen = new Set(list.map(m => m.id));
-      const remaining = {};
-      for (const [id, msg] of Object.entries(bucket)) {
-        if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
-        // Удалённое сообщение не возвращается из pending (tombstone).
-        if (this.isTombstoned(id)) continue;
-        // Страховка: не держим запись дольше 10 минут (если SMTP молча не
-        // отправил письмо, сообщение не должно висеть «отправленным» вечно).
-        // failed-записи (частичный фейл отправки) НЕ выкидываем — пользователь
-        // должен видеть, что сообщение не дошло.
-        if (msg.status !== 'failed' && msg._pendingAt && now - msg._pendingAt > 10 * 60 * 1000) continue;
-        remaining[id] = msg;
-        out.push(msg);
-      }
-      if (Object.keys(remaining).length) {
-        this.pendingOutgoing = { ...this.pendingOutgoing, [chatKey]: remaining };
-      } else {
-        const copy = { ...this.pendingOutgoing };
-        delete copy[chatKey];
-        this.pendingOutgoing = copy;
-      }
-      // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
-      // сообщений и вложений нет email-объекта, сортировка по email.date давала
-      // 0 и рвала хронологию.
-      out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return out;
-    },
-    // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
-    // удалён навсегда) или deleted-метка из истории — фильтруются при
-    // каждом построении чата (история + письма + pending). Message-ID
-    // tombstones (mid) отсекают письма, вернувшиеся из другой папки/All
-    // Mail с новым uid (DC-аналог rfc724_mid).
-    filterDeleted(list) {
-      const tombs = this.loadTombstones();
-      const mids = this.loadMidTombstones();
-      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
-    },
-    // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
-    // из IndexedDB.
-    // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
-    // за лимиты фетча, легли в спам или исчезли из ящика. Почта — только
-    // транспорт: приносит НОВЫЕ письма, уже показанное не затирает.
-    // Локальная история чата: SQLite (db.history_load) — единственный
-    // источник. localStorage-копии НЕТ: WebKitGTK-localStorage ограничен
-    // ~5 МБ (body-cache уже 3–7 МБ), история живёт в sqlite vault.db
-    async loadLocalHistory(chatKey) {
-      let hist = null;
-      try {
-        hist = await loadHistory(this.email, chatKey);
-      } catch (e) { /* sqlite недоступен — чат откроется из писем */ }
-      hist = this.normalizeStaleSending(hist);
-      // Сигнальные call_*-конверты: старые сборки сохраняли их в
-      // историю как сырой JSON — не рендерим нигде.
-      if (hist && hist.length) {
-        hist = hist.filter(m => {
-          const c = (m && m.content) || '';
-          return !(typeof c === 'string' && c.indexOf('"type":"call_') !== -1);
-        });
-      }
-      return hist;
-    },
-    // 'sending' — переходный статус, он не должен долго жить в истории: его
-    // персистят оптимистично ДО отправки, а финальный пишут после. После
-    // вечно горела красным. Повышаем до 'sent' (письмо либо принято SMTP, либо
-    // умерло вместе с процессом — квитанции получателей уточнят статус позже).
-    normalizeStaleSending(hist) {
-      if (!hist || !hist.length) return hist;
-      const now = Date.now();
-      for (const m of hist) {
-        if (m && m.from === 'me' && m.status === 'sending') {
-          const t = this.msgTs(m);
-          if (t && now - t > 60 * 1000) m.status = 'sent';
-        }
-      }
-      return hist;
-    },
-    // полученные когда-либо, остаются в чате навсегда, с датами), а письма
-    // из IMAP только ДОБАВЛЯЮТ новое.
-    // поллинг перестраивался из писем: старые письма (за курсорами/лимитами)
-    // выпадали, чат «мерцал» и рассинхронизировался между аккаунтами.
-    async mergeHistory(chatKey, list) {
-      let hist = await this.loadLocalHistory(chatKey); // let: фильтр call_* ниже
-      if (!hist || !hist.length) return list;
-      // Звонки: сигнальные call_*-конверты, попавшие в историю
-      // старыми сборками (до фильтра в loadMessages), не рендерим — они
-      // «застревали» в чате как сырой JSON и не удалялись.
-      hist = hist.filter(m => {
-        const c = (m && m.content) || '';
-        return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type": "call_') !== -1));
-      });
-      const ids = new Set();
-      for (const m of hist) if (m && m.id) ids.add(m.id);
-      // Исчезающие: старые записи истории могли быть сохранены БЕЗ
-      // ttl/expireAt. Письмо то же
-      // обновляем таймер из свежераспарсенного env.
-      for (const h of hist) {
-        if (!h || !h.id) continue;
-        const fresh = list.find((x) => x && x.id === h.id && x.expireAt);
-        if (fresh && !h.expireAt) {
-          h.ttl = fresh.ttl;
-          h.expireAt = fresh.expireAt;
-        }
-      }
-      // Из писем добавляем только то, чего ещё нет в истории (новое).
-      const extra = list.filter(m => m && m.id && !ids.has(m.id));
-      // МИГРАЦИЯ 0.1.151 (только группы): старые сборки теряли env.poll и
-      // писали в историю текст вопроса (id конверта). Свежая карточка из
-      // писем (id poll-а, есть .poll) заменяет такую запись, иначе после
-      // фикса в чате дубль: старый текст + новая карточка.
-      if (extra.length && String(chatKey).startsWith('group:')) {
-        const pollQs = new Set(extra.filter(m => m && m.poll && m.poll.question).map(m => m.poll.question));
-        if (pollQs.size) {
-          hist = hist.filter(h => !(!h || h.poll || typeof h.content !== 'string' || !pollQs.has(h.content)));
-        }
-      }
-      // Сортировка ОБЯЗАТЕЛЬНА всегда: история в sqlite хранится в порядке
-      // вставки, и
-      // «16:37 20:31 18:06 18:07 20:38»).
-      if (!extra.length) {
-        hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        return this.filterDeleted(hist);
-      }
-      const merged = [...hist, ...extra];
-      merged.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-      return this.filterDeleted(merged);
-    },
-    // Машинная временная метка сообщения для сортировки чата.
-    msgTs(m) {
-      if (!m) return 0;
-      if (m.ts) return m.ts;
-      if (m.email && m.email.date) return new Date(m.email.date).getTime();
-      if (m.created_at) return new Date(m.created_at).getTime();
-      // Оптимистичные исходящие (вложения/голос) персистились без ts —
-      // только _pendingAt; без этого фолбэка они сортировались в начало.
-      if (m._pendingAt) return m._pendingAt;
-      return 0;
-    },
     async selectGroup(group) {
       this.saveDraft(); // черновик прошлого чата
       this.messages = [];
@@ -2734,24 +2542,6 @@ export default {
     // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
     // 200KB, а вот пустой аватар = собеседник никогда не увидит картинку).
-    async shrinkAvatar(dataUrl) {
-      if (!dataUrl) return '';
-      if (dataUrl.length <= 8192) return dataUrl;
-      try {
-        const img = new Image();
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
-        const canvas = document.createElement('canvas');
-        canvas.width = 64; canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, 64, 64);
-        const small = canvas.toDataURL('image/jpeg', 0.7);
-        // Берём сжатый только если он реально получился и меньше оригинала.
-        if (small && small.length > 0 && small.length < dataUrl.length) return small;
-        return dataUrl; // сжатие не помогло — шлём оригинал, не роняем аватар
-      } catch (e) {
-        return dataUrl; // canvas недоступен — шлём оригинал, не роняем аватар
-      }
-    },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text, ttl = 0) {
       const dn = this.displayName || (await api.getDisplayName()) || '';
@@ -2993,58 +2783,6 @@ export default {
         const arr = raw ? JSON.parse(raw) : [];
         this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
       } catch (e) { /* тихо */ }
-    },
-    // Транспорт правок (паттерн sendReactionEmail):
-    // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
-    // группа — encryptWithGroupKey, письма VaultGroupEdit: <id>.
-    sendEditEmail(msgId, text, action) {
-      // Метки письма (аналог DC Chat-Edit/Chat-Delete + rfc724_mid, но в
-      // зашифрованном теле — стелс): msg_id (сопоставление с оригиналом),
-      // sender (проверка «автор оригинала» на стороне получателя), ts
-      // (последняя по времени правка авторитетна).
-      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action, sender: this.email, ts: Date.now() });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupEdit(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendEdit(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send edit email:', e);
-        }
-      })();
-    },
-    // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
-    // в localStorage, см. loadLocalHistory).
-    showHistoryFirst(chatKey, isStale) {
-      return this.loadLocalHistory(chatKey).then(hist => {
-        if (hist && hist.length && !isStale()) {
-          // История в sqlite — в порядке вставки; показываем сразу по времени.
-          hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-          // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
-          // сырые сообщения — сигналы не
-          // рендерятся ни в истории, ни в чате.
-          this.messages = hist.filter(m => {
-            const c = (m && m.content) || '';
-            return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type":"profile"') !== -1));
-          });
-        }
-      });
-    },
-    saveCurrentHistory(chatKey) {
-      // SQLite (db.history_save) — единственный источник истории. Сбои
-      // sqlite не критичны: чат пересоберётся из писем IMAP при поллинге.
-      try {
-        saveHistory(this.email, chatKey, this.messages);
-      } catch (e) {
-        console.warn('saveHistory (sqlite) failed:', e);
-      }
     },
     async loadMessages(email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
@@ -3856,44 +3594,6 @@ export default {
     // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
     // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
     // и не рендерит как сообщение (см. processIncoming).
-    async broadcastProfile() {
-      const peers = Object.keys(this.peerKeys || {});
-      if (!peers.length) return;
-      const name = this.displayName || this.email || '';
-      // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,
-      // this.profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
-      let avatar = (this.profiles[this.email] || {}).avatar || '';
-      try {
-        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-        const kp = kvProfiles[String(this.email).toLowerCase()];
-        if (kp && kp.avatar) avatar = kp.avatar;
-      } catch (e) { /* ignore */ }
-      const bio = await this.getBio();
-      const body = {
-        vault: 1,
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
-        type: 'profile',
-        text: '',
-        name,
-        avatar,
-        bio: (bio || '').slice(0, 200),
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      // Шифруем для КАЖДОГО получателя его ключом. Без этого
-      // encryptVault использует глобальный peerPublicKey (последний открытый
-      // чат) — письмо расшифровывает только один из всех контактов, остальные
-      // получают «AAD auth failed». Это была причина нестабильности: «с третьего
-      // раза сработало» — потому что последний открытый чат менялся случайно.
-      for (const peer of peers) {
-        const peerKey = this.peerKeys[peer];
-        if (!peerKey) continue;
-        crypto.setPeerPublicKey(peerKey, this.peerPqKeys && this.peerPqKeys[peer]);
-        const content = await crypto.encryptVault(JSON.stringify(body));
-        try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
-      }
-      console.log('[profile] broadcast to', peers.length, 'contacts');
-    },
     // Выбор аватара в диалоге «Новая группа»: центр-кроп 128×128 JPEG
     // (те же параметры, что у аватара группы в GroupSettings).
     onNewGroupAvatarSelected(e) {
@@ -3986,117 +3686,17 @@ export default {
         this.loginLoading = false;
       }
     },
-    // --- Зелёная точка
-    // Отмечаем активность контакта: входящее письмо от него.
-    noteSeen(email, ts) {
-      if (!email || typeof email !== 'string' || !email.includes('@')) return;
-      const t = Number(ts) || Date.now();
-      if ((this.lastSeenMap[email] || 0) < t) {
-        this.lastSeenMap = { ...this.lastSeenMap, [email]: t };
-      }
-    },
-    isRecentlySeen(email) {
-      const t = this.lastSeenMap[email];
-      if (!t) return false;
-      return Date.now() - t < 10 * 60 * 1000; // 10 минут
-    },
-
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() {
       try { return (await db.kvGet('anon', 'media-quality')) || 'high'; } catch { return 'high'; }
     },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
-    compressImage(dataUrl, maxSide, quality) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          const side = Math.max(img.width, img.height);
-          if (side <= maxSide) { resolve(null); return; } // сжатие не нужно
-          const scale = maxSide / side;
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        };
-        img.onerror = () => reject(new Error('image decode failed'));
-        img.src = dataUrl;
-      });
-    },
-
-    // --- Статус «О себе»: свой bio в kv_store, уходит в profile-конверте
-    async getBio() {
-      try { return (await db.kvGet(this.email || 'anon', 'bio')) || ''; } catch { return ''; }
-    },
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
     },
     // M2.4: тумблер релея в настройках — живое обновление кэша
     // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
-    onRelayEnabled(on) {
-      this.relayEnabled = !!on;
-    },
-    // M2.3: экономный режим — постоянный IMAP IDLE останавливается
-    // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
-    // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
-    async onEcoMode(on, silent = false) {
-      this.ecoMode = !!on;
-      // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
-      // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
-      this.ecoAutonomous = false;
-      this.relayOfflineSince = null;
-      try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
-      if (!this.isLoggedIn) return;
-      if (this.ecoMode) {
-        // стоп JS IDLE-цикла
-        this._idleStop = true;
-        try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
-        // M2.3-b ФИНАЛ: пуши при закрытом приложении несёт ntfy-клиент
-        // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
-        // глушим его полностью: иконка исчезает из шторки, батарея целая.
-        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
-        try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
-        // релей-тикер — канал приёма при живом JS (activity открыта)
-        this.startRelayTicker();
-        // редкий поллинг-тик страхует (релей — основной канал)
-        this.stopPolling();
-        this.startPolling(60000);
-        if (!silent) this.showToast(this.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
-      } else {
-        // классика: постоянный IDLE + обычный поллинг
-        try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
-        try { await api.ecoSet(false); } catch (e) { console.warn('[eco] svc start:', e); }
-        this.stopPolling();
-        this.idleLoop();
-        this.startPolling();
-        this.showToast(this.t('eco_off_toast') || 'Классический режим: постоянное соединение включено');
-      }
-    },
-    async onBioSave(text) {
-      await this.setBio(text);
-      this.showToast('Профиль сохранён — статус уйдёт контактам');
-    },
-    async setBio(text) {
-      const v = String(text || '').slice(0, 200);
-      await db.kvSet(this.email || 'anon', 'bio', v);
-      this.myBio = v;
-      return v;
-    },
-    // «Сохранить профиль»: ОДНО письмо с именем+аватаром+статусом и
-    // одним ts.
-    // на приёме более позднее письмо с неполным набором перетирало _ts и
-    // блокировало/возвращало старые значения (чехарда имени/аватара).
-    async onProfileSave() {
-      try {
-        await this.broadcastProfile();
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
-      } catch (e) {
-        console.error('[profile] broadcast on save failed:', e);
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён');
-      }
-    },
-
     // --- Исчезающие сообщения
     // TTL хранится per-chat в kv_store ('ephemeral:<chatId>'), уходит в
     // конверте (env.ttl, секунды). У получателя таймер стартует при ПОКАЗЕ
@@ -4845,76 +4445,6 @@ export default {
     // конкурирует за lock основного клиента. Используется ИЗ IDLE-цикла:
     // входящий call_request доходит, даже когда обычный поллинг пропускается
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
-    async loadEmailsFast(silent = true) {
-      try {
-        const accounts = await api.getEmailAccounts();
-        const fetched = [];
-        for (const account of accounts) {
-          try {
-            const cursors = this.loadCursors(account.id);
-            const res = await api.fetchEmailsIncrementalFast(account.id, cursors);
-            fetched.push(...(res.messages || []));
-            this.saveCursors(account.id, res.cursors);
-          } catch (e) {
-            console.warn('[calls] fast fetch failed:', e);
-          }
-        }
-        if (!fetched.length) return;
-        const merged = [...this.emails];
-        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-        for (const m of fetched) {
-          const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (!seen.has(k)) { seen.add(k); merged.push(m); }
-        }
-        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        if (merged.length > 2000) merged.length = 2000;
-        this.emails = merged;
-        console.log(`[Emails] fast loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
-        await this.processIncoming(fetched, { notify: silent });
-      } catch (e) {
-        console.warn('[calls] fast load failed:', e);
-      }
-    },
-    // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
-    // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
-    // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
-    // from приходит от отправителя (поле from) — дальше обычная расшифровка
-    // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
-    async relayConsume() {
-      const list = await relay.relayPoll(this.email);
-      if (!list.length) return;
-      const merged = [...this.emails];
-      const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-      const fresh = [];
-      for (const env of list) {
-        const uid = 'rl-' + env.id;
-        if (seen.has(uid + '|RELAY')) continue;
-        seen.add(uid + '|RELAY');
-        fresh.push({
-          uid,
-          folder: 'RELAY',
-          from: (env.from || '').toLowerCase(),
-          to: this.email,
-          date: new Date((env.ts || 0) * 1000).toISOString(),
-          subject: '',
-          message_id: 'relay-' + env.id,
-          body: env.body, // тело уже декодировано в relay-client
-          is_read: false,
-        });
-      }
-      if (!fresh.length) return;
-      merged.push(...fresh);
-      merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      if (merged.length > 2000) merged.length = 2000;
-      this.emails = merged;
-      // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
-      for (const f of fresh) {
-        this.cacheBody('RELAY:' + f.uid, f.body);
-      }
-      await this.processIncoming(fresh, { notify: true });
-      console.log('[relay] consumed envelopes: ' + fresh.length);
-    },
     // Входящие конверты (router) — логика в features/incoming.js; Этап 4
     // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
     async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts); },
@@ -5089,938 +4619,6 @@ export default {
       }
     },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
-    // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
-    // call_id обработанного звонка (request/accept/end/reject). После
-    // перезапуска не даёт старым конвертам снова дёргать state machine.
-    async isCallSeen(callId) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
-        const set = raw ? new Set(JSON.parse(raw)) : new Set();
-        return set.has(callId);
-      } catch (e) { return false; }
-    },
-    async rememberCallSeen(callId) {
-      try {
-        const raw = await db.kvGet(this.email || 'anon', 'call-seen');
-        const set = raw ? new Set(JSON.parse(raw)) : new Set();
-        set.add(callId);
-        // Храним последние 100 call_id (старые не нужны)
-        if (set.size > 100) {
-          const arr = Array.from(set);
-          arr.splice(0, arr.length - 100);
-          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(arr));
-        } else {
-          await db.kvSet(this.email || 'anon', 'call-seen', JSON.stringify(Array.from(set)));
-        }
-      } catch (e) { /* тихо */ }
-    },
-    // ── Звонки (M3, feature/calls) — Фаза 1: сигнализация конвертами call_* ──
-    // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
-    // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
-    // state machine звонка. Медиа (webrtc-rs) подключается в Фазе 2.
-    parseCallSignal(decrypted) {
-      if (!decrypted || typeof decrypted !== 'string') return null;
-      try {
-        const obj = JSON.parse(decrypted);
-        if (obj && obj.vault === 1 && typeof obj.type === 'string'
-            && obj.type.indexOf('call_') === 0 && obj.call_id) {
-          return obj;
-        }
-      } catch (e) { /* не сигнал */ }
-      return null;
-    },
-    // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
-    async sendCallEnvelope(peer, payload, opts = {}) {
-      const body = {
-        vault: 1,
-        id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
-        type: payload.type,
-        call_id: payload.call_id,
-        ts: Date.now(),
-        ...(payload.sdp ? { sdp: payload.sdp } : {}),
-        ...(payload.role ? { role: payload.role } : {}),
-        // PQ: kemct звонящего едет в call_request; принимающий
-        // собирает гибридный media_key декапсуляцией. sender_ek — чтобы
-        // contact сохранялся и для ответного гибрида.
-        ...(payload.kemct ? { kemct: payload.kemct } : {}),
-        ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
-      };
-      const content = await crypto.encryptVault(JSON.stringify(body));
-      // M2.2: дублируем сигнал звонка на релей (критично для скорости
-      // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
-      // заберёт его relayConsume'ом (parseCallSignal работает и на
-      // relay-конвертах — тот же зашифрованный wire-формат). Дедуп по
-      // call_id (isCallSeen) — дубль через email безопасен.
-      //
-      // ntfy wake-семантика (fix 09.09): будим пушем ТОЛЬКО call_request —
-      // остальные сигналы (accept/answer/end/reject) адресат получает,
-      // когда уже активен на звонке, и каждый ntfy-wake рисовал лишнее
-      // «Новое сообщение» ПОСЛЕ принятия/завершения звонка.
-      // viaRelay=false — ретранслируем ТОЛЬКО почтой (call_request
-      // повторяется каждые 15с: релей-копия уже лежит в очереди, повтор
-      // жёг суточный лимит издателя и плодил дубль-пуши).
-      const viaRelay = opts.viaRelay !== false;
-      const wake = payload.type === 'call_request';
-      if (viaRelay) {
-        try {
-          relay.relayPublish(this.email, peer, { id: body.id }, content, { wake });
-        } catch (e) { /* релей опционален — email путь живёт */ }
-      }
-      // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный
-      // дублирующий канал: НЕ ждём его завершения, чтобы не блокировать
-      // звонковую state machine (раньше accept-цепочка могла ждать до
-      // 3×3с ретраев, а при зависшем Gmail — минуту). Ретраи оставляем
-      // внутри фоновой задачи.
-      (async () => {
-        let lastErr;
-        for (let i = 0; i < 3; i++) {
-          try {
-            await api.sendReadReceipt(peer, content); // stealth: пустая тема
-            if (i > 0) console.log('[call] envelope sent on retry', i);
-            return;
-          } catch (e) {
-            lastErr = e;
-            console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        }
-        console.error('[call] SMTP envelope failed after retries:', lastErr && lastErr.message);
-      })();
-      // SMTP ушёл в фон — ошибки канала не роняют звонок (релей-копия уже
-      // доставлена; письмо — догоняющий дубль). Больше не бросаем lastErr.
-    },
-    // Входящий сигнал → state machine. MVP: один звонок одновременно.
-    async handleCallSignal(sig, from) {
-      const { call_id, type } = sig;
-      if (!call_id || !from) return;
-      // Ignore-лист: звонки заблокированного гасятся до state machine —
-      // ни рингтона, ни оверлея, ни «пропущенного» в истории.
-      if (this.isIgnored(from)) return;
-      console.log('[call] signal', type, call_id, 'from', from, 'state=' + this.callState,
-        'current=' + (this.currentCall ? this.currentCall.call_id : 'null'));
-      // после перезапуска приложение
-      // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
-      // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
-      // state machine в incoming_ringing, и НОВЫЙ звонок, пришедший в это
-      // время, молча отбрасывался (callState !== 'idle') — вызовы пропадали.
-      // Звонок живёт ≤45с (ring-таймер) + запас на доставку почты и на вход
-      // в аккаунт после перезапуска окна (пользователь мог перезапустить
-      // окно, и собеседник залогинился позже звонка) — конверты старше 10
-      // минут неактуальны — игнорируем (и запоминаем call_id).
-      if (sig.ts && Date.now() - sig.ts > 600000) {
-        console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
-        const alreadySeen = await this.isCallSeen(call_id);
-        await this.rememberCallSeen(call_id);
-        // Пропущенные вызовы: звонок пришёл, пока нас не было
-        // (офлайн/перезапуск) — записываем «Пропущенный звонок» в историю
-        // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
-        // иначе повторный фетч Спада после рестарта плодил дубли пилюль.
-        if (type === 'call_request' && !alreadySeen) {
-          await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
-        }
-        return;
-      }
-      // ДЕДУП + ПОВТОРНЫЙ ПОКАЗ: call_id уже показанного звонка
-      // из повторного фетча гасится — НО только если звонок ещё «жив» в системе
-      // (not cancelled). Ретрансляция call_request (каждые 15с) того же call_id
-      // после ЛОКАЛЬНОГО отклонения обязана СНОВА поднять экран звонка? НЕТ:
-      // юзер уже решил судьбу звонка — гасим. А вот РЕТРАНСЛЯЦИИ ДО отклонения
-      // дедупятся через currentCall check (4800) — они безопасны.
-      // Зомби-гвард: терминальные cancel/end/reject запоминаются
-      // request, приехавший ПОЗЖЕ своего cancel, гасится здесь.
-      if (type === 'call_request' && !(this.currentCall && this.currentCall.call_id === call_id)) {
-        if (await this.isCallSeen(call_id)) return;
-        await this.rememberCallSeen(call_id);
-      }
-      // Чужой звонок во время активного — отвечаем занято (call_reject).
-      if (this.callState !== 'idle' && this.currentCall
-          && this.currentCall.call_id !== call_id && type === 'call_request') {
-        await this.sendCallEnvelope(from, { type: 'call_reject', call_id });
-        // Пропущенные вызовы: мы говорили по другому звонку
-        await this.recordCallEvent(from, 'missed', sig.ts, 0, call_id);
-        return;
-      }
-      switch (type) {
-        case 'call_request':
-          // РЕТРАНСЛЯЦИЯ: звонящий повторяет call_request каждые 15с
-          // (письма теряются в транзите). Если тот же call_id УЖЕ звонит у
-          // нас — это дубль: игнорируем.
-          // reset» ниже → hangup('preempt') → повторный SET incoming_ringing:
-          // рингтон перезапускался, а драг-жест свайпа сбрасывался посреди
-          // движения (пользователь видел «трубка вернулась в центр»).
-          if (this.currentCall && this.currentCall.call_id === call_id) return;
-          // ГАРАНТИЯ ПОКАЗА: НОВЫЙ call_request ВСЕГДА вытесняет любое
-          // состояние, кроме реального разговора (active) — даже если state
-          // machine зависла в ringing от старого конверта без currentCall.
-          if (this.callState !== 'idle' && this.callState !== 'active') {
-            console.warn('[call] forcing reset before new request (state=' + this.callState + ')');
-            await this.hangup('preempt');
-          }
-          if (this.callState !== 'idle') return;
-          // OFFER В call_request: звонящий создаёт offer ДО набора
-          // он едет в первом письме. Сохраняем: при accept сразу создадим
-          // answer (1 hop вместо 2). Если sdp нет (старая версия/fallback) —
-          // acceptCall создаст offer сам (старая схема).
-          this.currentCall = {
-            call_id, peer: from, offerSdp: sig.sdp || null,
-            // PQ: kemct звонящего — в mediaAcceptIncoming при accept.
-            kemct: sig.kemct || null, senderEk: sig.sender_ek || null,
-          };
-          this.lastCallId = call_id;
-          this.callState = 'incoming_ringing';
-          this.callMuted = false;
-          this.callStartedAt = Date.now();
-          console.log('[call] incoming_ringing SET for', call_id, 'from', from);
-          // Звук входящего: WAV-рингтон «кристальный чайм».
-          // Desktop — cpal в Rust (слышен при свёрнутом окне).
-          // Android: рингтон играет НАТИВНЫЙ MediaPlayer в сервисе
-          // (запускается в mediaShowIncomingCall) — HTML5 Audio в WebView
-          // глохнет в фоне и играл ОДИН раз. Поэтому HTML5-луп входящего
-          // на Android пропускаем, чтобы не было двойного звука.
-          if (!this.isAndroid) {
-            this.playCallSound('incoming', true);
-          }
-          // Full-screen уведомление: Android — системный звонок
-          // поверх локскрина (рингтон+вибрация канала уведомлений).
-          // Desktop — no-op. Снимается в hangup().
-          api.mediaShowIncomingCall(this.callPeerName || from);
-          this.startFastPolling();
-          // Таймер гудка 180с: было 90с, но call_accept/answer по
-          // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
-          // того, как собеседник успевал ответить.
-          this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 180000);
-          break;
-        case 'call_accept':
-          if (this.currentCall && this.currentCall.call_id === call_id
-              && this.callState === 'outgoing_ringing') {
-            // Собеседник принял — таймер отмены больше не нужен.
-            clearTimeout(this.callRingTimer);
-            this.callRingTimer = null;
-            if (this.callResendTimer) {
-              clearInterval(this.callResendTimer);
-              this.callResendTimer = null;
-            }
-            // Гудки исходящего → чайм соединения. stop не нужен
-            // play сам останавливает предыдущий звук (Rust/HTML5).
-            this.playCallSound('connect', false);
-            this.callState = 'active';
-            // Таймер НЕ запускаем: ждём событие call-media-connected
-            // из Rust (реальный звук). Предохранитель 120с — если событие
-            // потерялось, показываем таймер хоть когда-нибудь.
-            this.callMediaConnected = false;
-            this.armMediaFallback();
-            // OFFER В call_request: если мы создали offer при наборе
-            // (hasLocalOffer) — sdp в call_accept это ANSWER: ставим remote,
-            // DTLS-SRTP устанавливается. Fallback (старая схема): sdp это
-            // offer принимающего — принимаем его и шлём answer.
-            if (sig.sdp) {
-              if (this.currentCall && this.currentCall.hasLocalOffer) {
-                try {
-                  await api.mediaSetRemote(call_id, sig.sdp);
-                  console.log('[call] remote answer set — DTLS handshake should follow');
-                } catch (e) {
-                  console.error('[call] media set remote (answer) failed:', e && e.message || e);
-                }
-              } else {
-                try {
-                  const r = await api.mediaAcceptIncoming(call_id, sig.sdp, this.peerKeys[from] || '', sig.kemct || null);
-                  console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
-                  const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
-                  await this.sendCallEnvelope(from, answerPayload);
-                  console.log('[call] answer sent OK — waiting for DTLS');
-                  // Ретрансляция answer: если письмо потеряется
-                  // принимающий зависнет в «Соединение…». Повторяем каждые
-                  // 10с до соединения медиа.
-                  this.startSignalResend(from, answerPayload, call_id);
-                } catch (e) {
-                  console.error('[call] media accept failed:', e && e.message || e);
-                }
-              }
-            }
-          }
-          break;
-        case 'call_reject':
-        case 'call_end':
-        case 'call_cancel':
-          // call_cancel — собеседник отменил/завершил звонок (или у него
-          // сработал таймаут): кладём трубку автоматически.
-          // Гонка: пользователь мог уже повесить трубку вручную
-          // (state=idle) до того, как call_end дошёл — проверяем и по
-          // lastCallId, чтобы не оставить трубку у собеседника.
-          if (this.currentCall && this.currentCall.call_id === call_id) {
-            // remote_reject — отдельно от remote: звонящий увидит
-            // «Вызов отклонён», а не «Нет ответа».
-            this.hangup(type === 'call_reject' ? 'remote_reject' : 'remote');
-          } else if (this.lastCallId === call_id && this.callState === 'idle') {
-            console.log('[call] remote end after local hangup — ensuring cleanup');
-            this.hangup('remote_late');
-          }
-          // ЗАПОМНИТЬ ТЕРМИНАЛЬНЫЙ call_id ВСЕГДА
-          // доставки (INBOX/All Mail/Спам — разные копии, порядок не
-          // гарантирован). Без помни later call_request поднимал звонок,
-          // которого уже нет (запомненные терминалы гасят его в guard
-          // isCallSeen ниже). Свежие cancel не попадали в stale-ветку —
-          // потому и не запоминались.
-          await this.rememberCallSeen(call_id);
-          if (this.lastCallId !== call_id) this.lastCallId = call_id;
-          break;
-        case 'call_sdp':
-          // Фаза 2: SDP-обмен после call_accept. offer — сторона получателя
-          // (создаёт answer и шлёт обратно), answer — сторона звонящего
-          // (завершает handshake, DTLS-SRTP устанавливается).
-          console.log('[call] sdp received', call_id, 'role=' + sig.role, 'state=' + this.callState);
-          if (!this.currentCall || this.currentCall.call_id !== call_id
-              || this.callState !== 'active') {
-            console.warn('[call] sdp DROPPED by guard:', call_id, 'role=' + sig.role,
-                'state=' + this.callState, 'current=' + (this.currentCall && this.currentCall.call_id));
-            break;
-          }
-          if (sig.role === 'answer') {
-            // Фаза 2.3 (схема: offer от принимающего): звонящий получает ANSWER от принимающего
-            // и завершает handshake (DTLS-SRTP).
-            try {
-              await api.mediaSetRemote(call_id, sig.sdp);
-              console.log('[call] remote answer set — DTLS handshake should follow');
-            } catch (e) {
-              console.error('[call] media set remote failed:', e);
-            }
-          }
-          break;
-        default:
-          break;
-      }
-    },
-    // Кнопка «Позвонить» в шапке чата (1:1, есть ключ собеседника).
-    async startCall() {
-      const peer = this.activeChat;
-      if (!peer || peer === '__notes__' || this.activeChatType !== 'chat') return;
-      if (this.callState !== 'idle' || !this.peerKeys[peer]) return;
-      const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-      this.currentCall = { call_id, peer };
-      this.lastCallId = call_id;
-      this.callState = 'outgoing_ringing';
-      this.callMuted = false;
-      this.startFastPolling();
-      // для call_accept может превысить 180с, и звонок сгорал до ответа;
-      // окончательно решает call_reject/call_cancel от собеседника).
-      this.callRingTimer = setTimeout(() => this.cancelCall('timeout'), 300000);
-      // ВАЖНО: сигнал call_request отправляем ДО гудков. cpal-гудок
-      // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
-      // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
-      // call_cancel при hangup проходил). Сначала сигнал, потом звук
-      // (запустится на ~1с позже — некритично).
-      //
-      // OFFER В call_request: классическая схема
-      // WebRTC — offer звонящего едет в ПЕРВОМ письме.
-      // почтовых hops (call_request → accept+offer → answer), после свайпа
-      // принять до звука проходило 2 hops (20-60с). Теперь после accept
-      // Offer создаётся
-      // ДО отправки (ICE gathering ~4с); если не получится — fallback на
-      // старую схему (offer принимающего внутри call_accept).
-      let offerSdp = null;
-      try {
-        const r = await api.mediaStartOutgoing(call_id, this.peerKeys[peer] || '', (this.peerPqKeys && this.peerPqKeys[peer]) || null);
-        offerSdp = r.sdp;
-        // PQ: kemct из SdpResult — поедет в call_request-конверте
-        // принимающий передаст в mediaAcceptIncoming для гибридного ключа.
-        if (r.kemct) this._pendingKemct = r.kemct;
-        if (r.sender_ek) this._pendingSenderEk = r.sender_ek;
-        console.log('[call] offer created at dial time,', (offerSdp || '').length, 'bytes');
-      } catch (e) {
-        console.error('[call] offer at dial failed (fallback callee-offer):', e);
-      }
-      // Флаг для обработки call_accept: если offer создан здесь
-      // sdp в call_accept это ANSWER; иначе (fallback) — offer принимающего.
-      this.currentCall.hasLocalOffer = !!offerSdp;
-      // ГУДКИ СРАЗУ: раньше ждали SMTP-отправки call_request (Gmail
-      // держит коннект до минуты, ретраи ×3 с паузами) — звонящий сидел
-      // в тишине и не понимал, идёт ли звонок. Релей-копия уходит за ~1с
-      // (relayPublish в sendCallEnvelope не блокирует), SMTP-письмо —
-      // медленный дублирующий канал, пусть идёт в фоне.
-      this.playCallSound('outgoing', true);
-      try {
-        // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-        await this.sendCallEnvelope(peer, {
-          type: 'call_request', call_id, sdp: offerSdp,
-          kemct: this._pendingKemct || undefined,
-          sender_ek: this._pendingSenderEk || undefined,
-        });
-        this._pendingKemct = null; this._pendingSenderEk = null;
-      } catch (e) {
-        console.error('call_request failed:', e);
-        this.hangup('error');
-        return;
-      }
-      // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
-      // попадаем только когда сигналы ушли/идут в фоне.)
-      // РЕТРАНСЛЯЦИЯ: email-сигнал может потеряться в транзите
-      // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
-      // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
-      // call_id (isCallSeen), дубликаты безопасны. Останавливается в hangup.
-      this.callResendTimer = setInterval(async () => {
-        if (this.callState !== 'outgoing_ringing' || !this.currentCall
-            || this.currentCall.call_id !== call_id) {
-          clearInterval(this.callResendTimer);
-          this.callResendTimer = null;
-          return;
-        }
-        try {
-          // Offer внутри — ретрансляция несёт и его.
-          // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-          // Релей-копия НЕ повторяется (viaRelay=false): конверт уже
-          // лежит в relay-очереди получателя с первого отправления —
-          // повтор только жёг суточный лимит и плодил ntfy-пуши.
-        await this.sendCallEnvelope(peer, {
-          type: 'call_request', call_id, sdp: offerSdp,
-          kemct: this._pendingKemct || undefined,
-          sender_ek: this._pendingSenderEk || undefined,
-        }, { viaRelay: false });
-        this._pendingKemct = null; this._pendingSenderEk = null;
-          console.log('[call] call_request retransmitted', call_id);
-        } catch (e) {
-          console.warn('[call] call_request retransmit failed:', e && e.message || e);
-        }
-      }, 15000);
-    },
-    async acceptCall() {
-      const c = this.currentCall;
-      if (!c || this.callState !== 'incoming_ringing') return;
-      // Ответили — рингтон и таймер отмены в сторону, чайм соединения.
-      // stop не нужен: play сам останавливает предыдущий звук.
-      clearTimeout(this.callRingTimer);
-      this.callRingTimer = null;
-      this.playCallSound('connect', false);
-      // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
-      setTimeout(() => {
-        if (this.callState === 'active' && !this.callMediaConnected) {
-          this.playCallSound('outgoing', true);
-        }
-      }, 1200);
-      this.callState = 'active';
-      // Фаза 3: сообщаем монитору-владельцу, что звонок принят
-      // иначе headless-таймаут поставит missed поверх принятого.
-      api.reportCallState(c.call_id, 'accept');
-      // Таймер НЕ запускаем: ждём событие call-media-connected
-      // из Rust (реальный звук). Предохранитель 120с — см. armMediaFallback.
-      this.callMediaConnected = false;
-      this.armMediaFallback();
-      // OFFER В call_request: если offer звонящего пришёл в первом
-      // письме — сразу создаём ANSWER и шлём его внутри call_accept. После
-      // accept+offer → answer). Fallback (старая версия звонящего без
-      // offer): создаём offer сами внутри call_accept.
-      try {
-        let acceptPayload;
-        if (c.offerSdp) {
-          const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, this.peerKeys[c.peer] || '', c.kemct || null);
-          console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
-          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
-        } else {
-          const r = await api.mediaStartOutgoing(c.call_id, this.peerKeys[c.peer] || '', (this.peerPqKeys && this.peerPqKeys[c.peer]) || null);
-          console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
-          acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
-        }
-        await this.sendCallEnvelope(c.peer, acceptPayload);
-        console.log('[call] call_accept + sdp sent OK');
-        // Ретрансляция call_accept: письмо может потеряться
-        // тогда звонящий будет гудеть вечно. Повторяем каждые 10с, пока
-        // медиа не соединится (stopSignalResend в media-connected/hangup).
-        this.startSignalResend(c.peer, acceptPayload, c.call_id);
-      } catch (e) {
-        console.error('[call] media start (callee) failed:', e);
-        // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
-        // показываем ошибку в UI — на Android иначе не
-        // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
-        this.showToast('media start failed: ' + (e && e.message || e), 10000);
-        try { await this.sendCallEnvelope(c.peer, { type: 'call_accept', call_id: c.call_id }); }
-        catch (e2) { console.error('call_accept failed:', e2); }
-      }
-    },
-    async rejectCall() {
-      const c = this.currentCall;
-      if (c) {
-        // Повтор call_reject — см. sendTerminalRepeat.
-        this.sendTerminalRepeat(c.peer, 'call_reject', c.call_id);
-        // Фаза 3: решение монитору-владельцу (нет missed поверх).
-        api.reportCallState(c.call_id, 'reject');
-      }
-      this.hangup('reject');
-    },
-    async endCall() {
-      const c = this.currentCall;
-      if (c && this.callState === 'active') {
-        // «hangup» по WebRTC DataChannel
-        // собеседник получает за миллисекунды.
-        // email 30-60с, и собеседник сидел с «активным» звонком.
-        api.mediaSendHangup(c.call_id);
-        // Email-сигнал остаётся как fallback (DC мог не открыться):
-        // 3 попытки: сразу, +3с, +7с.
-        this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
-      }
-      this.hangup('end');
-    },
-    // Локальный сброс состояния (после сигнала, отмены или таймаута).
-    async hangup(reason) {
-      const c = this.currentCall;
-      const callId = c ? c.call_id : null;
-      const wasActive = this.callState === 'active';
-      const wasIncoming = this.callState === 'incoming_ringing';
-      const wasOutgoing = this.callState === 'outgoing_ringing';
-      console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + this.callState);
-      // Снять full-screen уведомление входящего: любой исход
-      // (принят/отклонён/таймаут/завершён) гасит системный звонок.
-      api.mediaDismissIncomingCall();
-      // «пилюлей» (Пропущенный звонок / Нет ответа / Звонок завершён · 03:24).
-      // fire-and-forget: hangup не ждёт sqlite.
-      if (c && callId) {
-        const dur = wasActive ? this.callClockSec : 0;
-        let kind = null;
-        if (wasActive) {
-          kind = 'ended';
-        } else if (wasIncoming) {
-          if (reason === 'reject') kind = 'declined';
-          else if (reason === 'timeout' || reason === 'remote'
-              || reason === 'remote_late' || reason === 'preempt') kind = 'missed';
-        } else if (wasOutgoing) {
-          if (reason === 'timeout') kind = 'no_answer';
-          else if (reason === 'remote_reject') kind = 'declined';
-          // call_cancel от собеседника = у него сгорел таймер гудка → нет ответа.
-          else if (reason === 'remote' || reason === 'remote_late') kind = 'no_answer';
-          else if (reason === 'cancel') kind = 'canceled';
-        }
-        if (kind) this.recordCallEvent(c.peer, kind, Date.now(), dur, callId);
-      }
-      clearTimeout(this.callRingTimer);
-      this.callRingTimer = null;
-      // Ретрансляция call_request — тоже останавливаем.
-      if (this.callResendTimer) {
-        clearInterval(this.callResendTimer);
-        this.callResendTimer = null;
-      }
-      // Ретрансляция call_accept/answer.
-      this.stopSignalResend();
-      // Предохранитель «Соединение…».
-      clearTimeout(this._mediaFallbackTimer);
-      // Grace-таймер ICE disconnected.
-      if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
-      this.stopCallClock();
-      // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
-      // headless-логика не ставила missed поверх реального решения.
-      if (callId) {
-        const st = (wasIncoming && (reason === 'reject' || reason === 'timeout'
-          || reason === 'cancel' || reason === 'preempt')) ? 'rejected'
-          : 'ended';
-        api.reportCallState(callId, st);
-      }
-      this.callState = 'idle';
-      this.currentCall = null;
-      this.callMuted = false;
-      this.callSpeaker = false;
-      this.callMediaConnected = false;
-      this.stopFastPolling();
-      // Финальный звук: play сам останавливает предыдущий поток
-      // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
-      // только если звука не будет вовсе.
-      if (wasActive) {
-        this.playCallSound('end', false);
-      } else if (wasIncoming && (reason === 'timeout' || reason === 'reject'
-          || reason === 'cancel' || reason === 'remote' || reason === 'preempt')) {
-        this.playCallSound('missed', false);
-      } else if (wasOutgoing && (reason === 'remote' || reason === 'timeout')) {
-        // Звонящий: собеседник отклонил/отменил или гудки сгорели — отбой.
-        this.playCallSound('end', false);
-      } else {
-        this.stopCallSound();
-      }
-      // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
-      if (callId) {
-        try { await api.mediaClose(callId); } catch (e) { /* ignore */ }
-      }
-    },
-    // ── Пропущенные вызовы ──
-    // пропущенный/нет ответа/отклонён/завершён + время + кнопка «Перезвонить».
-    // Пилюля — обычное сообщение с полем callEvent; персистится в sqlite
-    // вместе с историей (saveCurrentHistory) и в chat-cache (slim-маппер
-    // сохраняет callEvent). Текст рендерится через t() — язык из настроек.
-    async recordCallEvent(peer, kind, ts, durationSec, callId) {
-      if (!peer || !callId) return;
-      const chatKey = this.canonicalOf(peer) || peer;
-      const tsNum = Number(ts) || Date.now();
-      const msg = {
-        id: 'call-' + callId,
-        content: '',
-        from: 'them',
-        time: new Date(tsNum).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        ts: tsNum,
-        encrypted: true,
-        vault: true,
-        callEvent: { kind, duration: Number(durationSec) || 0, call_id: callId },
-      };
-      // Дедуп: один call_id — одна пилюля (повторный фетч/ретрансляция).
-      const exists = (this.messages || []).some(m => m && m.id === msg.id);
-      if (!exists && this.activeChat === chatKey && this.activeChatType === 'chat') {
-        this.messages.push(msg);
-        this.messages.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.saveCurrentHistory(chatKey);
-        this.saveChatCache(chatKey, this.messages);
-        this.scrollToBottom(true);
-      } else if (!exists) {
-        // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,
-        // чтобы она появилась при следующем открытии чата.
-        try {
-          const hist = await loadHistory(this.email, chatKey);
-          if (Array.isArray(hist) && !hist.some(m => m && m.id === msg.id)) {
-            hist.push(msg);
-            hist.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-            await saveHistory(this.email, chatKey, hist);
-          }
-        } catch (e) { /* sqlite недоступен — не критично */ }
-      }
-      // Бейдж непрочитанных: пропущенный входящий — как непрочитанное
-      // сообщение, если чат сейчас не виден.
-      if (kind === 'missed' && !this.chatVisible(chatKey)) {
-        this.unreadCounts[chatKey] = (this.unreadCounts[chatKey] || 0) + 1;
-        await this.saveUnreadCounts();
-      }
-    },
-    callEventLabel(msg) {
-      const ev = msg && msg.callEvent;
-      if (!ev) return '';
-      const key = {
-        missed: 'call_missed',
-        no_answer: 'call_no_answer',
-        declined: 'call_declined',
-        canceled: 'call_canceled',
-        ended: 'call_ended',
-      }[ev.kind] || 'call_missed';
-      let label = this.t(key);
-      if (ev.kind === 'ended' && ev.duration > 0) {
-        const m = Math.floor(ev.duration / 60);
-        const s = ev.duration % 60;
-        label += ' · ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-      }
-      return label;
-    },
-    callPillIcon(msg) {
-      const kind = msg && msg.callEvent && msg.callEvent.kind;
-      if (kind === 'ended') return 'phone';
-      return 'phone-off';
-    },
-    canCallBack(msg) {
-      // Перезвонить можно, если звонок не активен и у собеседника есть ключ.
-      return !!(msg && msg.callEvent && this.expCalls
-          && this.callState === 'idle'
-          && this.activeChatType === 'chat'
-          && this.peerKeys[this.activeChat]);
-    },
-    callBack() {
-      this.startCall();
-    },
-    async cancelCall(reason) {
-      const c = this.currentCall;
-      // таймер гудка (ringing)
-      // может сработать ПОЗЖЕ, чем call_accept дошёл по почте (SMTP с
-      // Android + доставка + IMAP ≈ 90-180с). Если звонок уже active —
-      // НЕ рвём живой звонок.
-      if (reason === 'timeout' && this.callState === 'active') {
-        console.warn('[call] stale ring timeout ignored — call is active');
-        return;
-      }
-      // Отмена/таймаут — сообщаем собеседнику (call_cancel при ringing,
-      // call_end при active), чтобы у него трубка легла сама.
-      // ВАЖНО: fire-and-forget (НЕ await!) — между await-отправкой и
-      // hangup есть окно гонки: обработка call_accept успевает сменить
-      // state на active, и hangup рвёт живой звонок.
-      // Повтор сигнала: 3 попытки — см. sendTerminalRepeat.
-      if (c) {
-        const type = this.callState === 'active' ? 'call_end' : 'call_cancel';
-        this.sendTerminalRepeat(c.peer, type, c.call_id);
-      }
-      this.hangup(reason || 'cancel');
-    },
-    // Микрофон звонка (в конфликте ключей с чат-меню «Без звука» — то
-    // отдельный метод ниже; Options API не терпит дублей имён).
-    toggleCallMute() {
-      this.callMuted = !this.callMuted;
-      const c = this.currentCall;
-      if (c) {
-        api.mediaSetMuted(c.call_id, this.callMuted).catch((e) => console.error('[call] set muted failed:', e));
-      }
-    },
-    // Динамик: Android — speakerphone (earpiece ↔ динамик)
-    // desktop — no-op в Rust (вывод и так на динамики).
-    toggleSpeaker() {
-      this.callSpeaker = !this.callSpeaker;
-      const c = this.currentCall;
-      if (c) {
-        api.mediaSetSpeaker(c.call_id, this.callSpeaker).catch((e) => console.error('[call] set speaker failed:', e));
-      }
-    },
-    // РЕТРАНСЛЯЦИЯ КРИТИЧНЫХ СИГНАЛОВ: call_accept и SDP-answer
-    // повторяются каждые 10с, пока медиа не соединится или звонок не
-    // завершится. Email-письма теряются в транзите (наблюдали: call_accept
-    // сбрасывается»). Дубликаты безопасны: приёмник игнорирует их по
-    // состоянию (call_accept — только в outgoing_ringing, call_sdp —
-    // только в active с тем же call_id).
-    startSignalResend(peer, payload, call_id) {
-      this.stopSignalResend();
-      this._signalResendTimer = setInterval(async () => {
-        if (this.callState !== 'active' || !this.currentCall
-            || this.currentCall.call_id !== call_id || this.callMediaConnected) {
-          this.stopSignalResend();
-          return;
-        }
-        try {
-          // Релей-копия уже доставлена первым отправлением — повтор
-          // только почтой (лимит + лишние пуши).
-          await this.sendCallEnvelope(peer, payload, { viaRelay: false });
-          console.log('[call] signal retransmitted:', payload.type, call_id);
-        } catch (e) {
-          console.warn('[call] signal retransmit failed:', e && e.message || e);
-        }
-      }, 10000);
-    },
-    stopSignalResend() {
-      if (this._signalResendTimer) {
-        clearInterval(this._signalResendTimer);
-        this._signalResendTimer = null;
-      }
-    },
-    // Повтор терминального сигнала (call_end/call_cancel/call_reject):
-    // если письмо потеряется, собеседник останется с поднятой трубкой
-    // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
-    // у приёмника безопасны (ветка remote_late / guard по state).
-    sendTerminalRepeat(peer, type, call_id) {
-      // Повторы — только почтой: релей-копия call_end ушла первым
-      // отправлением; wake=false и так стоит (терминальный сигнал),
-      // повтор на релей жёг бы лимит издателя.
-      this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {});
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 3000);
-      setTimeout(() => { this.sendCallEnvelope(peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 7000);
-    },
-    // Watchdog «Соединение…»: если через 90с после accept медиа
-    // не соединилось (событие call-media-connected не пришло) — звонок не
-    // состоялся: accept/answer потерялись в почте или собеседник уже ушёл.
-    // красной кнопкой висел вечно. Теперь кладём трубку сами.
-    armMediaFallback() {
-      clearTimeout(this._mediaFallbackTimer);
-      this._mediaFallbackTimer = setTimeout(() => {
-        if (this.callState === 'active' && !this.callMediaConnected) {
-          console.warn('[call] media not connected in 90s — auto hangup');
-          this.showToast(this.t('call_connect_failed'), 4000);
-          // Сообщаем собеседнику, чтобы у него тоже легла трубка
-          // (он может висеть в таком же «Соединение…»).
-          const c = this.currentCall;
-          if (c) this.sendTerminalRepeat(c.peer, 'call_end', c.call_id);
-          this.hangup('connect_timeout');
-        }
-      }, 90000);
-    },
-    startCallClock() {
-      this.callClockSec = 0;
-      clearInterval(this.callClockTimer);
-      this.callClockTimer = setInterval(() => { this.callClockSec++; }, 1000);
-    },
-    stopCallClock() {
-      clearInterval(this.callClockTimer);
-      this.callClockTimer = null;
-    },
-    // Быстрый путь сигнализации (Фаза 1.5): IDLE-цикл теперь ПОСТОЯННЫЙ
-    // дополнительно ничего делать не нужно, IDLE уже ловит
-    // сигналы за ~1с. Оставляем как гарантию, что цикл запущен.
-    startFastPolling() {
-      this.idleLoop();
-    },
-    stopFastPolling() {
-      // IDLE-цикл постоянный — не останавливаем.
-    },
-    // IMAP IDLE-цикл: крутится ПОСТОЯННО, не только на
-    // время звонка. Таймаут ожидания 2с; при событии «новое письмо» — сразу
-    // инкрементальный фетч (разбирает call_* сигналы). Страховочный фетч
-    // каждые ~10с: IDLE видит только INBOX, а сигнал мог упасть в Спам
-    // (Gmail кладёт шифрописьма в Junk). БЕЗ этого входящий call_request
-    // ждал бы поллинга 30с — получатель не успевал увидеть оверлей.
-    // M2.3: релей-тикер — ЕДИНСТВЕННЫЙ канал приёма в эко-режиме (IDLE погашен).
-    // Живёт независимо от idleLoop: запускается при логине/эко-включении.
-    // УСТОЙЧИВОСТЬ К БЛОКИРОВКАМ (relay-resilience): каждые 60с health-чек
-    // активного релея. В эко-режиме мёртвый релей (3 подряд неудачи) →
-    // АВТОНОМНЫЙ режим: поднимаем foreground-службу + IDLE + поллинг 30с —
-    // приложение работает как классика, единственная разница — иконка в
-    // шторке. При оживании релея — тихо возвращаемся в эко.
-    startRelayTicker() {
-      if (this._relayTicker) return;
-      this._relayFails = 0;
-      this._lastRelayHealth = Date.now();
-      this._relayTicker = setInterval(async () => {
-        if (!this.isLoggedIn) {
-          clearInterval(this._relayTicker);
-          this._relayTicker = null;
-          return;
-        }
-        try { await this.relayConsume(); } catch (e) { /* релей опционален */ }
-        // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
-        if (Date.now() - this._lastRelayHealth >= 60000) {
-          this._lastRelayHealth = Date.now();
-          let healthy = false;
-          try { healthy = await relay.relayHealth(this.email); } catch (e) { healthy = false; }
-          if (healthy) {
-            this._relayFails = 0;
-            if (this.relayOfflineSince) {
-              console.log('[relay] healthy again → leaving offline mode');
-              this.relayOfflineSince = null;
-              if (this.ecoMode && !this.ecoAutonomous) {
-                // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
-                this.onEcoMode(true, true).catch(() => {});
-              }
-            }
-          } else {
-            this._relayFails++;
-            console.warn(`[relay] health fail #${this._relayFails}`);
-            // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
-            if (this._relayFails >= 3 && this.ecoMode && !this.ecoAutonomous) {
-              console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
-              this.enterRelayOfflineRescue();
-            }
-          }
-        }
-      }, 5000);
-    },
-    // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
-    // уведомления локальные — работа мессенджера НЕ отличается от классики.
-    // Отличия только: иконка в шторке есть, скорость = почтовая.
-    async enterRelayOfflineRescue() {
-      this.ecoAutonomous = true;
-      this.relayOfflineSince = Date.now();
-      this.relayDeliveryMode = 'email';
-      try {
-        // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
-        // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
-        await api.pushSet(false, '', '');
-        await api.ecoSet(false);
-      } catch (e) { console.warn('[relay-rescue] svc start:', e); }
-      // IDLE + обычный поллинг — как в классике.
-      this._idleStop = false;
-      this.idleLoop();
-      this.stopPolling();
-      this.startPolling();
-      this.showToast(this.t('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
-    },
-    async idleLoop() {
-      if (this._idleActive || !this.isLoggedIn) return;
-      this._idleActive = true;
-      // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
-      // но relay-очередь иначе ждала бы 30с тика поллинга).
-      this.startRelayTicker();
-      // Rust-монитор: запускаем параллельно с JS-циклом.
-      // Идемпотентен на стороне Rust; курсоры берём из кэша активного
-      // аккаунта, чтобы первый fetch не тянул старые письма.
-      api.idleStart(this.loadCursors(this.email) || {}).catch(e =>
-        console.warn('[idle-monitor] start failed:', e));
-      let lastSafety = Date.now();
-      let idleFailed = false;
-      try {
-        while (this.isLoggedIn && !this._idleStop) {
-          let changed = false;
-          try {
-            const r = await api.idleWait(2000, 'INBOX');
-            changed = !!(r && r.changed);
-          } catch (e) {
-            console.warn('[calls] IMAP IDLE недоступен, фолбэк на поллинг:', e && e.message || e);
-            idleFailed = true;
-            break;
-          }
-          const elapsed = Date.now() - lastSafety;
-          // Gmail кладёт call_* письма в СПАМ, а IDLE-push приходит только от
-          // INBOX: страховочный фетч JUNK делаем чаще (7с), чтобы answer/accept
-          // из Спама не ждали 10с и не опаздывали к 90с-таймауту.
-          if (changed || elapsed >= 7000) {
-            lastSafety = Date.now();
-            // Быстрый фетч для звонков: ОТДЕЛЬНЫЙ IMAP-клиент в Rust
-            // (email_fetch_incremental_fast) — основной клиент может быть занят
-            // зависшими операциями/троттлингом (lock busy → поллинг молча
-            // пропускается, call_request невидим часами). Звонки доходят
-            // всегда, независимо от состояния основного клиента.
-            try { await this.loadEmailsFast(true); } catch (e) { /* тихо */ }
-          }
-        }
-      } finally {
-        this._idleActive = false;
-        this._idleStop = false;
-      }
-      // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
-      // (hangup сам вернёт обычный 30с-поллинг).
-      if (this.isLoggedIn && this.callState !== 'idle') this.startPolling(3000);
-      // IDLE умер (провайдер/сеть): обычный поллинг продолжает работать;
-      // пробуем вернуть IDLE через 60с (провайдер мог временно отключить).
-      if (this.isLoggedIn && idleFailed) {
-        setTimeout(() => { if (this.isLoggedIn) this.idleLoop(); }, 60000);
-      }
-    },
-    startPolling(intervalMs = 30000) {
-      if (this.pollTimer) return;
-      this.pollTimer = setInterval(async () => {
-        // Анти-наложение: setInterval запускает новый тик каждые 30с
-        // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
-        // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
-        // стартует поверх, lock занят почти всегда, и открытие чата падает с
-        // «Timed out waiting for email client lock» (чаты пустые). Пропускаем
-        // тик, пока предыдущий ещё выполняется.
-        if (!this.isLoggedIn || this._pollingActive) return;
-        this._pollingActive = true;
-        try {
-          // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
-          // мержим в this.emails как виртуальные письма (uid: rl-<id>) —
-          // дальше их разберёт штатный processIncoming (дедуп по env.id
-          // в mergeHistory не даст дубликату email-письма задвоиться).
-          try {
-            await this.relayConsume();
-          } catch (e) { /* релей недоступен — почта продолжит доставку */ }
-          // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
-          // контактов (модель почтовый мессенджер — группа тоже источник контактов).
-          try { await this.loadGroups(); } catch (e) { /* тихо */ }
-          // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
-          // инвайты (попап согласия) и обновляет список писем.
-          await this.loadEmails(true);
-          // Новые письма могли прийти в любой момент — перерисовываем
-          // открытый чат, чтобы не приходилось переоткрывать его вручную.
-          if (this.activeChat === '__notes__') {
-            // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
-            // перезаписал бы пустым списком из IMAP).
-          } else if (this.activeChat && this.activeChatType === 'chat') {
-            await this.loadMessages(this.activeChat);
-            // Не выдёргиваем из чтения истории: прокручиваем только если
-            // пользователь уже у низа чата.
-            this.scrollToBottom(false);
-          } else if (this.activeChatType === 'group' && this.currentGroup) {
-            // Группы тоже обновляем поллингом: новые сообщения и реакции
-            // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-            await this.loadGroupMessages(this.currentGroup.id);
-            this.scrollToBottom(false);
-          }
-        } catch (e) {
-          // "Not connected" — сессия IMAP умерла; пробуем тихо восстановить её
-          // из сохранённых (зашифрованных на устройстве) учётных данных —
-          // без релога и остановки поллинга.
-          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-            try {
-              const ok = await api.restoreSession();
-              if (!ok) this.stopPolling();
-            } catch (_) {
-              this.stopPolling();
-            }
-          } else {
-            console.error('Polling loadEmails failed:', e);
-          }
-        } finally {
-          this._pollingActive = false;
-        }
-      }, intervalMs);
-    },
-    stopPolling() {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = null;
-      }
-    },
     // Emoji
     insertEmoji(emoji) {
       this.newMessage += emoji
@@ -6327,30 +4925,7 @@ export default {
       // Reset input
       event.target.value = '';
     },
-    // Reactions
-    // --- Персистентность реакций ---
-    // localStorage "vault-reactions-<email>": {chatKey: {msg_id: [{emoji, user}]}}.
-    // Поллинг перерисовывает сообщения из почты — без хранилища реакции
-    // исчезали через 30 сек даже у отправителя.
-    reactionsStorageKey() {
-      return 'vault-reactions-' + (this.email || 'anon');
-    },
-    loadStoredReactions() {
-      try {
-        return JSON.parse(localStorage.getItem(this.reactionsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredReactions(data) {
-      try {
-        localStorage.setItem(this.reactionsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save reactions:', e);
-      }
-    },
-    // Мерж сохранённых реакций + реакций из писем (wireReactions: msg_id ->
-    // [{emoji, user, action}]). Результат пишется в хранилище и в msg.reactions.
+    // Мерж сохранённых реакций + реакций из писем — features/reactions.js.
     // Отправитель письма — мы сами: sender_id это сырой заголовок From
     // («Имя <email>» или просто email). userId — рудимент серверной эпохи,
     // в serverless он всегда null, поэтому сравниваем по своему email
@@ -6378,56 +4953,6 @@ export default {
       if (msg == null) return '';
       const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
       return this.senderEmail(raw);
-    },
-    // ── Черновики ──────────────────────────────────────────────────
-    // (логика в features/drafts.js; обёртки см. в блоке feature-обёрток выше)
-    applyReactions(list, chatKey, wireReactions) {
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      // Применяем реакции из писем (add/remove) к хранилищу.
-      if (wireReactions && Object.keys(wireReactions).length) {
-        for (const [msgId, reactions] of Object.entries(wireReactions)) {
-          const cur = chatReactions[msgId] || [];
-          for (const r of reactions) {
-            const idx = cur.findIndex(x => x.emoji === r.emoji && x.user === r.user);
-            if (r.action === 'remove') {
-              if (idx >= 0) cur.splice(idx, 1);
-            } else if (idx < 0) {
-              cur.push({ emoji: r.emoji, user: r.user });
-            }
-          }
-          if (cur.length) chatReactions[msgId] = cur;
-          else delete chatReactions[msgId];
-        }
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-      }
-      // Проставляем на сообщения (массив эмодзи для рендера).
-      for (const msg of list) {
-        const rs = chatReactions[msg.id];
-        msg.reactions = rs ? [...new Set(rs.map(r => r.emoji))] : [];
-      }
-    },
-    // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
-    // Паттерн applyReactions: мерж писем в localStorage-хранилище
-    // edit-письмо в пути. Последняя по дате правка авторитетна:
-    // delete → msg.deleted, edit → msg.content = новый текст + msg.edited.
-    editsStorageKey() {
-      return 'vault-edits-' + (this.email || 'anon');
-    },
-    loadStoredEdits() {
-      try {
-        return JSON.parse(localStorage.getItem(this.editsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredEdits(data) {
-      try {
-        localStorage.setItem(this.editsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save edits:', e);
-      }
     },
     // --- Квитанции чтения («просмотрено») ---
     // Получатель при открытии чата шлёт отправителю квитанцию {read:1,
@@ -6567,16 +5092,6 @@ export default {
       }
       db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
     },
-    // Локальная (оптимистичная) запись правки — до доставки письма.
-    recordLocalEdit(chatKey, msgId, text, action) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      const cur = chatEdits[msgId] || [];
-      cur.push({ text: text || '', action, date: Date.now(), sender: this.email });
-      chatEdits[msgId] = cur;
-      stored[chatKey] = chatEdits;
-      this.saveStoredEdits(stored);
-    },
     // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
@@ -6594,172 +5109,6 @@ export default {
         this.cursorsCache = await db.cursorsLoad(accLocal);
       } catch (e) {
         console.warn('initLocalDb cursors failed:', e);
-      }
-    },
-    tombstonesKey() {
-      return 'vault-tombstones-' + (this.email || 'anon');
-    },
-    loadTombstones() {
-      return this.tombstonesCache || [];
-    },
-    addTombstone(msgId) {
-      if (!msgId) return;
-      const list = this.tombstonesCache;
-      if (!list.includes(msgId)) {
-        list.push(msgId);
-        // sqlite persist (async, fire-and-forget)
-        db.tombstoneAdd(this.email || 'anon', msgId, '');
-      }
-    },
-    isTombstoned(msgId) {
-      if (!msgId) return false;
-      return (this.tombstonesCache || []).includes(msgId);
-    },
-    // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
-    // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
-    // или повторной доставке с новым UID. В отличие от msg_id-tombstones
-    // (которые привязаны к uid-папки), mid-tombstones работают ГЛОБАЛЬНО:
-    // письмо, вернувшееся из All Mail любого провайдера, будет отфильтровано.
-    midTombstonesKey() {
-      return 'vault-mid-tombstones-' + (this.email || 'anon');
-    },
-    loadMidTombstones() {
-      return this.midTombstonesCache || [];
-    },
-    addMidTombstone(mid) {
-      if (!mid) return;
-      const list = this.midTombstonesCache;
-      if (!list.includes(mid)) {
-        list.push(mid);
-        db.tombstoneAdd(this.email || 'anon', '', mid);
-      }
-    },
-    isMidTombstoned(mid) {
-      if (!mid) return false;
-      return (this.midTombstonesCache || []).includes(mid);
-    },
-    applyEdits(list, chatKey, wireEdits) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      // Мерж правок из писем в хранилище. Дедупликация по
-      // дате+тексту+действию+отправителю (один и тот же edit-конверт
-      // доходит в нескольких копиях — Sent отправителя + INBOX получателя).
-      if (wireEdits && Object.keys(wireEdits).length) {
-        for (const [msgId, edits] of Object.entries(wireEdits)) {
-          const cur = chatEdits[msgId] || [];
-          for (const e of edits) {
-            const dup = cur.some(x => x.text === e.text && x.action === e.action
-              && String(x.date || 0) === String(e.date || 0) && (x.sender || '') === (e.sender || ''));
-            if (!dup) cur.push(e);
-          }
-          chatEdits[msgId] = cur;
-        }
-        stored[chatKey] = chatEdits;
-        this.saveStoredEdits(stored);
-      }
-      // Проставляем на сообщения. Проверка отправителя (аналог почтовый мессенджер
-      // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
-      // чужие правки игнорируются. Старые правки без sender — применяем
-      // (обратная совместимость).
-      for (const msg of list) {
-        const edits = chatEdits[msg.id];
-        if (!edits || !edits.length) continue;
-        const mine = edits.filter(e => {
-          if (!e.sender) return true;
-          if (msg.sender_id) return e.sender === msg.sender_id;
-          // 1:1 без sender_id: моё сообщение правит только мой email,
-          // чужое — только не мой (в 1:1 другой участник один).
-          if (msg.from === 'me') return e.sender === this.email;
-          return e.sender !== this.email;
-        });
-        if (!mine.length) continue;
-        const latest = mine.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
-        if (latest.action === 'delete') {
-          // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
-          this.addTombstone(msg.id);
-          this.addMidTombstone(msg.mid);
-          msg.deleted = true;
-          msg.content = '';
-        } else if (latest.text) {
-          msg.content = latest.text;
-          msg.edited = true;
-        }
-      }
-    },
-    // Отправить реакцию письмом (транспорт E2E). Ошибки — не критичны.
-    sendReactionEmail(msgId, emoji, action) {
-      const payload = JSON.stringify({ react: 1, msg_id: msgId, emoji, action });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupReact(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReaction(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send reaction email:', e);
-        }
-      })();
-    },
-    toggleReactionPicker(msgId) {
-      // Пилюли звонков — не сообщения: реакции на них не нужны.
-      const m = (this.messages || []).find(x => x && x.id === msgId);
-      if (m && m.callEvent) return;
-      // Если пользователь выделял текст (копирование) — клик не должен
-      // открывать пикер реакций.
-      try {
-        const sel = window.getSelection && window.getSelection();
-        if (sel && String(sel).length > 0) return;
-      } catch (e) { /* ignore */ }
-      this.reactionPickerMsgId = this.reactionPickerMsgId === msgId ? null : msgId
-    },
-    addReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg) return
-      if (!msg.reactions) msg.reactions = []
-      if (!msg.reactions.includes(emoji)) {
-        msg.reactions.push(emoji)
-      }
-      // Персистентность: сохранить сразу (переживёт поллинг).
-      const chatKey = this.activeChatType === 'group' ? this.activeChat : this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      if (!cur.some(r => r.emoji === emoji && r.user === this.email)) {
-        cur.push({ emoji, user: this.email });
-      }
-      chatReactions[msgId] = cur;
-      stored[chatKey] = chatReactions;
-      this.saveStoredReactions(stored);
-      // Транспорт: отправить реакцию собеседнику/группе.
-      this.sendReactionEmail(msgId, emoji, 'add');
-      this.reactionPickerMsgId = null
-    },
-    toggleReaction(msgId, emoji) {
-      const msg = this.messages.find(m => m.id === msgId)
-      if (!msg || !msg.reactions) return
-      const idx = msg.reactions.indexOf(emoji)
-      if (idx >= 0) {
-        msg.reactions.splice(idx, 1)
-      }
-      // Убрать из хранилища и уведомить собеседника.
-      const chatKey = this.activeChat;
-      const stored = this.loadStoredReactions();
-      const chatReactions = stored[chatKey] || {};
-      const cur = chatReactions[msgId] || [];
-      const ri = cur.findIndex(r => r.emoji === emoji && r.user === this.email);
-      if (ri >= 0) {
-        cur.splice(ri, 1);
-        if (cur.length) chatReactions[msgId] = cur;
-        else delete chatReactions[msgId];
-        stored[chatKey] = chatReactions;
-        this.saveStoredReactions(stored);
-        this.sendReactionEmail(msgId, emoji, 'remove');
       }
     },
     // --- Копирование сообщений ---
@@ -7421,142 +5770,6 @@ export default {
       }
     },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---
-    profileOf(email) {
-      return this.profiles[email] || null;
-    },
-    // Локальные переопределения (per-account): пользователь сам решает, как
-    // называть контакт и какой аватар ему ставить. Приоритет выше, чем у
-    // синхронизированного профиля собеседника.
-    localProfileOf(email) {
-      return this.localProfiles[email] || null;
-    },
-    nameOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.name) return lp.name;
-      const p = this.profileOf(email);
-      // name == email — это НЕ имя, а fallback старых клиентов (они слали
-      // email как name). Не показываем его как имя.
-      if (p && p.name && p.name !== email) return p.name;
-      // Регистр email может отличаться (заголовки From: «Имя <Mail@X>» vs
-      // ключ в kv_store lowercase). Ищем по нижнему регистру.
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
-      }
-      // Смена почты: профиль может лежать под СТАРЫМ адресом
-      // все алиасы (один pubkey → несколько адресов) дадут имя.
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.name && ap.name !== alias) return ap.name;
-      }
-      return email;
-    },
-    avatarOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.avatar) return lp.avatar;
-      const p = this.profileOf(email);
-      if (p && p.avatar) return p.avatar;
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
-      }
-      // Смена почты: аватар может лежать под СТАРЫМ адресом (алиасом).
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.avatar) return ap.avatar;
-      }
-      return null;
-    },
-    loadLocalProfiles() {
-      try {
-        // SQLite kv_store.
-        db.kvGet(this.email || 'anon', 'local-profiles').then(v => {
-          if (v) this.localProfiles = JSON.parse(v);
-        }).catch(() => {});
-        this.localProfiles = this.localProfiles || {};
-      } catch (e) {
-        this.localProfiles = {};
-      }
-    },
-    saveLocalProfiles() {
-      try {
-        db.kvSet(this.email || 'anon', 'local-profiles', JSON.stringify(this.localProfiles)).catch(() => {});
-      } catch (e) {
-        console.error('Failed to save local profiles:', e);
-      }
-    },
-    // Модалка редактирования контакта (локальные имя/аватар).
-    // Карточка контакта: тап по аватару в шапке чата.
-    async openContactCard(email) {
-      if (!email || email === '__notes__') return;
-      // вью-данные (bio мог прийти поллингом, но this.profiles не обновился).
-      await this.loadProfiles().catch(() => {});
-      this.contactCardEmail = email;
-      this.showContactCard = true;
-    },
-    // Из карточки → локальная правка имени/аватара (старый попап).
-    startEditFromCard() {
-      const email = this.contactCardEmail;
-      this.showContactCard = false;
-      this.openContactEdit(email);
-    },
-    openContactEdit(email) {
-      if (!email) return;
-      this.editingContact = email;
-      const lp = this.localProfileOf(email);
-      this.editContactName = (lp && lp.name) || '';
-      this.editContactAvatar = (lp && lp.avatar) || '';
-      this.showContactEdit = true;
-    },
-    async handleContactAvatarSelect(event) {
-      const file = event.target.files && event.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        // Сжимаем до 64×64, как и свои аватары (localStorage не резиновый).
-        this.editContactAvatar = await this.shrinkAvatar(e.target.result);
-      };
-      reader.readAsDataURL(file);
-      event.target.value = '';
-    },
-    saveContactEdit() {
-      const email = this.editingContact;
-      if (!email) return;
-      const name = this.editContactName.trim();
-      const avatar = this.editContactAvatar || '';
-      if (!name && !avatar) {
-        // Пусто = сброс к реальным имени/аватару собеседника.
-        delete this.localProfiles[email];
-      } else {
-        this.localProfiles[email] = { name, avatar };
-      }
-      this.saveLocalProfiles();
-      // Обновляем отображение в списке контактов (contact.name берётся из
-      // peer-key label — подменяем на локальное имя, если задано).
-      const c = this.contacts.find(x => x.email === email);
-      if (c) c.name = name || this.nameOf(email);
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    resetContactEdit() {
-      if (this.editingContact) {
-        delete this.localProfiles[this.editingContact];
-        this.saveLocalProfiles();
-        const c = this.contacts.find(x => x.email === this.editingContact);
-        if (c) c.name = this.nameOf(this.editingContact);
-      }
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    async loadProfiles() {
-      try {
-        this.profiles = await api.getProfilesAll();
-      } catch (e) {
-        this.profiles = {};
-      }
-    },
     // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —
     // это глобальный ignore-лист получателя (E2E-модель), а не декоративный
     // group.blocked (который никто не читал и который не персистился).
