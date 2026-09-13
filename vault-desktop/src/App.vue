@@ -845,6 +845,7 @@ import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
+import * as ProfilesFeature from './features/profiles.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1673,6 +1674,30 @@ export default {
     stopFastPolling() { return CallsFeature.stopFastPolling(this); },
     playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
     stopCallSound() { return CallsFeature.stopCallSound(this); },
+    // ── Профили контактов (логика в features/profiles.js) ──
+    aliasesOf(email) { return ProfilesFeature.aliasesOf(this, email); },
+    profileOf(email) { return ProfilesFeature.profileOf(this, email); },
+    localProfileOf(email) { return ProfilesFeature.localProfileOf(this, email); },
+    nameOf(email) { return ProfilesFeature.nameOf(this, email); },
+    avatarOf(email) { return ProfilesFeature.avatarOf(this, email); },
+    loadLocalProfiles() { return ProfilesFeature.loadLocalProfiles(this); },
+    saveLocalProfiles() { return ProfilesFeature.saveLocalProfiles(this); },
+    async loadProfiles() { return ProfilesFeature.loadProfiles(this); },
+    async getBio() { return ProfilesFeature.getBio(this); },
+    async setBio(text) { return ProfilesFeature.setBio(this, text); },
+    async onBioSave(text) { return ProfilesFeature.onBioSave(this, text); },
+    async onProfileSave() { return ProfilesFeature.onProfileSave(this); },
+    async broadcastProfile() { return ProfilesFeature.broadcastProfile(this); },
+    async openContactCard(email) { return ProfilesFeature.openContactCard(this, email); },
+    startEditFromCard() { return ProfilesFeature.startEditFromCard(this); },
+    openContactEdit(email) { return ProfilesFeature.openContactEdit(this, email); },
+    handleContactAvatarSelect(event) { return ProfilesFeature.handleContactAvatarSelect(this, event); },
+    saveContactEdit() { return ProfilesFeature.saveContactEdit(this); },
+    resetContactEdit() { return ProfilesFeature.resetContactEdit(this); },
+    async shrinkAvatar(dataUrl) { return ProfilesFeature.shrinkAvatar(dataUrl); },
+    compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
+    noteSeen(email, ts) { return ProfilesFeature.noteSeen(this, email, ts); },
+    isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this, email); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -2102,15 +2127,6 @@ export default {
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
     // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
-    aliasesOf(email) {
-      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
-      if (!key) return [String(email || '').toLowerCase()];
-      const out = new Set([String(email || '').toLowerCase()]);
-      for (const [k, v] of Object.entries(this.peerKeys)) {
-        if (v === key) out.add(String(k).toLowerCase());
-      }
-      return [...out];
-    },
     // Канонический адрес: какой контакт показывается для этого ключа
     // (после дедупликации в loadContacts). Если email — алиас, возвращаем
     // показываемый адрес (самый новый по added_at).
@@ -2526,24 +2542,6 @@ export default {
     // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
     // 200KB, а вот пустой аватар = собеседник никогда не увидит картинку).
-    async shrinkAvatar(dataUrl) {
-      if (!dataUrl) return '';
-      if (dataUrl.length <= 8192) return dataUrl;
-      try {
-        const img = new Image();
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = dataUrl; });
-        const canvas = document.createElement('canvas');
-        canvas.width = 64; canvas.height = 64;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, 64, 64);
-        const small = canvas.toDataURL('image/jpeg', 0.7);
-        // Берём сжатый только если он реально получился и меньше оригинала.
-        if (small && small.length > 0 && small.length < dataUrl.length) return small;
-        return dataUrl; // сжатие не помогло — шлём оригинал, не роняем аватар
-      } catch (e) {
-        return dataUrl; // canvas недоступен — шлём оригинал, не роняем аватар
-      }
-    },
     // Обернуть текст в конверт перед шифрованием.
     async buildEnvelope(text, ttl = 0) {
       const dn = this.displayName || (await api.getDisplayName()) || '';
@@ -3596,44 +3594,6 @@ export default {
     // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
     // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
     // и не рендерит как сообщение (см. processIncoming).
-    async broadcastProfile() {
-      const peers = Object.keys(this.peerKeys || {});
-      if (!peers.length) return;
-      const name = this.displayName || this.email || '';
-      // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,
-      // this.profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
-      let avatar = (this.profiles[this.email] || {}).avatar || '';
-      try {
-        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-        const kp = kvProfiles[String(this.email).toLowerCase()];
-        if (kp && kp.avatar) avatar = kp.avatar;
-      } catch (e) { /* ignore */ }
-      const bio = await this.getBio();
-      const body = {
-        vault: 1,
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
-        type: 'profile',
-        text: '',
-        name,
-        avatar,
-        bio: (bio || '').slice(0, 200),
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
-      // Шифруем для КАЖДОГО получателя его ключом. Без этого
-      // encryptVault использует глобальный peerPublicKey (последний открытый
-      // чат) — письмо расшифровывает только один из всех контактов, остальные
-      // получают «AAD auth failed». Это была причина нестабильности: «с третьего
-      // раза сработало» — потому что последний открытый чат менялся случайно.
-      for (const peer of peers) {
-        const peerKey = this.peerKeys[peer];
-        if (!peerKey) continue;
-        crypto.setPeerPublicKey(peerKey, this.peerPqKeys && this.peerPqKeys[peer]);
-        const content = await crypto.encryptVault(JSON.stringify(body));
-        try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
-      }
-      console.log('[profile] broadcast to', peers.length, 'contacts');
-    },
     // Выбор аватара в диалоге «Новая группа»: центр-кроп 128×128 JPEG
     // (те же параметры, что у аватара группы в GroupSettings).
     onNewGroupAvatarSelected(e) {
@@ -3726,78 +3686,17 @@ export default {
         this.loginLoading = false;
       }
     },
-    // --- Зелёная точка
-    // Отмечаем активность контакта: входящее письмо от него.
-    noteSeen(email, ts) {
-      if (!email || typeof email !== 'string' || !email.includes('@')) return;
-      const t = Number(ts) || Date.now();
-      if ((this.lastSeenMap[email] || 0) < t) {
-        this.lastSeenMap = { ...this.lastSeenMap, [email]: t };
-      }
-    },
-    isRecentlySeen(email) {
-      const t = this.lastSeenMap[email];
-      if (!t) return false;
-      return Date.now() - t < 10 * 60 * 1000; // 10 минут
-    },
-
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() {
       try { return (await db.kvGet('anon', 'media-quality')) || 'high'; } catch { return 'high'; }
     },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
-    compressImage(dataUrl, maxSide, quality) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          const side = Math.max(img.width, img.height);
-          if (side <= maxSide) { resolve(null); return; } // сжатие не нужно
-          const scale = maxSide / side;
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        };
-        img.onerror = () => reject(new Error('image decode failed'));
-        img.src = dataUrl;
-      });
-    },
-
-    // --- Статус «О себе»: свой bio в kv_store, уходит в profile-конверте
-    async getBio() {
-      try { return (await db.kvGet(this.email || 'anon', 'bio')) || ''; } catch { return ''; }
-    },
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
       try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
     },
     // M2.4: тумблер релея в настройках — живое обновление кэша
     // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
-    async onBioSave(text) {
-      await this.setBio(text);
-      this.showToast('Профиль сохранён — статус уйдёт контактам');
-    },
-    async setBio(text) {
-      const v = String(text || '').slice(0, 200);
-      await db.kvSet(this.email || 'anon', 'bio', v);
-      this.myBio = v;
-      return v;
-    },
-    // «Сохранить профиль»: ОДНО письмо с именем+аватаром+статусом и
-    // одним ts.
-    // на приёме более позднее письмо с неполным набором перетирало _ts и
-    // блокировало/возвращало старые значения (чехарда имени/аватара).
-    async onProfileSave() {
-      try {
-        await this.broadcastProfile();
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
-      } catch (e) {
-        console.error('[profile] broadcast on save failed:', e);
-        this.showToast(t('settings_profile_saved') || 'Профиль сохранён');
-      }
-    },
-
     // --- Исчезающие сообщения
     // TTL хранится per-chat в kv_store ('ephemeral:<chatId>'), уходит в
     // конверте (env.ttl, секунды). У получателя таймер стартует при ПОКАЗЕ
@@ -5871,142 +5770,6 @@ export default {
       }
     },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---
-    profileOf(email) {
-      return this.profiles[email] || null;
-    },
-    // Локальные переопределения (per-account): пользователь сам решает, как
-    // называть контакт и какой аватар ему ставить. Приоритет выше, чем у
-    // синхронизированного профиля собеседника.
-    localProfileOf(email) {
-      return this.localProfiles[email] || null;
-    },
-    nameOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.name) return lp.name;
-      const p = this.profileOf(email);
-      // name == email — это НЕ имя, а fallback старых клиентов (они слали
-      // email как name). Не показываем его как имя.
-      if (p && p.name && p.name !== email) return p.name;
-      // Регистр email может отличаться (заголовки From: «Имя <Mail@X>» vs
-      // ключ в kv_store lowercase). Ищем по нижнему регистру.
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
-      }
-      // Смена почты: профиль может лежать под СТАРЫМ адресом
-      // все алиасы (один pubkey → несколько адресов) дадут имя.
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.name && ap.name !== alias) return ap.name;
-      }
-      return email;
-    },
-    avatarOf(email) {
-      const lp = this.localProfileOf(email);
-      if (lp && lp.avatar) return lp.avatar;
-      const p = this.profileOf(email);
-      if (p && p.avatar) return p.avatar;
-      const e = String(email || '').toLowerCase();
-      for (const [k, v] of Object.entries(this.profiles || {})) {
-        if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
-      }
-      // Смена почты: аватар может лежать под СТАРЫМ адресом (алиасом).
-      for (const alias of this.aliasesOf(email)) {
-        if (alias === e) continue;
-        const ap = this.profileOf(alias) || (this.profiles || {})[alias];
-        if (ap && ap.avatar) return ap.avatar;
-      }
-      return null;
-    },
-    loadLocalProfiles() {
-      try {
-        // SQLite kv_store.
-        db.kvGet(this.email || 'anon', 'local-profiles').then(v => {
-          if (v) this.localProfiles = JSON.parse(v);
-        }).catch(() => {});
-        this.localProfiles = this.localProfiles || {};
-      } catch (e) {
-        this.localProfiles = {};
-      }
-    },
-    saveLocalProfiles() {
-      try {
-        db.kvSet(this.email || 'anon', 'local-profiles', JSON.stringify(this.localProfiles)).catch(() => {});
-      } catch (e) {
-        console.error('Failed to save local profiles:', e);
-      }
-    },
-    // Модалка редактирования контакта (локальные имя/аватар).
-    // Карточка контакта: тап по аватару в шапке чата.
-    async openContactCard(email) {
-      if (!email || email === '__notes__') return;
-      // вью-данные (bio мог прийти поллингом, но this.profiles не обновился).
-      await this.loadProfiles().catch(() => {});
-      this.contactCardEmail = email;
-      this.showContactCard = true;
-    },
-    // Из карточки → локальная правка имени/аватара (старый попап).
-    startEditFromCard() {
-      const email = this.contactCardEmail;
-      this.showContactCard = false;
-      this.openContactEdit(email);
-    },
-    openContactEdit(email) {
-      if (!email) return;
-      this.editingContact = email;
-      const lp = this.localProfileOf(email);
-      this.editContactName = (lp && lp.name) || '';
-      this.editContactAvatar = (lp && lp.avatar) || '';
-      this.showContactEdit = true;
-    },
-    async handleContactAvatarSelect(event) {
-      const file = event.target.files && event.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        // Сжимаем до 64×64, как и свои аватары (localStorage не резиновый).
-        this.editContactAvatar = await this.shrinkAvatar(e.target.result);
-      };
-      reader.readAsDataURL(file);
-      event.target.value = '';
-    },
-    saveContactEdit() {
-      const email = this.editingContact;
-      if (!email) return;
-      const name = this.editContactName.trim();
-      const avatar = this.editContactAvatar || '';
-      if (!name && !avatar) {
-        // Пусто = сброс к реальным имени/аватару собеседника.
-        delete this.localProfiles[email];
-      } else {
-        this.localProfiles[email] = { name, avatar };
-      }
-      this.saveLocalProfiles();
-      // Обновляем отображение в списке контактов (contact.name берётся из
-      // peer-key label — подменяем на локальное имя, если задано).
-      const c = this.contacts.find(x => x.email === email);
-      if (c) c.name = name || this.nameOf(email);
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    resetContactEdit() {
-      if (this.editingContact) {
-        delete this.localProfiles[this.editingContact];
-        this.saveLocalProfiles();
-        const c = this.contacts.find(x => x.email === this.editingContact);
-        if (c) c.name = this.nameOf(this.editingContact);
-      }
-      this.showContactEdit = false;
-      this.editingContact = null;
-    },
-    async loadProfiles() {
-      try {
-        this.profiles = await api.getProfilesAll();
-      } catch (e) {
-        this.profiles = {};
-      }
-    },
     // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —
     // это глобальный ignore-лист получателя (E2E-модель), а не декоративный
     // group.blocked (который никто не читал и который не персистился).
