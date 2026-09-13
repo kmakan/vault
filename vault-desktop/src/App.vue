@@ -1342,6 +1342,13 @@ export default {
     mailProviderHint() {
       const p = findProvider(this.mailProvider);
       return (p && p.hint) || '';
+    },
+    // Заблокирован ли открытый сейчас 1:1-чат (баннер в chat-area).
+    // ВАЖНО: это computed — в methods он резолвится в шаблоне как
+    // функция-ссылка (truthy) и баннер висел всегда (баг 13.09).
+    activeChatIgnored() {
+      return this.activeChatType === 'chat'
+        && !!this.activeChat && this.isIgnored(this.activeChat);
     }
   },
   watch: {
@@ -1649,11 +1656,6 @@ export default {
         }
       }
       await this.saveIgnoredUsers();
-    },
-    // Компьютед-хелпер для шаблона: открытый сейчас 1:1-чат с заблокированным?
-    activeChatIgnored() {
-      return this.activeChatType === 'chat'
-        && this.activeChat && this.isIgnored(this.activeChat);
     },
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
     // kv-блоба (гонка save/restore) — на статике модуля, не компонента.

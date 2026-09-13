@@ -389,10 +389,16 @@ impl EmailClient {
 
         let uid_list = match last_uid {
             None => session.uid_search("ALL")?,
-            // Gmail bug: UID SEARCH X:* (где X > max UID) не возвращает
-            // пусто — возвращает последний известный UID. Фильтруем на
-            // клиенте: отбрасываем uid ≤ last_uid.
-            Some(last) => session.uid_search(&format!("{}:*", last + 1))?,
+            // Диапазон X:* на Gmail НЕНАДЁЖЕН: при скоплении нескольких
+            // писем после курсора (17 писем за день офлайна) он возвращал
+            // ТОЛЬКО максимальный uid — середина диапазона (все письма
+            // между курсором и max) терялась навсегда, чат пустел
+            // (кейс 13.09: группа «Четыре», uid 1551-1567, получен один).
+            // Надёжный путь: полный список ALL + клиентский фильтр
+            // uid > last. Папка уже выбрана, ALL — один RTT, объём
+            // копеечный (uid-числа). Self-валиддность проверок ниже
+            // (UIDVALIDITY reset, max == last) сохраняется.
+            Some(_last) => session.uid_search("ALL")?,
         };
         let raw_uids: Vec<u32> = uid_list.iter().copied().collect();
         let raw_max = raw_uids.iter().copied().max().unwrap_or(0);
