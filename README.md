@@ -3,7 +3,7 @@
 > **A private messenger that lives inside ordinary email.**
 > No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.165 · License: AGPL-3.0 · Status: Beta
+> Version: 0.1.166 · License: AGPL-3.0 · Status: Beta
 
 [English](#english) · [Русский](#русский)
 
@@ -118,7 +118,7 @@ if every relay in the world went down, your messenger would keep working.
 ### Install (prebuilt binaries)
 
 **Android** — download the signed APK and open it:
-[vault-0.1.165.apk](https://github.com/kmakan/vault/releases/download/v0.1.165/vault-0.1.165.apk)
+[vault-0.1.166.apk](https://github.com/kmakan/vault/releases/download/v0.1.166/vault-0.1.166.apk)
 (21 MB, Android 7+). The system will ask to allow installs from this source —
 allow it. The APK is signed with the Vault release key, so future versions
 install over it without data loss; in-app updates: Settings → Help →
@@ -126,11 +126,11 @@ install over it without data loss; in-app updates: Settings → Help →
 
 **Linux (Debian/Ubuntu)** — deb package:
 ```bash
-sudo dpkg -i Vault_0.1.165_amd64.deb   # or: sudo apt install ./Vault_0.1.165_amd64.deb
+sudo dpkg -i Vault_0.1.166_amd64.deb   # or: sudo apt install ./Vault_0.1.166_amd64.deb
 ```
 **Linux (any distro)** — portable tar.gz:
 ```bash
-tar xzf vault-desktop-0.1.165-linux-x86_64.tar.gz
+tar xzf vault-desktop-0.1.166-linux-x86_64.tar.gz
 ./vault-desktop
 ```
 Runtime deps on Ubuntu 22.04+: `libwebkit2gtk-4.1-0` (pulled in automatically
