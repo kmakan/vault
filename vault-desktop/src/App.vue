@@ -421,7 +421,7 @@
         @reject="rejectCall"
         @cancel="cancelCall"
         @end="endCall"
-        @toggle-mute="toggleMute"
+        @toggle-mute="toggleCallMute"
         @toggle-speaker="toggleSpeaker"
       />
 
@@ -5970,7 +5970,9 @@ export default {
       }
       this.hangup(reason || 'cancel');
     },
-    toggleMute() {
+    // Микрофон звонка (в конфликте ключей с чат-меню «Без звука» — то
+    // отдельный метод ниже; Options API не терпит дублей имён).
+    toggleCallMute() {
       this.callMuted = !this.callMuted;
       const c = this.currentCall;
       if (c) {
