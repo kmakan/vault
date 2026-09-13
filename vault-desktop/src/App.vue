@@ -199,6 +199,15 @@
           <button class="chat-search-close" @click="chatSearchQuery = ''; showChatSearch = false"><Icon name="x" :size="13" /></button>
         </div>
 
+        <!-- Ignore-баннер: чат открыт с заблокированным. Отправка заблокирована
+             (E2E-модель: сервер доставляет всё, получатель решает, что показать).
+             Разблок — здесь же или из контекстного меню чата в списке. -->
+        <div v-if="activeChatIgnored" class="ignore-banner">
+          <Icon name="ban" :size="14" />
+          <span>{{ t('ignore_banner') || 'Заблокирован — новые сообщения скрыты' }}</span>
+          <button class="ignore-banner-unblock" @click="unblockActiveChat()">{{ t('chat_unblock') || 'Разблокировать' }}</button>
+        </div>
+
         <!-- Список сообщений: контейнер/пустые состояния/баннер закрепа —
              отдельный компонент; карточки сообщений — слотом (следующий
              шаг декомпозиции выделит их в MessageItem) -->
@@ -288,6 +297,13 @@
                  только своё устройство, у собеседника остаётся.
                  -->
             <button @click="deleteMessageForMe(messageMenu.msg); messageMenu = null"><Icon name="trash" :size="14" /> {{ t('delete_for_me') || 'Удалить у меня' }}</button>
+            <!-- Ignore-лист: блок отправителя чужого сообщения (1:1 — адрес
+                 чата, группа — сам участник). E2E: скрывает новые сообщения
+                 этого человека у получателя; контент серверу не виден. -->
+            <button v-if="!messageMenu.msg.callEvent && messageMenu.msg.from !== 'me'" @click="blockSenderOfMessage(messageMenu.msg); messageMenu = null">
+              <Icon name="ban" :size="14" />
+              {{ isIgnored(msgSenderEmail(messageMenu.msg) || (activeChatType === 'chat' ? activeChat : '')) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
+            </button>
             <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
             <template v-if="messageMenu.phones && messageMenu.phones.length">
               <div class="message-menu-sep"></div>
@@ -647,9 +663,11 @@
             :group="currentGroup"
             :currentUser="email"
             :profiles="mergedProfiles"
+            :ignoredUsers="ignoredUsers"
             @close="showGroupSettings = false"
             @role-change="changeMemberRole"
             @remove="removeMember"
+            @block="blockUser"
             @unblock="unblockUser"
             @leave="leaveGroup"
             @delete="deleteGroup"
@@ -740,6 +758,13 @@
         <button @click="toggleMute()">
           <Icon :name="isMuted(flagKey(chatMenu.target)) ? 'bell' : 'bell-off'" :size="14" />
           {{ isMuted(flagKey(chatMenu.target)) ? (t('chat_unmute') || 'Со звуком') : (t('chat_mute') || 'Без звука') }}
+        </button>
+        <!-- Ignore-лист (E2E-блокировка): только для 1:1-чатов. Группа —
+             общий контент, блокировать там отдельного участника можно из
+             меню его сообщения. -->
+        <button v-if="chatMenu.target.type === 'contact'" @click="toggleIgnoreContact()">
+          <Icon name="ban" :size="14" />
+          {{ isIgnored(chatMenu.target.email) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
         </button>
         <div class="message-menu-sep"></div>
         <div class="chat-menu-folder-label">{{ t('chat_folder') || 'Папка' }}</div>
@@ -869,6 +894,13 @@ export default {
       // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
       // непрочитанных остаётся). Персист в sqlite kv 'chat-flags'.
       chatFlags: {},
+      // Глобальный ignore-лист (E2E-честная блокировка): объект
+      // { email: tsБлокировки }. Сообщения/звонки/уведомления от этих
+      // отправителей скрываются у НАШЕГО получателя (сервер в serverless
+      // блокировать не может — контент ему не виден). Новое НЕ попадает в
+      // историю (после разблокировки не появляется), старое — остаётся.
+      // Персист в sqlite kv 'ignored-users'.
+      ignoredUsers: {},
       showArchived: false,
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
       chatMenu: { show: false, target: null },
@@ -1504,6 +1536,7 @@ export default {
           initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
           this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store
           this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
+          this.loadIgnoredUsers(); // ignore-лист (E2E-блокировка) из sqlite kv_store
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
           if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
@@ -1560,6 +1593,67 @@ export default {
     chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
     async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
     async createChatFolder() { return FoldersFeature.createChatFolder(this); },
+    // ── Ignore-лист (E2E-честная блокировка отправителя). Логика — здесь,
+    // не в features/: точек интеграции мало, а data-инвариант (объект
+    // email→ts) связан с тремя путями доставки (почта/релей/история).
+    // Загрузка из sqlite kv 'ignored-users' (вызывается при входе рядом с
+    // loadChatFlags). Повреждённый блоб — тихо пустой список.
+    async loadIgnoredUsers() {
+      try {
+        const raw = await db.kvGet(this.email || 'anon', 'ignored-users');
+        this.ignoredUsers = raw ? (JSON.parse(raw) || {}) : {};
+      } catch (e) { this.ignoredUsers = {}; }
+    },
+    async saveIgnoredUsers() {
+      try {
+        await db.kvSet(this.email || 'anon', 'ignored-users', JSON.stringify(this.ignoredUsers));
+      } catch (e) { /* kv недоступен — список живёт в памяти до перезапуска */ }
+    },
+    // Заблокирован ли отправитель для НАС (смена почты не помогает:
+    // проверяем и сам email, и все алиасы того же peer-ключа).
+    isIgnored(email) {
+      const key = String(email || '').toLowerCase();
+      if (!key || !this.ignoredUsers) return false;
+      if (this.ignoredUsers[key]) return true;
+      // Алиасы: отправитель сменил адрес, ключ тот же — блок следует за ним.
+      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
+      if (!pk) return false;
+      for (const k of Object.keys(this.ignoredUsers)) {
+        if (this.peerKeys[k] === pk) return true;
+      }
+      return false;
+    },
+    // Заблокировать отправителя: с этого момента его новые сообщения,
+    // звонки и уведомления скрыты у получателя. Возвращает false, если
+    // email пустой или это наш собственный адрес.
+    async ignoreUser(email) {
+      const key = String(email || '').toLowerCase().trim();
+      if (!key || key === (this.email || '').toLowerCase()) return false;
+      if (!this.isIgnored(key)) {
+        this.ignoredUsers[key] = Date.now();
+        await this.saveIgnoredUsers();
+      }
+      return true;
+    },
+    // Снять блокировку: новые сообщения снова показываются. Прошлое (то,
+    // что скрылось, пока блок был активен) не возвращается — его не было
+    // в истории. Снимаем и сам адрес, и алиасы того же ключа.
+    async unignoreUser(email) {
+      const key = String(email || '').toLowerCase().trim();
+      if (!key) return;
+      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
+      for (const k of Object.keys(this.ignoredUsers)) {
+        if (k === key || (pk && this.peerKeys[k] === pk)) {
+          delete this.ignoredUsers[k];
+        }
+      }
+      await this.saveIgnoredUsers();
+    },
+    // Компьютед-хелпер для шаблона: открытый сейчас 1:1-чат с заблокированным?
+    activeChatIgnored() {
+      return this.activeChatType === 'chat'
+        && this.activeChat && this.isIgnored(this.activeChat);
+    },
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
     // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
     draftRun(fn) { return DraftsFeature.draftRun(fn); },
@@ -2970,11 +3064,16 @@ export default {
       // ВСЕМ адресам с его ключом (алиасы), иначе история старого адреса
       // не видна в чате нового адреса.
       const aliases = this.aliasesOf(email);
+      // Ignore-лист: у заблокированного чат открывается пустым (показываем
+      // только локальную историю ДО блокировки, новые письма не расшифровываем
+      // и не кэшируем). Старые письма в this.messages остаются после
+      // showHistoryFirst — блок скрывает именно НОВОЕ.
+      const ignored = this.isIgnored(email);
       const relatedAll = this.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
-          return aliases.some(a => f.includes(a) || t.includes(a));
+          return !ignored && aliases.some(a => f.includes(a) || t.includes(a));
         })
         // Свежие сверху. Расшифровываем только последние 30: фетч тела идёт
         // по одному письму (с переключением папки) — на всю переписку это
@@ -3458,6 +3557,10 @@ export default {
         if (groupKey) {
           for (const msg of raw || []) {
             if (!crypto.isEncrypted(msg.content)) continue; // не наше
+            // Ignore-лист: сообщения заблокированного УЧАСТНИКА не
+            // расшифровываем и не рендерим в группе (фильтр до расшифровки —
+            // по sender_id письма, он приходит из заголовка From).
+            if (!this.isOwnSender(msg.sender_id) && this.isIgnored(msg.sender_id)) continue;
             let plaintext;
             try {
               plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
@@ -4247,6 +4350,12 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
+      // Ignore-гвард: в чате с заблокированным писать нельзя (E2E-модель
+      // блокировки получателя: мы решаем, что показывать и кому отвечать).
+      if (this.activeChatType === 'chat' && this.isIgnored(this.activeChat)) {
+        this.showToast(this.t('ignore_cannot_write') || 'Чат заблокирован — сначала разблокируйте');
+        return;
+      }
       // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
       // игнорируем — иначе уходит 2+ письма с разными id и получатели видят
       // «одно сообщение несколько раз».
@@ -4828,6 +4937,11 @@ export default {
         const from = this.senderEmail(m.from);
         // Пропускаем исходящие (от себя) и пустые from.
         if (!from || from === myEmail) continue;
+        // Ignore-лист: сообщения/звонки заблокированного скрыты у получателя
+        // целиком — не считаются, не уведомляют, в историю не пишутся
+        // (continue ДО расшифровки и ДО дедуп-механики: письмо остаётся
+        // «необработанным» и после разблокировки не всплывёт).
+        if (this.isIgnored(from)) continue;
         const body = this.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
         if (!body || !crypto.isEncrypted(body)) continue;
         let chatKey = null; // email (1:1) или 'group:<id>'
@@ -5157,7 +5271,56 @@ export default {
       this.closeChatMenu();
       await this.saveChatFlags();
     },
-    // ── Папки чатов (kv chat-folders + chatFlags[key].folder) ──────────
+    // Ignore-лист из chat-меню (1:1-чат): блокировка E2E-честная — скрывает
+    // новые сообщения/звонки у получателя, серверу невидим. После разблока
+    // прошлое НЕ возвращается (его не было в истории).
+    async toggleIgnoreContact() {
+      const email = this.chatMenu.target && this.chatMenu.target.email;
+      if (!email) return;
+      const wasIgnored = this.isIgnored(email);
+      if (wasIgnored) {
+        await this.unignoreUser(email);
+        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      } else {
+        await this.ignoreUser(email);
+        // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
+        // иначе выглядело бы, что блок не работает.
+        if (this.activeChatType === 'chat' && this.activeChat === email) {
+          await this.loadMessages(this.activeChat);
+        }
+        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
+      }
+      this.closeChatMenu();
+    },
+    // Разблок из баннера открытого чата: новые сообщения снова показываются.
+    async unblockActiveChat() {
+      if (this.activeChatType !== 'chat' || !this.activeChat) return;
+      await this.unignoreUser(this.activeChat);
+      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
+      // истории (фильтр до расшифровки), возвращать их нечем. Просто
+      // перерисовываем: баннер уходит, новые сообщения начинают приходить.
+      await this.loadMessages(this.activeChat);
+    },
+    // Ignore из меню сообщения: 1:1 — адрес чата, группа — sender_id автора
+    // (msgSenderEmail). Тост объясняет, что именно произошло.
+    async blockSenderOfMessage(msg) {
+      if (!msg || msg.from === 'me') return;
+      const sender = this.msgSenderEmail(msg)
+        || (this.activeChatType === 'chat' ? this.activeChat : '');
+      if (!sender) return;
+      if (this.isIgnored(sender)) {
+        await this.unignoreUser(sender);
+        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      } else {
+        await this.ignoreUser(sender);
+        // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
+        if (this.activeChatType === 'chat' && this.activeChat === sender) {
+          await this.loadMessages(this.activeChat);
+        }
+        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
+      }
+    },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // ── Дедуп звонков (persist kv 'call-seen') ──────────────────────────────
     // call_id обработанного звонка (request/accept/end/reject). После
@@ -5263,6 +5426,9 @@ export default {
     async handleCallSignal(sig, from) {
       const { call_id, type } = sig;
       if (!call_id || !from) return;
+      // Ignore-лист: звонки заблокированного гасятся до state machine —
+      // ни рингтона, ни оверлея, ни «пропущенного» в истории.
+      if (this.isIgnored(from)) return;
       console.log('[call] signal', type, call_id, 'from', from, 'state=' + this.callState,
         'current=' + (this.currentCall ? this.currentCall.call_id : 'null'));
       // после перезапуска приложение
@@ -7622,15 +7788,18 @@ export default {
         this.profiles = {};
       }
     },
-    blockUser(email) {
-      if (!this.currentGroup) return;
-      if (!this.currentGroup.blocked.includes(email)) {
-        this.currentGroup.blocked.push(email);
-      }
+    // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —
+    // это глобальный ignore-лист получателя (E2E-модель), а не декоративный
+    // group.blocked (который никто не читал и который не персистился).
+    async blockUser(email) {
+      if (!this.currentGroup || !email) return;
+      await this.ignoreUser(email);
+      this.showToast(this.t('ignore_on_toast') || 'Заблокирован: новые сообщения и звонки скрыты');
     },
-    unblockUser(email) {
-      if (!this.currentGroup) return;
-      this.currentGroup.blocked = this.currentGroup.blocked.filter(e => e !== email);
+    async unblockUser(email) {
+      if (!email) return;
+      await this.unignoreUser(email);
+      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
     },
     async leaveGroup() {
       if (!this.currentGroup) return;
@@ -8901,6 +9070,38 @@ body {
 .reply-bar-close:hover {
   background: var(--bg-hover, #1e1e4a);
   color: var(--text-primary, #f1f5f9);
+}
+
+/* Ignore-баннер над списком сообщений (чат с заблокированным) */
+.ignore-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 24px;
+  background: rgba(239, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.25);
+  font-size: 13px;
+  color: var(--text-primary, #f1f5f9);
+}
+
+.ignore-banner .vault-icon { flex-shrink: 0; color: #ef4444; }
+
+.ignore-banner span { flex: 1; color: var(--text-secondary, #94a3b8); }
+
+.ignore-banner-unblock {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: var(--text-primary, #f1f5f9);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm, 6px);
+  white-space: nowrap;
+}
+
+.ignore-banner-unblock:hover {
+  background: rgba(239, 68, 68, 0.15);
 }
 
 /* Пустое состояние списка — в MessageList.vue (scoped) */
