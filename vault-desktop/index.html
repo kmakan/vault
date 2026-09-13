@@ -1,6 +1,17 @@
 <!doctype html>
 <html lang="en">
-  <head>
+  <head>  <script>
+    // M2.4: ntfy deep-link очередь. Kotlin dispatchOpenChat вызывает
+    // window.__vaultOpenChat(chat) — до готовности Vue вызовы копятся в
+    // очереди; App.vue после загрузки ключей разбирает очередь (drain).
+    window.__VAULT_CHAT_QUEUE = window.__VAULT_CHAT_QUEUE || [];
+    window.__vaultOpenChat = function (chat) {
+      if (!chat) return;
+      window.__VAULT_CHAT_QUEUE.push(chat);
+      if (window.__VAULT_DRAIN) window.__VAULT_DRAIN();
+    };
+  </script>
+
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/icons/vault-letter.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />

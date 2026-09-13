@@ -3,7 +3,7 @@
 > **A private messenger that lives inside ordinary email.**
 > No servers. No phone numbers. Post-quantum E2E encryption. Voice calls.
 >
-> Version: 0.1.149 · License: AGPL-3.0 · Status: Beta
+> Version: 0.1.167 · License: AGPL-3.0 · Status: Beta
 
 [English](#english) · [Русский](#русский)
 
@@ -46,14 +46,29 @@ if every relay in the world went down, your messenger would keep working.
   link (Android).
 - **Chat folders** — organize chats into folders (chips above the list);
   archive and per-chat mute included.
+- **Blocking a contact** — a local ignore list hides a contact's new
+  messages and calls (silently, before decryption) without touching your
+  old history; it follows the contact across address changes, and a
+  group-scoped block is available in group settings. Your device decides
+  — no server ever sees your filter list.
 - **Voice calls** — Opus 48 kHz, per-frame AEAD + DTLS-SRTP, P2P via
   WebRTC with email signaling and instant hangup over a control
   DataChannel. No call servers.
 - **Push relay (optional)** — a self-hostable relay (open source, in this
   repo under `relay-server/`) duplicates every envelope over HTTPS/WebSocket
   to cut delivery from ~30-60 s to ~1 s. Email stays the primary transport:
-  if the relay is down, nothing is lost. Use our instance or point the app
-  to your own / a community relay (Settings → Privacy).
+  if the relay is down or the free daily quota (100 envelopes) is spent,
+  delivery silently continues over email — nothing is lost. Tokens are
+  exchanged automatically between contacts; use our instance or point the
+  app to your own / a community relay (Settings → Privacy).
+- **Notifications when the app is closed (optional)** — by default Vault
+  keeps a persistent service (status-bar icon) exactly like before. If you
+  prefer no icon and lower battery use, enable Eco mode (Settings → Privacy)
+  and pair the app with any [ntfy](https://ntfy.sh) client (UnifiedPush):
+  the relay wakes your device with a push the moment a letter arrives.
+  No Google services involved. A smart gate (since 0.1.164) keeps exactly
+  one notification per message — no duplicates between the local
+  notification and the system push.
 - **Attachments** — encrypted files, images, audio messages; provider
   size limits detected automatically.
 - **Duress & panic controls** — a duress password opens an empty vault,
@@ -82,7 +97,8 @@ if every relay in the world went down, your messenger would keep working.
 - **Key exchange** — QR code in person, or send your public key over any
   channel you already trust. Fingerprints are short and verifiable.
 - **Groups** — a shared group key is delivered inside an E2E envelope to
-  each member; group state lives locally on every device.
+  each member; group state lives locally on every device. Group messages
+  are accelerated by the relay for every member (parallel to email).
 - **Calls** — SDP offers/answers travel as the same E2E envelopes;
   media goes peer-to-peer (STUN only, TURN relay planned as a premium
   option).
@@ -95,13 +111,14 @@ if every relay in the world went down, your messenger would keep working.
   mail (not what, not that it is Vault).
 - **Latency** — plain email delivery is 30–60 s; IMAP IDLE brings it to
   ~1 s while the app is alive. The optional push relay cuts it to ~1 s
-  even when the app is in the background.
+  even when the app is in the background, and a paired ntfy/UnifiedPush
+  client delivers notifications when the app is fully closed.
 - **Attachments** are capped by your mail provider (typically 25–30 MB).
 
 ### Install (prebuilt binaries)
 
 **Android** — download the signed APK and open it:
-[vault-0.1.149.apk](https://github.com/kmakan/vault/releases/download/v0.1.149/vault-0.1.149.apk)
+[vault-0.1.167.apk](https://github.com/kmakan/vault/releases/download/v0.1.167/vault-0.1.167.apk)
 (21 MB, Android 7+). The system will ask to allow installs from this source —
 allow it. The APK is signed with the Vault release key, so future versions
 install over it without data loss; in-app updates: Settings → Help →
@@ -109,11 +126,11 @@ install over it without data loss; in-app updates: Settings → Help →
 
 **Linux (Debian/Ubuntu)** — deb package:
 ```bash
-sudo dpkg -i Vault_0.1.149_amd64.deb   # or: sudo apt install ./Vault_0.1.149_amd64.deb
+sudo dpkg -i Vault_0.1.167_amd64.deb   # or: sudo apt install ./Vault_0.1.167_amd64.deb
 ```
 **Linux (any distro)** — portable tar.gz:
 ```bash
-tar xzf vault-desktop-0.1.149-linux-x86_64.tar.gz
+tar xzf vault-desktop-0.1.167-linux-x86_64.tar.gz
 ./vault-desktop
 ```
 Runtime deps on Ubuntu 22.04+: `libwebkit2gtk-4.1-0` (pulled in automatically
@@ -193,9 +210,11 @@ Vault превращает обычную почту в приватный ме�
 
 **Возможности:** 1-на-1 и групповые чаты (роли, QR-инвайты, реакции,
 редактирование, «удалить у меня», избранное, исчезающие сообщения),
-голосовые звонки (Opus + DTLS-SRTP, P2P, без серверов), зашифрованные
-вложения, duress/panic-режимы с полным стиранием, SOS с гео, вход по
-отпечатку (Android), локальная база SQLite, три языка интерфейса.
+блокировка контакта (локальный ignore-лист — без сервера), голосовые
+звонки (Opus + DTLS-SRTP, P2P, без серверов), зашифрованные вложения,
+голосования, пересылка, черновики, гео-сообщения, папки чатов,
+duress/panic-режимы с полным стиранием, SOS с гео, вход по отпечатку
+(Android), локальная база SQLite, три языка интерфейса.
 
 **Честно об ограничениях:** нет forward secrecy (в роадмапе), почтовые
 метаданные видны провайдеру, доставка 30–60 с (IDLE — ~1 с), размер

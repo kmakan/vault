@@ -78,6 +78,16 @@
               <option value="Admin">{{ t('role_admin') }}</option>
               <option value="Member">{{ t('role_member') }}</option>
             </select>
+            <!-- Ignore (E2E-блокировка): скрывает НОВЫЕ сообщения этого
+                 участника у нас — во всех чатах и группах. Не рассылается
+                 другим (контент серверу не виден), работает только у нас. -->
+            <button
+              v-if="member.email !== currentUser"
+              class="btn-sm"
+              :class="isMemberIgnored(member.email) ? 'btn-success' : 'btn-danger'"
+              @click="$emit(isMemberIgnored(member.email) ? 'unblock' : 'block', member.email)"
+              :title="isMemberIgnored(member.email) ? (t('unblock') || 'Unblock user') : (t('chat_block') || 'Block')"
+            >{{ isMemberIgnored(member.email) ? '✓' : '⊘' }}</button>
             <button
               class="btn-sm btn-danger"
               @click="$emit('remove', member.email)"
@@ -88,18 +98,20 @@
       </div>
     </div>
 
-    <!-- Blocked Users -->
-    <div class="group-settings__section" v-if="group.blocked?.length">
+    <!-- Blocked Users: глобальный ignore-лист получателя (E2E-модель),
+         пересечение с участниками этой группы. ТС 0.1.165: до этого
+         group.blocked был декоративным — массив никто не читал. -->
+    <div class="group-settings__section" v-if="blockedMembers.length">
       <h4>{{ t('blocked_users') || 'Blocked Users' }}</h4>
       <div class="member-list">
         <div
-          v-for="email in group.blocked"
+          v-for="email in blockedMembers"
           :key="email"
           class="member-item member-item--blocked"
         >
           <UserAvatar :email="email" :size="32" />
           <span class="member-item__email">{{ email }}</span>
-          <div class="member-item__actions" v-if="isAdmin">
+          <div class="member-item__actions">
             <button
               class="btn-sm btn-success"
               @click="$emit('unblock', email)"
@@ -146,9 +158,24 @@ const props = defineProps({
   group: { type: Object, required: true },
   currentUser: { type: String, required: true },
   profiles: { type: Object, default: () => ({}) },
+  // Глобальный ignore-лист (App.vue): { email: ts }. Показываем
+  // заблокированных участников группы и состояние кнопки ⊘/✓.
+  ignoredUsers: { type: Object, default: () => ({}) },
 })
 
 const emit = defineEmits(['close', 'promote', 'demote', 'remove', 'block', 'unblock', 'leave', 'delete', 'avatar-update', 'add-member', 'role-change', 'rename-group', 'clone'])
+
+// Заблокирован ли участник (email в нижнем регистре — как хранит ignore-лист).
+function isMemberIgnored(email) {
+  return !!(props.ignoredUsers && props.ignoredUsers[String(email || '').toLowerCase()])
+}
+
+// Участники группы, находящиеся в глобальном ignore-листе.
+const blockedMembers = computed(() => {
+  const list = props.ignoredUsers ? Object.keys(props.ignoredUsers) : []
+  const members = (props.group.members || []).map(m => String(m.email || '').toLowerCase())
+  return list.filter(e => members.includes(e))
+})
 
 function addMember() {
   // Открываем попап выбора контактов (основной UX добавления участника).

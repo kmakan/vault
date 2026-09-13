@@ -59,27 +59,32 @@ class VaultForegroundService : Service() {
             val nm0 = getSystemService(NotificationManager::class.java)
             nm0?.cancel(CALL_NOTIF_ID)
         } catch (_: Throwable) {}
-        try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vault:idle-wake").apply {
-                setReferenceCounted(false)
-                acquire()
+        if (!pushMode) {
+            // PUSH-РЕЖИМ (эко): без wakeLock/wifiLock — стриму хватит системного
+            // сокет-таймаута; это и есть экономия батареи эко-режима.
+            try {
+                val pm = getSystemService(POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vault:idle-wake").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "wakeLock acquire failed: " + e.message)
             }
-        } catch (e: Throwable) {
-            Log.w("VaultRust", "wakeLock acquire failed: " + e.message)
-        }
-        try {
-            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "vault:idle-wifi").apply {
-                setReferenceCounted(false)
-                acquire()
+            try {
+                val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "vault:idle-wifi").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "wifiLock acquire failed: " + e.message)
             }
-        } catch (e: Throwable) {
-            Log.w("VaultRust", "wifiLock acquire failed: " + e.message)
         }
     }
 
     override fun onDestroy() {
+        stopNtfyStream()
         if (instance === this) instance = null
         try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
@@ -87,9 +92,17 @@ class VaultForegroundService : Service() {
         wifiLock = null
         // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // Samsung/Oppo на Android 11) убивает foreground-сервис. Планируем
-        // перезапуск через AlarmManager, чтобы сервис воскрес.
-        scheduleRestart(this)
+        // ЭКО: сервис остановлен пользователем/смахиванием — не воскрешаем.
+        // Иконка исчезает из шторки, пуши при закрытом приложении несёт
+        // ntfy-клиент (UnifiedPush). КЛАССИКА (не эко): воскрешаем, как в
+        // 0.1.149 — служба всегда активна, звонки и уведомления при закрытом.
+        if (ecoStoppedByUser) {
+            ecoStoppedByUser = false
+            Log.i("VaultRust", "eco: service stopped by user, no restart")
+        } else {
+            scheduleRestart(this)
+            Log.i("VaultRust", "classic: service resurrect scheduled")
+        }
         super.onDestroy()
     }
 
@@ -97,6 +110,10 @@ class VaultForegroundService : Service() {
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        if (ecoStoppedByUser) {
+            Log.i("VaultRust", "eco: task removed, no restart")
+            return
+        }
         Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
         scheduleRestart(this)
     }
@@ -116,19 +133,121 @@ class VaultForegroundService : Service() {
         } catch (e: Throwable) {
             Log.w("VaultRust", "startForeground failed: " + e.message)
         }
-        // HEADLESS-МОНИТОР: процесс без activity не имеет ни WebView
-        // ни Rust-рантайма Tauri — после свайпа приложения из recents система
-        // перезапускает ТОЛЬКО этот сервис, и уведомления умирали до открытия
-        // приложения. Поднимаем нативный IMAP-монитор (Rust): IDLE → fetch →
-        // decrypt → showMessage. При живой MainActivity монитор ставится на
-        // паузу (nativePauseMonitor из onResume) — доставляет JS, дубликатов нет.
-        try {
-            nativeStartMonitor(applicationContext.dataDir.absolutePath)
-        } catch (e: Throwable) {
-            Log.w("VaultRust", "nativeStartMonitor failed: " + e.message)
+        if (pushMode && pushTopic != null) {
+            // M2.3-b PUSH-РЕЖИМ (эко): БЕЗ IMAP-монитора и wakeLock — только
+            // тихая подписка на ntfy (один HTTP-стрим, системный сокет-таймаут).
+            // Пуш «есть конверты» → системное уведомление «Новое сообщение»
+            // → юзер открывает Vault → relayConsume+IMAP забирают всё.
+            startNtfyStream()
+        } else {
+            // HEADLESS-МОНИТОР: процесс без activity не имеет ни WebView
+            // ни Rust-рантайма Tauri — после свайпа приложения из recents система
+            // перезапускает ТОЛЬКО этот сервис, и уведомления умирали до открытия
+            // приложения. Поднимаем нативный IMAP-монитор (Rust): IDLE → fetch →
+            // decrypt → showMessage. При живой MainActivity монитор ставится на
+            // паузу (nativePauseMonitor из onResume) — доставляет JS, дубликатов нет.
+            try {
+                nativeStartMonitor(applicationContext.dataDir.absolutePath)
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "nativeStartMonitor failed: " + e.message)
+            }
         }
-        // Пересоздавать сервис, если система его прибьёт.
+        // КЛАССИКА: служба всегда активна — система перезапускает сервис.
         return START_STICKY
+    }
+
+    // ── M2.3-b: ntfy-стрим (долгий HTTP GET, построчный JSON) ──────────────
+    // Читает /topic/json (stream): сервер держит соединение, каждая строка —
+    // событие. При «message» показываем системное уведомление. Разрыв —
+    // реконнект через 3с. Поток демон, гасится в pushStop().
+    private fun startNtfyStream() {
+        val topic = pushTopic ?: return
+        val base = pushNtfyBase
+        stopNtfyStream()
+        pushStop = false
+        val th = Thread {
+            var attempt = 0
+            while (!pushStop) {
+                attempt++
+                try {
+                    val url = java.net.URL("$base/$topic/json")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 15000
+                    // OkHttp (внутри HttpURLConnection) фиксирует readTimeout при
+                    // получении заголовков — после этого менять бесполезно.
+                    // ntfy шлёт keepalive каждые ~45с → 60с: живой стрим не
+                    // таймаутится, мёртвый распознаётся за минуту.
+                    conn.readTimeout = 60000
+                    conn.setRequestProperty("User-Agent", "VaultPush/1")
+                    val code = conn.responseCode
+                    Log.i("VaultRust", "ntfy-stream: connect #$attempt code=$code topic=${topic.take(16)}…")
+                    if (code == 200) {
+                        val reader = java.io.BufferedReader(java.io.InputStreamReader(conn.inputStream))
+                        while (!pushStop) {
+                            val line = reader.readLine() ?: break
+                            if (line.isEmpty()) continue
+                            try {
+                                val obj = org.json.JSONObject(line)
+                                val ev = obj.optString("event")
+                                if (ev == "open") {
+                                    Log.i("VaultRust", "ntfy-stream: open ok")
+                                } else if (ev == "message") {
+                                    Log.i("VaultRust", "ntfy-stream: message received -> notify")
+                                    showPushNotification()
+                                }
+                            } catch (e: Throwable) {
+                                Log.w("VaultRust", "ntfy-stream: parse: " + e.message)
+                            }
+                        }
+                        Log.i("VaultRust", "ntfy-stream: stream closed (null line), reconnect")
+                    } else {
+                        Log.w("VaultRust", "ntfy-stream: HTTP $code, reconnect")
+                    }
+                    conn.disconnect()
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "ntfy-stream: error: " + e.javaClass.simpleName + ": " + e.message)
+                }
+                if (!pushStop) {
+                    try { Thread.sleep(3000) } catch (_: InterruptedException) { return@Thread }
+                }
+            }
+        }
+        th.isDaemon = true
+        th.start()
+        pushLoop = th
+        Log.i("VaultRust", "pushMode: ntfy stream started")
+    }
+
+    private fun stopNtfyStream() {
+        pushStop = true
+        try { pushLoop?.interrupt() } catch (_: Throwable) {}
+        pushLoop = null
+    }
+
+    private fun showPushNotification() {
+        try {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            Log.i("VaultRust", "push-notify: building notification")
+            val ch = NotificationChannel("vault_messages", "Vault сообщения",
+                NotificationManager.IMPORTANCE_HIGH)
+            nm.createNotificationChannel(ch)
+            val launch = packageManager.getLaunchIntentForPackage(packageName)
+            val pi = launch?.let {
+                PendingIntent.getActivity(this, 1, it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            }
+            val n = NotificationCompat.Builder(this, "vault_messages")
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("Vault")
+                .setContentText("Новое сообщение")
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build()
+            nm.notify((System.currentTimeMillis() % 100000).toInt(), n)
+            Log.i("VaultRust", "pushMode: NEW MESSAGE notification shown")
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "push notify failed: " + e.message)
+        }
     }
 
     private fun createChannel() {
@@ -172,6 +291,113 @@ class VaultForegroundService : Service() {
     }
 
     companion object {
+        // M2.3: эко-режим — форс-стоп сервиса пользователем (без авторестарта)
+        @Volatile var ecoStoppedByUser: Boolean = false
+
+        // M2.3-b: ntfy push-режим — сервис держит ntfy-стрим вместо IMAP.
+        @Volatile var pushTopic: String? = null   // hex-hash read-токена
+        @Volatile var pushLoop: Thread? = null
+        @Volatile var pushStop = false
+
+        /// Включить push-режим: сервис остаётся жить (виден как тихий
+        /// MIN-сервис), но НЕ поднимает IMAP; подписывается на ntfy-topic.
+        @JvmStatic
+        fun pushModeStart(context: Context, topic: String, ntfyBase: String) {
+            pushTopic = topic
+            pushNtfyBase = ntfyBase
+            pushMode = true
+            // Персистим для BootReceiver: после перезагрузки телефона сервис
+            // должен сам подняться в push-режиме (пуши работают всегда).
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putString("push_topic", topic)
+                    .putString("push_base", ntfyBase)
+                    .putBoolean("push_mode", true).apply()
+            // Сервис уже ЖИВ в push-режиме? Переключаем стрим на новый topic
+            // на месте (onStartCommand не придёт — startForegroundService
+            // с живым сервисом только доставит Intent если он started).
+            instance?.let { svc ->
+                svc.startNtfyStream()
+                Log.i("VaultRust", "pushMode: live stream re-subscribed to topic")
+                return
+            }
+            try {
+                val svc = Intent(context, VaultForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc)
+                } else {
+                    context.startService(svc)
+                }
+                Log.i("VaultRust", "pushMode: service (re)started with ntfy topic")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "pushMode start failed: " + e.message)
+            }
+        }
+
+        @Volatile var pushMode: Boolean = false
+        @Volatile var pushNtfyBase: String = "https://ntfy.vault-msg.ru"
+
+        @JvmStatic
+        fun ecoStop(context: Context) {
+            ecoStoppedByUser = true
+            // Персистим в prefs: MainActivity при следующем запуске НЕ поднимет сервис
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("eco_mode", true).apply()
+            try {
+                context.stopService(Intent(context, VaultForegroundService::class.java))
+                Log.i("VaultRust", "eco: foreground service stopped")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco stop failed: " + e.message)
+            }
+        }
+
+        /// Push-режим ВЫКЛ: перезапустить сервис в классический (IMAP) режим.
+        @JvmStatic
+        fun pushModeStop(context: Context) {
+            pushMode = false
+            pushTopic = null
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("push_mode", false).remove("push_topic").apply()
+            try {
+                context.stopService(Intent(context, VaultForegroundService::class.java))
+                val svc = Intent(context, VaultForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc)
+                } else {
+                    context.startService(svc)
+                }
+                Log.i("VaultRust", "pushMode off: service restarted in classic mode")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "pushModeStop failed: " + e.message)
+            }
+        }
+
+        @JvmStatic
+        fun ecoStart(context: Context) {
+            ecoStoppedByUser = false
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .edit().putBoolean("eco_mode", false).apply()
+            try {
+                val svc = Intent(context, VaultForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc)
+                } else {
+                    context.startService(svc)
+                }
+                Log.i("VaultRust", "eco: foreground service started")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco start failed: " + e.message)
+            }
+        }
+
+        /// Eco-режим сохранён? (для MainActivity: не стартовать сервис при эко)
+        @JvmStatic
+        fun ecoModeEnabled(context: Context): Boolean {
+            return try {
+                context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                    .getBoolean("eco_mode", false)
+            } catch (e: Throwable) { false }
+        }
+
         init {
             // Сервис-процесс не касается MainActivity/Rust.kt — грузим .so
             // сами (идемпотентно: в activity-процессе библиотека уже
