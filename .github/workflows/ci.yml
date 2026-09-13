@@ -44,7 +44,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev \
-            patchelf libgtk-3-dev libayatana-appindicator3-dev libasound2-dev
+            patchelf libgtk-3-dev libayatana-appindicator3-dev libasound2-dev \
+            ninja-build
+          pip install --user meson
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Install npm dependencies
         working-directory: vault-desktop
         run: npm ci
