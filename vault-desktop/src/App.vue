@@ -841,6 +841,7 @@ import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
+import * as EditsFeature from './features/edits.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1598,6 +1599,22 @@ export default {
     toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this, msgId); },
     addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this, msgId, emoji); },
     toggleReaction(msgId, emoji) { return ReactionsFeature.toggleReaction(this, msgId, emoji); },
+    // ── Правки/удаления + tombstones (логика в features/edits.js) ──
+    editsStorageKey() { return EditsFeature.editsStorageKey(this); },
+    loadStoredEdits() { return EditsFeature.loadStoredEdits(this); },
+    saveStoredEdits(data) { return EditsFeature.saveStoredEdits(this, data); },
+    recordLocalEdit(chatKey, msgId, text, action) { return EditsFeature.recordLocalEdit(this, chatKey, msgId, text, action); },
+    tombstonesKey() { return EditsFeature.tombstonesKey(this); },
+    loadTombstones() { return EditsFeature.loadTombstones(this); },
+    addTombstone(msgId) { return EditsFeature.addTombstone(this, msgId); },
+    isTombstoned(msgId) { return EditsFeature.isTombstoned(this, msgId); },
+    midTombstonesKey() { return EditsFeature.midTombstonesKey(this); },
+    loadMidTombstones() { return EditsFeature.loadMidTombstones(this); },
+    addMidTombstone(mid) { return EditsFeature.addMidTombstone(this, mid); },
+    isMidTombstoned(mid) { return EditsFeature.isMidTombstoned(this, mid); },
+    filterDeleted(list) { return EditsFeature.filterDeleted(this, list); },
+    applyEdits(list, chatKey, wireEdits) { return EditsFeature.applyEdits(this, list, chatKey, wireEdits); },
+    sendEditEmail(msgId, text, action) { return EditsFeature.sendEditEmail(this, msgId, text, action); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -2452,16 +2469,6 @@ export default {
       out.sort((a, b) => this.msgTs(a) - this.msgTs(b));
       return out;
     },
-    // Удалённые сообщения не возвращаются в чат никогда: tombstone (msg_id
-    // удалён навсегда) или deleted-метка из истории — фильтруются при
-    // каждом построении чата (история + письма + pending). Message-ID
-    // tombstones (mid) отсекают письма, вернувшиеся из другой папки/All
-    // Mail с новым uid (DC-аналог rfc724_mid).
-    filterDeleted(list) {
-      const tombs = this.loadTombstones();
-      const mids = this.loadMidTombstones();
-      return (list || []).filter(m => m && !m.deleted && !(m.id && tombs.includes(m.id)) && !(m.mid && mids.includes(m.mid)));
-    },
     // mergeHistory: чат = письма из IMAP (свежие) + ПОЛНАЯ локальная история
     // из IndexedDB.
     // сообщения (с датами) остаются в чате навсегда, даже если письма ушли
@@ -3003,32 +3010,6 @@ export default {
         const arr = raw ? JSON.parse(raw) : [];
         this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
       } catch (e) { /* тихо */ }
-    },
-    // Транспорт правок (паттерн sendReactionEmail):
-    // 1-на-1 — encryptVault(JSON {edit:1,msg_id,text?,action}) с пустой темой;
-    // группа — encryptWithGroupKey, письма VaultGroupEdit: <id>.
-    sendEditEmail(msgId, text, action) {
-      // Метки письма (аналог DC Chat-Edit/Chat-Delete + rfc724_mid, но в
-      // зашифрованном теле — стелс): msg_id (сопоставление с оригиналом),
-      // sender (проверка «автор оригинала» на стороне получателя), ts
-      // (последняя по времени правка авторитетна).
-      const payload = JSON.stringify({ edit: 1, msg_id: msgId, text: text || '', action, sender: this.email, ts: Date.now() });
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupEdit(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendEdit(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send edit email:', e);
-        }
-      })();
     },
     // без ожидания IMAP, история переживает перезапуск (IndexedDB + копия
     // в localStorage, см. loadLocalHistory).
@@ -6366,27 +6347,6 @@ export default {
       const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
       return this.senderEmail(raw);
     },
-    // Применяем правки из писем (wireEdits: msg_id -> [{text, action, date}]).
-    // Паттерн applyReactions: мерж писем в localStorage-хранилище
-    // edit-письмо в пути. Последняя по дате правка авторитетна:
-    // delete → msg.deleted, edit → msg.content = новый текст + msg.edited.
-    editsStorageKey() {
-      return 'vault-edits-' + (this.email || 'anon');
-    },
-    loadStoredEdits() {
-      try {
-        return JSON.parse(localStorage.getItem(this.editsStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveStoredEdits(data) {
-      try {
-        localStorage.setItem(this.editsStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save edits:', e);
-      }
-    },
     // --- Квитанции чтения («просмотрено») ---
     // Получатель при открытии чата шлёт отправителю квитанцию {read:1,
     // msg_ids:[...]} (1-на-1: encryptVault с пустой темой; группа:
@@ -6525,16 +6485,6 @@ export default {
       }
       db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
     },
-    // Локальная (оптимистичная) запись правки — до доставки письма.
-    recordLocalEdit(chatKey, msgId, text, action) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      const cur = chatEdits[msgId] || [];
-      cur.push({ text: text || '', action, date: Date.now(), sender: this.email });
-      chatEdits[msgId] = cur;
-      stored[chatKey] = chatEdits;
-      this.saveStoredEdits(stored);
-    },
     // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
@@ -6552,96 +6502,6 @@ export default {
         this.cursorsCache = await db.cursorsLoad(accLocal);
       } catch (e) {
         console.warn('initLocalDb cursors failed:', e);
-      }
-    },
-    tombstonesKey() {
-      return 'vault-tombstones-' + (this.email || 'anon');
-    },
-    loadTombstones() {
-      return this.tombstonesCache || [];
-    },
-    addTombstone(msgId) {
-      if (!msgId) return;
-      const list = this.tombstonesCache;
-      if (!list.includes(msgId)) {
-        list.push(msgId);
-        // sqlite persist (async, fire-and-forget)
-        db.tombstoneAdd(this.email || 'anon', msgId, '');
-      }
-    },
-    isTombstoned(msgId) {
-      if (!msgId) return false;
-      return (this.tombstonesCache || []).includes(msgId);
-    },
-    // Message-ID tombstones (DC-аналог rfc724_mid): письмо, чей Message-ID
-    // когда-либо был удалён, НЕ ВОСКРЕСАЕТ даже при переезде между папками
-    // или повторной доставке с новым UID. В отличие от msg_id-tombstones
-    // (которые привязаны к uid-папки), mid-tombstones работают ГЛОБАЛЬНО:
-    // письмо, вернувшееся из All Mail любого провайдера, будет отфильтровано.
-    midTombstonesKey() {
-      return 'vault-mid-tombstones-' + (this.email || 'anon');
-    },
-    loadMidTombstones() {
-      return this.midTombstonesCache || [];
-    },
-    addMidTombstone(mid) {
-      if (!mid) return;
-      const list = this.midTombstonesCache;
-      if (!list.includes(mid)) {
-        list.push(mid);
-        db.tombstoneAdd(this.email || 'anon', '', mid);
-      }
-    },
-    isMidTombstoned(mid) {
-      if (!mid) return false;
-      return (this.midTombstonesCache || []).includes(mid);
-    },
-    applyEdits(list, chatKey, wireEdits) {
-      const stored = this.loadStoredEdits();
-      const chatEdits = stored[chatKey] || {};
-      // Мерж правок из писем в хранилище. Дедупликация по
-      // дате+тексту+действию+отправителю (один и тот же edit-конверт
-      // доходит в нескольких копиях — Sent отправителя + INBOX получателя).
-      if (wireEdits && Object.keys(wireEdits).length) {
-        for (const [msgId, edits] of Object.entries(wireEdits)) {
-          const cur = chatEdits[msgId] || [];
-          for (const e of edits) {
-            const dup = cur.some(x => x.text === e.text && x.action === e.action
-              && String(x.date || 0) === String(e.date || 0) && (x.sender || '') === (e.sender || ''));
-            if (!dup) cur.push(e);
-          }
-          chatEdits[msgId] = cur;
-        }
-        stored[chatKey] = chatEdits;
-        this.saveStoredEdits(stored);
-      }
-      // Проставляем на сообщения. Проверка отправителя (аналог почтовый мессенджер
-      // «Bad sender»): edit/delete применяются только от АВТОРА оригинала;
-      // чужие правки игнорируются. Старые правки без sender — применяем
-      // (обратная совместимость).
-      for (const msg of list) {
-        const edits = chatEdits[msg.id];
-        if (!edits || !edits.length) continue;
-        const mine = edits.filter(e => {
-          if (!e.sender) return true;
-          if (msg.sender_id) return e.sender === msg.sender_id;
-          // 1:1 без sender_id: моё сообщение правит только мой email,
-          // чужое — только не мой (в 1:1 другой участник один).
-          if (msg.from === 'me') return e.sender === this.email;
-          return e.sender !== this.email;
-        });
-        if (!mine.length) continue;
-        const latest = mine.reduce((a, b) => (new Date(b.date || 0) >= new Date(a.date || 0) ? b : a));
-        if (latest.action === 'delete') {
-          // Навсегда: tombstone + скрытие (фильтр в mergeHistory/mergePending).
-          this.addTombstone(msg.id);
-          this.addMidTombstone(msg.mid);
-          msg.deleted = true;
-          msg.content = '';
-        } else if (latest.text) {
-          msg.content = latest.text;
-          msg.edited = true;
-        }
       }
     },
     // --- Копирование сообщений ---
