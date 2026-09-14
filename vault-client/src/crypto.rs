@@ -16,7 +16,6 @@ use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
 pub const NONCE_LEN: usize = 24;
-pub use NONCE_LEN as NONCE_LEN_PUB;
 
 pub struct CryptoClient {
     private_key: Option<StaticSecret>,
@@ -62,6 +61,68 @@ impl CryptoClient {
         self.public_key = Some(public);
 
         (pub_hex, priv_hex)
+    }
+
+    /// Загрузить пару из ~/.vault/keys/keypair.json (формат Desktop
+    /// StoredKeyPair: public_key/private_key hex + pq_private_key/pq_public_key).
+    /// Возвращает false, если файла нет — вызывающий код решает, звать ли
+    /// /keygen. Чужой/битый JSON — тоже false (не фатально: пусть keygen).
+    pub fn load_keypair(&mut self) -> bool {
+        let path = dirs::home_dir()
+            .map(|h| h.join(".vault/keys/keypair.json"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".vault/keys/keypair.json"));
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return false;
+        };
+        let Some(priv_hex) = obj.get("private_key").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        if self.import_private_key(priv_hex).is_err() {
+            return false;
+        }
+        // PQ-поля опциональны (старые аккаунты без PQ продолжают работать
+        // по чистому X25519 — legacy-путь).
+        if let Some(seed_hex) = obj.get("pq_private_key").and_then(|v| v.as_str()) {
+            if pq::pq_from_seed(seed_hex).is_some() {
+                self.pq_seed_hex = Some(seed_hex.to_string());
+                if let Some(ek) = obj.get("pq_public_key").and_then(|v| v.as_str()) {
+                    self.pq_ek_b64 = Some(ek.to_string());
+                }
+            }
+        }
+        true
+    }
+
+    /// Сохранить текущую пару в ~/.vault/keys/keypair.json (формат Desktop).
+    /// Вызывается после /keygen, чтобы ключи пережили перезапуск REPL.
+    pub fn save_keypair(&self) -> Result<()> {
+        let (Some(priv_key), Some(pub_key)) = (&self.private_key, &self.public_key) else {
+            return Ok(());
+        };
+        let dir = dirs::home_dir()
+            .map(|h| h.join(".vault/keys"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".vault/keys"));
+        std::fs::create_dir_all(&dir).context("Failed to create keys dir")?;
+        let path = dir.join("keypair.json");
+        if path.exists() {
+            // Не перезаписывать существующий аккаунтный ключ молча —
+            // иначе /keygen в тестовом HOME снесёт ключ, которым уже
+            // зашифрована история. Для смены ключа файл удаляют вручную.
+            return Ok(());
+        }
+        let obj = serde_json::json!({
+            "public_key": hex::encode(pub_key.as_bytes()),
+            "private_key": hex::encode(priv_key.to_bytes()),
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "pq_private_key": self.pq_seed_hex.clone().unwrap_or_default(),
+            "pq_public_key": self.pq_ek_b64.clone().unwrap_or_default(),
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&obj)?)
+            .context("Failed to write keypair.json")?;
+        Ok(())
     }
 
     /// Import a private key from hex

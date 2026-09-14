@@ -176,7 +176,7 @@ async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<(St
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let uid = msg.id.clone();
             let body = client
-                .fetch_message_body(&uid)
+                .fetch_message_body(&uid, "INBOX")
                 .await
                 .context("fetch body failed")?;
             return Ok((uid, body));
@@ -202,7 +202,7 @@ async fn poll_for_message(client: &mut EmailClient, subject: &str) -> Result<(St
         if let Some(msg) = msgs.iter().find(|m| m.subject.contains(subject)) {
             let uid = msg.id.clone();
             let body = client
-                .fetch_message_body(&uid)
+                .fetch_message_body(&uid, "INBOX")
                 .await
                 .context("fetch body (junk) failed")?;
             eprintln!("  ✓ found in junk folder (Gmail spam filter)");

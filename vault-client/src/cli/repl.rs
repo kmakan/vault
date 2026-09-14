@@ -119,6 +119,9 @@ struct CliContext {
     reaction_store: crate::vault::ReactionStore,
     message_index: crate::vault::MessageIndex,
     edit_manager: crate::vault::EditManager,
+    /// Пара ключей была загружена с диска (для /keys — отличать
+    /// «загружено с диска» от «сгенерировано в этой сессии»).
+    keys_loaded: bool,
 }
 
 impl CliContext {
@@ -127,10 +130,15 @@ impl CliContext {
             eprintln!("Warning: could not load contacts: {}", e);
             crate::vault::ContactBook::new()
         });
+        let mut crypto = CryptoClient::new();
+        // Пара ключей переживает перезапуск REPL: ~/.vault/keys/keypair.json
+        // (тот же файл, что Desktop) — без этого каждая сессия шифровала
+        // новым ключом и старые письма становились нечитаемыми.
+        let keys_loaded = crypto.load_keypair();
         Self {
             config,
             email_client: None,
-            crypto: CryptoClient::new(),
+            crypto,
             active_chat: None,
             attachments: Vec::new(),
             invite_manager: crate::vault::InviteManager::new(),
@@ -139,6 +147,7 @@ impl CliContext {
             reaction_store: crate::vault::ReactionStore::new(),
             message_index: crate::vault::MessageIndex::new(),
             edit_manager: crate::vault::EditManager::new(),
+            keys_loaded: keys_loaded,
         }
     }
 
@@ -295,17 +304,27 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 if let Some(ref client) = ctx.email_client {
                     // Set the recipient's public key so we encrypt on the
                     // shared X25519 ECDH secret (Desktop-compatible).
-                    if let Some(contact) = ctx.contact_book.get(chat) {
-                        if !contact.public_key.is_empty() {
-                            if let Err(e) = ctx.crypto.set_peer_key_pq(
+                    // Без peer-ключа encrypt_vault молча уходит в
+                    // self-encryption (ключ-хэш своего pubkey) — получатель
+                    // НИКОГДА не расшифрует. Отказываем явно.
+                    let peer_ready = match ctx.contact_book.get(chat) {
+                        Some(contact) if !contact.public_key.is_empty() => {
+                            match ctx.crypto.set_peer_key_pq(
                                 &contact.public_key,
                                 contact.pq_public_key.as_deref(),
                             ) {
-                                Output::warn(&format!("Could not set peer key: {}", e));
+                                Ok(()) => true,
+                                Err(e) => {
+                                    Output::error(&format!("Could not set peer key: {}", e));
+                                    false
+                                }
                             }
-                        } else {
-                            Output::warn("Contact has no public key — message will NOT be Desktop-compatible. Add key via /add <email> <name> <pubkey> or /accept first.");
                         }
+                        _ => false,
+                    };
+                    if !peer_ready {
+                        Output::error("Contact has no public key — send aborted (the recipient could not decrypt). Use /invite or /accept first.");
+                        return Ok(false);
                     }
 
                     // Wrap plaintext in the Desktop-compatible JSON envelope,
@@ -396,7 +415,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Inbox => {
             if let Some(ref mut client) = ctx.email_client {
                 Output::info("Fetching inbox (contacts-only)...");
-                match client.fetch_messages().await {
+                match client.fetch_messages_with_prefix("INBOX", 512).await {
                     Ok(messages) => {
                         // Process incoming read receipts first
                         use crate::vault::VaultFilter;
@@ -541,8 +560,20 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             }
                         }
 
-                        // Filter: only Vault messages from contacts
-                        let vault_msgs = VaultFilter::filter_vault_messages(&messages);
+                        // Filter: only Vault messages from contacts.
+                        // Stealth-письма несут пустую тему и НЕ содержат
+                        // текстовых маркеров — единственный надёжный признак
+                        // (как в Desktop incoming.js): тело = валидный base64
+                        // достаточно большой длины (AAD-конверт encrypt_vault).
+                        // Receipts и group-invites различаются по subject.
+                        let vault_msgs: Vec<_> = messages
+                            .iter()
+                            .filter(|m| {
+                                VaultFilter::is_vault_receipt(m)
+                                    || m.subject.starts_with("VaultGroupInvite:")
+                                    || ctx.crypto.is_encrypted(&m.body)
+                            })
+                            .collect();
                         // Further filter: only from contacts
                         let contact_msgs: Vec<_> = vault_msgs
                             .iter()
@@ -606,7 +637,22 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
         Command::Read { id } => {
             if let Some(ref mut client) = ctx.email_client {
-                match client.fetch_message_body(&id).await {
+                // Peer-ключ нужен ДО расшифровки: тело письма не несёт
+                // отправителя (stealth), поэтому сначала читаем From-заголовок
+                // по UID, находим контакт и ставим его ключ в сессию.
+                if let Ok(sender) = client.fetch_sender(&id, "INBOX").await {
+                    if let Some(contact) = ctx.contact_book.get(&sender) {
+                        if !contact.public_key.is_empty() {
+                            if let Err(e) = ctx.crypto.set_peer_key_pq(
+                                &contact.public_key,
+                                contact.pq_public_key.as_deref(),
+                            ) {
+                                Output::warn(&format!("Could not set peer key: {}", e));
+                            }
+                        }
+                    }
+                }
+                match client.fetch_message_body(&id, "INBOX").await {
                     Ok(body) => {
                         let is_enc = ctx.crypto.is_encrypted(&body);
                         Output::divider();
@@ -774,16 +820,26 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             };
 
             if let Some(ref client) = ctx.email_client {
-                // Set the recipient's public key so we encrypt on the shared
-                // X25519 ECDH secret (Desktop-compatible), like /send.
-                if let Some(contact) = ctx.contact_book.get(&to) {
-                    if !contact.public_key.is_empty() {
-                        if let Err(e) = ctx.crypto.set_peer_key_pq(&contact.public_key, contact.pq_public_key.as_deref()) {
-                            Output::warn(&format!("Could not set peer key: {}", e));
+                // Peer-ключ обязателен (см. /send): без него encrypt_vault
+                // молча шифрует self-encryption — получатель не расшифрует.
+                let peer_ready = match ctx.contact_book.get(&to) {
+                    Some(contact) if !contact.public_key.is_empty() => {
+                        match ctx.crypto.set_peer_key_pq(
+                            &contact.public_key,
+                            contact.pq_public_key.as_deref(),
+                        ) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                Output::error(&format!("Could not set peer key: {}", e));
+                                false
+                            }
                         }
-                    } else {
-                        Output::warn("Contact has no public key — message will NOT be Desktop-compatible. Add key via /add <email> <name> <pubkey> or /accept first.");
                     }
+                    _ => false,
+                };
+                if !peer_ready {
+                    Output::error("Contact has no public key — reply aborted (the recipient could not decrypt). Use /invite or /accept first.");
+                    return Ok(false);
                 }
 
                 // Wrap plaintext in the Desktop-compatible JSON envelope,
@@ -875,10 +931,8 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                     match format_attachment_text(text) {
                                                         Some(human) => human,
                                                         None => {
-                                                            let short: String = text
-                                                                .chars()
-                                                                .take(40)
-                                                                .collect();
+                                                            let short: String =
+                                                                text.chars().take(40).collect();
                                                             format!("[encrypted] {}...", short)
                                                         }
                                                     }
@@ -1159,6 +1213,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         Command::Keygen => {
             Output::info("Generating new key pair...");
             let (pub_hex, _priv_hex) = ctx.crypto.generate_keypair();
+            // Персистим (создаёт файл только если его ещё нет — аккаунтный
+            // ключ не перезаписывается молча, см. save_keypair).
+            if let Err(e) = ctx.crypto.save_keypair() {
+                Output::warn(&format!("Could not persist keypair: {}", e));
+            }
             Output::success("New key pair generated");
             Output::fingerprint(&pub_hex);
             Output::info("Share your public key with /keyshare <contact>");
@@ -1168,7 +1227,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             Output::info("Key status:");
             if ctx.crypto.has_keys() {
                 let fp = ctx.crypto.fingerprint();
-                Output::status(true, "Keys loaded");
+                if ctx.keys_loaded {
+                    Output::status(true, "Keys loaded from ~/.vault/keys/keypair.json");
+                } else {
+                    Output::status(true, "Keys generated this session (will persist)");
+                }
                 Output::fingerprint(&fp);
                 if let Some(pub_hex) = ctx.crypto.public_key_hex() {
                     Output::info(&format!("Public key: {}", pub_hex));
@@ -1281,6 +1344,13 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
         Command::SendFile { path } => {
             if let Some(ref mut client) = ctx.email_client {
+                let to = match ctx.active_chat.as_deref() {
+                    Some(chat) if !chat.is_empty() => chat.to_string(),
+                    _ => {
+                        Output::error("No active chat. Use /chat <contact> first.");
+                        return Ok(false);
+                    }
+                };
                 match crate::cli::commands::attachments::FileInfo::from_path(&path) {
                     Ok(info) => {
                         // Check size limit
@@ -1295,30 +1365,144 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             Output::error(&format!("{} (limit: {})", e, limit_label));
                         } else {
                             match info.read_contents() {
-                                Ok(_data) => {
-                                    // Encrypt the file using the standalone Encryptor
-                                    let encryptor = crate::crypto::encryptor::Encryptor::new();
-                                    match encryptor.encrypt_file(&info.path) {
-                                        Ok(encrypted_envelope) => {
-                                            // Build MIME multipart body
-                                            let mime_body =
-                                                crate::cli::commands::attachments::build_mime_multipart(
-                                                    &encrypted_envelope,
-                                                    &info.filename,
-                                                    &info.mime_type,
-                                                );
+                                Ok(data) => {
+                                    // Desktop wire: вложение = конверт
+                                    // {vault:1,...,text:<JSON вложения>} + encryptVault
+                                    // (AAD="VAULT"). DoD >1MB: data-письмо с
+                                    // Message-ID=ref уходит ПЕРВЫМ, затем мета —
+                                    // как App.vue sendFile (порядок: сбой data
+                                    // = мета бесполезна).
+                                    use base64::{engine::general_purpose::STANDARD, Engine};
+                                    let b64 = STANDARD.encode(&data);
+                                    let dod_threshold = 1024 * 1024u64;
+                                    let use_dod = info.size as u64 > dod_threshold;
 
-                                            let to = ctx.active_chat.as_deref().unwrap_or("");
-                                            let subject = String::new(); // stealth — empty subject
+                                    // Peer-ключ обязателен (как /send): без него
+                                    // encrypt_vault молча уходит в self-encryption —
+                                    // получатель НИКОГДА не расшифрует. Отказываем.
+                                    let peer_ready = match ctx.contact_book.get(&to) {
+                                        Some(contact) if !contact.public_key.is_empty() => {
+                                            match ctx.crypto.set_peer_key_pq(
+                                                &contact.public_key,
+                                                contact.pq_public_key.as_deref(),
+                                            ) {
+                                                Ok(()) => true,
+                                                Err(e) => {
+                                                    Output::error(&format!(
+                                                        "Could not set peer key: {}",
+                                                        e
+                                                    ));
+                                                    false
+                                                }
+                                            }
+                                        }
+                                        _ => false,
+                                    };
+                                    if !peer_ready {
+                                        Output::error("Contact has no public key — file send aborted (the recipient could not decrypt). Use /invite first.");
+                                        return Ok(false);
+                                    }
 
-                                            match client.send_email(to, &subject, &mime_body).await
+                                    let build_envelope = |text: String| {
+                                        serde_json::json!({
+                                            "vault": 1,
+                                            "id": uuid::Uuid::new_v4().to_string(),
+                                            "text": text,
+                                            "name": ctx.config.email.as_deref().unwrap_or(""),
+                                            "avatar": "",
+                                            "key": ctx.crypto.public_key_hex().unwrap_or_default(),
+                                            "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default()
+                                        })
+                                        .to_string()
+                                    };
+
+                                    let mut failed = false;
+                                    let mut dod_mid = String::new();
+                                    if use_dod {
+                                        // ref: как Desktop — vault-<ts36>-<rand>@домен
+                                        let ts = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        let domain = to.split('@').nth(1).unwrap_or("localhost");
+                                        dod_mid = format!(
+                                            "<vault-{}-{}@{}>",
+                                            ts,
+                                            &uuid::Uuid::new_v4().to_string()[..8],
+                                            domain
+                                        );
+                                        let data_payload = serde_json::json!({
+                                            "vault_dod_data": 1,
+                                            "ref": dod_mid,
+                                            "data": b64,
+                                        })
+                                        .to_string();
+                                        let wire = ctx
+                                            .crypto
+                                            .encrypt_vault(&build_envelope(data_payload))
+                                            .unwrap_or_else(|e| {
+                                                Output::warn(&format!("Encrypt failed: {}", e));
+                                                failed = true;
+                                                String::new()
+                                            });
+                                        if !failed {
+                                            match client
+                                                .send_email_with_id(&to, "", &wire, Some(&dod_mid))
+                                                .await
                                             {
+                                                Ok(()) => {}
+                                                Err(e) => {
+                                                    Output::error(&format!(
+                                                        "DoD data letter failed: {}",
+                                                        e
+                                                    ));
+                                                    failed = true;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if !failed {
+                                        let meta = if use_dod {
+                                            serde_json::json!({
+                                                "vault_attachment": true,
+                                                "name": info.filename,
+                                                "type": info.mime_type,
+                                                "size": info.size,
+                                                "dod": dod_mid,
+                                            })
+                                        } else {
+                                            serde_json::json!({
+                                                "vault_attachment": true,
+                                                "name": info.filename,
+                                                "type": info.mime_type,
+                                                "size": info.size,
+                                                "data": b64,
+                                            })
+                                        };
+                                        let wire = ctx
+                                            .crypto
+                                            .encrypt_vault(&build_envelope(meta.to_string()))
+                                            .unwrap_or_else(|e| {
+                                                Output::warn(&format!("Encrypt failed: {}", e));
+                                                failed = true;
+                                                String::new()
+                                            });
+                                        if !failed {
+                                            let subject = String::new(); // stealth — empty subject
+                                            match client.send_email(&to, &subject, &wire).await {
                                                 Ok(()) => {
+                                                    let label = if use_dod {
+                                                        "download on demand".to_string()
+                                                    } else {
+                                                        "inline".to_string()
+                                                    };
                                                     Output::success(&format!(
-                                                        "Encrypted file sent: {} ({})",
+                                                        "Encrypted file sent ({}): {} ({})",
+                                                        label,
                                                         info.filename,
                                                         crate::cli::commands::attachments::human_size(
-                                                            info.size as usize,
+                                                            info.size as usize
                                                         )
                                                     ));
                                                 }
@@ -1327,9 +1511,6 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                     e
                                                 )),
                                             }
-                                        }
-                                        Err(e) => {
-                                            Output::error(&format!("Encryption failed: {}", e));
                                         }
                                     }
                                 }
@@ -1898,7 +2079,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
         Command::Forward { id, to } => {
             if let Some(ref mut client) = ctx.email_client {
-                match client.fetch_message_body(&id).await {
+                match client.fetch_message_body(&id, "INBOX").await {
                     Ok(body) => {
                         let forwarded = format!("[Forwarded from {}]\n{}", id, body);
                         match client
@@ -2482,7 +2663,10 @@ mod tests {
         // DoD data letter: full base64 payload — must collapse to a placeholder,
         // never the raw blob.
         let data = "A".repeat(3_000_000); // ~2.25 MB decoded
-        let letter = format!(r#"{{"vault_dod_data":1,"ref":"<vault-abc@bk.ru>","data":"{}"}}"#, data);
+        let letter = format!(
+            r#"{{"vault_dod_data":1,"ref":"<vault-abc@bk.ru>","data":"{}"}}"#,
+            data
+        );
         let out = format_attachment_text(&letter).unwrap();
         assert!(out.contains("file data letter"));
         assert!(!out.contains(&data[..100]));

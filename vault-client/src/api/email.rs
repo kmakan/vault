@@ -159,12 +159,116 @@ impl EmailClient {
         Ok(messages)
     }
 
-    pub async fn fetch_message_body(&mut self, uid: &str) -> Result<String> {
+    /// Заголовки + ПРЕФИКС тела (первые `prefix_bytes` байт BODY[TEXT]) для
+    /// классификации писем без выкачки тяжёлых тел: stealth-письма несут
+    /// пустую тему и маркеров в теле нет — «наше» письмо узнаётся по тому,
+    /// что тело начинается с валидного base64 (AAD-конверт encrypt_vault).
+    /// PEEK не ставит \\Seen. Длина — единственный признак в префиксе;
+    /// полная расшифровка всё равно делается по требованию (/read).
+    pub async fn fetch_messages_with_prefix(
+        &mut self,
+        folder: &str,
+        prefix_bytes: usize,
+    ) -> Result<Vec<EmailMessage>> {
         let session = self
             .imap_session
             .as_mut()
             .context("Not connected to IMAP server")?;
 
+        session.select(folder)?;
+
+        let message_ids = session.uid_search("ALL")?;
+        let mut uids: Vec<u32> = message_ids.iter().copied().collect();
+        uids.sort_by(|a, b| b.cmp(a));
+
+        let mut messages = Vec::new();
+        for uid in uids.iter().take(50) {
+            let query = format!("(UID FLAGS RFC822.HEADER BODY.PEEK[TEXT]<0.{prefix_bytes}>)");
+            if let Ok(data) = session.uid_fetch(uid.to_string(), query) {
+                for fetch in data.iter() {
+                    let uid_str = fetch.uid.unwrap_or_default().to_string();
+                    let flags = fetch.flags();
+                    let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
+
+                    if let Some(header) = fetch.header() {
+                        let header_str = String::from_utf8_lossy(header);
+                        let from = extract_header(&header_str, "From:")
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let to = extract_header(&header_str, "To:")
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let subject = extract_header(&header_str, "Subject:")
+                            .unwrap_or_else(|| "(no subject)".to_string());
+                        let date = extract_header(&header_str, "Date:")
+                            .unwrap_or_else(|| "Unknown".to_string());
+
+                        // BODY[TEXT] (в т.ч. BODY.PEEK[TEXT]<0.N>) imap-proto
+                        // парсит как SectionPath::Full(Text) — accessor body()
+                        // отдаёт только section:None (BODY[]/RFC822), поэтому
+                        // текст берём через text().
+                        let body = fetch
+                            .text()
+                            .map(|b| decode_quoted_printable(&String::from_utf8_lossy(b)))
+                            .unwrap_or_default();
+
+                        messages.push(EmailMessage {
+                            id: uid_str,
+                            from,
+                            to,
+                            subject,
+                            body,
+                            date,
+                            is_read,
+                        });
+                    }
+                }
+            }
+        }
+
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// Header-only fetch: sender email by UID. Used by /read to pick the
+    /// right peer key BEFORE decryption — the body alone carries no sender.
+    pub async fn fetch_sender(&mut self, uid: &str, folder: &str) -> Result<String> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")?;
+
+        session.select(folder)?;
+        if let Ok(data) = session.uid_fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])") {
+            for fetch in data.iter() {
+                if let Some(header) = fetch.header() {
+                    let from = extract_header(&String::from_utf8_lossy(header), "From:")
+                        .unwrap_or_default();
+                    // strip display name: "Name <a@b.c>" → a@b.c
+                    let from = from
+                        .split('<')
+                        .next_back()
+                        .and_then(|s| s.strip_suffix('>'))
+                        .unwrap_or(&from)
+                        .trim()
+                        .to_string();
+                    if !from.is_empty() {
+                        return Ok(from);
+                    }
+                }
+            }
+        }
+        Ok(String::new())
+    }
+
+    /// Полное тело письма по UID. SELECT обязательна: после чистого
+    /// /connect ни одна папка не выбрана, и UID FETCH отвечал BAD,
+    /// молча оставляя тело пустым.
+    pub async fn fetch_message_body(&mut self, uid: &str, folder: &str) -> Result<String> {
+        let session = self
+            .imap_session
+            .as_mut()
+            .context("Not connected to IMAP server")?;
+
+        session.select(folder)?;
         if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
             for fetch in data.iter() {
                 if let Some(body) = fetch.text() {
@@ -187,24 +291,45 @@ impl EmailClient {
     }
 
     pub async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<()> {
+        self.send_email_with_id(to, subject, body, None).await
+    }
+
+    /// SMTP-отправка с заданным Message-ID (data-письма DoD ссылаются на
+    /// него — получатель найдёт тело по Message-ID при выкачке по клику).
+    pub async fn send_email_with_id(
+        &self,
+        to: &str,
+        subject: &str,
+        body: &str,
+        message_id: Option<&str>,
+    ) -> Result<()> {
         let from_mailbox: Mailbox = self.config.email.parse().context("Invalid sender email")?;
         let to_mailbox: Mailbox = to.parse().context("Invalid recipient email")?;
 
-        let email = Message::builder()
+        let mut builder = Message::builder()
             .from(from_mailbox)
             .to(to_mailbox)
             .subject(subject)
-            .header(ContentType::TEXT_PLAIN)
+            .header(ContentType::TEXT_PLAIN);
+        if let Some(mid) = message_id {
+            builder = builder.message_id(Some(mid.to_string()));
+        }
+        let email = builder
             .body(fold_lines(body))
             .context("Failed to build email")?;
 
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
 
-        let transport =
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
-                .credentials(creds)
+        // Порт 465 = SMTPS (TLS сразу), 587 = STARTTLS. Отличие критично:
+        // starttls на 465 рвёт соединение на первом же STARTTLS.
+        let transport_builder = if self.config.smtp_port == 465 {
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&self.config.smtp_server)?
                 .port(self.config.smtp_port)
-                .build();
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.smtp_server)?
+                .port(self.config.smtp_port)
+        };
+        let transport = transport_builder.credentials(creds).build();
 
         transport
             .send(email)
