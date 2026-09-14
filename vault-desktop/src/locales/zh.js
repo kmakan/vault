@@ -542,6 +542,8 @@ export default {
   contact_bio_self: '在 设置 → 个人资料 中添加状态',
   contact_bio_empty: '联系人尚未添加「关于」状态',
   contact_seen_recently: '最近在线',
+  presence_enable: '显示我在线',
+  presence_hint: '每 5 分钟向有密钥的联系人发送加密信号 — 他们会看到绿点。关闭后您将隐身。',
   contact_offline: '离线',
   contact_edit_local: '本地编辑',
   group_avatar_label: '群组头像',

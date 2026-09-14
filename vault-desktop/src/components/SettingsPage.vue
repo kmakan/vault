@@ -181,6 +181,13 @@
           <span>{{ t('settings_hide_last_seen') }}</span>
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
+        <div class="setting-row" style="display:block">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span>{{ t('presence_enable') || 'Показывать, что я онлайн' }}</span>
+            <label class="toggle"><input type="checkbox" v-model="presenceEnabled" @change="presenceSave" /><span class="slider"></span></label>
+          </div>
+          <p class="setting-hint" style="margin-top:6px">{{ t('presence_hint') || 'Шифрованный сигнал каждые 5 минут контактам с ключом — у них загорается зелёная точка. Выключено — вас не видно.' }}</p>
+        </div>
 
         <!-- Duress-защита: замок, panic-PIN, duress-PIN -->
       <div class="setting-row" style="display:block">
@@ -446,6 +453,7 @@ export default {
       notifTray: true,
       notifSystem: notificationsEnabled(),
       hideLastSeen: false,
+      presenceEnabled: false,
       categories: [
         { id: 'profile', icon: 'user', label: 'Профиль' },
         { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
@@ -485,6 +493,8 @@ export default {
       this.localAutoclean = (await db.kvGet('anon', 'autoclean-period')) || 'off';
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
       this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+      // Presence (M2): per-account тумблер heartbeat-зелёной точки.
+      this.presenceEnabled = (await db.kvGet(this.email || 'anon', 'presence-enabled')) === '1';
       // Звонки: выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
@@ -526,6 +536,11 @@ export default {
         // Применение — живое: сообщаем ядру (App слушает kv-событие простым полем)
         this.$emit('eco-mode', this.ecoMode);
       } catch (e) { /* kv */ }
+    },
+    // Presence (M2): тумблер «Показывать, что я онлайн». Ядро (App) запускает
+    // или глушит heartbeat-таймер; kv пишет и сам App-обработчик (per-account).
+    async presenceSave() {
+      this.$emit('presence-enabled', this.presenceEnabled);
     },
     async relaySave() {
       try {

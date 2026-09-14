@@ -553,6 +553,8 @@ export default {
   contact_bio_self: 'Add a status in Settings → Profile',
   contact_bio_empty: 'The contact has not added an «About» status yet',
   contact_seen_recently: 'Seen recently',
+  presence_enable: 'Show me as online',
+  presence_hint: 'Encrypted signal every 5 minutes to contacts with a key — they see a green dot. Off — you stay invisible.',
   contact_offline: 'Offline',
   contact_edit_local: 'Edit locally',
   group_avatar_label: 'Group avatar',

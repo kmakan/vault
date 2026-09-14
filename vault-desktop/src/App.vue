@@ -127,6 +127,7 @@
         :unreadOf="unreadOf"
         :isMuted="isMuted"
         :isRecentlySeen="isRecentlySeen"
+        :isOnline="isOnline"
         :membersLabel="membersLabel"
         @search="v => searchQuery = v"
         @select-chat="selectChat"
@@ -436,7 +437,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" />
         </div>
       </div>
 
@@ -621,8 +622,8 @@
           <div v-if="contactCardBio" class="contact-bio-view">«{{ contactCardBio }}»</div>
           <p v-else class="contact-bio-empty">{{ contactCardEmail === email ? t('contact_bio_self') : t('contact_bio_empty') }}</p>
           <div class="contact-card-footer">
-            <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) }">
-              {{ isRecentlySeen(contactCardEmail) ? t('contact_seen_recently') : t('contact_offline') }}
+            <span class="contact-card-seen" :class="{ online: isRecentlySeen(contactCardEmail) || isOnline(contactCardEmail) }">
+              {{ (isRecentlySeen(contactCardEmail) || isOnline(contactCardEmail)) ? t('contact_seen_recently') : t('contact_offline') }}
             </span>
             <button class="btn btn-primary btn-sm" @click="startEditFromCard">{{ t('contact_edit_local') }}</button>
           </div>
@@ -850,6 +851,7 @@ import * as HistoryFeature from './features/history.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
 import * as ProfilesFeature from './features/profiles.js';
+import * as PresenceFeature from './features/presence.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1575,6 +1577,9 @@ export default {
           this.startPolling()
           if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
           else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          // Presence (M2): heartbeat-таймер, если тумблер включён (kv,
+          // per-account). Восстанавливается на входе, глушится на выходе.
+          try { if (await PresenceFeature.isEnabled(this)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -1665,6 +1670,7 @@ export default {
     stopPolling() { return RelayFeature.stopPolling(this); },
     onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
     onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
+    onPresenceEnabled(on) { this.presenceSetEnabled(on); },
     // ── Звонки (логика в features/calls.js) ──
     async isCallSeen(callId) { return CallsFeature.isCallSeen(this, callId); },
     async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this, callId); },
@@ -1718,6 +1724,13 @@ export default {
     compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
     noteSeen(email, ts) { return ProfilesFeature.noteSeen(this, email, ts); },
     isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this, email); },
+    // ── Presence (t_e858bdb9) — heartbeat-зелёная точка; логика в
+    // features/presence.js. Тумблер живёт в настройках (Приватность).
+    isOnline(email) { return PresenceFeature.isOnline(this, email); },
+    presenceSetEnabled(on) {
+      PresenceFeature.setEnabled(this, on).catch(e =>
+        console.warn('[presence] setEnabled failed:', e && e.message || e));
+    },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward(this, msg); },
@@ -2105,6 +2118,7 @@ export default {
     },
     async handleLogout() {
       this.stopPolling();
+      PresenceFeature.stopHeartbeats(this); // M2: heartbeat больше не отправляем
       try { await api.logout(); } catch (e) { /* ignore */ }
       // Сбрасываем всё состояние сессии к экрану логина.
       this.isLoggedIn = false;
@@ -3078,6 +3092,11 @@ export default {
                   });
                   return null; // не сообщение
                 }
+                // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
+                //     («я онлайн»); отмечаем активность, в чат не показываем.
+                if (PresenceFeature.ingestSignal(this, robj, isOut ? email : this.email, new Date(m.date || Date.now()).getTime())) {
+                  return null; // не сообщение
+                }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
@@ -3498,6 +3517,12 @@ export default {
                 option: Number(obj.option) || 0,
               });
               continue; // голос не рендерится как сообщение
+            }
+            // Presence: {presence:1, ts} — heartbeat участника; активность
+            // без карточки в чате (группы: peer-ключ есть только у 1:1, но
+            // сигнал может прийти и по групповому каналу от старых клиентов).
+            if (PresenceFeature.ingestSignal(this, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
+              continue; // presence не рендерится как сообщение
             }
             if (obj && obj.meta === 1 && obj.avatar) {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {

@@ -554,6 +554,8 @@ export default {
   contact_bio_self: 'Добавьте статус в Настройки → Профиль',
   contact_bio_empty: 'Контакт ещё не добавил статус «О себе»',
   contact_seen_recently: 'Недавно видели',
+  presence_enable: 'Показывать, что я онлайн',
+  presence_hint: 'Шифрованный сигнал каждые 5 минут контактам с ключом — у них загорается зелёная точка. Выключено — вас не видно.',
   contact_offline: 'Не в сети',
   contact_edit_local: 'Изменить локально',
   group_avatar_label: 'Аватар группы',

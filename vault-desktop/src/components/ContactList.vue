@@ -45,7 +45,7 @@
         <span v-if="unreadOf(contact.email)" class="unread-badge">{{ unreadOf(contact.email) }}</span>
         <Icon v-if="isMuted(contact.email.toLowerCase())" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
         <span v-if="!peerKeys[contact.email]" class="contact-no-key" :title="t('contact_no_key_hint') || 'Нет ключа собеседника — обменяйтесь ключами (по id участника или QR)'"><Icon name="unlock" :size="13" /></span>
-        <span v-if="isRecentlySeen(contact.email)" class="status-dot online" :title="t('contact_seen_recently')"></span>
+        <span v-if="isRecentlySeen(contact.email) || isOnline(contact.email)" class="status-dot online" :title="t('contact_seen_recently')"></span>
         <button class="contact-delete" :title="t('contact_delete') || 'Удалить контакт'" @click.stop="$emit('delete', contact.email)"><Icon name="trash" :size="14" /></button>
       </div>
     </div>
@@ -128,6 +128,7 @@ defineProps({
   unreadOf: { type: Function, required: true },
   isMuted: { type: Function, required: true },
   isRecentlySeen: { type: Function, required: true },
+  isOnline: { type: Function, default: () => false },
   membersLabel: { type: Function, required: true },
 })
 
