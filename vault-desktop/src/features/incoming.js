@@ -13,6 +13,7 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
+import * as PresenceFeature from './presence.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -90,6 +91,19 @@ async function classify(ctx, m, from) {
         ctx.handleCallSignal(callSig, from).catch(e => console.warn('[call] signal failed:', e));
         return null;
       }
+      // Presence (M2): {presence:1, ts} — heartbeat «я онлайн» от пира.
+      // ЖИВОЙ поллинг: точка загорается сразу, без открытия чата.
+      // До parseEnvelope: presence — не конверт (env=null → точка бы
+      // не загорелась до ручного открытия чата с этим контактом).
+      // Канонический адрес — точка на той же карточке, куда упало бы
+      // сообщение от этого ключа (смена почты не расщепляет dot).
+      try {
+        const robj = JSON.parse(plain);
+        if (PresenceFeature.ingestSignal(ctx, robj, ctx.canonicalOf(from) || from, new Date(m.date || Date.now()).getTime())) {
+          console.log('[presence] heartbeat from', from);
+          return null; // не сообщение, не уведомление
+        }
+      } catch (e) { /* не JSON — продолжаем */ }
       const env = ctx.parseEnvelope(plain);
       if (env) {
         // env.id — ключ кросс-канального дедупа (relay-копия и
