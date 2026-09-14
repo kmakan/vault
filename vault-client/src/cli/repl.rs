@@ -129,6 +129,9 @@ struct CliContext {
     /// открывает первую строку последнего списка. /read <UID> работает
     /// как раньше — сначала проверяем мапу, потом сам аргумент как UID.
     inbox_uids: Vec<String>,
+    /// Relay-конверты последнего /inbox (id → (from, body)): /read rl-*
+    /// читает их из кэша, НЕ по IMAP (uid rl-<id> — не IMAP UID).
+    relay_cache: std::collections::HashMap<String, (String, String)>,
 }
 
 impl CliContext {
@@ -157,6 +160,7 @@ impl CliContext {
             relay: crate::vault::relay::RelayState::load(),
             keys_loaded: keys_loaded,
             inbox_uids: Vec::new(),
+            relay_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -236,6 +240,199 @@ fn format_attachment_text(inner: &str) -> Option<String> {
     }
 
     None
+}
+
+
+/// Общий конвейер показа расшифрованного письма для /read (IMAP и relay
+/// конверты — один и тот же AAD-шифротекст). sender_hint: relay-конверты
+/// знают from заранее (поле конверта), IMAP-письма — X-Vault-From из тела.
+fn read_and_show_vault_body(
+    ctx: &mut CliContext,
+    body: &str,
+    id: &str,
+    sender_hint: Option<&str>,
+) {
+    let is_enc = ctx.crypto.is_encrypted(body);
+    Output::divider();
+
+    // Show reactions for this message
+    let reaction_display = ctx.reaction_store.format_reactions(id);
+    if !reaction_display.is_empty() {
+        println!("  Reactions: {}", reaction_display);
+    }
+
+    if is_enc {
+        // Try AAD-authenticated vault decryption first.
+                            // decrypt_vault returns Err when AAD="VAULT" auth
+                            // fails → either wrong key or NOT a vault message.
+                            match ctx.crypto.decrypt_vault(&body) {
+                                Ok(inner) => {
+                                    Output::info("Decrypted vault message:");
+
+                                    // Parse Desktop-compatible envelopes: reactions
+                                    // are applied locally, vault converts show their
+                                    // inner text, and everything else shows raw.
+                                    let displayed =
+                                        match serde_json::from_str::<serde_json::Value>(&inner) {
+                                            Ok(obj)
+                                                if obj.get("react").and_then(|v| v.as_i64())
+                                                    == Some(1) =>
+                                            {
+                                                let mid = obj
+                                                    .get("msg_id")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?");
+                                                let em = obj
+                                                    .get("emoji")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("?");
+                                                let act = obj
+                                                    .get("action")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("add");
+                                                // Apply to local reaction store, as Desktop.
+                                                // Relay-конверты не несут X-Vault-From —
+                                                // отправитель из hint (поле конверта релея).
+                                                let user = sender_hint
+                                                    .map(str::to_string)
+                                                    .or_else(|| extract_sender_from_body(&body))
+                                                    .unwrap_or_else(|| "peer".to_string());
+                                                if act == "remove" {
+                                                    let _ = ctx
+                                                        .reaction_store
+                                                        .remove_reaction(mid, em, &user);
+                                                } else {
+                                                    let _ = ctx
+                                                        .reaction_store
+                                                        .add_reaction(mid, em, &user);
+                                                }
+                                                format!(
+                                                    "[reaction {} on message {} ({})]",
+                                                    em, mid, act
+                                                )
+                                            }
+                                            Ok(obj)
+                                                if obj.get("vault").and_then(|v| v.as_i64())
+                                                    == Some(1) =>
+                                            {
+                                                // PQ: конверт несёт pubkey
+                                                // отправителя (+pq ek) — как
+                                                // Desktop: сохраняем/обновляем
+                                                // контакт, чтобы ответить
+                                                // гибридом без invite.
+                                                let sender_key = obj
+                                                    .get("key")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let sender_pq = obj
+                                                    .get("pq")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let sender_mail = sender_hint
+                                                    .map(str::to_string)
+                                                    .or_else(|| extract_sender_from_body(&body));
+                                                if !sender_key.is_empty() {
+                                                    if let (Some(ref mail), Some(my_pub)) =
+                                                        (&sender_mail, ctx.crypto.public_key_hex())
+                                                    {
+                                                        if sender_key != my_pub {
+                                                            if let Some(ref mut contact) =
+                                                                ctx.contact_book.get_mut(mail)
+                                                            {
+                                                                contact.public_key =
+                                                                    sender_key.to_string();
+                                                                contact.pq_public_key =
+                                                                    if sender_pq.is_empty() {
+                                                                        None
+                                                                    } else {
+                                                                        Some(sender_pq.to_string())
+                                                                    };
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // M2.4 автообмен: конверт несёт tok
+                                                // отправителя (адрес его relay-очереди) —
+                                                // запоминаем молча, чтобы отвечать
+                                                // мгновенными пушами. Desktop делает
+                                                // то же в incoming.js.
+                                                if let (Some(ref mail), Some(tok)) = (
+                                                    &sender_mail,
+                                                    obj.get("tok")
+                                                        .and_then(|v| v.as_str())
+                                                        .filter(|t| !t.is_empty()),
+                                                ) {
+                                                    let mail_lc = mail.to_lowercase();
+                                                    if ctx.relay.peers.get(&mail_lc)
+                                                        != Some(&tok.to_string())
+                                                    {
+                                                        ctx.relay
+                                                            .peers
+                                                            .insert(mail_lc, tok.to_string());
+                                                        if ctx.relay.save().is_ok() {
+                                                            Output::info(&format!(
+                                                                "Relay: peer token learned ({})",
+                                                                mail
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                                obj.get("text")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_string()
+                                            }
+                                            _ => inner.clone(), // legacy: not JSON or old format
+                                        };
+                                    // Attachments / DoD letters: human-readable
+                                    // placeholder instead of the raw JSON payload
+                                    // (data letters carry megabytes of base64).
+                                    let displayed =
+                                        format_attachment_text(&displayed).unwrap_or(displayed);
+                                    println!("  {}", displayed);
+
+                                    // Record read receipt locally only (no email sent —
+                                    // stealth: the desktop client does not send receipts).
+                                    let receipt_sender = sender_hint
+                                        .map(str::to_string)
+                                        .or_else(|| extract_sender_from_body(&body));
+                                    if let Some(ref sender) = receipt_sender {
+                                        let reader = ctx.config.email.as_deref().unwrap_or("");
+                                        if let Err(e) =
+                                            ctx.receipt_store.record_read(&id, reader, sender)
+                                        {
+                                            tracing::warn!("Failed to save receipt locally: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(_aad_err) => {
+                                    // AAD auth failed. Fall back to the legacy
+                                    // non-AAD decrypt + prefix check for
+                                    // backwards-compatible reading of old
+                                    // VAULT1:-prefixed messages.
+                                    match ctx.crypto.decrypt(&body) {
+                                        Ok(plain) => match strip_vault_magic(&plain) {
+                                            Some(inner) => {
+                                                Output::info("Decrypted message (legacy):");
+                                                println!("  {}", inner);
+                                            }
+                                            None => {
+                                                Output::warn(
+                                                    "Not a Vault message — ordinary mail, ignored.",
+                                                );
+                                            }
+                                        },
+                                        Err(_) => {
+                                            Output::warn("Could not decrypt (wrong key?)");
+                                            println!("  {}", body);
+                                        }
+                                    }
+                                }
+                            }
+    } else {
+        println!("  {}", body);
+    }
+    Output::divider();
 }
 
 /// Dispatch a command and return true if should quit
@@ -460,7 +657,49 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             if let Some(ref mut client) = ctx.email_client {
                 Output::info("Fetching inbox (contacts-only)...");
                 match client.fetch_messages_with_prefix("INBOX", 512).await {
-                    Ok(messages) => {
+                    Ok(mut messages) => {
+                        // ── Relay-конверты (M2): мгновенный канал ──
+                        // Забираем нашу relay-очередь (destructive) и вливаем
+                        // как виртуальные письма uid 'rl-<id>' (как Desktop
+                        // relayConsume): body = тот же AAD-шифротекст, дальше
+                        // общий конвейер ниже их расшифрует. Письмо-дубль по
+                        // email придёт позже (30-60с) и отобразится отдельно —
+                        // на CLI это два просмотра, не бейдж-дубль.
+                        if ctx.relay.enabled && !ctx.relay.my_token.is_empty() {
+                            match crate::vault::relay::poll(&ctx.relay.my_token) {
+                                Ok(envs) if !envs.is_empty() => {
+                                    let n = envs.len();
+                                    for env in envs {
+                                        ctx.relay_cache.insert(
+                                            format!("rl-{}", env.id),
+                                            (env.from.clone(), env.body.clone()),
+                                        );
+                                        messages.push(crate::api::email::EmailMessage {
+                                            id: format!("rl-{}", env.id),
+                                            from: env.from,
+                                            to: ctx
+                                                .config
+                                                .email
+                                                .clone()
+                                                .unwrap_or_default(),
+                                            subject: String::new(),
+                                            body: env.body,
+                                            date: String::new(),
+                                            is_read: false,
+                                        });
+                                    }
+                                    messages.sort_by(|a, b| b.date.cmp(&a.date));
+                                    Output::info(&format!(
+                                        "Relay: {} envelope(s) consumed (instant channel)",
+                                        n
+                                    ));
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::warn!("relay poll failed: {}", e)
+                                }
+                            }
+                        }
                         // Process incoming read receipts first
                         use crate::vault::VaultFilter;
                         let receipts: Vec<_> = messages
@@ -555,17 +794,59 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         }
 
                         // ── Group messages: decrypt & display ──
-                        let group_msgs: Vec<_> = messages
-                            .iter()
-                            .filter(|m| m.subject.starts_with("VaultGroup: "))
-                            .collect();
-                        for gmsg in &group_msgs {
-                            let gid = gmsg
-                                .subject
-                                .strip_prefix("VaultGroup: ")
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
+                        // ДВА пути классификации (как Desktop incoming.js):
+                        // (1) legacy: тема "VaultGroup: <id>" (старые CLI-отправки);
+                        // (2) stealth (Desktop-wire): пустая тема — тело
+                        //     групповым ключом КАЖДОЙ известной группы, чей
+                        //     отправитель — участник. Нужен после перехода
+                        //     GroupSend на stealth-тему (wire-совместимость).
+                        let mut group_msgs: Vec<(String, &crate::api::email::EmailMessage)> =
+                            Vec::new();
+                        for m in &messages {
+                            if let Some(gid) =
+                                m.subject.strip_prefix("VaultGroup: ").map(str::trim)
+                            {
+                                group_msgs.push((gid.to_string(), m));
+                            } else if m.subject.is_empty()
+                                && ctx.crypto.is_encrypted(&m.body)
+                            {
+                                // stealth-группа: перебор ключей известных групп
+                                let gm = crate::vault::GroupManager::new();
+                                'outer: for group in gm.list_groups() {
+                                    let gid = group.id.clone();
+                                    if group.group_key.is_empty() {
+                                        continue;
+                                    }
+                                    let members: Vec<String> = group
+                                        .members
+                                        .iter()
+                                        .map(|x| x.email.to_lowercase())
+                                        .collect();
+                                    if !members.contains(&m.from.to_lowercase()) {
+                                        continue;
+                                    }
+                                    if let Ok(kb) = hex::decode(&group.group_key) {
+                                        if kb.len() != 32 {
+                                            continue;
+                                        }
+                                        let mut arr = [0u8; 32];
+                                        arr.copy_from_slice(&kb);
+                                        let enc =
+                                            crate::crypto::encryptor::Encryptor::from_key_bytes(
+                                                &arr,
+                                            );
+                                        if matches!(
+                                            enc.decrypt(&m.body),
+                                            Ok(crate::crypto::encryptor::DecryptedContent::Text(_))
+                                        ) {
+                                            group_msgs.push((gid, m));
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for (gid, gmsg) in &group_msgs {
                             let gm = crate::vault::GroupManager::new();
                             match gm.get_group(&gid) {
                                 Some(group) if !group.group_key.is_empty() => {
@@ -691,6 +972,23 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     Ok(n) if n >= 1 && n <= ctx.inbox_uids.len() => ctx.inbox_uids[n - 1].clone(),
                     _ => id,
                 };
+                // Relay-конверт (uid rl-<id>): тела НЕТ в IMAP — читаем из
+                // кэша последнего /inbox. Дальше общий конвейер расшифровки
+                // (peer-ключ по from, AAD-decrypt, конверт-парсинг).
+                if let Some((sender, body)) = ctx.relay_cache.get(&id).cloned() {
+                    if let Some(contact) = ctx.contact_book.get(&sender) {
+                        if !contact.public_key.is_empty() {
+                            if let Err(e) = ctx.crypto.set_peer_key_pq(
+                                &contact.public_key,
+                                contact.pq_public_key.as_deref(),
+                            ) {
+                                Output::warn(&format!("Could not set peer key: {}", e));
+                            }
+                        }
+                    }
+                    read_and_show_vault_body(ctx, &body, &id, Some(&sender));
+                    return Ok(false);
+                }
                 // Peer-ключ нужен ДО расшифровки: тело письма не несёт
                 // отправителя (stealth), поэтому сначала читаем From-заголовок
                 // по UID, находим контакт и ставим его ключ в сессию.
@@ -708,178 +1006,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 }
                 match client.fetch_message_body(&id, "INBOX").await {
                     Ok(body) => {
-                        let is_enc = ctx.crypto.is_encrypted(&body);
-                        Output::divider();
-
-                        // Show reactions for this message
-                        let reaction_display = ctx.reaction_store.format_reactions(&id);
-                        if !reaction_display.is_empty() {
-                            println!("  Reactions: {}", reaction_display);
-                        }
-
-                        if is_enc {
-                            // Try AAD-authenticated vault decryption first.
-                            // decrypt_vault returns Err when AAD="VAULT" auth
-                            // fails → either wrong key or NOT a vault message.
-                            match ctx.crypto.decrypt_vault(&body) {
-                                Ok(inner) => {
-                                    Output::info("Decrypted vault message:");
-
-                                    // Parse Desktop-compatible envelopes: reactions
-                                    // are applied locally, vault converts show their
-                                    // inner text, and everything else shows raw.
-                                    let displayed =
-                                        match serde_json::from_str::<serde_json::Value>(&inner) {
-                                            Ok(obj)
-                                                if obj.get("react").and_then(|v| v.as_i64())
-                                                    == Some(1) =>
-                                            {
-                                                let mid = obj
-                                                    .get("msg_id")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("?");
-                                                let em = obj
-                                                    .get("emoji")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("?");
-                                                let act = obj
-                                                    .get("action")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("add");
-                                                // Apply to local reaction store, as Desktop
-                                                let user = extract_sender_from_body(&body)
-                                                    .unwrap_or_else(|| "peer".to_string());
-                                                if act == "remove" {
-                                                    let _ = ctx
-                                                        .reaction_store
-                                                        .remove_reaction(mid, em, &user);
-                                                } else {
-                                                    let _ = ctx
-                                                        .reaction_store
-                                                        .add_reaction(mid, em, &user);
-                                                }
-                                                format!(
-                                                    "[reaction {} on message {} ({})]",
-                                                    em, mid, act
-                                                )
-                                            }
-                                            Ok(obj)
-                                                if obj.get("vault").and_then(|v| v.as_i64())
-                                                    == Some(1) =>
-                                            {
-                                                // PQ: конверт несёт pubkey
-                                                // отправителя (+pq ek) — как
-                                                // Desktop: сохраняем/обновляем
-                                                // контакт, чтобы ответить
-                                                // гибридом без invite.
-                                                let sender_key = obj
-                                                    .get("key")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
-                                                let sender_pq = obj
-                                                    .get("pq")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("");
-                                                let sender_mail = extract_sender_from_body(&body);
-                                                if !sender_key.is_empty() {
-                                                    if let (Some(ref mail), Some(my_pub)) =
-                                                        (&sender_mail, ctx.crypto.public_key_hex())
-                                                    {
-                                                        if sender_key != my_pub {
-                                                            if let Some(ref mut contact) =
-                                                                ctx.contact_book.get_mut(mail)
-                                                            {
-                                                                contact.public_key =
-                                                                    sender_key.to_string();
-                                                                contact.pq_public_key =
-                                                                    if sender_pq.is_empty() {
-                                                                        None
-                                                                    } else {
-                                                                        Some(sender_pq.to_string())
-                                                                    };
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                // M2.4 автообмен: конверт несёт tok
-                                                // отправителя (адрес его relay-очереди) —
-                                                // запоминаем молча, чтобы отвечать
-                                                // мгновенными пушами. Desktop делает
-                                                // то же в incoming.js.
-                                                if let (Some(ref mail), Some(tok)) = (
-                                                    &sender_mail,
-                                                    obj.get("tok")
-                                                        .and_then(|v| v.as_str())
-                                                        .filter(|t| !t.is_empty()),
-                                                ) {
-                                                    let mail_lc = mail.to_lowercase();
-                                                    if ctx.relay.peers.get(&mail_lc)
-                                                        != Some(&tok.to_string())
-                                                    {
-                                                        ctx.relay
-                                                            .peers
-                                                            .insert(mail_lc, tok.to_string());
-                                                        if ctx.relay.save().is_ok() {
-                                                            Output::info(&format!(
-                                                                "Relay: peer token learned ({})",
-                                                                mail
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                                obj.get("text")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("")
-                                                    .to_string()
-                                            }
-                                            _ => inner.clone(), // legacy: not JSON or old format
-                                        };
-                                    // Attachments / DoD letters: human-readable
-                                    // placeholder instead of the raw JSON payload
-                                    // (data letters carry megabytes of base64).
-                                    let displayed =
-                                        format_attachment_text(&displayed).unwrap_or(displayed);
-                                    println!("  {}", displayed);
-
-                                    // Record read receipt locally only (no email sent —
-                                    // stealth: the desktop client does not send receipts).
-                                    if let Some(ref sender) = extract_sender_from_body(&body) {
-                                        let reader = ctx.config.email.as_deref().unwrap_or("");
-                                        if let Err(e) =
-                                            ctx.receipt_store.record_read(&id, reader, sender)
-                                        {
-                                            tracing::warn!("Failed to save receipt locally: {}", e);
-                                        }
-                                    }
-                                }
-                                Err(_aad_err) => {
-                                    // AAD auth failed. Fall back to the legacy
-                                    // non-AAD decrypt + prefix check for
-                                    // backwards-compatible reading of old
-                                    // VAULT1:-prefixed messages.
-                                    match ctx.crypto.decrypt(&body) {
-                                        Ok(plain) => match strip_vault_magic(&plain) {
-                                            Some(inner) => {
-                                                Output::info("Decrypted message (legacy):");
-                                                println!("  {}", inner);
-                                            }
-                                            None => {
-                                                Output::warn(
-                                                    "Not a Vault message — ordinary mail, ignored.",
-                                                );
-                                            }
-                                        },
-                                        Err(_) => {
-                                            Output::warn("Could not decrypt (wrong key?)");
-                                            println!("  {}", body);
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            println!("  {}", body);
-                        }
-                        Output::divider();
+                        read_and_show_vault_body(ctx, &body, &id, None);
                     }
                     Err(e) => {
                         Output::error(&format!("Failed to read message: {}", e));
@@ -1725,19 +1852,57 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 return Ok(false);
                             }
                         };
+                        // Desktop-wire: текст оборачивается в конверт
+                        // {vault:1,id,text,name,avatar,key,pq,tok} и шифруется
+                        // групповым ключом. Получатель (Desktop/Android)
+                        // классифицирует письмо РАСШИФРОВКОЙ по групповому
+                        // ключу, конверт даёт env.id для кросс-канального
+                        // дедупа (relay-копия + email-копия) и имя отправителя.
+                        // Голый текст без конверта Desktop-клиенты рендерили
+                        // как «[расшифровано, но не конверт]».
+                        let envelope_id = uuid::Uuid::new_v4().to_string();
+                        let envelope = serde_json::json!({
+                            "vault": 1,
+                            "id": envelope_id,
+                            "text": &text,
+                            "name": ctx.config.email.as_deref().unwrap_or(""),
+                            "avatar": "",
+                            "key": ctx.crypto.public_key_hex().unwrap_or_default(),
+                            "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default(),
+                            // M2.4: мой relay-токен — участники сохранят
+                            // и смогут отвечать мгновенными пушами.
+                            "tok": ctx.relay.my_token.clone()
+                        });
                         let encryptor =
                             crate::crypto::encryptor::Encryptor::from_key_bytes(&key_bytes);
-                        let encrypted = encryptor.encrypt_text(&text);
-                        let subject = format!("VaultGroup: {}", group_id);
+                        let encrypted = encryptor.encrypt_text(&envelope.to_string());
+                        // STEALTH: пустая тема (как 1:1 и Desktop-группы) —
+                        // получатель классифицирует по содержимому, не по теме.
+                        let subject = String::new();
                         let self_email = ctx.config.email.as_deref().unwrap_or("");
                         let mut sent = 0usize;
                         let mut errors = 0usize;
+                        let mut relay_pushed = 0usize;
+                        let fp = ctx.crypto.fingerprint();
                         for m in &group.members {
                             if m.email == self_email {
                                 continue;
                             }
                             match client.send_email(&m.email, &subject, &encrypted).await {
-                                Ok(_) => sent += 1,
+                                Ok(_) => {
+                                    sent += 1;
+                                    // Relay-дубль (M2, как Desktop relayGroupPublish):
+                                    // мгновенная доставка + ntfy-пуш; пейсинг между
+                                    // адресатами — сервер считает лимит на каждый pub.
+                                    let out = crate::vault::relay::publish(
+                                        &mut ctx.relay, &m.email, &envelope_id,
+                                        &encrypted, self_email, &fp,
+                                    );
+                                    if out == crate::vault::relay::PubOutcome::Published {
+                                        relay_pushed += 1;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(120));
+                                }
                                 Err(e) => {
                                     errors += 1;
                                     tracing::warn!(
@@ -1757,6 +1922,12 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             Output::warn(&format!(
                                 "Sent to {} member(s), {} failed in group {}",
                                 sent, errors, group_id
+                            ));
+                        }
+                        if relay_pushed > 0 {
+                            Output::info(&format!(
+                                "Relay: pushed to {} member(s) (instant delivery)",
+                                relay_pushed
                             ));
                         }
                     }

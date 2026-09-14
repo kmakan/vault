@@ -259,6 +259,73 @@ fn utc_day() -> u64 {
     unix_now() / 86400
 }
 
+// ───────────────────────── Приём (poll) ─────────────────────────
+
+/// Конверт из relay-очереди (поле body декодировано из base64).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelayEnvelope {
+    pub id: String,
+    pub body: String,
+    pub from: String,
+}
+
+/// GET /relay/poll?wait=0 с Authorization: VaultRelay <myToken> —
+/// destructive read: забранное удаляется из очереди. 204 = очередь пуста.
+pub fn poll(my_token: &str) -> Result<Vec<RelayEnvelope>> {
+    // Микро-GET поверх того же TLS-стека (код выше — POST; GET не несёт тела).
+    let (host, path) = parse_url(&format!("{DEFAULT_RELAY_URL}/poll?wait=0"))?;
+    let tls = native_tls::TlsConnector::new().context("TLS connector")?;
+    let stream = std::net::TcpStream::connect((host.as_str(), 443u16))
+        .with_context(|| format!("connect {host}:443"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    let mut tls = tls
+        .connect(&host, stream)
+        .with_context(|| format!("TLS handshake {host}"))?;
+    use std::io::{Read, Write};
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: VaultRelay {my_token}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    tls.write_all(req.as_bytes()).context("write request")?;
+    let mut raw = String::new();
+    tls.read_to_string(&mut raw).context("read response")?;
+    let res = parse_http_response(&raw)?;
+    if res.status == 204 || res.body.is_empty() {
+        return Ok(Vec::new());
+    }
+    anyhow::ensure!(res.status == 200, "poll: HTTP {}", res.status);
+    let list: Vec<serde_json::Value> = serde_json::from_str(&res.body).context("poll: bad JSON")?;
+    let mut out = Vec::new();
+    for env in list {
+        let id = env
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let from = env
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let Some(body_b64) = env.get("body").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let Ok(body) = B64.decode(body_b64) else {
+            continue;
+        };
+        let Ok(body) = String::from_utf8(body) else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        out.push(RelayEnvelope { id, body, from });
+    }
+    Ok(out)
+}
+
 // ───────────────────────── Тесты ─────────────────────────
 
 #[cfg(test)]
