@@ -122,6 +122,10 @@ struct CliContext {
     /// Пара ключей была загружена с диска (для /keys — отличать
     /// «загружено с диска» от «сгенерировано в этой сессии»).
     keys_loaded: bool,
+    /// UID'ы последнего /inbox по порядковому номеру строки: /read 1
+    /// открывает первую строку последнего списка. /read <UID> работает
+    /// как раньше — сначала проверяем мапу, потом сам аргумент как UID.
+    inbox_uids: Vec<String>,
 }
 
 impl CliContext {
@@ -148,6 +152,7 @@ impl CliContext {
             message_index: crate::vault::MessageIndex::new(),
             edit_manager: crate::vault::EditManager::new(),
             keys_loaded: keys_loaded,
+            inbox_uids: Vec::new(),
         }
     }
 
@@ -608,6 +613,13 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             Output::info("No messages from contacts.");
                             Output::info("(Use /accept to add new contacts)");
                         } else {
+                            // Номер строки → UID: /read 1 = первая строка этого
+                            // списка (иначе юзер не знает UID, которого нет на
+                            // экране).
+                            ctx.inbox_uids = contact_msgs
+                                .iter()
+                                .map(|m| m.id.clone())
+                                .collect();
                             Output::table_header(
                                 &["#", "From", "Subject", "Date", ""],
                                 &[4, 30, 40, 12, 4],
@@ -645,6 +657,14 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
         }
         Command::Read { id } => {
             if let Some(ref mut client) = ctx.email_client {
+                // Порядковый номер из последнего /inbox → UID; иначе аргумент
+                // сам является UID (старое поведение).
+                let id: String = match id.parse::<usize>() {
+                    Ok(n) if n >= 1 && n <= ctx.inbox_uids.len() => {
+                        ctx.inbox_uids[n - 1].clone()
+                    }
+                    _ => id,
+                };
                 // Peer-ключ нужен ДО расшифровки: тело письма не несёт
                 // отправителя (stealth), поэтому сначала читаем From-заголовок
                 // по UID, находим контакт и ставим его ключ в сессию.
