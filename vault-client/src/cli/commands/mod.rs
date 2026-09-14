@@ -841,29 +841,35 @@ fn parse_reply(args: &str) -> Command {
 }
 
 fn default_imap_server(email: &str) -> String {
+    provider_hosts(email).0.to_string()
+}
+
+/// Каталог провайдеров (порт IMAP везде 993/SSL; SMTP-порты как в Desktop
+/// mailProviders.js: mail-семейство и Яндекс — 465/SMTPS, остальные — 587).
+/// bk.ru/list.ru/inbox.ru — алиасы Mail.ru Group: imap.bk.ru не существует.
+pub fn provider_hosts(email: &str) -> (&'static str, &'static str, u16) {
     if email.ends_with("@gmail.com") || email.ends_with("@googlemail.com") {
-        "imap.gmail.com".to_string()
+        ("imap.gmail.com", "smtp.gmail.com", 587)
     } else if email.ends_with("@outlook.com") || email.ends_with("@hotmail.com") {
-        "outlook.office365.com".to_string()
+        ("outlook.office365.com", "smtp.office365.com", 587)
     } else if email.ends_with("@yandex.ru")
         || email.ends_with("@yandex.com")
         || email.ends_with("@ya.ru")
         || email.ends_with("@ya.com")
     {
-        "imap.yandex.com".to_string()
-    } else if email.ends_with("@mail.ru") {
-        "imap.mail.ru".to_string()
+        ("imap.yandex.com", "smtp.yandex.com", 465)
+    } else if email.ends_with("@mail.ru")
+        || email.ends_with("@bk.ru")
+        || email.ends_with("@list.ru")
+        || email.ends_with("@inbox.ru")
+    {
+        ("imap.mail.ru", "smtp.mail.ru", 465)
     } else if email.ends_with("@zoho.com") {
-        "imap.zoho.com".to_string()
-    } else if email.ends_with("@bk.ru") {
-        // bk.ru — алиас Mail.ru Group: imap.bk.ru не существует.
-        "imap.mail.ru".to_string()
-    } else if email.ends_with("@list.ru") || email.ends_with("@inbox.ru") {
-        "imap.mail.ru".to_string()
+        ("imap.zoho.com", "smtp.zoho.com", 587)
     } else if email.ends_with("@ro.ru") {
-        "mail.rambler.ru".to_string()
+        ("mail.rambler.ru", "smtp.rambler.ru", 465)
     } else {
-        "imap.gmail.com".to_string()
+        ("imap.gmail.com", "smtp.gmail.com", 587)
     }
 }
 

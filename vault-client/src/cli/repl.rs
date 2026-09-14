@@ -5,7 +5,7 @@ use reedline::{DefaultPrompt, FileBackedHistory, Reedline, Signal};
 
 use crate::api::client::Config;
 use crate::api::email::{EmailClient, EmailConfig};
-use crate::cli::commands::Command;
+use crate::cli::commands::{provider_hosts, Command};
 use crate::cli::output::Output;
 use crate::crypto::CryptoClient;
 use crate::vault::Reaction;
@@ -250,9 +250,17 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             password,
             server,
         } => {
-            Output::info(&format!("Connecting to {}...", server));
+            // SMTP выводим из того же домена, что и IMAP (каталог Desktop
+            // mailProviders.js) — иначе не-Gmail аккаунты отправляют через
+            // smtp.gmail.com по умолчанию и падают на 535.
+            let (imap_host, smtp_host, smtp_port) = provider_hosts(&email);
+            let imap_server: String =
+                if server.is_empty() { imap_host.to_string() } else { server.clone() };
+            Output::info(&format!("Connecting to {}...", imap_server));
             let imap_config = EmailConfig {
-                imap_server: server.clone(),
+                imap_server: imap_server.clone(),
+                smtp_server: smtp_host.to_string(),
+                smtp_port,
                 email: email.clone(),
                 password: password.clone(),
                 ..Default::default()
