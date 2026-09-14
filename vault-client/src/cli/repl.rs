@@ -119,6 +119,9 @@ struct CliContext {
     reaction_store: crate::vault::ReactionStore,
     message_index: crate::vault::MessageIndex,
     edit_manager: crate::vault::EditManager,
+    /// Push-релей-состояние (~/.vault/relay.json): myToken, peer-токены,
+    /// лимит-день. Дубль отправок — опция, email остаётся источником истины.
+    relay: crate::vault::relay::RelayState,
     /// Пара ключей была загружена с диска (для /keys — отличать
     /// «загружено с диска» от «сгенерировано в этой сессии»).
     keys_loaded: bool,
@@ -151,6 +154,7 @@ impl CliContext {
             reaction_store: crate::vault::ReactionStore::new(),
             message_index: crate::vault::MessageIndex::new(),
             edit_manager: crate::vault::EditManager::new(),
+            relay: crate::vault::relay::RelayState::load(),
             keys_loaded: keys_loaded,
             inbox_uids: Vec::new(),
         }
@@ -259,8 +263,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             // mailProviders.js) — иначе не-Gmail аккаунты отправляют через
             // smtp.gmail.com по умолчанию и падают на 535.
             let (imap_host, smtp_host, smtp_port) = provider_hosts(&email);
-            let imap_server: String =
-                if server.is_empty() { imap_host.to_string() } else { server.clone() };
+            let imap_server: String = if server.is_empty() {
+                imap_host.to_string()
+            } else {
+                server.clone()
+            };
             Output::info(&format!("Connecting to {}...", imap_server));
             let imap_config = EmailConfig {
                 imap_server: imap_server.clone(),
@@ -351,7 +358,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         // Desktop-совместимость: свой pubkey в конверте
                         // + PQ ek — получатель сохранит контакт и ответит гибридом.
                         "key": ctx.crypto.public_key_hex().unwrap_or_default(),
-                        "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default()
+                        "pq": ctx.crypto.pq_ek_b64.clone().unwrap_or_default(),
+                        // M2.4 автообмен: мой relay-токен (адрес моей очереди) —
+                        // получатель сохранит и сможет отвечать мгновенными пушами.
+                        "tok": ctx.relay.my_token.clone()
                     });
                     let encrypted = ctx
                         .crypto
@@ -406,6 +416,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                     }
 
                     // Send the text message
+                    let envelope_id = envelope
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     match client.send_email(chat, &subject, &encrypted).await {
                         Ok(_) => {
                             Output::chat_message("You", &message, true);
@@ -413,6 +428,22 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
 
                             // Update last_seen for the contact
                             ctx.contact_book.touch(chat);
+
+                            // Relay-дубль (M2): мгновенная доставка + ntfy-пуш.
+                            // Опционален: любая ошибка тихая, письмо уже ушло.
+                            let fp = ctx.crypto.fingerprint();
+                            let me = ctx.config.email.clone().unwrap_or_default();
+                            let out = crate::vault::relay::publish(
+                                &mut ctx.relay,
+                                chat,
+                                &envelope_id,
+                                &encrypted,
+                                &me,
+                                &fp,
+                            );
+                            if out == crate::vault::relay::PubOutcome::Published {
+                                Output::info("Relay: pushed (instant delivery)");
+                            }
                         }
                         Err(e) => {
                             Output::error(&format!("Send failed: {}", e));
@@ -616,10 +647,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                             // Номер строки → UID: /read 1 = первая строка этого
                             // списка (иначе юзер не знает UID, которого нет на
                             // экране).
-                            ctx.inbox_uids = contact_msgs
-                                .iter()
-                                .map(|m| m.id.clone())
-                                .collect();
+                            ctx.inbox_uids = contact_msgs.iter().map(|m| m.id.clone()).collect();
                             Output::table_header(
                                 &["#", "From", "Subject", "Date", ""],
                                 &[4, 30, 40, 12, 4],
@@ -660,9 +688,7 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 // Порядковый номер из последнего /inbox → UID; иначе аргумент
                 // сам является UID (старое поведение).
                 let id: String = match id.parse::<usize>() {
-                    Ok(n) if n >= 1 && n <= ctx.inbox_uids.len() => {
-                        ctx.inbox_uids[n - 1].clone()
-                    }
+                    Ok(n) if n >= 1 && n <= ctx.inbox_uids.len() => ctx.inbox_uids[n - 1].clone(),
                     _ => id,
                 };
                 // Peer-ключ нужен ДО расшифровки: тело письма не несёт
@@ -775,6 +801,32 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                                         }
                                                     }
                                                 }
+                                                // M2.4 автообмен: конверт несёт tok
+                                                // отправителя (адрес его relay-очереди) —
+                                                // запоминаем молча, чтобы отвечать
+                                                // мгновенными пушами. Desktop делает
+                                                // то же в incoming.js.
+                                                if let (Some(ref mail), Some(tok)) = (
+                                                    &sender_mail,
+                                                    obj.get("tok")
+                                                        .and_then(|v| v.as_str())
+                                                        .filter(|t| !t.is_empty()),
+                                                ) {
+                                                    let mail_lc = mail.to_lowercase();
+                                                    if ctx.relay.peers.get(&mail_lc)
+                                                        != Some(&tok.to_string())
+                                                    {
+                                                        ctx.relay
+                                                            .peers
+                                                            .insert(mail_lc, tok.to_string());
+                                                        if ctx.relay.save().is_ok() {
+                                                            Output::info(&format!(
+                                                                "Relay: peer token learned ({})",
+                                                                mail
+                                                            ));
+                                                        }
+                                                    }
+                                                }
                                                 obj.get("text")
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or("")
@@ -852,10 +904,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 // молча шифрует self-encryption — получатель не расшифрует.
                 let peer_ready = match ctx.contact_book.get(&to) {
                     Some(contact) if !contact.public_key.is_empty() => {
-                        match ctx.crypto.set_peer_key_pq(
-                            &contact.public_key,
-                            contact.pq_public_key.as_deref(),
-                        ) {
+                        match ctx
+                            .crypto
+                            .set_peer_key_pq(&contact.public_key, contact.pq_public_key.as_deref())
+                        {
                             Ok(()) => true,
                             Err(e) => {
                                 Output::error(&format!("Could not set peer key: {}", e));
@@ -2015,6 +2067,70 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             Output::success(&format!("Set {} = {}", key, value));
         }
 
+        // ── Push-релей ────────────────────────────────────────
+        Command::Relay { action } => {
+            match action.as_deref().map(str::trim) {
+                Some("on") => {
+                    ctx.relay.enabled = true;
+                    let _ = ctx.relay.save();
+                    Output::success(
+                        "Relay: enabled — outgoing messages are duplicated for instant delivery",
+                    );
+                    if ctx.relay.my_token.is_empty() {
+                        Output::info("No token yet — run /relay register");
+                    }
+                }
+                Some("off") => {
+                    ctx.relay.enabled = false;
+                    let _ = ctx.relay.save();
+                    Output::success("Relay: disabled (email-only)");
+                }
+                Some("register") => {
+                    if !ctx.crypto.has_keys() {
+                        Output::error(
+                            "No keys — run /keygen first (token is bound to your key fingerprint)",
+                        );
+                        return Ok(false);
+                    }
+                    let fp = ctx.crypto.fingerprint();
+                    Output::info("Registering on relay (vault-msg.ru)...");
+                    match crate::vault::relay::register(&fp) {
+                        Ok(token) => {
+                            ctx.relay.my_token = token;
+                            ctx.relay.fp_bound = Some(fp);
+                            if ctx.relay.save().is_ok() {
+                                Output::success(
+                                    "Relay: token issued (30 days) — bound to your key",
+                                );
+                                if !ctx.relay.enabled {
+                                    Output::info("Enable with /relay on");
+                                }
+                            } else {
+                                Output::warn(
+                                    "Token received but not saved (check ~/.vault/ permissions)",
+                                );
+                            }
+                        }
+                        Err(e) => Output::error(&format!("Relay register failed: {}", e)),
+                    }
+                }
+                _ => {
+                    // Статус (и просто /relay тоже)
+                    Output::divider();
+                    Output::info("Relay:");
+                    println!("  {}", ctx.relay.describe());
+                    let peers: Vec<String> = ctx.relay.peers.keys().cloned().collect();
+                    if peers.is_empty() {
+                        println!("  peer tokens: none yet — they arrive in messages from relay-enabled contacts");
+                    } else {
+                        println!("  peer tokens: {}", peers.join(", "));
+                    }
+                    Output::info("Commands: /relay on | off | register | status");
+                    Output::divider();
+                }
+            }
+        }
+
         Command::React { id, emoji } => {
             let user = ctx.config.email.as_deref().unwrap_or("local");
             if !Reaction::is_valid_emoji(&emoji) {
@@ -2465,6 +2581,26 @@ fn print_help(topic: Option<&str>) {
                 ],
             );
         }
+        Some("relay") => {
+            Output::block(
+                "/relay — Push relay (instant delivery)",
+                &[
+                    "  /relay             Status: enabled, token, known peers",
+                    "  /relay on          Duplicate outgoing messages via relay (~1s vs 30-60s email)",
+                    "  /relay off         Email-only delivery",
+                    "  /relay register    Issue a fresh token on vault-msg.ru (30 days, free)",
+                    "",
+                    "How it works:",
+                    "  - The email copy is ALWAYS sent; the relay only accelerates",
+                    "    delivery and wakes the recipient with a push notification.",
+                    "  - Peer tokens arrive inside messages from relay-enabled",
+                    "    contacts (automatic — nothing to type).",
+                    "  - Token is bound to your key fingerprint: one key = one token.",
+                    "",
+                    "State: ~/.vault/relay.json",
+                ],
+            );
+        }
         Some("contacts") | Some("who") => {
             Output::block(
                 "/contacts — Contact book",
@@ -2622,7 +2758,7 @@ fn print_help(topic: Option<&str>) {
                     "  HELP TOPICS:",
                     "    connect, chat, keys, encrypt, files,",
                     "    folders, media, groups, search, thread,",
-                    "    reactions, settings, contacts, aliases",
+                    "    reactions, relay, settings, contacts, aliases",
                     "",
                     "  Use: /help <topic> for detailed help",
                     "",

@@ -170,12 +170,15 @@ impl CryptoClient {
         self.private_key.is_some()
     }
 
-    /// Get key fingerprint (first 8 bytes of public key)
+    /// Get key fingerprint (first 8 bytes of public key).
+    /// Формат строго Desktop (fingerprint_cmd): hex-decode ключа → первые
+    /// 8 байт → `xx:xx:…:xx:****`. Релей-сервер привязывает read-токен к fp
+    /// издателя/получателя — несовпадение форматов = 403 «token bound to
+    /// another account» для одного и того же ключа.
     pub fn fingerprint(&self) -> String {
         match &self.public_key {
             Some(pub_key) => {
-                let bytes = pub_key.as_bytes();
-                let fp: String = bytes[..8]
+                let fp: String = pub_key.as_bytes()[..8]
                     .iter()
                     .map(|b| format!("{:02x}", b))
                     .collect::<Vec<_>>()

@@ -220,6 +220,13 @@ pub enum Command {
         value: String,
     },
 
+    // ── Push-релей ────────────────────────────────────────────
+    /// /relay — статус; /relay on|off — вкл/выкл; /relay register —
+    /// свежий myToken на нашем релее (30 дней free, 3 рег/день по IP).
+    Relay {
+        action: Option<String>,
+    },
+
     // ── Unknown ──────────────────────────────────────────────
     Unknown(String),
 }
@@ -770,6 +777,13 @@ impl Command {
 
                 // Settings
                 "settings" | "cfg" => Command::Settings,
+                "relay" => Command::Relay {
+                    action: if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.to_string())
+                    },
+                },
                 "set" => {
                     let mut parts = args.splitn(2, ' ');
                     match (parts.next(), parts.next()) {
@@ -973,6 +987,7 @@ impl fmt::Display for Command {
             Command::Thumb { file_path, size } => write!(f, "thumb {} {}", file_path, size),
             Command::ThumbInfo { file_path } => write!(f, "thumbinfo {}", file_path),
             Command::Settings => write!(f, "settings"),
+            Command::Relay { .. } => write!(f, "relay"),
             Command::Set { key, .. } => write!(f, "set {}", key),
             Command::Unknown(s) => write!(f, "{}", s),
         }

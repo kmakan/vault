@@ -9,6 +9,7 @@ pub mod media;
 pub mod protocol;
 pub mod reactions;
 pub mod read_receipts;
+pub mod relay;
 pub mod search;
 pub mod status;
 pub mod thread;
