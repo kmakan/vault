@@ -246,6 +246,41 @@ fn format_attachment_text(inner: &str) -> Option<String> {
 /// Общий конвейер показа расшифрованного письма для /read (IMAP и relay
 /// конверты — один и тот же AAD-шифротекст). sender_hint: relay-конверты
 /// знают from заранее (поле конверта), IMAP-письма — X-Vault-From из тела.
+/// Убирает transport-whitespace (SMTP оборачивает base64 по 76 символов,
+/// RFC 2045): compact-виды релейного и email-тел одного сообщения совпадают.
+fn strip_ws(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Кросс-канальный дедуп /inbox (зеркало Desktop e200de0): relay-конверт
+/// (uid rl-*) и его email-копия несут ОДИН шифротекст — publish кодирует
+/// то же тело, что SMTP. /inbox письма не расшифровывает (тела — только
+/// 512-байтные префиксы), поэтому сравниваем сами байты: email-префикс
+/// совпадает с началом rl-тела (24-байтный nonce в начале конверта
+/// делает коллизию невозможной). `rl_bodies_compact` — compact-тела всех
+/// конвертов сеанса (кэш живёт до выхода). Возвращает число скрытых копий.
+fn dedup_relay_email_copies(
+    messages: &mut Vec<crate::api::email::EmailMessage>,
+    rl_bodies_compact: &[String],
+    is_encrypted: impl Fn(&str) -> bool,
+) -> usize {
+    if rl_bodies_compact.is_empty() {
+        return 0;
+    }
+    let before = messages.len();
+    messages.retain(|m| {
+        // сами конверты не трогаем (destructive read их уже забрал)
+        if m.id.starts_with("rl-") || !is_encrypted(&m.body) {
+            return true;
+        }
+        let c = strip_ws(&m.body);
+        !rl_bodies_compact
+            .iter()
+            .any(|r| r.starts_with(c.as_str()) || c.starts_with(r.as_str()))
+    });
+    before - messages.len()
+}
+
 fn read_and_show_vault_body(
     ctx: &mut CliContext,
     body: &str,
@@ -698,6 +733,31 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 Err(e) => {
                                     tracing::warn!("relay poll failed: {}", e)
                                 }
+                            }
+                        }
+                        // ── Кросс-канальный дедуп (зеркало Desktop e200de0) ──
+                        // Email-копия consumed-конверта (доехала через SMTP за
+                        // 30-60с) не должна занимать вторую строку /inbox:
+                        // compact-байты тел совпадают (publish кодирует то же
+                        // тело). Кэш живёт до конца сеанса — копия, доехавшая
+                        // ПОСЛЕ этого /inbox, скроется и на следующем.
+                        {
+                            let rl_bodies_compact: Vec<String> = ctx
+                                .relay_cache
+                                .values()
+                                .map(|(_, body)| strip_ws(body))
+                                .collect();
+                            let hidden = dedup_relay_email_copies(
+                                &mut messages,
+                                &rl_bodies_compact,
+                                |b| ctx.crypto.is_encrypted(b),
+                            );
+                            if hidden > 0 {
+                                Output::info(&format!(
+                                    "Relay: {} email cop{} hidden (cross-channel dedup)",
+                                    hidden,
+                                    if hidden == 1 { "y" } else { "ies" }
+                                ));
                             }
                         }
                         // Process incoming read receipts first
@@ -3014,5 +3074,72 @@ mod tests {
         assert!(format_attachment_text("Hello!").is_none());
         let not_attachment = r#"{"vault":1,"text":"hi"}"#;
         assert!(format_attachment_text(not_attachment).is_none());
+    }
+
+    #[test]
+    fn test_strip_ws_removes_smtp_wrap() {
+        // SMTP оборачивает base64 по 76 символов (RFC 2045): компакт-виды
+        // релейного и email-тел одного сообщения обязаны совпадать.
+        let wrapped = "AAAA\r\nBBBB\nCCCC\tDDDD";
+        assert_eq!(strip_ws(wrapped), "AAAABBBBCCCCDDDD");
+    }
+
+    #[test]
+    fn test_dedup_relay_email_copies() {
+        use crate::api::email::EmailMessage;
+        // Релейное тело — полное; email-копия дошла в 76-символьной
+        // обёртке (транспорт), /inbox держит только 512-байтный префикс.
+        let rl_body = "k".repeat(600);
+        let mut wrapped = String::new();
+        for (i, ch) in rl_body.chars().enumerate() {
+            if i > 0 && i % 76 == 0 {
+                wrapped.push_str("\r\n");
+            }
+            wrapped.push(ch);
+        }
+        let email_prefix: String = wrapped.chars().take(500).collect();
+
+        let msg = |id: &str, body: String| EmailMessage {
+            id: id.to_string(),
+            from: "a@b.c".to_string(),
+            to: String::new(),
+            subject: String::new(),
+            body,
+            date: String::new(),
+            is_read: false,
+        };
+
+        // (1) email-копия гасится, конверт rl-* остаётся
+        let mut msgs = vec![msg("rl-1", rl_body.clone()), msg("42", email_prefix.clone())];
+        let hidden = dedup_relay_email_copies(
+            &mut msgs,
+            &[strip_ws(&rl_body)],
+            |b| !b.is_empty(), // «шифровано» = непустое
+        );
+        assert_eq!(hidden, 1);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, "rl-1");
+
+        // (2) постороннее «шифрованное» письмо не трогаем
+        let mut msgs = vec![msg("rl-1", rl_body.clone()), msg("42", "z".repeat(500))];
+        let hidden = dedup_relay_email_copies(
+            &mut msgs,
+            &[strip_ws(&rl_body)],
+            |b| !b.is_empty(),
+        );
+        assert_eq!(hidden, 0);
+        assert_eq!(msgs.len(), 2);
+
+        // (3) guard: не-шифрованные письма (is_encrypted=false) никогда
+        // не гасятся — сравнение тел только для валидных конвертов
+        let mut msgs = vec![msg("42", email_prefix.clone())];
+        let hidden = dedup_relay_email_copies(&mut msgs, &[strip_ws(&rl_body)], |_| false);
+        assert_eq!(hidden, 0);
+        assert_eq!(msgs.len(), 1);
+
+        // (4) пустой список конвертов — no-op
+        let mut msgs = vec![msg("42", email_prefix)];
+        assert_eq!(dedup_relay_email_copies(&mut msgs, &[], |_| true), 0);
+        assert_eq!(msgs.len(), 1);
     }
 }
