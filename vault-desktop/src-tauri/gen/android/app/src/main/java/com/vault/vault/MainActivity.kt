@@ -72,8 +72,12 @@ class MainActivity : TauriActivity() {
     // WebView живёт в activity-процессе. Статик-ссылка
     // ставится в onWebViewCreate, снимается в onDestroy.
     private var liveWebView: WebView? = null
-  }
 
+    // Геттер для других классов процесса (VaultForegroundService —
+    // завершение голосового): R8 видит Java-колера, не переименует.
+    @JvmStatic
+    fun liveWebViewPublic(): WebView? = liveWebView
+  }
   // ndk-context: tao 0.35 НЕ инициализирует crate ndk-context, из-за
   // чего Rust-звонки падали с «android context was not initialized». Пробрасы-
   // ваем контекст явно; реализация — src-tauri/src/audio/audio_android.rs.

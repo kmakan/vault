@@ -69,7 +69,18 @@
         <button class="attachment-dl-btn" @click.stop="$emit('download', msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
       </div>
       <div v-else-if="msg.attachment && msg.attachment.isAudio" class="attachment-preview">
-        <audio controls class="attachment-audio"
+        <!-- Android: фоновый плеер (t_c1c44344) — <audio> в WebView глохнет
+             при сворачивании, трек играет нативный MediaPlayer сервиса.
+             Desktop (WebKitGTK): инлайн-плеер, свёрнутое окно не останавливает. -->
+        <template v-if="isAndroidClient">
+          <button class="voicenote-btn" :class="{ playing: voicePlayingId === msg.id }"
+                  :title="voicePlayingId === msg.id ? (t('voice_stop') || 'Стоп') : (t('voice_play') || 'Слушать')"
+                  @click.stop="$emit('voice-play', msg, msg.attachment)">
+            <Icon :name="voicePlayingId === msg.id ? 'square' : 'play'" :size="15" />
+            <span class="voicenote-label">{{ t('voice_message') || 'Голосовое сообщение' }}</span>
+          </button>
+        </template>
+        <audio v-else controls class="attachment-audio"
                :src="'data:' + msg.attachment.type + ';base64,' + msg.attachment.data"></audio>
         <button class="attachment-dl-btn" @click.stop="$emit('download', msg.attachment)"><Icon name="download" :size="13" /> {{ t('download') || 'Скачать' }}</button>
       </div>
@@ -156,6 +167,10 @@ defineProps({
   dragOverPos: { type: String, default: '' },
   reactionPickerId: { type: String, default: '' },
   quickReactions: { type: Array, default: () => [] },
+  // Фоновый плеер голосовых (Android): платформа и id играющего трека —
+  // состояние живёт в App (одновременно играет один трек).
+  isAndroidClient: { type: Boolean, default: false },
+  voicePlayingId: { type: String, default: '' },
   // функции-рендеры родителя (текст-хелперы и колбэки карточки)
   nameOf: { type: Function, required: true },
   avatarOf: { type: Function, required: true },
@@ -179,7 +194,7 @@ defineEmits([
   'context-menu', 'toggle-reaction-picker', 'toggle-reaction', 'add-reaction',
   'note-drag-start', 'note-drag-over', 'note-drag-leave', 'note-drop', 'note-drag-end',
   'reply', 'copy-text', 'pin', 'edit', 'delete', 'poll-vote',
-  'open-image', 'download', 'text-click', 'call-back', 'dod-download',
+  'open-image', 'download', 'text-click', 'call-back', 'dod-download', 'voice-play',
 ])
 </script>
 

@@ -99,6 +99,14 @@
     public static void ecoStart(android.content.Context);
 }
 
+# t_c1c44344: фоновый плеер голосовых — start/stopVoicePlayback зовутся
+# ТОЛЬКО из Rust (voicenote.rs) через JNI. Без keep R8 вырезал бы их
+# (грабля класса ecoStop — NoSuchMethodError из invoke).
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void startVoicePlayback(android.content.Context, java.lang.String, byte[], java.lang.String);
+    public static void stopVoicePlayback(android.content.Context);
+}
+
 # M2.3-b: VaultBootReceiver создаётся системой по имени из манифеста — R8
 # может переименовать/вырезать. Держим целиком.
 -keep class com.vault.vault.VaultBootReceiver { *; }

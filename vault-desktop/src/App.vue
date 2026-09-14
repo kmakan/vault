@@ -251,6 +251,8 @@
             :pollVotes="pollVotes"
             :pollOptionCount="pollOptionCount"
             :pollLeadLabel="pollLeadLabel"
+            :isAndroidClient="isAndroidClient"
+            :voicePlayingId="voicePlayingId"
             @context-menu="openMessageMenu"
             @toggle-reaction-picker="toggleReactionPicker"
             @toggle-reaction="toggleReaction"
@@ -271,6 +273,7 @@
             @dod-download="downloadDodAttachment"
             @text-click="onMessageTextClick"
             @call-back="callBack"
+            @voice-play="toggleVoiceNote"
           />
         </MessageList>
 
@@ -985,6 +988,11 @@ export default {
       // (saveCurrentHistory в fetchDodAttachment) — после перезапуска файл
       // уже в карточке, IMAP не тревожится.
       dodCache: {},
+      // Фоновый плеер голосовых (t_c1c44344): id трека, играющего в
+      // нативном MediaPlayer (Android). Пустая строка — ничего не играет.
+      voicePlayingId: '',
+      // Платформа (Android → нативный плейбек в фоне; desktop → <audio>).
+      isAndroidClient: /Android/i.test(typeof navigator !== 'undefined' ? navigator.userAgent : ''),
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
@@ -1391,6 +1399,12 @@ export default {
       window.__vaultRejectCall = () => {
         console.log('[call] native REJECT tapped');
         this.rejectCall();
+      };
+      // Фоновый плеер голосовых: нативный MediaPlayer (Kotlin) сигнализирует
+      // завершение трека — кнопка возвращается в «play» (троттлинг JS-таймеров
+      // в фоне не позволяет надёжно слушать duration JS-событиями).
+      window.__vaultVoiceNoteDone = () => {
+        this.voicePlayingId = '';
       };
       // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
       // (index.html уже определил __vaultOpenChat с очередью — не трогаем.)
@@ -1815,6 +1829,30 @@ export default {
     downloadAttachment(attachment) {
       if (!attachment || !attachment.data) return;
       downloadBase64(attachment.data, attachment.name, attachment.type);
+    },
+    // ── Фоновый плеер голосовых (t_c1c44344, Android) ──────────────────
+    // Кнопка в карточке голосового: play — отправить расшифрованное
+    // тело в нативный MediaPlayer (FGS mediaPlayback, играет при
+    // свёрнутом приложении); стоп — погасить. Один трек одновременно.
+    async toggleVoiceNote(msg, attachment) {
+      if (!this.isAndroidClient) return;
+      if (!attachment || !attachment.data) return;
+      if (this.voicePlayingId === msg.id) {
+        try { await invoke('voicenote_stop'); } catch (e) { console.warn('[voicenote] stop failed:', e); }
+        this.voicePlayingId = '';
+        return;
+      }
+      try {
+        await invoke('voicenote_play', {
+          id: String(msg.id),
+          data: attachment.data,
+          mime: attachment.type || 'audio/webm',
+        });
+        this.voicePlayingId = String(msg.id);
+      } catch (e) {
+        console.warn('[voicenote] play failed:', e);
+        this.showToast(this.t('voice_play_failed') || 'Не удалось воспроизвести', 3000);
+      }
     },
     // ── Download-on-demand (M1) ─────────────────────────────────────
     // Клик по карточке DoD-вложения: найти data-письмо по Message-ID из
@@ -7314,6 +7352,29 @@ body {
   width: 260px;
   max-width: 100%;
   height: 36px;
+}
+
+/* Фоновый плеер голосовых (t_c1c44344, Android): карточка-кнопка в стиле
+   attachment-file — янтарная иконка play/square + подпись. */
+.voicenote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #fff);
+}
+
+.voicenote-btn .voicenote-label {
+  opacity: 0.9;
+}
+
+.voicenote-btn.playing {
+  background: rgba(245, 158, 11, 0.16);
 }
 
 /* Image viewer (полноэкранный просмотр вложения-изображения) */

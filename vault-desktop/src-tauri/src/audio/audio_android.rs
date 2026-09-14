@@ -388,3 +388,102 @@ pub(crate) fn dismiss_incoming_call_notification() {
         Err(_) => eprintln!("[audio] dismissIncomingCall panicked (JNI)"),
     }
 }
+
+/// Фоновый плеер голосовых (t_c1c44344): передать расшифрованные байты
+/// вложения в нативный MediaPlayer сервиса (setDataSource(byte[]) — без
+/// временных файлов и файловых разрешений). id возвращается фронту
+/// событием playback-finished, чтобы кнопка вернулась в состояние «play».
+pub(crate) fn voicenote_play(id: &str, bytes: &[u8], mime: &str) -> Result<(), String> {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let jid = env
+            .new_string(id)
+            .map_err(|e| format!("new_string id: {e}"))?;
+        let jmime = env
+            .new_string(mime)
+            .map_err(|e| format!("new_string mime: {e}"))?;
+        let jarr = env
+            .byte_array_from_slice(bytes)
+            .map_err(|e| format!("byte_array_from_slice: {e}"))?;
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "startVoicePlayback",
+            "(Landroid/content/Context;Ljava/lang/String;[BLjava/lang/String;)V",
+            &[
+                (&activity).into(),
+                (&jid).into(),
+                (&jarr).into(),
+                (&jmime).into(),
+            ],
+        )
+        .map_err(|e| {
+            let _ = env.exception_clear();
+            format!("startVoicePlayback: {e}")
+        })?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => {
+            eprintln!("[audio] voicenote play: {id} ({} bytes)", bytes.len());
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            eprintln!("[audio] voicenote play failed: {e}");
+            Err(e)
+        }
+        Err(_) => Err("voicenote play panicked (JNI)".into()),
+    }
+}
+
+/// Остановить нативный плеер голосовых (кнопка «стоп» / смена чата).
+pub(crate) fn voicenote_stop() -> Result<(), String> {
+    let result = std::panic::catch_unwind(|| {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "stopVoicePlayback",
+            "(Landroid/content/Context;)V",
+            &[(&activity).into()],
+        )
+        .map_err(|e| {
+            let _ = env.exception_clear();
+            format!("stopVoicePlayback: {e}")
+        })?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => {
+            eprintln!("[audio] voicenote stopped");
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            eprintln!("[audio] voicenote stop failed: {e}");
+            Err(e)
+        }
+        Err(_) => Err("voicenote stop panicked (JNI)".into()),
+    }
+}

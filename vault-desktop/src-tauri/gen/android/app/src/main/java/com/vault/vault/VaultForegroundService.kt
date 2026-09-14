@@ -638,6 +638,171 @@ class VaultForegroundService : Service() {
         @JvmStatic
         var currentCallId: String = "" 
 
+        // Фоновый плеер голосовых (t_c1c44344): MediaPlayer в сервисе —
+        // WebView <audio> глохнет при сворачивании, рингтон-паттерн уже
+        // доказал надёжность нативного воспроизведения.
+        @Volatile
+        private var voicePlayer: MediaPlayer? = null
+        @Volatile
+        private var voicePlayingId: String? = null
+
+        /// Запустить воспроизведение голосового вложения. bytes —
+        /// расшифрованное тело (без файлов на диске), mime — audio/webm.
+        /// FGS переводится в тип mediaPlayback (фон Android разрешает
+        /// медиа только сервису с этим типом) + запрашивается аудио-фокус.
+        @JvmStatic
+        fun startVoicePlayback(context: Context, id: String, bytes: ByteArray, mime: String) {
+            stopVoicePlayback(context)
+            try {
+                // Media-режим: пока играет трек, сервис заявляет тип
+                // mediaPlayback — без него Android глушит вывод свёрнутого
+                // приложения (а на 14+ это требование к FGS-типу).
+                instance?.let { enterMediaMode(it) }
+                // Аудио-фокус: голосовое — медиа-контент (USAGE_MEDIA),
+                // вежливо уступаем другим плеерам и получаем приоритет
+                // над фоновыми звуками. Duck не нужен — короткий трек.
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                try {
+                    am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC,
+                        android.media.AudioManager.AUDIOFOCUS_GAIN)
+                } catch (_: Throwable) {}
+                val mp = MediaPlayer().apply {
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(
+                                if (mime.startsWith("audio/")) android.media.AudioAttributes.CONTENT_TYPE_SPEECH
+                                else android.media.AudioAttributes.CONTENT_TYPE_MUSIC
+                            )
+                            .build()
+                    )
+                    // byte[]-источник: MediaPlayer (API 36) не имеет public
+                    // setDataSource(ByteArray) — обёртка MediaDataSource
+                    // (API 23+, minSdk 24). Контент-тело уже расшифровано в
+                    // памяти, временных файлов и файловых разрешений не нужно.
+                    setDataSource(object : android.media.MediaDataSource() {
+                        override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+                            if (position >= bytes.size) return -1 // EOF
+                            val n = minOf(size, (bytes.size - position).toInt())
+                            System.arraycopy(bytes, position.toInt(), buffer, offset, n)
+                            return n
+                        }
+                        override fun getSize(): Long = bytes.size.toLong()
+                        // API 36: close() стал abstract — data в памяти,
+                        // закрывать нечего.
+                        override fun close() {}
+                    })
+                    // Каждое воспроизведение — встряска keep-alive WebView
+                    // не нужна: плеер живёт в сервисе, троттлинг фона ему
+                    // не страшен.
+                    setOnCompletionListener {
+                        onVoicePlaybackDone(context, id, true)
+                    }
+                    setOnErrorListener { _, what, extra ->
+                        onVoicePlaybackDone(context, id, false)
+                        true
+                    }
+                    prepare()
+                    start()
+                }
+                voicePlayer = mp
+                voicePlayingId = id
+                Log.i("VaultRust", "voicenote play: $id (${bytes.size} bytes)")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "voicenote play failed: " + e.message)
+                onVoicePlaybackDone(context, id, false)
+            }
+        }
+
+        /// Трек закончился/ошибка/стоп: гасим плеер, возвращаем FGS в
+        /// dataSync, отдаём аудио-фокус, уведомляем фронт (кнопка «play»).
+        @JvmStatic
+        fun stopVoicePlayback(context: Context) {
+            val id = voicePlayingId
+            try {
+                voicePlayer?.let {
+                    if (it.isPlaying) it.stop()
+                    it.release()
+                }
+            } catch (_: Throwable) {}
+            voicePlayer = null
+            voicePlayingId = null
+            instance?.let { exitMediaMode(it) }
+            try {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.abandonAudioFocus(null)
+            } catch (_: Throwable) {}
+            if (id != null) notifyVoiceDone(id)
+        }
+
+        /// Дедуп завершения: onCompletion ПОСЛЕ stop() не должен снова
+        /// дёргать фронт — гасим id до листенеров и уведомляем один раз.
+        private fun onVoicePlaybackDone(context: Context, id: String, played: Boolean) {
+            if (voicePlayingId == null) return
+            voicePlayingId = null
+            try {
+                voicePlayer?.let {
+                    try { if (it.isPlaying) it.stop() } catch (_: Throwable) {}
+                    it.release()
+                }
+            } catch (_: Throwable) {}
+            voicePlayer = null
+            instance?.let { exitMediaMode(it) }
+            try {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.abandonAudioFocus(null)
+            } catch (_: Throwable) {}
+            notifyVoiceDone(id)
+        }
+
+        /// Сообщить фронту о завершении трека: JS-мост через живой
+        /// keep-alive WebView (как dispatchCallAction — без рестарта UI).
+        private fun notifyVoiceDone(id: String) {
+            val wv = MainActivity.liveWebViewPublic() ?: run {
+                Log.w("VaultRust", "voicenote done: no live WebView — JS button stays until action")
+                return
+            }
+            val esc = id.replace("\\", "\\\\").replace("'", "\\'")
+            wv.post {
+                wv.evaluateJavascript(
+                    "window.__vaultVoiceNoteDone && window.__vaultVoiceNoteDone('$esc')", null
+                )
+                Log.i("VaultRust", "voicenote done dispatched: $id")
+            }
+        }
+
+        /* Перевести FGS в режим mediaPlayback (пока играет голосовое). */
+        private fun enterMediaMode(svc: VaultForegroundService) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    svc.startForeground(
+                        NOTIF_ID,
+                        svc.buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    )
+                    Log.i("VaultRust", "FGS switched to mediaPlayback mode")
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "enterMediaMode failed: " + e.message)
+            }
+        }
+
+        /** Вернуть FGS в обычный режим dataSync после трека/звонка. */
+        private fun exitMediaMode(svc: VaultForegroundService) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    svc.startForeground(
+                        NOTIF_ID,
+                        svc.buildNotification(),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                    Log.i("VaultRust", "FGS back to dataSync mode")
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "exitMediaMode failed: " + e.message)
+            }
+        }
+
         // Входящий звонок: отдельный high-importance канал +
         // звонилке. Вызывается из Rust через JNI (audio_android.rs).
         // ВАЖНО: ID канала v2 — старый канал уже

@@ -14,9 +14,9 @@
       stroke-linejoin="round"
     >
       <template v-for="(p, i) in paths" :key="i">
-        <path v-if="p.type === 'path'" :d="p.d" />
-        <circle v-else-if="p.type === 'circle'" :cx="p.cx" :cy="p.cy" :r="p.r" />
-        <rect v-else-if="p.type === 'rect'" :x="p.x" :y="p.y" :width="p.w" :height="p.h" :rx="p.rx" />
+        <path v-if="p.type === 'path'" :d="p.d" :fill="p.fill || 'none'" />
+        <circle v-else-if="p.type === 'circle'" :cx="p.cx" :cy="p.cy" :r="p.r" :fill="p.fill || 'none'" />
+        <rect v-else-if="p.type === 'rect'" :x="p.x" :y="p.y" :width="p.w" :height="p.h" :rx="p.rx" :fill="p.fill || 'none'" />
         <line v-else-if="p.type === 'line'" :x1="p.x1" :y1="p.y1" :x2="p.x2" :y2="p.y2" />
       </template>
     </g>

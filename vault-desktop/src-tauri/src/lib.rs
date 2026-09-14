@@ -114,6 +114,8 @@ pub(crate) fn service_monitor_ensure_ctx(env: &mut jni::JNIEnv, context: &jni::o
     service_monitor::ensure_ndk_context(env, context);
 }
 
+pub mod voicenote;
+
 use credential_store::StoredCredentials;
 use storage::sqlite::Storage;
 
@@ -1616,6 +1618,8 @@ pub fn run() {
             service_monitor::call_report_state,
             eco_set,
             push_set,
+            voicenote::voicenote_play,
+            voicenote::voicenote_stop,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a
