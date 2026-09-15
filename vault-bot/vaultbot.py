@@ -101,6 +101,12 @@ def main() -> int:
     if not API_URL:
         log("VAULTBOT_API_URL is not set")
         return 2
+    # line-buffered stdin: iterating sys.stdin from a PIPE buffers until EOF
+    # and the bot would never see a line until the listener closes.
+    try:
+        sys.stdin.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -131,6 +131,11 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
     }
 }
 
+/// Папки входящих: те же три, что сканирует Desktop/Android — стелс-письма
+/// (пустая тема) спам-фильтры почтовиков охотно кладут в Junk, а копия
+/// «себе» уходит в ToMyself.
+const INBOX_FOLDERS: [&str; 3] = ["INBOX", "Junk", "ToMyself"];
+
 /// Один цикл: письма + relay-очередь → дедуп → декод → события msg.
 async fn tick(
     client: &mut EmailClient,
@@ -142,13 +147,20 @@ async fn tick(
     out: &mut std::io::Stdout,
     me: &str,
 ) {
-    let mut messages = match client.fetch_messages_with_prefix("INBOX", 512).await {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!("inbox fetch failed: {e}");
-            Vec::new()
+    let mut messages = Vec::new();
+    let mut folder_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for folder in INBOX_FOLDERS {
+        match client.fetch_messages_with_prefix(folder, 512).await {
+            Ok(ms) => {
+                for m in &ms {
+                    folder_of.insert(m.id.clone(), folder.to_string());
+                }
+                messages.extend(ms);
+            }
+            // Пустой ящик без Junk/ToMyself — не ошибка, просто тихо мимо.
+            Err(e) => tracing::debug!("fetch {folder} skipped: {e}"),
         }
-    };
+    }
     // Relay — мгновенный канал (destructive-поллинг, как /inbox REPL).
     if relay_state.enabled && !relay_state.my_token.is_empty() {
         if let Ok(envs) = relay::poll(&relay_state.my_token) {
@@ -182,7 +194,8 @@ async fn tick(
         if decrypted.is_none() && !m.id.starts_with("rl-") && crypto.is_encrypted(&m.body) {
             // Fetch берёт BODY.PEEK[TEXT]<0.512> — PQ-конверты (>1КБ)
             // обрезаются. Полный фетч по uid, как /read (path-of-truth).
-            if let Ok(full) = client.fetch_message_body(&m.id, "INBOX").await {
+            let folder = folder_of.get(&m.id).map(|s| s.as_str()).unwrap_or("INBOX");
+            if let Ok(full) = client.fetch_message_body(&m.id, folder).await {
                 decrypted = decrypt_envelope(crypto, &full);
             }
         }
