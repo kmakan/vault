@@ -1090,7 +1090,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         }
     };
     if env_json.get("vault").and_then(|v| v.as_i64()) != Some(1) {
-        return Outcome::Delivered; 
+        return Outcome::Delivered;
     }
     // ЭХО-ЗАЩИТА: конверт с МОИМ публичным
     // ключом — это письмо себе (profile-broadcast / копия в свой ящик) —
