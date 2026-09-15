@@ -2,6 +2,7 @@
 mod api;
 mod cli;
 mod crypto;
+mod listen;
 mod storage;
 mod vault;
 
@@ -25,6 +26,15 @@ struct Cli {
     /// IMAP server address
     #[arg(long, short = 's')]
     server: Option<String>,
+
+    /// Headless bot listener: poll INBOX + relay, NDJSON events on stdout,
+    /// NDJSON commands on stdin (see src/listen.rs). Requires -e, VAULT_PASSWORD.
+    #[arg(long)]
+    listen: bool,
+
+    /// Poll interval for --listen (seconds, min 5)
+    #[arg(long, default_value = "15")]
+    listen_interval: u64,
 }
 
 #[tokio::main]
@@ -41,6 +51,10 @@ async fn main() -> Result<()> {
     }
     if let Some(server) = &cli_args.server {
         config.server = Some(server.clone());
+    }
+
+    if cli_args.listen {
+        return listen::run(config, cli_args.listen_interval).await;
     }
 
     // Serverless era: the REPL is the only frontend. The legacy ratatui TUI
