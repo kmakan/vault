@@ -327,6 +327,17 @@ mod tests {
         assert_ne!(p_rd.key_id, p_rd_b.key_id);
     }
 
+    #[test]
+    fn channel_tokens_golden_vectors() {
+        // Cross-implementation contract (Rust relay-server ↔ Python smoke ↔
+        // JS WebCrypto client): for broadcast key 0x00..0x1f the derived pair
+        // MUST be byte-identical everywhere. Any layout change breaks this.
+        let key: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let (rd, wr) = channel_tokens(&key);
+        assert_eq!(rd, "SV_HjXPp5iRj_____0lfx41z6eYkxBwsz_yjudMQsR5y1y_gjWtvThUEHsVi");
+        assert_eq!(wr, "SV_HjXPp5iRD_____wggA7nRt299pz5hlBU0WewQCsWWD7JgIIcmkz8csufh");
+    }
+
     fn issue_channel_pair(_keys: &ServerKeys, key: &[u8; 32]) -> (String, String) {
         channel_tokens(key)
     }

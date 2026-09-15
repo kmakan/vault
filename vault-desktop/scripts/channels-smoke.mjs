@@ -9,7 +9,13 @@ mkdirSync(MOCKS, { recursive: true });
 // api-мок (api.js экспортирует default api + db)
 writeFileSync(path.join(MOCKS, 'api.js'), `
 export const db = { kvGet: async () => null, kvSet: async () => {} };
-export default {};
+export const sent = [];
+export default { sendEmail: async (mode, msg) => { sent.push(msg); return { ok: true }; } };
+`);
+// relay-client-мок (динамический импорт в sendChannelPost)
+writeFileSync(path.join(MOCKS, 'relay-client.js'), `
+export const pubs = [];
+export const relayChannelPublish = async (ch, env, body) => { pubs.push({ ch: ch.id, env, body }); return { ok: true }; };
 `);
 // tauri core-мок (invoke)
 writeFileSync(path.join(MOCKS, 'core.js'), `
@@ -24,6 +30,8 @@ export const invoke = async (cmd, args) => {
 let src = readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'features', 'channels.js'), 'utf8');
 src = src.replace("from '@tauri-apps/api/core'", 'from "/tmp/channels-smoke-mocks/core.js"');
 src = src.replace("from '../api.js'", 'from "/tmp/channels-smoke-mocks/api.js"');
+src = src.replace("import('../api.js')", 'import("/tmp/channels-smoke-mocks/api.js")');
+src = src.replace("import('../relay-client.js')", 'import("/tmp/channels-smoke-mocks/relay-client.js")');
 writeFileSync('/tmp/channels-smoke-feature.mjs', src);
 
 const m = await import('/tmp/channels-smoke-feature.mjs');
@@ -77,6 +85,32 @@ ok('hello чужому каналу (не владелец) → null', m.ingestC
 ok('hello СВОЕМУ каналу → hello', m.ingestChannelEnvelope(mkCtx(true), ownHello, 'sub@x.y') === 'hello');
 ok('не-канальный конверт → null', m.ingestChannelEnvelope(ctx, { vault: 1, text: 'hi' }, 'a@x.y') === null);
 ok('канал не подписан → null', m.ingestChannelEnvelope(ctx, { ...post, chan: 'chn_unknown' }, 'a@x.y') === null);
+
+// ── relay channel tokens: parity с Rust (golden vectors из tokens.rs) ──
+// Node 24: globalThis.crypto — getter-only, определяем поверх (WebCrypto для channelTokens).
+const { webcrypto } = await import('node:crypto');
+Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+const GOLD = {
+  key: Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0')).join(''),
+  read: 'SV_HjXPp5iRj_____0lfx41z6eYkxBwsz_yjudMQsR5y1y_gjWtvThUEHsVi',
+  write: 'SV_HjXPp5iRD_____wggA7nRt299pz5hlBU0WewQCsWWD7JgIIcmkz8csufh',
+};
+const tk = await m.channelTokens(GOLD.key);
+ok('channelTokens read == Rust golden', tk.read === GOLD.read);
+ok('channelTokens write == Rust golden', tk.write === GOLD.write);
+ok('channelTokens кэш идемпотентен', (await m.channelTokens(GOLD.key)) === tk);
+let threw = false; try { await m.channelTokens('zz'); } catch { threw = true; }
+ok('bad key → throw', threw);
+
+// ── sendChannelPost: relay-паб + email-дубли cap 50 ──
+const apiMock = await import('/tmp/channels-smoke-mocks/api.js');
+const rcMock = await import('/tmp/channels-smoke-mocks/relay-client.js');
+const ch50 = { id: 'chn_1', key: GOLD.key, is_owner: true,
+  known_subscribers: Array.from({ length: 60 }, (_, i) => `s${i}@x.y`) };
+const res = await m.sendChannelPost(ch50, 'CIPHERTEXT', { id: 'post_x' });
+ok('post: relay pub один', rcMock.pubs.length === 1 && rcMock.pubs[0].ch === 'chn_1' && rcMock.pubs[0].body === 'CIPHERTEXT');
+ok('post: email cap 50', res.mailSent === 50 && apiMock.sent.length === 50);
+ok('post: stealth-тема пуста', apiMock.sent.every(s => s.subject === '' && s.body === 'CIPHERTEXT'));
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nALL ${pass} passed`);
 process.exit(fail ? 1 : 0);

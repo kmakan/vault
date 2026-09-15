@@ -385,3 +385,88 @@ export async function relayHealth(account) {
 export function isRelayEnvelope(obj) {
   return obj && typeof obj === 'object' && obj.body && obj.id && obj.ts;
 }
+
+// ───────────────────────── Каналы (M2 channels-3) ─────────────────────────
+// Channel delivery is fan-out: ONE pub into the channel queue, every
+// subscriber reads the same queue (peek with a `since` cursor on the server,
+// design channels §4.1). Tokens are derived from the broadcast key client-side
+// (features/channels.js::channelTokens) — the server never sees the key,
+// possession of the token IS the authorization.
+const KV_CHAN_CURSOR = 'relay-channel-cursor'; // {relayUrl: {chId: ts}}
+
+export async function relayChannelPublish(ch, envelopeObj, encryptedBody, account) {
+  const job = async () => {
+    try {
+      if (!ch || !ch.key) return { ok: false, why: 'no-key' };
+      const { enabled, relays, active } = await getSettings(account);
+      if (!enabled) return { ok: false, why: 'disabled' };
+      const relay = await pickLiveRelay(account);
+      if (!relay) return { ok: false, why: 'no-live-relay' };
+      const { channelTokens } = await import('./features/channels.js');
+      const { read, write } = await channelTokens(ch.key);
+      const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
+      const res = await rfetch(relay.url + '/pub', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader(write), // write-токен канала = право publish
+        },
+        body: JSON.stringify({
+          v: 1,
+          to: read, // адрес общей очереди канала
+          id: envelopeObj.id || ('ch-' + Date.now()),
+          exp,
+          body: btoa(unescape(encodeURIComponent(encryptedBody))),
+          wake: false, // пушей на канал нет (общая очередь)
+        }),
+        connectTimeout: PUB_TIMEOUT_MS,
+      });
+      if (!res.ok) { console.log('[relay-chan] publish http', res.status); return { ok: false, why: 'http-' + res.status }; }
+      console.log('[relay-chan] published to', ch.id);
+      return { ok: true };
+    } catch (e) {
+      console.log('[relay-chan] publish error:', e && e.message || e);
+      return { ok: false, why: (e && e.message) || 'error' };
+    }
+  };
+  pubChain = pubChain.then(job, job);
+  return pubChain;
+}
+
+// Подписка на посты канала: пуллим ОДИН канал его read-токеном с курсором
+// `since` (последний виденный ts). Возвращает конверты; дедуп по id на
+// клиенте в relayConsume (uid 'rl-<id>') делает повторную отдачу безвредной,
+// курсор лишь экономит трафик. Вызывается из relayConsume для каждого канала.
+export async function relayChannelPoll(ch, account) {
+  try {
+    if (!ch || !ch.key) return [];
+    const { enabled } = await getSettings(account);
+    if (!enabled) return [];
+    const relay = await pickLiveRelay(account);
+    if (!relay) return [];
+    const { channelTokens } = await import('./features/channels.js');
+    const { read } = await channelTokens(ch.key);
+    let cursors = {};
+    try { cursors = JSON.parse((await invoke('db_kv_get', { account, key: KV_CHAN_CURSOR }).catch(() => null)) || '{}'); } catch (e) { cursors = {}; }
+    const since = (cursors[relay.url] && cursors[relay.url][ch.id]) || 0;
+    const res = await rfetch(relay.url + `/poll?wait=0&since=${since}`, {
+      method: 'GET',
+      headers: authHeader(read),
+      connectTimeout: POLL_TIMEOUT_MS,
+    });
+    if (res.status === 204 || !res.ok) return [];
+    const list = await res.json();
+    if (list.length) {
+      const maxTs = list.reduce((m, e) => Math.max(m, e.ts || 0), since);
+      cursors[relay.url] = Object.assign({}, cursors[relay.url], { [ch.id]: maxTs });
+      await invoke('db_kv_set', { account, key: KV_CHAN_CURSOR, value: JSON.stringify(cursors) }).catch(() => {});
+    }
+    for (const env of list) {
+      env._relay = relay.url;
+      try { env.body = decodeURIComponent(escape(atob(env.body))); } catch (e) { /* как есть */ }
+    }
+    return list;
+  } catch (e) {
+    return [];
+  }
+}

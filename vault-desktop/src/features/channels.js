@@ -126,6 +126,74 @@ export function buildHelloPayload(channelId) {
   return JSON.stringify({ channel: 1, chan: channelId, hello: 1, id: newId('hello_'), ts: Date.now() });
 }
 
+// ── Relay channel tokens (M2 channels-3, design §4.1) ─────────
+// The pair is derived from the 32-byte broadcast key, byte-for-byte like
+// relay-server/src/tokens.rs::channel_tokens (the server never sees the
+// key; possession of the value IS the authorization):
+//   read  = base64url( kid(8) ‖ 'c' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-read") )
+//   write = base64url( kid(8) ‖ 'C' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-write") )
+// kid = first 8 bytes (BE u64) of the READ mac — links the write token to
+// its queue: publish into a channel only accepted with that channel's own
+// write token (cross-channel = 403 on the server).
+
+const _chanTokCache = new Map(); // keyHex → {read, write}
+const b64url = (bytes) => {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+export async function channelTokens(keyHex) {
+  const hit = _chanTokCache.get(keyHex);
+  if (hit) return hit;
+  if (!/^[0-9a-fA-F]{64}$/.test(keyHex || '')) throw new Error('bad channel key');
+  const raw = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) raw[i] = parseInt(keyHex.substr(i * 2, 2), 16);
+  const macOf = async (label) => {
+    const k = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(label));
+    return new Uint8Array(sig);
+  };
+  const rd = await macOf('vault-relay-channel-read');
+  const wr = await macOf('vault-relay-channel-write');
+  const pack = (scopeByte, mac) => {
+    const buf = new Uint8Array(45);
+    buf.set(rd.subarray(0, 8), 0);            // kid = read mac[:8]
+    buf[8] = scopeByte.charCodeAt(0);
+    buf[9] = buf[10] = buf[11] = buf[12] = 0xFF; // sentinel expiry (u32::MAX)
+    buf.set(mac, 13);
+    return b64url(buf);
+  };
+  const out = Object.freeze({ read: pack('c', rd), write: pack('C', wr) });
+  _chanTokCache.set(keyHex, out);
+  return out;
+}
+
+// Owner-side post dispatch (t_4455b0dc): relay pub (write-scoped channel
+// token, ONE store for all subscribers) + email duplicate to the opt-in
+// known-subscriber list (cap 50, group mechanics). Throws only when every
+// path failed — the caller (UI) shows the standard delivery badge.
+export async function sendChannelPost(ch, content, envelopeObj, account) {
+  const { relayChannelPublish } = await import('../relay-client.js');
+  const api = (await import('../api.js')).default;
+  let relayOk = false, mailSent = 0, mailFail = 0;
+  try {
+    relayOk = (await relayChannelPublish(ch, envelopeObj, content, account)).ok;
+  } catch (e) { console.warn('[channels] relay pub:', e); }
+  const targets = (ch.known_subscribers || []).slice(0, 50);
+  for (const email of targets) {
+    try {
+      await api.sendEmail('local', { to: email, subject: '', body: content });
+      mailSent++;
+    } catch (e) {
+      mailFail++;
+      console.error(`[channels] email dup to ${email}:`, e);
+    }
+  }
+  if (!relayOk && !mailSent && targets.length) throw new Error('post not delivered');
+  return { relayOk, mailSent, mailFail };
+}
+
 // ── Router branch helper (called from features/incoming.js) ────
 // Returns true when the decrypted group-envelope payload is a channel
 // envelope, i.e. `channel:1` marker present. The router then treats it

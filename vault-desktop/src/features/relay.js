@@ -21,11 +21,25 @@ import * as relay from '../relay-client.js';
 // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
 export async function relayConsume(ctx) {
   const list = await relay.relayPoll(ctx.email);
-  if (!list.length) return;
+  // Каналы (M2 channels-3): подписчики пуллят общую очередь каждого канала
+  // его read-токеном (fan-out, серверный peek+курсор). Конверты-посты идут
+  // в тот же конвейер виртуальных писем — роутер классифицирует по ключу.
+  const chanEnvelopes = [];
+  for (const ch of (ctx.channels || [])) {
+    const posts = await relay.relayChannelPoll(ch, ctx.email).catch(() => []);
+    for (const env of posts) {
+      // from = канал: владельческий эхо-фильтр и классификация в роутере
+      // идут по ключу, адрес отправителя здесь не нужен (privacy-модель).
+      env.from = env.from || ('channel:' + ch.id);
+      chanEnvelopes.push(env);
+    }
+  }
+  const all = [...list, ...chanEnvelopes];
+  if (!all.length) return;
   const merged = [...ctx.emails];
   const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
   const fresh = [];
-  for (const env of list) {
+  for (const env of all) {
     const uid = 'rl-' + env.id;
     if (seen.has(uid + '|RELAY')) continue;
     seen.add(uid + '|RELAY');

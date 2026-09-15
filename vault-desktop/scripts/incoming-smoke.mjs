@@ -35,7 +35,7 @@ const relayMock = {
 const notifyMock = { fires: [] };
 notifyMock.notifyNewMessage = (n) => { notifyMock.fires.push(n); };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api;');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = { kvGet: async () => null, kvSet: async () => {} };');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/relay-client.js', 'const relay = globalThis.__relayMock; export default relay; export const getSettings = (...a) => relay.getSettings(...a); export const setPeerToken = (...a) => relay.setPeerToken(...a);');
 writeFileSync(MOCKS + '/notify.js', 'export const notifyNewMessage = (n) => globalThis.__notifyMock.notifyNewMessage(n); export const initNotifications = async () => {};');
@@ -51,8 +51,21 @@ inc = inc
   .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
   .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
   .replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"')
-  .replace("from '../notify.js'", 'from "' + MOCKS + '/notify.js"');
+  .replace("from '../notify.js'", 'from "' + MOCKS + '/notify.js"')
+  .replace("from './presence.js'", 'from "' + MOCKS + '/presence.js"')
+  .replace("from './channels.js'", 'from "' + MOCKS + '/channels.js"');
 writeFileSync(MOCKS + '/incoming.mjs', inc);
+// presence-мок: сигналы presence в этих тестах не разбираем (свой смоук)
+writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
+// channels: реальный модуль (проверяем и канальную ветку incoming) с
+// подменой внешним импортов — тот же приём, что в channels-smoke.
+let chan = readFileSync(ROOT + '/src/features/channels.js', 'utf8');
+chan = chan
+  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
+  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"');
+writeFileSync(MOCKS + '/channels-real.mjs', chan);
+writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
+writeFileSync(MOCKS + '/channels.js', 'export * from "' + MOCKS + '/channels-real.mjs";');
 const { processIncoming } = await import(MOCKS + '/incoming.mjs');
 
 // ── Хелперы тестов ─────────────────────────────────────────────

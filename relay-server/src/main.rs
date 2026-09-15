@@ -288,6 +288,10 @@ pub async fn relay_pub(
 #[derive(Deserialize)]
 pub struct PollQuery {
     pub wait: Option<u64>,
+    /// Канальный курсор (M2 channels): отдать только посты с ts > since.
+    /// Игнорируется для личных очередей (drain сам по себе « один раз »).
+    #[serde(default)]
+    pub since: Option<u64>,
 }
 
 /// GET /relay/poll?wait=25 — long-poll: до 25 конвертов, 204 по таймауту.
@@ -331,9 +335,10 @@ pub async fn relay_poll(
         }
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
+    let since = if channel { q.since.unwrap_or(0) } else { 0 };
     loop {
         let list = if channel {
-            app.store.peek(&tok.hash)
+            app.store.peek(&tok.hash, since)
         } else {
             app.store.drain(&tok.hash)
         };
@@ -395,7 +400,7 @@ async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::ext
     loop {
         // Сначала всё, что накопилось (без ack), затем ждём новых/ack'и.
         let list = if channel {
-            app.store.peek(&tok.hash)
+            app.store.peek(&tok.hash, 0)
         } else {
             app.store.drain(&tok.hash)
         };
@@ -497,7 +502,14 @@ fn publisher_key(
         .filter(|s| !s.is_empty());
     for tok in candidates {
         if let Some(t) = vault_relay::parse(&app.keys, tok) {
-            let premium = u64::from(t.expiry) > now() + 365 * 86400;
+            // Premium = токен с expiry > now+365д (promo-выдача на 10 лет).
+            // Канальные токены — sentinel u32::MAX по построению, это НЕ
+            // premium-признак: иначе pub в канал обходил бы лимит вообще.
+            // Лимит на канал = по hash write-токена (100 постов/сут на
+            // канал с бесплатного аккаунта; утечка write-токена не спамит
+            // бесконечно).
+            let premium = !t.scope.is_channel()
+                && u64::from(t.expiry) > now() + 365 * 86400;
             return (format!("t:{}", t.hash), premium);
         }
     }
