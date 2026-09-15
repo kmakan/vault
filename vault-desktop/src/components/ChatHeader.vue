@@ -16,7 +16,8 @@
         </div>
       </template>
       <template v-else-if="type === 'channel'">
-        <div class="group-avatar channel-avatar">
+        <img v-if="channelAvatar" :src="channelAvatar" class="group-avatar group-avatar-img" :alt="channel && channel.name" />
+        <div v-else class="group-avatar channel-avatar">
           <Icon name="megaphone" :size="20" />
         </div>
       </template>
@@ -130,6 +131,7 @@ defineProps({
   name: { type: String, default: '' },
   group: { type: Object, default: null },
   channel: { type: Object, default: null },
+  channelAvatar: { type: String, default: '' },
   groupAvatar: { type: String, default: '' },
   groupIcon: { type: String, default: '' },
   isMobile: { type: Boolean, default: false },

@@ -94,7 +94,8 @@
         @click="$emit('select-channel', ch)"
         @contextmenu="$emit('menu', { type: 'channel', id: ch.id }, $event)"
       >
-        <div class="group-avatar channel-avatar">
+        <img v-if="channelAvatars[ch.id]" :src="channelAvatars[ch.id]" class="group-avatar group-avatar-img" :alt="ch.name" />
+        <div v-else class="group-avatar channel-avatar">
           <Icon name="megaphone" :size="16" />
         </div>
         <div class="contact-info">
@@ -142,6 +143,7 @@ defineProps({
   contacts: { type: Array, default: () => [] },
   groups: { type: Array, default: () => [] },
   channels: { type: Array, default: () => [] },
+  channelAvatars: { type: Object, default: () => ({}) },
   avatars: { type: Object, default: () => ({}) },
   groupIconMap: { type: Object, default: () => ({}) },
   folders: { type: Array, default: () => [] },

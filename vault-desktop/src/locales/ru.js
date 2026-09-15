@@ -284,6 +284,7 @@ export default {
   channel_copy_link: 'Ссылка для подписки',
   channel_share: 'Поделиться',
   channel_delete: 'Удалить канал',
+  channel_rename_prompt: 'Новое название канала',
   channel_delete_confirm: 'Удалить канал и всю его локальную историю?',
   channel_owner_tag: 'автор',
   channel_sub_tag: 'подписка',

@@ -115,6 +115,7 @@
         :contacts="filteredContacts"
         :groups="filteredGroups"
         :channels="channels"
+        :channelAvatars="channelAvatars"
         :avatars="groupAvatars"
         :groupIconMap="groupIconMap"
         :folders="chatFoldersList"
@@ -158,6 +159,7 @@
           :name="activeChatName"
           :group="currentGroup"
           :channel="activeChatType === 'channel' ? currentChannel : null"
+          :channelAvatar="currentChannel ? (channelAvatars[currentChannel.id] || '') : ''"
           :groupAvatar="currentGroup && groupAvatars[currentGroup.id]"
           :groupIcon="currentGroup && groupIconMap[currentGroup.id]"
           :isMobile="isMobile"
@@ -820,6 +822,9 @@
           {{ isIgnored(chatMenu.target.email) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
         </button>
         <!-- Канал (M2): ссылка подписки (владелец) + удаление подписки -->
+        <button v-if="chatMenu.target.type === 'channel' && channelById(chatMenu.target.id)?.is_owner" @click="renameChannel(chatMenu.target.id)">
+          <Icon name="pencil" :size="14" /> {{ t('group_rename') || 'Переименовать' }}
+        </button>
         <button v-if="chatMenu.target.type === 'channel' && channelById(chatMenu.target.id)?.is_owner" @click="copyChannelLinkById(chatMenu.target.id)">
           <Icon name="link" :size="14" /> {{ t('channel_copy_link') || 'Ссылка для подписки' }}
         </button>
@@ -1127,6 +1132,7 @@ export default {
       channels: [],            // M2 broadcast-каналы (features/channels.js)
       channelPosts: {},        // channelId -> [{ts, body, images, sender}]
       channelUnread: {},        // channelId -> count
+      channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
       // UI (t_a14ac823): активный канал + модалки создания/подписки
       currentChannel: null,
       showCreateChannel: false,
@@ -2529,8 +2535,26 @@ export default {
           const posts = JSON.parse((await db.kvGet(this.email || 'anon', 'channel-posts:' + ch.id)) || '[]');
           this.channelPosts[ch.id] = posts;
           this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
+          this.channelAvatars[ch.id] = (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '';
         }
       } catch (e) { console.error('Failed to load channels:', e); }
+    },
+    // Владелец переименовывает канал: локальный патч + meta-конверт
+    // подписчикам (name/about летят тем же транспортом, что посты).
+    async renameChannel(id) {
+      const ch = this.channelById(id);
+      this.closeChatMenu();
+      if (!ch || !ch.is_owner) return;
+      const name = prompt(this.t('channel_rename_prompt') || 'Новое название канала', ch.name || '');
+      if (!name || !name.trim() || name.trim() === ch.name) return;
+      ch.name = name.trim();
+      try {
+        await ChannelsFeature.updateChannel(id, { name: ch.name });
+        const res = await ChannelsFeature.sendChannelMeta(ch, this.email);
+        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+        }
+      } catch (e) { console.error('[channels] rename:', e); }
     },
     // Router helpers (features/incoming.js вызывает через ctx)
     channelById(id) { return this.channels.find(c => c.id === id) || null; },

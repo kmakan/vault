@@ -169,6 +169,14 @@ export async function channelTokens(keyHex) {
   return out;
 }
 
+// Owner-side meta publish (t_09bf424a): name/about/avatar updates travel
+// as a meta-конверт — same relay queue + email dup as posts.
+export async function sendChannelMeta(ch, account) {
+  const payload = buildMetaPayload(ch, ch.key_version || 1);
+  const content = await (await import('../crypto.js')).default.encryptWithGroupKey(payload, ch.key);
+  return sendChannelPost(ch, content, JSON.parse(payload), account);
+}
+
 // Owner-side post dispatch (t_4455b0dc): relay pub (write-scoped channel
 // token, ONE store for all subscribers) + email duplicate to the opt-in
 // known-subscriber list (cap 50, group mechanics). Throws only when every
@@ -214,6 +222,11 @@ export function ingestChannelEnvelope(ctx, payload, senderEmail) {
   if (payload.meta === 1) {
     // meta update from the owner (name/about/avatar)
     if (ch.is_owner) return 'meta-own'; // our own echo — nothing to apply
+    if (payload.avatar) db.kvSet('anon', 'channel-avatar:' + chId, payload.avatar).catch(() => {});
+    // мгновенный UI: тот же объект ch живёт в ctx.channels (Vue реактивен)
+    if (payload.name) ch.name = payload.name;
+    if (payload.about !== undefined) ch.about = payload.about;
+    if (payload.owner_fpr) ch.owner_fpr = payload.owner_fpr;
     updateChannel(chId, { name: payload.name, about: payload.about, owner_fpr: payload.owner_fpr })
       .catch(e => console.warn('[channels] meta apply:', e));
     return 'meta';

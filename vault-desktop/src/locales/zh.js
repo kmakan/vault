@@ -284,6 +284,7 @@ export default {
   channel_copy_link: '订阅链接',
   channel_share: '分享',
   channel_delete: '删除频道',
+  channel_rename_prompt: '新频道名称',
   channel_delete_confirm: '删除此频道及其全部本地历史？',
   channel_owner_tag: '作者',
   channel_sub_tag: '订阅',

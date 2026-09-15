@@ -284,6 +284,7 @@ export default {
   channel_copy_link: 'Subscribe link',
   channel_share: 'Share',
   channel_delete: 'Delete channel',
+  channel_rename_prompt: 'New channel name',
   channel_delete_confirm: 'Delete this channel and all of its local history?',
   channel_owner_tag: 'author',
   channel_sub_tag: 'subscription',

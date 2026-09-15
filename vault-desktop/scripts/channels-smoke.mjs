@@ -17,6 +17,10 @@ writeFileSync(path.join(MOCKS, 'relay-client.js'), `
 export const pubs = [];
 export const relayChannelPublish = async (ch, env, body) => { pubs.push({ ch: ch.id, env, body }); return { ok: true }; };
 `);
+// crypto-мок (динамический импорт в sendChannelMeta)
+writeFileSync(path.join(MOCKS, 'crypto.js'), `
+export default { encryptWithGroupKey: async (plain, key) => 'ENC(' + key.slice(0, 4) + ')' + plain };
+`);
 // tauri core-мок (invoke)
 writeFileSync(path.join(MOCKS, 'core.js'), `
 export const invoke = async (cmd, args) => {
@@ -32,6 +36,7 @@ src = src.replace("from '@tauri-apps/api/core'", 'from "/tmp/channels-smoke-mock
 src = src.replace("from '../api.js'", 'from "/tmp/channels-smoke-mocks/api.js"');
 src = src.replace("import('../api.js')", 'import("/tmp/channels-smoke-mocks/api.js")');
 src = src.replace("import('../relay-client.js')", 'import("/tmp/channels-smoke-mocks/relay-client.js")');
+src = src.replace("import('../crypto.js')", 'import("/tmp/channels-smoke-mocks/crypto.js")');
 writeFileSync('/tmp/channels-smoke-feature.mjs', src);
 
 const m = await import('/tmp/channels-smoke-feature.mjs');
@@ -111,6 +116,21 @@ const res = await m.sendChannelPost(ch50, 'CIPHERTEXT', { id: 'post_x' });
 ok('post: relay pub один', rcMock.pubs.length === 1 && rcMock.pubs[0].ch === 'chn_1' && rcMock.pubs[0].body === 'CIPHERTEXT');
 ok('post: email cap 50', res.mailSent === 50 && apiMock.sent.length === 50);
 ok('post: stealth-тема пуста', apiMock.sent.every(s => s.subject === '' && s.body === 'CIPHERTEXT'));
+
+// ── sendChannelMeta: meta-конверт через тот же транспорт (t_09bf424a) ──
+rcMock.pubs.length = 0; apiMock.sent.length = 0;
+const chMeta = { id: 'chn_m', key: GOLD.key, is_owner: true, name: 'M', about: 'A', avatar: '', key_version: 1, known_subscribers: [] };
+const mres = await m.sendChannelMeta(chMeta, 'me@x.y');
+ok('meta: pub c meta:1 в payload', rcMock.pubs.length === 1 && rcMock.pubs[0].env.meta === 1 && rcMock.pubs[0].env.name === 'M');
+ok('meta: тело зашифровано (мок ENC)', mres.relayOk && String(rcMock.pubs[0].body).startsWith('ENC('));
+// ingest: meta обновляет name/about мгновенно + avatar в kv
+const avatarKv = [];
+apiMock.db.kvSet = async (acc, k, v) => { avatarKv.push([acc, k, v]); };
+const chSub = { id: 'chn_1', key: 'k'.repeat(64), is_owner: false, name: 'C1', about: '' };
+const ctxMeta = { channels: [chSub], channelById: (id) => chSub.id === id ? chSub : null };
+const metaPayload = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'New', about: 'Desc', avatar: 'data:img', key_version: 1 }));
+ok('ingest meta: kind + мгновенный мутейт', m.ingestChannelEnvelope(ctxMeta, metaPayload, 'o@x.y') === 'meta' && chSub.name === 'New' && chSub.about === 'Desc');
+ok('ingest meta: avatar → kv channel-avatar:', avatarKv.some(([a, k, v]) => a === 'anon' && k === 'channel-avatar:chn_1' && v === 'data:img'));
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nALL ${pass} passed`);
 process.exit(fail ? 1 : 0);
