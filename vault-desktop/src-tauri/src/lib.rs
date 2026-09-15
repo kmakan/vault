@@ -5,6 +5,7 @@ mod crypto;
 mod crypto_pq;
 mod duress;
 mod email;
+mod channels;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
@@ -30,8 +31,11 @@ fn push_set(enabled: bool, topic: String, ntfy_base: String) -> Result<bool, Str
     {
         use jni::objects::JValue;
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let cls = crate::audio::audio_android::find_app_class(
             &mut env,
@@ -77,8 +81,11 @@ fn eco_set(enabled: bool) -> Result<bool, String> {
     #[cfg(target_os = "android")]
     {
         let ctx = ndk_context::android_context();
-        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach: {e}"))?;
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
         let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
         let cls = crate::audio::audio_android::find_app_class(
             &mut env,
@@ -783,7 +790,11 @@ async fn email_send_dod(
         .clone()
         .ok_or_else(|| "Not connected to email server".to_string())?;
     let mut client = EmailClient::new(cfg);
-    let mid = if message_id.trim().is_empty() { None } else { Some(message_id.as_str()) };
+    let mid = if message_id.trim().is_empty() {
+        None
+    } else {
+        Some(message_id.as_str())
+    };
     match t_timeout(
         Duration::from_secs(120),
         client.send_email_with_id(&to, &subject, &body, mid),
@@ -1005,6 +1016,54 @@ fn groups_delete(group_id: String) -> Result<(), String> {
 #[tauri::command]
 fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, String> {
     groups::rename_group(&group_id, &new_name).map_err(|e| e.to_string())
+}
+
+// ── Broadcast channels (M2, docs/design/channels-protocol.md) ─────────────
+
+#[tauri::command]
+fn channels_load() -> Result<Vec<channels::Channel>, String> {
+    channels::load_channels()
+        .map(|c| c.into_values().collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_create(
+    name: String,
+    owner: String,
+    owner_fpr: String,
+    about: String,
+) -> Result<channels::Channel, String> {
+    channels::create_channel(&name, &owner, &owner_fpr, &about).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_import(
+    channel_id: String,
+    name: String,
+    key: String,
+    owner: String,
+    owner_fpr: String,
+) -> Result<channels::Channel, String> {
+    channels::import_channel(&channel_id, &name, &key, &owner, &owner_fpr).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_update(
+    channel_id: String,
+    patch: channels::ChannelPatch,
+) -> Result<channels::Channel, String> {
+    channels::update_channel(&channel_id, &patch).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_add_known_subscriber(channel_id: String, email: String) -> Result<(), String> {
+    channels::add_known_subscriber(&channel_id, &email).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn channels_delete(channel_id: String) -> Result<(), String> {
+    channels::delete_channel(&channel_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1552,6 +1611,12 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            channels_load,
+            channels_create,
+            channels_import,
+            channels_update,
+            channels_add_known_subscriber,
+            channels_delete,
             groups_rename_member,
             groups_save_member_fingerprints,
             android_open_url,
