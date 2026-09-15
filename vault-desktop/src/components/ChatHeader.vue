@@ -15,6 +15,11 @@
           {{ (group && (groupIcon || group.name?.charAt(0).toUpperCase())) || '?' }}
         </div>
       </template>
+      <template v-else-if="type === 'channel'">
+        <div class="group-avatar channel-avatar">
+          <Icon name="megaphone" :size="20" />
+        </div>
+      </template>
       <template v-else-if="chat === '__notes__'">
         <div class="notes-self-avatar notes-self-avatar-lg">
           <Icon name="pencil" :size="20" gradient cls="notes-self-icon" />
@@ -32,6 +37,14 @@
             <span class="members-count" @click="$emit('members')">
               <Icon name="users" :size="15" gradient cls="members-count-icon" />
               {{ (group?.members || []).length }} {{ membersLabel((group?.members || []).length) }}
+            </span>
+          </template>
+          <template v-else-if="type === 'channel'">
+            <span class="members-count channel-sub-count">
+              <Icon name="megaphone" :size="15" gradient cls="members-count-icon" />
+              {{ channel && channel.is_owner
+                ? (t('channel_owner_tag') || 'автор') + (channel.known_subscribers && channel.known_subscribers.length ? ' · ' + channel.known_subscribers.length : '')
+                : (t('channel_sub_tag') || 'подписка') }}
             </span>
           </template>
           <template v-else-if="chat === '__notes__'">
@@ -52,6 +65,9 @@
         <button v-if="isAdmin" class="chat-action-btn" @click="$emit('add-member')" :title="t('add_member') || 'Добавить участника'"><Icon name="user-plus" :size="17" /><span class="chat-action-label">{{ t('add_member') || 'Добавить участника' }}</span></button>
         <button class="chat-action-btn" :title="t('group_refresh') || 'Перечитать группу (полный скан)'" @click="$emit('refresh-group')"><Icon name="refresh" :size="17" /></button>
         <button class="chat-action-btn" @click="$emit('group-settings')" :title="t('group_settings') || 'Настройки группы'"><Icon name="settings" :size="17" /><span class="chat-action-label">{{ t('group_settings') || 'Настройки' }}</span></button>
+      </template>
+      <template v-else-if="type === 'channel'">
+        <button v-if="channel && channel.is_owner" class="chat-action-btn" @click="$emit('channel-link')" :title="t('channel_copy_link') || 'Ссылка для подписки'"><Icon name="link" :size="17" /><span class="chat-action-label">{{ t('channel_share') || 'Поделиться' }}</span></button>
       </template>
       <template v-else-if="chat && chat !== '__notes__'">
         <!-- Замок-индикатор был убран по просьбе пользователя. -->
@@ -113,6 +129,7 @@ defineProps({
   type: { type: String, default: 'contact' },
   name: { type: String, default: '' },
   group: { type: Object, default: null },
+  channel: { type: Object, default: null },
   groupAvatar: { type: String, default: '' },
   groupIcon: { type: String, default: '' },
   isMobile: { type: Boolean, default: false },
@@ -132,7 +149,7 @@ defineProps({
   ephemeralLabel: { type: Function, required: true },
 })
 
-defineEmits(['back', 'open-card', 'members', 'relay-explain', 'add-member', 'refresh-group', 'group-settings', 'call', 'edit-contact', 'ephemeral-menu', 'ephemeral-apply', 'toggle-starred', 'toggle-search', 'export-menu', 'export-json', 'export-txt'])
+defineEmits(['back', 'open-card', 'members', 'relay-explain', 'add-member', 'refresh-group', 'group-settings', 'channel-link', 'call', 'edit-contact', 'ephemeral-menu', 'ephemeral-apply', 'toggle-starred', 'toggle-search', 'export-menu', 'export-json', 'export-txt'])
 </script>
 
 <!-- Стили шапки чата (chat-header/chat-head-col/chat-actions/ephemeral/

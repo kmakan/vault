@@ -12,7 +12,9 @@ import { db } from '../api.js';
 
 // Flag-key of a chat target: group chats by 'group:<id>', DMs by lowercased email.
 export function flagKey(target) {
-  return target.type === 'group' ? 'group:' + target.id : target.email.toLowerCase();
+  if (target.type === 'group') return 'group:' + target.id;
+  if (target.type === 'channel') return 'channel:' + target.id;
+  return target.email.toLowerCase();
 }
 
 // Flags object of a chat key (always an object, may be empty).

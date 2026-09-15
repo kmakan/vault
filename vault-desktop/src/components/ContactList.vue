@@ -80,6 +80,36 @@
         </div>
       </div>
     </div>
+    <!-- Channels Section (M2): broadcast подписки — тот же сайдбар-паттерн,
+         что группы; непрочитанные считает родитель (channelUnread kv-лог). -->
+    <div v-if="channels.length > 0" class="groups-section">
+      <div class="groups-header">
+        <Icon name="megaphone" :size="14" cls="groups-header-icon" />
+        {{ t('nav_channels') || 'Channels' }}
+      </div>
+      <div
+        v-for="ch in channels"
+        :key="ch.id"
+        :class="['contact-item', { active: active === `channel:${ch.id}` }]"
+        @click="$emit('select-channel', ch)"
+        @contextmenu="$emit('menu', { type: 'channel', id: ch.id }, $event)"
+      >
+        <div class="group-avatar channel-avatar">
+          <Icon name="megaphone" :size="16" />
+        </div>
+        <div class="contact-info">
+          <div class="contact-name">{{ ch.name }}</div>
+          <div class="contact-email">
+            <Icon v-if="ch.is_owner" name="key" :size="10" />
+            {{ ch.is_owner ? (t('channel_owner_tag') || 'автор') : (t('channel_sub_tag') || 'подписка') }}
+          </div>
+        </div>
+        <div class="contact-status">
+          <span v-if="channelUnread(ch.id)" class="unread-badge">{{ channelUnread(ch.id) }}</span>
+          <Icon v-if="isMuted('channel:' + ch.id)" name="bell-off" :size="14" cls="chat-mute-icon" :title="t('chat_muted') || 'Без звука'" />
+        </div>
+      </div>
+    </div>
     <!-- переключатель архива (виден, когда есть архивные чаты) -->
     <!-- v-if: показываем и когда showArchived=true, даже если архив
          опустел — иначе после «из архива» последнего чата переключатель
@@ -111,6 +141,7 @@ defineProps({
   search: { type: String, default: '' },
   contacts: { type: Array, default: () => [] },
   groups: { type: Array, default: () => [] },
+  channels: { type: Array, default: () => [] },
   avatars: { type: Object, default: () => ({}) },
   groupIconMap: { type: Object, default: () => ({}) },
   folders: { type: Array, default: () => [] },
@@ -130,9 +161,10 @@ defineProps({
   isRecentlySeen: { type: Function, required: true },
   isOnline: { type: Function, default: () => false },
   membersLabel: { type: Function, required: true },
+  channelUnread: { type: Function, default: () => 0 },
 })
 
-defineEmits(['search', 'select-chat', 'select-group', 'select-notes', 'menu', 'delete', 'open-keys', 'open-qr', 'archive-toggle', 'folder'])
+defineEmits(['search', 'select-chat', 'select-group', 'select-channel', 'select-notes', 'menu', 'delete', 'open-keys', 'open-qr', 'archive-toggle', 'folder'])
 </script>
 
 <!-- Стили .contact-*/.unread-badge/.groups-*/.archive-toggle/.search-box/
@@ -283,6 +315,12 @@ defineEmits(['search', 'select-chat', 'select-group', 'select-notes', 'menu', 'd
   margin-top: 16px;
   border-top: 1px solid var(--border);
   padding-top: 12px;
+}
+/* канал: иконка-аватар по центру круга (наследует .group-avatar из App global) */
+:deep(.channel-avatar) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .groups-header {
   padding: 8px 12px;

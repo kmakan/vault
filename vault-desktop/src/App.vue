@@ -101,6 +101,8 @@
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
             <Icon name="user-plus" :size="22" gradient cls="group-create-icon" />
           </button>
+          <button :title="t('channel_create') || 'Создать канал'" @click="showCreateChannel = true"><Icon name="megaphone" :size="20" /></button>
+          <button :title="t('channel_join') || 'Присоединиться к каналу'" @click="showJoinChannel = true"><Icon name="link" :size="20" /></button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true"><Icon name="link" :size="20" /></button>
           <button :title="t('nav_keys')" @click="showKeyManager = true"><Icon name="key" :size="20" /></button>
           <button :title="t('cipher_title')" @click="showCipher = true"><Icon name="shield" :size="20" /></button>
@@ -112,6 +114,7 @@
         :search="searchQuery"
         :contacts="filteredContacts"
         :groups="filteredGroups"
+        :channels="channels"
         :avatars="groupAvatars"
         :groupIconMap="groupIconMap"
         :folders="chatFoldersList"
@@ -129,9 +132,11 @@
         :isRecentlySeen="isRecentlySeen"
         :isOnline="isOnline"
         :membersLabel="membersLabel"
+        :channelUnread="id => channelUnread[id] || 0"
         @search="v => searchQuery = v"
         @select-chat="selectChat"
         @select-group="selectGroup"
+        @select-channel="selectChannel"
         @select-notes="selectNotes"
         @menu="openChatMenu"
         @delete="deleteContact"
@@ -152,6 +157,7 @@
           :type="activeChatType"
           :name="activeChatName"
           :group="currentGroup"
+          :channel="activeChatType === 'channel' ? currentChannel : null"
           :groupAvatar="currentGroup && groupAvatars[currentGroup.id]"
           :groupIcon="currentGroup && groupIconMap[currentGroup.id]"
           :isMobile="isMobile"
@@ -175,6 +181,7 @@
           @add-member="openAddMemberPopup"
           @refresh-group="refreshGroupFull"
           @group-settings="showGroupSettings = !showGroupSettings"
+          @channel-link="copyChannelLink"
           @call="startCall"
           @edit-contact="openContactEdit"
           @ephemeral-menu="showEphemeralMenu = !showEphemeralMenu"
@@ -336,7 +343,7 @@
           <button class="reply-bar-close" @click="cancelEdit" title="Cancel edit"><Icon name="x" :size="13" /></button>
         </div>
 
-        <div class="message-input" v-if="activeChat">
+        <div class="message-input" v-if="activeChat && (activeChatType !== 'channel' || (currentChannel && currentChannel.is_owner))">
         <div class="input-wrapper">
           <EmojiPicker
             :show="showEmojiPicker"
@@ -751,6 +758,47 @@
         </div>
       </div>
     </div>
+    <!-- CREATE CHANNEL modal (M2): имя + описание, ссылка после создания -->
+    <div v-if="showCreateChannel" class="modal-overlay" @click.self="showCreateChannel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('channel_create_title') || 'Новый канал' }}</h3>
+          <button class="modal-close-x" @click="showCreateChannel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('channel_name') || 'Название канала' }}</label>
+          <input v-model="newChannelName" :placeholder="(t('channel_name') || 'Название') + '...'" class="modal-input" @keyup.enter="createChannelAndClose" />
+          <label>{{ t('channel_about') || 'Описание' }}</label>
+          <input v-model="newChannelAbout" :placeholder="(t('channel_about') || 'Описание') + '...'" class="modal-input" />
+          <p class="channel-modal-hint">{{ t('channel_create_hint') || 'Канал — широковещательный чат: вы публикуете посты, подписчики только читают и не видят друг друга.' }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showCreateChannel = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="createChannelAndClose" :disabled="!newChannelName.trim() || postingChannel">
+            {{ t('channel_create') || 'Создать канал' }}
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- JOIN CHANNEL modal (M2): вставка vault://join-channel ссылки/QR -->
+    <div v-if="showJoinChannel" class="modal-overlay" @click.self="showJoinChannel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('channel_join') || 'Присоединиться к каналу' }}</h3>
+          <button class="modal-close-x" @click="showJoinChannel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <label>{{ t('channel_link_label') || 'Ссылка канала (vault://join-channel…)' }}</label>
+          <textarea v-model="joinChannelLink" rows="3" class="modal-input" placeholder="vault://join-channel?c=chn_…"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showJoinChannel = false">{{ t('general_cancel') || 'Cancel' }}</button>
+          <button class="btn-primary" @click="joinChannelAndClose" :disabled="!joinChannelLink.trim()">
+            {{ t('channel_subscribe') || 'Подписаться' }}
+          </button>
+        </div>
+      </div>
+    </div>
     <!-- контекстное меню чата (долгое нажатие / правый клик).
          мобильном скрыт при экране списка — меню открывалось «за экраном».
          -->
@@ -770,6 +818,13 @@
         <button v-if="chatMenu.target.type === 'contact'" @click="toggleIgnoreContact()">
           <Icon name="ban" :size="14" />
           {{ isIgnored(chatMenu.target.email) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
+        </button>
+        <!-- Канал (M2): ссылка подписки (владелец) + удаление подписки -->
+        <button v-if="chatMenu.target.type === 'channel' && channelById(chatMenu.target.id)?.is_owner" @click="copyChannelLinkById(chatMenu.target.id)">
+          <Icon name="link" :size="14" /> {{ t('channel_copy_link') || 'Ссылка для подписки' }}
+        </button>
+        <button v-if="chatMenu.target.type === 'channel'" @click="deleteChannelConfirmed()">
+          <Icon name="trash" :size="14" /> {{ t('channel_delete') || 'Удалить канал' }}
         </button>
         <div class="message-menu-sep"></div>
         <div class="chat-menu-folder-label">{{ t('chat_folder') || 'Папка' }}</div>
@@ -1072,6 +1127,14 @@ export default {
       channels: [],            // M2 broadcast-каналы (features/channels.js)
       channelPosts: {},        // channelId -> [{ts, body, images, sender}]
       channelUnread: {},        // channelId -> count
+      // UI (t_a14ac823): активный канал + модалки создания/подписки
+      currentChannel: null,
+      showCreateChannel: false,
+      showJoinChannel: false,
+      newChannelName: '',
+      newChannelAbout: '',
+      joinChannelLink: '',
+      postingChannel: false,
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
       groupIconMap: {},  // group_id → эмодзи-иконка (выбор при создании)
@@ -1327,6 +1390,7 @@ export default {
     activeChatName() {
       if (this.activeChat === '__notes__') return this.t('notes_self') || 'Заметки для себя';
       if (this.activeChatType === 'group') return this.currentGroup?.name || this.activeChat;
+      if (this.activeChatType === 'channel') return this.currentChannel?.name || this.activeChat;
       if (!this.activeChat) return '';
       // Локальное имя контакта (если задано) — выше реального.
       const lp = this.localProfileOf(this.activeChat);
@@ -2328,6 +2392,135 @@ export default {
       }
     },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
+    channelPostsToMessages(ch) {
+      // kv-лог постов → формат MessageItem (own = наш пост/эхо).
+      const posts = this.channelPosts[ch.id] || [];
+      return posts.map(p => ({
+        id: p.id || ('post-' + p.ts),
+        content: p.body || '',
+        from: (p.sender && p.sender === (ch.owner || this.email)) || (!p.sender && ch.is_owner) ? 'me' : p.sender,
+        sender_id: p.sender || ch.owner || '',
+        time: new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        ts: p.ts,
+        encrypted: true,
+        vault: true,
+      }));
+    },
+    async selectChannel(ch) {
+      this.saveDraft();
+      this.messages = [];
+      this.newMessage = '';
+      this.cancelReply();
+      this.activeChat = 'channel:' + ch.id;
+      this.activeChatType = 'channel';
+      this.currentChannel = ch;
+      this.currentGroup = null;
+      this.showStarredOnly = false;
+      this.loadSeq++;
+      this.messages = this.channelPostsToMessages(ch);
+      this.channelUnread[ch.id] = 0; // канал открыт — сбрасываем счётчик
+      // last_ts монотонный (Rust-гейт): пишем максимум visible-постов,
+      // иначе последующие непрочитанные перестанут считаться.
+      const maxTs = (this.channelPosts[ch.id] || []).reduce((m, p) => Math.max(m, p.ts || 0), 0);
+      if (maxTs) ChannelsFeature.updateChannel(ch.id, { last_ts: maxTs }).catch(() => {});
+      this.openMobileChat();
+      await this.$nextTick();
+      this.scrollToBottom(true);
+    },
+    async createChannelAndClose() {
+      const name = this.newChannelName.trim();
+      if (!name || this.postingChannel) return;
+      this.postingChannel = true;
+      try {
+        const ch = await ChannelsFeature.createChannel(name, this.newChannelAbout.trim(), this.email || '', this.fingerprint || '');
+        await this.loadChannels();
+        this.showCreateChannel = false;
+        this.newChannelName = '';
+        this.newChannelAbout = '';
+        const fresh = this.channels.find(c => c.id === ch.id) || ch;
+        await this.selectChannel(fresh);
+        this.showToast(this.t('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
+      } catch (e) {
+        console.error('[channels] create:', e);
+        this.showToast(this.t('channel_create_failed') || 'Не удалось создать канал', 3000);
+      } finally { this.postingChannel = false; }
+    },
+    async joinChannelAndClose() {
+      const parsed = ChannelsFeature.parseJoinLink(this.joinChannelLink.trim());
+      if (!parsed) {
+        this.showToast(this.t('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
+        return;
+      }
+      try {
+        await ChannelsFeature.importChannel(parsed.id, parsed.name, parsed.key, parsed.owner, parsed.ownerFpr);
+        await this.loadChannels();
+        this.showJoinChannel = false;
+        this.joinChannelLink = '';
+        const ch = this.channels.find(c => c.id === parsed.id);
+        if (ch) await this.selectChannel(ch);
+      } catch (e) {
+        console.error('[channels] join:', e);
+        this.showToast(this.t('channel_join_failed') || 'Не удалось подписаться', 3000);
+      }
+    },
+    copyChannelLink() {
+      const ch = this.currentChannel;
+      if (!ch) return;
+      const link = ChannelsFeature.buildJoinLink(ch);
+      try { navigator.clipboard.writeText(link); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      catch (e) { console.warn('[channels] clipboard:', e); }
+    },
+    copyChannelLinkById(id) {
+      const ch = this.channelById(id);
+      this.closeChatMenu();
+      if (!ch) return;
+      try { navigator.clipboard.writeText(ChannelsFeature.buildJoinLink(ch)); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      catch (e) { console.warn('[channels] clipboard:', e); }
+    },
+    // Отправка поста владельцем (composer → post-конверт). Тело шифруется
+    // broadcast-ключом канала (тот же симметричный путь, что группы).
+    async sendChannelPost() {
+      const ch = this.currentChannel;
+      const text = this.newMessage.trim();
+      if (!ch || !ch.is_owner || !text || this.postingChannel) return;
+      this.postingChannel = true;
+      try {
+        const payload = ChannelsFeature.buildPostPayload(ch.id, text, []);
+        const content = await crypto.encryptWithGroupKey(payload, ch.key);
+        const env = JSON.parse(payload);
+        // optimistic local (владельческое эхо-письмо может и не вернуться)
+        this.noteChannelPost(ch.id, env.ts, env, this.email);
+        this.channelUnread[ch.id] = 0; // собственный пост — не «непрочитанное»
+        this.messages = this.channelPostsToMessages(ch);
+        this.newMessage = '';
+        await this.$nextTick();
+        this.scrollToBottom(true);
+        const res = await ChannelsFeature.sendChannelPost(ch, content, env, this.email);
+        ChannelsFeature.updateChannel(ch.id, { last_ts: env.ts }).catch(() => {});
+        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+        }
+      } catch (e) {
+        console.error('[channels] post:', e);
+        this.showToast(this.t('channel_post_failed') || 'Пост не отправлен', 3000);
+      } finally { this.postingChannel = false; }
+    },
+    async deleteChannelConfirmed() {
+      const t2 = this.chatMenu.target;
+      if (!t2 || t2.type !== 'channel') return;
+      if (!confirm(this.t('channel_delete_confirm') || 'Удалить канал и всю его локальную историю?')) return;
+      this.closeChatMenu();
+      try {
+        await ChannelsFeature.deleteChannel(t2.id);
+        if (this.activeChat === 'channel:' + t2.id) {
+          this.activeChat = '';
+          this.activeChatType = 'chat';
+          this.currentChannel = null;
+          this.messages = [];
+        }
+        await this.loadChannels();
+      } catch (e) { console.error('[channels] delete:', e); }
+    },
     async loadChannels() {
       try {
         this.channels = await ChannelsFeature.loadChannels();
@@ -4171,6 +4364,9 @@ export default {
     },
     async sendMessage() {
       if (!this.newMessage.trim()) return;
+      // Канал (M2): отдельный путь — пост-конверт с broadcast-ключом,
+      // composer только владельца (UI-гейт + проверка в sendChannelPost).
+      if (this.activeChatType === 'channel') { this.sendChannelPost(); return; }
       // Ignore-гвард: в чате с заблокированным писать нельзя (E2E-модель
       // блокировки получателя: мы решаем, что показывать и кому отвечать).
       if (this.activeChatType === 'chat' && this.isIgnored(this.activeChat)) {
@@ -7870,6 +8066,14 @@ body {
 
 .modal-body {
   padding: 20px 24px;
+}
+
+/* Подсказка в модалках каналов (M2) */
+.channel-modal-hint {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #64748b);
 }
 
 .modal-body label {
