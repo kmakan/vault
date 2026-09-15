@@ -122,7 +122,14 @@ QR рендерится из ссылки (тот же qrcode-генератор
 
 1. Владелец публикует post-конверт в relay одним `pub` с `to = channel_token`
    (read-токен канала, общий для всех подписчиков — broadcast-секрет и есть
-   авторизация: токен = HMAC(server_key, "channel:" + channel_id)).
+   авторизация). Реализация (channels-6, relay-server/src/tokens.rs): токены
+   детерминированно выводятся КЛИЕНТОМ из broadcast-ключа (серверного
+   HMAC(server_key,...) клиент вычислить не может — server_key не покидает
+   релей): `read = base64url(kid8 ‖ 'c' ‖ 0xFFFFFFFF ‖ HMAC(bcast, "vault-relay-channel-read"))`,
+   `write = тот же kid (от read-MAC) ‖ 'C' ‖ 0xFFFFFFFF ‖ HMAC(bcast, "vault-relay-channel-write")`.
+   Владение токеном = владение ключом (256-битная способность); rotation
+   ключа = новые токены сами (миграция §3.3). Сервер для каналов проверяет
+   структуру + kid-связку write↔read-очереди, не MAC.
 2. Relay хранит конверт ≤24ч, TTL-очистка; все подписчики поллят
    `/relay/poll` со своим аккаунтом — но токен канала общий, значит каждый
    poll отдаёт конверт каждому подписчику (fan-out на read-стороне, не на

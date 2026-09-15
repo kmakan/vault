@@ -71,6 +71,8 @@ pub struct Metrics {
     pub register_ok: AtomicU64,
     /// §0: сколько раз упрели в суточный лимит (429).
     pub limit_hit: AtomicU64,
+    /// M2 channels: сколько постов опубликовано в канальные очереди.
+    pub channel_pub: AtomicU64,
 }
 
 // ───────────────────────── Публикация (§5.1) ─────────────────────────
@@ -141,8 +143,9 @@ pub async fn relay_pub(
     }
     // `to` должен быть ВАЛИДНЫМ read-токеном (не обязательно активным:
     // истёкшая подписка получателя = 402, чтобы отправитель показал баннер).
+    // ChannelRead допустим: пост канала публикуется в его общую очередь.
     let to_tok = match vault_relay::parse(&app.keys, &req.to) {
-        Some(t) if t.scope == Scope::Read => t,
+        Some(t) if t.scope == Scope::Read || t.scope == Scope::ChannelRead => t,
         _ => {
             app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
             return err(StatusCode::BAD_REQUEST, "bad recipient token");
@@ -151,16 +154,33 @@ pub async fn relay_pub(
     if to_tok.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "recipient subscription expired");
     }
+    let is_channel = to_tok.scope == Scope::ChannelRead;
     // Анонимный publish (§9.1): без заголовка — только если разрешено конфигом.
+    // Канальные очереди — ИСКЛЮЧЕНИЕ: анонимный pub в канал запрещён всегда,
+    // publish возможен только write-токеном этого же канала (link: kid==kid).
     if let Some(auth) = auth_header(&headers) {
         match vault_relay::parse(&app.keys, &auth) {
-            Some(t) if t.scope == Scope::Write && !t.is_expired() => {}
+            Some(t) if t.scope == Scope::Write && !t.is_expired() && !is_channel => {}
+            Some(t) if t.scope == Scope::ChannelWrite && !t.is_expired() => {
+                if !is_channel {
+                    app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                    return err(StatusCode::FORBIDDEN, "channel token cannot post to personal queue");
+                }
+                if !t.channel_matches(&to_tok) {
+                    app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                    return err(StatusCode::FORBIDDEN, "channel token does not match queue");
+                }
+                app.metrics.channel_pub.fetch_add(1, Ordering::Relaxed);
+            }
             Some(_) => return err(StatusCode::FORBIDDEN, "token scope mismatch"),
             None => {
                 app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
                 return err(StatusCode::UNAUTHORIZED, "bad token");
             }
         }
+    } else if is_channel {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "channel write token required");
     } else if !app.allow_anonymous_pub {
         app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         return err(StatusCode::UNAUTHORIZED, "token required");
@@ -175,11 +195,15 @@ pub async fn relay_pub(
     // токен скопирован на другой аккаунт → 403, письмо уйдёт почтой
     // (клиент не считает это ошибкой доставки). Работает независимо от
     // суточного лимита — защита от шаринга актуальна и для premium.
-    if let Some(sender_tok) = req.tok.as_deref().filter(|s| !s.is_empty()) {
-        if let Some(t) = vault_relay::parse(&app.keys, sender_tok) {
-            if !check_token_binding(&app, &t.hash, &req.fp) {
-                app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
-                return err(StatusCode::FORBIDDEN, "token bound to another account");
+    // Для каналов пропускаем: write-токен канала общий у всех, кто знает
+    // broadcast-ключ, привязка к одному fp противоречит модели рассылки.
+    if !is_channel {
+        if let Some(sender_tok) = req.tok.as_deref().filter(|s| !s.is_empty()) {
+            if let Some(t) = vault_relay::parse(&app.keys, sender_tok) {
+                if !check_token_binding(&app, &t.hash, &req.fp) {
+                    app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                    return err(StatusCode::FORBIDDEN, "token bound to another account");
+                }
             }
         }
     }
@@ -237,7 +261,10 @@ pub async fn relay_pub(
     // получатель — пуш обязателен, это его единственный канал.
     // wake=false (call-сигналы после request) — пуши НЕ шлём: адресат
     // уже активен на звонке, уведомление было бы лишним.
-    if !app.ntfy_url.is_empty() && req.wake {
+    // Мост ntfy — только личные очереди: подписчики канала не подписаны
+    // на topic=hash(канального токена) (topic-подписка = приватный
+    // 1-на-1 wake), будить «молчащую канальную очередь» бессмысленно.
+    if !app.ntfy_url.is_empty() && req.wake && !is_channel {
         let silent_for = {
             let seen = app.last_seen.lock().unwrap();
             seen.get(&to_tok.hash).map_or(u64::MAX, |t| now().saturating_sub(*t))
@@ -264,6 +291,8 @@ pub struct PollQuery {
 }
 
 /// GET /relay/poll?wait=25 — long-poll: до 25 конвертов, 204 по таймауту.
+/// ChannelRead-токен: очередь канала общая (fan-out) — конверты читаются
+/// peek'ом и НЕ забираются; каждый подписчик получает каждый пост до TTL.
 pub async fn relay_poll(
     State(app): State<Arc<AppState>>,
     Query(q): Query<PollQuery>,
@@ -275,9 +304,11 @@ pub async fn relay_poll(
     if tok.is_expired() {
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
     }
+    let channel = tok.scope == Scope::ChannelRead;
     // Привязка токена к аккаунту: чужой fingerprint = токен скопировали
-    // на другое устройство → 403 (клиент перерегистрируется).
-    if !check_token_binding(&app, &tok.hash, &poll_fp(&headers)) {
+    // на другое устройство → 403 (клиент перерегистрируется). Для канала
+    // пропускаем: read-токен канала общий по построению (все подписчики).
+    if !channel && !check_token_binding(&app, &tok.hash, &poll_fp(&headers)) {
         app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         return err(StatusCode::FORBIDDEN, "token bound to another account");
     }
@@ -287,7 +318,8 @@ pub async fn relay_poll(
     let wait = q.wait.unwrap_or(0).min(25);
     // Пара-фикс (0.1.164): получатель жив — отмечаем его «видимым» для
     // ntfy-гейта (см. relay_pub). Даже 204-поллинг тикера = процесс жив.
-    {
+    // Канальную очередь в last_seen не пишем — wake-пуш на канал не шлём.
+    if !channel {
         let mut seen = app.last_seen.lock().unwrap();
         let t = now();
         let len_before = seen.len();
@@ -300,7 +332,12 @@ pub async fn relay_poll(
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
     loop {
-        if let Some(list) = app.store.drain(&tok.hash) {
+        let list = if channel {
+            app.store.peek(&tok.hash)
+        } else {
+            app.store.drain(&tok.hash)
+        };
+        if let Some(list) = list {
             if !list.is_empty() {
                 app.metrics.poll_hits.fetch_add(1, Ordering::Relaxed);
                 return AxumJson(list).into_response();
@@ -328,7 +365,8 @@ pub async fn relay_ws(
     let app2 = app.clone();
     // Пара-фикс (0.1.164): живой WS-клиент тоже «не молчит» — ntfy-гейт
     // не должен будить получателя с открытым WebSocket-подключением.
-    {
+    // Для канала last_seen не пишем (wake-пушей на канал нет).
+    if tok.scope != Scope::ChannelRead {
         let mut seen = app.last_seen.lock().unwrap();
         seen.insert(tok.hash.clone(), now());
     }
@@ -341,6 +379,12 @@ pub async fn relay_ws(
 async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::extract::ws::WebSocket) {
     use futures_util::{SinkExt, StreamExt};
     let (mut tx, mut rx) = socket.split();
+    // Канальный WS: очередь общая — читаем peek'ом и держим множество
+    // уже отправленных в этой сессии id (клиент дедупит по env.id, но
+    // слать одно и то же каждый цикл нельзя). При реконнекте посты
+    // придут снова — это at-least-once, дедуп на клиенте.
+    let channel = tok.scope == Scope::ChannelRead;
+    let mut sent_ids: HashMap<String, ()> = HashMap::new();
     // Пара-фикс (0.1.164): пока WS открыт, получатель жив — обновляем
     // last_seen каждые 30с (loop ниже пингует store; здесь же touch).
     let mut last_touch = now();
@@ -350,19 +394,34 @@ async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::ext
     let mut inflight: HashMap<String, vault_relay::store::Envelope> = HashMap::new();
     loop {
         // Сначала всё, что накопилось (без ack), затем ждём новых/ack'и.
-        if let Some(list) = app.store.drain(&tok.hash) {
+        let list = if channel {
+            app.store.peek(&tok.hash)
+        } else {
+            app.store.drain(&tok.hash)
+        };
+        if let Some(list) = list {
             for env in list {
+                if channel {
+                    if sent_ids.contains_key(&env.id) {
+                        continue;
+                    }
+                    sent_ids.insert(env.id.clone(), ());
+                }
                 let frame = serde_json::json!({"t":"msg","id":env.id,"body":env.body});
                 if tx.send(Message::Text(frame.to_string())).await.is_err() {
-                    app.store.push_front(&tok.hash, env, MAX_QUEUE);
+                    if !channel {
+                        app.store.push_front(&tok.hash, env, MAX_QUEUE);
+                    }
                     return;
                 }
-                inflight.insert(env.id.clone(), env);
+                if !channel {
+                    inflight.insert(env.id.clone(), env);
+                }
             }
         }
         // touch: открытый WS = получатель не молчит (см. ntfy-гейт в pub).
         let t_now = now();
-        if t_now.saturating_sub(last_touch) >= 30 {
+        if !channel && t_now.saturating_sub(last_touch) >= 30 {
             last_touch = t_now;
             if let Ok(mut seen) = app.last_seen.lock() {
                 seen.insert(tok.hash.clone(), t_now);
@@ -399,7 +458,7 @@ async fn ws_serve(app: Arc<AppState>, tok: vault_relay::Token, socket: axum::ext
 fn require_read(app: &Arc<AppState>, headers: &HeaderMap) -> Option<vault_relay::Token> {
     let auth = auth_header(headers)?;
     let t = vault_relay::parse(&app.keys, &auth)?;
-    (t.scope == Scope::Read).then_some(t)
+    (t.scope == Scope::Read || t.scope == Scope::ChannelRead).then_some(t)
 }
 
 /// Привязка токена к fingerprint аккаунта (анти-шаринг для монетизации).
@@ -508,7 +567,7 @@ fn now() -> u64 {
 pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
     let m = &app.metrics;
     let body = format!(
-        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nlimit_hit {}\n",
+        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nlimit_hit {}\nchannel_pub {}\n",
         m.pub_ok.load(Ordering::Relaxed),
         m.pub_anon.load(Ordering::Relaxed),
         m.poll_hits.load(Ordering::Relaxed),
@@ -517,6 +576,7 @@ pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
         app.store.total(),
         m.register_ok.load(Ordering::Relaxed),
         m.limit_hit.load(Ordering::Relaxed),
+        m.channel_pub.load(Ordering::Relaxed),
     );
     ([("content-type", "text/plain")], body).into_response()
 }

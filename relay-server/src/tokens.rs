@@ -14,6 +14,12 @@ type HmacSha256 = Hmac<Sha256>;
 pub enum Scope {
     Read,
     Write,
+    /// Канал (M2 channels): read-токен канала = адрес общей очереди
+    /// подписчиков (fan-out на poll). Детерминирован из channel_id.
+    ChannelRead,
+    /// write-токен канала = право publish в его очередь, отдельный
+    /// идентификатор для pub-лимитов канала (design channels §4.1/§6).
+    ChannelWrite,
 }
 
 impl Scope {
@@ -21,14 +27,22 @@ impl Scope {
         match self {
             Scope::Read => b'r',
             Scope::Write => b'w',
+            Scope::ChannelRead => b'c',
+            Scope::ChannelWrite => b'C',
         }
     }
     fn from_byte(b: u8) -> Option<Self> {
         match b {
             b'r' => Some(Scope::Read),
             b'w' => Some(Scope::Write),
+            b'c' => Some(Scope::ChannelRead),
+            b'C' => Some(Scope::ChannelWrite),
             _ => None,
         }
+    }
+    /// Канальные scope'ы (read или write) — токен привязан к channel_id.
+    pub fn is_channel(self) -> bool {
+        matches!(self, Scope::ChannelRead | Scope::ChannelWrite)
     }
 }
 
@@ -68,6 +82,11 @@ pub struct Token {
     pub expiry: u32,
     /// hash очереди получателя = mac токена (read-токен адресует очередь).
     pub hash: String,
+    /// Личные токены: id серверного ключа. Канальные: read несёт
+    /// первые 8 байт своего mac, write — те же байты mac'а read-токена
+    /// (привязка: publish в очередь канала возможен только write-токеном
+    /// этого канала; подделка = знать broadcast-ключ).
+    pub key_id: u64,
 }
 
 impl Token {
@@ -77,6 +96,11 @@ impl Token {
             .map(|d| d.as_secs() as u32)
             .unwrap_or(0);
         self.expiry < now
+    }
+    /// Привязан ли этот write-токен канала к данной очереди канала.
+    pub fn channel_matches(&self, read_tok: &Token) -> bool {
+        self.scope == Scope::ChannelWrite && read_tok.scope == Scope::ChannelRead
+            && self.key_id == read_tok.key_id
     }
 }
 
@@ -93,14 +117,37 @@ pub fn issue(keys: &ServerKeys, scope: Scope, expiry: u32) -> String {
 }
 
 /// Разобрать и проверить токен. None = битый/поддельный/неизвестный key_id.
+///
+/// Канальные scope'ы ('c'/'C') — capability-токены: выводятся из
+/// broadcast-ключа канала (clients-derive, design channels §4.1), сервер
+/// их НЕ верифицирует server_key-MAC'ом: владение значением = авторизация
+/// (256-битная способность, подбор невозможен). Структурная проверка:
+/// длина + sentinel-expiry (u32::MAX — канал живёт, пока жив broadcast-ключ;
+/// ротация ключа = новые токены через migration-механику §3.3).
 pub fn parse(keys: &ServerKeys, token: &str) -> Option<Token> {
     let raw = b64url_decode(token)?;
     if raw.len() != 8 + 1 + 4 + 32 {
         return None;
     }
-    let key_id = u64::from_be_bytes(raw[..8].try_into().expect("8"));
     let scope = Scope::from_byte(raw[8])?;
     let expiry = u32::from_be_bytes(raw[9..13].try_into().expect("4"));
+    if scope.is_channel() {
+        if expiry != u32::MAX {
+            return None;
+        }
+        // hash очереди = hex(mac-поля), та же адресация, что у личных.
+        // key_id у канала — link-связка: read несёт свои первые 8 байт mac,
+        // write — первые 8 байт mac-а read (publish принимается только
+        // write-токеном, чей key_id == key_id очереди).
+        let key_id = u64::from_be_bytes(raw[..8].try_into().expect("8"));
+        return Some(Token {
+            scope,
+            expiry,
+            hash: hex(&raw[13..45]),
+            key_id,
+        });
+    }
+    let key_id = u64::from_be_bytes(raw[..8].try_into().expect("8"));
     let tag = &raw[13..45];
     let mac = keys.mac(key_id, scope, expiry)?;
     // constant-time compare
@@ -112,7 +159,38 @@ pub fn parse(keys: &ServerKeys, token: &str) -> Option<Token> {
         scope,
         expiry,
         hash: hex(&mac),
+        key_id,
     })
+}
+
+/// Вывести канальную пару токенов из broadcast-ключа (32B, тот что в QR).
+/// (read, write): read — адрес общей очереди подписчиков (poll у всех дают
+/// одни и те же посты), write — право publish в неё. Детерминированно:
+/// владелец и каждый подписчик вычисляют пару независимо, сервера-выдачи
+/// нет. Layout: kid(8) ‖ scope(1) ‖ 0xFFFFFFFF ‖ mac(32),
+/// mac = HMAC-SHA256(broadcast_key, "vault-relay-channel-{read,write}").
+/// kid write-токена = первые 8 байт mac read-токена (привязка к очереди).
+pub fn channel_tokens(broadcast_key: &[u8; 32]) -> (String, String) {
+    let mac_of = |label: &[u8]| -> [u8; 32] {
+        let mut mac = HmacSha256::new_from_slice(broadcast_key).expect("32B key");
+        mac.update(label);
+        mac.finalize().into_bytes().into()
+    };
+    let read_mac = mac_of(b"vault-relay-channel-read");
+    let write_mac = mac_of(b"vault-relay-channel-write");
+    let pack = |kid: u64, byte: u8, mac: &[u8; 32]| -> String {
+        let mut raw = Vec::with_capacity(45);
+        raw.extend_from_slice(&kid.to_be_bytes());
+        raw.push(byte);
+        raw.extend_from_slice(&u32::MAX.to_be_bytes());
+        raw.extend_from_slice(mac);
+        b64url(&raw)
+    };
+    let read_kid = u64::from_be_bytes(read_mac[..8].try_into().expect("8"));
+    (
+        pack(read_kid, Scope::ChannelRead.to_byte(), &read_mac),
+        pack(read_kid, Scope::ChannelWrite.to_byte(), &write_mac),
+    )
 }
 
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -182,5 +260,74 @@ mod tests {
         let t = issue(&k, Scope::Read, 1); // 1970
         let parsed = parse(&k, &t).expect("parse");
         assert!(parsed.is_expired());
+    }
+
+    #[test]
+    fn channel_tokens_roundtrip() {
+        let k = keys();
+        let key = [7u8; 32];
+        let (rd, wr) = issue_channel_pair(&k, &key);
+        let p_rd = parse(&k, &rd).expect("channel read parses");
+        assert_eq!(p_rd.scope, Scope::ChannelRead);
+        assert!(!p_rd.is_expired());
+        let p_wr = parse(&k, &wr).expect("channel write parses");
+        assert_eq!(p_wr.scope, Scope::ChannelWrite);
+        assert_eq!(p_rd.hash.len(), 64);
+        assert_ne!(p_rd.hash, p_wr.hash);
+    }
+
+    #[test]
+    fn channel_tokens_derived_only_from_broadcast_key() {
+        // Серверные ключи не участвуют: две разные ServerKeys дают те же токены.
+        let a = ServerKeys::new([1u8; 32]);
+        let b = ServerKeys::new([2u8; 32]);
+        let key = [9u8; 32];
+        assert_eq!(issue_channel_pair(&a, &key), issue_channel_pair(&b, &key));
+    }
+
+    #[test]
+    fn channel_tokens_cross_scope_not_confusable() {
+        let k = keys();
+        let (rd, _) = issue_channel_pair(&k, &[7u8; 32]);
+        let p = parse(&k, &rd).expect("parses");
+        assert_eq!(p.scope, Scope::ChannelRead);
+        // подмена scope-байта ломает канал (hash меняется, mac не проверяем) —
+        // канал-токены проверяются структурой, не MAC; своп read↔write =
+        // другой hash = другая очередь, publish не попадёт в подписчиков.
+        use base64::Engine;
+        let mut raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&rd).unwrap();
+        raw[8] = b'w'; // канал → личный write: MAC-валидация не пройдёт
+        let forged = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+        assert!(parse(&k, &forged).is_none());
+    }
+
+    #[test]
+    fn channel_read_token_accepted_where_read_expected() {
+        // Подписчик poll'ит с read-токеном канала; сервер принимает его там,
+        // где ожидает личный Read (общая очередь), но НЕ как write.
+        let k = keys();
+        let (rd, _) = issue_channel_pair(&k, &[3u8; 32]);
+        let p = parse(&k, &rd).unwrap();
+        assert_eq!(p.scope, Scope::ChannelRead);
+        assert_ne!(p.scope, Scope::Write);
+    }
+
+    #[test]
+    fn channel_write_token_bound_to_its_queue() {
+        let k = keys();
+        let (rd, wr) = issue_channel_pair(&k, &[5u8; 32]);
+        let p_rd = parse(&k, &rd).unwrap();
+        let p_wr = parse(&k, &wr).unwrap();
+        assert!(p_wr.channel_matches(&p_rd));
+        // Чужой канал не матчится: write-токен канала B не публикует в A.
+        let (rd_b, _) = issue_channel_pair(&k, &[6u8; 32]);
+        let p_rd_b = parse(&k, &rd_b).unwrap();
+        assert!(!p_wr.channel_matches(&p_rd_b));
+        // канал ≠ 2 разных broadcast-ключа → kid'ы разные (2^-64 коллизии)
+        assert_ne!(p_rd.key_id, p_rd_b.key_id);
+    }
+
+    fn issue_channel_pair(_keys: &ServerKeys, key: &[u8; 32]) -> (String, String) {
+        channel_tokens(key)
     }
 }

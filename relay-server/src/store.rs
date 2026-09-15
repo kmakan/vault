@@ -71,6 +71,18 @@ impl Store {
         Some(deque.drain(..).collect())
     }
 
+    /// Peek (канал, M2): прочитать живые конверты, НЕ забирая — очередь канала
+    /// общая, каждый подписчик должен получить каждый пост (fan-out на
+    /// read-стороне, design channels §4.1). Дедуп — на клиенте по env.id.
+    /// Удаление — только по TTL (retain) и вытеснению при переполнении.
+    pub fn peek(&self, token_hash: &str) -> Option<Vec<Envelope>> {
+        let mut q = self.queues.lock().expect("store lock");
+        let deque = q.get_mut(token_hash)?;
+        let now = now_unix();
+        deque.retain(|e| e.exp > now);
+        Some(deque.iter().cloned().collect())
+    }
+
     /// Сколько конвертов ждёт токен (hello-кадр WS).
     pub fn len(&self, token_hash: &str) -> usize {
         let q = self.queues.lock().expect("store lock");
