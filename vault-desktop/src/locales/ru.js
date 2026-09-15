@@ -290,6 +290,7 @@ export default {
   channel_sub_tag: 'подписка',
   channel_post_failed: 'Пост не отправлен',
   channel_post_email_only: 'Релей недоступен — пост ушёл только известным подписчикам',
+  channel_panel_empty: 'Пока нет каналов — создайте свой или подпишитесь по ссылке.',
   members: 'участников',
   blocked: 'заблокировано',
   blocked_users: 'Заблокированные',

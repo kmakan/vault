@@ -101,8 +101,7 @@
           <button class="group-create-btn" :title="t('group_create') || 'New Group'" @click="showCreateGroup = true">
             <Icon name="user-plus" :size="22" gradient cls="group-create-icon" />
           </button>
-          <button :title="t('channel_create') || 'Создать канал'" @click="showCreateChannel = true"><Icon name="megaphone" :size="20" /></button>
-          <button :title="t('channel_join') || 'Присоединиться к каналу'" @click="showJoinChannel = true"><Icon name="link" :size="20" /></button>
+          <button :title="t('nav_channels') || 'Каналы'" @click="showChannelPanel = true"><Icon name="megaphone" :size="20" /></button>
           <button :title="t('nav_add_contact')" @click="showQRCode = true"><Icon name="link" :size="20" /></button>
           <button :title="t('nav_keys')" @click="showKeyManager = true"><Icon name="key" :size="20" /></button>
           <button :title="t('cipher_title')" @click="showCipher = true"><Icon name="shield" :size="20" /></button>
@@ -782,6 +781,29 @@
         </div>
       </div>
     </div>
+    <!-- CHANNELS panel (M2): единая точка входа вместо двух кнопок в шапке
+         (7 кнопок не влезали в 320px сайдбар и залезали за край). -->
+    <div v-if="showChannelPanel" class="modal-overlay" @click.self="showChannelPanel = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>{{ t('nav_channels') || 'Каналы' }}</h3>
+          <button class="modal-close-x" @click="showChannelPanel = false"><Icon name="x" :size="20" /></button>
+        </div>
+        <div class="modal-body">
+          <div v-if="!channels.length" class="channels-panel-empty">{{ t('channel_panel_empty') || 'Пока нет каналов — создайте свой или подпишитесь по ссылке.' }}</div>
+          <div v-for="ch in channels" :key="ch.id" class="channels-panel-row"
+               @click="selectChannel(ch); showChannelPanel = false">
+            <Icon name="megaphone" :size="16" />
+            <span class="channels-panel-name">{{ ch.name }}</span>
+            <span class="channels-panel-tag">{{ ch.is_owner ? (t('channel_owner_tag') || 'автор') : (t('channel_sub_tag') || 'подписка') }}</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showJoinChannel = true; showChannelPanel = false">{{ t('channel_join') || 'Присоединиться к каналу' }}</button>
+          <button class="btn-primary" @click="showCreateChannel = true; showChannelPanel = false">{{ t('channel_create') || 'Создать канал' }}</button>
+        </div>
+      </div>
+    </div>
     <!-- JOIN CHANNEL modal (M2): вставка vault://join-channel ссылки/QR -->
     <div v-if="showJoinChannel" class="modal-overlay" @click.self="showJoinChannel = false">
       <div class="modal-card">
@@ -1135,6 +1157,7 @@ export default {
       channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
       // UI (t_a14ac823): активный канал + модалки создания/подписки
       currentChannel: null,
+      showChannelPanel: false,
       showCreateChannel: false,
       showJoinChannel: false,
       newChannelName: '',
@@ -6443,7 +6466,7 @@ body {
 }
 
 .sidebar-header {
-  padding: 20px 24px;
+  padding: 20px 16px;
   /* Android edge-to-edge: контент рисуется под статус-бар. Добавляем
      safe-area-inset-top, чтобы иконки не залезали под него и не прилипали.
      На десктопе inset = 0 — правило ничего не меняет. */
@@ -6451,6 +6474,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .app-logo {
@@ -6675,7 +6699,8 @@ body {
 
 .header-actions {
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .header-actions button {
@@ -6683,7 +6708,7 @@ body {
   border: none;
   cursor: pointer;
   font-size: 18px;
-  padding: 8px;
+  padding: 8px 7px;
   border-radius: var(--radius-sm);
   transition: background var(--transition-fast);
   display: flex;
@@ -8098,6 +8123,36 @@ body {
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-muted, #64748b);
+}
+/* Панель «Каналы» (M2): единая точка входа */
+.channels-panel-empty {
+  padding: 10px 2px;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+}
+.channels-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.channels-panel-row:hover {
+  background: var(--bg-hover);
+}
+.channels-panel-name {
+  flex: 1;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.channels-panel-tag {
+  font-size: 11px;
+  color: var(--text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
 .modal-body label {

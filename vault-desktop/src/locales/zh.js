@@ -290,6 +290,7 @@ export default {
   channel_sub_tag: '订阅',
   channel_post_failed: '帖子未发送',
   channel_post_email_only: '中继不可用——帖子仅发送给已知订阅者',
+  channel_panel_empty: '还无频道——创建您的频道或通过链接订阅。',
   members: '成员',
   blocked: '已屏蔽',
   blocked_users: '已屏蔽用户',

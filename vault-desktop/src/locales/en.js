@@ -290,6 +290,7 @@ export default {
   channel_sub_tag: 'subscription',
   channel_post_failed: 'Post not sent',
   channel_post_email_only: 'Relay unavailable — the post went only to known subscribers',
+  channel_panel_empty: 'No channels yet — create yours or subscribe via a link.',
   members: 'members',
   blocked: 'blocked',
   blocked_users: 'Blocked Users',
