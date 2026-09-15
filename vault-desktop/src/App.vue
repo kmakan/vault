@@ -852,6 +852,7 @@ import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
 import * as ProfilesFeature from './features/profiles.js';
 import * as PresenceFeature from './features/presence.js';
+import * as ChannelsFeature from './features/channels.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1068,6 +1069,9 @@ export default {
       searchQuery: '',
       // Groups
       groups: [],
+      channels: [],            // M2 broadcast-каналы (features/channels.js)
+      channelPosts: {},        // channelId -> [{ts, body, images, sender}]
+      channelUnread: {},        // channelId -> count
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
       groupIconMap: {},  // group_id → эмодзи-иконка (выбор при создании)
@@ -1563,6 +1567,7 @@ export default {
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP.
           this.isLoggedIn = true;
@@ -2102,6 +2107,7 @@ export default {
         await this.loadBodyCache(); 
         await this.loadContacts();
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
         this.startPolling()
         this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
@@ -2185,6 +2191,7 @@ export default {
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
         this.loadEmails().catch(() => {});
@@ -2319,6 +2326,38 @@ export default {
       } catch (error) {
         console.error('Failed to load groups:', error);
       }
+    },
+    // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
+    async loadChannels() {
+      try {
+        this.channels = await ChannelsFeature.loadChannels();
+        // last_ts > 0 у подписчика = есть непрочитанное (считаем по post-логу kv)
+        for (const ch of this.channels) {
+          const posts = JSON.parse((await db.kvGet(this.email || 'anon', 'channel-posts:' + ch.id)) || '[]');
+          this.channelPosts[ch.id] = posts;
+          this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
+        }
+      } catch (e) { console.error('Failed to load channels:', e); }
+    },
+    // Router helpers (features/incoming.js вызывает через ctx)
+    channelById(id) { return this.channels.find(c => c.id === id) || null; },
+    // Новый пост канала: сохраняем в kv-лог (аналог истории, только локально),
+    // инкремент непрочитанных.
+    noteChannelPost(chId, ts, payload, senderEmail) {
+      const ch = this.channelById(chId);
+      if (!ch) return;
+      const posts = this.channelPosts[chId] || [];
+      const body = (payload && payload.post && payload.post.body) || '';
+      const images = (payload && payload.post && payload.post.images) || [];
+      if (posts.some(p => p.id === payload.id)) return; // дедуп post.id
+      posts.push({ id: payload.id, ts, body, images, sender: senderEmail || '' });
+      posts.sort((a, b) => a.ts - b.ts);
+      this.channelPosts[chId] = posts.slice(-200); // локальный лог компактный
+      this.channelUnread[chId] = (this.channelUnread[chId] || 0) + 1;
+      db.kvSet(this.email || 'anon', 'channel-posts:' + chId, JSON.stringify(this.channelPosts[chId])).catch(() => {});
+    },
+    noteChannelHello(chId, senderEmail) {
+      console.log('[channel] hello from', senderEmail, '→ chan', chId);
     },
     setPeerKey(email, key, pq = null) {
       this.peerKeys[email] = key;
@@ -3854,6 +3893,7 @@ export default {
         await this.loadBodyCache();
         await this.loadContacts();
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
         this.loadEmails().catch(() => {});
@@ -5727,7 +5767,8 @@ export default {
       }
       // Состав группы перечитываем с диска: groups_rename_member правил
       // groups.json в Rust-стороне, локальный members мог разойтись.
-      try { await this.loadGroups(); } catch (e) { /* не критично */ }
+      try { await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ } } catch (e) { /* не критично */ }
       const parts = [];
       if (sent.length) parts.push((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
       if (skipped.length) parts.push((this.t('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
@@ -5747,6 +5788,7 @@ export default {
         const accepts = await api.fetchPendingAccepts();
         if (accepts.length) {
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
           if (this.currentGroup) {
             await this.loadGroupMessages(this.currentGroup.id);
             await this.refreshGroupMembers();
@@ -5769,6 +5811,7 @@ export default {
           await this.loadStoredPeerKeys();
           await this.loadContacts();
           await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         }
       } catch (e) {
         console.error('processInvites: contact accepts failed:', e);
@@ -5853,6 +5896,7 @@ export default {
           this.groupAvatars[inv.group_id] = inv.group_avatar;
         }
         await this.loadGroups();
+          try { await this.loadChannels(); } catch (e) { /* не критично */ }
         if (this.currentGroup?.id === inv.group_id) {
           await this.loadGroupMessages(inv.group_id);
         }

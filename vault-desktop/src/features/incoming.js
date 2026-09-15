@@ -14,6 +14,7 @@ import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
+import * as ChannelsFeature from './channels.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -188,6 +189,31 @@ async function classify(ctx, m, from) {
         if (matched.env.type === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
       }
     } catch (e) { /* не наше письмо */ }
+  }
+
+  // Каналы (M2): расшифровка канальным ключом. Отправитель — владелец
+  // канала (или наш эхо-пост, если мы владелец и письмо ушло себе в копию).
+  // В отличие от групп, отправитель НЕ обязан быть в members-списке —
+  // подписчик не знает других подписчиков; авторизация = знание ключа.
+  if (!chatKey) {
+    for (const ch of (ctx.channels || [])) {
+      if (!ch.key) continue;
+      try {
+        const plain = await crypto.decryptWithGroupKey(body, ch.key);
+        const robj = ctx.parseEnvelope(plain) || JSON.parse(plain);
+        if (ChannelsFeature.isChannelEnvelope(robj)) {
+          const kind = ChannelsFeature.ingestChannelEnvelope(ctx, robj, from);
+          if (kind) {
+            console.log('[channel] envelope', kind, 'from', from, 'chan', ch.id);
+            // post — как сообщение (бейдж+пуш); meta/hello — тихие
+            if (kind === 'post') {
+              return { kind: 'message', chatKey: 'channel:' + ch.id, title: ch.name || '', envId: String(robj.id || '') };
+            }
+            return null;
+          }
+        }
+      } catch (e) { /* не канал — мимо */ }
+    }
   }
 
   // Группы — ключом группы, где отправитель участник (1:1-ключ не пройдёт).

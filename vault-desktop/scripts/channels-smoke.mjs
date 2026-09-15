@@ -1,0 +1,82 @@
+// Node-смоук features/channels.js — чистая логика без Vue/Tauri.
+// Мокаем invoke/api через подмену импортов (заглушки в tmp-модулях).
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+
+const MOCKS = '/tmp/channels-smoke-mocks';
+mkdirSync(MOCKS, { recursive: true });
+
+// api-мок (api.js экспортирует default api + db)
+writeFileSync(path.join(MOCKS, 'api.js'), `
+export const db = { kvGet: async () => null, kvSet: async () => {} };
+export default {};
+`);
+// tauri core-мок (invoke)
+writeFileSync(path.join(MOCKS, 'core.js'), `
+export const invoke = async (cmd, args) => {
+  if (cmd === 'channels_load') return [];
+  throw new Error('unexpected invoke ' + cmd);
+};
+`);
+
+// Подменяем спецификаторы через package.json imports нельзя (это не пакет),
+// поэтому временный файл-обёртка: копируем модуль и правим импорты.
+let src = readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'features', 'channels.js'), 'utf8');
+src = src.replace("from '@tauri-apps/api/core'", 'from "/tmp/channels-smoke-mocks/core.js"');
+src = src.replace("from '../api.js'", 'from "/tmp/channels-smoke-mocks/api.js"');
+writeFileSync('/tmp/channels-smoke-feature.mjs', src);
+
+const m = await import('/tmp/channels-smoke-feature.mjs');
+let pass = 0, fail = 0;
+const ok = (name, cond) => { if (cond) { pass++; console.log('  ok:', name); } else { fail++; console.log('FAIL:', name); } };
+
+// ── link roundtrip ──
+const fake = { id: 'chn_deadbeefcafe', key: 'a'.repeat(64), name: 'Тест канал', owner_fpr: 'f'.repeat(128) };
+const link = m.buildJoinLink(fake);
+ok('link строится', link.startsWith('vault://join-channel?c=chn_'));
+const p = m.parseJoinLink(link);
+ok('link парсится: id+key+name+fpr', p && p.id === fake.id && p.key === fake.key && p.name === fake.name && p.ownerFpr === fake.owner_fpr);
+ok('мусор → null', m.parseJoinLink('hello') === null);
+ok('плохой ключ → null', m.parseJoinLink('vault://join-channel?c=chn_x&k=zz&n=&o=') === null);
+ok('не-chn id → null', m.parseJoinLink('vault://join-channel?c=grp_x&k=' + 'a'.repeat(64)) === null);
+ok('пустой ввод → null', m.parseJoinLink('') === null && m.parseJoinLink(null) === null);
+
+// ── payloads ──
+const post = JSON.parse(m.buildPostPayload('chn_1', 'hello world', ['data:img1']));
+ok('post: маркер channel:1', post.channel === 1);
+ok('post: body+images', post.post.body === 'hello world' && post.post.images.length === 1);
+ok('post: id post_*, ts now', post.id.startsWith('post_') && Math.abs(post.ts - Date.now()) < 5000);
+ok('post: meta false', post.meta === false);
+const meta = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'N', about: 'A', avatar: '', key_version: 1 }));
+ok('meta: meta:1 + поля', meta.meta === 1 && meta.name === 'N' && meta.about === 'A' && meta.key_version === 1);
+const hello = JSON.parse(m.buildHelloPayload('chn_1'));
+ok('hello: hello:1', hello.hello === 1 && hello.id.startsWith('hello_'));
+ok('isChannelEnvelope', m.isChannelEnvelope(hello) && m.isChannelEnvelope(post) && !m.isChannelEnvelope({ vault: 1 }) && !m.isChannelEnvelope(null));
+
+// ── ingest ──
+const calls = { posts: [], metas: 0, hellos: [] };
+const ctx = {
+  channels: [{ id: 'chn_1', key: 'k'.repeat(64), is_owner: false, name: 'C1' }],
+  channelById: (id) => ctx.channels.find(c => c.id === id) || null,
+  noteChannelPost: (id, ts, payload, sender) => calls.posts.push({ id, ts, payload, sender }),
+  noteChannelHello: (id, sender) => calls.hellos.push({ id, sender }),
+};
+// подменяем invoke для update/addKnown
+const core = await import('/tmp/channels-smoke-mocks/core.js');
+
+ok('ingest post → kind post', m.ingestChannelEnvelope(ctx, post, 'owner@x.y') === 'post');
+ok('ingest вызвал noteChannelPost', calls.posts.length === 1 && calls.posts[0].sender === 'owner@x.y');
+ok('ingest meta → kind meta', m.ingestChannelEnvelope(ctx, meta, 'owner@x.y') === 'meta');
+const ownHello = JSON.parse(m.buildHelloPayload('chn_1'));
+const mkCtx = (owner) => {
+  const c = { channels: [{ id: 'chn_1', is_owner: owner }], noteChannelPost: ctx.noteChannelPost, noteChannelHello: ctx.noteChannelHello };
+  c.channelById = (id) => c.channels.find(x => x.id === id) || null; // без замыкания на внешний ctx
+  return c;
+};
+ok('hello чужому каналу (не владелец) → null', m.ingestChannelEnvelope(mkCtx(false), ownHello, 'sub@x.y') === null);
+ok('hello СВОЕМУ каналу → hello', m.ingestChannelEnvelope(mkCtx(true), ownHello, 'sub@x.y') === 'hello');
+ok('не-канальный конверт → null', m.ingestChannelEnvelope(ctx, { vault: 1, text: 'hi' }, 'a@x.y') === null);
+ok('канал не подписан → null', m.ingestChannelEnvelope(ctx, { ...post, chan: 'chn_unknown' }, 'a@x.y') === null);
+
+console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nALL ${pass} passed`);
+process.exit(fail ? 1 : 0);
