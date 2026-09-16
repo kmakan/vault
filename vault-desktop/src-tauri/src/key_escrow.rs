@@ -243,10 +243,19 @@ mod tests {
         // нормализация: лишние пробелы/регистр допустимы при вводе
         validate_mnemonic(&format!("  {}  ", m1.to_uppercase())).expect("normalized valid");
 
-        let bad = m1.replace(m1.split_whitespace().next().unwrap(), "abandon");
-        if bad != m1 {
-            assert!(validate_mnemonic(&bad).is_err(), "checksum must fail");
-        }
+        // Коррупт чексаммы: заменяем слово на «abandon». Если первое слово
+        // случайно само «abandon», подстановка ничего не меняет и проверка
+        // бессмысленна — тогда шлём второе слово. Раньше тест флакал
+        // (~1/44 шанс), потому что bad == m1 и assert пропускался.
+        let first = m1.split_whitespace().next().unwrap();
+        let word = if first == "abandon" {
+            "ability"
+        } else {
+            "abandon"
+        };
+        let bad = m1.replacen(first, word, 1);
+        assert_ne!(bad, m1, "corrupted mnemonic must differ");
+        assert!(validate_mnemonic(&bad).is_err(), "checksum must fail");
     }
 
     #[test]
