@@ -15,6 +15,12 @@
 //!
 //! Audio capture/playback (cpal + audiopus) is wired in a later iteration;
 //! this module establishes and tears down the encrypted media channel.
+//!
+//! Video (M3, step 1/3): a call started with `with_video` gets a SECOND track
+//! on the same PeerConnection — VP8 (`video/VP8`, clock 90000, payload 96,
+//! own SSRC); the Opus track/transceiver stays as it is. Audio-only calls
+//! register no video codec and create no video track, so the prod audio path
+//! is byte-identical to the pre-video build. Camera capture = step 2, UI = step 3.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -38,7 +44,9 @@ use webrtc::peer_connection::{
 use webrtc::runtime::{channel, Receiver, Sender};
 
 use rtc::media_stream::MediaStreamTrack;
-use rtc::peer_connection::configuration::media_engine::{MediaEngine, MIME_TYPE_OPUS};
+use rtc::peer_connection::configuration::media_engine::{
+    MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8,
+};
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
@@ -46,6 +54,9 @@ use rtc::rtp_transceiver::rtp_sender::{
 
 /// Opus dynamic payload type (both ends are our app; registered in MediaEngine).
 const OPUS_PAYLOAD_TYPE: u8 = 120;
+/// VP8 dynamic payload type (video; both ends are our app). 96 — первый
+/// динамический PT, отдельный от OPUS_PAYLOAD_TYPE.
+const VP8_PAYLOAD_TYPE: u8 = 96;
 /// Max time to wait for ICE gathering before giving up (non-trickle).
 /// 4с: было 15с — ответ (SDP) создавался слишком долго, звонок
 /// успевал сгореть по таймеру гудка. Host-кандидаты собираются <1с;
@@ -90,6 +101,10 @@ pub struct SdpResult {
     /// PQ: ek звонящего (b64) — чтобы принимающий мог сохранить контакт.
     #[serde(default)]
     pub sender_ek: Option<String>,
+    /// SSRC локального видео-трека. None — звонок без видео (шаг 1/3:
+    /// трек только создаётся и регистрируется, кадры пишет шаг 2).
+    #[serde(default)]
+    pub video_ssrc: Option<u32>,
 }
 
 /// Event handler: forwards webrtc events into channels for the session.
@@ -129,6 +144,115 @@ impl PeerConnectionEventHandler for CallHandler {
 
     async fn on_data_channel(&self, dc: Arc<dyn DataChannel>) {
         let _ = self.dc_tx.try_send(dc);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Codecs / local tracks (audio always; video only in video calls)
+// ---------------------------------------------------------------------------
+
+/// Opus (mono, 48 kHz) — must stay identical to the params owned by the prod
+/// audio path (audiopus uses `OpusChannels::Mono`, 48 kHz; SDP обязан совпадать).
+fn opus_codec() -> RTCRtpCodec {
+    RTCRtpCodec {
+        mime_type: MIME_TYPE_OPUS.to_owned(),
+        clock_rate: 48000,
+        // MONO: энкодер/декодер audiopus используют OpusChannels::Mono
+        // (audio.rs) — SDP обязан совпадать, иначе рассинхрон каналов.
+        channels: 1,
+        sdp_fmtp_line: String::new(),
+        rtcp_feedback: vec![],
+    }
+}
+
+/// VP8 (video, 90 kHz) — regression-free choice: the packetizer ships with
+/// webrtc 0.20 on desktop and Android (no extra crate, no C dependencies).
+fn vp8_codec() -> RTCRtpCodec {
+    RTCRtpCodec {
+        mime_type: MIME_TYPE_VP8.to_owned(),
+        clock_rate: 90000,
+        channels: 0,
+        sdp_fmtp_line: String::new(),
+        rtcp_feedback: vec![],
+    }
+}
+
+/// MediaEngine for one call. Opus регистрируется всегда; VP8 — только когда
+/// звонок с видео. `with_video == false` даёт ровно тот же engine, что был до
+/// появления видео: аудио-звонок не видит видео-кодека вообще.
+fn build_media_engine(with_video: bool) -> Result<MediaEngine, String> {
+    let mut media_engine = MediaEngine::default();
+    media_engine
+        .register_codec(
+            RTCRtpCodecParameters {
+                rtp_codec: opus_codec(),
+                payload_type: OPUS_PAYLOAD_TYPE,
+                ..Default::default()
+            },
+            RtpCodecKind::Audio,
+        )
+        .map_err(|e| e.to_string())?;
+
+    if with_video {
+        media_engine
+            .register_codec(
+                RTCRtpCodecParameters {
+                    rtp_codec: vp8_codec(),
+                    payload_type: VP8_PAYLOAD_TYPE,
+                    ..Default::default()
+                },
+                RtpCodecKind::Video,
+            )
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(media_engine)
+}
+
+/// Descriptor of the local audio track: one encoding, one SSRC.
+fn audio_media_track(call_id: &str, ssrc: u32) -> MediaStreamTrack {
+    MediaStreamTrack::new(
+        format!("vault-audio-{call_id}"),
+        format!("vault-audio-{call_id}"),
+        "vault-audio".to_owned(),
+        RtpCodecKind::Audio,
+        vec![RTCRtpEncodingParameters {
+            rtp_coding_parameters: RTCRtpCodingParameters {
+                ssrc: Some(ssrc),
+                ..Default::default()
+            },
+            codec: opus_codec(),
+            ..Default::default()
+        }],
+    )
+}
+
+/// Descriptor of the local video track (same shape as audio, own SSRC).
+fn video_media_track(call_id: &str, ssrc: u32) -> MediaStreamTrack {
+    MediaStreamTrack::new(
+        format!("vault-video-{call_id}"),
+        format!("vault-video-{call_id}"),
+        "vault-video".to_owned(),
+        RtpCodecKind::Video,
+        vec![RTCRtpEncodingParameters {
+            rtp_coding_parameters: RTCRtpCodingParameters {
+                ssrc: Some(ssrc),
+                ..Default::default()
+            },
+            codec: vp8_codec(),
+            ..Default::default()
+        }],
+    )
+}
+
+/// Random SSRC, гарантированно отличный от `other` (аудио-SSRC): два трека
+/// одного PeerConnection не имеют права делить один SSRC.
+fn random_ssrc_excluding(other: u32) -> u32 {
+    loop {
+        let ssrc = rand::random::<u32>();
+        if ssrc != other {
+            return ssrc;
+        }
     }
 }
 
@@ -175,8 +299,11 @@ impl CallMediaManager {
             .collect();
     }
 
-    /// Build a PeerConnection with an Opus audio track; returns the PC, the
-    /// local track (caller writes encoded frames into it) and the ICE
+    /// Build a PeerConnection with an Opus audio track — and, when `with_video`
+    /// is set, a SECOND VP8 video track on the same PC (audio untouched).
+    ///
+    /// Returns the PC, the local audio track (caller writes encoded frames into
+    /// it), the video SSRC (`None` — аудио-звонок) and the ICE
     /// gathering-complete receiver.
     async fn build_pc(
         &mut self,
@@ -184,34 +311,18 @@ impl CallMediaManager {
         call_id: &str,
         media_key: Option<[u8; 32]>,
         is_caller: bool,
+        with_video: bool,
     ) -> Result<
         (
             Arc<dyn PeerConnection>,
             Arc<TrackLocalStaticSample>,
+            Option<u32>,
             Receiver<()>,
         ),
         String,
     > {
-        let mut media_engine = MediaEngine::default();
-        let audio_codec = RTCRtpCodec {
-            mime_type: MIME_TYPE_OPUS.to_owned(),
-            clock_rate: 48000,
-            // MONO: энкодер/декодер audiopus используют OpusChannels::Mono
-            // (audio.rs) — SDP обязан совпадать, иначе рассинхрон каналов.
-            channels: 1,
-            sdp_fmtp_line: String::new(),
-            rtcp_feedback: vec![],
-        };
-        media_engine
-            .register_codec(
-                RTCRtpCodecParameters {
-                    rtp_codec: audio_codec.clone(),
-                    payload_type: OPUS_PAYLOAD_TYPE,
-                    ..Default::default()
-                },
-                RtpCodecKind::Audio,
-            )
-            .map_err(|e| e.to_string())?;
+        // Opus всегда; VP8 — только при with_video (нулевое влияние на аудио).
+        let media_engine = build_media_engine(with_video)?;
 
         let config = RTCConfigurationBuilder::new()
             .with_ice_servers(self.ice_servers.clone())
@@ -311,26 +422,34 @@ impl CallMediaManager {
         // Local Opus track (SSRC random; the library packetizes samples).
         let ssrc = rand::random::<u32>();
         let track = Arc::new(
-            TrackLocalStaticSample::new(MediaStreamTrack::new(
-                format!("vault-audio-{call_id}"),
-                format!("vault-audio-{call_id}"),
-                "vault-audio".to_owned(),
-                RtpCodecKind::Audio,
-                vec![RTCRtpEncodingParameters {
-                    rtp_coding_parameters: RTCRtpCodingParameters {
-                        ssrc: Some(ssrc),
-                        ..Default::default()
-                    },
-                    codec: audio_codec,
-                    ..Default::default()
-                }],
-            ))
-            .map_err(|e| e.to_string())?,
+            TrackLocalStaticSample::new(audio_media_track(call_id, ssrc))
+                .map_err(|e| e.to_string())?,
         );
 
         pc.add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
             .await
             .map_err(|e| e.to_string())?;
+
+        // Video: ВТОРОЙ track на том же PeerConnection (add_track, не замена) —
+        // аудио-трансивер выше не трогаем. Аудио-звонок (with_video=false)
+        // выходит отсюда как раньше: без кодека, без трека, без m=video.
+        let video_ssrc = if with_video {
+            let video_ssrc = random_ssrc_excluding(ssrc);
+            let video_track = Arc::new(
+                TrackLocalStaticSample::new(video_media_track(call_id, video_ssrc))
+                    .map_err(|e| e.to_string())?,
+            );
+            pc.add_track(Arc::clone(&video_track) as Arc<dyn TrackLocal>)
+                .await
+                .map_err(|e| e.to_string())?;
+            eprintln!(
+                "[media] video track added (ssrc={video_ssrc}, \
+                 payload_type={VP8_PAYLOAD_TYPE}); audio ssrc={ssrc}"
+            );
+            Some(video_ssrc)
+        } else {
+            None
+        };
 
         // Audio pipeline: wait for the connection to establish, then start
         // mic capture / speaker playback (Phase 2.1). Aborted on close.
@@ -441,7 +560,7 @@ impl CallMediaManager {
             },
         );
 
-        Ok((pc, track, gather_rx))
+        Ok((pc, track, video_ssrc, gather_rx))
     }
 
     /// Wait for non-trickle ICE gathering; return the local SDP as a JSON
@@ -481,15 +600,18 @@ impl CallMediaManager {
         Ok(sdp_json)
     }
 
-    /// Start an outgoing call: build PC + track, create offer, gather ICE,
-    /// return the full SDP (JSON).
+    /// Start an outgoing call: build PC + track(s), create offer, gather ICE,
+    /// return the full SDP (JSON). `with_video` adds the second (VP8) track.
     pub async fn start_outgoing(
         &mut self,
         app: tauri::AppHandle,
         call_id: &str,
         media_key: Option<[u8; 32]>,
+        with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key, true).await?;
+        let (pc, _track, video_ssrc, mut gather_rx) = self
+            .build_pc(app, call_id, media_key, true, with_video)
+            .await?;
 
         let offer = pc.create_offer(None).await.map_err(|e| e.to_string())?;
         pc.set_local_description(offer)
@@ -503,19 +625,24 @@ impl CallMediaManager {
             call_id: call_id.to_owned(),
             kemct: None,
             sender_ek: None,
+            video_ssrc,
         })
     }
 
-    /// Accept an incoming call: build PC + track, set remote offer, create
-    /// answer, gather ICE, return answer SDP (JSON).
+    /// Accept an incoming call: build PC + track(s), set remote offer, create
+    /// answer, gather ICE, return answer SDP (JSON). `with_video` adds the
+    /// second (VP8) track.
     pub async fn accept_incoming(
         &mut self,
         app: tauri::AppHandle,
         call_id: &str,
         offer_sdp: &str,
         media_key: Option<[u8; 32]>,
+        with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, mut gather_rx) = self.build_pc(app, call_id, media_key, false).await?;
+        let (pc, _track, video_ssrc, mut gather_rx) = self
+            .build_pc(app, call_id, media_key, false, with_video)
+            .await?;
 
         let offer: RTCSessionDescription =
             serde_json::from_str(offer_sdp).map_err(|e| e.to_string())?;
@@ -535,6 +662,7 @@ impl CallMediaManager {
             call_id: call_id.to_owned(),
             kemct: None,
             sender_ek: None,
+            video_ssrc,
         })
     }
 
@@ -636,9 +764,15 @@ pub async fn media_start_outgoing(
     call_id: String,
     peer_public_key: String,
     peer_pq_ek: Option<String>,
+    // Видео (шаг 1/3): необязательный флаг. Отсутствует/None → аудио-звонок
+    // (поведение как было, старый фронт флаг не передаёт); true → в тот же
+    // PeerConnection добавляется второй (VP8) track, его ssrc — в
+    // SdpResult.video_ssrc.
+    with_video: Option<bool>,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
+    let with_video = with_video.unwrap_or(false);
     // Медиа-ключ: гибрид ML-KEM-768+X25519 при наличии PQ-ключей
     // Гибридный ключ: HKDF(x25519_ss ‖ mlkem_ss) — mlkem-часть отправитель
     // вычисляет инкапсуляцией против ek принимающего; kemct едет в
@@ -677,7 +811,9 @@ pub async fn media_start_outgoing(
         },
         _ => None,
     };
-    let mut sdp = mgr.start_outgoing(app, &call_id, media_key).await?;
+    let mut sdp = mgr
+        .start_outgoing(app, &call_id, media_key, with_video)
+        .await?;
     sdp.kemct = kemct_out;
     sdp.sender_ek = sender_ek_out;
     Ok(sdp)
@@ -690,9 +826,12 @@ pub async fn media_accept_incoming(
     offer_sdp: String,
     peer_public_key: String,
     kemct: Option<String>,
+    // Видео (шаг 1/3): см. media_start_outgoing — None = аудио-звонок.
+    with_video: Option<bool>,
     state: tauri::State<'_, Mutex<CallMediaManager>>,
 ) -> Result<SdpResult, String> {
     let mut mgr = state.lock().await;
+    let with_video = with_video.unwrap_or(false);
     // PQ: kemct из call-конверта + свой PQ-seed → тот же гибридный
     // HKDF-ключ, что у звонящего. Нет kemct/seed — legacy X25519.
     let media_key = match crate::key_store::load_keypair() {
@@ -723,7 +862,7 @@ pub async fn media_accept_incoming(
         _ => None,
     };
     let sdp = mgr
-        .accept_incoming(app, &call_id, &offer_sdp, media_key)
+        .accept_incoming(app, &call_id, &offer_sdp, media_key, with_video)
         .await?;
     Ok(sdp)
 }
@@ -877,5 +1016,166 @@ pub async fn media_sound_stop() -> Result<(), String> {
             eprintln!("[sound] stop timed out (cpal hung) — continuing");
             Ok(()) // остановка звука не критична — не роняем вызов
         }
+    }
+}
+// ---------------------------------------------------------------------------
+// Tests (video step 1/3: codec registration + second track; audio untouched)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal handler — the codec/track tests never negotiate, so no event
+    /// has to be delivered anywhere.
+    #[derive(Clone)]
+    struct TestHandler;
+
+    #[async_trait::async_trait]
+    impl PeerConnectionEventHandler for TestHandler {}
+
+    /// PeerConnection wired exactly like `build_pc` (same engine, same addrs),
+    /// but without a Tauri AppHandle, so it can run in `cargo test`.
+    async fn test_pc(with_video: bool) -> Arc<dyn PeerConnection> {
+        Arc::new(
+            PeerConnectionBuilder::new()
+                .with_configuration(RTCConfigurationBuilder::new().build())
+                .with_media_engine(build_media_engine(with_video).unwrap())
+                .with_handler(Arc::new(TestHandler))
+                .with_udp_addrs(vec!["127.0.0.1:0".to_owned()])
+                .build()
+                .await
+                .expect("peer connection build"),
+        )
+    }
+
+    async fn add_track(pc: &Arc<dyn PeerConnection>, track: TrackLocalStaticSample) {
+        pc.add_track(Arc::new(track) as Arc<dyn TrackLocal>)
+            .await
+            .expect("add_track");
+    }
+
+    /// Local track descriptors: both codecs build (TrackLocalStaticSample::new
+    /// fails when the library has no packetizer for the codec), and the video
+    /// SSRC never collides with the audio one.
+    #[tokio::test]
+    async fn tracks_carry_their_codecs_and_distinct_ssrcs() {
+        let audio_ssrc = 0x1111_2222u32;
+        let video_ssrc = random_ssrc_excluding(audio_ssrc);
+        assert_ne!(
+            video_ssrc, audio_ssrc,
+            "video SSRC must differ from audio SSRC"
+        );
+
+        // Codec params: Opus stays mono/48k, VP8 is video/90000 on PT 96.
+        let opus = opus_codec();
+        assert_eq!(opus.mime_type, MIME_TYPE_OPUS);
+        assert_eq!(opus.clock_rate, 48000);
+        assert_eq!(opus.channels, 1);
+        let vp8 = vp8_codec();
+        assert_eq!(vp8.mime_type, MIME_TYPE_VP8);
+        assert_eq!(vp8.clock_rate, 90000);
+        assert_eq!(VP8_PAYLOAD_TYPE, 96);
+        assert_ne!(VP8_PAYLOAD_TYPE, OPUS_PAYLOAD_TYPE);
+
+        let audio_track = TrackLocalStaticSample::new(audio_media_track("c1", audio_ssrc)).unwrap();
+        let video_track = TrackLocalStaticSample::new(video_media_track("c1", video_ssrc)).unwrap();
+
+        let audio_mst = audio_track.track().await;
+        assert_eq!(audio_mst.kind(), RtpCodecKind::Audio);
+        assert_eq!(
+            audio_mst.codec(audio_ssrc).unwrap().mime_type,
+            MIME_TYPE_OPUS
+        );
+        assert!(audio_mst.codec(video_ssrc).is_none());
+
+        let video_mst = video_track.track().await;
+        assert_eq!(video_mst.kind(), RtpCodecKind::Video);
+        assert_eq!(
+            video_mst.codec(video_ssrc).unwrap().mime_type,
+            MIME_TYPE_VP8
+        );
+        assert!(video_mst.codec(audio_ssrc).is_none());
+    }
+
+    /// Offer SDP is built from the MediaEngine: with video the offer carries a
+    /// second m-line with `VP8/90000` at PT 96 plus two senders (audio left in
+    /// place); without video it stays audio-only — zero impact on audio calls.
+    #[tokio::test]
+    async fn video_call_registers_vp8_and_keeps_audio_call_audio_only() {
+        let audio_ssrc = 0x0a0b_0c0du32;
+        let video_ssrc = random_ssrc_excluding(audio_ssrc);
+
+        // --- with_video = true ---------------------------------------------
+        let pc = test_pc(true).await;
+        add_track(
+            &pc,
+            TrackLocalStaticSample::new(audio_media_track("c1", audio_ssrc)).unwrap(),
+        )
+        .await;
+        add_track(
+            &pc,
+            TrackLocalStaticSample::new(video_media_track("c1", video_ssrc)).unwrap(),
+        )
+        .await;
+
+        let offer = tokio::time::timeout(Duration::from_secs(10), pc.create_offer(None))
+            .await
+            .expect("create_offer timed out")
+            .expect("create_offer");
+        assert!(
+            offer
+                .sdp
+                .contains(&format!("a=rtpmap:{VP8_PAYLOAD_TYPE} VP8/90000")),
+            "VP8 not registered in the media engine:\n{}",
+            offer.sdp
+        );
+        assert!(
+            offer.sdp.contains("m=audio") && offer.sdp.contains("m=video"),
+            "video call offer must carry m=audio + m=video:\n{}",
+            offer.sdp
+        );
+
+        let senders = pc.get_senders().await;
+        assert_eq!(
+            senders.len(),
+            2,
+            "video call must have audio + video senders"
+        );
+        let mut ssrcs = vec![];
+        let mut kinds = vec![];
+        for sender in &senders {
+            let mst = sender.track().track().await;
+            kinds.push(mst.kind());
+            ssrcs.push(mst.ssrcs().next().unwrap());
+        }
+        assert!(kinds.contains(&RtpCodecKind::Audio));
+        assert!(kinds.contains(&RtpCodecKind::Video));
+        assert!(ssrcs.contains(&video_ssrc));
+        assert_ne!(ssrcs[0], ssrcs[1], "audio and video SSRCs must differ");
+        pc.close().await.expect("close");
+
+        // --- with_video = false (prod audio path) --------------------------
+        let pc = test_pc(false).await;
+        add_track(
+            &pc,
+            TrackLocalStaticSample::new(audio_media_track("c2", audio_ssrc)).unwrap(),
+        )
+        .await;
+
+        let offer = tokio::time::timeout(Duration::from_secs(10), pc.create_offer(None))
+            .await
+            .expect("create_offer timed out")
+            .expect("create_offer");
+        assert!(offer.sdp.contains("m=audio"));
+        assert!(
+            !offer.sdp.contains("m=video") && !offer.sdp.contains("VP8"),
+            "audio-only call must not offer video:\n{}",
+            offer.sdp
+        );
+
+        let senders = pc.get_senders().await;
+        assert_eq!(senders.len(), 1, "audio call must have exactly one sender");
+        pc.close().await.expect("close");
     }
 }
