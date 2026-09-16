@@ -11,7 +11,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-DB = os.environ.get("VAULT_FEEDBACK_DB", "/home/maksim/vault-feedback/feedback.db")
+DB = os.environ.get("VAULT_FEEDBACK_DB", "feedback.db")
 MAX_BODY = 16 * 1024
 RATE_WINDOW = 3600  # seconds
 RATE_MAX = 10       # messages per hour per IP

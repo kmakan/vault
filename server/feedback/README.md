@@ -5,7 +5,8 @@ Tiny WSGI app (stdlib-only) behind nginx on vault-msg.ru:
 the Tauri WebView. Email (Settings -> Help fallback) remains the
 backup channel; the app never sends anything from a server.
 
-Deploy (VPS): file at /home/maksim/vault-feedback/app.py, venv with
-gunicorn, systemd unit `vault-feedback` (127.0.0.1:8090), nginx
-`location = /api/feedback` proxy_pass. Triage: local cron reads the
-sqlite over SSH (vault-feedback-triage.py).
+Deploy (VPS): app.py in a directory of your choice, venv with
+gunicorn, systemd unit `vault-feedback` listening on 127.0.0.1:8090
+(set VAULT_FEEDBACK_DB to the sqlite path), nginx
+`location = /api/feedback` proxy_pass. Triage: read the sqlite with
+any client or a small script over SSH.
