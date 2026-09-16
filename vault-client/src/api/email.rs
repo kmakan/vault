@@ -104,6 +104,73 @@ impl EmailClient {
         "[Gmail]/Spam".to_string()
     }
 
+    /// Найти входящие папки для --listen: INBOX + Junk + «Письма себе».
+    /// mail.ru автосортирует From==To в INBOX/ToMyself, и хардкод "ToMyself"
+    /// падает с NONEXISTENT — ищем реальные имена, как find_special_folders
+    /// у Desktop (атрибут, затем фолбэк по имени/локали).
+    pub async fn inbox_folders(&mut self) -> Vec<String> {
+        let session = match self.imap_session.as_mut() {
+            Some(s) => s,
+            None => return vec!["INBOX".to_string(), "Junk".to_string(), "ToMyself".to_string()],
+        };
+        let list = match session.list(None, Some("*")) {
+            Ok(l) => l,
+            Err(_) => return vec!["INBOX".to_string(), "Junk".to_string(), "ToMyself".to_string()],
+        };
+        let mut junk = None;
+        let mut myself = None;
+        for m in list.iter() {
+            let name = m.name();
+            if name.is_empty() {
+                continue;
+            }
+            let attrs: Vec<String> = m
+                .attributes()
+                .iter()
+                .filter_map(|a| {
+                    if let imap::types::NameAttribute::Custom(s) = a {
+                        Some(s.to_ascii_lowercase())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let name_l = name.to_ascii_lowercase();
+            if junk.is_none() && attrs.iter().any(|a| a == "\\junk" || a == "\\spam") {
+                junk = Some(name.to_string());
+            }
+            // Фолбэк по имени — для провайдеров без атрибутов.
+            if junk.is_none()
+                && (name_l == "spam"
+                    || name_l == "junk"
+                    || name_l == "спам"
+                    || name_l.ends_with("/spam")
+                    || name_l.ends_with("/junk"))
+            {
+                junk = Some(name.to_string());
+            }
+            // «Письма себе» (mail.ru: INBOX/ToMyself, локаль «Письма себе»).
+            if myself.is_none()
+                && (name_l.ends_with("/tomyself")
+                    || name_l == "tomyself"
+                    || name_l == "myself"
+                    || name_l.ends_with("/myself")
+                    || name_l == "письма себе"
+                    || name_l.ends_with("/письма себе"))
+            {
+                myself = Some(name.to_string());
+            }
+        }
+        let mut out = vec!["INBOX".to_string()];
+        if let Some(j) = junk {
+            out.push(j);
+        }
+        if let Some(m) = myself {
+            out.push(m);
+        }
+        out
+    }
+
     /// Fetch recent messages from an arbitrary IMAP folder (e.g. "INBOX",
     /// "[Gmail]/Spam" or the localized junk folder). Used by tests to find
     /// messages that Gmail's spam filter routed away from INBOX.

@@ -292,10 +292,12 @@ pub fn poll(my_token: &str) -> Result<Vec<RelayEnvelope>> {
     tls.read_to_string(&mut raw).context("read response")?;
     let res = parse_http_response(&raw)?;
     if res.status == 204 || res.body.is_empty() {
+        tracing::debug!("relay poll: empty (204)");
         return Ok(Vec::new());
     }
     anyhow::ensure!(res.status == 200, "poll: HTTP {}", res.status);
     let list: Vec<serde_json::Value> = serde_json::from_str(&res.body).context("poll: bad JSON")?;
+    tracing::debug!("relay poll: {} envelope(s)", list.len());
     let mut out = Vec::new();
     for env in list {
         let id = env

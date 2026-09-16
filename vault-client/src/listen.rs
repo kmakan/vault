@@ -100,6 +100,7 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
+                    tracing::debug!("stdin line: {} bytes", line.len());
                     let line = line.trim().to_string();
                     if line.is_empty() {
                         continue;
@@ -147,10 +148,9 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
     }
 }
 
-/// Папки входящих: те же три, что сканирует Desktop/Android — стелс-письма
-/// (пустая тема) спам-фильтры почтовиков охотно кладут в Junk, а копия
-/// «себе» уходит в ToMyself.
-const INBOX_FOLDERS: [&str; 3] = ["INBOX", "Junk", "ToMyself"];
+/// Папки входящих для --listen больше не хардкодятся: mail.ru кладёт
+/// From==To в INBOX/ToMyself, и хардкод падал с NONEXISTENT. Реальные
+/// имена ищет EmailClient::inbox_folders (логика — как у Desktop).
 
 /// Один цикл: письма + relay-очередь → дедуп → декод → события msg.
 async fn tick(
@@ -165,7 +165,9 @@ async fn tick(
 ) {
     let mut messages = Vec::new();
     let mut folder_of: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for folder in INBOX_FOLDERS {
+    let folders = client.inbox_folders().await;
+    tracing::debug!("listen: scanning folders: {:?}", folders);
+    for folder in &folders {
         match client.fetch_messages_with_prefix(folder, 512).await {
             Ok(ms) => {
                 tracing::debug!("listen: {folder} fetched {} msg(s)", ms.len());
@@ -223,7 +225,11 @@ async fn tick(
             }
         }
         if let Err(reason) = &decrypted {
-            if !m.id.starts_with("rl-") {
+            if m.id.starts_with("rl-") {
+                // relay-конверты не ретраятся (destructive poll), поэтому
+                // единственный способ увидеть причину провала — залогировать.
+                tracing::warn!("rl-{} from={} decrypt failed: {}", m.id, m.from, reason);
+            } else {
                 // retry каждый тик (контакт/ключ могли появиться позже) — debug,
                 // не warn: чужие письма давали бы шквал повторов.
                 tracing::debug!(
@@ -278,6 +284,12 @@ async fn tick(
                     let _ = r.save();
                 }
             }
+        }
+        // Self-копии (mail.ru складывает From==To в INBOX/ToMyself) —
+        // это исходящий трафик самого аккаунта. Без фильтра бот отвечает
+        // на свои же ответы → бесконечная петля.
+        if m.from.eq_ignore_ascii_case(me) {
+            continue;
         }
         emit(
             out,
