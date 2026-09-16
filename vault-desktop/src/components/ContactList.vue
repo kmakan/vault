@@ -1,9 +1,28 @@
 <template>
-  <div class="contacts-list">
+  <div ref="rootRef" class="contacts-list" @scroll.passive="updateActive">
     <div class="search-box">
       <input type="text" :placeholder="t('contacts_search')" :value="search" @input="$emit('search', $event.target.value)" />
     </div>
 
+    <!-- Быстрая навигация по секциям списка (M2 UX): липкие вкладки-якоря
+         «Контакты / Группы / Каналы» со счётчиками и индикатором непрочитанного.
+         Клик — плавный скролл к секции; скролл-спай подсветит активную. -->
+    <div v-if="tabsVisible" class="list-tabs" role="tablist">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        class="list-tab"
+        :class="{ active: activeSec === tab.id }"
+        @click="jumpTo(tab.id)"
+      >
+        <Icon :name="tab.icon" :size="13" />
+        <span>{{ tab.label }}</span>
+        <span class="tab-count">{{ tab.count }}</span>
+        <span v-if="tab.unread" class="tab-unread" :title="t('chat_unread') || 'Непрочитанные'" />
+      </button>
+    </div>
+
+    <div class="list-section" data-sec="contacts">
     <!-- Заметки для себя: локальный чат с собой.
          Не зависит от peer_keys, почты и шифрования — хранится только
          в localStorage vault-notes-<email>. -->
@@ -52,9 +71,10 @@
 
     <!-- Email load error (debug aid) -->
     <div v-if="error" class="email-error-hint">{{ error }}</div>
+    </div>
 
     <!-- Groups Section -->
-    <div v-if="groups.length > 0" class="groups-section">
+    <div v-if="groups.length > 0" ref="groupsRef" class="list-section groups-section" data-sec="groups">
       <div class="groups-header">
         <Icon name="users" :size="14" cls="groups-header-icon" />
         {{ t('nav_groups') || 'Groups' }}
@@ -82,7 +102,7 @@
     </div>
     <!-- Channels Section (M2): broadcast подписки — тот же сайдбар-паттерн,
          что группы; непрочитанные считает родитель (channelUnread kv-лог). -->
-    <div v-if="channels.length > 0" class="groups-section">
+    <div v-if="channels.length > 0" ref="channelsRef" class="list-section groups-section" data-sec="channels">
       <div class="groups-header">
         <Icon name="megaphone" :size="14" cls="groups-header-icon" />
         {{ t('nav_channels') || 'Channels' }}
@@ -128,6 +148,7 @@
 </template>
 
 <script setup>
+import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from '../i18n.js'
 import Icon from './Icon.vue'
 import UserAvatar from './UserAvatar.vue'
@@ -138,7 +159,7 @@ import FoldersBar from './FoldersBar.vue'
 // отсюда — только события выбора и контекстные действия.
 const { t } = useI18n()
 
-defineProps({
+const props = defineProps({
   search: { type: String, default: '' },
   contacts: { type: Array, default: () => [] },
   groups: { type: Array, default: () => [] },
@@ -167,6 +188,68 @@ defineProps({
 })
 
 defineEmits(['search', 'select-chat', 'select-group', 'select-channel', 'select-notes', 'menu', 'delete', 'open-keys', 'open-qr', 'archive-toggle', 'folder'])
+
+// ── Вкладки-якоря секций (M2 UX) ───────────────────────────────────────────
+const rootRef = ref(null)
+const groupsRef = ref(null)
+const channelsRef = ref(null)
+
+const sumUnread = (list, idOf) =>
+  list.reduce((acc, x) => acc + (props.unreadOf(idOf(x)) ? Number(props.unreadOf(idOf(x))) : 0), 0)
+
+const tabs = computed(() => {
+  const out = []
+  out.push({
+    id: 'contacts', icon: 'chat', label: t('nav_contacts') || 'Чаты',
+    count: props.contacts.length + 1, // + заметки для себя (всегда в секции)
+    unread: props.contacts.reduce((a, c) => a + (Number(props.unreadOf(c.email)) || 0), 0),
+  })
+  if (props.groups.length) {
+    out.push({ id: 'groups', icon: 'users', label: t('nav_groups') || 'Группы', count: props.groups.length, unread: sumUnread(props.groups, g => 'group:' + g.id) })
+  }
+  if (props.channels.length) {
+    out.push({ id: 'channels', icon: 'megaphone', label: t('nav_channels') || 'Каналы', count: props.channels.length, unread: props.channels.reduce((a, ch) => a + (Number(props.channelUnread(ch.id)) || 0), 0) })
+  }
+  return out
+})
+// Полоса имеет смысл только при длинном списке: при 2 секциях и так видно.
+const tabsVisible = computed(() => tabs.value.length > 1)
+
+const activeSec = ref('contacts')
+function sectionTop(el) {
+  const root = rootRef.value
+  if (!root || !el) return null
+  return el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+}
+function updateActive() {
+  const root = rootRef.value
+  if (!root) return
+  // активна последняя секция, чей верх выше порога (4px от верха контейнера)
+  let cur = 'contacts'
+  for (const [id, el] of [['groups', groupsRef.value], ['channels', channelsRef.value]]) {
+    const top = el ? sectionTop(el) : null
+    if (top !== null && top - root.scrollTop <= 4) cur = id
+  }
+  activeSec.value = cur
+}
+function jumpTo(id) {
+  const root = rootRef.value
+  const el = id === 'groups' ? groupsRef.value : id === 'channels' ? channelsRef.value : null
+  if (!root) return
+  const top = el ? sectionTop(el) : 0
+  root.scrollTo({ top: Math.max(0, top - (id === 'contacts' ? 0 : 2)), behavior: 'smooth' })
+  activeSec.value = id
+}
+// пересчёт активной вкладки при смене состава секций (фильтр поиска и пр.)
+let ro = null
+onMounted(async () => {
+  await nextTick()
+  if (rootRef.value && 'ResizeObserver' in window) {
+    ro = new ResizeObserver(() => updateActive())
+    ro.observe(rootRef.value)
+  }
+})
+onBeforeUnmount(() => ro?.disconnect?.())
 </script>
 
 <!-- Стили .contact-*/.unread-badge/.groups-*/.archive-toggle/.search-box/
@@ -312,6 +395,63 @@ defineEmits(['search', 'select-chat', 'select-group', 'select-channel', 'select-
 .contact-item:hover .contact-delete:hover {
   opacity: 1;
   background: rgba(220, 60, 60, 0.18);
+}
+/* ── Вкладки-якоря секций: липкая полоса под поиском ── */
+.list-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  margin: 0 12px;
+  padding: 6px 0;
+  background: var(--bg-secondary, #12122a);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.list-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-full, 999px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition-fast, .15s), color var(--transition-fast, .15s);
+  white-space: nowrap;
+  min-width: 0;
+}
+.list-tab:hover { color: var(--text-primary); background: var(--bg-hover, #26264f); }
+.list-tab.active {
+  color: var(--accent-primary, #818cf8);
+  background: var(--accent-glow, rgba(99, 102, 241, 0.15));
+}
+.list-tab .tab-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-tertiary, #1e1e3a);
+  border-radius: 8px;
+  padding: 1px 5px;
+  min-width: 16px;
+  text-align: center;
+}
+.list-tab.active .tab-count { color: var(--accent-primary, #818cf8); background: var(--accent-glow, rgba(99,102,241,.18)); }
+.tab-unread {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-primary, #6366f1);
+  box-shadow: 0 0 0 2px var(--bg-secondary, #12122a);
 }
 .groups-section {
   margin-top: 16px;
