@@ -10,16 +10,16 @@ Wiring (one pipe, two processes):
          +---------------- vaultbot.py --------+
 
 vaultbot.py reads line events {"type":"msg","from","id","text"} on stdin,
-POSTs the text to HERMES_API_URL (default http://127.0.0.1:8642)
-/v1/chat/completions with header X-Hermes-Session-Id keyed per sender
-(stable conversation memory per user), then prints
+POSTs the text to VAULTBOT_API_URL (an OpenAI-compatible /v1/chat/completions
+endpoint; per-sender history is kept in-process) and then prints
 {"action":"send","to":...,"text":...,"reply_to":...} on stdout for the
 listener to encrypt and deliver.
 
 Config via environment (never in code):
     VAULTBOT_API_URL   — base URL of the agent API (required)
     VAULTBOT_API_KEY   — bearer token
-    VAULTBOT_MODEL     — model name (default: hermes)
+    VAULTBOT_MODEL     — model/route name (required in practice; the API
+                         advertises its own aliases, e.g. "bot")
     VAULTBOT_BOT_NAME  — display name the bot signs replies with
     VAULTBOT_TIMEOUT   — API timeout seconds (default 120)
 
@@ -35,7 +35,7 @@ import urllib.error
 
 API_URL = os.environ.get("VAULTBOT_API_URL", "").rstrip("/")
 API_KEY = os.environ.get("VAULTBOT_API_KEY", "")
-MODEL = os.environ.get("VAULTBOT_MODEL", "hermes")
+MODEL = os.environ.get("VAULTBOT_MODEL", "gpt-4o-mini")
 TIMEOUT = int(os.environ.get("VAULTBOT_TIMEOUT", "120"))
 MAX_REPLY = int(os.environ.get("VAULTBOT_MAX_REPLY", "4000"))
 # system prompt shapes the bot persona; keep short — history carries context
@@ -72,8 +72,6 @@ def ask_agent(email: str, text: str) -> str | None:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {API_KEY}",
-            # continuity header: the gateway keeps one agent session per user
-            "X-Hermes-Session-Id": f"vault:{email}",
         },
     )
     try:
