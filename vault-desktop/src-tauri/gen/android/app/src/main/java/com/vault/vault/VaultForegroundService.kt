@@ -350,15 +350,30 @@ class VaultForegroundService : Service() {
             }
         }
 
-        /// Push-режим ВЫКЛ: перезапустить сервис в классический (IMAP) режим.
+        /// Push-режим ВЫКЛ. Если аккаунт в эко-режиме — сервис НЕ
+        /// воскрешаем: эко-пользователь не должен видеть постоянную
+        /// иконку/IMAP-монитор только из-за переключения push-режима.
+        /// (Раньше stopService+startForegroundService безусловно поднимал
+        /// classic-сервис — это и было «служба висит в шторке при эко».)
+        /// Если эко выключено — перезапускаем сервис в классический (IMAP).
         @JvmStatic
         fun pushModeStop(context: Context) {
             pushMode = false
             pushTopic = null
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("push_mode", false).remove("push_topic").apply()
+            if (ecoModeEnabled(context)) {
+                // Эко: гасим службу полностью. ecoStop выставит флаг
+                // запрета авторестарта и снимет уведомление из шторки.
+                ecoStop(context)
+                Log.i("VaultRust", "pushMode off: eco mode — service stopped (no classic restart)")
+                return
+            }
             try {
                 context.stopService(Intent(context, VaultForegroundService::class.java))
+                // Авторестарт из onDestroy/onTaskRemoved не должен двоить
+                // ручной рестарт: отменим будильник перед перезапуском.
+                cancelScheduledRestart(context)
                 val svc = Intent(context, VaultForegroundService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(svc)
@@ -625,6 +640,28 @@ class VaultForegroundService : Service() {
                 Log.i("VaultRust", "service restart scheduled in 3s")
             } catch (e: Throwable) {
                 Log.w("VaultRust", "scheduleRestart failed: " + e.message)
+            }
+        }
+
+        /// Отменить отложенный авторестарт (будильник из scheduleRestart).
+        /// Нужно перед ручным перезапуском сервиса, иначе два будильника
+        /// могут поднять сервис дважды (onStartCommand @ START_STICKY).
+        @JvmStatic
+        fun cancelScheduledRestart(context: Context) {
+            try {
+                val intent = Intent(context, VaultForegroundService::class.java)
+                val pi = PendingIntent.getService(
+                    context, 0, intent,
+                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                )
+                if (pi != null) {
+                    val am = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    am.cancel(pi)
+                    pi.cancel()
+                    Log.i("VaultRust", "scheduled restart cancelled")
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "cancelScheduledRestart failed: " + e.message)
             }
         }
 

@@ -13,6 +13,7 @@ import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
+  removeAllActive,
 } from '@tauri-apps/plugin-notification';
 
 // Ключ настройки «показывать уведомления» (переключатель в настройках).
@@ -65,11 +66,27 @@ export async function initNotifications() {
       granted = perm === 'granted';
     }
     permissionReady = granted;
+    // M2.3-fix: при запуске/возврате в приложение снимаем осиротевшие
+    // уведомления о сообщениях — открытое приложение само показывает чаты,
+    // висящая в шторке «простыня» была багом («служба остаётся в шторке»).
+    // Звонки (vault_incoming_call_v2) не трогаем — ими управляет Rust-слой.
+    if (granted) {
+      try { await clearMessageNotifications(); } catch (e) { /* плагин мог не инициализироваться */ }
+    }
   } catch (e) {
     console.warn('[notify] permission init failed:', e);
     permissionReady = false;
   }
   return permissionReady;
+}
+
+// Снять все активные уведомления, показанные этим плагином (канал default).
+// Звонковые уведомления FGS из Rust (showIncomingCall) живут в другом канале
+// и этим вызовом не затрагиваются.
+export async function clearMessageNotifications() {
+  try {
+    await removeAllActive();
+  } catch (e) { /* плагин недоступен — не критично */ }
 }
 
 // Показать системное уведомление о новом входящем сообщении.
