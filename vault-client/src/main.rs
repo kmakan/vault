@@ -41,6 +41,10 @@ struct Cli {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        // Логи — в stderr. В --listen-режиме stdout это NDJSON-канал моста:
+        // перемешивать с ним текст нельзя (браузер событий и диагностика
+        // должны быть разведены по потокам, как у всех unix-фильтров).
+        .with_writer(std::io::stderr)
         .init();
 
     let cli_args = Cli::parse();

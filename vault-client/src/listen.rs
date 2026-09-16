@@ -77,8 +77,19 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
     });
     client.connect_imap().await?;
 
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut seen_order: Vec<String> = Vec::new();
+    // Durable dedup: переживает рестарты (аналог update-offset у Telegram-ботов)
+    // — иначе после перезапуска бот перечитает весь UNSEEN-бэклог и ответит на
+    // старые сообщения заново.
+    let seen_file = dirs::home_dir()
+        .map(|h| h.join(".vault/listen_seen.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".vault/listen_seen.json"));
+    let mut seen: HashSet<String> = std::fs::read_to_string(&seen_file)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let mut seen_order: Vec<String> = seen.iter().cloned().collect();
 
     let mut out = std::io::stdout();
     emit(&mut out, &serde_json::json!({"type":"ready","email":email}));
@@ -126,6 +137,11 @@ pub async fn run(config: Config, interval_secs: u64) -> Result<()> {
             }
             _ = tokio::time::sleep(interval) => {
                 tick(&mut client, &mut crypto, &mut contact_book, &relay_state, &mut seen, &mut seen_order, &mut out, &email).await;
+                // Дедуп на диске: переживаем рестарты без переотправки на бэклог.
+                if let Some(dir) = seen_file.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&seen_file, serde_json::to_string(&seen_order).unwrap_or_default());
             }
         }
     }
@@ -152,13 +168,21 @@ async fn tick(
     for folder in INBOX_FOLDERS {
         match client.fetch_messages_with_prefix(folder, 512).await {
             Ok(ms) => {
+                tracing::debug!("listen: {folder} fetched {} msg(s)", ms.len());
                 for m in &ms {
                     folder_of.insert(m.id.clone(), folder.to_string());
                 }
                 messages.extend(ms);
             }
-            // Пустой ящик без Junk/ToMyself — не ошибка, просто тихо мимо.
-            Err(e) => tracing::debug!("fetch {folder} skipped: {e}"),
+            // Пустой ящик без Junk/ToMyself — не ошибка, просто тихо мимо;
+            // отказ INBOX — видно (warn).
+            Err(e) => {
+                if folder == "INBOX" {
+                    tracing::warn!("listen: INBOX fetch failed: {e}");
+                } else {
+                    tracing::debug!("listen: fetch {folder} skipped: {e}");
+                }
+            }
         }
     }
     // Relay — мгновенный канал (destructive-поллинг, как /inbox REPL).
@@ -190,16 +214,25 @@ async fn tick(
                 let _ = crypto.set_peer_key_pq(&c.public_key, c.pq_public_key.as_deref());
             }
         }
-        let mut decrypted = decrypt_envelope(crypto, &m.body);
-        if decrypted.is_none() && !m.id.starts_with("rl-") && crypto.is_encrypted(&m.body) {
-            // Fetch берёт BODY.PEEK[TEXT]<0.512> — PQ-конверты (>1КБ)
-            // обрезаются. Полный фетч по uid, как /read (path-of-truth).
+            let mut decrypted = decrypt_envelope(crypto, &m.body);
+        if matches!(&decrypted, Ok(None) | Err(_)) {
+            // Полный фетч по uid (BODY.PEEK[TEXT]<0.512> режет PQ1 >1КБ).
             let folder = folder_of.get(&m.id).map(|s| s.as_str()).unwrap_or("INBOX");
             if let Ok(full) = client.fetch_message_body(&m.id, folder).await {
                 decrypted = decrypt_envelope(crypto, &full);
             }
         }
-        let Some((id, value)) = decrypted else {
+        if let Err(reason) = &decrypted {
+            if !m.id.starts_with("rl-") {
+                // retry каждый тик (контакт/ключ могли появиться позже) — debug,
+                // не warn: чужие письма давали бы шквал повторов.
+                tracing::debug!(
+                    "uid={} from={} decrypt deferred: {}",
+                    m.id, m.from, reason
+                );
+            }
+        }
+        let Ok(Some((id, value))) = decrypted else {
             continue;
         };
         // Дедуп кросс-канальный: env.id первичен (релей+почта = одно событие).
@@ -265,15 +298,24 @@ async fn tick(
     }
 }
 
-/// Расшифровать vault-конверт и разобрать JSON. None = не наш/битый.
-fn decrypt_envelope(crypto: &CryptoClient, body: &str) -> Option<(String, Value)> {
-    let plain = crypto.decrypt_vault(body).ok()?;
-    let value: Value = serde_json::from_str(&plain).ok()?;
-    if value.get("vault").and_then(|v| v.as_i64()) != Some(1) {
-        return None;
+/// Расшифровать vault-конверт и разобрать JSON. Ok(None) — не наш/битый
+/// (чужое письмо); Err — почему не расшифровалось (для deferred-диагностики).
+fn decrypt_envelope(crypto: &CryptoClient, body: &str) -> anyhow::Result<Option<(String, Value)>> {
+    let plain = match crypto.decrypt_vault(body) {
+        Ok(p) => p,
+        Err(e) => {
+            let kind = if body.trim_start().starts_with("PQ1:") { "pq1" } else { "legacy" };
+            anyhow::bail!("{kind}: {e:#}");
+        }
+    };
+    let value: Option<Value> = serde_json::from_str(&plain).ok();
+    match value {
+        Some(value) if value.get("vault").and_then(|v| v.as_i64()) == Some(1) => {
+            let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Ok(Some((id, value)))
+        }
+        _ => Ok(None),
     }
-    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    Some((id, value))
 }
 
 /// Команда send из stdin: E2E на pubkey контакта (гибрид PQ если есть) +
