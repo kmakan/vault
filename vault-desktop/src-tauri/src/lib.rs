@@ -17,6 +17,8 @@ mod key_escrow_smoke;
 mod key_store;
 mod media;
 mod storage;
+// Видеозвонки (M3, шаг 2/3): захват камеры + запись кадров в VP8-трек звонка.
+mod video;
 // Headless IMAP-монитор для FGS-процесса: уведомления при убитом
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
 #[cfg(target_os = "android")]
@@ -1664,6 +1666,9 @@ pub fn run() {
             media::media_close,
             media::media_set_muted,
             media::media_set_speaker,
+            // Видео (шаг 2/3): камера → кадры → локальный VP8-трек звонка.
+            media::media_camera_start,
+            media::media_camera_stop,
             media::media_send_hangup,
             media::media_show_incoming_call,
             media::media_dismiss_incoming_call,

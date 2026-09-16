@@ -21,6 +21,12 @@
 //! own SSRC); the Opus track/transceiver stays as it is. Audio-only calls
 //! register no video codec and create no video track, so the prod audio path
 //! is byte-identical to the pre-video build. Camera capture = step 2, UI = step 3.
+//!
+//! Video (M3, step 2/3): the video track handle is kept in `CallSession`, and
+//! `media_camera_start`/`media_camera_stop` wire camera frames into it
+//! (`crate::video::start_video_for_call` → `write_video_loop`). Capture itself
+//! is a desktop stub / a hard error on Android: webrtc 0.20 has no VP8
+//! *encoder* and the ТЗ forbids new crates — see `crate::video` module docs.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -56,7 +62,8 @@ use rtc::rtp_transceiver::rtp_sender::{
 const OPUS_PAYLOAD_TYPE: u8 = 120;
 /// VP8 dynamic payload type (video; both ends are our app). 96 — первый
 /// динамический PT, отдельный от OPUS_PAYLOAD_TYPE.
-const VP8_PAYLOAD_TYPE: u8 = 96;
+/// `pub(crate)`: тот же PT передаёт writer кадров камеры (`crate::video`).
+pub(crate) const VP8_PAYLOAD_TYPE: u8 = 96;
 /// Max time to wait for ICE gathering before giving up (non-trickle).
 /// 4с: было 15с — ответ (SDP) создавался слишком долго, звонок
 /// успевал сгореть по таймеру гудка. Host-кандидаты собираются <1с;
@@ -86,6 +93,16 @@ struct CallSession {
     /// Слот общий: у звонящего в нём его собственный канал, у
     /// принимающего — канал, пришедший через on_data_channel.
     dc: Arc<Mutex<Option<Arc<dyn DataChannel>>>>,
+    /// Видео (шаг 2/3): локальный VP8-трек и его SSRC. None — аудио-звонок.
+    /// Свою ссылку держим намеренно: у PC-сендера есть своя, но кадры камеры
+    /// пишет `media_camera_start`, которому нужен собственный handle.
+    video_track: Option<Arc<TrackLocalStaticSample>>,
+    video_ssrc: Option<u32>,
+    /// E2E-ключ медиа — тот же, что у аудио-пайплайна: кадры камеры
+    /// шифруются `media_encrypt_frame` перед SRTP (defence in depth).
+    media_key: Option<[u8; 32]>,
+    /// Живая камера (шаг 2/3). Drop = стоп захвата + завершение writer-таски.
+    camera: Option<crate::video::CameraHandle>,
 }
 
 /// SDP payload returned to the UI (JSON-encoded RTCSessionDescription).
@@ -167,7 +184,8 @@ fn opus_codec() -> RTCRtpCodec {
 
 /// VP8 (video, 90 kHz) — regression-free choice: the packetizer ships with
 /// webrtc 0.20 on desktop and Android (no extra crate, no C dependencies).
-fn vp8_codec() -> RTCRtpCodec {
+/// `pub(crate)`: `crate::video` сверяет с ним клок для таймстампов кадров.
+pub(crate) fn vp8_codec() -> RTCRtpCodec {
     RTCRtpCodec {
         mime_type: MIME_TYPE_VP8.to_owned(),
         clock_rate: 90000,
@@ -228,7 +246,8 @@ fn audio_media_track(call_id: &str, ssrc: u32) -> MediaStreamTrack {
 }
 
 /// Descriptor of the local video track (same shape as audio, own SSRC).
-fn video_media_track(call_id: &str, ssrc: u32) -> MediaStreamTrack {
+/// `pub(crate)`: `crate::video` тестирует writer кадров на этом же дескрипторе.
+pub(crate) fn video_media_track(call_id: &str, ssrc: u32) -> MediaStreamTrack {
     MediaStreamTrack::new(
         format!("vault-video-{call_id}"),
         format!("vault-video-{call_id}"),
@@ -433,6 +452,9 @@ impl CallMediaManager {
         // Video: ВТОРОЙ track на том же PeerConnection (add_track, не замена) —
         // аудио-трансивер выше не трогаем. Аудио-звонок (with_video=false)
         // выходит отсюда как раньше: без кодека, без трека, без m=video.
+        // Свою ссылку на трек сохраняем (шаг 2/3): в неё пишет кадры камеры
+        // `media_camera_start`; у PC-сендера остаётся её собственная ссылка.
+        let mut video_track_for_session: Option<Arc<TrackLocalStaticSample>> = None;
         let video_ssrc = if with_video {
             let video_ssrc = random_ssrc_excluding(ssrc);
             let video_track = Arc::new(
@@ -446,6 +468,7 @@ impl CallMediaManager {
                 "[media] video track added (ssrc={video_ssrc}, \
                  payload_type={VP8_PAYLOAD_TYPE}); audio ssrc={ssrc}"
             );
+            video_track_for_session = Some(video_track);
             Some(video_ssrc)
         } else {
             None
@@ -557,6 +580,10 @@ impl CallMediaManager {
                 muted,
                 speaker_tx,
                 dc: Arc::clone(&dc_slot),
+                video_track: video_track_for_session,
+                video_ssrc,
+                media_key,
+                camera: None,
             },
         );
 
@@ -736,11 +763,70 @@ impl CallMediaManager {
         }
     }
 
+    /// Видео (шаг 2/3): запустить камеру для активного звонка — writer-таска
+    /// пишет кадры в локальный VP8-трек этого звонка.
+    ///
+    /// Ошибки: звонок не найден / аудио-звонок (нет видео-трека) / камера уже
+    /// запущена / платформенный бэкенд захвата недоступен (Android, см.
+    /// `crate::video`) — ошибка не глотается, команда вернёт её наверх.
+    pub fn camera_start(&mut self, call_id: &str) -> Result<(), String> {
+        let session = self
+            .calls
+            .get_mut(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        if session.camera.is_some() {
+            return Err("camera already started for this call".to_string());
+        }
+        let track = session
+            .video_track
+            .clone()
+            .ok_or_else(|| "call has no video track (audio-only call)".to_string())?;
+        let video_ssrc = session
+            .video_ssrc
+            .ok_or_else(|| "call has no video ssrc".to_string())?;
+        // Стоп-сигнал звонка — тот же, что у аудио-пайплайна: close() гасит
+        // и аудио, и видео (subscribe() до close(), поэтому событие видно).
+        let stop_rx = session.stop_tx.subscribe();
+        let camera = crate::video::start_video_for_call(
+            call_id,
+            track,
+            video_ssrc,
+            VP8_PAYLOAD_TYPE,
+            session.media_key,
+            stop_rx,
+        )?;
+        session.camera = Some(camera);
+        Ok(())
+    }
+
+    /// Видео (шаг 2/3): остановить камеру. `None` — все сессии (шаг 3 UI может
+    /// позвать `media_camera_stop()` без call_id). Идемпотентно.
+    pub fn camera_stop(&mut self, call_id: Option<&str>) {
+        match call_id {
+            Some(id) => {
+                if let Some(session) = self.calls.get_mut(id) {
+                    // Drop CameraHandle: стоп захвата + закрытие канала кадров.
+                    session.camera = None;
+                }
+            }
+            None => {
+                for session in self.calls.values_mut() {
+                    session.camera = None;
+                }
+            }
+        }
+        // Страховка на случай, если handle уже потерян: гасим платформенный
+        // захват (идемпотентно — нет активного, ничего не делает).
+        crate::video::stop_camera();
+    }
+
     /// Close a call session (graceful PeerConnection teardown).
     pub async fn close(&mut self, call_id: &str) -> Result<(), String> {
         if let Some(session) = self.calls.remove(call_id) {
             let _ = session.stop_tx.send(true);
             session.pc.close().await.map_err(|e| e.to_string())?;
+            // `session` здесь дропается: CameraHandle::drop гасит захват камеры
+            // (шаг 2/3) и закрывает канал кадров — writer завершится сам.
         }
         Ok(())
     }
@@ -905,6 +991,33 @@ pub async fn media_set_speaker(
 ) -> Result<(), String> {
     let mut mgr = state.lock().await;
     mgr.set_speaker(&call_id, on).await
+}
+
+/// Видео (шаг 2/3): старт камеры для активного видеозвонка. Кадры камеры
+/// уходят зашифрованными в локальный VP8-трек того же PeerConnection.
+///
+/// Ошибка возвращается наверх, если звонок аудио-only, камера уже запущена или
+/// платформенный бэкенд захвата недоступен (сейчас: Android — «не реализовано»,
+/// desktop — заглушка без кадров; см. `crate::video`).
+#[tauri::command]
+pub async fn media_camera_start(
+    call_id: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.camera_start(&call_id)
+}
+
+/// Видео (шаг 2/3): стоп камеры. `call_id` необязателен — без него гасим
+/// камеру всех сессий (совместимо с вызовом `media_camera_stop()` без аргумента).
+#[tauri::command]
+pub async fn media_camera_stop(
+    call_id: Option<String>,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.camera_stop(call_id.as_deref());
+    Ok(())
 }
 
 /// Full-screen уведомление входящего звонка: Android — системное
