@@ -224,11 +224,19 @@ function sectionTop(el) {
 function updateActive() {
   const root = rootRef.value
   if (!root) return
-  // активна последняя секция, чей верх выше порога (4px от верха контейнера)
+  // Активна последняя секция, чей верх дошёл до линии под sticky-полосой
+  // вкладок (учитываем её высоту + запас на отступы заголовка секции).
+  const tabsH = root.querySelector('.list-tabs')?.offsetHeight || 0
+  const threshold = tabsH + 40
   let cur = 'contacts'
   for (const [id, el] of [['groups', groupsRef.value], ['channels', channelsRef.value]]) {
     const top = el ? sectionTop(el) : null
-    if (top !== null && top - root.scrollTop <= 4) cur = id
+    if (top !== null && top - root.scrollTop <= threshold) cur = id
+  }
+  // Долистали до конца — последняя существующая секция активна всегда
+  if (root.scrollTop >= root.scrollHeight - root.clientHeight - 2) {
+    if (channelsRef.value) cur = 'channels'
+    else if (groupsRef.value) cur = 'groups'
   }
   activeSec.value = cur
 }
