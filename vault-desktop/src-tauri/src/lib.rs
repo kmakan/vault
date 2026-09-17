@@ -1,11 +1,11 @@
 // Android library entry point — re-exports main.rs for Tauri cdylib
 mod audio;
+mod channels;
 mod credential_store;
 mod crypto;
 mod crypto_pq;
 mod duress;
 mod email;
-mod channels;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
@@ -1047,7 +1047,8 @@ fn channels_import(
     owner: String,
     owner_fpr: String,
 ) -> Result<channels::Channel, String> {
-    channels::import_channel(&channel_id, &name, &key, &owner, &owner_fpr).map_err(|e| e.to_string())
+    channels::import_channel(&channel_id, &name, &key, &owner, &owner_fpr)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1671,6 +1672,7 @@ pub fn run() {
             media::media_camera_stop,
             media::media_video_start,
             media::media_video_stop,
+            media::media_video_frame,
             media::media_send_hangup,
             media::media_show_incoming_call,
             media::media_dismiss_incoming_call,

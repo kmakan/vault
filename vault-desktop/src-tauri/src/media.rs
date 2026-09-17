@@ -49,12 +49,12 @@ use webrtc::peer_connection::{
 };
 use webrtc::runtime::{channel, Receiver, Sender};
 
+use base64::Engine as _;
+use bytes::Bytes;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::{
     MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8,
 };
-use base64::Engine as _;
-use bytes::Bytes;
 use rtc::rtp::codec::vp8::Vp8Packet;
 use rtc::rtp::packetizer::Depacketizer;
 use rtc::rtp_transceiver::rtp_sender::{
@@ -832,6 +832,23 @@ impl CallMediaManager {
         Ok(())
     }
 
+    /// Видео (шаг 3/3): принять закодированный кадр от WebCodecs (WebView) и
+    /// положить в writer-таску локального видео-трека — E2E-шифр + RTP.
+    /// Заменяет нативный захват камеры на платформах, где его нет (Android:
+    /// camera2+MediaCodec JNI нереализован). Вызов до `camera_start` или в
+    /// аудио-звонке → ошибка (JS-сторона гасит камеру).
+    pub fn video_accept_frame(&mut self, call_id: &str, frame: Vec<u8>) -> Result<(), String> {
+        let session = self
+            .calls
+            .get(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        let camera = session
+            .camera
+            .as_ref()
+            .ok_or_else(|| "camera not started for this call".to_string())?;
+        camera.accept_frame(frame)
+    }
+
     /// Видео (шаг 2/3): остановить камеру. `None` — все сессии (шаг 3 UI может
     /// позвать `media_camera_stop()` без call_id). Идемпотентно.
     pub fn camera_stop(&mut self, call_id: Option<&str>) {
@@ -861,11 +878,7 @@ impl CallMediaManager {
     /// Е2Е-шифр: payload RTP шифруется целиком (см. `write_video_loop`),
     /// поэтому депакетизируем ПОСЛЕ расшифровки — обратный порядок
     /// относительно отправки.
-    pub fn video_start(
-        &mut self,
-        call_id: &str,
-        app: tauri::AppHandle,
-    ) -> Result<(), String> {
+    pub fn video_start(&mut self, call_id: &str, app: tauri::AppHandle) -> Result<(), String> {
         let session = self
             .calls
             .get_mut(call_id)
@@ -1145,7 +1158,7 @@ pub async fn media_camera_start(
     mgr.camera_start(&call_id)
 }
 
-/// Видео (шаг 2/3): стоп камеры. `call_id` необязателен — без него гасим
+/// Видео (шаг 3/3): стоп камеры. `call_id` необязателен — без него гасим
 /// камеру всех сессий (совместимо с вызовом `media_camera_stop()` без аргумента).
 #[tauri::command]
 pub async fn media_camera_stop(
@@ -1155,6 +1168,23 @@ pub async fn media_camera_stop(
     let mut mgr = state.lock().await;
     mgr.camera_stop(call_id.as_deref());
     Ok(())
+}
+
+/// Видео (шаг 3/3): WebCodecs-кадр из JS → локальный VP8-трек звонка.
+///
+/// Захват камеры и VP8-кодирование делает WebView (WebCodecs VideoEncoder —
+/// Chrome 151 на Android), Rust получает уже готовый закодированный кадр.
+/// Команда кладёт его в канал `write_video_loop` (E2E-шифр + RTP), как
+/// нативный capture-бэкенд. Это заменяет camera2+MediaCodec через JNI.
+///
+/// `frame` — сырые байты EncodedVideoChunk (JS передаёт Uint8Array).
+#[tauri::command]
+pub async fn media_video_frame(
+    call_id: String,
+    frame: Vec<u8>,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    state.lock().await.video_accept_frame(&call_id, frame)
 }
 
 /// Видео (шаг 3/3): приём remote-видео. Запускает reader remote VP8-трека:

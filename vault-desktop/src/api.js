@@ -1104,6 +1104,15 @@ export class ApiClient {
   async mediaSetMuted(callId, muted) {
     return await invoke('media_set_muted', { callId, muted });
   }
+  // Видео (M3): приём remote-видео — запуск reader-таски в Rust
+  // (RTP → E2E-расшифровка → VP8-депакетизация → событие call-video-frame).
+  async mediaVideoStart(callId) {
+    return await invoke('media_video_start', { callId });
+  }
+  // Видео (M3): стоп reader'а remote-видео (идемпотентно).
+  async mediaVideoStop(callId) {
+    return await invoke('media_video_stop', { callId });
+  }
   // Динамик: Android — speakerphone вкл/выкл; desktop — no-op.
   async mediaSetSpeaker(callId, on) {
     return await invoke('media_set_speaker', { callId, on });

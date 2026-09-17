@@ -102,6 +102,26 @@ impl CameraHandle {
     pub fn call_id(&self) -> &str {
         &self.call_id
     }
+
+    /// Принять кадр от внешнего кодера (WebCodecs в WebView): готовый VP8
+    /// битстрим кладётся в канал writer'а. Заменяет платформенный захват.
+    /// Full — не ошибка звонка (перегрузка), Closed — writer уже мёртв.
+    pub fn accept_frame(&self, data: Vec<u8>) -> Result<(), String> {
+        match self.frames_tx.try_send(CameraFrame { data }) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // Канал переполнен (4 кадра) — дропаем кадр, как нативный
+                // захват; лучше потерять fps, чем копить задержку.
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err("video writer closed".to_string()),
+        }
+    }
+
+    /// Sender для нативного capture-бэкенда (Android camera2 и т.д.).
+    pub(crate) fn frame_sender(&self) -> mpsc::Sender<CameraFrame> {
+        self.frames_tx.clone()
+    }
 }
 
 impl Drop for CameraHandle {
@@ -201,7 +221,24 @@ pub fn start_video_for_call(
         stop_rx,
         media_key,
     ));
-    start_camera(call_id, frames_tx)
+    // Нативный захват — best-effort: если платформенный бэкенд не реализован
+    // (Android: camera2+MediaCodec через JNI), writer остаётся жить в
+    // «WebCodecs-режиме» — кадры приходит от WebView через
+    // `media_video_frame` → `CameraHandle::accept_frame`. Канал у writer'а
+    // уже есть (frames_tx клонирован), так что отказ захвата не ломает звонок.
+    match start_camera(call_id, frames_tx.clone()) {
+        Ok(handle) => Ok(handle),
+        Err(reason) => {
+            eprintln!(
+                "[video] native capture unavailable (call {call_id}: {reason}) — \
+                 WebCodecs mode (frames via media_video_frame)"
+            );
+            Ok(CameraHandle {
+                call_id: call_id.to_string(),
+                frames_tx,
+            })
+        }
+    }
 }
 
 /// Async writer: VP8-кадры камеры → E2E-шифрование → RTP-пакеты в трек.
@@ -270,10 +307,7 @@ mod capture {
     /// (nokhwa/v4l) И VP8-энкодер, которого в дереве зависимостей нет. Пока
     /// заглушка: возвращает Ok и не отправляет ни одного кадра (разрешено ТЗ
     /// шага 2) — writer звонка просто ждёт кадров и завершится на стопе.
-    pub(super) fn start(
-        call_id: &str,
-        _frames: mpsc::Sender<CameraFrame>,
-    ) -> Result<(), String> {
+    pub(super) fn start(call_id: &str, _frames: mpsc::Sender<CameraFrame>) -> Result<(), String> {
         eprintln!(
             "[video] camera capture STUB (desktop): no capture backend / no VP8 encoder yet \
              — no frames will be sent for call {call_id} (see video.rs TODO)"
@@ -472,4 +506,3 @@ mod tests {
         stop_camera(); // повторный стоп не паникует
     }
 }
-

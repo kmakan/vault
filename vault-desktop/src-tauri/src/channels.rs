@@ -25,9 +25,23 @@ fn get_channels_dir() -> Result<PathBuf> {
     Ok(home.join(".vault"))
 }
 
+thread_local! {
+    /// Tests redirect the storage file per-thread (see `tests::tmpfile`):
+    /// a process-global `std::env::var` raced between tests running in one
+    /// binary — a test could see another test's path and read a file that
+    /// its own fixture never created. Thread-local keeps the same public
+    /// redirect seam without the cross-test leak.
+    static TEST_CHANNELS_FILE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn get_channels_path() -> Result<PathBuf> {
-    // Tests can redirect the storage file; keeps the real
-    // `~/.vault/channels.json` untouched.
+    // Test redirect: per-thread, keeps the real `~/.vault/channels.json`
+    // untouched. Precedence over the env var — tests set this, the env var
+    // stays a manual override for ad-hoc runs.
+    if let Some(p) = TEST_CHANNELS_FILE.with(|c| c.borrow().clone()) {
+        return Ok(p);
+    }
     if let Ok(p) = std::env::var("VAULT_CHANNELS_FILE") {
         return Ok(PathBuf::from(p));
     }
@@ -265,9 +279,17 @@ mod tests {
         format!("/tmp/vault-channels-test-{}-{}.json", tag, hex::encode(b))
     }
 
+    /// Устанавливает thread-local файл хранилища для теста и возвращает
+    /// его путь (тест видит свой файл и только свой).
+    fn redirect(tag: &str) -> PathBuf {
+        let p = PathBuf::from(tmpfile(tag));
+        TEST_CHANNELS_FILE.with(|c| *c.borrow_mut() = Some(p.clone()));
+        p
+    }
+
     #[test]
     fn create_import_update_delete_roundtrip() {
-        std::env::set_var("VAULT_CHANNELS_FILE", tmpfile("rt"));
+        let _path = redirect("rt");
         // Owner creates
         let ch = create_channel("News", "a@x.y", "fpr123", "about text").unwrap();
         assert!(ch.id.starts_with("chn_"));
@@ -288,7 +310,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(upd.name, "News 2");
-        update_channel(&ch.id, &ChannelPatch { last_ts: Some(50), ..Default::default() }).unwrap();
+        update_channel(
+            &ch.id,
+            &ChannelPatch {
+                last_ts: Some(50),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(load_channels().unwrap()[&ch.id].last_ts, 123);
         // Known subscribers: idempotent add
         add_known_subscriber(&ch.id, "B@X.Y").unwrap();
@@ -301,7 +330,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        std::env::set_var("VAULT_CHANNELS_FILE", tmpfile("bad"));
+        let _path = redirect("bad");
         assert!(create_channel("  ", "a", "f", "b").is_err());
         assert!(import_channel("grp_123", "n", &"k".repeat(64), "a", "f").is_err());
         assert!(import_channel("chn_123", "n", "short", "a", "f").is_err());
