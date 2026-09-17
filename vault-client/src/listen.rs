@@ -205,9 +205,27 @@ async fn tick(
     }
 
     let mut contacts_dirty = false;
+    tracing::debug!("listen: tick: {} message(s) to process", messages.len());
     for m in &messages {
+        // Безусловный след каждого письма: ветки ошибок ниже логируются, а
+        // успешный путь (Ok(Some) → dedup → emit) был молчаливым — из-за этого
+        // «пропавшие» uid (напр. 674) выглядели как молча пропущенные.
+        tracing::debug!(
+            "listen-proc: uid={} from={} folder={} body_len={}",
+            m.id,
+            m.from,
+            folder_of.get(&m.id).map(|s| s.as_str()).unwrap_or("-"),
+            m.body.len()
+        );
         if !crypto.is_encrypted(&m.body) {
-            continue; // стелс: чужие/служебные письма молча мимо
+            // стелс: чужие/служебные письма молча мимо
+            tracing::debug!(
+                "listen-skip: uid={} from={} body_len={} (not encrypted)",
+                m.id,
+                m.from,
+                m.body.len()
+            );
+            continue;
         }
         // peer-ключ отправителя — для PQ-ветки decrypt_vault (как /read).
         let contact = contact_book.get(&m.from);
@@ -239,8 +257,26 @@ async fn tick(
             }
         }
         let Ok(Some((id, value))) = decrypted else {
+            tracing::debug!(
+                "listen: uid={} from={} skipped after decrypt (no vault/text)",
+                m.id,
+                m.from
+            );
             continue;
         };
+        // Успешная расшифровка раньше не логировалась вообще — теперь видно
+        // и env-id, и есть ли в конверте поле text (receipt'ы его не несут).
+        tracing::debug!(
+            "listen-decrypted: uid={} from={} env_id={} has_text={} keys={:?}",
+            m.id,
+            m.from,
+            id,
+            value.get("text").is_some(),
+            value
+                .as_object()
+                .map(|o| o.keys().collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
         // Дедуп кросс-канальный: env.id первичен (релей+почта = одно событие).
         let key = if id.is_empty() {
             format!("uid:{}", m.id)
@@ -248,6 +284,12 @@ async fn tick(
             format!("env:{id}")
         };
         if !seen.insert(key.clone()) {
+            tracing::debug!(
+                "listen-dedup: uid={} from={} key={} already seen — skip without emit",
+                m.id,
+                m.from,
+                key
+            );
             continue;
         }
         seen_order.push(key);
@@ -259,7 +301,15 @@ async fn tick(
         }
         let text = match value.get("text").and_then(|v| v.as_str()) {
             Some(t) => t,
-            None => continue, // служебные (receipt/edit/react/call) боту в MVP не нужны
+            None => {
+                tracing::debug!(
+                    "listen-skip: uid={} from={} env_id={} has no \"text\" field (service envelope)",
+                    m.id,
+                    m.from,
+                    id
+                );
+                continue; // служебные (receipt/edit/react/call) боту в MVP не нужны
+            }
         };
         // Автоонбординг: конверт несёт pubkey/pq/tok отправителя — сохраняем.
         if let Some(peer_key) = value.get("key").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
@@ -289,8 +339,21 @@ async fn tick(
         // это исходящий трафик самого аккаунта. Без фильтра бот отвечает
         // на свои же ответы → бесконечная петля.
         if m.from.eq_ignore_ascii_case(me) {
+            tracing::debug!(
+                "listen-skip: uid={} env_id={} self-copy from={} (ToMyself self-loop guard)",
+                m.id,
+                id,
+                m.from
+            );
             continue;
         }
+        tracing::debug!(
+            "listen-emit: uid={} env_id={} from={} chars={}",
+            m.id,
+            id,
+            m.from,
+            text.chars().count()
+        );
         emit(
             out,
             &serde_json::json!({
@@ -326,7 +389,13 @@ fn decrypt_envelope(crypto: &CryptoClient, body: &str) -> anyhow::Result<Option<
             let id = value.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             Ok(Some((id, value)))
         }
-        _ => Ok(None),
+        _ => {
+            tracing::debug!(
+                "listen: envelope decrypted but unrecognized: {}",
+                plain.chars().take(120).collect::<String>()
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -388,6 +457,20 @@ async fn handle_command(
 }
 
 fn emit(out: &mut std::io::Stdout, v: &Value) {
-    let _ = writeln!(out, "{v}");
-    let _ = out.flush();
+    // stdout — пайп в bridge.py. Раньше ошибки записи глотались (`let _ =`),
+    // а ключ дедупа уже лежал в seen: сломанный/закрытый пайп = безвозвратная
+    // потеря события, без единой строки в логе.
+    if writeln!(out, "{v}").is_err() {
+        tracing::warn!(
+            "emit: stdout write failed (bridge pipe closed?) — event lost: {:?}",
+            v.get("type")
+        );
+        return;
+    }
+    if out.flush().is_err() {
+        tracing::warn!(
+            "emit: stdout flush failed (bridge pipe broken?) — event lost: {:?}",
+            v.get("type")
+        );
+    }
 }

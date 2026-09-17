@@ -259,6 +259,19 @@ impl EmailClient {
 
                     if let Some(header) = fetch.header() {
                         let header_str = String::from_utf8_lossy(header);
+                        // imap-proto парсит BODY.PEEK[TEXT]<0.N> как
+                        // SectionPath::Full(Text) — body() достаёт только
+                        // section:None (BODY[]/RFC822), поэтому текст берём
+                        // через text(). Если text() = None — is_encrypted()
+                        // видит пустоту и молча выбрасывает письмо, поэтому
+                        // отсутствие тела логируем.
+                        let body_raw = fetch.text().unwrap_or_default();
+                        if body_raw.is_empty() {
+                            tracing::debug!(
+                                "listen-fetch: uid={} has no TEXT section",
+                                uid_str
+                            );
+                        }
                         let from = extract_header(&header_str, "From:")
                             .unwrap_or_else(|| "Unknown".to_string());
                         let to = extract_header(&header_str, "To:")
@@ -272,10 +285,7 @@ impl EmailClient {
                         // парсит как SectionPath::Full(Text) — accessor body()
                         // отдаёт только section:None (BODY[]/RFC822), поэтому
                         // текст берём через text().
-                        let body = fetch
-                            .text()
-                            .map(|b| decode_quoted_printable(&String::from_utf8_lossy(b)))
-                            .unwrap_or_default();
+                        let body = decode_quoted_printable(&String::from_utf8_lossy(body_raw));
 
                         messages.push(EmailMessage {
                             id: uid_str,

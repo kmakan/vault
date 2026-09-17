@@ -17,6 +17,63 @@ use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
 pub const NONCE_LEN: usize = 24;
 
+/// Очистить тело письма перед Base64-декодом конверта.
+///
+/// Почтовые транспорты (mail.ru, yandex) иногда оборачивают Base64-конверт
+/// в quoted-printable кодирование: символ `=` (Base64 padding) превращается
+/// в `=3D`, а `=` в других позициях — в `=XX`. Без раскодирования длина
+/// «компактной» строки перестаёт быть кратной 4, decode падает, и
+/// `is_encrypted()` возвращает false — письмо тихо выбрасывается как
+/// «не зашифрованное».
+///
+/// Здесь выполняется проход QP-декодера: `=XX` раскодируется в
+/// соответствующий байт (символы за пределами base64 просто выбрасываются
+/// — транспорт также может вставлять `=\r\n` soft line breaks).
+fn clean_base64_body(text: &str) -> String {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    // Быстрый путь: ни одного QP-escape — ничего раскодировать не нужно.
+    if !compact.contains('=') {
+        return compact;
+    }
+
+    let bytes = compact.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // soft line break, который QP-транспорт оставил после очистки
+            // пробелов: валидируем как base64-безопасный — пропускаем.
+            b'=' if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit() =>
+            {
+                let hi = (bytes[i + 1] as char).to_digit(16).unwrap();
+                let lo = (bytes[i + 2] as char).to_digit(16).unwrap();
+                let b = ((hi << 4) | lo) as u8;
+                out.push(b);
+                i += 3;
+            }
+            _ => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // Декодер мог вернуть хвост, некратный 4 (оторванный padding).
+    // Base64-провайдер ругается на такую длину — восстанавливаем padding
+    // по кратности: дописываем `=` до кратного 4 размера.
+    while out.len() % 4 != 0 {
+        out.push(b'=');
+    }
+
+    match String::from_utf8(out) {
+        Ok(s) => s,
+        // Невозможно в теории: все исходные символы были ASCII.
+        Err(_) => compact,
+    }
+}
+
 pub struct CryptoClient {
     private_key: Option<StaticSecret>,
     public_key: Option<PublicKey>,
@@ -227,8 +284,11 @@ impl CryptoClient {
     /// Decrypt Base64 ciphertext → plaintext string.
     /// Whitespace (line breaks from email transport) is ignored — transport
     /// relays may wrap the base64 line, e.g. `\r\n` inside the payload.
+    /// Quoted-printable кодирование (`=3D` вместо `=`, которое некоторые
+    /// SMTP-транспорты накладывают на тело) раскодируется в
+    /// [`clean_base64_body`].
     pub fn decrypt(&self, ciphertext: &str) -> Result<String> {
-        let compact: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
+        let compact = clean_base64_body(ciphertext);
         let decoded = BASE64.decode(compact).context("Invalid Base64")?;
         let plaintext = self.do_decrypt(&decoded)?;
         String::from_utf8(plaintext).context("Invalid UTF-8 in decrypted text")
@@ -312,7 +372,7 @@ impl CryptoClient {
             }
         }
 
-        let compact: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
+        let compact = clean_base64_body(ciphertext);
         let decoded = BASE64.decode(compact).context("Invalid Base64")?;
 
         let key = self.get_key()?;
@@ -338,7 +398,7 @@ impl CryptoClient {
 
     /// Check if text looks like encrypted data
     pub fn is_encrypted(&self, text: &str) -> bool {
-        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        let compact = clean_base64_body(text);
         if let Ok(decoded) = BASE64.decode(compact) {
             decoded.len() >= NONCE_LEN + 17 && self.has_keys()
         } else {
