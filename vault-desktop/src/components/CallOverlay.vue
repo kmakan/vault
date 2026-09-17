@@ -10,6 +10,13 @@
     </div>
 
     <div class="call-panel" :style="panelShiftStyle">
+      <!-- Remote видео: Rust reader шлёт 'call-video-frame' (base64 VP8),
+           WebView декодирует (WebCodecs VideoDecoder) и рисует сюда.
+           Поверх — аватар/имя, пока кадров нет. -->
+      <div v-if="state === 'active' && mediaConnected && videoOn" class="call-video-wrap">
+        <canvas ref="remoteVideoEl" class="call-video-remote"></canvas>
+      </div>
+
       <!-- Аватар + пульсирующие кольца при дозвоне -->
       <div class="call-avatar-wrap">
         <template v-if="state === 'incoming_ringing' || state === 'outgoing_ringing'">
@@ -136,6 +143,16 @@
           >
             <Icon name="volume" :size="22" />
           </button>
+          <!-- Камера (M3): вкл/выкл видео. Premium-функция — ошибка
+               пермишена/отсутствие камеры не роняет аудио-звонок. -->
+          <button
+            class="call-orb call-orb-extra"
+            :class="{ 'orb-active': videoOn }"
+            :title="texts.camera"
+            @click="$emit('toggle-video')"
+          >
+            <Icon :name="videoOn ? 'video-off' : 'video'" :size="22" />
+          </button>
         </div>
       </template>
     </div>
@@ -164,12 +181,14 @@ export default {
     avatarUrl: { type: String, default: '' },
     muted: { type: Boolean, default: false },
     speaker: { type: Boolean, default: false },
+    // M3: видео включено (камера активна + remote-декодер подписан).
+    videoOn: { type: Boolean, default: false },
     // Реально ли пошёл звук.
     mediaConnected: { type: Boolean, default: false },
     elapsed: { type: String, default: '00:00' },
     texts: { type: Object, default: () => ({}) },
   },
-  emits: ['accept', 'reject', 'cancel', 'end', 'toggle-mute', 'toggle-speaker'],
+  emits: ['accept', 'reject', 'cancel', 'end', 'toggle-mute', 'toggle-speaker', 'toggle-video'],
   data() {
     return {
       dragging: false,
@@ -215,7 +234,14 @@ export default {
       this.decision = null;
     },
   },
+  // M3: пробрасываем <canvas ref="remoteVideoEl"> наружу, не нарушая
+  // инкапсуляцию оверлея: App.vue дёргает Video.startRemoteVideo (фича)
+  // с готовым DOM-узлом. expose — безопаснее прямых $refs на внутренности.
+  expose: ['getRemoteVideoEl'],
   methods: {
+    getRemoteVideoEl() {
+      return this.$refs.remoteVideoEl || null;
+    },
     reset() {
       this.dragging = false;
       this.startX = null;
@@ -323,6 +349,24 @@ export default {
   -webkit-backdrop-filter: blur(18px);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
   transition: transform 0.12s ease-out;
+}
+
+/* ── Remote видео (M3): canvas под декодер WebCodecs ──────────── */
+.call-video-wrap {
+  width: 100%;
+  max-width: 320px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  aspect-ratio: 4 / 3;
+}
+.call-video-remote {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transform: scaleX(-1); /* mirror — привычный взгляд собеседника */
 }
 /* ── Аватар + пульсирующие кольца дозвона ─────────────────────── */
 .call-avatar-wrap {

@@ -184,6 +184,7 @@ export default {
   call_connecting: 'Соединение…',
   call_connect_failed: 'Не удалось соединить звонок',
   call_speaker: 'Динамик',
+  call_camera: 'Видео',
   call_accept_hint: 'Свайп вправо →',
   call_reject_hint: '← Свайп влево',
   call_start_record: 'Запись',

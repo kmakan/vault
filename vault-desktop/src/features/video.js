@@ -147,17 +147,18 @@ let canvasCtx = null;
 
 /**
  * Запустить приём remote-видео: Rust-reader (media_video_start) шлёт
- * событие 'call-video-frame' — здесь декодируем и рисуем.
+ * событие 'call-video-frame' — App.vue роутит кадры в decodeFrame.
  *
  * @param {string} callId
  * @param {HTMLCanvasElement} canvasEl — куда рисовать remote-кадры
- * @param {object} [controller] — { unlisten } для отписки от событий
+ * @returns {boolean} true если декодер запущен
  */
-export async function startRemoteVideo(callId, canvasEl, controller = {}) {
+export async function startRemoteVideo(callId, canvasEl) {
   if (!('VideoDecoder' in window)) {
     console.warn('[video] VideoDecoder unavailable — no remote video');
-    return;
+    return false;
   }
+  if (decoder) return true;
 
   decoder = new VideoDecoder({
     output: (frame) => {
@@ -175,10 +176,7 @@ export async function startRemoteVideo(callId, canvasEl, controller = {}) {
     // но canvas создаётся под ожидаемый размер — Rust шлёт 640x480.
     optimizeForLatency: true, // видеозвонок: задержка важнее качества
   });
-
-  // Подписка на кадры из Rust. unlisten возвращаем для stopRemoteVideo.
-  const unlisten = await controller.listen(callId);
-  controller._unlisten = unlisten;
+  return true;
 }
 
 function drawFrame(canvasEl, frame) {
@@ -194,8 +192,7 @@ function drawFrame(canvasEl, frame) {
 /**
  * Остановить приём remote-видео (hangup).
  */
-export function stopRemoteVideo(controller = {}) {
-  try { if (controller._unlisten) controller._unlisten(); } catch (e) {}
+export function stopRemoteVideo() {
   try { if (decoder) { decoder.flush().catch(() => {}); decoder.close(); } } catch (e) {}
   decoder = null;
   canvasCtx = null;

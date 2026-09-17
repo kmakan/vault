@@ -271,4 +271,13 @@ export const icons = {
     { type: 'path', d: 'M17 8l-5-5-5 5' },
     { type: 'path', d: 'M12 3v12' },
   ],
+  // Видео (M3): вкл/выкл камеры в звонке. Feather-style.
+  'video': [
+    { type: 'path', d: 'M23 7l-7 5 7 5V7z' },
+    { type: 'rect', x: 1, y: 5, w: 15, h: 14, rx: 2 },
+  ],
+  'video-off': [
+    { type: 'path', d: 'M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10' },
+    { type: 'path', d: 'M1 1l22 22' },
+  ],
 };

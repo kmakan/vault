@@ -3,6 +3,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Звонки (26.08): WebRTC-аудио требует доступ к микрофону. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Видеозвонки (M3): WebCodecs getUserMedia({video}) требует
+         CAMERA. Runtime-пермишен запрашивает RustWebChromeClient
+         (onPermissionRequest), манифест — обязательная декларация. -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- Фоновый приём звонков (27.08): foreground-сервис удерживает процесс,
          чтобы IMAP IDLE-цикл продолжал доставлять входящие вызовы в фоне. -->

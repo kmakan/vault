@@ -421,12 +421,14 @@
            Медиа (webrtc-rs) — Фаза 2; сейчас состояние + таймер + 🔒. -->
       <CallOverlay
         v-if="callState !== 'idle' && currentCall"
+        ref="callOverlay"
         :state="callState"
         :peer="currentCall.peer"
         :peer-name="callPeerName"
         :avatar-url="avatarOf(currentCall.peer)"
         :muted="callMuted"
         :speaker="callSpeaker"
+        :video-on="callVideoOn"
         :media-connected="callMediaConnected"
         :elapsed="callElapsedLabel"
         :texts="callTexts"
@@ -436,6 +438,7 @@
         @end="endCall"
         @toggle-mute="toggleCallMute"
         @toggle-speaker="toggleSpeaker"
+        @toggle-video="toggleCallVideo"
       />
 
       <!-- CIPHER TOOL -->
@@ -887,6 +890,7 @@ import api, { db } from './api.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
+import * as Video from './features/video.js';
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
 import CallOverlay from './components/CallOverlay.vue';
@@ -1017,6 +1021,8 @@ export default {
       lastCallId: null,   // { call_id, peer }
       callMuted: false,
       callSpeaker: false,
+      // M3: видео — камера + remote-декодер активны.
+      callVideoOn: false,
       // Реально ли пошёл звук.
       // До этого оверлей показывает «Соединение…» вместо таймера.
       callMediaConnected: false,
@@ -1360,6 +1366,7 @@ export default {
         mute: this.t('call_mute') || 'Выключить микрофон',
         unmute: this.t('call_unmute') || 'Включить микрофон',
         speaker: this.t('call_speaker') || 'Динамик',
+        camera: this.t('call_camera') || 'Видео',
         acceptHint: this.t('call_accept_hint') || '',
         rejectHint: this.t('call_reject_hint') || '',
         noMedia: this.t('call_no_media') || '',
@@ -1562,6 +1569,16 @@ export default {
         this.hangup('remote');
       }
     }).catch(e => console.warn('[call] listen connection-state failed:', e));
+    // M3: remote-видео — Rust-reader шлёт base64 VP8-кадр.
+    // Роутинг в features/video.js (декодер), как остальные 4 listener'а
+    // звонков; кадры идут только текущему звонку.
+    this._unlistenVideoFrame = tauriListen('call-video-frame', (ev) => {
+      const p = ev && ev.payload;
+      const cid = p && p.callId;
+      if (!cid || !this.currentCall || this.currentCall.call_id !== cid) return;
+      if (!this.callVideoOn) return; // видео выключено — кадры не рисуем
+      Video.decodeFrame(p.frame, p.timestamp);
+    }).catch(e => console.warn('[video] listen frame failed:', e));
     // Rust IDLE-монитор: «mail-changed» приходит из tokio-таска
     // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.
     // Обработка идемпотентна к JS-поллингу: дедуп по uid|folder + processedUnreadIds.
@@ -1704,7 +1721,12 @@ export default {
     if (this._unlistenMediaConnected) { this._unlistenMediaConnected(); this._unlistenMediaConnected = null; }
     if (this._unlistenRemoteHangup) { this._unlistenRemoteHangup(); this._unlistenRemoteHangup = null; }
     if (this._unlistenConnState) { this._unlistenConnState(); this._unlistenConnState = null; }
+    if (this._unlistenVideoFrame) { this._unlistenVideoFrame(); this._unlistenVideoFrame = null; }
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
+    // M3: видеотракт — камера и remote-декодер не должны пережить
+    // размонтирование (иначе энкодер держит USB/камеру после закрытия UI).
+    Video.stopCamera();
+    Video.stopRemoteVideo();
   },
   methods: {
     // ── Голосования (poll) — логика в features/poll.js; обёртки держат
@@ -1778,8 +1800,14 @@ export default {
     async startCall() { return CallsFeature.startCall(this); },
     async acceptCall() { return CallsFeature.acceptCall(this); },
     async rejectCall() { return CallsFeature.rejectCall(this); },
-    async endCall() { return CallsFeature.endCall(this); },
-    async hangup(reason) { return CallsFeature.hangup(this, reason); },
+    async endCall() {
+      this.stopCallVideo();
+      return CallsFeature.endCall(this);
+    },
+    async hangup(reason) {
+      this.stopCallVideo();
+      return CallsFeature.hangup(this, reason);
+    },
     async cancelCall(reason) { return CallsFeature.cancelCall(this, reason); },
     async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this, peer, kind, ts, durationSec, callId); },
     callEventLabel(msg) { return CallsFeature.callEventLabel(this, msg); },
@@ -1788,6 +1816,54 @@ export default {
     callBack() { return CallsFeature.callBack(this); },
     toggleCallMute() { return CallsFeature.toggleCallMute(this); },
     toggleSpeaker() { return CallsFeature.toggleSpeaker(this); },
+    // M3: видео живёт в features/video.js — здесь только тонкая
+    // точка сборки (reactive-флаг + вызов фичи), как у mute/speaker.
+    toggleCallVideo() {
+      if (!this.currentCall || !this.callMediaConnected) return;
+      if (this.callVideoOn) { this.stopCallVideo(); } else { this.startCallVideo(); }
+    },
+    async startCallVideo() {
+      const c = this.currentCall;
+      if (!c || this.callVideoOn) return;
+      const cid = c.call_id;
+      // Сначала поднимаем флаг: canvas рендерится по v-if=videoOn,
+      // и только когда DOM готов — стартуем remote-декодер.
+      this.callVideoOn = true;
+      await this.$nextTick();
+      const overlay = this.$refs.callOverlay;
+      const canvasEl = overlay ? overlay.getRemoteVideoEl() : null;
+      try {
+        const ok = await Video.startRemoteVideo(cid, canvasEl);
+        if (!ok) {
+          this.callVideoOn = false;
+          this.showToast(this.t('video_unavailable') || 'Видео недоступно в этом WebView', 3000);
+          return;
+        }
+        await api.mediaVideoStart(cid);
+      } catch (e) {
+        console.error('[video] remote start failed:', e);
+        this.callVideoOn = false;
+        Video.stopRemoteVideo();
+        this.showToast(this.t('video_start_failed') || 'Не удалось включить видео', 3000);
+        return;
+      }
+      // Локальная камера: кадры → Rust → собеседник (превью нет — air).
+      try {
+        await Video.startCamera(cid);
+      } catch (e) {
+        // Камера недоступна/отказала — remote-видео собеседника всё равно
+        // работает; переключатель остается «вкл», звонок не роняем.
+        console.warn('[video] camera unavailable, remote-only:', e && e.message || e);
+        this.showToast(this.t('video_camera_off') || 'Камера недоступна — видно только собеседника', 3000);
+      }
+    },
+    stopCallVideo() {
+      if (!this.currentCall) return;
+      Video.stopCamera();
+      Video.stopRemoteVideo();
+      this.callVideoOn = false;
+      api.mediaVideoStop(this.currentCall.call_id).catch((e) => console.warn('[video] stop failed:', e));
+    },
     startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this, peer, payload, call_id); },
     stopSignalResend() { return CallsFeature.stopSignalResend(this); },
     sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this, peer, type, call_id); },

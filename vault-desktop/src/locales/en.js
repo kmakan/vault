@@ -184,6 +184,7 @@ export default {
   call_connecting: 'Connecting…',
   call_connect_failed: 'Could not connect the call',
   call_speaker: 'Speaker',
+  call_camera: 'Video',
   call_accept_hint: 'Swipe right →',
   call_reject_hint: '← Swipe left',
   call_start_record: 'Record',

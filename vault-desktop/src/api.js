@@ -1113,6 +1113,11 @@ export class ApiClient {
   async mediaVideoStop(callId) {
     return await invoke('media_video_stop', { callId });
   }
+  // Видео (M3): закодированный кадр локальной камеры → Rust
+  // (E2E-шифр + RTP-пакетизация). 30fps, fire-and-forget.
+  async mediaVideoFrame(callId, frame) {
+    return await invoke('media_video_frame', { callId, frame });
+  }
   // Динамик: Android — speakerphone вкл/выкл; desktop — no-op.
   async mediaSetSpeaker(callId, on) {
     return await invoke('media_set_speaker', { callId, on });

@@ -184,6 +184,7 @@ export default {
   call_connecting: '连接中…',
   call_connect_failed: '通话连接失败',
   call_speaker: '扬声器',
+  call_camera: '视频',
   call_accept_hint: '右滑 →',
   call_reject_hint: '← 左滑',
   call_start_record: '录音',
