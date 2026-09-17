@@ -1669,6 +1669,8 @@ pub fn run() {
             // Видео (шаг 2/3): камера → кадры → локальный VP8-трек звонка.
             media::media_camera_start,
             media::media_camera_stop,
+            media::media_video_start,
+            media::media_video_stop,
             media::media_send_hangup,
             media::media_show_incoming_call,
             media::media_dismiss_incoming_call,

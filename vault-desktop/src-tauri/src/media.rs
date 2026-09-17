@@ -41,7 +41,7 @@ use tokio::time::timeout;
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_local::TrackLocal;
-use webrtc::media_stream::track_remote::TrackRemote;
+use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
     RTCIceGatheringState, RTCIceServer, RTCPeerConnectionState, RTCSessionDescription,
@@ -53,6 +53,10 @@ use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::{
     MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8,
 };
+use base64::Engine as _;
+use bytes::Bytes;
+use rtc::rtp::codec::vp8::Vp8Packet;
+use rtc::rtp::packetizer::Depacketizer;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
@@ -103,6 +107,12 @@ struct CallSession {
     media_key: Option<[u8; 32]>,
     /// Живая камера (шаг 2/3). Drop = стоп захвата + завершение writer-таски.
     camera: Option<crate::video::CameraHandle>,
+    /// Видео (шаг 3/3):remote-видео. Сюда on_track кладёт видео-трек,
+    /// reader-таска (video_start) забирает его и гонит кадры в UI.
+    video_rx: Option<Receiver<Arc<dyn TrackRemote>>>,
+    /// Видео (шаг 3/3): идемпотентность — повторный video_start не запускает
+    /// второй reader. None = reader ещё не стартовал (или уже закончился).
+    video_reader: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 /// SDP payload returned to the UI (JSON-encoded RTCSessionDescription).
@@ -130,6 +140,9 @@ struct CallHandler {
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     track_tx: Sender<Arc<dyn TrackRemote>>,
+    /// M3 видео: remote-видео-треки идут отдельным каналом — audio-pipeline
+    /// по-прежнему получает только аудио (см. фильтр в on_track).
+    video_tx: Sender<Arc<dyn TrackRemote>>,
     /// получает канал, созданный caller'ом, через DCEP-негосиацию).
     dc_tx: Sender<Arc<dyn DataChannel>>,
     /// Состояние соединения: пробрасываем ВСЕ смены состояния в UI.
@@ -157,14 +170,15 @@ impl PeerConnectionEventHandler for CallHandler {
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
         // M3 видео: on_track вызывается для КАЖДОГО remote-трека (аудио и
-        // видео отдельно — rtc driver.rs:1199). Audio-pipeline ждёт из этого
-        // канала ОДИН трек и ведёт его в Opus-декодер: отданный сюда
-        // видео-трек либо вытеснил бы аудио (канал с буфером 1), либо попал
-        // бы в decode_float как Opus-пакет. Поэтому видео-треки отсекаем
-        // здесь — audio-pipeline по-прежнему получает ровно аудио.
+        // видео отдельно — rtc driver.rs:1199). Audio-pipeline ждёт из своего
+        // канала ОДИН трек и ведёт его в Opus-декодер: видео туда не должно
+        // попасть — маршрутизируем по kind():
+        //  - Video → отдельный канал для video-reader'а (UI рендерит кадры)
+        //  - остальное → audio-pipeline (ровно аудио, как и раньше).
         match track.kind().await {
             RtpCodecKind::Video => {
-                eprintln!("[media] remote VIDEO track ignored (audio pipeline)");
+                eprintln!("[media] remote VIDEO track received");
+                let _ = self.video_tx.try_send(track);
             }
             _ => {
                 let _ = self.track_tx.try_send(track);
@@ -350,6 +364,7 @@ impl CallMediaManager {
             Arc<TrackLocalStaticSample>,
             Option<u32>,
             Receiver<()>,
+            Receiver<Arc<dyn TrackRemote>>,
         ),
         String,
     > {
@@ -380,6 +395,8 @@ impl CallMediaManager {
         let (gather_tx, gather_rx) = channel::<()>(1);
         let (connected_tx, connected_rx) = channel::<()>(1);
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
+        // M3 видео: remote-видео-треки — отдельный канал (см. фильтр в on_track).
+        let (video_tx, video_rx) = channel::<Arc<dyn TrackRemote>>(1);
         let (dc_tx, mut dc_rx) = channel::<Arc<dyn DataChannel>>(1);
         // Состояние соединения → UI: единственный надёжный сигнал
         let (state_tx, mut state_rx) = channel::<RTCPeerConnectionState>(8);
@@ -388,6 +405,7 @@ impl CallMediaManager {
             gather_complete_tx: gather_tx,
             connected_tx,
             track_tx,
+            video_tx,
             dc_tx,
             state_tx,
         });
@@ -597,10 +615,12 @@ impl CallMediaManager {
                 video_ssrc,
                 media_key,
                 camera: None,
+                video_rx: Some(video_rx.clone()),
+                video_reader: None,
             },
         );
 
-        Ok((pc, track, video_ssrc, gather_rx))
+        Ok((pc, track, video_ssrc, gather_rx, video_rx))
     }
 
     /// Wait for non-trickle ICE gathering; return the local SDP as a JSON
@@ -649,7 +669,7 @@ impl CallMediaManager {
         media_key: Option<[u8; 32]>,
         with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, video_ssrc, mut gather_rx) = self
+        let (pc, _track, video_ssrc, mut gather_rx, video_rx) = self
             .build_pc(app, call_id, media_key, true, with_video)
             .await?;
 
@@ -680,7 +700,7 @@ impl CallMediaManager {
         media_key: Option<[u8; 32]>,
         with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, video_ssrc, mut gather_rx) = self
+        let (pc, _track, video_ssrc, mut gather_rx, video_rx) = self
             .build_pc(app, call_id, media_key, false, with_video)
             .await?;
 
@@ -799,7 +819,7 @@ impl CallMediaManager {
             .ok_or_else(|| "call has no video ssrc".to_string())?;
         // Стоп-сигнал звонка — тот же, что у аудио-пайплайна: close() гасит
         // и аудио, и видео (subscribe() до close(), поэтому событие видно).
-        let stop_rx = session.stop_tx.subscribe();
+        let mut stop_rx = session.stop_tx.subscribe();
         let camera = crate::video::start_video_for_call(
             call_id,
             track,
@@ -831,6 +851,110 @@ impl CallMediaManager {
         // Страховка на случай, если handle уже потерян: гасим платформенный
         // захват (идемпотентно — нет активного, ничего не делает).
         crate::video::stop_camera();
+    }
+
+    /// Видео (шаг 3/3): приём remote-видео. Reader-таска ждёт remote
+    /// VP8-трек (on_track кладёт его в `video_rx`), дальше для каждого
+    /// RTP-пакета: депакетизация VP8 → E2E-расшифровка → кадр в UI
+    /// через событие `call-video-frame`.
+    ///
+    /// Е2Е-шифр: payload RTP шифруется целиком (см. `write_video_loop`),
+    /// поэтому депакетизируем ПОСЛЕ расшифровки — обратный порядок
+    /// относительно отправки.
+    pub fn video_start(
+        &mut self,
+        call_id: &str,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        let session = self
+            .calls
+            .get_mut(call_id)
+            .ok_or_else(|| "call not found".to_string())?;
+        if session.video_reader.is_some() {
+            return Err("video reader already started for this call".to_string());
+        }
+        let mut video_rx = session
+            .video_rx
+            .take()
+            .ok_or_else(|| "call has no video channel".to_string())?;
+        let mut stop_rx = session.stop_tx.subscribe();
+        let media_key = session.media_key;
+        let cid = call_id.to_owned();
+        let reader = tauri::async_runtime::spawn(async move {
+            // Ждём remote-видео-трек: on_track срабатывает на ПЕРВОМ
+            // RTP-пакете пира (rtc endpoint.go), поэтому трек приходит
+            // только когда собеседник реально шлёт видео.
+            let track = tokio::select! {
+                t = video_rx.recv() => match t { Some(t) => t, None => return },
+                _ = stop_rx.changed() => return,
+            };
+            eprintln!("[video] remote track received — decoding frames to UI");
+            let mut depacketizer = Vp8Packet::default();
+            loop {
+                tokio::select! {
+                    ev = track.poll() => {
+                        let Some(ev) = ev else { break };
+                        match ev {
+                            TrackRemoteEvent::OnRtpPacket(pkt) => {
+                                // E2E-расшифровка (как в audio read_remote_loop,
+                                // но для видео): payload зашифран целиком.
+                                let payload = match &media_key {
+                                    Some(k) => {
+                                        match crate::crypto::media_decrypt_frame(k, &pkt.payload) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                eprintln!("[video] media decrypt: {e}");
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    None => pkt.payload.to_vec(),
+                                };
+                                // Депакетизация VP8: снимает RTP-заголовок
+                                // кадра (picture ID и пр.), выдаёт чистый
+                                // VP8-битстрим кадра.
+                                let frame = match depacketizer.depacketize(&Bytes::from(payload)) {
+                                    Ok(f) => f,
+                                    Err(e) => {
+                                        eprintln!("[video] depacketize: {e}");
+                                        continue;
+                                    }
+                                };
+                                if frame.is_empty() {
+                                    continue;
+                                }
+                                // Кадр в UI: байты VP8-фрейма. UI декодирует
+                                // через WebCodecs VideoDecoder('vp8').
+                                let _ = app.emit(
+                                    "call-video-frame",
+                                    serde_json::json!({
+                                        "callId": cid,
+                                        // base64: tauri events — JSON, бинарка
+                                        // через строку (как релей/вложения).
+                                        "frame": base64::engine::general_purpose::STANDARD.encode(&frame),
+                                    }),
+                                );
+                            }
+                            TrackRemoteEvent::OnEnded | TrackRemoteEvent::OnEnding => break,
+                            _ => {}
+                        }
+                    }
+                    _ = stop_rx.changed() => break,
+                }
+            }
+            eprintln!("[video] remote reader finished (call {cid})");
+        });
+        session.video_reader = Some(reader);
+        Ok(())
+    }
+
+    /// Видео (шаг 3/3): стоп reader'а remote-видео. Идемпотентно.
+    pub fn video_stop(&mut self, call_id: &str) {
+        if let Some(session) = self.calls.get_mut(call_id) {
+            if let Some(reader) = session.video_reader.take() {
+                reader.abort();
+            }
+        }
     }
 
     /// Close a call session (graceful PeerConnection teardown).
@@ -1030,6 +1154,33 @@ pub async fn media_camera_stop(
 ) -> Result<(), String> {
     let mut mgr = state.lock().await;
     mgr.camera_stop(call_id.as_deref());
+    Ok(())
+}
+
+/// Видео (шаг 3/3): приём remote-видео. Запускает reader remote VP8-трека:
+/// RTP-пакеты → депакетизация → E2E-расшифровка → кадры отдаются в UI
+/// через событие `call-video-frame`. Сам трек приходит через `on_track`
+/// (видео отсекается от audio-pipeline фильтром по `kind()`).
+///
+/// Идемпотентно: повторный вызов для того же звонка не запускает второй reader.
+#[tauri::command]
+pub async fn media_video_start(
+    call_id: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.video_start(&call_id, app)
+}
+
+/// Видео (шаг 3/3): стоп приёма remote-видео (гасит reader-таску).
+#[tauri::command]
+pub async fn media_video_stop(
+    call_id: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let mut mgr = state.lock().await;
+    mgr.video_stop(&call_id);
     Ok(())
 }
 
