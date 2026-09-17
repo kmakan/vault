@@ -156,7 +156,20 @@ impl PeerConnectionEventHandler for CallHandler {
     }
 
     async fn on_track(&self, track: Arc<dyn TrackRemote>) {
-        let _ = self.track_tx.try_send(track);
+        // M3 видео: on_track вызывается для КАЖДОГО remote-трека (аудио и
+        // видео отдельно — rtc driver.rs:1199). Audio-pipeline ждёт из этого
+        // канала ОДИН трек и ведёт его в Opus-декодер: отданный сюда
+        // видео-трек либо вытеснил бы аудио (канал с буфером 1), либо попал
+        // бы в decode_float как Opus-пакет. Поэтому видео-треки отсекаем
+        // здесь — audio-pipeline по-прежнему получает ровно аудио.
+        match track.kind().await {
+            RtpCodecKind::Video => {
+                eprintln!("[media] remote VIDEO track ignored (audio pipeline)");
+            }
+            _ => {
+                let _ = self.track_tx.try_send(track);
+            }
+        }
     }
 
     async fn on_data_channel(&self, dc: Arc<dyn DataChannel>) {
