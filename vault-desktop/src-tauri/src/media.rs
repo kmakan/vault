@@ -107,9 +107,12 @@ struct CallSession {
     media_key: Option<[u8; 32]>,
     /// Живая камера (шаг 2/3). Drop = стоп захвата + завершение writer-таски.
     camera: Option<crate::video::CameraHandle>,
-    /// Видео (шаг 3/3):remote-видео. Сюда on_track кладёт видео-трек,
-    /// reader-таска (video_start) забирает его и гонит кадры в UI.
-    video_rx: Option<Receiver<Arc<dyn TrackRemote>>>,
+    /// Видео (шаг 3/3): remote-видео-трек, который on_track кладёт сюда.
+    /// Хранится В СЕССИИ в виде слота: кнопку видео можно выключать и
+    /// включать сколько угодно раз за звонок — каждый video_start берёт
+    /// трек из слота (Arc::clone), а не из израсходованного одноразового
+    /// канала (баг: повторное включение видео падало «no video channel»).
+    video_slot: Arc<Mutex<Option<Arc<dyn TrackRemote>>>>,
     /// Видео (шаг 3/3): идемпотентность — повторный video_start не запускает
     /// второй reader. None = reader ещё не стартовал (или уже закончился).
     video_reader: Option<tauri::async_runtime::JoinHandle<()>>,
@@ -140,9 +143,9 @@ struct CallHandler {
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     track_tx: Sender<Arc<dyn TrackRemote>>,
-    /// M3 видео: remote-видео-треки идут отдельным каналом — audio-pipeline
+    /// M3 видео: remote-видео-трек кладётся в слот сессии — audio-pipeline
     /// по-прежнему получает только аудио (см. фильтр в on_track).
-    video_tx: Sender<Arc<dyn TrackRemote>>,
+    video_slot: Arc<Mutex<Option<Arc<dyn TrackRemote>>>>,
     /// получает канал, созданный caller'ом, через DCEP-негосиацию).
     dc_tx: Sender<Arc<dyn DataChannel>>,
     /// Состояние соединения: пробрасываем ВСЕ смены состояния в UI.
@@ -173,12 +176,15 @@ impl PeerConnectionEventHandler for CallHandler {
         // видео отдельно — rtc driver.rs:1199). Audio-pipeline ждёт из своего
         // канала ОДИН трек и ведёт его в Opus-декодер: видео туда не должно
         // попасть — маршрутизируем по kind():
-        //  - Video → отдельный канал для video-reader'а (UI рендерит кадры)
+        //  - Video → слот сессии для video-reader'а (UI рендерит кадры)
         //  - остальное → audio-pipeline (ровно аудио, как и раньше).
+        // Трек хранится в слоте, а не в канале: кнопка видео может
+        // выключаться и включаться повторно — повторный video_start
+        // берёт трек из слота, а не из израсходованного канала.
         match track.kind().await {
             RtpCodecKind::Video => {
                 eprintln!("[media] remote VIDEO track received");
-                let _ = self.video_tx.try_send(track);
+                *self.video_slot.lock().await = Some(track);
             }
             _ => {
                 let _ = self.track_tx.try_send(track);
@@ -364,7 +370,6 @@ impl CallMediaManager {
             Arc<TrackLocalStaticSample>,
             Option<u32>,
             Receiver<()>,
-            Receiver<Arc<dyn TrackRemote>>,
         ),
         String,
     > {
@@ -394,9 +399,15 @@ impl CallMediaManager {
 
         let (gather_tx, gather_rx) = channel::<()>(1);
         let (connected_tx, connected_rx) = channel::<()>(1);
+        // M3 видео: on_track кладёт remote-видео-трек в слот сессии
+        // (см. `video_slot` у CallSession). Слот, а не канал: кнопку видео
+        // можно выключать и включать повторно — каждый video_start берёт
+        // трек из слота, а не из израсходованного одноразового канала.
+        let video_slot: Arc<Mutex<Option<Arc<dyn TrackRemote>>>> =
+            Arc::new(Mutex::new(None));
+        // Аудио: remote-аудио-трек уходит в audio-pipeline (один трек
+        // на звонок — пайплайн запускается один раз, канал не нужен).
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
-        // M3 видео: remote-видео-треки — отдельный канал (см. фильтр в on_track).
-        let (video_tx, video_rx) = channel::<Arc<dyn TrackRemote>>(1);
         let (dc_tx, mut dc_rx) = channel::<Arc<dyn DataChannel>>(1);
         // Состояние соединения → UI: единственный надёжный сигнал
         let (state_tx, mut state_rx) = channel::<RTCPeerConnectionState>(8);
@@ -405,7 +416,7 @@ impl CallMediaManager {
             gather_complete_tx: gather_tx,
             connected_tx,
             track_tx,
-            video_tx,
+            video_slot: Arc::clone(&video_slot),
             dc_tx,
             state_tx,
         });
@@ -615,12 +626,12 @@ impl CallMediaManager {
                 video_ssrc,
                 media_key,
                 camera: None,
-                video_rx: Some(video_rx.clone()),
+                video_slot: Arc::clone(&video_slot),
                 video_reader: None,
             },
         );
 
-        Ok((pc, track, video_ssrc, gather_rx, video_rx))
+        Ok((pc, track, video_ssrc, gather_rx))
     }
 
     /// Wait for non-trickle ICE gathering; return the local SDP as a JSON
@@ -669,7 +680,7 @@ impl CallMediaManager {
         media_key: Option<[u8; 32]>,
         with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, video_ssrc, mut gather_rx, video_rx) = self
+        let (pc, _track, video_ssrc, mut gather_rx) = self
             .build_pc(app, call_id, media_key, true, with_video)
             .await?;
 
@@ -700,7 +711,7 @@ impl CallMediaManager {
         media_key: Option<[u8; 32]>,
         with_video: bool,
     ) -> Result<SdpResult, String> {
-        let (pc, _track, video_ssrc, mut gather_rx, video_rx) = self
+        let (pc, _track, video_ssrc, mut gather_rx) = self
             .build_pc(app, call_id, media_key, false, with_video)
             .await?;
 
@@ -871,7 +882,7 @@ impl CallMediaManager {
     }
 
     /// Видео (шаг 3/3): приём remote-видео. Reader-таска ждёт remote
-    /// VP8-трек (on_track кладёт его в `video_rx`), дальше для каждого
+    /// VP8-трек (on_track кладёт его в слот сессии), дальше для каждого
     /// RTP-пакета: депакетизация VP8 → E2E-расшифровка → кадр в UI
     /// через событие `call-video-frame`.
     ///
@@ -886,10 +897,7 @@ impl CallMediaManager {
         if session.video_reader.is_some() {
             return Err("video reader already started for this call".to_string());
         }
-        let mut video_rx = session
-            .video_rx
-            .take()
-            .ok_or_else(|| "call has no video channel".to_string())?;
+        let video_slot = Arc::clone(&session.video_slot);
         let mut stop_rx = session.stop_tx.subscribe();
         let media_key = session.media_key;
         let cid = call_id.to_owned();
@@ -897,9 +905,19 @@ impl CallMediaManager {
             // Ждём remote-видео-трек: on_track срабатывает на ПЕРВОМ
             // RTP-пакете пира (rtc endpoint.go), поэтому трек приходит
             // только когда собеседник реально шлёт видео.
-            let track = tokio::select! {
-                t = video_rx.recv() => match t { Some(t) => t, None => return },
-                _ = stop_rx.changed() => return,
+            //
+            // Трек лежит в слоте сессии (video_slot), а не в одноразовом
+            // канале: кнопку видео можно дёргать сколько угодно раз за
+            // звонок — каждый video_start заново клонирует Arc того же
+            // трека, не изымая его (фикс "call has no video channel").
+            let track = loop {
+                if let Some(t) = video_slot.lock().await.as_ref() {
+                    break Arc::clone(t);
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    _ = stop_rx.changed() => return,
+                }
             };
             eprintln!("[video] remote track received — decoding frames to UI");
             let mut depacketizer = Vp8Packet::default();
@@ -948,7 +966,12 @@ impl CallMediaManager {
                                     }),
                                 );
                             }
-                            TrackRemoteEvent::OnEnded | TrackRemoteEvent::OnEnding => break,
+                            TrackRemoteEvent::OnEnded | TrackRemoteEvent::OnEnding => {
+                                // Трек умер — гасим слот, чтобы следующий
+                                // video_start не крутил вхолостую мёртвый Arc.
+                                *video_slot.lock().await = None;
+                                break;
+                            }
                             _ => {}
                         }
                     }
