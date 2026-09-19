@@ -255,7 +255,7 @@ export async function handleCallSignal(ctx, sig, from) {
             }
           } else {
             try {
-              const r = await api.mediaAcceptIncoming(call_id, sig.sdp, ctx.peerKeys[from] || '', sig.kemct || null);
+              const r = await api.mediaAcceptIncoming(call_id, sig.sdp, ctx.peerKeys[from] || '', sig.kemct || null, true);
               console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
               const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
               await sendCallEnvelope(ctx, from, answerPayload);
@@ -356,7 +356,7 @@ export async function startCall(ctx) {
   // старую схему (offer принимающего внутри call_accept).
   let offerSdp = null;
   try {
-    const r = await api.mediaStartOutgoing(call_id, ctx.peerKeys[peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[peer]) || null);
+    const r = await api.mediaStartOutgoing(call_id, ctx.peerKeys[peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[peer]) || null, true);
     offerSdp = r.sdp;
     // PQ: kemct из SdpResult — поедет в call_request-конверте
     // принимающий передаст в mediaAcceptIncoming для гибридного ключа.
@@ -449,11 +449,11 @@ export async function acceptCall(ctx) {
   try {
     let acceptPayload;
     if (c.offerSdp) {
-      const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, ctx.peerKeys[c.peer] || '', c.kemct || null);
+      const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, ctx.peerKeys[c.peer] || '', c.kemct || null, true);
       console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
       acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
     } else {
-      const r = await api.mediaStartOutgoing(c.call_id, ctx.peerKeys[c.peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[c.peer]) || null);
+      const r = await api.mediaStartOutgoing(c.call_id, ctx.peerKeys[c.peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[c.peer]) || null, true);
       console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
       acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
     }

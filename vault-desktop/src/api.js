@@ -1077,22 +1077,32 @@ export class ApiClient {
   // ── Calls (M3, Фаза 2): WebRTC media backend (webrtc-rs) ────────────────
   // startOutgoing → SDP offer (JSON RTCSessionDescription); acceptIncoming →
   // SDP answer; setRemote — вторая половина рукопожатия; close — teardown.
-  async mediaStartOutgoing(callId, peerPublicKey, peerPqEk = null) {
+  async mediaStartOutgoing(callId, peerPublicKey, peerPqEk = null, withVideo = true) {
     // PQ: ek контакта → гибридный media_key; kemct/sender_ek
     // в SdpResult — фронт кладёт их в call-конверт.
+    // Видео: m=video добавляется в SDP при создании PeerConnection.
+    // Без него video-трека нет → camera_start упадёт «call has no video
+    // track», remote-видео не придёт (нет on_track). Renegotiation не
+    // реализован, поэтому видео-трек нужен СРАЗУ — кнопка «Видео» в
+    // активном звонке только включает уже существующий путь.
     return await invoke('media_start_outgoing', {
       callId,
       peerPublicKey,
       peerPqEk: peerPqEk || null,
+      withVideo,
     });
   }
-  async mediaAcceptIncoming(callId, offerSdp, peerPublicKey, kemct = null) {
+  async mediaAcceptIncoming(callId, offerSdp, peerPublicKey, kemct = null, withVideo = true) {
     // PQ: kemct из call-конверта звонящего → декапсуляция своим seed.
+    // Видео: принимающий тоже создаёт video-трек в answer'е — иначе
+    // одностороннее video (m=video есть в offer, но нет в answer) и
+    // remote-трек не поднимется.
     return await invoke('media_accept_incoming', {
       callId,
       offerSdp,
       peerPublicKey,
       kemct: kemct || null,
+      withVideo,
     });
   }
   async mediaSetRemote(callId, sdp) {
