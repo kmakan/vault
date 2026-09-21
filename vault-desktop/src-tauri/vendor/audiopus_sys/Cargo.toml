@@ -1,0 +1,13 @@
+[package]
+name = "audiopus_sys"
+version = "0.1.8"
+edition = "2021"
+build = "build.rs"
+description = "Vendored fork: links a prebuilt cross-compiled static Opus instead of building with host tools"
+license = "BSD-3-Clause"
+
+[features]
+default = []
+static = []
+dynamic = []
+generate_binding = []

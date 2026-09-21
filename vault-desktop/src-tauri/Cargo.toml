@@ -87,7 +87,7 @@ jni = "0.21"
 ndk-context = "0.1"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "barcode-scanner"]
 custom-protocol = ["tauri/custom-protocol"]
 barcode-scanner = ["tauri-plugin-barcode-scanner"]
 
@@ -97,3 +97,7 @@ lto = true
 codegen-units = 1
 opt-level = "s"    # optimize for size
 panic = "abort"
+
+[patch.crates-io]
+audiopus_sys = { path = "vendor/audiopus_sys" }
+

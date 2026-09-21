@@ -238,6 +238,10 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
     try {
       const { enabled, peers, active, relays } = await getSettings(account);
       if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
+      // Бесконечная регистрация: при пустом myToken pickLiveRelay не найдёт
+      // живого релея (health-чек идёт только по url, но publish без токена
+      // всё равно не отправится). Регистрируем токен заранее.
+      await ensureOurRelayToken(account);
       // Тихий фолбэк при исчерпании суточного лимита (§0): до конца
       // UTC-дня pub не дёргаем вовсе, письмо — единственный путь.
       const limitDay = await invoke('db_kv_get', { account, key: KV_LIMIT_DAY }).catch(() => null);
@@ -335,6 +339,9 @@ export async function relayPoll(account) {
   try {
     const { enabled, relays } = await getSettings(account);
     if (!enabled || !relays.length) return [];
+    // Бесконечная регистрация: при пустом myToken наш релей не дойдёт до
+    // HTTP (фильтр ниже его отбросит) — зарегистрируем токен заранее.
+    if (enabled) await ensureOurRelayToken(account);
     const fp = await myFingerprint(account);
     const results = await Promise.all(relays.filter(r => r.myToken).map(async (r) => {
       try {
@@ -375,8 +382,23 @@ export async function relayPoll(account) {
   }
 }
 
+// Бесконечная регистрация: на нашем релее токен выдаётся бесплатно и
+// автоматически. Если myToken пуст (чистая установка / миграция kv),
+// опрос и publish вообще не доходят до HTTP — фильтр relays.filter(r =>
+// r.myToken) отбрасывает релей ДО запроса, поэтому 403-авторегистрация
+// никогда не сработает. Регистрируем заранее, молча.
+export async function ensureOurRelayToken(account) {
+  try {
+    const { relays } = await getSettings(account);
+    const ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
+    if (ours && ours.myToken) return true;
+    return await reRegisterOurRelay(account);
+  } catch (e) { return false; }
+}
+
 // Живость активного релея (кнопка «проверить» в настройках).
 export async function relayHealth(account) {
+  await ensureOurRelayToken(account);
   const { relays, active } = await getSettings(account);
   if (!relays.length) return false;
   return relayHealthUrl(relays[active].url);

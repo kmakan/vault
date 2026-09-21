@@ -59,8 +59,8 @@
         <div class="call-drag-row">
           <transition name="hintfade">
             <span v-if="!dragging && orbX === 0 && !decision" class="drag-hint hint-left">
-              <Icon name="double-chevron-left" :size="20" color="#f87171" />
-              <Icon name="double-chevron-left" :size="14" color="#f87171" />
+              <Icon name="double-chevron-left" :size="20" color="#ffffff" />
+              <Icon name="double-chevron-left" :size="14" color="#ffffff" />
             </span>
           </transition>
           <button
@@ -75,13 +75,13 @@
             @pointercancel="onDragEnd"
           >
             <Icon name="phone" :size="26" color="#ffffff" />
-          </button>
-          <transition name="hintfade">
+            </button>
+            <transition name="hintfade">
             <span v-if="!dragging && orbX === 0 && !decision" class="drag-hint hint-right">
-              <Icon name="double-chevron-right" :size="14" color="#4ade80" />
-              <Icon name="double-chevron-right" :size="20" color="#4ade80" />
+              <Icon name="double-chevron-right" :size="14" color="#ffffff" />
+              <Icon name="double-chevron-right" :size="20" color="#ffffff" />
             </span>
-          </transition>
+            </transition>
         </div>
       </template>
 
@@ -90,7 +90,7 @@
       <template v-else-if="state === 'outgoing_ringing'">
         <div class="call-control-row">
           <button class="call-end-pill" :title="texts.cancel" @click="$emit('cancel')">
-            <Icon name="phone" :size="26" />
+            <Icon name="phone" :size="26" color="#ffffff" />
           </button>
         </div>
         <div class="call-waiting-hint">{{ texts.outgoing }}</div>
@@ -116,7 +116,7 @@
               <Icon name="phone" :size="26" color="#ffffff" />
             </div>
             <button class="call-end-pill call-end-pill-small" :title="texts.end" @click="$emit('end')">
-              <Icon name="phone" :size="18" />
+              <Icon name="phone" :size="18" color="#ffffff" />
             </button>
           </div>
         </template>
@@ -130,10 +130,10 @@
             :title="muted ? texts.unmute : texts.mute"
             @click="$emit('toggle-mute')"
           >
-            <Icon :name="muted ? 'mic-off' : 'mic'" :size="22" />
+            <Icon :name="muted ? 'mic-off' : 'mic'" :size="22" color="#ffffff" />
           </button>
           <button class="call-end-pill" :title="texts.end" @click="$emit('end')">
-            <Icon name="phone" :size="26" />
+            <Icon name="phone" :size="26" color="#ffffff" />
           </button>
           <button
             class="call-orb call-orb-extra"
@@ -141,7 +141,7 @@
             :title="texts.speaker"
             @click="$emit('toggle-speaker')"
           >
-            <Icon name="volume" :size="22" />
+            <Icon name="volume" :size="22" color="#ffffff" />
           </button>
           <!-- Камера (M3): вкл/выкл видео. Premium-функция — ошибка
                пермишена/отсутствие камеры не роняет аудио-звонок. -->
@@ -151,7 +151,7 @@
             :title="texts.camera"
             @click="$emit('toggle-video')"
           >
-            <Icon :name="videoOn ? 'video-off' : 'video'" :size="22" />
+            <Icon :name="videoOn ? 'video-off' : 'video'" :size="22" color="#ffffff" />
           </button>
         </div>
       </template>

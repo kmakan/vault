@@ -428,12 +428,6 @@ dependencies = [
 [[package]]
 name = "audiopus_sys"
 version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "927791de46f70facea982dbfaf19719a41ce6064443403be631a85de6a58fff9"
-dependencies = [
- "log",
- "pkg-config",
-]
 
 [[package]]
 name = "autocfg"
