@@ -164,8 +164,16 @@ impl EmailClient {
             .context("Failed TLS handshake")?;
 
         let client = imap::Client::new(ssl_stream);
+        // Яндекс режет логин с доменом-алиасом (koanmak@ya.com → AUTHENTICATIONFAILED),
+        // хотя тот же ящик принимается как «koanmak» или «koanmak@yandex.ru».
+        // Для @ya.com отправляем bare-логин; остальные провайдеры работают как прежде.
+        let imap_login: &str = if self.config.email.ends_with("@ya.com") {
+            self.config.email.split('@').next().unwrap_or(&self.config.email)
+        } else {
+            &self.config.email
+        };
         let session = client
-            .login(&self.config.email, &self.config.password)
+            .login(imap_login, &self.config.password)
             .map_err(|e| anyhow::anyhow!("IMAP login failed: {}", e.0))?;
 
         self.imap_session = Some(session);
