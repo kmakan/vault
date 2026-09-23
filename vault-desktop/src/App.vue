@@ -6438,6 +6438,18 @@ export default {
   color: white; font-size: 14px; font-weight: 600;
 }
 .login-box button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Кнопки-раскрывашки и кнопка выбора файла — не градиентные:
+   .login-box button (0,1,1) бьёт .server-toggle/.btn-secondary (0,1,0),
+   поэтому явное повышение специфичности. */
+.login-box button.server-toggle {
+  background: none; color: var(--text-secondary, #8b949e); font-size: 13px; font-weight: 400;
+  border: none; padding: 6px 0;
+}
+.login-box button.btn-secondary {
+  width: auto; background: var(--bg-tertiary, #1a1a3a); color: var(--text-primary, #f1f5f9);
+  font-size: 13px; font-weight: 500; padding: 8px 16px;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+}
 .login-error { color: #f85149; font-size: 13px; margin-top: 4px; }
 .remember-label { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text-secondary, #8b949e); font-size: 13px; cursor: pointer; user-select: none; }
 .remember-label input { width: auto; margin: 0; cursor: pointer; }
