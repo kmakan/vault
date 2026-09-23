@@ -204,19 +204,21 @@ export function stopRemoteVideo() {
  */
 export function decodeFrame(base64Frame, timestamp) {
   if (!decoder) return;
-  // base64 → байты. STANDARD (не url-safe) — Rust кодирует general_purpose::STANDARD.
-  const raw = atob(base64Frame);
-  const data = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
-
-  const chunk = new EncodedVideoChunk({
-    type: 'delta', // VP8-депакетизатор не различает key/delta в payload —
-                   // декодер сам определит по битстриму
-    timestamp: timestamp || 0,
-    duration: Math.round(1_000_000 / VIDEO_FPS),
-    data,
-  });
   try {
+    // base64 → байты. STANDARD (не url-safe) — Rust кодирует general_purpose::STANDARD.
+    // atob бросает InvalidCharacterError на битом кадре — вся обёртка под try,
+    // иначе один мусорный пакет роняет listener звонка (App.vue зовёт без catch).
+    const raw = atob(base64Frame);
+    const data = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
+
+    const chunk = new EncodedVideoChunk({
+      type: 'delta', // VP8-депакетизатор не различает key/delta в payload —
+                     // декодер сам определит по битстриму
+      timestamp: timestamp || 0,
+      duration: Math.round(1_000_000 / VIDEO_FPS),
+      data,
+    });
     decoder.decode(chunk);
   } catch (e) {
     // Потерянный/битый кадр — пропускаем, следующий keyframe всё исправит.
