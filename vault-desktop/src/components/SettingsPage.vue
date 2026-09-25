@@ -533,6 +533,11 @@ export default {
     async ecoSave() {
       try {
         await db.kvSet('anon', 'eco-mode', this.ecoMode ? '1' : '0');
+        // Запоминаем ВЫБОР пользователя: ручное выключение тумблера
+        // блокирует автоматическое включение эко от живого релея
+        // («не выключен пользователем» — приоритет ручной настройки).
+        if (!this.ecoMode) await db.kvSet('anon', 'eco-user-disabled', '1');
+        else await db.kvSet('anon', 'eco-user-disabled', '0');
         // Применение — живое: сообщаем ядру (App слушает kv-событие простым полем)
         this.$emit('eco-mode', this.ecoMode);
       } catch (e) { /* kv */ }

@@ -5,7 +5,7 @@
 #
 # ANDROID_NDK_HOME задаётся перед tauri android build (см. доки).
 [target.aarch64-linux-android]
-rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34"]
+rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android", "-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34"]
 
 [target.armv7-linux-androideabi]
 rustflags = ["-L", "native=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/34"]

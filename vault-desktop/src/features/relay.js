@@ -137,6 +137,8 @@ export function startRelayTicker(ctx) {
             ctx.onEcoMode(true, true).catch(() => {});
           }
         }
+        // Авто-eco: релей жив и не был отключён пользователем → eco ON.
+        syncEcoWithRelay(ctx, true).catch(() => {});
       } else {
         ctx._relayFails++;
         console.warn(`[relay] health fail #${ctx._relayFails}`);
@@ -145,6 +147,9 @@ export function startRelayTicker(ctx) {
           console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
           enterRelayOfflineRescue(ctx);
         }
+        // Авто-eco: релей отключился — выходим из эко в классический режим
+        // (пользователь не должен получать «молчащий» мессенджер).
+        syncEcoWithRelay(ctx, true).catch(() => {});
       }
     }
   }, 5000);
@@ -294,6 +299,30 @@ export function stopPolling(ctx) {
 // M2.3: экономный режим — постоянный IMAP IDLE останавливается
 // (батарея), доставка едет через релей (5с-тикер остаётся) + редкий
 // страховочный поллинг 60с. Звонки: сигналы идут релеем ~1с.
+// Авто-eco (M2.3-c): релей включён и жив → eco активен автоматически
+// (постоянный IMAP IDLE не нужен — доставка едет релеем + ntfy).
+// Ручное выключение тумблером выставляет kv 'eco-user-disabled' и
+// автопереключение больше не дёргает режим («не выключен пользователем»).
+export async function syncEcoWithRelay(ctx, silent = false) {
+  if (!ctx.isLoggedIn) return;
+  let healthy = false;
+  try { healthy = await relay.relayHealth(ctx.email); } catch (e) { healthy = false; }
+  let userDisabled = false;
+  try { userDisabled = (await db.kvGet('anon', 'eco-user-disabled')) === '1'; } catch (e) {}
+  const wantEco = !!ctx.relayEnabled && healthy && !userDisabled;
+  if (wantEco === ctx.ecoMode) return; // уже в нужном режиме
+  if (wantEco) {
+    console.log('[eco] relay alive → auto eco ON');
+    await onEcoMode(ctx, true, silent);
+  } else {
+    // Релей умер/отключён — автономный rescue поднимет службу через
+    // health-чек тикера; сюда приходим только при выключении релея
+    // пользователем — тогда чистый классический режим.
+    console.log('[eco] relay off → auto eco OFF');
+    await onEcoMode(ctx, false, silent);
+  }
+}
+
 export async function onEcoMode(ctx, on, silent = false) {
   ctx.ecoMode = !!on;
   // Сброс автономного состояния: onEcoMode(true) из rescue-возврата

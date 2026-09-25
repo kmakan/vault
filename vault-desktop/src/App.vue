@@ -1671,6 +1671,14 @@ export default {
           try {
             const rs = await relay.getSettings(this.email);
             this.relayEnabled = rs.enabled;
+            // M2.3-c: релей включён → eco активируется автоматически.
+            // syncEcoWithRelay проверит здоровье релея и включит eco
+            // (если пользователь явно его не выключал в настройках).
+            if (this.relayEnabled) {
+              await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
+              // syncEcoWithRelay мог изменить ecoMode — перечитаем kv.
+              this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+            }
           } catch (e) { /* релей опционален */ }
           this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
           await this.loadBodyCache(); 

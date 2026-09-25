@@ -151,14 +151,24 @@ class MainActivity : TauriActivity() {
     // Отображение поверх окон: с этим правом Android разрешает запуск
     // MainActivity из фонового сервиса — экран звонка открывается сам при
     // свёрнутом приложении (иначе heads-up «откройте Vault»).
+    // ВАЖНО: системный экран ACTION_MANAGE_OVERLAY_PERMISSION — это полный
+    // список «все приложения с тумблером». Без флага он открывался ПРИ КАЖДОМ
+    // onCreate (каждый холодный старт) и выглядел как «приложение выбора
+    // приложений». Теперь запрос ОДНОРАЗОВЫЙ — как у battery-optimization.
     try {
-      if (!Settings.canDrawOverlays(this)) {
-        val intent = Intent(
-          Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-          android.net.Uri.parse("package:$packageName")
-        )
-        startActivity(intent)
-        Log.i("VaultRust", "asked overlay permission (screen-over-apps)")
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+        val prefs = getSharedPreferences("vault_prefs", MODE_PRIVATE)
+        if (!prefs.getBoolean("overlay_asked", false)) {
+          prefs.edit().putBoolean("overlay_asked", true).apply()
+          val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            android.net.Uri.parse("package:$packageName")
+          )
+          startActivity(intent)
+          Log.i("VaultRust", "asked overlay permission (screen-over-apps)")
+        } else {
+          Log.i("VaultRust", "overlay permission still not granted; not nagging (asked before)")
+        }
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "overlay permission request failed: " + e.message)
