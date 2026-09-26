@@ -6290,7 +6290,8 @@ export default {
         this.peerKeys[c.sender] = c.public_key;
         this.peerKeysLoaded[c.sender] = true;
         await api.addContact(c.sender);
-        api.saveProfile(c.sender, c.sender_name, c.sender_avatar);
+        api.saveProfile(c.sender, c.sender_name, c.sender_avatar,
+          Date.parse(c.date) || Date.now());
         this.loadProfiles();
         // Отвечаем своим публичным ключом — у пригласившего появится наш контакт.
         await api.sendContactAccept(c.sender, this.publicKey);

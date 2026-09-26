@@ -803,7 +803,10 @@ export class ApiClient {
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
       if (!parsed.public_key) continue;
-      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      // ts обязателен: saveProfile молча выходит при ts=0, и аватар
+      // из инвайта никогда не сохранялся бы (баг: пустые аватары на телефоне).
+      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar,
+        Date.parse(m.date) || Date.now());
       if (peers.has(sender)) continue;
       out.push({
         sender,
@@ -908,7 +911,9 @@ export class ApiClient {
       }
       // Профиль/аватар обновляем ВСЕГДА (даже если ключ уже сохранён) —
       // иначе аватар, загруженный после принятия контакта, никогда не дойдёт.
-      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar);
+      // ts: без него saveProfile молча выходит (баг пустых аватаров).
+      await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar,
+        Date.parse(m.date) || Date.now());
       if (peers.has(sender)) {
         // Ключ уже сохранён — обновили профиль, пометили письмо, приглашение исполнено.
         this.markAcceptedContact(`${sender}|${m.uid}`);
@@ -1360,8 +1365,9 @@ async mediaSoundStop() {
       }
     }
     if (payload.sender) {
-      // Сохраняем профиль пригласившего в кэш.
-      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar);
+      // Сохраняем профиль пригласившего в кэш (ts нужен — иначе saveProfile выйдет).
+      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar,
+        Date.parse(m && m.date) || Date.now());
     }
     return { ok: true, group_id: groupId };
   }
@@ -1588,7 +1594,8 @@ async mediaSoundStop() {
       } catch (e) {
         // уже участник или временная ошибка — игнорируем
       }
-      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar);
+      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar,
+        Date.parse(m.date) || Date.now());
       out.push({ group_id: payload.group_id, sender: payload.sender });
     }
     return out;
