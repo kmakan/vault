@@ -216,20 +216,25 @@ class MainActivity : TauriActivity() {
     }
 
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
-    // ECO-ФИКС 0.1.176: сервис стартует ВСЕГДА — eco-режим экономит батарею
-    // на ТИШИНЕ сети (LOW-importance notification, без vibra/sound), а не на
-    // убийстве процесса. Раньше eco полностью гасил foreground-service →
-    // система убивала процесс во сне и входящие звонки отваливались.
-    // Тихий/громкий режим сервис выбирает сам в onStartCommand (ecoModeEnabled).
-    try {
-      val svc = Intent(this, VaultForegroundService::class.java)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        startForegroundService(svc)
-      } else {
-        startService(svc)
+    // 0.1.181: в eco (релей жив) сервис НЕ стартуем вовсе — доставка в фоне
+    // несёт отдельный ntfy-клиент (UnifiedPush), FGS = иконка в шторке, а
+    // Android API31+ прицеливает ЛЮБОЕ FGS-уведомление до LOW. Классический
+    // (не-eco) режим — стартуем как раньше.
+    val ecoOn = try { VaultForegroundService.ecoModeEnabled(this) } catch (e: Throwable) { false }
+    if (ecoOn) {
+      try { VaultForegroundService.cancelScheduledRestart(this) } catch (_: Throwable) {}
+      Log.i("VaultRust", "eco mode: foreground service not started (delivery via relay+ntfy)")
+    } else {
+      try {
+        val svc = Intent(this, VaultForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          startForegroundService(svc)
+        } else {
+          startService(svc)
+        }
+      } catch (e: Throwable) {
+        Log.w("VaultRust", "startForegroundService failed: " + e.message)
       }
-    } catch (e: Throwable) {
-      Log.w("VaultRust", "startForegroundService failed: " + e.message)
     }
   }
 
