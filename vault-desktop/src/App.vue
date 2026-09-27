@@ -6208,6 +6208,13 @@ export default {
       this.pendingInvites.splice(this.invitePopupIndex, 1);
       this.showInvitePopup = false;
       try {
+        // Дубль-инвайт: группа уже есть локально (приглашение принято ранее).
+        // Это НЕ ошибка — тихо сообщаем (ключ уже помечен обработанным выше).
+        if (this.groups.some(g => g.id === inv.group_id)) {
+          this.showToast((this.t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
+          this.showNextInvite();
+          return;
+        }
         // Новый формат: group_key зашифрован на нашем публичном ключе —
         // расшифровываем своим приватным ключом (ECDH + sender_public_key).
         let groupKey = inv.group_key || null;
@@ -6278,6 +6285,21 @@ export default {
       // Попап закрываем СРАЗУ — accept-письмо идёт через медленный SMTP.
       this.pendingContacts.splice(this.contactPopupIndex, 1);
       try {
+        // Дубль-инвайт: контакт уже есть (приглашение уже принято).
+        // Поллинг обычно фильтрует таких (peers.has в fetchPendingContactInvites),
+        // но два письма от одного отправителя могут прийти одним пакетом —
+        // это НЕ ошибка: помечаем обработанным и тихо сообщаем.
+        let exists = !!this.peerKeys[c.sender];
+        if (!exists) {
+          try { exists = (await api.loadPeerKeyEmails()).has(c.sender); }
+          catch (e) { /* с диска не прочитать — считаем новым */ }
+        }
+        if (exists) {
+          await api.markAcceptedContact(key);
+          this.showToast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + c.sender, 3000);
+          this.showNextContact();
+          return;
+        }
         // PQ: pq-ключ приглашающего (если прислал) — контакт сразу
         // гибридный. pq отсутствует → legacy X25519-контакт.
         if (c.pq_public_key) this.peerPqKeys[c.sender] = c.pq_public_key;
@@ -6333,8 +6355,17 @@ export default {
       const id = (email || '').trim();
       if (!id) return;
       // Уже в контактах — не шлём повторный запрос (защита от дублей).
-      if (this.peerKeys[id] || this.peerKeys[id.toLowerCase()]) {
-        alert(this.t('already_in_contacts') || 'Этот контакт уже в вашем списке');
+      // Проверяем память И диск: ключ мог быть загружен с диска позже,
+      // а in-memory peerKeys ещё не заполнен.
+      let exists = !!this.peerKeys[id] || !!this.peerKeys[id.toLowerCase()];
+      if (!exists) {
+        try {
+          const low = id.toLowerCase();
+          exists = [...(await api.loadPeerKeyEmails())].some(e => e === id || e.toLowerCase() === low);
+        } catch (e) { /* диск недоступен — считаем новым */ }
+      }
+      if (exists) {
+        this.showToast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + id, 3000);
         return;
       }
       try {

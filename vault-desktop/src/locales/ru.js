@@ -374,6 +374,7 @@ export default {
   invite_sent: 'Приглашение отправлено',
   invite_pending: 'приглашён',
   already_in_group: 'Этот участник уже в группе',
+  already_in_groups: 'Вы уже состоите в этой группе',
   already_in_contacts: 'Этот контакт уже в вашем списке',
   add_member_from_contacts: 'Добавить участника из контактов',
   add_member_invite_btn: 'Пригласить',

@@ -374,6 +374,7 @@ export default {
   invite_sent: '邀请已发送',
   invite_pending: '已邀请',
   already_in_group: '该成员已在群组中',
+  already_in_groups: '您已是该群组成员',
   already_in_contacts: '该联系人已在您的列表中',
   add_member_from_contacts: '从联系人添加成员',
   add_member_invite_btn: '邀请',

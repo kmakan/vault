@@ -374,6 +374,7 @@ export default {
   invite_sent: 'Invitation sent',
   invite_pending: 'invited',
   already_in_group: 'This member is already in the group',
+  already_in_groups: 'You are already a member of this group',
   already_in_contacts: 'This contact is already in your list',
   add_member_from_contacts: 'Add member from contacts',
   add_member_invite_btn: 'Invite',
