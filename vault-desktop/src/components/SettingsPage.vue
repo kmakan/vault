@@ -119,6 +119,20 @@
           <p v-if="backupResult" class="change-email-note">{{ backupResult }}</p>
           <p class="change-email-note">{{ t('settings_backup_note') }}</p>
         </div>
+        <!-- Подтверждение восстановления: свой модал вместо window.confirm().
+             В Android-WebView нативные JS-диалоги не рисуются (Tauri не
+             регистрирует WebViewClient.onJsDialog) и молча возвращают false —
+             из-за этого importBackup() всегда отменялся. -->
+        <div v-if="confirmRestore.show" class="backup-confirm-overlay" @click.self="cancelRestore">
+          <div class="modal-settings backup-confirm-panel">
+            <h3>{{ t('settings_restore_confirm') }}</h3>
+            <p class="change-email-note">{{ confirmRestore.fileName }}</p>
+            <div class="backup-confirm-actions">
+              <button @click="cancelRestore" class="btn btn-secondary">{{ t('cancel') }}</button>
+              <button @click="doRestore" class="btn btn-primary">{{ t('ok') }}</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- УВЕДОМЛЕНИЯ -->
@@ -396,7 +410,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed'],
   setup() { const { t } = useI18n(); return { t }; },
   data() {
     return {
@@ -474,7 +488,15 @@ export default {
       _previewEl: null,
       backupBusy: false,
       backupResult: '',
+      // Импорт копии: своё подтверждение (нативный confirm() на Android
+      // не рисуется и всегда «отменял» восстановление).
+      confirmRestore: { show: false, fileName: '' },
     };
+  },
+  created() {
+    // Служебное поле (вне data(), без реактивности): File, выбранный для
+    // восстановления, ждёт подтверждения в модале.
+    this._pendingBackup = null;
   },
   watch: {
     // Персист переключателя «Системные уведомления» (notify.js читает его
@@ -909,28 +931,37 @@ export default {
       this.backupResult = '';
       try {
         const json = await invoke('export_backup');
-        const blob = new Blob([json], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `vault-backup-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-        this.backupResult = t('settings_backup_ok');
+        // Файл пишет Rust-команда: Blob + <a download>.click() в Android-
+        // WebView ничего не делает (нет DownloadListener) — «ничего не
+        // происходит». save_backup_to_disk кладёт файл в системные «Загрузки»
+        // (MediaStore) и возвращает путь для показа пользователю.
+        const path = await invoke('save_backup_to_disk', { json });
+        this.backupResult = t('settings_backup_ok') + ' ' + t('settings_backup_saved_to') + path;
       } catch (e) {
         this.backupResult = t('settings_backup_fail') + (e.message || e);
       } finally {
         this.backupBusy = false;
       }
     },
-    async importBackup(event) {
+    // Выбор файла: только запоминаем его и показываем подтверждение.
+    // window.confirm() здесь не используется — в Android-WebView он молча
+    // возвращает false и восстановление отменялось без каких-либо сообщений.
+    importBackup(event) {
       const file = event.target.files && event.target.files[0];
       if (!file) return;
-      if (!(await confirm(t('settings_restore_confirm')))) {
-        event.target.value = '';
-        return;
-      }
+      this._pendingBackup = file;
+      this.confirmRestore = { show: true, fileName: file.name };
+      event.target.value = '';
+    },
+    cancelRestore() {
+      this.confirmRestore.show = false;
+      this._pendingBackup = null;
+    },
+    // Подтверждено: читаем файл и восстанавливаем (как раньше, но без confirm).
+    async doRestore() {
+      const file = this._pendingBackup;
+      this.confirmRestore.show = false;
+      if (!file) { this._pendingBackup = null; return; }
       this.backupBusy = true;
       this.backupResult = '';
       try {
@@ -942,7 +973,7 @@ export default {
         this.backupResult = t('settings_restore_fail') + (e.message || e);
       } finally {
         this.backupBusy = false;
-        event.target.value = '';
+        this._pendingBackup = null;
       }
     },
     onIconChanged(id) {
@@ -1220,6 +1251,22 @@ export default {
 .backup-btn { display: inline-block; margin-right: 8px; margin-bottom: 4px; }
 .backup-import-label { display: inline-block; cursor: pointer; }
 .backup-file-input { display: none; }
+
+/* Подтверждение восстановления из копии (ин-апп модал вместо window.confirm,
+   который в Android-WebView не рисуется) */
+.backup-confirm-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.backup-confirm-panel {
+  max-width: 340px; width: 100%; padding: 16px;
+  background: var(--panel, #1b1b24);
+  border-radius: 12px; text-align: center;
+}
+.backup-confirm-panel h3 { margin: 0 0 8px; font-size: 15px; color: #e6edf3; line-height: 1.35; }
+.backup-confirm-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: center; }
 
 /* Help */
 

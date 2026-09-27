@@ -1441,6 +1441,146 @@ fn import_backup(json_data: String) -> Result<String, String> {
     Ok(restored.join(", "))
 }
 
+/// Сохранить резервную копию на диск и вернуть путь к файлу (для показа в UI).
+///
+/// Зачем команда: в Android-WebView скачивание через `Blob` + `<a download>` не
+/// работает (у WebView нет DownloadListener) — «нажал, ничего не произошло».
+/// Android: файл пишем нативно в системные «Загрузки» через MediaStore
+/// (коллекция Downloads доступна без разрешений с API 29); если MediaStore
+/// недоступен (API 24-28 без WRITE_EXTERNAL_STORAGE) — фолбэк в приватный
+/// каталог приложения. Desktop: каталог загрузок (~/Downloads).
+#[tauri::command]
+fn save_backup_to_disk(app: tauri::AppHandle, json: String) -> Result<String, String> {
+    let file_name = format!("vault-backup-{}.json", chrono::Utc::now().format("%Y-%m-%d"));
+
+    #[cfg(target_os = "android")]
+    {
+        match android_media_store_save(&file_name, &json) {
+            Ok(()) => return Ok(format!("Download/{file_name}")),
+            Err(e) => log::warn!("[backup] MediaStore save failed: {e} — фолбэк в app dir"),
+        }
+    }
+
+    let dir = if cfg!(target_os = "android") {
+        app.path().app_data_dir().map_err(|e| e.to_string())?
+    } else {
+        dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir)
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(&file_name);
+    std::fs::write(&path, json.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Android: запись файла в «Загрузки» через MediaStore
+/// (ContentResolver.insert → openOutputStream). Нужны только framework-классы
+/// (ContentValues/MediaStore/OutputStream): их находит FindClass и с
+/// привязанного native-потока (для классов приложения так нельзя — см.
+/// audio_android::find_app_class). Любая ошибка (в т.ч. SecurityException на
+/// API < 29) возвращается как Err — вызывающий код уходит в фолбэк.
+#[cfg(target_os = "android")]
+fn android_media_store_save(file_name: &str, json: &str) -> Result<(), String> {
+    use jni::objects::JObject;
+
+    let file_name = file_name.to_string();
+    let json = json.to_string();
+    let result = std::panic::catch_unwind(move || -> Result<(), String> {
+        let ctx = ndk_context::android_context();
+        let vm =
+            unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("vm: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let stage = (|| -> Result<(), String> {
+            let activity = unsafe { JObject::from_raw(ctx.context().cast()) };
+            let resolver = env
+                .call_method(
+                    &activity,
+                    "getContentResolver",
+                    "()Landroid/content/ContentResolver;",
+                    &[],
+                )
+                .map_err(|e| format!("resolver: {e}"))?
+                .l()
+                .map_err(|e| format!("resolver: {e}"))?;
+            // ContentValues: _display_name + mime_type. RELATIVE_PATH не задаём —
+            // для коллекции Downloads система по умолчанию кладёт в Download/.
+            let values = env
+                .new_object("android/content/ContentValues", "()V", &[])
+                .map_err(|e| format!("values: {e}"))?;
+            let jname = env
+                .new_string(&file_name)
+                .map_err(|e| format!("name: {e}"))?;
+            let jmime = env
+                .new_string("application/json")
+                .map_err(|e| format!("mime: {e}"))?;
+            for (key, value) in [("_display_name", &jname), ("mime_type", &jmime)] {
+                let jkey = env.new_string(key).map_err(|e| format!("key: {e}"))?;
+                env.call_method(
+                    &values,
+                    "put",
+                    "(Ljava/lang/String;Ljava/lang/String;)V",
+                    &[(&jkey).into(), value.into()],
+                )
+                .map_err(|e| format!("put {key}: {e}"))?;
+            }
+            // MediaStore.Downloads.EXTERNAL_CONTENT_URI (API 29+).
+            let uri = env
+                .get_static_field(
+                    "android/provider/MediaStore$Downloads",
+                    "EXTERNAL_CONTENT_URI",
+                    "Landroid/net/Uri;",
+                )
+                .map_err(|e| format!("uri: {e}"))?
+                .l()
+                .map_err(|e| format!("uri: {e}"))?;
+            let inserted = env
+                .call_method(
+                    &resolver,
+                    "insert",
+                    "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+                    &[(&uri).into(), (&values).into()],
+                )
+                .map_err(|e| format!("insert: {e}"))?
+                .l()
+                .map_err(|e| format!("insert: {e}"))?;
+            if inserted.is_null() {
+                return Err("insert: пустой Uri".into());
+            }
+            let stream = env
+                .call_method(
+                    &resolver,
+                    "openOutputStream",
+                    "(Landroid/net/Uri;)Ljava/io/OutputStream;",
+                    &[(&inserted).into()],
+                )
+                .map_err(|e| format!("open stream: {e}"))?
+                .l()
+                .map_err(|e| format!("open stream: {e}"))?;
+            if stream.is_null() {
+                return Err("open stream: null".into());
+            }
+            let bytes = env
+                .byte_array_from_slice(json.as_bytes())
+                .map_err(|e| format!("bytes: {e}"))?;
+            env.call_method(&stream, "write", "([B)V", &[(&bytes).into()])
+                .map_err(|e| format!("write: {e}"))?;
+            let _ = env.call_method(&stream, "close", "()V", &[]);
+            Ok(())
+        })();
+        // Висящее Java-исключение не должно остаться в потоке: иначе следующий
+        // JNI-вызов (аудио/звонки/сервис) в нём же упадёт.
+        let _ = env.exception_clear();
+        stage
+    });
+    match result {
+        Ok(ok) => ok,
+        Err(_) => Err("MediaStore save: паника в JNI-мосте".into()),
+    }
+}
+
 // --- Key Recovery: мнемоника 12 слов обёртывает backup.
 // Генерация мнемоники (показывается пользователю один раз).
 #[tauri::command]
@@ -1659,6 +1799,7 @@ pub fn run() {
             db_kv_set_all,
             export_backup,
             import_backup,
+            save_backup_to_disk,
             db_emails_save,
             db_emails_load,
             db_emails_clear,
