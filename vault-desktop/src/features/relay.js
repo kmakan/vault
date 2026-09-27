@@ -359,4 +359,10 @@ export async function onEcoMode(ctx, on, silent = false) {
 
 export function onRelayEnabled(ctx, on) {
   ctx.relayEnabled = !!on;
+  // 0.1.180: живое применение тумблера ИЗ настроек. Раньше только
+  // health-тик релей-тикера (60с) заметил изменение — а в классическом
+  // (не-eco) режиме тикер не запущен, и выключенный релей НЕ поднимал
+  // службу. Теперь: on=true → eco-автопроверка; on=false → сразу классика
+  // (syncEcoWithRelay выключит eco → foreground-служба + IDLE).
+  syncEcoWithRelay(ctx, true).catch(() => {});
 }

@@ -2281,13 +2281,29 @@ export default {
         this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
         this.runAutoclean(); // плановая автоочистка при входе
         this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
+        // 0.1.180: релей/eco-инициализация при НОВОМ логине (зеркало
+        // auto-login пути): релей ВКЛ по умолчанию (free-токен 100/день,
+        // без промо-ключа) → eco активируется автоматически, foreground-
+        // служба не поднимается (батарея). Явное '0' юзера уважаем.
+        this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+        try {
+          const rs = await relay.getSettings(this.email);
+          this.relayEnabled = rs.enabled;
+          if (this.relayEnabled) {
+            await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
+            // syncEcoWithRelay мог изменить ecoMode — перечитаем kv.
+            this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+          }
+        } catch (e) { /* релей опционален — не блокируем почтовый вход */ }
         await this.loadBodyCache(); 
         await this.loadContacts();
         await this.loadGroups();
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
         // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
+        if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); } // eco: служба отключена, доставка через релей
         this.startPolling()
-        this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+        if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
+        else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
         this.loadEmails().catch(e => {
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
             this.loginError = e.message;
@@ -4214,12 +4230,26 @@ export default {
         await this.initLocalDb();
         this.loadUnreadCounts();
         this.loadLocalProfiles();
+        // 0.1.180: инициализация релей/eco (зеркало login/auto-login):
+        // дефолт — релей ВКЛ (free-100/день) → eco, foreground-служба не
+        // поднимается. Явный выбор юзера (KV '0') уважается навсегда.
+        this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+        try {
+          const rs = await relay.getSettings(this.email);
+          this.relayEnabled = rs.enabled;
+          if (this.relayEnabled) {
+            await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
+            this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+          }
+        } catch (e) { /* релей опционален */ }
         await this.loadBodyCache();
         await this.loadContacts();
         await this.loadGroups();
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
+        if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); }
         this.startPolling();
-        this.idleLoop();
+        if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); }
+        else this.idleLoop();
         this.loadEmails().catch(() => {});
         this.showToast(t('recovery_ok'));
       } catch (error) {

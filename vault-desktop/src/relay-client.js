@@ -109,7 +109,7 @@ export async function removeRelay(account, url) {
 // ───────────────────────── Настройки (kv) ─────────────────────────
 
 export async function getSettings(account) {
-  const [enabled, peersRaw, activeRaw] = await Promise.all([
+  const [kvEnabled, peersRaw, activeRaw] = await Promise.all([
     invoke('db_kv_get', { account, key: KV_ENABLED }).catch(() => null),
     invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null),
     invoke('db_kv_get', { account, key: KV_ACTIVE }).catch(() => null),
@@ -119,7 +119,14 @@ export async function getSettings(account) {
   const relays = await getRelays(account);
   let active = parseInt(activeRaw || '0', 10) || 0;
   if (active < 0 || active >= relays.length) active = 0;
-  return { enabled: enabled === '1', relays, active, peers };
+  // 0.1.180: ДЕФОЛТ — релей ВКЛЮЧЁН (лимитированный free-токен 100/день,
+  // БЕЗ промо-ключа), чтобы свежая установка работала через релей + ntfy
+  // (эко-режим, без foreground-службы) и не жгла батарею. Токен сам
+  // регистрируется при первом health/poll/publish (ensureOurRelayToken).
+  // Явный выбор юзера (KV '0') навсегда уважается → служба (классика).
+  // KV null (никогда не задавался) → дефолт ВКЛ.
+  const enabled = kvEnabled === null ? true : (kvEnabled === '1');
+  return { enabled, relays, active, peers };
 }
 
 export async function setEnabled(account, on) {
