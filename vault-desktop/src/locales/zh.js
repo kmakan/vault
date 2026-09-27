@@ -376,6 +376,7 @@ export default {
   already_in_group: '该成员已在群组中',
   already_in_groups: '您已是该群组成员',
   already_in_contacts: '该联系人已在您的列表中',
+  invite_send_failed: '邀请发送失败：',
   add_member_from_contacts: '从联系人添加成员',
   add_member_invite_btn: '邀请',
   add_member_no_key: '没有密钥：请先添加联系人',

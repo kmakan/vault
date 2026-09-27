@@ -6357,10 +6357,18 @@ export default {
       // Уже в контактах — не шлём повторный запрос (защита от дублей).
       // Проверяем память И диск: ключ мог быть загружен с диска позже,
       // а in-memory peerKeys ещё не заполнен.
-      let exists = !!this.peerKeys[id] || !!this.peerKeys[id.toLowerCase()];
+      // exists-check по трём источникам: (1) in-memory peerKeys, (2) список
+      // контактов, который показывает UI (this.contacts — виден даже если
+      // in-memory peerKeys ещё не заполнен), (3) диск loadPeerKeyEmails.
+      // Любой найден → дубль, тост «уже в списке» (защита от повторных
+      // приглашений принятым контактам).
+      const low = id.toLowerCase();
+      let exists = !!this.peerKeys[id] || !!this.peerKeys[low];
+      if (!exists && Array.isArray(this.contacts)) {
+        exists = this.contacts.some(c => (c && c.email || '').toLowerCase() === low);
+      }
       if (!exists) {
         try {
-          const low = id.toLowerCase();
           exists = [...(await api.loadPeerKeyEmails())].some(e => e === id || e.toLowerCase() === low);
         } catch (e) { /* диск недоступен — считаем новым */ }
       }
@@ -6370,9 +6378,12 @@ export default {
       }
       try {
         await api.sendContactInvite(id, this.publicKey);
-        alert((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id);
+        this.showToast((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id, 3000);
       } catch (e) {
-        alert('Failed to send invite: ' + e.message);
+        // Tauri-команды отклоняют СТРОКОЙ (Rust Err(e.to_string())), не
+        // Error-объектом: e.message может быть undefined — нормализуем.
+        const emsg = (e && e.message) ? e.message : String(e);
+        this.showToast((this.t('invite_send_failed') || 'Не удалось отправить приглашение: ') + emsg, 5000);
       }
     },
     async deleteContact(email) {

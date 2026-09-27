@@ -376,6 +376,7 @@ export default {
   already_in_group: 'Этот участник уже в группе',
   already_in_groups: 'Вы уже состоите в этой группе',
   already_in_contacts: 'Этот контакт уже в вашем списке',
+  invite_send_failed: 'Не удалось отправить приглашение:',
   add_member_from_contacts: 'Добавить участника из контактов',
   add_member_invite_btn: 'Пригласить',
   add_member_no_key: 'нет ключа: сначала добавьте контакт',

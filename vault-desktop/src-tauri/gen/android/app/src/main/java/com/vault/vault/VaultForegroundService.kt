@@ -268,12 +268,15 @@ class VaultForegroundService : Service() {
                 description = getString(R.string.fg_channel_desc)
                 setShowBadge(false)
             }
-            // ECO-ФИКС 0.1.176: тихий канал для eco-режима — те же MIN-уведомления,
-            // но гарантированно без звука и вибрации.
+            // ECO-ФИКС 0.1.176: тихий канал для eco-режима — без звука/вибрации.
+            // 0.1.179: IMPORTANCE_MIN, а не LOW — «тихая» иконка LOW-канала
+            // всё равно видна в шторке (жалоба: «иконка службы тратит батарею»).
+            // MIN-канал: системное уведомление FGS ставится, но в шторке не
+            // рендерится — доставка фактов идёт через ntfy-клиент.
             val quietChannel = NotificationChannel(
                 CHANNEL_ID_QUIET,
                 getString(R.string.fg_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
                 description = getString(R.string.fg_channel_desc)
                 setShowBadge(false)
@@ -282,6 +285,20 @@ class VaultForegroundService : Service() {
             }
             try {
                 nm.createNotificationChannel(channel)
+                // МИГРАЦИЯ 0.1.179: на уже установленных устройствах канал
+                // vault_service_quiet закеширован системой с LOW (0.1.176) —
+                // createNotificationChannel его НЕ обновляет (no-op при
+                // повторном создании), и иконка остаётся в шторке. Удаляем
+                // старый канал и пересоздаём с MIN; тихую нотификацию
+                // пере-постим ниже (ecoStop), чтобы FGS остался связан с
+                // уведомлением.
+                val cachedQuiet = nm.getNotificationChannel(CHANNEL_ID_QUIET)
+                if (cachedQuiet != null &&
+                    cachedQuiet.importance != NotificationManager.IMPORTANCE_MIN
+                ) {
+                    nm.deleteNotificationChannel(CHANNEL_ID_QUIET)
+                    Log.i("VaultRust", "quiet channel re-created as MIN (was ${cachedQuiet.importance})")
+                }
                 nm.createNotificationChannel(quietChannel)
             } catch (e: Throwable) {
                 Log.w("VaultRust", "createNotificationChannel failed: " + e.message)

@@ -376,6 +376,7 @@ export default {
   already_in_group: 'This member is already in the group',
   already_in_groups: 'You are already a member of this group',
   already_in_contacts: 'This contact is already in your list',
+  invite_send_failed: 'Failed to send invite:',
   add_member_from_contacts: 'Add member from contacts',
   add_member_invite_btn: 'Invite',
   add_member_no_key: 'no key: add the contact first',
