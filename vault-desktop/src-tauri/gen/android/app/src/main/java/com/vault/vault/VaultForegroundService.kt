@@ -530,7 +530,13 @@ class VaultForegroundService : Service() {
 
         const val CHANNEL_ID = "vault_foreground"
         // ECO-ФИКС 0.1.176: тихий канал для eco-режима (без звука/вибрации).
-        const val CHANNEL_ID_QUIET = "vault_service_quiet"
+        // 0.1.179: НОВЫЙ id «vault_service_quiet_min» — importance канала в
+        // Android ИММУТАБЕЛЬНА: на MTK (Cubot) delete+recreate «vault_service_quiet»
+        // при живом FGS-уведомлении не обновил importance (остался LOW=2,
+        // иконка в шторке не снялась). NMS новый id не видел → канал создастся
+        // гарантированно с IMPORTANCE_MIN. Старый «vault_service_quiet» остаётся
+        // сиротским в настройках (без активных уведомлений — в шторке не видно).
+        const val CHANNEL_ID_QUIET = "vault_service_quiet_min"
         const val NOTIF_ID = 9001
 
         // Хэш PIN хранится в SharedPreferences (дублируется Rust при сохранении
