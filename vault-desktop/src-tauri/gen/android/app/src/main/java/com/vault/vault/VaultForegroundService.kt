@@ -48,6 +48,12 @@ class VaultForegroundService : Service() {
         super.onCreate()
         instance = this
         createChannel()
+        // ECO-ФИКС 0.1.176: сервис поднимают из нового процесса (AlarmManager-
+        // рестарт, BootReceiver, MainActivity) — in-memory ecoMode обнулён.
+        // Единственный источник правды — персистентный prefs «eco_mode».
+        // Иначе сервис молча «вырос бы громким»: wakeLock + IMAP-монитор
+        // вопреки включённому eco.
+        ecoMode = ecoModeEnabled(this)
         // ГАРАНТ: если процесс
         // Vault умер при ПОКАЗАННОМ уведомлении звонка, в шторке остаётся
         // CATEGORY_CALL + full-screen-intent уведомление, а FGS — в режиме
@@ -59,7 +65,7 @@ class VaultForegroundService : Service() {
             val nm0 = getSystemService(NotificationManager::class.java)
             nm0?.cancel(CALL_NOTIF_ID)
         } catch (_: Throwable) {}
-        if (!pushMode) {
+        if (!pushMode && !ecoMode) {
             // PUSH-РЕЖИМ (эко): без wakeLock/wifiLock — стриму хватит системного
             // сокет-таймаута; это и есть экономия батареи эко-режима.
             try {
@@ -92,17 +98,11 @@ class VaultForegroundService : Service() {
         wifiLock = null
         // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // ЭКО: сервис остановлен пользователем/смахиванием — не воскрешаем.
-        // Иконка исчезает из шторки, пуши при закрытом приложении несёт
-        // ntfy-клиент (UnifiedPush). КЛАССИКА (не эко): воскрешаем, как в
-        // 0.1.149 — служба всегда активна, звонки и уведомления при закрытом.
-        if (ecoStoppedByUser) {
-            ecoStoppedByUser = false
-            Log.i("VaultRust", "eco: service stopped by user, no restart")
-        } else {
-            scheduleRestart(this)
-            Log.i("VaultRust", "classic: service resurrect scheduled")
-        }
+        // ECO-ФИКС 0.1.176: eco больше НЕ означает «пользователь остановил
+        // сервис». Сервис ВСЕГДА воскрешается — в eco он живёт тихо, без
+        // locks/монитора, но держит foreground-приоритет процесса (звонки).
+        scheduleRestart(this)
+        Log.i("VaultRust", "service resurrect scheduled (eco keeps process alive)")
         super.onDestroy()
     }
 
@@ -110,17 +110,16 @@ class VaultForegroundService : Service() {
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        if (ecoStoppedByUser) {
-            Log.i("VaultRust", "eco: task removed, no restart")
-            return
-        }
+        // ECO-ФИКС 0.1.176: сервис всегда воскрешается (см. onDestroy).
         Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
         scheduleRestart(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            val notification = buildNotification()
+            // ECO-ФИКС 0.1.176: в eco — тихая нотификация (без звука/вибрации),
+            // иначе штатная. Тип foreground — DATA_SYNC в обоих случаях.
+            val notification = if (ecoMode) buildQuietNotification() else buildNotification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
                     NOTIF_ID,
@@ -132,6 +131,14 @@ class VaultForegroundService : Service() {
             }
         } catch (e: Throwable) {
             Log.w("VaultRust", "startForeground failed: " + e.message)
+        }
+        if (ecoMode) {
+            // ECO-ФИКС 0.1.176: ТИХИЙ режим. Процесс жив (START_STICKY, foreground-
+            // приоритет — система не убьёт во сне, звонки дойдут), но НИЧЕГО не
+            // крутится: ни IMAP-монитора, ни ntfy-стрима, ни locks.
+            // Фоновую доставку сообщений несёт UnifiedPush (ntfy-клиент).
+            Log.i("VaultRust", "eco: quiet service started (live process, no locks)")
+            return START_STICKY
         }
         if (pushMode && pushTopic != null) {
             // M2.3-b PUSH-РЕЖИМ (эко): БЕЗ IMAP-монитора и wakeLock — только
@@ -261,8 +268,21 @@ class VaultForegroundService : Service() {
                 description = getString(R.string.fg_channel_desc)
                 setShowBadge(false)
             }
+            // ECO-ФИКС 0.1.176: тихий канал для eco-режима — те же MIN-уведомления,
+            // но гарантированно без звука и вибрации.
+            val quietChannel = NotificationChannel(
+                CHANNEL_ID_QUIET,
+                getString(R.string.fg_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.fg_channel_desc)
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+            }
             try {
                 nm.createNotificationChannel(channel)
+                nm.createNotificationChannel(quietChannel)
             } catch (e: Throwable) {
                 Log.w("VaultRust", "createNotificationChannel failed: " + e.message)
             }
@@ -290,9 +310,52 @@ class VaultForegroundService : Service() {
             .build()
     }
 
+    // ECO-ФИКС 0.1.176: тихая нотификация для eco-режима. Процесс нужно
+    // удерживать foreground-приоритетом, но пользователь не должен слышать
+    // звук/вибрацию — экономия батареи eco идёт именно за счёт этого.
+    fun buildQuietNotification(): Notification {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val pi: PendingIntent? = launchIntent?.let {
+            PendingIntent.getActivity(
+                this,
+                0,
+                it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID_QUIET)
+            .setContentTitle(getString(R.string.fg_notif_title))
+            .setContentText(getString(R.string.fg_notif_text))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSilent(true)
+            .build()
+    }
+
+    // ECO-ФИКС 0.1.176: снимает locks — вызывается из ecoStop при переводе
+    // живого сервиса в тихий режим и из onDestroy.
+    fun releaseLocks() {
+        try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
+        try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
+        wakeLock = null
+        wifiLock = null
+    }
+
     companion object {
         // M2.3: эко-режим — форс-стоп сервиса пользователем (без авторестарта)
+        // ECO-ФИКС 0.1.176: флаг больше не используется — eco больше НЕ убивает
+        // сервис. Оставлен для совместимости со ссылками в коде, всегда false.
         @Volatile var ecoStoppedByUser: Boolean = false
+
+        // ECO-ФИКС 0.1.176: сервис ЖИВЁТ в eco, но в «тихом» режиме —
+        // процесс не убивается системой во сне (звонки доходят),
+        // при этом БЕЗ wakeLock/wifiLock, ntfy-стрима и IMAP-монитора.
+        // Персистится в prefs «eco_mode» — единственный источник правды
+        // для нового процесса сервиса (in-memory ecoMode обнуляется).
+        @Volatile var ecoMode: Boolean = false
 
         // M2.3-b: ntfy push-режим — сервис держит ntfy-стрим вместо IMAP.
         @Volatile var pushTopic: String? = null   // hex-hash read-токена
@@ -338,15 +401,40 @@ class VaultForegroundService : Service() {
 
         @JvmStatic
         fun ecoStop(context: Context) {
-            ecoStoppedByUser = true
-            // Персистим в prefs: MainActivity при следующем запуске НЕ поднимет сервис
+            // ECO-ФИКС 0.1.176: БОЛЬШЕ НЕ УБИВАЕМ сервис. Переводим его в
+            // «тихий» режим: процесс жив (foreground-приоритет — систему
+            // не убьёт во сне, WebRTC-сигнализация звонков дойдёт), но
+            // снимаем locks/ntfy-стрим и ставим тихую нотификацию.
+            ecoMode = true
+            ecoStoppedByUser = false
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("eco_mode", true).apply()
-            try {
-                context.stopService(Intent(context, VaultForegroundService::class.java))
-                Log.i("VaultRust", "eco: foreground service stopped")
-            } catch (e: Throwable) {
-                Log.w("VaultRust", "eco stop failed: " + e.message)
+            val inst = instance
+            if (inst != null) {
+                // Сервис уже жив: глушим стрим/монитор, снимаем locks,
+                // меняем нотификацию на тихую — БЕЗ stopService.
+                try { inst.stopNtfyStream() } catch (_: Throwable) {}
+                try { inst.nativeStopMonitor() } catch (_: Throwable) {}
+                try { inst.releaseLocks() } catch (_: Throwable) {}
+                try {
+                    val nm = inst.getSystemService(NotificationManager::class.java)
+                    nm?.notify(NOTIF_ID, inst.buildQuietNotification())
+                } catch (_: Throwable) {}
+                Log.i("VaultRust", "eco: switched to quiet mode (service live)")
+            } else {
+                // Сервиса нет — поднимаем его, он стартанет тихим (ecoMode=true
+                // восстанавливается из prefs в onCreate).
+                try {
+                    val svc = Intent(context, VaultForegroundService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(svc)
+                    } else {
+                        context.startService(svc)
+                    }
+                    Log.i("VaultRust", "eco: quiet service started (was not running)")
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "eco quiet start failed: " + e.message)
+                }
             }
         }
 
@@ -363,10 +451,10 @@ class VaultForegroundService : Service() {
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("push_mode", false).remove("push_topic").apply()
             if (ecoModeEnabled(context)) {
-                // Эко: гасим службу полностью. ecoStop выставит флаг
-                // запрета авторестарта и снимет уведомление из шторки.
+                // ECO-ФИКС 0.1.176: eco больше НЕ убивает сервис —
+                // переводим его в тихий режим (ecoStop не вызывает stopService).
                 ecoStop(context)
-                Log.i("VaultRust", "pushMode off: eco mode — service stopped (no classic restart)")
+                Log.i("VaultRust", "pushMode off: eco mode — service switched to quiet")
                 return
             }
             try {
@@ -389,6 +477,8 @@ class VaultForegroundService : Service() {
         @JvmStatic
         fun ecoStart(context: Context) {
             ecoStoppedByUser = false
+            // ECO-ФИКС 0.1.176: eco выключен — выходим из тихого режима.
+            ecoMode = false
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("eco_mode", false).apply()
             try {
@@ -422,6 +512,8 @@ class VaultForegroundService : Service() {
         }
 
         const val CHANNEL_ID = "vault_foreground"
+        // ECO-ФИКС 0.1.176: тихий канал для eco-режима (без звука/вибрации).
+        const val CHANNEL_ID_QUIET = "vault_service_quiet"
         const val NOTIF_ID = 9001
 
         // Хэш PIN хранится в SharedPreferences (дублируется Rust при сохранении

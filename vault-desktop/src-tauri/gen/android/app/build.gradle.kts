@@ -29,6 +29,14 @@ android {
             abiFilters += "arm64-v8a"
         }
     }
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("VAULT_KEYSTORE") ?: "")
+            storePassword = System.getenv("VAULT_KEYSTORE_PASS") ?: ""
+            keyAlias = "vault"
+            keyPassword = System.getenv("VAULT_KEYSTORE_PASS") ?: ""
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -42,6 +50,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
