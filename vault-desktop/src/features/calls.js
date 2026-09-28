@@ -143,6 +143,21 @@ export async function handleCallSignal(ctx, sig, from) {
   if (ctx.isIgnored(from)) return;
   console.log('[call] signal', type, call_id, 'from', from, 'state=' + ctx.callState,
     'current=' + (ctx.currentCall ? ctx.currentCall.call_id : 'null'));
+  // M2.4: call-конверт несёт tok отправителя (адрес его relay-очереди).
+  // Обучение живёт в call-фиче (модульность: общий classify() relay не зовёт)
+  // и НЕ блокирует state machine (fire-and-forget).
+  if (sig.tok && ctx.relayEnabled) {
+    (async () => {
+      try {
+        const rs = await relay.getSettings(ctx.email);
+        const r = rs.relays[rs.active] || rs.relays[0];
+        if (r) {
+          const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
+          if (known !== sig.tok) await relay.setPeerToken(ctx.email, r.url, from, sig.tok);
+        }
+      } catch (e) { /* релей опционален */ }
+    })();
+  }
   // после перезапуска приложение
   // заново сканирует Спам, и старые call_* письма (прошлых сессий) снова
   // попадают в processIncoming. Без этой защиты «зомби-звонок» вешал
