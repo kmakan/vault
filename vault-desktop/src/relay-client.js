@@ -25,6 +25,19 @@ const KV_RELAYS = 'relay-list'; // JSON: [{url, myToken, label}] — поряд�
 const KV_ACTIVE = 'relay-active'; // индекс активного релея в списке (auto-managed)
 const KV_LIMIT_DAY = 'relay-limit-day'; // UTC-день исчерпания лимита (тихий фолбэк)
 
+// 0.1.186: in-memory mirror of peer tokens. handleCallSignal (calls.js)
+// seeds it SYNCHRONOUSLY on call-signal receipt; relayPublish prefers it
+// over the kv lookup. Removes the race: user rejects before the
+// fire-and-forget kv write finishes → publish used to lose the peer token
+// and the reject fell to email fallback (30-60s); now it goes via relay (~1s).
+const memPeers = new Map(); // key: <normalizedUrl>::<chatId lowercase> → token
+export function memLearn(relayUrl, chatId, token) {
+  const base = normalizeRelayUrl(relayUrl);
+  const key = (base || String(relayUrl)) + '::' + String(chatId).toLowerCase();
+  if (token) memPeers.set(key, token);
+  else memPeers.delete(key);
+}
+
 let http = null;
 try {
   // Tauri http-плагин: обходит CORS WebView (запрос идёт из Rust).
@@ -166,6 +179,7 @@ export async function setPeerToken(account, relayUrl, chatId, token) {
   if (token) peers[key][String(chatId).toLowerCase()] = token;
   else delete peers[key][String(chatId).toLowerCase()];
   await invoke('db_kv_set', { account, key: KV_PEERS, value: JSON.stringify(peers) });
+  memLearn(relayUrl, chatId, token || '');
 }
 
 // Миграция M2.1 → M2.2: плоские peer-токены переносятся на активный релей.
@@ -259,7 +273,8 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
       const relay = await pickLiveRelay(account);
       if (!relay) { console.log('[relay] publish skip: no-live-relay'); return { ok: false, why: 'no-live-relay' }; }
       const relayPeers = peers[relay.url] || {};
-      const to = relayPeers[String(chatId).toLowerCase()];
+      const memKey = (normalizeRelayUrl(relay.url) || relay.url) + '::' + String(chatId).toLowerCase();
+      const to = memPeers.get(memKey) || relayPeers[String(chatId).toLowerCase()];
       if (!to) { console.log('[relay] publish skip: no-peer-token for', chatId, 'keys:', Object.keys(relayPeers)); return { ok: false, why: 'no-peer-token' }; }
       const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
       const res = await rfetch(relay.url + '/pub', {

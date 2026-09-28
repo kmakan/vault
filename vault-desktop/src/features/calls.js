@@ -155,6 +155,7 @@ export async function handleCallSignal(ctx, sig, from) {
         const rs = await relay.getSettings(ctx.email);
         const r = rs.relays[rs.active] || rs.relays[0];
         if (r) {
+          relay.memLearn(r.url, from, sig.tok); // 0.1.186: синхронный mirror для relayPublish
           const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
           if (known !== sig.tok) await relay.setPeerToken(ctx.email, r.url, from, sig.tok);
         }
