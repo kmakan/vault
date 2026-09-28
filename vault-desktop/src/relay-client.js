@@ -280,6 +280,10 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
           fp: (await myFingerprint(account)) || undefined,
           // ntfy wake-up нужен не всегда (call-сигналы после request — нет).
           wake: opts.wake === false ? false : true,
+          // Приоритет (звонок): сервер обходит last_seen-гейт —
+          // «только что закрыл приложение» ≠ «жив» (гейт 90с гасил
+          // вайк в первые 90с после закрытия → S3: звонок не доходит).
+          urgent: opts.urgent === true,
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });

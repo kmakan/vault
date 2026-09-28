@@ -107,7 +107,10 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   const wake = payload.type === 'call_request';
   if (viaRelay) {
     try {
-      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake });
+      // urgent для call_request: сервер обходит last_seen-гейт, чтобы
+      // будить только что закрытое приложение (гейт 90с не знал, что
+      // «поллил 5с назад» = его убили). Дедуп на клиенте по env.id.
+      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake });
     } catch (e) { /* релей опционален — email путь живёт */ }
   }
   // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный

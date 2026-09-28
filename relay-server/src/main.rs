@@ -105,6 +105,15 @@ pub struct PubRequest {
     /// Легаси-клиенты поле не шлют → true (как было).
     #[serde(default = "default_true")]
     pub wake: bool,
+    /// Высокий приоритет (звонок): обходит last_seen-гейт ntfy-вайка.
+    /// Гейт существует, чтобы не дублировать пуш у живого получателя,
+    /// но «поллил 3 секунды назад и его только что закрыли» сервер не
+    /// отличает от «жив» → звонок в первые секунды после закрытия
+    /// не будил телефон (S3: процесс убит, уведомления нет). Звонок —
+    /// «ответь сейчас»: дубль уведомления допустим, пропуск — нет.
+    /// Легаси-клиенты поле не шлют → false (гейт как раньше).
+    #[serde(default)]
+    pub urgent: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -265,11 +274,17 @@ pub async fn relay_pub(
     // на topic=hash(канального токена) (topic-подписка = приватный
     // 1-на-1 wake), будить «молчащую канальную очередь» бессмысленно.
     if !app.ntfy_url.is_empty() && req.wake && !is_channel {
+        // Urgent (звонок) обходит гейт: «поллил N сек назад» не отличает
+        // «только что закрыл приложение» от «жив». Звонок — приоритет,
+        // дубль пуша допустим, пропуск нет. Обычные сообщения — гейт 15с
+        // (живой тикер полил раз в 5с → 3× запас дедупа; закрыто >15с →
+        // булим; раньше 90с — в первые 90с после закрытия вайк подавлялся).
+        let urgent = req.urgent == Some(true);
         let silent_for = {
             let seen = app.last_seen.lock().unwrap();
             seen.get(&to_tok.hash).map_or(u64::MAX, |t| now().saturating_sub(*t))
         };
-        if silent_for >= 90 {
+        if urgent || silent_for >= 15 {
             let ntfy_url = app.ntfy_url.clone();
             let topic = to_tok.hash.clone();
             let total = app.store.len(&to_tok.hash);
