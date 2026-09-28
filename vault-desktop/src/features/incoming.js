@@ -89,6 +89,23 @@ async function classify(ctx, m, from) {
       // бейджи, не в уведомления) — уходят в state machine звонка.
       const callSig = ctx.parseCallSignal(plain);
       if (callSig) {
+        // M2.4: call-конверт несёт tok (env.tok) — учим peer-токен
+        // ДО обработки сигнала (если signal = call_request и получатель
+        // откликается на релей, обратный ответ (accept/answer) дублируется
+        // на релей, но только если у нас уже есть peer-tok для него).
+        if (callSig.tok && ctx.relayEnabled) {
+          try {
+            const rs = await relay.getSettings(ctx.email);
+            const r = rs.relays[rs.active] || rs.relays[0];
+            if (r) {
+              const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
+              if (known !== callSig.tok) {
+                await relay.setPeerToken(ctx.email, r.url, from, callSig.tok);
+                console.log('[relay] call-signal peer token auto-learned:', from);
+              }
+            }
+          } catch (e) { /* релей опционален */ }
+        }
         ctx.handleCallSignal(callSig, from).catch(e => console.warn('[call] signal failed:', e));
         return null;
       }

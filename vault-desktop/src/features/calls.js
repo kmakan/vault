@@ -78,6 +78,17 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
     ...(payload.kemct ? { kemct: payload.kemct } : {}),
     ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
   };
+  // M2.4: call-конверт несёт tok отправителя (адрес его relay-очереди) —
+  // получатель auto-learned при приходе (incoming.js call-ветка).
+  // Почта=гарант, релей=ускорение: без peer-tokens call-сигналы
+  // падают на 30с-поллинг — это корневой фикс.
+  if (ctx.relayEnabled) {
+    try {
+      const { relays, active } = await relay.getSettings(ctx.email);
+      const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
+      if (myTok) body.tok = myTok;
+    } catch (e) { /* релей опционален */ }
+  }
   const content = await crypto.encryptVault(JSON.stringify(body));
   // M2.2: дублируем сигнал звонка на релей (критично для скорости
   // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
