@@ -54,6 +54,19 @@ class VaultForegroundService : Service() {
         // Иначе сервис молча «вырос бы громким»: wakeLock + IMAP-монитор
         // вопреки включённому eco.
         ecoMode = ecoModeEnabled(this)
+        // 0.1.187: восстановить push-тему из prefs — тихий eco-сервис
+        // ловит звонки только если ntfy-стрим знает topic. Resurrection
+        // (AlarmManager/BootReceiver/MainActivity) поднимает НОВЫЙ процесс,
+        // где in-memory pushMode/pushTopic/pushNtfyBase обнулены.
+        try {
+            val pp = getSharedPreferences("vault_prefs", MODE_PRIVATE)
+            val pt = pp.getString("push_topic", null)
+            if (pt != null) {
+                pushTopic = pt
+                pushNtfyBase = pp.getString("push_base", "https://ntfy.vault-msg.ru") ?: "https://ntfy.vault-msg.ru"
+                pushMode = pp.getBoolean("push_mode", true)
+            }
+        } catch (_: Throwable) {}
         // ГАРАНТ: если процесс
         // Vault умер при ПОКАЗАННОМ уведомлении звонка, в шторке остаётся
         // CATEGORY_CALL + full-screen-intent уведомление, а FGS — в режиме
@@ -102,7 +115,11 @@ class VaultForegroundService : Service() {
         // нtfy-клиент, иконки нет. Классика (eco выключен / релей мёртв)
         // — воскрешаем (OEM-экономия батареи не должна гасить приём).
         if (ecoMode) {
-            Log.i("VaultRust", "service destroyed in eco — no resurrection (relay delivery)")
+            // 0.1.187: тихий eco-сервис живёт и ловит звонки (ntfy-стрим →
+            // showIncomingCall) — воскрешаем, иначе процесс умрёт и S3
+            // вернётся (звонок не дойдёт до карточки/рингтона).
+            scheduleRestart(this)
+            Log.i("VaultRust", "service destroyed in eco — quiet resurrection (call wake)")
         } else {
             scheduleRestart(this)
             Log.i("VaultRust", "service resurrect scheduled (classic mode keeps process alive)")
@@ -114,29 +131,41 @@ class VaultForegroundService : Service() {
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // 0.1.181: в eco не воскрешаем (см. onDestroy).
-        if (!ecoMode) {
-            Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
-            scheduleRestart(this)
-        }
+        // 0.1.187: eco — тоже воскрешаем (тихий сервис ловит звонки:
+        // ntfy-стрим → showIncomingCall). Смахивание из recents не должно
+        // уронить call-wake.
+        Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
+        scheduleRestart(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 0.1.181: eco (релей жив) — startForeground НЕ вызываем вовсе
-        // (иконка не мигает) и сервис сразу останавливаем: доставка через
-        // релей + отдельный нtfy-клиент, без FGS = без иконки в шторке
-        // (Android API31+ прицеливает ЛЮБОЕ FGS-уведомление до LOW — тихую
-        // иконку 0.1.176 скрыть нельзя, только убрав FGS). Если система
-        // перезапустила сервис (START_STICKY из классики) — тоже самостоп.
+        // 0.1.187: eco — ТИХИЙ FGS (0.1.181 «без иконки» ломал S3: процесс
+        // мёртв → звонок не будил приложение). Теперь: процесс ЖИВ,
+        // без IMAP-монитора/locks — один ntfy-сокет. ntfy-стрим детектит
+        // звонок (title «Входящий вызов») и сам зовёт showIncomingCall
+        // (полноэкранная карточка + зацикленный рингтон + phoneCall-FGS
+        // для BAL-запуска activity). Иконка тихая (MIN-канал, без звука);
+        // на API 30 ее нельзя скрыть (private-иконка — API 31+) — цена
+        // за call-wake. START_STICKY: система переподнимет после рестарта.
         if (ecoMode) {
-            cancelScheduledRestart(this)
             try {
-                val nm = getSystemService(NotificationManager::class.java)
-                nm?.cancel(NOTIF_ID)
-            } catch (_: Throwable) {}
-            Log.i("VaultRust", "eco: onStartCommand — stopping service (delivery via relay+ntfy, no icon)")
-            stopSelf()
-            return START_NOT_STICKY
+                val qn = buildQuietNotification()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIF_ID,
+                        qn,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    startForeground(NOTIF_ID, qn)
+                }
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco quiet startForeground failed: " + e.message)
+            }
+            if (pushTopic != null) startNtfyStream()
+            Log.i("VaultRust", "eco: quiet service live (calls wake full-screen + looping ringtone)")
+            return START_STICKY
         }
         try {
             // КЛАССИЧЕСКИЙ режим: FGS с уведомлением. Тип foreground —
@@ -213,8 +242,21 @@ class VaultForegroundService : Service() {
                                 if (ev == "open") {
                                     Log.i("VaultRust", "ntfy-stream: open ok")
                                 } else if (ev == "message") {
-                                    Log.i("VaultRust", "ntfy-stream: message received -> notify")
-                                    showPushNotification()
+                                    val evTitle = obj.optString("title")
+                                    Log.i("VaultRust", "ntfy-stream: message title=$evTitle")
+                                    // 0.1.187: звонок (urgent-пуш relay-server,
+                                    // title «Входящий вызов» + Audio-рингтон) →
+                                    // полноэкранная карточка + ЗАЦИКЛЕННЫЙ
+                                    // нативный рингтон, НЕ тихое «новое
+                                    // сообщение». priority high у ВСЕХ пушей
+                                    // (relay-server main.rs:585) — дискриминатор
+                                    // только заголовок: звонок = «Входящий вызов»,
+                                    // обычное = «Vault».
+                                    if (evTitle == "Входящий вызов") {
+                                        showIncomingCall(applicationContext, "Входящий вызов")
+                                    } else {
+                                        showPushNotification()
+                                    }
                                 }
                             } catch (e: Throwable) {
                                 Log.w("VaultRust", "ntfy-stream: parse: " + e.message)
@@ -432,42 +474,53 @@ class VaultForegroundService : Service() {
 
         @JvmStatic
         fun ecoStop(context: Context) {
-            // 0.1.181: eco (релей жив) = сервис Vault ПОЛНОСТЬЮ остановлен —
-            // БЕЗ FGS, БЕЗ иконки в шторке. Доставка несёт нtfy-клиент
-            // (UnifiedPush, отдельное приложение) + релей-тикер в живом
-            // activity. (0.1.176 дёргал сервис в «тихом» режиме для звонков
-            // в фоне, но Android API31+ прицеливает ЛЮБОЕ FGS-уведомление до
-            // LOW — иконка вешалась вечно; юзерская модель: релей жив →
-            // службы нет.)
+            // 0.1.187: eco ON = ТИХИЙ сервис (процесс жив, ntfy-стрим ловит
+            // звонки и будит полноэкранную карточку + зацикленный рингтон),
+            // а НЕ полный стоп (0.1.181 stopSelf ломал S3). Без IMAP-монитора
+            // и locks — один ntfy-сокет. Иконка тихая (на API 30 скрыть
+            // FGS-иконку нельзя — это цена за call-wake).
             ecoMode = true
             ecoStoppedByUser = false
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
                 .edit().putBoolean("eco_mode", true).apply()
             val inst = instance
             if (inst != null) {
-                // Сервис жив: глушим стрим/монитор, снимаем locks и
-                // полностью останавливаем (stopForeground + stopSelf).
-                try { inst.stopNtfyStream() } catch (_: Throwable) {}
+                // Сервис жив: глушим IMAP-монитор/locks, но ДЕРЖИМ ntfy-стрим
+                // (он ловит звонки). Тихая иконка вместо громкой.
                 try { inst.nativeStopMonitor() } catch (_: Throwable) {}
                 try { inst.releaseLocks() } catch (_: Throwable) {}
+                // pushTopic/pushNtfyBase — companion @Volatile var (не instance),
+                // внутри companion-объекта (ecoStop) доступны без префикса inst.
+                if (pushTopic != null) {
+                    try { inst.stopNtfyStream() } catch (_: Throwable) {}
+                    try { inst.startNtfyStream() } catch (_: Throwable) {}
+                }
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        inst.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+                    val qn = inst.buildQuietNotification()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        inst.startForeground(NOTIF_ID, qn, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
                     } else {
-                        @Suppress("DEPRECATION") inst.stopForeground(true)
+                        @Suppress("DEPRECATION")
+                        inst.startForeground(NOTIF_ID, qn)
                     }
-                } catch (_: Throwable) {}
-                try {
-                    val nm = inst.getSystemService(NotificationManager::class.java)
-                    nm?.cancel(NOTIF_ID)
-                } catch (_: Throwable) {}
-                cancelScheduledRestart(context)
-                context.stopService(Intent(context, VaultForegroundService::class.java))
-                Log.i("VaultRust", "eco: service fully stopped (delivery via relay+ntfy, no icon)")
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "ecoStop quiet startForeground failed: " + e.message)
+                }
+                Log.i("VaultRust", "eco: quiet service live (calls still wake)")
             } else {
-                // Сервиса нет — убедимся, что его не воскресит будильник.
-                cancelScheduledRestart(context)
-                Log.i("VaultRust", "eco: service already stopped (no icon)")
+                // Сервиса нет — поднимаем тихий (onStartCommand eco-ветка
+                // поставит тихую иконку и ntfy-стрим по pushTopic из prefs).
+                try {
+                    val svc = Intent(context, VaultForegroundService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(svc)
+                    } else {
+                        context.startService(svc)
+                    }
+                    Log.i("VaultRust", "eco: quiet service started (call wake)")
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "ecoStop quiet start failed: " + e.message)
+                }
             }
         }
 
