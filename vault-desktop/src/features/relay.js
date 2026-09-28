@@ -153,6 +153,9 @@ export function startRelayTicker(ctx) {
       }
     }
   }, 5000);
+  // M2.3-c: мгновенный первый consume — ntfy-пуш будит холодный старт,
+  // call_request уже в очереди; без этого звонок загремел бы через 5с.
+  if (ctx.isLoggedIn) relayConsume(ctx).catch(() => {});
 }
 
 // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),

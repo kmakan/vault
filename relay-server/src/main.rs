@@ -291,7 +291,7 @@ pub async fn relay_pub(
             // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
             // дедуп путей уведомлений — last_seen-гейт (один путь, не оба).
             tokio::task::spawn_blocking(move || {
-                ntfy_publish(&ntfy_url, &topic, total);
+                ntfy_publish(&ntfy_url, &topic, total, urgent);
             });
         }
     }
@@ -553,7 +553,7 @@ fn err(code: StatusCode, msg: &str) -> Response {
 
 /// M2.3-b: минимальный HTTP-клиент для локального ntfy (без зависимостей).
 /// ntfy живёт на том же сервере (nginx terminates TLS наружу) — plain HTTP.
-fn ntfy_publish(base: &str, topic: &str, total: usize) {
+fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool) {
     use std::io::{Read, Write};
     let base = base.trim_end_matches('/');
     // base = http://127.0.0.1:8092 или https://... — поддержим только http
@@ -563,14 +563,27 @@ fn ntfy_publish(base: &str, topic: &str, total: usize) {
         Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => (h.to_string(), p.to_string()),
         _ => (host_port.to_string(), "80".to_string()),
     };
-    let body = format!("Новое сообщение ({total})");
+    const RING_URL: &str = "https://vault-msg.ru/ring_incoming.mp3";
+    let (title, body, audio_header) = if urgent {
+        (
+            "Входящий вызов",
+            "Входящий вызов — откройте Vault: принять или отклонить".to_string(),
+            format!("Audio: {RING_URL}\r\n"),
+        )
+    } else {
+        (
+            "Vault",
+            format!("Новое сообщение ({total})"),
+            String::new(),
+        )
+    };
     // Icon: PNG-иконка Vault вместо дефолтной ntfy-иконки в шторке
     // (ntfy-клиент скачивает URL и ставит largeIcon). Tags: bell убран —
     // рядом с приложением колокольчик лишний (иконка самого ntfy-клиента
     // в списке приложений не меняется — это largeIcon только в уведомлении).
     let icon = "https://vault-msg.ru/vault-notif-icon-192.png";
     let req = format!(
-        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: Vault\r\nPriority: high\r\nIcon: {icon}\r\nClick: vault://open\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: {title}\r\nPriority: high\r\nIcon: {icon}\r\nClick: vault://open\r\n{audio_header}Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
