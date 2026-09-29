@@ -257,6 +257,9 @@ pub async fn relay_pub(
         }
     }
     let mid = uuid::Uuid::new_v4().to_string();
+    // S4: отправитель нужен дальше (клик по звонку ведёт в чат), а req.from
+    // ниже перемещается в Envelope — забираем копию до partial move.
+    let from = req.from.clone();
     let envelope = vault_relay::store::Envelope {
         id: req.id,
         body: req.body,
@@ -303,7 +306,7 @@ pub async fn relay_pub(
             // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
             // дедуп путей уведомлений — last_seen-гейт (один путь, не оба).
             tokio::task::spawn_blocking(move || {
-                ntfy_publish(&ntfy_url, &topic, total, urgent, &ring);
+                ntfy_publish(&ntfy_url, &topic, total, urgent, &ring, from.as_deref());
             });
         }
     }
@@ -568,7 +571,14 @@ fn err(code: StatusCode, msg: &str) -> Response {
 /// `ringtone_url` — звук входящего звонка, выбранный ПОЛУЧАТЕЛЕМ в
 /// настройках (S3): ntfy проигрывает его через Audio-заголовок вместо
 /// жёстко прописанного когда-то RING_URL.
-fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool, ringtone_url: &str) {
+fn ntfy_publish(
+    base: &str,
+    topic: &str,
+    total: usize,
+    urgent: bool,
+    ringtone_url: &str,
+    from: Option<&str>,
+) {
     use std::io::{Read, Write};
     let base = base.trim_end_matches('/');
     // base = http://127.0.0.1:8092 или https://... — поддержим только http
@@ -596,18 +606,26 @@ fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool, ringtone_ur
     // рядом с приложением колокольчик лишний (иконка самого ntfy-клиента
     // в списке приложений не меняется — это largeIcon только в уведомлении).
     let icon = "https://vault-msg.ru/vault-notif-icon-192.png";
+    // S4: `from` — адрес отправителя (для клика по звонку). Область видимости
+    // та же, что у `ringtone_url`: читается только в click_url.
+    let click = click_url(urgent, from);
     let req = format!(
-        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: {title}\r\nPriority: high\r\nIcon: {icon}\r\nClick: vault://open\r\n{audio_header}Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /{topic} HTTP/1.1\r\nHost: {host}\r\nTitle: {title}\r\nPriority: high\r\nIcon: {icon}\r\nClick: {click}\r\n{audio_header}Content-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    let _ = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
+    // Ошибка публикации — не фатальна: конверт уже в очереди, клиент заберёт
+    // его poll'ом. Логируем (иначе корень #4 — молчащий сбой ntfy-моста).
+    if let Err(e) = std::net::TcpStream::connect((host.as_str(), port.parse::<u16>().unwrap_or(80)))
         .and_then(|mut s| {
             s.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
             s.write_all(req.as_bytes())?;
             let mut buf = [0u8; 256];
             let _ = s.read(&mut buf);
             Ok(())
-        });
+        })
+    {
+        eprintln!("vault-relay: ntfy publish to {topic} failed: {e}");
+    }
 }
 
 fn now() -> u64 {
@@ -682,6 +700,35 @@ fn ringtone_or_default(store: &RingtoneStore, hash: &str) -> String {
         .get(hash)
         .cloned()
         .unwrap_or_else(|| DEFAULT_RING_URL.to_string())
+}
+
+/// URL для ntfy-заголовка Click: обычный пуш → просто открыть приложение;
+/// urgent (звонок) с известным отправителем → сразу открыть чат с ним.
+/// Percent-кодирование по RFC 3986: кодируем всё, кроме unreserved
+/// [A-Za-z0-9._~-]. Без новых зависимостей — чистая функция.
+fn click_url(urgent: bool, from: Option<&str>) -> String {
+    if !urgent {
+        return "vault://open".to_string();
+    }
+    let Some(f) = from.filter(|f| !f.is_empty()) else {
+        return "vault://open".to_string();
+    };
+    // Обход ПО БАЙТАМ (не chars): не-ASCII уходит как UTF-8-байты → %XX,
+    // round-trip корректен. hex-цифра: 0-9, затем A-F (uppercase, RFC).
+    let hex = |n: u8| char::from(b"0123456789ABCDEF"[n as usize]);
+    let enc: String = f
+        .as_bytes()
+        .iter()
+        .flat_map(|&b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-') {
+                vec![b as char]
+            } else {
+                // каждый спецсимвол → %XX (uppercase hex)
+                vec!['%', hex(b / 16), hex(b % 16)]
+            }
+        })
+        .collect();
+    format!("vault://open?chat={enc}")
 }
 
 /// POST /relay/ringtone — обновить/прочесть рингтон входящего звонка темы,
@@ -1009,5 +1056,26 @@ mod tests {
         let ring = "https://vault-msg.ru/sounds/ring_incoming_classic.mp3";
         assert_eq!(ringtone_resolve(&app.topic_ringtone, &hash, Some(ring)).as_deref(), Some(ring));
         assert_eq!(ringtone_or_default(&app.topic_ringtone, &hash), ring);
+    }
+
+    /// S4: клик по обычному пушу = просто открыть приложение (без query).
+    #[test]
+    fn click_url_non_urgent_is_bare_open() {
+        assert_eq!(click_url(false, Some("a@b.c")), "vault://open");
+    }
+
+    /// S4: клик по звонку = сразу чат с отправителем; `@` кодируется по RFC 3986.
+    #[test]
+    fn click_url_urgent_encodes_chat() {
+        assert_eq!(
+            click_url(true, Some("anna@example.com")),
+            "vault://open?chat=anna%40example.com"
+        );
+    }
+
+    /// S4: звонок без известного отправителя → на главный экран (не в пустой чат).
+    #[test]
+    fn click_url_urgent_without_sender_is_bare_open() {
+        assert_eq!(click_url(true, None), "vault://open");
     }
 }
