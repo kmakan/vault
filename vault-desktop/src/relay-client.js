@@ -25,6 +25,27 @@ const KV_RELAYS = 'relay-list'; // JSON: [{url, myToken, label}] — поряд�
 const KV_ACTIVE = 'relay-active'; // индекс активного релея в списке (auto-managed)
 const KV_LIMIT_DAY = 'relay-limit-day'; // UTC-день исчерпания лимита (тихий фолбэк)
 
+// S3: ntfy-пуш звонка = ЗВУК ИЗ НАСТРОЕК приложения. Сервер играл один
+// жёстко прописанный mp3 для всех; теперь клиент отдаёт свой URL (тот же
+// выбор, что и локальный рингтон: Настройки → Звонки → «входящий», kv
+// 'anon'/'call-ringtone-incoming'), сервер хранит его per-topic и ставит
+// в Audio-заголовок ntfy-пуша. Пути mp3 лежат на сервере в /sounds/.
+const RING_URLS = {
+  incoming: 'https://vault-msg.ru/sounds/ring_incoming.mp3',
+  incoming_classic: 'https://vault-msg.ru/sounds/ring_incoming_classic.mp3',
+  incoming_pulse: 'https://vault-msg.ru/sounds/ring_incoming_pulse.mp3',
+};
+
+// Рингтон входящего звонка из настроек (S3) — URL для релея. account в
+// сигнатуре для единообразия с остальными kv-хелперами, но настройка
+// глобальная (leaves in 'anon'). Ошибка чтения = дефолт: релей должен
+// всегда получать валидный URL, иначе звонок вернётся к серверному дефолту.
+export async function preferredRingtoneUrl(account) {
+  const name = await invoke('db_kv_get', { account: 'anon', key: 'call-ringtone-incoming' })
+    .catch(() => null);
+  return RING_URLS[name] || RING_URLS.incoming;
+}
+
 // 0.1.186: in-memory mirror of peer tokens. handleCallSignal (calls.js)
 // seeds it SYNCHRONOUSLY on call-signal receipt; relayPublish prefers it
 // over the kv lookup. Removes the race: user rejects before the
@@ -340,7 +361,9 @@ export async function reRegisterOurRelay(account) {
     const r = await rfetch(DEFAULT_RELAY_URL + '/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fp: fp || '' }),
+      // S3: заодно отдаём серверу рингтон входящего звонка из настроек —
+      // ntfy-пуш звонка играет именно его (per-topic на нашем токене).
+      body: JSON.stringify({ fp: fp || '', ringtone: await preferredRingtoneUrl(account) }),
       connectTimeout: PUB_TIMEOUT_MS,
     });
     if (!r.ok) { console.log('[relay] re-register http', r.status); return false; }

@@ -59,6 +59,14 @@ pub struct AppState {
     /// Ключ — hash read-токена (тот же, что ntfy-topic). In-memory:
     /// рестарт релея = всем «молчащим», первый pub честно разбудит.
     pub last_seen: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// S3: per-topic рингтон, выданный клиентом (звук из настроек
+    /// «Настройки → Звонки → входящий»): token_hash → URL mp3. Клиент
+    /// присылает его при регистрации (/relay/register) и может обновить
+    /// через /relay/ringtone; ntfy-вайк звонка играет ИМЕННО его, а не
+    /// жёстко прописанный RING_URL. In-memory: рестарт релея → дефолт
+    /// (DEFAULT_RING_URL), клиент перешлёт URL при ближайшей регистрации —
+    /// приемлемо, звук вернётся сам.
+    pub topic_ringtone: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Default)]
@@ -288,10 +296,14 @@ pub async fn relay_pub(
             let ntfy_url = app.ntfy_url.clone();
             let topic = to_tok.hash.clone();
             let total = app.store.len(&to_tok.hash);
+            // S3: звук звонка — тот, что получатель выбрал в настройках
+            // (per-topic ringtone, key = hash его read-токена = ntfy-topic);
+            // тема без ringtone → дефолт (легаси-клиенты, рестарт релея).
+            let ring = ringtone_or_default(&app.topic_ringtone, &to_tok.hash);
             // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
             // дедуп путей уведомлений — last_seen-гейт (один путь, не оба).
             tokio::task::spawn_blocking(move || {
-                ntfy_publish(&ntfy_url, &topic, total, urgent);
+                ntfy_publish(&ntfy_url, &topic, total, urgent, &ring);
             });
         }
     }
@@ -553,7 +565,10 @@ fn err(code: StatusCode, msg: &str) -> Response {
 
 /// M2.3-b: минимальный HTTP-клиент для локального ntfy (без зависимостей).
 /// ntfy живёт на том же сервере (nginx terminates TLS наружу) — plain HTTP.
-fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool) {
+/// `ringtone_url` — звук входящего звонка, выбранный ПОЛУЧАТЕЛЕМ в
+/// настройках (S3): ntfy проигрывает его через Audio-заголовок вместо
+/// жёстко прописанного когда-то RING_URL.
+fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool, ringtone_url: &str) {
     use std::io::{Read, Write};
     let base = base.trim_end_matches('/');
     // base = http://127.0.0.1:8092 или https://... — поддержим только http
@@ -563,12 +578,11 @@ fn ntfy_publish(base: &str, topic: &str, total: usize, urgent: bool) {
         Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => (h.to_string(), p.to_string()),
         _ => (host_port.to_string(), "80".to_string()),
     };
-    const RING_URL: &str = "https://vault-msg.ru/ring_incoming.mp3";
     let (title, body, audio_header) = if urgent {
         (
             "Входящий вызов",
             "Входящий вызов — откройте Vault: принять или отклонить".to_string(),
-            format!("Audio: {RING_URL}\r\n"),
+            format!("Audio: {ringtone_url}\r\n"),
         )
     } else {
         (
@@ -625,6 +639,80 @@ pub async fn health() -> Response {
     AxumJson(serde_json::json!({"ok":true,"service":"vault-relay"})).into_response()
 }
 
+// ───────────────────── Рингтон звонка (S3, per-topic) ─────────────────────
+// Модель юзера: базовый канал доставки звонка — ntfy-пуш со ЗВУКОМ ИЗ
+// НАСТРОЕК приложения («Настройки → Звонки → входящий»: incoming /
+// incoming_classic / incoming_pulse). Раньше сервер жёстко играл один
+// mp3 для всех; теперь клиент выдаёт свой URL при регистрации токена и
+// может обновить его на живом токене через /relay/ringtone.
+
+/// Дефолт для тем, которые ещё не прислали ringtone (легаси-клиенты,
+/// рестарт релея = in-memory хранилище пустое).
+const DEFAULT_RING_URL: &str = "https://vault-msg.ru/ring_incoming.mp3";
+
+/// Тип хранилища (тот же, что у поля AppState::topic_ringtone).
+type RingtoneStore = std::sync::Mutex<std::collections::HashMap<String, String>>;
+
+/// Нормализовать ringtone из запроса: принимаем только http(s)-URL
+/// (обрезанный по пробелам); мусор/пусто/чужая схема = None (не храним).
+fn norm_ringtone(v: Option<&str>) -> Option<String> {
+    v.map(str::trim)
+        .filter(|s| s.starts_with("http"))
+        .map(str::to_string)
+}
+
+/// Единая точка записи/чтения per-topic рингтона (и /relay/register, и
+/// /relay/ringtone): прислали валидный URL → сохранить и вернуть его;
+/// иначе → вернуть сохранённый (None = «своего нет, играй дефолт»).
+fn ringtone_resolve(store: &RingtoneStore, hash: &str, incoming: Option<&str>) -> Option<String> {
+    let mut saved = store.lock().unwrap();
+    if let Some(ring) = norm_ringtone(incoming) {
+        tracing::info!(topic = %hash, "ringtone: stored");
+        saved.insert(hash.to_string(), ring.clone());
+        return Some(ring);
+    }
+    saved.get(hash).cloned()
+}
+
+/// Рингтон для ntfy-вайка звонка (см. relay_pub): сохранённый темой или дефолт.
+fn ringtone_or_default(store: &RingtoneStore, hash: &str) -> String {
+    store
+        .lock()
+        .unwrap()
+        .get(hash)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_RING_URL.to_string())
+}
+
+/// POST /relay/ringtone — обновить/прочесть рингтон входящего звонка темы,
+/// не перерегистрируя токен (пользователь сменил звук в настройках).
+/// Тело: `{"ringtone": "https://.../ring_incoming_pulse.mp3"}` — сохранить
+/// и отдать его; пустое/без поля — отдать сохранённый. Ответ: `{"ringtone":
+/// "<url>"}` | `{"ringtone": null}`. Auth — тот же токен из Authorization
+/// («VaultRelay <токен>»), что у pub/poll (CORS-заголовок уже разрешён).
+#[derive(Deserialize, Default)]
+struct GetRingtoneReq {
+    #[serde(default)]
+    pub ringtone: Option<String>,
+}
+
+async fn relay_get_ringtone(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<GetRingtoneReq>,
+) -> Response {
+    let Some(tok) = auth_header(&headers) else {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "bad token");
+    };
+    let Some(t) = vault_relay::tokens::parse(&app.keys, &tok) else {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "bad token");
+    };
+    let ring = ringtone_resolve(&app.topic_ringtone, &t.hash, req.ringtone.as_deref());
+    AxumJson(serde_json::json!({ "ringtone": ring })).into_response()
+}
+
 /// M2.4: авто-выдача read-токена новому пользователю (freemium).
 /// Rate-limit по IP: 3 регистрации в сутки — иначе скопом выметут лимиты.
 /// Токен = адрес очереди получателя + его ntfy-topic (hex(mac)).
@@ -645,6 +733,12 @@ struct RegisterReq {
     /// один аккаунт» (анти-шаринг при монетизации). Не обязателен.
     #[serde(default)]
     fp: Option<String>,
+    /// S3: URL рингтона входящего звонка из настроек клиента
+    /// (ring_incoming | ring_incoming_classic | ring_incoming_pulse .mp3).
+    /// Необязателен: без него у темы дефолтный звук. Легаси-клиенты
+    /// поле не шлют.
+    #[serde(default)]
+    ringtone: Option<String>,
 }
 async fn relay_register(
     State(app): State<Arc<AppState>>,
@@ -689,6 +783,9 @@ async fn relay_register(
         // но на всякий случай не отдаём его чужому fp.
         return err(StatusCode::CONFLICT, "token already bound");
     }
+    // S3: заодно сохраняем рингтон звонка из настроек клиента (если
+    // прислан валидный http-URL) — тема = hash этого же токена.
+    ringtone_resolve(&app.topic_ringtone, &topic, req.ringtone.as_deref());
     app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
     tracing::info!("register: token issued (unlimited={promo_ok}, days={days})");
     (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp, unlimited: promo_ok })).into_response()
@@ -731,6 +828,7 @@ async fn main() {
         free_daily_limit,
         token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
         last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+        topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}"
@@ -744,6 +842,7 @@ async fn main() {
         // alias: клиентские baseUrl заканчиваются на /relay → зовут /relay/health
         .route("/relay/health", get(health))
         .route("/relay/register", post(relay_register))
+        .route("/relay/ringtone", post(relay_get_ringtone))
         .route("/relay/metrics", get(metrics))
         .layer(cors_layer())
         .with_state(state);
@@ -797,4 +896,118 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
         .collect()
+}
+
+// ─────────────────── Тесты (S3: per-topic ringtone) ───────────────────
+// Без сети и БД: локальные ServerKeys → свой хеш темы, хранилище — тот же
+// in-memory HashMap, что у AppState. ntfy-путь (внешний TCP) не тестируем.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vault_relay::tokens::{issue, parse};
+
+    fn keys() -> ServerKeys {
+        ServerKeys::new([7u8; 32])
+    }
+
+    /// Read-токен + hash его очереди (= ntfy-topic = ключ рингтона).
+    /// hash = mac(key_id‖scope‖expiry), то есть тема однозначно задаётся
+    /// expiry токена: выдача в разное время = разный expiry = разная тема.
+    fn fresh_topic(k: &ServerKeys, exp: u32) -> (String, String) {
+        let token = issue(k, Scope::Read, exp); // 2100 год — не просрочен
+        let hash = parse(k, &token).expect("token must parse").hash;
+        (token, hash)
+    }
+
+    fn store() -> RingtoneStore {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    }
+
+    #[test]
+    fn ringtone_roundtrip_by_token_hash() {
+        let k = keys();
+        let (_token, hash) = fresh_topic(&k, 4_102_444_800);
+        let s = store();
+        let pulse = "https://vault-msg.ru/sounds/ring_incoming_pulse.mp3";
+        // сохранение (POST /relay/ringtone с полем) → вернули тот же URL
+        assert_eq!(ringtone_resolve(&s, &hash, Some(pulse)).as_deref(), Some(pulse));
+        // перечитка без поля (клиент просто спрашивает свой звук) → он же
+        assert_eq!(ringtone_resolve(&s, &hash, None).as_deref(), Some(pulse));
+        // «пустое» значение не затирает сохранённое
+        assert_eq!(ringtone_resolve(&s, &hash, Some("   ")).as_deref(), Some(pulse));
+        // ntfy-путь читает из этого же хранилища → играет выбранный звук
+        assert_eq!(ringtone_or_default(&s, &hash), pulse);
+    }
+
+    #[test]
+    fn ringtone_is_per_topic_and_defaults_otherwise() {
+        let k = keys();
+        let (_t1, h1) = fresh_topic(&k, 4_102_444_800);
+        let (_t2, h2) = fresh_topic(&k, 4_102_444_801);
+        assert_ne!(h1, h2, "разные токены = разные очереди/темы");
+        let s = store();
+        let classic = "https://vault-msg.ru/sounds/ring_incoming_classic.mp3";
+        ringtone_resolve(&s, &h1, Some(classic));
+        assert_eq!(ringtone_resolve(&s, &h2, None), None, "чужая тема осталась чистой");
+        assert_eq!(ringtone_or_default(&s, &h1), classic);
+        // тема без ringtone → дефолт (легаси-клиенты, рестарт релея)
+        assert_eq!(ringtone_or_default(&s, &h2), DEFAULT_RING_URL);
+    }
+
+    #[test]
+    fn ringtone_accepts_only_http_urls() {
+        let s = store();
+        for junk in ["", "   ", "ftp://x/r.mp3", "javascript:alert(1)", "vault-msg.ru/a.mp3"] {
+            assert_eq!(ringtone_resolve(&s, "t", Some(junk)), None, "must reject {junk:?}");
+        }
+        assert!(s.lock().unwrap().is_empty(), "мусор не попадает в хранилище");
+        // http/https принимаем, пробелы обрезаются
+        assert_eq!(
+            ringtone_resolve(&s, "t", Some("  https://vault-msg.ru/sounds/ring_incoming.mp3 ")).as_deref(),
+            Some("https://vault-msg.ru/sounds/ring_incoming.mp3")
+        );
+    }
+
+    #[test]
+    fn wire_compat_legacy_bodies_still_parse() {
+        // легаси-клиенты поле ringtone не шлют → None (играет дефолт)
+        let r: RegisterReq = serde_json::from_str(r#"{"fp":"abc"}"#).expect("legacy register");
+        assert_eq!(r.ringtone, None);
+        let r: RegisterReq = serde_json::from_str("{}").expect("empty register body");
+        assert_eq!(r.fp, None);
+        // новый клиент прислал ringtone → прочитан
+        let r: RegisterReq = serde_json::from_str(
+            r#"{"fp":"abc","ringtone":"https://vault-msg.ru/sounds/ring_incoming_pulse.mp3"}"#,
+        )
+        .expect("register with ringtone");
+        assert_eq!(r.ringtone.as_deref(), Some("https://vault-msg.ru/sounds/ring_incoming_pulse.mp3"));
+        // запрос «просто отдай мой звук» (без поля) допустим
+        let g: GetRingtoneReq = serde_json::from_str("{}").expect("empty get body");
+        assert_eq!(g.ringtone, None);
+    }
+
+    /// Хранилище живёт в AppState и собирается без сети — поле на месте.
+    #[test]
+    fn app_state_carries_empty_ringtone_store() {
+        let app = AppState {
+            store: Store::new(),
+            keys: keys(),
+            allow_anonymous_pub: true,
+            metrics: Metrics::default(),
+            registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            ntfy_url: String::new(),
+            unlimited_key: None,
+            daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
+            free_daily_limit: 0,
+            token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
+            last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+            topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
+        };
+        assert!(app.topic_ringtone.lock().unwrap().is_empty());
+        let (_token, hash) = fresh_topic(&app.keys, 4_102_444_800);
+        assert_eq!(ringtone_or_default(&app.topic_ringtone, &hash), DEFAULT_RING_URL);
+        let ring = "https://vault-msg.ru/sounds/ring_incoming_classic.mp3";
+        assert_eq!(ringtone_resolve(&app.topic_ringtone, &hash, Some(ring)).as_deref(), Some(ring));
+        assert_eq!(ringtone_or_default(&app.topic_ringtone, &hash), ring);
+    }
 }
