@@ -220,20 +220,21 @@ class MainActivity : TauriActivity() {
     // несёт отдельный ntfy-клиент (UnifiedPush), FGS = иконка в шторке, а
     // Android API31+ прицеливает ЛЮБОЕ FGS-уведомление до LOW. Классический
     // (не-eco) режим — стартуем как раньше.
-    // 0.1.187: eco — ТАКЖЕ стартуем сервис (тихий FGS: без IMAP/locks,
-    // один ntfy-сокет, ловит звонки). Сервис сам решает тихий/громкий по
-    // ecoMode в onCreate (eco → buildQuietNotification + ntfy-стрим).
-    // Если не стартуем, в eco процесс гаснет и S3 ломается (звонок не
-    // будит app). Классический (не-eco) — штатный FGS как раньше.
-    try {
-      val svc = Intent(this, VaultForegroundService::class.java)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        startForegroundService(svc)
-      } else {
-        startService(svc)
+    val ecoOn = try { VaultForegroundService.ecoModeEnabled(this) } catch (e: Throwable) { false }
+    if (ecoOn) {
+      try { VaultForegroundService.cancelScheduledRestart(this) } catch (_: Throwable) {}
+      Log.i("VaultRust", "eco mode: foreground service not started (delivery via relay+ntfy)")
+    } else {
+      try {
+        val svc = Intent(this, VaultForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          startForegroundService(svc)
+        } else {
+          startService(svc)
+        }
+      } catch (e: Throwable) {
+        Log.w("VaultRust", "startForegroundService failed: " + e.message)
       }
-    } catch (e: Throwable) {
-      Log.w("VaultRust", "startForegroundService failed: " + e.message)
     }
   }
 
