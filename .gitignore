@@ -44,3 +44,9 @@ __pycache__/
 
 # Local data
 /data/
+
+# FCM (Part A/B, 29.09): серверные секреты НЕ в git
+**/google-services.json
+**/fcm-key.json
+**/service-account.json
+**/service-account*.json
