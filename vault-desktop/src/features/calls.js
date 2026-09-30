@@ -19,6 +19,19 @@ import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
 
+// ── S5-2: решение, принятое кнопкой системного уведомления ──────
+// Сценарий: приложение закрыто, звонок пришёл по FCM, JS о нём не знает
+// (ctx.currentCall=null). Юзер жмёт «Ответить» → CallActionReceiver →
+// MainActivity.dispatchCallAction('accept'). Живого WebView на этот момент
+// может не быть (только что поднятое приложение) — натив отдаёт решение
+// сюда через window.__vaultApplyPendingCallDecision, а мы применяем его
+// ровно к тому call_request, который придёт из очереди реля (контракт C).
+// Значение ОДНОРАЗОВОЕ: применяется и сбрасывается.
+let pendingNativeCallDecision = null;
+export function setPendingNativeCallDecision(action) {
+  if (action === 'accept' || action === 'reject') pendingNativeCallDecision = action;
+}
+
 // ── Дедуп звонков (persist kv 'call-seen') ─────────────────────
 // call_id обработанного звонка (request/accept/end/reject). После
 // перезапуска не даёт старым конвертам снова дёргать state machine.
@@ -272,17 +285,19 @@ export async function handleCallSignal(ctx, sig, from) {
       console.log('[call] incoming_ringing SET for', call_id, 'from', from);
       // Звук входящего: WAV-рингтон «кристальный чайм».
       // Desktop — cpal в Rust (слышен при свёрнутом окне).
-      // Android: рингтон играет НАТИВНЫЙ MediaPlayer в сервисе
-      // (запускается в mediaShowIncomingCall) — HTML5 Audio в WebView
-      // глохнет в фоне и играл ОДИН раз. Поэтому HTML5-луп входящего
-      // на Android пропускаем, чтобы не было двойного звука.
-      if (!ctx.isAndroid) {
+      // Android: в фоне/закрытом WebView HTML5-Audio глохнет — рингтон там
+      // нативный MediaPlayer (showIncomingCall). В ВИДИМОМ WebView (приложение
+      // открыто) нативный звонок подавлен — HTML5 работает, играем сами.
+      if (!ctx.isAndroid || document.visibilityState === 'visible') {
         playCallSound(ctx, 'incoming', true);
       }
-      // Full-screen уведомление: Android — системный звонок
-      // поверх локскрина (рингтон+вибрация канала уведомлений).
+      // Full-screen уведомление: Android — системный звонок поверх локскрина.
+      // При ОТКРЫТОМ приложении UI = CallOverlay (свайпы) — системное
+      // уведомление не поднимаем (контракт A), иначе дубль с оверлеем.
       // Desktop — no-op. Снимается в hangup().
-      api.mediaShowIncomingCall(ctx.callPeerName || from);
+      if (!(ctx.isAndroid && document.visibilityState === 'visible')) {
+        api.mediaShowIncomingCall(ctx.callPeerName || from);
+      }
       startFastPolling(ctx);
       // Таймер гудка: длительность из настроек (SettingsPage → kv
       // 'call-ring-duration', секунды). Читаем АСИНХРОННО и НЕ блокируем
@@ -290,6 +305,18 @@ export async function handleCallSignal(ctx, sig, from) {
       // 180с вместо прежних 90с: call_accept/answer по почте идут долго
       // (SMTP+доставка+IMAP), звонок «сгорал» до ответа собеседника.
       armRingTimer(ctx, DEFAULT_RING_MS);
+      // S5-2 (контракт C): юзер уже нажал «Ответить»/«Отклонить» в
+      // уведомлении, пока приложение поднималось. Звонок только что
+      // появился в incoming_ringing — применяем накопленное решение один
+      // раз, вместо показа свайпов. Иначе guard в acceptCall отбивал бы
+      // вызов как «отклонён».
+      if (pendingNativeCallDecision) {
+        const act = pendingNativeCallDecision;
+        pendingNativeCallDecision = null;
+        console.log('[call] applying native button decision:', act, 'for', call_id);
+        if (act === 'accept') await acceptCall(ctx);
+        else await rejectCall(ctx);
+      }
       break;
     }
     case 'call_accept': {

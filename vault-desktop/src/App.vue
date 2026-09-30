@@ -936,6 +936,9 @@ import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
+// S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
+// не был готов — очередь применяется к следующему call_request.
+import { setPendingNativeCallDecision } from './features/calls.js';
 import * as ProfilesFeature from './features/profiles.js';
 import * as PresenceFeature from './features/presence.js';
 import * as ChannelsFeature from './features/channels.js';
@@ -1505,6 +1508,11 @@ export default {
       window.__vaultRejectCall = () => {
         console.log('[call] native REJECT tapped');
         this.rejectCall();
+      };
+      // S5-2: кнопку уведомления нажали, пока живого WebView не было —
+      // Kotlin отдаст решение сюда (очередь), как только страница готова.
+      window.__vaultApplyPendingCallDecision = (action) => {
+        setPendingNativeCallDecision(action);
       };
       // Фоновый плеер голосовых: нативный MediaPlayer (Kotlin) сигнализирует
       // завершение трека — кнопка возвращается в «play» (троттлинг JS-таймеров

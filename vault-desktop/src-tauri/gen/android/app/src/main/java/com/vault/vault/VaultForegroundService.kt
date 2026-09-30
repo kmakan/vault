@@ -1266,7 +1266,13 @@ class VaultForegroundService : Service() {
 
         @JvmStatic
         fun showIncomingCall(context: Context, callerName: String, callerEmail: String, callId: String) {
-            
+            // S5-2 (контракт A): приложение ВИДИМО — нативный звонок не
+            // поднимаем, UI = in-app CallOverlay (свайпы + HTML5-рингтон).
+            // Закрывает дубль и от FCM, и от JS mediaShowIncomingCall.
+            if (MainActivity.appVisible) {
+                Log.i("VaultRust", "call: app visible — native notification suppressed (in-app overlay UI)")
+                return
+            }
             currentCallId = callId
             try {
                 // Длительность гудка из настроек пользователя (в try — чтобы

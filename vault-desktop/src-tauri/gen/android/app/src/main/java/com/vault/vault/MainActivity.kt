@@ -38,7 +38,13 @@ class MainActivity : TauriActivity() {
         else -> return
       }
       val wv = liveWebView ?: run {
-        Log.w("VaultRust", "dispatchCallAction($action): no live WebView")
+        // Живого WebView нет — приложение только что поднято из уведомления
+        // (кнопка «Ответить» при закрытом приложении). Решение НЕ теряем:
+        // запоминаем и отдадим в onWebViewCreate, как только фронт готов.
+        // Иначе call_request из очереди реля поднимет звонок в incoming_ringing,
+        // а нажатие кнопки молча пропадёт.
+        pendingCallAction = action
+        Log.i("VaultRust", "dispatchCallAction(): queued (no live WebView) — $action")
         return
       }
       wv.post {
@@ -69,6 +75,19 @@ class MainActivity : TauriActivity() {
 
     @JvmStatic
     var pendingOpenChat: String? = null
+
+    // S5-2 (контракт C): решение, принятое кнопкой уведомления, пока
+    // WebView ещё не создан. Действует ОДИН раз: JS заберёт его через
+    // __vaultApplyPendingCallDecision при обработке call_request.
+    @JvmStatic
+    var pendingCallAction: String? = null
+
+    // S5-2 (контракт A/B): видимость приложения. Пока true — входящий
+    // звонок обслуживает ТОЛЬКО in-app CallOverlay (свайпы + HTML5-рингтон),
+    // нативное уведомление и MediaPlayer-рингтон не поднимаются.
+    // Ставится в onResume/onPause MainActivity; читает VaultForegroundService.
+    @JvmStatic
+    var appVisible: Boolean = false
 
     // WebView живёт в activity-процессе. Статик-ссылка
     // ставится в onWebViewCreate, снимается в onDestroy.
@@ -265,6 +284,36 @@ class MainActivity : TauriActivity() {
     super.onWebViewCreate(webView)
     keepAliveWebView = webView
     liveWebView = webView
+    // S5-2 (контракт C): отдаём решение, накопленное кнопкой уведомления
+    // (accept/reject), пока живого WebView ещё не было. Фронт положит его
+    // в очередь (setPendingNativeCallDecision) и применит ровно к тому
+    // call_request, который придёт из очереди реля.
+    pendingCallAction?.let { act ->
+      pendingCallAction = null
+      webView.post {
+        // Страница могла ещё не прогрузить App.vue (окно __vaultApplyPending-
+        // CallDecision не определено) — короткий повтор, не чаще 5×100мс.
+        var attempt = 0
+        val deliver = object : Runnable {
+          override fun run() {
+            // Вкладываем $act ('accept'/'reject') в JS-вызов. act — строгий
+            // бинарный набор (guard setPendingNativeCallDecision), но на
+            // всякий случай экранируем кавычки.
+            val actJs = act.replace("\\", "\\\\").replace("'", "\\'")
+            webView.evaluateJavascript(
+              "(function(){ if (window.__vaultApplyPendingCallDecision) {" +
+                " window.__vaultApplyPendingCallDecision('$actJs'); return 1; } return 0; })()",
+              { res ->
+                val ok = res != null && res.contains("1")
+                Log.i("VaultRust", "queued call action delivered: $act (ok=$ok)")
+                if (!ok && attempt < 5) { attempt++; webView.postDelayed(this, 100) }
+              }
+            )
+          }
+        }
+        webView.postDelayed(deliver, 100)
+      }
+    }
     // Гео для SOS: WebView должен разрешать
     // navigator.geolocation для tauri://localhost (prompt ниже выдаёт грант).
     try {
@@ -353,6 +402,9 @@ class MainActivity : TauriActivity() {
 
   override fun onPause() {
     super.onPause()
+    // S5-2: приложение ушло в фон → возвращаем нативный путь показа
+    // звонка (уведомление + рингтон + кнопки). Keep-alive WebView НЕ трогаем.
+    appVisible = false
     // Замок: при уходе из приложения — сброс «разблокирован» и показ
     // LockActivity при следующем возврате.
     try {
@@ -388,6 +440,13 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    // S5-2 (контракт A): приложение видимо — входящий звонок обслуживает
+    // ТОЛЬКО in-app CallOverlay. Если нативное уведомление/рингтон уже
+    // поднято (пользователь открыл приложение во время гудка) — снимаем
+    // его сейчас; безопасный no-op, если показывать было нечего.
+    appVisible = true
+    try { VaultForegroundService.dismissIncomingCall(this) }
+    catch (e: Throwable) { Log.w("VaultRust", "onResume dismissIncomingCall: " + e.message) }
     // M2.4: ntfy Click vault://open?chat=<email> → открыть чат.
     handleVaultDeepLink(intent)
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
