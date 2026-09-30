@@ -10,8 +10,13 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hmac = "0.12"
-sha2 = "0.10"
+# sha2/oid: rsa::pkcs1v15::SigningKey требует AssociatedOid у хэша (RS256).
+sha2 = { version = "0.10", features = ["oid"] }
 base64 = "0.22"
+# FCM Part B: подпись JWT (RS256) и HTTPS-обмен с fcm.googleapis.com
+# (у ntfy — plain HTTP на локальный сокет, у FCM — только https/TLS).
+rsa = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"

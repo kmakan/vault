@@ -357,6 +357,63 @@ pub(crate) fn show_incoming_call_notification_ext(
     }
 }
 
+/// Записать настройки звонков (рингтоны + длительность гудка) в Android
+/// SharedPreferences `vault_prefs`, чтобы нативный FGS-рингтон и таймаут
+/// звонка работали при СМАХНУТОМ приложении (JS-движок звонка мёртв).
+/// Вызывается из media::sync_call_prefs (таури-команда sync_call_prefs).
+/// Паттерн JNI скопирован с duress::sync_prefs_android (env через
+/// ndk_context::android_context, catch_unwind, exception_clear).
+/// Длительность едет СТРОКОЙ — Kotlin парсит Long через toLongOrNull().
+pub(crate) fn sync_call_prefs_to_android(ring_in: &str, ring_out: &str, duration_ms: u64) {
+    let ring_in = ring_in.to_owned();
+    let ring_out = ring_out.to_owned();
+    let result = std::panic::catch_unwind(move || {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }
+            .map_err(|e| format!("JavaVM from_raw: {e}"))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context().cast()) };
+        let jring_in = env
+            .new_string(&ring_in)
+            .map_err(|e| format!("new_string ring_in: {e}"))?;
+        let jring_out = env
+            .new_string(&ring_out)
+            .map_err(|e| format!("new_string ring_out: {e}"))?;
+        let jdur = env
+            .new_string(duration_ms.to_string())
+            .map_err(|e| format!("new_string duration: {e}"))?;
+        let cls = find_app_class(
+            &mut env,
+            &activity,
+            "com.vault.vault.VaultForegroundService",
+        )
+        .map_err(|e| format!("find class: {e}"))?;
+        env.call_static_method(
+            &cls,
+            "syncCallPrefs",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            &[
+                (&activity).into(),
+                (&jring_in).into(),
+                (&jring_out).into(),
+                (&jdur).into(),
+            ],
+        )
+        .map_err(|e| {
+            let _ = env.exception_clear();
+            format!("syncCallPrefs: {e}")
+        })?;
+        Ok::<(), String>(())
+    });
+    match result {
+        Ok(Ok(())) => eprintln!("[audio] call prefs synced (dur={duration_ms}ms)"),
+        Ok(Err(e)) => eprintln!("[audio] syncCallPrefs failed: {e}"),
+        Err(_) => eprintln!("[audio] syncCallPrefs panicked (JNI)"),
+    }
+}
+
 /// Убрать уведомление входящего звонка (принят/отклонён/завершён/таймаут).
 pub(crate) fn dismiss_incoming_call_notification() {
     let result = std::panic::catch_unwind(|| {

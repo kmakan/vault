@@ -15,7 +15,8 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://*/" },
-        { "url": "https://*/*" }
+        { "url": "https://*/*" },
+        { "url": "http://192.168.1.4:36639/*" }
       ]
     }
   ]

@@ -180,6 +180,17 @@
             </button>
           </div>
         </div>
+        <div class="setting-group">
+          <label>{{ t('calls_duration') }}</label>
+          <div class="ringtone-row">
+            <select v-model="callDuration" @change="saveCallDuration" class="media-quality-select">
+              <option :value="60">{{ t('calls_duration_60') }}</option>
+              <option :value="120">{{ t('calls_duration_120') }}</option>
+              <option :value="180">{{ t('calls_duration_180') }}</option>
+              <option :value="300">{{ t('calls_duration_300') }}</option>
+            </select>
+          </div>
+        </div>
         <button v-if="previewPlaying" class="btn btn-secondary" @click="stopPreview">■ {{ t('calls_stop_preview') }}</button>
         <p class="setting-hint">{{ t('calls_settings_hint') }}</p>
       </div>
@@ -484,6 +495,9 @@ export default {
       // Звонки: выбранные рингтоны (имена WAV без ring_/.wav).
       ringtoneIncoming: 'incoming',
       ringtoneOutgoing: 'outgoing',
+      // Длительность гудка в СЕКУНДАХ (60/120/180/300). Нативная сторона
+      // хранит то же значение в МИЛЛИСЕКУНДАХ (prefs call_ring_duration).
+      callDuration: 180,
       previewPlaying: false,
       _previewEl: null,
       backupBusy: false,
@@ -520,6 +534,12 @@ export default {
       // Звонки: выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
+      // Длительность гудка (секунды). Значение из опций — Number, а kv
+      // отдаёт строку: приводим и клампим, иначе select не покажет выбранное.
+      try {
+        const dsec = parseInt(await db.kvGet('anon', 'call-ring-duration'), 10);
+        if (Number.isFinite(dsec) && dsec > 0) this.callDuration = dsec;
+      } catch (e) { /* дефолт 180 */ }
       // Duress: восстановить состояние тумблера из конфига — иначе
       // после перезапуска тумблер выглядит выключенным, даже если замок активен.
       try {
@@ -882,11 +902,32 @@ export default {
       this.$emit('autoclean-change', this.localAutoclean);
     },
     // ── Звонки: сохранение + превью рингтонов ──────────────────
+    // syncCallPrefsAndroid дублирует ВСЕ три настройки звонка в Android
+    // SharedPreferences (vault_prefs) через таури-команду sync_call_prefs —
+    // иначе при СМАХНУТОМ приложении (JS мёртв) нативный FGS играл бы
+    // системный рингтон и считал 180с в обход настроек. Вызывается из всех
+    // трёх сохранений — в prefs пишем полный снимок, поэтому порядок
+    // сохранения неважен.
+    async syncCallPrefsAndroid() {
+      try {
+        await api.syncCallPrefs(
+          this.ringtoneIncoming, this.ringtoneOutgoing, this.callDuration * 1000
+        );
+      } catch (e) { /* desktop — no-op */ }
+    },
     async saveRingtoneIncoming() {
       try { await db.kvSet('anon', 'call-ringtone-incoming', this.ringtoneIncoming); } catch (e) { /* ignore */ }
+      await this.syncCallPrefsAndroid();
     },
     async saveRingtoneOutgoing() {
       try { await db.kvSet('anon', 'call-ringtone-outgoing', this.ringtoneOutgoing); } catch (e) { /* ignore */ }
+      await this.syncCallPrefsAndroid();
+    },
+    async saveCallDuration() {
+      const sec = parseInt(this.callDuration, 10);
+      if (!Number.isFinite(sec) || sec <= 0) this.callDuration = 180;
+      try { await db.kvSet('anon', 'call-ring-duration', String(this.callDuration)); } catch (e) { /* ignore */ }
+      await this.syncCallPrefsAndroid();
     },
     // Превью: desktop — cpal в Rust (media_sound_play), Android — HTML5
     // Audio. Зацикленный звук — стоп кнопкой.

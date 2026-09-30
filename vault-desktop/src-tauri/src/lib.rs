@@ -1818,6 +1818,9 @@ pub fn run() {
             media::media_send_hangup,
             media::media_show_incoming_call,
             media::media_dismiss_incoming_call,
+            // Настройки звонков → Android SharedPreferences (нативный рингтон
+            // и таймаут при смахнутом приложении). Android — JNI, desktop no-op.
+            media::sync_call_prefs,
             media::media_set_ice_servers,
             // Рингтон входящего звонка (cpal, не webview — работает и со
             // свёрнутым окном; autoplay-политика WebKitGTK не мешает).

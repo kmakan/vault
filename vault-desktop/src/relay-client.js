@@ -14,7 +14,18 @@
 import { invoke } from '@tauri-apps/api/core';
 
 // Наш релей (прод). Первый в списке, но НЕ единственный.
-export const DEFAULT_RELAY_URL = 'https://vault-msg.ru/relay';
+//
+// СБОРКА: адрес переопределяется переменной окружения VITE_RELAY_URL на этапе
+// сборки фронтенда (vite сам подставляет import.meta.env.VITE_*). Нужно для
+// стендов: локальный релей на http:// — plain-text, и чтобы не патчить
+// исходник при каждом тесте. БЕЗ переменной значение = прод, поэтому
+// production-сборка ведёт себя ровно как раньше.
+//
+//   VITE_RELAY_URL=http://192.168.1.4:36639/relay npm run build
+//
+// Пустое/пропущенное значение → прод (защита от «переменная set, но пустая»).
+const BUILD_RELAY_URL = (import.meta.env.VITE_RELAY_URL || '').trim();
+export const DEFAULT_RELAY_URL = BUILD_RELAY_URL || 'https://vault-msg.ru/relay';
 const PUB_TIMEOUT_MS = 8000;
 const POLL_TIMEOUT_MS = 10000;
 // kv-ключи (per-account) для настроек relay.
@@ -431,6 +442,26 @@ export async function relayPoll(account) {
   }
 }
 
+// FCM (Part B, Android): нативный мост window.VaultFcm (MainActivity.kt) сам
+// шлёт POST <relay>/fcm/register со своим FCM reg_token. Креды релея лежат в
+// kv, нативному слою недоступны — отдаём их один раз за загрузку WebView.
+// В desktop/браузере моста нет → тихий false; FCM — дополнение, основной путь
+// доставки (релей+ntfy) от него не зависит.
+export async function registerNativeFcm(relayUrl, readToken, fp) {
+  try {
+    const bridge = window.VaultFcm;
+    if (!bridge || !bridge.register) return false;
+    bridge.register(String(relayUrl || ''), String(readToken || ''), String(fp || ''));
+    return true;
+  } catch (e) { return false; }
+}
+
+// Аккаунт, для которого мост уже получил креды (одна регистрация на WebView:
+// нативный слой сам кэширует reg_token+url в prefs и перерегистрируется при
+// следующем создании WebView). Смена аккаунта в той же сессии → регистрация
+// заново, иначе пуши ушли бы в очередь прежнего владельца токена.
+let nativeFcmAccount = null;
+
 // Бесконечная регистрация: на нашем релее токен выдаётся бесплатно и
 // автоматически. Если myToken пуст (чистая установка / миграция kv),
 // опрос и publish вообще не доходят до HTTP — фильтр relays.filter(r =>
@@ -438,10 +469,19 @@ export async function relayPoll(account) {
 // никогда не сработает. Регистрируем заранее, молча.
 export async function ensureOurRelayToken(account) {
   try {
-    const { relays } = await getSettings(account);
-    const ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
-    if (ours && ours.myToken) return true;
-    return await reRegisterOurRelay(account);
+    let { relays } = await getSettings(account);
+    let ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
+    if (!ours || !ours.myToken) {
+      if (!await reRegisterOurRelay(account)) return false;
+      // Свежий токен уже в kv — перечитываем, чтобы отдать мосту актуальный.
+      ({ relays } = await getSettings(account));
+      ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
+    }
+    if (ours && ours.myToken && nativeFcmAccount !== account) {
+      nativeFcmAccount = account; // до await: publish+poll идут параллельно
+      registerNativeFcm(ours.url, ours.myToken, await myFingerprint(account)).catch(() => {});
+    }
+    return !!(ours && ours.myToken);
   } catch (e) { return false; }
 }
 

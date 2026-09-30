@@ -1165,6 +1165,18 @@ export class ApiClient {
       console.warn('[call] mediaDismissIncomingCall failed:', e);
     }
   }
+  // Настройки звонков → Android SharedPreferences (vault_prefs), чтобы
+  // нативный FGS-рингтон/таймаут звонка работали при смахнутом приложении.
+  // duration — МИЛИСЕКУНДЫ. Desktop — no-op в Rust.
+  async syncCallPrefs(ringIn, ringOut, duration) {
+    try {
+      return await invoke('sync_call_prefs', {
+        ringIncoming: ringIn, ringOutgoing: ringOut, duration: Number(duration) || 0,
+      });
+    } catch (e) {
+      console.warn('[call] syncCallPrefs failed:', e);
+    }
+  }
   async mediaSetIceServers(urls) {
     return await invoke('media_set_ice_servers', { urls });
   }

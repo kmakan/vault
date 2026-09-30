@@ -29,6 +29,17 @@
 -keep class com.vault.vault.MainActivity { *; }
 -keep class com.vault.vault.CallActionReceiver { *; }
 
+# FCM Part B: сервис инстанцируется Firebase по имени из манифеста
+# (MESSAGING_EVENT). Держим класс + его @JvmStatic-хелперы явно: иначе
+# R8 может переименовать/вырезать то, что вызывает только Firebase и
+# JS-мост VaultFcm (JS-мост ищет метод по имени — obfuscation ломает).
+-keep class com.vault.vault.VaultFirebaseMessagingService { *; }
+-keepclassmembers class com.vault.vault.VaultFirebaseMessagingService {
+    public static void saveRegToken(android.content.Context, java.lang.String);
+    public static void setRelayCredentials(android.content.Context, java.lang.String, java.lang.String, java.lang.String);
+    public static void registerDevice(android.content.Context);
+}
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:
@@ -82,6 +93,13 @@
     public static void ecoStart(android.content.Context);
 }
 
+
+# Настройки звонков → prefs (task 4): syncCallPrefs зовётся ТОЛЬКО из Rust
+# (media::sync_call_prefs → JNI). Без keep R8 вырезал бы статик на ВНЕШНЕМ
+# классе — та же грабля, что с syncLockPrefs/ecoStop.
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void syncCallPrefs(android.content.Context, java.lang.String, java.lang.String, java.lang.String);
+}
 
 # УВЕДОМЛЕНИЯ: small-icon ic_notification зовётся из JS строкой
 # (notify.js opts.icon) — Java-коллера нет, R8 вырезал drawable →

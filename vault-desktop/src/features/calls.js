@@ -46,6 +46,44 @@ export async function rememberCallSeen(ctx, callId) {
   } catch (e) { /* тихо */ }
 }
 
+// ── Длительность гудка (настройка «Звонки») ────────────────────
+// Значение в kv_store — СЕКУНДЫ (60/120/180/300, дефолт 180). Здесь
+// переводим в мс. Читаем асинхронно ДО старта setTimeout, state machine
+// не ждёт: гудок стартует с дефолтом, а если kv ответит позже — таймер
+// ПЕРЕСТАРАИВАЕТСЯ на реальное значение (см. armRingTimer).
+// Дублирует нативную сторону: при СМАХНУТОМ приложении JS мёртв и таймаут
+// считает FGS (VaultForegroundService → prefs call_ring_duration).
+const DEFAULT_RING_MS = 180000;
+
+async function fetchRingDurationMs() {
+  try {
+    const raw = await db.kvGet('anon', 'call-ring-duration');
+    const sec = parseInt(raw, 10);
+    if (!Number.isFinite(sec) || sec <= 0) return DEFAULT_RING_MS;
+    // Кламп 15..600с — битое значение в kv не должно вешать звонок.
+    return Math.min(600, Math.max(15, sec)) * 1000;
+  } catch (e) {
+    return DEFAULT_RING_MS;
+  }
+}
+
+// Ставит таймер таймаута гудка. fallbackMs используется немедленно,
+// затем (асинхронно) уточняется реальной настройкой. Гонка учтена:
+// если за это время звонок уже снят/принят (callRingTimer !== null
+// меняется на null) — переставлять таймер нельзя.
+function armRingTimer(ctx, fallbackMs = DEFAULT_RING_MS) {
+  const start = (ms) => {
+    if (!ctx.currentCall || ctx.callState !== 'incoming_ringing') return;
+    if (ctx.callRingTimer) clearTimeout(ctx.callRingTimer);
+    ctx.callRingTimer = setTimeout(() => cancelCall(ctx, 'timeout'), ms);
+  };
+  start(fallbackMs);
+  fetchRingDurationMs().then((ms) => {
+    if (ctx.callState !== 'incoming_ringing') return;
+    start(ms);
+  }).catch(() => { /* дефолт уже стоит */ });
+}
+
 // ── Сигнализация ───────────────────────────────────────────────
 // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
 // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
@@ -246,10 +284,12 @@ export async function handleCallSignal(ctx, sig, from) {
       // Desktop — no-op. Снимается в hangup().
       api.mediaShowIncomingCall(ctx.callPeerName || from);
       startFastPolling(ctx);
-      // Таймер гудка 180с: было 90с, но call_accept/answer по
-      // почте могут идти дольше (SMTP+доставка+IMAP), звонок «сгорал» до
-      // того, как собеседник успевал ответить.
-      ctx.callRingTimer = setTimeout(() => cancelCall(ctx, 'timeout'), 180000);
+      // Таймер гудка: длительность из настроек (SettingsPage → kv
+      // 'call-ring-duration', секунды). Читаем АСИНХРОННО и НЕ блокируем
+      // state machine: если kv не ответил — дефолт 180с (было хардкодом).
+      // 180с вместо прежних 90с: call_accept/answer по почте идут долго
+      // (SMTP+доставка+IMAP), звонок «сгорал» до ответа собеседника.
+      armRingTimer(ctx, DEFAULT_RING_MS);
       break;
     }
     case 'call_accept': {

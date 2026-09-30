@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use vault_relay::fcm::FcmSender;
 use vault_relay::store::Store;
 use vault_relay::{ServerKeys, Scope};
 
@@ -67,6 +68,15 @@ pub struct AppState {
     /// (DEFAULT_RING_URL), клиент перешлёт URL при ближайшей регистрации —
     /// приемлемо, звук вернётся сам.
     pub topic_ringtone: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// FCM Part B: отправитель пушей Firebase Cloud Messaging v1. None =
+    /// FCM выключен (нет VAULT_FCM_KEY/файла/валидного ключа) — доставка
+    /// «будильника» идёт через ntfy-мост, поведение как до FCM.
+    pub fcm: Option<Arc<FcmSender>>,
+    /// FCM-регистрация получателя: hash(read-токен) → FCM reg_token.
+    /// Заполняется POST /relay/fcm/register. In-memory: после рестарта релея
+    /// клиент перерегистрируется (как ntfy-topic, он и так переподписывается).
+    /// Присутствие записи = «доставляем этому получателю через FCM».
+    pub topic_fcm: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Default)]
@@ -260,6 +270,9 @@ pub async fn relay_pub(
     // S4: отправитель нужен дальше (клик по звонку ведёт в чат), а req.from
     // ниже перемещается в Envelope — забираем копию до partial move.
     let from = req.from.clone();
+    // FCM Part B: id конверта уходит в data как call_id (ключ дедупа на
+    // клиенте). Забираем копию ДО partial move в Envelope.
+    let call_id = req.id.clone();
     let envelope = vault_relay::store::Envelope {
         id: req.id,
         body: req.body,
@@ -284,7 +297,12 @@ pub async fn relay_pub(
     // Мост ntfy — только личные очереди: подписчики канала не подписаны
     // на topic=hash(канального токена) (topic-подписка = приватный
     // 1-на-1 wake), будить «молчащую канальную очередь» бессмысленно.
-    if !app.ntfy_url.is_empty() && req.wake && !is_channel {
+    //
+    // FCM Part B: пути доставки ВЗАИМОИСКЛЮЧАЮЩИЕ — у получателя с
+    // FCM-регистрацией уходит FCM, у остальных ntfy (иначе телефон получил бы
+    // два будильника на один конверт). Внешний гейт расширен на «ntfy_url
+    // настроен ИЛИ FCM включён»: FCM работает и без ntfy-моста.
+    if req.wake && !is_channel && (!app.ntfy_url.is_empty() || app.fcm.is_some()) {
         // Urgent (звонок) обходит гейт: «поллил N сек назад» не отличает
         // «только что закрыл приложение» от «жив». Звонок — приоритет,
         // дубль пуша допустим, пропуск нет. Обычные сообщения — гейт 15с
@@ -296,7 +314,6 @@ pub async fn relay_pub(
             seen.get(&to_tok.hash).map_or(u64::MAX, |t| now().saturating_sub(*t))
         };
         if urgent || silent_for >= 15 {
-            let ntfy_url = app.ntfy_url.clone();
             let topic = to_tok.hash.clone();
             let total = app.store.len(&to_tok.hash);
             // S3: звук звонка — тот, что получатель выбрал в настройках
@@ -305,9 +322,43 @@ pub async fn relay_pub(
             let ring = ringtone_or_default(&app.topic_ringtone, &to_tok.hash);
             // Один pub = один wake-up. Дедуп контента на клиенте (env.id),
             // дедуп путей уведомлений — last_seen-гейт (один путь, не оба).
-            tokio::task::spawn_blocking(move || {
-                ntfy_publish(&ntfy_url, &topic, total, urgent, &ring, from.as_deref());
-            });
+            //
+            // Ветка FCM (предпочтительна): reg_token темы + включённый FCM.
+            let fcm_reg = app.topic_fcm.lock().unwrap().get(&topic).cloned();
+            match (app.fcm.clone(), fcm_reg) {
+                (Some(sender), Some(reg)) => {
+                    let push = vault_relay::fcm::CallPush {
+                        kind: if urgent { "call_request" } else { "message" },
+                        // id конверта = ключ дедупа на клиенте (= call_id).
+                        call_id: call_id.clone(),
+                        from: from.clone().unwrap_or_default(),
+                        // Отображаемого имени отправителя сервер НЕ знает
+                        // (видит только opaque-токены) — рисует клиент.
+                        name: String::new(),
+                        total: total.to_string(),
+                        urgent,
+                        ring: ring.clone(),
+                        click: click_url(urgent, from.as_deref()),
+                    };
+                    // Отдельная задача: сетевое ожидание не держит обработчик
+                    // pub. Ошибка — в лог, не фатальна (конверт в очереди).
+                    tokio::spawn(async move {
+                        if let Err(e) = sender.send(&reg, &push).await {
+                            tracing::error!(error = %e, "fcm send failed (envelope still queued)");
+                        }
+                    });
+                }
+                _ => {
+                    // ntfy-путь как был; если ntfy не настроен, а FCM не
+                    // выбран — просто ничего не будим (конверт в очереди).
+                    if !app.ntfy_url.is_empty() {
+                        let ntfy_url = app.ntfy_url.clone();
+                        tokio::task::spawn_blocking(move || {
+                            ntfy_publish(&ntfy_url, &topic, total, urgent, &ring, from.as_deref());
+                        });
+                    }
+                }
+            }
         }
     }
     (StatusCode::OK, AxumJson(PubOk { ok: true, mid })).into_response()
@@ -731,6 +782,85 @@ fn click_url(urgent: bool, from: Option<&str>) -> String {
     format!("vault://open?chat={enc}")
 }
 
+// ───────────────────── FCM-регистрация получателя (Part B) ─────────────────────
+// Клиент (Android) после FirebaseMessaging.getToken() присылает reg_token.
+// Сервер привязывает его к теме (hash его read-токена) и с этого момента
+// будит этого получателя через FCM вместо ntfy (в relay_pub пути взаимоисключающие).
+
+#[derive(Deserialize, Default)]
+struct FcmRegisterReq {
+    /// FCM registration token (Firebase SDK, длинная base64url-строка).
+    /// Пустой/слишком длинный/с чужими символами — 400, мусор не храним.
+    #[serde(default)]
+    reg_token: Option<String>,
+    /// Fingerprint аккаунта: тот же анти-шаринг, что у /relay/register и pub.
+    #[serde(default)]
+    fp: Option<String>,
+}
+
+/// Нормализовать reg_token: обрезать, ограничить длину, оставить только
+/// символы, которые реально встречаются в FCM-токенах (base64url + «:»).
+fn norm_reg_token(v: Option<&str>) -> Option<String> {
+    let t = v?.trim();
+    if t.is_empty() || t.len() > 4096 {
+        return None;
+    }
+    if !t
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.' | '~' | '%'))
+    {
+        return None;
+    }
+    Some(t.to_string())
+}
+
+/// POST /relay/fcm/register — привязать FCM reg_token к теме токена.
+/// Auth — тот же read-токен из Authorization («VaultRelay <токен>»), что у
+/// pub/poll: привязка к теме ИМЕННО этого получателя.
+/// FCM выключен → 503 (клиент знает: пуши через FCM недоступны, есть ntfy).
+async fn relay_fcm_register(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<FcmRegisterReq>,
+) -> Response {
+    let Some(tok) = require_read(&app, &headers) else {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "token required");
+    };
+    if tok.is_expired() {
+        return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
+    }
+    // Валидируем reg_token ДО проверки «включён ли FCM»: мусор в теле —
+    // ошибка клиента (400) независимо от состояния фичи.
+    let Some(reg) = norm_reg_token(req.reg_token.as_deref()) else {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::BAD_REQUEST, "bad reg_token");
+    };
+    // Канал от FCM-пушей не заводим: подписчиков много, wake 1-на-1.
+    if tok.scope == Scope::ChannelRead {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::BAD_REQUEST, "channel cannot register fcm");
+    }
+    // FCM выключен — честный 503, а не 200 «с виду успешно»: клиент поймёт,
+    // что надо перейти на ntfy-подписку.
+    if app.fcm.is_none() {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "fcm disabled");
+    }
+    // Тот же анти-шаринг, что у остальных маршрутов: чужая fp с тем же
+    // токеном → 403 (клиент перерегистрируется).
+    if !check_token_binding(&app, &tok.hash, &req.fp) {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::FORBIDDEN, "token bound to another account");
+    }
+    app.topic_fcm
+        .lock()
+        .expect("topic_fcm lock")
+        .insert(tok.hash.clone(), reg);
+    // reg_token в лог НЕ пишем (это адрес доставки, секрет клиента).
+    tracing::info!("fcm: device registered for push");
+    (StatusCode::OK, AxumJson(serde_json::json!({"ok": true}))).into_response()
+}
+
 /// POST /relay/ringtone — обновить/прочесть рингтон входящего звонка темы,
 /// не перерегистрируя токен (пользователь сменил звук в настройках).
 /// Тело: `{"ringtone": "https://.../ring_incoming_pulse.mp3"}` — сохранить
@@ -876,6 +1006,10 @@ async fn main() {
         token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
         last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
         topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
+        // FCM Part B: VAULT_FCM_KEY пуст/файл битый → fcm=None, сервер живёт
+        // на ntfy-мосте (поведение до FCM). Ошибка уже залогирована в from_env.
+        fcm: FcmSender::from_env().map(Arc::new),
+        topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}"
@@ -890,6 +1024,8 @@ async fn main() {
         .route("/relay/health", get(health))
         .route("/relay/register", post(relay_register))
         .route("/relay/ringtone", post(relay_get_ringtone))
+        // FCM Part B: привязка reg_token получателя к его теме.
+        .route("/relay/fcm/register", post(relay_fcm_register))
         .route("/relay/metrics", get(metrics))
         .layer(cors_layer())
         .with_state(state);
@@ -968,6 +1104,209 @@ mod tests {
 
     fn store() -> RingtoneStore {
         std::sync::Mutex::new(std::collections::HashMap::new())
+    }
+
+    /// AppState для тестов маршрутов: FCM выключен (None) и ntfy пуст —
+    /// сеть не трогаем никогда.
+    fn app_state(k: ServerKeys) -> Arc<AppState> {
+        Arc::new(AppState {
+            store: Store::new(),
+            keys: k,
+            allow_anonymous_pub: true,
+            metrics: Metrics::default(),
+            registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            ntfy_url: String::new(),
+            unlimited_key: None,
+            daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
+            free_daily_limit: 0,
+            token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
+            last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+            topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
+            fcm: None,
+            topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    fn auth_headers(token: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            format!("VaultRelay {token}").parse().expect("hdr"),
+        );
+        h
+    }
+
+    /// reg_token нормализуется: мусор и пустое — None (в мапку не попадает).
+    #[test]
+    fn norm_reg_token_accepts_fcm_and_rejects_junk() {
+        let real = "fcm-token_ABC-123:xyz~0%9";
+        assert_eq!(norm_reg_token(Some(real)).as_deref(), Some(real));
+        assert_eq!(
+            norm_reg_token(Some("  fcm-abc  ")).as_deref(),
+            Some("fcm-abc")
+        );
+        for junk in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("has space"),
+            Some("quote\"inject"),
+            Some("angle<brackets"),
+            Some(&"x".repeat(5000)),
+        ] {
+            assert!(norm_reg_token(junk).is_none(), "must reject {junk:?}");
+        }
+    }
+
+    /// Рег-роут без токена / с мусорным токеном — 401 (как все /relay/*).
+    #[tokio::test]
+    async fn fcm_register_requires_auth() {
+        let app = app_state(keys());
+        let mk = |t: Option<&str>| FcmRegisterReq {
+            reg_token: Some(t.unwrap_or("fcm-abc").to_string()),
+            fp: None,
+        };
+        assert_eq!(
+            relay_fcm_register(State(app.clone()), HeaderMap::new(), Json(mk(None)))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let mut h = HeaderMap::new();
+        h.insert("authorization", "VaultRelay nonsense".parse().expect("hdr"));
+        assert_eq!(
+            relay_fcm_register(State(app), h, Json(mk(None))).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// FCM выключен → 503 (не 200): клиент должен уйти на ntfy.
+    #[tokio::test]
+    async fn fcm_register_returns_503_when_fcm_disabled() {
+        let k = keys();
+        let (token, _hash) = fresh_topic(&k, 4_102_444_800);
+        let app = app_state(k); // fcm: None
+        let req = FcmRegisterReq {
+            reg_token: Some("fcm-abc".into()),
+            fp: None,
+        };
+        let resp = relay_fcm_register(State(app), auth_headers(&token), Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// Истёкшая подписка — 402 (как у poll/ws).
+    #[tokio::test]
+    async fn fcm_register_respects_expiry() {
+        let k = keys();
+        let token = issue(&k, Scope::Read, 1); // expiry в прошлом
+        let app = app_state(k);
+        let req = FcmRegisterReq {
+            reg_token: Some("fcm-abc".into()),
+            fp: None,
+        };
+        let resp = relay_fcm_register(State(app), auth_headers(&token), Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    /// Битый reg_token → 400, в topic_fcm ничего не записано.
+    #[tokio::test]
+    async fn fcm_register_rejects_bad_reg_token() {
+        let k = keys();
+        let (token, hash) = fresh_topic(&k, 4_102_444_800);
+        let app = app_state(k);
+        for junk in [None, Some(""), Some("bad token with spaces")] {
+            let req = FcmRegisterReq {
+                reg_token: junk.map(str::to_string),
+                fp: None,
+            };
+            let resp = relay_fcm_register(
+                State(app.clone()),
+                auth_headers(&token),
+                Json(req),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "junk {junk:?}");
+        }
+        let map = app.topic_fcm.lock().unwrap();
+        assert!(map.is_empty(), "мусор не сохраняем");
+        assert!(!map.contains_key(&hash));
+    }
+
+    /// Привязка идёт к ТЕМЕ (hash токена) — именно по to_tok.hash relay_pub
+    /// выбирает путь; вторая регистрация перезаписывает (ротация токена).
+    #[tokio::test]
+    async fn fcm_register_binds_reg_token_to_topic_hash() {
+        let k = keys();
+        let (token, hash) = fresh_topic(&k, 4_102_444_800);
+        let app = app_state(k);
+        let mut map = app.topic_fcm.lock().unwrap();
+        map.insert(hash.clone(), "fcm-reg-token".into());
+        assert_eq!(map.get(&hash).map(String::as_str), Some("fcm-reg-token"));
+        map.insert(hash.clone(), "fcm-reg-token-2".into());
+        assert_eq!(map.get(&hash).map(String::as_str), Some("fcm-reg-token-2"));
+        // Другая тема не затронута (у каждой свой FCM-регистрация).
+        let (_t2, hash2) = fresh_topic(&app.keys, 4_102_444_801);
+        assert!(!map.contains_key(&hash2), "чужая тема чиста");
+        assert_eq!(map.len(), 1);
+        // Токен в мапке не нужен после привязки (адресация — по хэшу).
+        assert!(!map.contains_key(&token));
+    }
+
+    /// Анти-шаринг: токен, привязанный к чужому fp → false (→ 403 на роуте).
+    #[tokio::test]
+    async fn fcm_register_respects_token_binding() {
+        let k = keys();
+        let (_token, hash) = fresh_topic(&k, 4_102_444_800);
+        let app = app_state(k);
+        assert!(check_token_binding(&app, &hash, &Some("fp-owner".into())));
+        assert!(!check_token_binding(&app, &hash, &Some("fp-other".into())));
+    }
+
+    /// Рег-роут не принимает канальный read-токен (у канала fan-out, не 1-на-1).
+    /// Канальный токен выводится из broadcast-ключа (sentinel-expiry u32::MAX).
+    #[tokio::test]
+    async fn fcm_register_rejects_channel_token() {
+        let k = keys();
+        let (read, _write) = vault_relay::tokens::channel_tokens(&[9u8; 32]);
+        let app = app_state(k);
+        let req = FcmRegisterReq {
+            reg_token: Some("fcm-abc".into()),
+            fp: None,
+        };
+        let resp = relay_fcm_register(State(app), auth_headers(&read), Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "канал не регистрируется");
+    }
+
+    /// Regression (критерий 3): без FCM и без ntfy pub/pub-путь работает как
+    /// прежде — конверт кладётся в очередь, 200, ошибок нет.
+    #[tokio::test]
+    async fn pub_works_without_fcm_and_ntfy() {
+        let k = keys();
+        let (token, hash) = fresh_topic(&k, 4_102_444_800);
+        let app = app_state(k);
+        let req = PubRequest {
+            v: 1,
+            to: token,
+            id: "env-1".into(),
+            exp: now() + 600,
+            body: "aGVsbG8=".into(),
+            tok: None,
+            from: Some("anna@example.com".into()),
+            fp: None,
+            wake: true,
+            urgent: Some(true),
+        };
+        let resp = relay_pub(
+            State(app.clone()),
+            ConnectInfo("127.0.0.1:1234".parse().expect("addr")),
+            HeaderMap::new(),
+            AxumJson(req),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let queued = app.store.peek(&hash, 0).expect("queue exists");
+        assert_eq!(queued.len(), 1, "конверт лежит в очереди получателя");
+        assert_eq!(queued[0].id, "env-1");
     }
 
     #[test]
@@ -1049,6 +1388,10 @@ mod tests {
             token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
             last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
             topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
+            // Тесты не читают VAULT_FCM_KEY и тем более fcm-key.json:
+            // FCM выключен, доставка проверяется через ntfy-ветку и юниты.
+            fcm: None,
+            topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
         };
         assert!(app.topic_ringtone.lock().unwrap().is_empty());
         let (_token, hash) = fresh_topic(&app.keys, 4_102_444_800);

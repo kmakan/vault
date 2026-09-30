@@ -4,6 +4,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("rust")
+    // FCM Part B: генерирует ресурсы Firebase из app/google-services.json
+    // (google_app_id / gcm_defaultSenderId / firebase_database_url).
+    id("com.google.gms.google-services")
 }
 
 val tauriProperties = Properties().apply {
@@ -78,6 +81,8 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // FCM Part B: приём data-only пуша с relay → будит звонок без тапа.
+    implementation("com.google.firebase:firebase-messaging:24.0.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

@@ -1253,6 +1253,33 @@ pub async fn media_show_incoming_call(caller_name: String) -> Result<(), String>
     Ok(())
 }
 
+/// Синхронизировать настройки звонков в Android SharedPreferences
+/// (`vault_prefs`: call_ringtone_incoming / call_ringtone_outgoing /
+/// call_ring_duration). Android — JNI-вызов VaultForegroundService.syncCallPrefs,
+/// чтобы нативный FGS-рингтон и таймаут звонка учитывали настройки при
+/// СМАХНУТОМ приложении (JS-движок звонка мёртв). Desktop — no-op.
+/// duration — МИЛЛИСЕКУНДЫ длительности гудка.
+#[tauri::command]
+pub async fn sync_call_prefs(
+    ring_incoming: String,
+    ring_outgoing: String,
+    duration: u64,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::audio::audio_android::sync_call_prefs_to_android(
+            &ring_incoming,
+            &ring_outgoing,
+            duration,
+        );
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (ring_incoming, ring_outgoing, duration);
+    }
+    Ok(())
+}
+
 /// Убрать уведомление входящего звонка (принят/отклонён/завершён/таймаут).
 #[tauri::command]
 pub async fn media_dismiss_incoming_call() -> Result<(), String> {

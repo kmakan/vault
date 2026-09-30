@@ -1,6 +1,7 @@
 package com.vault.vault
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -123,6 +124,28 @@ class MainActivity : TauriActivity() {
       }
     } catch (e: Throwable) {
       Log.w("VaultRust", "POST_NOTIFICATIONS request failed: " + e.message)
+    }
+
+    // FCM Part B: получить reg_token и зарегистрировать его на relay
+    // (POST /relay/fcm/register). getToken кэшируется Firebase — запрос
+    // дешёвый, но всё равно делаем его в фоне: onCreate не должен ждать сеть.
+    // onNewToken (ротация токена) подхватит сам в FCM-сервисе.
+    try {
+      com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+        .addOnSuccessListener { t ->
+          try {
+            VaultFirebaseMessagingService.saveRegToken(applicationContext, t)
+            VaultFirebaseMessagingService.registerDevice(applicationContext)
+            Log.i("VaultFCM", "reg_token fetched, registration requested")
+          } catch (e: Throwable) {
+            Log.w("VaultFCM", "token handling failed: " + e.message)
+          }
+        }
+        .addOnFailureListener { e ->
+          Log.w("VaultFCM", "getToken failed: " + e.message)
+        }
+    } catch (e: Throwable) {
+      Log.w("VaultFCM", "getToken unavailable: " + e.message)
     }
 
     // Исключение из оптимизации батареи: без него Doze замораживает
@@ -289,6 +312,29 @@ class MainActivity : TauriActivity() {
         }
       }, "VaultDeepLink")
     }
+    // FCM Part B: мост VaultFcm — фронт отдаёт read-токен и адрес релея
+    // (в kv, недоступном нативному слою), нативный слой регистрирует
+    // FCM reg_token на relay (POST /relay/fcm/register). Без этого пуши
+    // ПРИХОДЯТ, но relay их не отправляет (нет reg_token у темы).
+    try {
+      webView.addJavascriptInterface(object {
+        @android.webkit.JavascriptInterface
+        fun register(relayUrl: String?, readToken: String?, fp: String?) {
+          VaultFirebaseMessagingService.setRelayCredentials(
+            applicationContext, relayUrl, readToken, fp
+          )
+          VaultFirebaseMessagingService.registerDevice(applicationContext)
+          Log.i("VaultFCM", "relay credentials received from JS, registering")
+        }
+      }, "VaultFcm")
+    } catch (e: Throwable) {
+      Log.w("VaultFCM", "VaultFcm bridge failed: " + e.message)
+    }
+    // FCM Part B: повторная регистрация при каждом создании WebView — дёшево
+    // (защищено кэшем reg_token+url в prefs) и чинит кейс «токен сменился,
+    // пока приложение было убито», а также «креды релея пришли позже».
+    try { VaultFirebaseMessagingService.registerDevice(this) } catch (_: Throwable) {}
+
     // JS-мост: фронт вызывает window.__vaultRequestGeo() при включении гео-опции SOS —
     // он проксирует в статический requestGeoPermission() (companion), который
     // запрашивает runtime-разрешение у activity.
@@ -346,6 +392,14 @@ class MainActivity : TauriActivity() {
     handleVaultDeepLink(intent)
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
     try { nativePauseMonitor(true) } catch (_: Throwable) {}
+    // Тихие FCM-уведомления о сообщениях (VaultFirebaseMessagingService,
+    // фиксированный MSG_NOTIF_ID) — пользователь открыл приложение, сообщение
+    // прочитано. Раньше id был (currentTimeMillis() % 100000) — отменить
+    // снаружи было нельзя, «значок службы» висел в шторке.
+    try {
+      getSystemService(NotificationManager::class.java)
+        ?.cancel(VaultFirebaseMessagingService.MSG_NOTIF_ID)
+    } catch (_: Throwable) {}
     // Замок: вернулись в приложение — если PIN установлен и сессия
     // не разблокирована, показываем LockActivity ПОВЕРХ (same task, без
     // FLAG_ACTIVITY_NEW_TASK — он ломал видимость «мигнувшим» замком).
