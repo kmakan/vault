@@ -322,20 +322,56 @@ impl CallMediaManager {
         // отдаёт 400 Bad Request на все allocate → 15с ожидания gathering и
         // шум в логах. Для desktop↔desktop в одной сети host-кандидатов
         // достаточно; TURN вернём, когда поднимем свой (coturn, как у
+        // Dev/prod ICE: STUN (host/srflx) + TURN (наш coturn на VPS).
+        // Запросы к серверам идут ПАРАЛЛЕЛЬНО (stun_gatherer.rs), поэтому
+        // несколько серверов не замедляют gathering — самый быстрый ответ
+        // даёт srflx, а TURN закрывает случай, когда SRFLX/peer недоступны
+        // из-за симметричного NAT / CGNAT мобильного оператора (основной
+        // сценарий «звонок не доходит» у реальных пользователей).
+        //
+        // TURN: свой coturn (185.180.199.237:3478, realm vault-msg.ru,
+        // статическая пара vault:<секрет из /etc/coturn/vault-secret>).
+        // Секрет НЕ хардкодим в бинарнике: читаем из env VAULT_TURN_CRED
+        // (user:pass), кладём в tauri-конфиг/manifest при сборке. Если env
+        // нет — TURN-сервер просто не включается, остаётся STUN-only
+        // (не ломает desktop↔desktop в одной сети, где host-кандидаты
+        // достаточны). Это и есть «X2TURN из Phase 3», который был TODO.
+        let stun_urls = vec![
+            "stun:stun.l.google.com:19302".to_owned(),
+            "stun:stun1.l.google.com:19302".to_owned(),
+            "stun:stun.sipgate.net:3478".to_owned(),
+            "stun:stun.zadarma.com:3478".to_owned(),
+            "stun:stun.sipnet.ru:3478".to_owned(),
+            "stun:stun.1und1.de:3478".to_owned(),
+        ];
         let dev_ice = RTCIceServer {
-            urls: vec![
-                "stun:stun.l.google.com:19302".to_owned(),
-                "stun:stun1.l.google.com:19302".to_owned(),
-                "stun:stun.sipgate.net:3478".to_owned(),
-                "stun:stun.zadarma.com:3478".to_owned(),
-                "stun:stun.sipnet.ru:3478".to_owned(),
-                "stun:stun.1und1.de:3478".to_owned(),
-            ],
+            urls: stun_urls.clone(),
             ..Default::default()
         };
+        // TURN-сервер: добавляем ТОЛЬКО если задан VAULT_TURN_CRED.
+        // Формат env: "user:pass". URL: turn:HOST:PORT (по умолчанию наш VPS).
+        let mut ice_servers = vec![dev_ice];
+        if let Ok(cred) = std::env::var("VAULT_TURN_CRED") {
+            if let Some((user, pass)) = cred.split_once(':') {
+                if !user.is_empty() && !pass.is_empty() {
+                    let host = std::env::var("VAULT_TURN_HOST")
+                        .unwrap_or_else(|_| "185.180.199.237".to_owned());
+                    let turn_urls = vec![
+                        format!("turn:{host}:3478"),
+                        format!("turn:{host}:3478?transport=tcp"),
+                    ];
+                    ice_servers.push(RTCIceServer {
+                        urls: turn_urls,
+                        username: user.to_owned(),
+                        credential: pass.to_owned(),
+                    });
+                    log::info!("[media] TURN enabled: {host}:3478 user={user}");
+                }
+            }
+        }
         Self {
             calls: HashMap::new(),
-            ice_servers: vec![dev_ice],
+            ice_servers,
         }
     }
 
