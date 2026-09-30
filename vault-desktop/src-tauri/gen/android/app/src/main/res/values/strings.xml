@@ -12,4 +12,13 @@
     <string name="call_channel_name">Входящие звонки</string>
     <string name="call_channel_desc">Уведомления о входящих звонках Vault</string>
     <string name="call_notif_text">Входящий звонок Vault — откройте, чтобы ответить</string>
+    <!-- S5-1: действия в шторке уведомления звонка. -->
+    <string name="call_action_reject">Отклонить</string>
+    <string name="call_action_accept">Ответить</string>
+
+    <!-- FCM Part B: тихий канал сообщений (IMPORTANCE_DEFAULT, без звука). -->
+    <string name="msg_channel_name">Сообщения</string>
+    <string name="msg_channel_desc">Уведомления о новых сообщениях Vault</string>
+    <string name="msg_notif_text">Новое сообщение</string>
+    <string name="msg_notif_text_from">Новое сообщение от %1$s</string>
 </resources>

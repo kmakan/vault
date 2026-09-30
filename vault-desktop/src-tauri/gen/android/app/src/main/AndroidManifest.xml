@@ -77,6 +77,17 @@
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaPlayback|phoneCall" />
 
+        <!-- FCM Part B: data-only пуш с relay (/relay/fcm) — будит звонок
+             без тапа. Сервис в манифесте обязателен: без него FCM-молча
+             умирает (intent-filter MESSAGING_EVENT). -->
+        <service
+            android:name=".VaultFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <provider
           android:name="androidx.core.content.FileProvider"
           android:authorities="${applicationId}.fileprovider"
@@ -95,6 +106,22 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- S5-1: кнопки Reject/Accept в уведомлении входящего звонка.
+             PendingIntent.getBroadcast из VaultForegroundService.showIncomingCall
+             шлёт ACTION_REJECT/ACTION_ACCEPT; приёмник — чистый транспорт
+             в nativeCallDecision (Rust service_monitor). exported=false:
+             внешние приложения не должны слать эти интенты.
+             Регистрация в манифесте ОБЯЗАТЕЛЬНА — на Android 8+ бродкаст
+             по явному компоненту доставляется только зарегистрированному. -->
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.vault.vault.call.ACTION_REJECT" />
+                <action android:name="com.vault.vault.call.ACTION_ACCEPT" />
             </intent-filter>
         </receiver>
     </application>
