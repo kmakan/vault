@@ -91,6 +91,10 @@ class VaultForegroundService : Service() {
 
     override fun onDestroy() {
         stopNtfyStream()
+        // Сервис умер — активного звонка не осталось: снимаем watchdog,
+        // чтобы он не сработал на «воскрешённом» сервисе и не погасил
+        // уже начатый разговор (задача 5).
+        try { cancelCallWatchdog() } catch (_: Throwable) {}
         if (instance === this) instance = null
         try { wakeLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
         try { wifiLock?.takeIf { it.isHeld }?.release() } catch (_: Throwable) {}
@@ -603,6 +607,32 @@ class VaultForegroundService : Service() {
                 .commit()
         }
 
+        /// Дублирование настроек ЗВОНКОВ в prefs `vault_prefs` (вызывается
+        /// Rust'ом из sync_call_prefs при смене рингтона/длительности).
+        /// Нужно, чтобы нативный FGS-рингтон и таймаут звонка при СМАХНУТОМ
+        /// приложении (JS мёртв) использовали пользовательский выбор.
+        /// Пустая строка / null-строка = «не менять» (ключ не трогаем).
+        /// duration — миллисекунды; нечисловое значение игнорируем.
+        @JvmStatic
+        fun syncCallPrefs(
+            context: android.content.Context, ringIncoming: String,
+            ringOutgoing: String, duration: String
+        ) {
+            try {
+                val ed = context
+                    .getSharedPreferences("vault_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit()
+                if (ringIncoming.isNotEmpty()) ed.putString(K_RING_INCOMING, ringIncoming)
+                if (ringOutgoing.isNotEmpty()) ed.putString(K_RING_OUTGOING, ringOutgoing)
+                duration.toLongOrNull()?.let { ed.putLong(K_RING_DURATION, it) }
+                ed.commit()
+                Log.i("VaultRust", "call prefs synced: in=" + ringIncoming +
+                    " out=" + ringOutgoing + " dur=" + duration)
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "syncCallPrefs failed: " + e.message)
+            }
+        }
+
         /// Проверка кода по ВСЕМ хэшам замка. Возвращает тип:
         /// "lock" — обычный код (вход), "duress" — тихий SOS, "panic" — wipe, "none".
         @JvmStatic
@@ -981,6 +1011,89 @@ class VaultForegroundService : Service() {
         const val CALL_CHANNEL_ID = "vault_incoming_call_v2"
         const val CALL_NOTIF_ID = 9002
 
+        // Ключи настроек звонка в prefs `vault_prefs` (пишет Rust через
+        // syncCallPrefs из таури-команды sync_call_prefs).
+        private const val K_RING_INCOMING = "call_ringtone_incoming"
+        private const val K_RING_OUTGOING = "call_ringtone_outgoing"
+        private const val K_RING_DURATION = "call_ring_duration"
+        private const val DEFAULT_RING_DURATION_MS = 180000L
+        // Запас watchdog'а к таймауту гудка: JS-таймер 180с живёт в WebView
+        // и может сработать на пару секунд позже нативного notify-таймаута.
+        private const val RING_WATCHDOG_SLACK_MS = 10_000L
+
+        // Watchdog таймаута гудка (общий Handler + текущий Runnable, чтобы его
+        // можно было снять на dismiss/answer/hangup — задача 5). Раньше таймер
+        // жил 190с анонимно и гасил звонок, даже если пользователь уже
+        // ответил и разговор шёл.
+        private val callWatchdogHandler =
+            android.os.Handler(android.os.Looper.getMainLooper())
+        @Volatile
+        private var callWatchdogRunnable: Runnable? = null
+
+        // Таймер ДЛИТЕЛЬНОСТИ ГУДКА (без slack): по истечении ringMs
+        // звонок гасится нативно. Нужен потому, что в смахнутом состоянии
+        // JS-мёртв (callRingTimer в WebView не работает), а длительность
+        // звонка — это настройка пользователя, её нельзя терять.
+        // Отмена — в cancelCallWatchdog() (иначе сорвёт начатый разговор).
+        @Volatile
+        private var callRingTimeoutRunnable: Runnable? = null
+
+        /// Поставить таймер окончания гудка на ringMs. По срабатыванию
+        /// звонок снимается полностью: рингтон стоп, уведомление снято,
+        /// FGS возвращён в dataSync (dismissIncomingCall).
+        private fun startCallRingTimeout(context: Context, ringMs: Long) {
+            try {
+                val r = Runnable {
+                    // Ссылку сбрасываем ДО dismiss: cancelCallWatchdog
+                    // внутри не должен трогать уже отработавший таймер.
+                    callRingTimeoutRunnable = null
+                    try {
+                        Log.i("VaultRust", "call ring timeout ${ringMs}ms: dismissing")
+                        dismissIncomingCall(context)
+                    } catch (e: Throwable) {
+                        Log.w("VaultRust", "ring timeout dismiss failed: " + e.message)
+                    }
+                }
+                callRingTimeoutRunnable = r
+                callWatchdogHandler.postDelayed(r, ringMs)
+                Log.i("VaultRust", "call ring timeout scheduled in ${ringMs}ms")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "schedule ring timeout failed: " + e.message)
+            }
+        }
+
+        /// Снять watchdog гудка. Вызывается из dismissIncomingCall (answer /
+        /// reject / hangup / таймаут) и в начале showIncomingCall.
+        /// Снимает ОБА таймера: watchdog со slack'ом и точный таймер
+        /// длительности гудка — иначе таймер переживёт ответ и оборвёт
+        /// начатый разговор.
+        private fun cancelCallWatchdog() {
+            try {
+                val r = callWatchdogRunnable
+                if (r != null) {
+                    callWatchdogHandler.removeCallbacks(r)
+                    callWatchdogRunnable = null
+                    Log.i("VaultRust", "call watchdog cancelled")
+                }
+                val t = callRingTimeoutRunnable
+                if (t != null) {
+                    callWatchdogHandler.removeCallbacks(t)
+                    callRingTimeoutRunnable = null
+                    Log.i("VaultRust", "call ring timeout cancelled")
+                }
+            } catch (_: Throwable) {}
+        }
+
+        /// Длительность гудка из настроек (мс), с жёстким клампом 15..600с —
+        /// битое значение в prefs не должно вешать уведомление навсегда.
+        private fun ringDurationMs(context: Context): Long {
+            val raw = try {
+                context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                    .getLong(K_RING_DURATION, DEFAULT_RING_DURATION_MS)
+            } catch (_: Throwable) { DEFAULT_RING_DURATION_MS }
+            return raw.coerceIn(15_000L, 600_000L)
+        }
+
         // Нативный зацикленный рингтон: HTML5 Audio в WebView
         // глохнет при троттлинге фона, а звук канала уведомления играет
         // ОДИН раз — пользователь слышал «сигнал прозвучал и оборвался».
@@ -988,11 +1101,27 @@ class VaultForegroundService : Service() {
         @Volatile
         private var ringtonePlayer: MediaPlayer? = null
 
+        /// Выбранный пользователем рингтон входящего (key из prefs) → res/raw.
+        /// null = дефолт. Имена совпадают с ключами на фронте (calls.js/SettingsPage).
+        private fun ringtoneResFor(key: String?): Int = when (key) {
+            "incoming_classic" -> R.raw.ring_incoming_classic
+            "incoming_pulse" -> R.raw.ring_incoming_pulse
+            "incoming" -> R.raw.ring_incoming
+            else -> R.raw.ring_incoming
+        }
+
         private fun startRingtone(context: Context) {
             try {
                 stopRingtone()
-                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val key = try {
+                    context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                        .getString(K_RING_INCOMING, null)
+                } catch (_: Throwable) { null }
+                val resId = ringtoneResFor(key)
+                // Ресурс из res/raw: setDataSource(Context, resId) сам открывает
+                // ресурс (без AssetFileDescriptor руками). Системный рингтон
+                // оставлен как FALLBACK — если WAV не распакован/повреждён,
+                // звонок обязан всё равно прозвучать.
                 val mp = MediaPlayer().apply {
                     setAudioAttributes(
                         android.media.AudioAttributes.Builder()
@@ -1000,13 +1129,28 @@ class VaultForegroundService : Service() {
                             .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
                             .build()
                     )
-                    setDataSource(context, uri)
+                    var ok = false
+                    // setDataSource(Context, Int) НЕТ в MediaPlayer (только
+                    // Uri/AssetFileDescriptor). res/raw открываем через
+                    // ContentResolver → FileDescriptor.
+                    try {
+                        val afd = context.resources.openRawResourceFd(resId)
+                        afd.use { setDataSource(it.fileDescriptor, it.startOffset, it.declaredLength) }
+                        ok = true
+                    } catch (e: Throwable) {
+                        Log.w("VaultRust", "raw ringtone failed, system fallback: " + e.message)
+                    }
+                    if (!ok) {
+                        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                        setDataSource(context, uri)
+                    }
                     isLooping = true
                     prepare()
                     start()
                 }
                 ringtonePlayer = mp
-                Log.i("VaultRust", "ringtone started (native loop)")
+                Log.i("VaultRust", "ringtone started (native loop, res=" + resId + ")")
             } catch (e: Throwable) {
                 Log.w("VaultRust", "startRingtone failed: " + e.message)
             }
@@ -1074,6 +1218,12 @@ class VaultForegroundService : Service() {
             
             currentCallId = callId
             try {
+                // Длительность гудка из настроек пользователя (в try — чтобы
+                // ошибка чтения prefs не роняла показ звонка). Дефолт 180с.
+                val ringMs = ringDurationMs(context)
+                // Watchdog ТОЖЕ отменяем на каждом новом звонке — иначе таймер
+                // от ПРЕДЫДУЩЕГО (не снятого) звонка сорвёт новый разговор.
+                cancelCallWatchdog()
                 // 1) FGS → phoneCall: даёт право поднять activity из фона.
                 instance?.let { enterCallMode(it) }
 
@@ -1104,9 +1254,50 @@ class VaultForegroundService : Service() {
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                 }
-                // Уведомление БЕЗ кнопок: экран звонка с
-                // свайпом поднимается сразу (startActivity ниже), кнопки в шторке
-                // дублировали UI и вносили рассинхрон состояний.
+                // S5-1: кнопки Reject/Accept в шторке. Основной (первой)
+                // идёт Reject — большой палец обычно на нижней/дальней
+                // кнопке, случайный тап не должен принимать звонок.
+                // PendingIntent → BroadcastReceiver CallActionReceiver,
+                // который отдаёт решение в Rust (nativeCallDecision).
+                // Разные requestCode (REQ_REJECT/REQ_ACCEPT) — иначе
+                // PendingIntent'ы схлопнутся в один (одинаковые extras
+                // не входят в ключ Matching) и обе кнопки работали бы
+                // одинаково.
+                fun callAction(action: String, reqCode: Int): PendingIntent {
+                    val i = Intent(action).apply {
+                        // Явный компонент: доставляем только нашему
+                        // receiver'у, минуя разбор action по всем.
+                        setClass(context, CallActionReceiver::class.java)
+                        // callId в extras — надёжнее статика currentCallId:
+                        // после пересоздания процесса статик пуст, extras же
+                        // пережили вместе с PendingIntent.
+                        putExtra(CallActionReceiver.EXTRA_CALL_ID, callId)
+                        putExtra(CallActionReceiver.EXTRA_CALLER, callerName)
+                    }
+                    return PendingIntent.getBroadcast(
+                        context, reqCode, i,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                }
+
+                // Иконки кнопок: android.R.drawable.ic_call / ic_call_end
+                // НЕ резолвятся Kotlin-компилятором на compileSdk 36
+                // (Unresolved reference), поэтому используем собственные
+                // векторы res/drawable/ic_call_reject|ic_call_accept.xml
+                // (Material call_end / call).
+                val rejectAction = NotificationCompat.Action.Builder(
+                    R.drawable.ic_call_reject,
+                    context.getString(R.string.call_action_reject),
+                    callAction(CallActionReceiver.ACTION_REJECT, CallActionReceiver.REQ_REJECT)
+                ).build()
+                val acceptAction = NotificationCompat.Action.Builder(
+                    R.drawable.ic_call_accept,
+                    context.getString(R.string.call_action_accept),
+                    callAction(CallActionReceiver.ACTION_ACCEPT, CallActionReceiver.REQ_ACCEPT)
+                ).build()
+
+                // Ongoing + FullScreenIntent остаются как были: кнопки
+                // ДОБАВЛЯЮТся к шторке, а не заменяют экран звонка.
                 val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
                     .setContentTitle(callerName)
                     .setContentText(context.getString(R.string.call_notif_text))
@@ -1117,24 +1308,29 @@ class VaultForegroundService : Service() {
                     .setPriority(NotificationCompat.PRIORITY_MAX)
                     .setOngoing(true)
                     .setAutoCancel(false)
-                    .setTimeoutAfter(180_000) // гудок 180с = таймауту звонка
+                    .setTimeoutAfter(ringMs) // гудок = таймауту звонка (настройка)
+                    .addAction(rejectAction)
+                    .addAction(acceptAction)
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
 
                 // НАТИВНЫЙ WATCHDOG: таймер сброса звонка живёт в
-                // JS (callRingTimer 180с). Если WebView заморожен/убит,
-                // dismissIncomingCall из JS никогда не придёт → уведомление
+                // JS (callRingTimer — та же длительность из настроек). Если
+                // WebView заморожен/убит, dismissIncomingCall из JS не придёт → уведомление
                 // CATEGORY_CALL и FGS phoneCall зависнут, а на MTK/Cubot
                 // висящий «вызов» ломает свайп ответа ОБЫЧного телефонного
-                // звонка. Дублируем таймер нативно: через 190с (с запасом к
-                // JS-таймауту) гасим себя, если звонок всё ещё не принят.
+                // звонка. Дублируем таймер нативно: через ringMs + 10с (запас
+                // к JS-таймауту) гасим себя, если звонок всё ещё не принят.
                 try {
-                    val watchdog = android.os.Handler(android.os.Looper.getMainLooper())
+                    val watchdog = callWatchdogHandler
                     val wdRunnable = Runnable {
                         // Отпускаем только если звонок так и не был принят
                         // (в активном звонке notif уже отменён/заменён).
                         try {
+                            // Сработал — ссылку сбрасываем, чтобы следующая
+                            // отмена не трогала уже отработавший таймер.
+                            callWatchdogRunnable = null
                             val nmW = context.getSystemService(NotificationManager::class.java)
                             val active = nmW?.activeNotifications?.any { n ->
                                 n.id == CALL_NOTIF_ID
@@ -1145,8 +1341,18 @@ class VaultForegroundService : Service() {
                             }
                         } catch (_: Throwable) {}
                     }
-                    watchdog.postDelayed(wdRunnable, 190_000)
+                    callWatchdogRunnable = wdRunnable
+                    watchdog.postDelayed(wdRunnable, ringMs + RING_WATCHDOG_SLACK_MS)
                 } catch (_: Throwable) {}
+
+                // ТОЧНЫЙ таймер длительности гудка (ringMs, без slack) —
+                // это и есть нативный countdown: в смахнутом состоянии JS
+                // не работает, а звонок обязан сам завершиться по
+                // настройке пользователя. Гасит рингтон, снимает
+                // уведомление и возвращает FGS из phoneCall в dataSync.
+                // Отменяется в cancelCallWatchdog() — ответ на звонок
+                // НЕ трогаем (пост-accept таймеров здесь нет).
+                startCallRingTimeout(context, ringMs)
 
                 //    уведомления играет ОДИН раз, а HTML5 Audio в WebView
                 //    глохнет в фоне. MediaPlayer в сервисе крутится надёжно
@@ -1196,9 +1402,13 @@ class VaultForegroundService : Service() {
         @JvmStatic
         fun dismissIncomingCall(context: Context) {
             try {
+                // СНАЧАЛА снимаем watchdog: иначе таймер, поставленный на
+                // таймаут гудка, через N секунд дёрнет dismissIncomingCall
+                // ещё раз и оборвёт НАЧАТЫЙ разговор (задача 5).
+                cancelCallWatchdog()
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 nm.cancel(CALL_NOTIF_ID)
-                // Остановить нативный рингтон.
+                // Остановить нативный рингтон (MediaPlayer из res/raw).
                 stopRingtone()
                 // Вернуть FGS из phoneCall обратно в dataSync.
                 instance?.let { exitCallMode(it) }
