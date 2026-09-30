@@ -1438,40 +1438,17 @@ class VaultForegroundService : Service() {
                 //    до dismissIncomingCall — «сигнал не обрывается».
                 startRingtone(context)
 
-                //    срабатывает только при ЗАБЛОКИРОВАННОМ экране; при
-                //    разблокированном Android показывает лишь heads-up и
-                //    приложение остаётся свёрнутым. Поэтому сами стартуем
-                //    MainActivity (BAL-исключение даёт phoneCall-FGS).
-                //    ВАЖНО: startForeground(phoneCall) АСИНХРОННЫЙ — если
-                //    startActivity вызвать сразу, система ещё не видит
-                //    phoneCall-FGS и блокирует запуск (BAL). Даём 400мс
-                //    на применение типа сервиса.
-                try {
-                    // не «устаканится» (Abort background activity starts).
-                    // Ретраим: 600мс / 1.2с / 2.4с — одна из попыток пройдёт.
-                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                    val delays = longArrayOf(600, 1200, 2400)
-                    for ((idx, d) in delays.withIndex()) {
-                        handler.postDelayed({
-                            try {
-                                val openIntent = context.packageManager
-                                    .getLaunchIntentForPackage(context.packageName)
-                                if (openIntent != null) {
-                                    openIntent.addFlags(
-                                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                                    )
-                                    context.startActivity(openIntent)
-                                    Log.i("VaultRust", "activity launched (attempt ${idx + 1})")
-                                }
-                            } catch (e: Throwable) {
-                                Log.w("VaultRust", "launch activity failed: " + e.message)
-                            }
-                        }, d)
-                    }
-                } catch (e: Throwable) {
-                    Log.w("VaultRust", "schedule activity launch failed: " + e.message)
-                }
+                // S5-2 (контракт B): входящий в ЗАКРЫТОЕ приложение НЕ
+                // автоподнимает activity (S5-BAL-ретрай 600/1200/2400 убран).
+                // Старый auto-launch → onResume → appVisible=true →
+                // dismissIncomingCall в 600мс ронял рингтон/шторку, пока
+                // WebView был ещё холодный («звонку быстро кончился,
+                // приложение не закрыто» — оно открылось само).
+                // Теперь: CATEGORY_CALL + phoneCall-FGS + IMPORTANCE_HIGH
+                // сами дают full-screen на локскрине; приложение
+                // открывается ТОЛЬКО по тапу «Ответить» (CallActionReceiver
+                // запускает activity с BAL-исключением phoneCall-FGS).
+                // Рингтон/время/автоотбой — startCallRingTimeout + setTimeoutAfter.
             } catch (e: Throwable) {
                 Log.w("VaultRust", "showIncomingCall failed: " + e.message)
             }

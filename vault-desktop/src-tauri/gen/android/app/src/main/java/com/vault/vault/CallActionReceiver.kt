@@ -43,6 +43,30 @@ class CallActionReceiver : BroadcastReceiver() {
             return
         }
         try {
+            // S5-2 (контракт C): «Ответить» при ЗАКРЫТОМ/свёрнутом
+            // приложении должно открыть UI и перевести звонок в active.
+            // showIncomingCall больше НЕ автоподнимает activity (т.к.
+            // onResume → appVisible → dismissIncomingCall ронял рингтон в
+            // 600мс), поэтому открываем явно здесь — НО до dismissIncomingCall,
+            // пока phoneCall-FGS активен (BAL-исключение живо; после
+            // exitCallMode на Android 12+ старт из фона будет заблокирован).
+            // Только «accept»: «reject» звонок просто завершает — UI не нужен.
+            if (decision == "accept") {
+                try {
+                    val launch = context.packageManager
+                        .getLaunchIntentForPackage(context.packageName)
+                    launch?.addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                    )
+                    if (launch != null) {
+                        context.startActivity(launch)
+                        Log.i("VaultRust", "call action: accept — activity started (closed-app path)")
+                    }
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "call action: accept startActivity failed: " + e.message)
+                }
+            }
             nativeCallDecision(callId, decision)
             // Гасим уведомление и рингтон СРАЗУ: решение уже передано
             // нативному монитору (он сам погасит при ошибке, но ждать
