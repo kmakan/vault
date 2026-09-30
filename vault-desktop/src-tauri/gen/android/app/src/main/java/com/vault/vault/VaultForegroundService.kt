@@ -158,6 +158,19 @@ class VaultForegroundService : Service() {
         } catch (e: Throwable) {
             Log.w("VaultRust", "startForeground failed: " + e.message)
         }
+        // S5-BAL: холодный FCM-пуш запустил сервис с флагом call-режима —
+        // переводим FGS в phoneCall ЗДЕСЬ (showIncomingCall был вызван до
+        // onStartCommand, когда instance ещё был null). Тип phoneCall даёт
+        // исключение из запрета на background activity start → экран звонка
+        // реально открывается, а не висит heads-up в шторке.
+        try {
+            if (intent?.getBooleanExtra(EXTRA_CALL_MODE_KEY, false) == true) {
+                enterCallMode(this)
+                Log.i("VaultRust", "FGS switched to phoneCall (fcm)")
+            }
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "enterCallMode from onStartCommand failed: " + e.message)
+        }
         if (pushMode && pushTopic != null) {
             // M2.3-b PUSH-РЕЖИМ (эко): БЕЗ IMAP-монитора и wakeLock — только
             // тихая подписка на ntfy (один HTTP-стрим, системный сокет-таймаут).
@@ -1011,6 +1024,14 @@ class VaultForegroundService : Service() {
         const val CALL_CHANNEL_ID = "vault_incoming_call_v2"
         const val CALL_NOTIF_ID = 9002
 
+        // S5-BAL: флаг-экстра для запуска сервиса из холодного FCM-пуша.
+        // showIncomingCall вызывается из VaultFirebaseMessagingService, когда
+        // FGS ещё не поднят (instance == null) → enterCallMode пропускается,
+        // а вместе с ним и BAL-исключение для открытия экрана звонка.
+        // Поэтому поднимаем сервис ЯВНО с этим флагом, и уже onStartCommand
+        // переводит его в foregroundServiceType=phoneCall.
+        const val EXTRA_CALL_MODE_KEY = "com.vault.vault.call.MODE"
+
         // Ключи настроек звонка в prefs `vault_prefs` (пишет Rust через
         // syncCallPrefs из таури-команды sync_call_prefs).
         private const val K_RING_INCOMING = "call_ringtone_incoming"
@@ -1225,7 +1246,25 @@ class VaultForegroundService : Service() {
                 // от ПРЕДЫДУЩЕГО (не снятого) звонка сорвёт новый разговор.
                 cancelCallWatchdog()
                 // 1) FGS → phoneCall: даёт право поднять activity из фона.
-                instance?.let { enterCallMode(it) }
+                // S5-BAL: холодный FCM-пуш — сервис ещё не запущен
+                // (instance == null), значит enterCallMode выполнить НЕКОМУ и
+                // BAL-исключения нет: Android 12+ блокирует старт MainActivity
+                // из фона (isBgStartWhitelisted: false) и пользователь видит
+                // только шторку. Поднимаем сервис ЯВНО с флагом call-режима —
+                // onStartCommand переведёт его в phoneCall до показа уведомления.
+                if (instance == null) {
+                    try {
+                        context.startForegroundService(
+                            Intent(context, VaultForegroundService::class.java)
+                                .putExtra(EXTRA_CALL_MODE_KEY, true)
+                        )
+                        Log.i("VaultRust", "call: FGS not running, starting (fcm path)")
+                    } catch (e: Throwable) {
+                        Log.w("VaultRust", "call: startForegroundService failed: " + e.message)
+                    }
+                } else {
+                    instance?.let { enterCallMode(it) }
+                }
 
                 val nm = context.getSystemService(NotificationManager::class.java) ?: return
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1314,6 +1353,10 @@ class VaultForegroundService : Service() {
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
+                // S5-BAL диагностика: instance==false → сервис поднят только
+                // что (phoneCall ещё применяется), BAL-исключение появится в
+                // момент ретрая startActivity; instance==true → phoneCall активен.
+                Log.i("VaultRust", "call: instance=" + (instance != null) + " fgsPhoneCall started")
 
                 // НАТИВНЫЙ WATCHDOG: таймер сброса звонка живёт в
                 // JS (callRingTimer — та же длительность из настроек). Если
