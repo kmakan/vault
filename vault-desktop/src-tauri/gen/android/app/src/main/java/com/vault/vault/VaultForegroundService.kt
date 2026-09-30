@@ -138,6 +138,36 @@ class VaultForegroundService : Service() {
                 val nm = getSystemService(NotificationManager::class.java)
                 nm?.cancel(NOTIF_ID)
             } catch (_: Throwable) {}
+            // S5-BAL: если сервис запущен startForegroundService (холодный
+            // FCM-пуш звонка), startForeground() ОБЯЗАТЕЛЕН — иначе Android
+            // 12+ убивает процесс (RemoteServiceException), а вместе с ним
+            // живой звонок и кнопки шторки. Иконка в шторке живёт только до
+            // конца звонка (dismissIncomingCall в eco-режиме сам остановит
+            // сервис) — это осознанный компромисс: без phoneCall FGS экран
+            // звонка из фона не откроется вообще (BAL).
+            if (intent?.getBooleanExtra(EXTRA_CALL_MODE_KEY, false) == true) {
+                enterCallMode(this)
+                // enterCallMode на API < 30 НЕ вызывает startForeground —
+                // а контракт startForegroundService требует его в 5с
+                // (иначе RemoteServiceException убивает процесс). Догонялка
+                // для старых API: обычный startForeground (dataSync).
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            startForeground(
+                                NOTIF_ID, buildNotification(),
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                            )
+                        } else {
+                            startForeground(NOTIF_ID, buildNotification())
+                        }
+                    } catch (e: Throwable) {
+                        Log.w("VaultRust", "eco call-mode startForeground failed: " + e.message)
+                    }
+                }
+                Log.i("VaultRust", "eco: call-mode — FGS phoneCall (icon until call ends)")
+                return START_NOT_STICKY
+            }
             Log.i("VaultRust", "eco: onStartCommand — stopping service (delivery via relay+ntfy, no icon)")
             stopSelf()
             return START_NOT_STICKY
@@ -1454,7 +1484,17 @@ class VaultForegroundService : Service() {
                 // Остановить нативный рингтон (MediaPlayer из res/raw).
                 stopRingtone()
                 // Вернуть FGS из phoneCall обратно в dataSync.
-                instance?.let { exitCallMode(it) }
+                instance?.let { svc ->
+                    exitCallMode(svc)
+                    // S5-BAL: в эко-режиме сервис поднят только ради звонка
+                    // (startForegroundService с call-флагом, иконка — лишь до
+                    // его конца). После звонка гасим сервис — иконка не
+                    // висит, что и требуется эко-режимом.
+                    if (ecoMode) {
+                        svc.stopSelf()
+                        Log.i("VaultRust", "eco: call ended — service stopped (icon cleared)")
+                    }
+                }
             } catch (e: Throwable) {
                 Log.w("VaultRust", "dismissIncomingCall failed: " + e.message)
             }
