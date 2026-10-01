@@ -880,6 +880,62 @@ class VaultForegroundService : Service() {
         @JvmStatic
         var currentCallId: String = "" 
 
+        // Имя звонящего текущего звонка — для информационного уведомления
+        // «Пропущенный звонок» после окончания гудка (S6).
+        @JvmStatic
+        var currentCallerName: String = ""
+
+        /// Extra интента: call_id, для которого нужно показать ЭКРАН ЗВОНКА.
+        /// MainActivity читает его в onCreate/onNewIntent и отдаёт в JS.
+        const val EXTRA_CALL_NOTIF_ID = "vault_call_id"
+
+        /// S6: приложение вышло на передний план — гасим ТОЛЬКО нативный
+        /// рингтон (in-app оверлей играет свой), НЕ завершая звонок.
+        /// Раньше здесь стоял dismissIncomingCall, который рвал вызов до того,
+        /// как JS успевал его подхватить (баг «Ответить → экран не появился,
+        /// вызов сброшен»). Уведомление оставляем — звонок ещё идёт.
+        @JvmStatic
+        fun stopCallRingtoneOnly() {
+            try { stopRingtone() } catch (_: Throwable) {}
+        }
+
+        /// S6: информационное уведомление о пропущенном звонке — «кто и во
+        /// сколько звонил» остаётся в шторке после окончания гудка. Отдельный
+        /// канал IMPORTANCE_LOW: без звука и без heads-up (это справка, а не
+        /// приглашение к звонку — приглашение живёт на экране приложения).
+        private fun postMissedCallNotification(context: Context) {
+            try {
+                val nm = context.getSystemService(NotificationManager::class.java) ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val ch = NotificationChannel(
+                        MISSED_CHANNEL_ID,
+                        context.getString(R.string.call_info_channel_name),
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        description = context.getString(R.string.call_info_channel_desc)
+                        setSound(null, null)
+                        enableVibration(false)
+                    }
+                    nm.createNotificationChannel(ch)
+                }
+                val time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+                val who = currentCallerName.ifBlank { context.getString(R.string.app_name) }
+                val n = NotificationCompat.Builder(context, MISSED_CHANNEL_ID)
+                    .setContentTitle(context.getString(R.string.call_missed_title))
+                    .setContentText(context.getString(R.string.call_missed_text, who, time))
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(MISSED_CALL_NOTIF_ID, n)
+                Log.i("VaultRust", "missed-call info notification posted ($who $time)")
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "missed-call notification failed: " + e.message)
+            }
+        }
+
         // Фоновый плеер голосовых (t_c1c44344): MediaPlayer в сервисе —
         // WebView <audio> глохнет при сворачивании, рингтон-паттерн уже
         // доказал надёжность нативного воспроизведения.
@@ -1053,6 +1109,9 @@ class VaultForegroundService : Service() {
         // тихого канала: рингтон теперь играет нативный MediaPlayer.
         const val CALL_CHANNEL_ID = "vault_incoming_call_v2"
         const val CALL_NOTIF_ID = 9002
+        // S6: информационное уведомление о пропущенном звонке (кто/во сколько).
+        const val MISSED_CALL_NOTIF_ID = 9003
+        const val MISSED_CHANNEL_ID = "vault_call_info"
 
         // S5-BAL: флаг-экстра для запуска сервиса из холодного FCM-пуша.
         // showIncomingCall вызывается из VaultFirebaseMessagingService, когда
@@ -1100,6 +1159,9 @@ class VaultForegroundService : Service() {
                     callRingTimeoutRunnable = null
                     try {
                         Log.i("VaultRust", "call ring timeout ${ringMs}ms: dismissing")
+                        // S6: звонок не приняли — оставляем в шторке
+                        // ИНФОРМАЦИЮ (кто и во сколько звонил), а сам вызов гасим.
+                        postMissedCallNotification(context)
                         dismissIncomingCall(context)
                     } catch (e: Throwable) {
                         Log.w("VaultRust", "ring timeout dismiss failed: " + e.message)
@@ -1274,6 +1336,7 @@ class VaultForegroundService : Service() {
                 return
             }
             currentCallId = callId
+            currentCallerName = callerName
             try {
                 // Длительность гудка из настроек пользователя (в try — чтобы
                 // ошибка чтения prefs не роняла показ звонка). Дефолт 180с.
@@ -1322,57 +1385,29 @@ class VaultForegroundService : Service() {
                     }
                     nm.createNotificationChannel(channel)
                 }
-                val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                // S6: интент ЭКРАНА ЗВОНКА — несёт call_id, чтобы приложение
+                // открылось сразу на экране этого звонка (а не на списке чатов).
+                // Тот же интент идёт в content/full-screen intent уведомления.
+                val launchIntent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)
+                    ?.apply {
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        )
+                        putExtra(EXTRA_CALL_NOTIF_ID, callId)
+                    }
                 val pi: PendingIntent? = launchIntent?.let {
                     PendingIntent.getActivity(
                         context, 1, it,
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                     )
                 }
-                // S5-1: кнопки Reject/Accept в шторке. Основной (первой)
-                // идёт Reject — большой палец обычно на нижней/дальней
-                // кнопке, случайный тап не должен принимать звонок.
-                // PendingIntent → BroadcastReceiver CallActionReceiver,
-                // который отдаёт решение в Rust (nativeCallDecision).
-                // Разные requestCode (REQ_REJECT/REQ_ACCEPT) — иначе
-                // PendingIntent'ы схлопнутся в один (одинаковые extras
-                // не входят в ключ Matching) и обе кнопки работали бы
-                // одинаково.
-                fun callAction(action: String, reqCode: Int): PendingIntent {
-                    val i = Intent(action).apply {
-                        // Явный компонент: доставляем только нашему
-                        // receiver'у, минуя разбор action по всем.
-                        setClass(context, CallActionReceiver::class.java)
-                        // callId в extras — надёжнее статика currentCallId:
-                        // после пересоздания процесса статик пуст, extras же
-                        // пережили вместе с PendingIntent.
-                        putExtra(CallActionReceiver.EXTRA_CALL_ID, callId)
-                        putExtra(CallActionReceiver.EXTRA_CALLER, callerName)
-                    }
-                    return PendingIntent.getBroadcast(
-                        context, reqCode, i,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                    )
-                }
 
-                // Иконки кнопок: android.R.drawable.ic_call / ic_call_end
-                // НЕ резолвятся Kotlin-компилятором на compileSdk 36
-                // (Unresolved reference), поэтому используем собственные
-                // векторы res/drawable/ic_call_reject|ic_call_accept.xml
-                // (Material call_end / call).
-                val rejectAction = NotificationCompat.Action.Builder(
-                    R.drawable.ic_call_reject,
-                    context.getString(R.string.call_action_reject),
-                    callAction(CallActionReceiver.ACTION_REJECT, CallActionReceiver.REQ_REJECT)
-                ).build()
-                val acceptAction = NotificationCompat.Action.Builder(
-                    R.drawable.ic_call_accept,
-                    context.getString(R.string.call_action_accept),
-                    callAction(CallActionReceiver.ACTION_ACCEPT, CallActionReceiver.REQ_ACCEPT)
-                ).build()
-
-                // Ongoing + FullScreenIntent остаются как были: кнопки
-                // ДОБАВЛЯЮТся к шторке, а не заменяют экран звонка.
+                // S6 (директива пользователя): уведомление в шторке — ТОЛЬКО
+                // информационное (кто звонит). Кнопок «Ответить/Отклонить» нет:
+                // принятие и отклонение выполняются на ЭКРАНЕ ЗВОНКА приложения.
+                // Тап по уведомлению открывает приложение и НЕ сбрасывает вызов.
                 val notif = NotificationCompat.Builder(context, CALL_CHANNEL_ID)
                     .setContentTitle(callerName)
                     .setContentText(context.getString(R.string.call_notif_text))
@@ -1384,8 +1419,6 @@ class VaultForegroundService : Service() {
                     .setOngoing(true)
                     .setAutoCancel(false)
                     .setTimeoutAfter(ringMs) // гудок = таймауту звонка (настройка)
-                    .addAction(rejectAction)
-                    .addAction(acceptAction)
                     .build()
                 nm.notify(CALL_NOTIF_ID, notif)
                 Log.i("VaultRust", "incoming-call notification shown for $callerName")
@@ -1393,6 +1426,41 @@ class VaultForegroundService : Service() {
                 // что (phoneCall ещё применяется), BAL-исключение появится в
                 // момент ретрая startActivity; instance==true → phoneCall активен.
                 Log.i("VaultRust", "call: instance=" + (instance != null) + " fgsPhoneCall started")
+
+                // S6: входящий звонок открывает ЭКРАН ЗВОНКА в ЛЮБОМ состоянии
+                // приложения — смахнуто / в фоне / на экране (директива
+                // пользователя). phoneCall-FGS даёт BAL-исключение на старт
+                // activity из фона; тип сервиса применяется асинхронно, поэтому
+                // ретраим 600/1200/2400 мс. Безопасно: onResume БОЛЬШЕ НЕ
+                // завершает звонок (MainActivity.onResume → stopCallRingtoneOnly) —
+                // именно это раньше ронял вызов через 600 мс (баг S5-2:
+                // «Ответить → экран не появился, вызов сброшен»).
+                try {
+                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                    for ((idx, delay) in longArrayOf(600L, 1200L, 2400L).withIndex()) {
+                        handler.postDelayed({
+                            try {
+                                val oi = context.packageManager
+                                    .getLaunchIntentForPackage(context.packageName)
+                                    ?.apply {
+                                        addFlags(
+                                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                        )
+                                        putExtra(EXTRA_CALL_NOTIF_ID, callId)
+                                    }
+                                if (oi != null) {
+                                    context.startActivity(oi)
+                                    Log.i("VaultRust", "call screen launch attempt ${idx + 1}")
+                                }
+                            } catch (e: Throwable) {
+                                Log.w("VaultRust", "call screen launch failed: " + e.message)
+                            }
+                        }, delay)
+                    }
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "schedule call screen launch failed: " + e.message)
+                }
 
                 // НАТИВНЫЙ WATCHDOG: таймер сброса звонка живёт в
                 // JS (callRingTimer — та же длительность из настроек). Если

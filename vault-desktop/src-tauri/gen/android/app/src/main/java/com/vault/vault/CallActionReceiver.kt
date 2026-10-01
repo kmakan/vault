@@ -68,11 +68,12 @@ class CallActionReceiver : BroadcastReceiver() {
                 }
             }
             nativeCallDecision(callId, decision)
-            // Гасим уведомление и рингтон СРАЗУ: решение уже передано
-            // нативному монитору (он сам погасит при ошибке, но ждать
-            // JNI- round-trip с шторки не нужно — кнопка должна отработать
-            // мгновенно, иначе повторный тап шлёт решение дважды).
-            VaultForegroundService.dismissIncomingCall(context)
+            // S6: НЕ гасим звонок здесь. Кнопок в уведомлении больше нет
+            // (приём и отклонение выполняются на ЭКРАНЕ ЗВОНКА приложения),
+            // а прежний dismissIncomingCall рвал вызов раньше, чем JS успевал
+            // его подхватить. Уведомление/рингтон снимаются дальше по цепочке:
+            // reject → dismiss в nativeCallDecision; accept → экран приложения
+            // (JS гасит нативное уведомление сам при принятии).
         } catch (e: Throwable) {
             Log.w("VaultRust", "nativeCallDecision failed: " + e.message)
         }

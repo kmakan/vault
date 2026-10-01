@@ -53,6 +53,31 @@ class MainActivity : TauriActivity() {
       }
     }
 
+    // S6: приложение открыли ради входящего звонка (уведомление, локскрин,
+    // автозапуск из сервиса). Отдаём JS call_id, чтобы он показал ЭКРАН
+    // ПРИЁМА/ОТКЛОНЕНИЯ этого звонка. Если WebView ещё холодный — запоминаем
+    // и отдадим в onWebViewCreate (как pendingCallAction).
+    @JvmStatic
+    fun dispatchIncomingCall(callId: String) {
+      val safe = callId.replace("\\", "\\\\").replace("'", "\\'")
+      val js = "window.__vaultIncomingCall && window.__vaultIncomingCall('$safe')"
+      val wv = liveWebView
+      if (wv == null) {
+        pendingIncomingCallId = callId
+        Log.i("VaultRust", "dispatchIncomingCall: queued (no live WebView) — $callId")
+        return
+      }
+      wv.post {
+        wv.evaluateJavascript(js, null)
+        Log.i("VaultRust", "dispatchIncomingCall($callId): JS dispatched")
+      }
+    }
+
+    // S6: call_id, для которого нужно показать экран звонка, но WebView ещё
+    // не создан. Одноразовое значение (забирается в onWebViewCreate).
+    @JvmStatic
+    var pendingIncomingCallId: String? = null
+
     // M2.4: ntfy-пуш Click vault://open?chat=<email> → открыть чат.
     // Вызывается из onResume/onNewIntent (activity), JS сам выберет чат.
     @JvmStatic
@@ -314,6 +339,30 @@ class MainActivity : TauriActivity() {
         webView.postDelayed(deliver, 100)
       }
     }
+    // S6: приложение открыто ради входящего звонка, а WebView был холодным —
+    // отдаём JS call_id экрана звонка (тем же ретрай-паттерном, что и решение
+    // кнопок уведомления: страница могла ещё не определить window-хук).
+    pendingIncomingCallId?.let { cid ->
+      pendingIncomingCallId = null
+      webView.post {
+        var attempt = 0
+        val deliver = object : Runnable {
+          override fun run() {
+            val cidJs = cid.replace("\\", "\\\\").replace("'", "\\'")
+            webView.evaluateJavascript(
+              "(function(){ if (window.__vaultIncomingCall) {" +
+                " window.__vaultIncomingCall('$cidJs'); return 1; } return 0; })()",
+              { res ->
+                val ok = res != null && res.contains("1")
+                Log.i("VaultRust", "queued incoming call delivered: $cid (ok=$ok)")
+                if (!ok && attempt < 5) { attempt++; webView.postDelayed(this, 100) }
+              }
+            )
+          }
+        }
+        webView.postDelayed(deliver, 100)
+      }
+    }
     // Гео для SOS: WebView должен разрешать
     // navigator.geolocation для tauri://localhost (prompt ниже выдаёт грант).
     try {
@@ -445,8 +494,20 @@ class MainActivity : TauriActivity() {
     // поднято (пользователь открыл приложение во время гудка) — снимаем
     // его сейчас; безопасный no-op, если показывать было нечего.
     appVisible = true
-    try { VaultForegroundService.dismissIncomingCall(this) }
-    catch (e: Throwable) { Log.w("VaultRust", "onResume dismissIncomingCall: " + e.message) }
+    // S6 (директива пользователя): выход приложения на передний план НЕ
+    // завершает звонок — гасим только НАТИВНЫЙ рингтон (экран звонка в
+    // приложении играет свой). Раньше здесь стоял dismissIncomingCall:
+    // он рвал вызов раньше, чем JS успевал подхватить его — баг
+    // «Ответить → экран не появился, вызов сброшен».
+    try { VaultForegroundService.stopCallRingtoneOnly() }
+    catch (e: Throwable) { Log.w("VaultRust", "onResume stopCallRingtoneOnly: " + e.message) }
+    // S6: приложение открыто ИЗ-ЗА входящего звонка — сразу сообщаем JS,
+    // какой call_id показывать (экран приёма/отклонения).
+    try {
+      intent?.getStringExtra(VaultForegroundService.EXTRA_CALL_NOTIF_ID)
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { dispatchIncomingCall(it) }
+    } catch (_: Throwable) {}
     // M2.4: ntfy Click vault://open?chat=<email> → открыть чат.
     handleVaultDeepLink(intent)
     // Пока открыт UI, доставку ведёт JS — headless-монитор молчит.
@@ -480,6 +541,13 @@ class MainActivity : TauriActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    // S6: activity уже жила — пришёл интент экрана звонка (повторный
+    // входящий / раскрытие из уведомления). Отдаём call_id в JS.
+    try {
+      intent.getStringExtra(VaultForegroundService.EXTRA_CALL_NOTIF_ID)
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { dispatchIncomingCall(it) }
+    } catch (_: Throwable) {}
     handleVaultDeepLink(intent)
   }
 

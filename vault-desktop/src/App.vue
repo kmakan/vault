@@ -1514,6 +1514,14 @@ export default {
       window.__vaultApplyPendingCallDecision = (action) => {
         setPendingNativeCallDecision(action);
       };
+      // S6: приложение открыто РАДИ ВХОДЯЩЕГО ЗВОНКА (уведомление, локскрин,
+      // автозапуск из сервиса). Kotlin отдаёт call_id — запоминаем, чтобы
+      // сразу показать ЭКРАН ЗВОНКА этого вызова (сам экран поднимает штатный
+      // путь обработки call_request из очереди реля).
+      window.__vaultIncomingCall = (callId) => {
+        console.log('[call] native incoming-call screen for ' + callId);
+        window.__vaultPendingIncomingCall = callId || '';
+      };
       // Фоновый плеер голосовых: нативный MediaPlayer (Kotlin) сигнализирует
       // завершение трека — кнопка возвращается в «play» (троттлинг JS-таймеров
       // в фоне не позволяет надёжно слушать duration JS-событиями).
