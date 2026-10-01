@@ -210,8 +210,31 @@ export async function setPeerToken(account, relayUrl, chatId, token) {
   if (!peers[key]) peers[key] = {};
   if (token) peers[key][String(chatId).toLowerCase()] = token;
   else delete peers[key][String(chatId).toLowerCase()];
-  await invoke('db_kv_set', { account, key: KV_PEERS, value: JSON.stringify(peers) });
+  try {
+    await invoke('db_kv_set', { account, key: KV_PEERS, value: JSON.stringify(peers) });
+  } catch (e) {
+    // Раньше write падал молча (вызывающий код глотал catch) — на стенде
+    // это выглядело как «токен так и не выучился». Логируем явно.
+    console.log('[relay] peer token SAVE FAILED', chatId, ':', e && e.message || e);
+    throw e;
+  }
   memLearn(relayUrl, chatId, token || '');
+}
+
+// Диагностика отправки: известен ли адрес relay-очереди собеседника.
+// Проверяем ВСЕ релеи списка + оперативный mirror (memPeers) — тем же
+// источником, что и relayPublish, чтобы лог не врал.
+export async function hasPeerToken(account, chatId) {
+  try {
+    const { relays, peers } = await getSettings(account);
+    const id = String(chatId || '').toLowerCase();
+    for (const r of relays || []) {
+      const mem = memPeers.get((normalizeRelayUrl(r.url) || r.url) + '::' + id);
+      if (mem) return true;
+      if (((peers || {})[r.url] || {})[id]) return true;
+    }
+    return false;
+  } catch (e) { return false; }
 }
 
 // Миграция M2.1 → M2.2: плоские peer-токены переносятся на активный релей.

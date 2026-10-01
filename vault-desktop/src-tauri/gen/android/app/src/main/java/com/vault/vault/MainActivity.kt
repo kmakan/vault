@@ -289,8 +289,24 @@ class MainActivity : TauriActivity() {
     // (не-eco) режим — стартуем как раньше.
     val ecoOn = try { VaultForegroundService.ecoModeEnabled(this) } catch (e: Throwable) { false }
     if (ecoOn) {
-      try { VaultForegroundService.cancelScheduledRestart(this) } catch (_: Throwable) {}
-      Log.i("VaultRust", "eco mode: foreground service not started (delivery via relay+ntfy)")
+      // ЭКО-НЕЗАВИСИМОСТЬ: сервис в эко поднимаем В ТИХОМ режиме (quiet FGS,
+      // IMPORTANCE_MIN — в шторке не рендерится). Раньше здесь был отказ от
+      // старта, и вместе с ним исчезал носитель доставки: при упавшем релее
+      // никто (ни эко-тикер в WebView, ни FCM) не мог переключить доставку на
+      // почту. Тихий сервис нужен ровно для этого — health-чек релея каждые
+      // 60с и переход в классический (IMAP) режим, если релей недоступен.
+      try {
+        val svc = Intent(this, VaultForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          startForegroundService(svc)
+        } else {
+          startService(svc)
+        }
+        VaultForegroundService.enterEcoRelayWatch(this)
+        Log.i("VaultRust", "eco mode: quiet service started (relay delivery + mail fallback armed)")
+      } catch (e: Throwable) {
+        Log.w("VaultRust", "eco quiet startForegroundService failed: " + e.message)
+      }
     } else {
       try {
         val svc = Intent(this, VaultForegroundService::class.java)
@@ -569,6 +585,17 @@ class MainActivity : TauriActivity() {
     // снимаем паузу, headless-монитор подхватывает доставку уведомлений,
     // пока процесс (FGS) ещё жив или перезапущен системой без activity.
     try { nativePauseMonitor(false) } catch (_: Throwable) {}
+    // ЭКО-НЕЗАВИСИМОСТЬ: activity уничтожена, но эко-служба (тихий FGS +
+    // health-чек релея) обязана продолжить следить за релеем — иначе фолбэк
+    // на почту не наступит, пока пользователь не откроет приложение.
+    try {
+      if (VaultForegroundService.ecoModeEnabled(this)) {
+        VaultForegroundService.enterEcoRelayWatch(applicationContext)
+        Log.i("VaultRust", "MainActivity destroyed (eco): relay health-check re-armed")
+      }
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "eco watch re-arm on destroy failed: " + e.message)
+    }
     keepAliveWebView = null
     liveWebView = null
     super.onDestroy()

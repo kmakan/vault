@@ -133,13 +133,15 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   // получатель auto-learned при приходе (incoming.js call-ветка).
   // Почта=гарант, релей=ускорение: без peer-tokens call-сигналы
   // падают на 30с-поллинг — это корневой фикс.
-  if (ctx.relayEnabled) {
-    try {
-      const { relays, active } = await relay.getSettings(ctx.email);
-      const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
-      if (myTok) body.tok = myTok;
-    } catch (e) { /* релей опционален */ }
-  }
+  // Гейт ctx.relayEnabled СНЯТ: адрес НАШЕЙ очереди нужен собеседнику
+  // независимо от того, сами мы шлём через релей или нет. Иначе
+  // выключенный релей у одного из собеседников навсегда ломает
+  // обмен токенами (он не узнает наш адрес → мы не узнаём его).
+  try {
+    const { relays, active } = await relay.getSettings(ctx.email);
+    const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
+    if (myTok) body.tok = myTok;
+  } catch (e) { /* релей опционален */ }
   const content = await crypto.encryptVault(JSON.stringify(body));
   // M2.2: дублируем сигнал звонка на релей (критично для скорости
   // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
@@ -158,10 +160,22 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   const wake = payload.type === 'call_request';
   if (viaRelay) {
     try {
+      // Явная диагностика на стенде: без peer-токена получателя relayPublish
+      // выйдет по ветке 'no-peer-token', и звонок уйдёт ТОЛЬКО почтой.
+      // Раньше это было видно только по косвенным метрикам релея.
+      const known = await relay.hasPeerToken(ctx.email, peer);
+      if (!known) console.log('[relay] call: peer token unknown for', peer, '→ email-only');
       // urgent для call_request: сервер обходит last_seen-гейт, чтобы
       // будить только что закрытое приложение (гейт 90с не знал, что
       // «поллил 5с назад» = его убили). Дедуп на клиенте по env.id.
-      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake });
+      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake })
+        .then(r => {
+          // Причина пропуска публикации ВИДНА в логе: relayPublish возвращает
+          // {ok:false, why}, но вызывающий код его игнорировал — на стенде
+          // это читалось как «звонок ушёл, а на relay-очереди тишина».
+          if (r && r.ok === false) console.log('[relay] call publish skipped for', peer, '→', r.why);
+        })
+        .catch(e => console.warn('[relay] call publish error:', e && e.message || e));
     } catch (e) { /* релей опционален — email путь живёт */ }
   }
   // Релей-копия уже ушла выше (не блокирует). SMTP-письмо — медленный
@@ -200,7 +214,7 @@ export async function handleCallSignal(ctx, sig, from) {
   // M2.4: call-конверт несёт tok отправителя (адрес его relay-очереди).
   // Обучение живёт в call-фиче (модульность: общий classify() relay не зовёт)
   // и НЕ блокирует state machine (fire-and-forget).
-  if (sig.tok && ctx.relayEnabled) {
+  if (sig.tok) {
     (async () => {
       try {
         const rs = await relay.getSettings(ctx.email);

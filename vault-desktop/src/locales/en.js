@@ -65,7 +65,7 @@ export default {
   relay_list: "Relays (the first live one is used automatically)",
   eco_mode: "Battery saver (relay instead of a persistent connection)",
   eco_mode_hint: "Stops the persistent background connection: the app no longer holds IMAP IDLE; delivery goes via the relay plus a slow safety poll. Requires the relay enabled (Privacy). Experimental.",
-  eco_on_toast: "Battery saver: background connection stopped, delivery via relay",
+  eco_on_toast: "Battery saver: delivery via relay; if the relay is down, delivery switches to email",
   eco_off_toast: "Classic mode: persistent connection enabled",
     relay_enable: "Push relay (instant delivery)",
   relay_off_warn: "Without a relay, delivery goes by email only: messages and call signals can take up to 1 minute; no notifications arrive when the app is closed. Everything still works, just slower.",

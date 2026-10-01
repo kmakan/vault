@@ -108,6 +108,15 @@
 -keep class com.vault.vault.R$drawable { *; }
 -keep class com.vault.vault.R$drawable* { *; }
 
+# ЭКО-НЕЗАВИСИМОСТЬ: enterEcoRelayWatch зовётся из MainActivity.onCreate/
+# onDestroy и VaultBootReceiver. Внутри Kotlin (не JNI), поэтому R8 обычно
+# его и так держит, но держим явно: уберённый эко-health-чек = тихая потеря
+# доставки при упавшем релее (регрессия, которую чинить придётся на стенде).
+-keepclassmembers class com.vault.vault.VaultForegroundService {
+    public static void enterEcoRelayWatch(android.content.Context);
+    public static void cancelEcoHealthCheck(android.content.Context);
+}
+
 # M2.3-b: pushModeStart зовётся ТОЛЬКО из Rust (eco_set/push_set) — R8 вырезал
 # бы метод (как ecoStop/showMessage раньше). Держим.
 -keepclassmembers class com.vault.vault.VaultForegroundService {

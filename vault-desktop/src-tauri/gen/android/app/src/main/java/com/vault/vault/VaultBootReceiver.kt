@@ -18,7 +18,23 @@ class VaultBootReceiver : BroadcastReceiver() {
         try {
             val prefs = context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("push_mode", false)) {
-                Log.i("VaultRust", "boot: push mode off, skip")
+                // ЭКО-НЕЗАВИСИМОСТЬ: в эко push-режим выключен, но сервис
+                // ОБЯЗАН подняться — он несёт health-чек релея и переключает
+                // доставку на почту, если релей не поднялся вместе с
+                // телефоном (иначе после ребута звонки не доходили бы, пока
+                // пользователь не откроет приложение руками).
+                if (prefs.getBoolean("eco_mode", false)) {
+                    Log.i("VaultRust", "boot: eco mode — starting quiet service (relay health + mail fallback)")
+                    val svc = Intent(context, VaultForegroundService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(svc)
+                    } else {
+                        context.startService(svc)
+                    }
+                    VaultForegroundService.enterEcoRelayWatch(context)
+                } else {
+                    Log.i("VaultRust", "boot: push mode off, eco off, skip")
+                }
                 return
             }
             val topic = prefs.getString("push_topic", null) ?: return

@@ -3112,13 +3112,14 @@ export default {
       // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
       // адрес моей очереди. Получатель молча сохранит его и сможет
       // слать мне мгновенные пуши. Пользователь ничего не вводит.
-      if (this.relayEnabled) {
-        try {
-          const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
-          const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
-          if (myTok) env.tok = myTok;
-        } catch (e) { /* релей опционален */ }
-      }
+      // Гейт this.relayEnabled СНЯТ (как в calls.js sendCallEnvelope):
+      // адрес нашей очереди нужен собеседнику независимо от нашего
+      // переключателя — иначе выключенный релей у одного ломает обмен.
+      try {
+        const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
+        const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
+        if (myTok) env.tok = myTok;
+      } catch (e) { /* релей опционален */ }
       // Исчезающие сообщения: ttl в секундах от момента ПРОСМОТРА
       // получателем. 0 = обычное сообщение. Получатель ставит локальный
       // таймер удаления после показа (expireEphemeral).
@@ -3131,7 +3132,7 @@ export default {
       try {
         const obj = JSON.parse(decrypted);
         if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined };
+          const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined, tok: typeof obj.tok === 'string' ? obj.tok : '' };
           // Голосование: poll-подконверт (валидация в features/poll.js).
           if (obj.poll && typeof obj.poll === 'object') {
             env.poll = {

@@ -168,6 +168,13 @@ export async function enterRelayOfflineRescue(ctx) {
   try {
     // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
     // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
+    // ВНИМАНИЕ: этот rescue — только для СЛУЧАЯ ЖИВОГО UI. Когда процесс
+    // спит (а в эко он спит всегда), JS не исполняется и rescue недостижим —
+    // тогда переключение «релей мёртв → почта» делает НАТИВНЫЙ eco-watch
+    // в VaultForegroundService (ACTION_ECO_HEALTH → enterRelayFallbackMail).
+    // Поэтому здесь важно лишь не мешать нативному состоянию: ecoSet(false)
+    // сбрасывает у нативного слоя mailFallback и счётчики, что корректно —
+    // UI и сам подтвердил, что релей мёртв.
     await api.pushSet(false, '', '');
     await api.ecoSet(false);
   } catch (e) { console.warn('[relay-rescue] svc start:', e); }
@@ -342,7 +349,12 @@ export async function onEcoMode(ctx, on, silent = false) {
     // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
     // глушим его полностью: иконка исчезает из шторки, батарея целая.
     try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
-    try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc stop:', e); }
+    // ecoSet(true) → нативный ecoStop: сервис уходит в ТИХИЙ режим (quiet FGS,
+    // IMPORTANCE_MIN) и взводит эко-будильник relay-health. Он НЕ гасит
+    // сервис насовсем (так было до фикса) — именно этот будильник гарантирует,
+    // что при упавшем релее доставка переключится на почту, даже когда
+    // процесс/WebView спит. Не убивать службу = доставка не зависит от релея.
+    try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc quiet:', e); }
     // релей-тикер — канал приёма при живом JS (activity открыта)
     startRelayTicker(ctx);
     // редкий поллинг-тик страхует (релей — основной канал)

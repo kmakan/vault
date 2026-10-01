@@ -113,7 +113,7 @@ async function classify(ctx, m, from) {
         // M2.4 АВТООБМЕН токенами: конверт несёт tok отправителя
         // (адрес его relay-очереди) — сохраняем молча, чтобы
         // отвечать ему мгновенными пушами. Ноль ручного ввода.
-        if (env.tok && ctx.relayEnabled) {
+        if (env.tok) {
           try {
             const rs = await relay.getSettings(ctx.email);
             const r = rs.relays[rs.active] || rs.relays[0];
