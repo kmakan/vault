@@ -136,15 +136,42 @@ impl EmailClient {
         // тогда висит по системному TCP-таймауту (минуты), кнопка входа
         // показывает «…» и «вход не проходит». connect_timeout(15с) даёт
         // пользователю понятную ошибку вместо бесконечного ожидания.
+        // HAPPY EYEBALLS: getaddrinfo отдаёт AAAA (IPv6) первым, а многие сети
+        // раздают IPv6 БЕЗ рабочего маршрута наружу → `.next()` уходит в чёрную
+        // дыру и падает по таймауту, хотя IPv4 работает. Перебираем все адреса,
+        // IPv4 первым, по 5с на каждый.
         let host = self.config.imap_server.clone();
         let port = self.config.imap_port;
-        let addr = (host.as_str(), port)
+        let mut addrs: Vec<std::net::SocketAddr> = (host.as_str(), port)
             .to_socket_addrs()
             .context("Failed to resolve IMAP host")?
-            .next()
-            .context("No addresses for IMAP host")?;
-        let tcp = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(15))
-            .context("Failed to connect to IMAP server (15s timeout)")?;
+            .collect();
+        if addrs.is_empty() {
+            anyhow::bail!("No addresses for IMAP host");
+        }
+        addrs.sort_by_key(|a| u8::from(a.is_ipv6()));
+        let mut tcp: Option<TcpStream> = None;
+        let mut last_err = String::new();
+        for a in &addrs {
+            match TcpStream::connect_timeout(a, std::time::Duration::from_secs(5)) {
+                Ok(s) => {
+                    log::info!("imap: connected to {a}");
+                    tcp = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("imap: connect to {a} failed: {e}");
+                    last_err = format!("{a}: {e}");
+                }
+            }
+        }
+        let tcp = tcp.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to connect to IMAP server (tried {} address(es); last: {})",
+                addrs.len(),
+                last_err
+            )
+        })?;
         let timeout = std::time::Duration::from_secs(30);
         tcp.set_read_timeout(Some(timeout))
             .context("Failed to set read timeout")?;
