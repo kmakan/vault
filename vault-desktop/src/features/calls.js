@@ -862,10 +862,16 @@ export function stopSignalResend(ctx) {
 // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
 // у приёмника безопасны (ветка remote_late / guard по state).
 export function sendTerminalRepeat(ctx, peer, type, call_id) {
-  // Повторы — только почтой: релей-копия call_end ушла первым
-  // отправлением; wake=false и так стоит (терминальный сигнал),
-  // повтор на релей жёг бы лимит издателя.
-  sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {});
+  // ПЕРВОЕ отправление — и в релей, и почтой. Раньше здесь стоял
+  // viaRelay:false с комментарием «релей-копия ушла первым отправлением»,
+  // но первого отправления через релей НЕ БЫЛО вообще: все три попытки
+  // шли только почтой, и собеседник продолжал гудеть/держать трубку
+  // 15-60с (жалоба: «на десктопе долго идут гудки после отбоя на
+  // телефоне»). wake=false и так стоит — терминальный сигнал не должен
+  // поднимать уведомление на том конце.
+  sendCallEnvelope(ctx, peer, { type, call_id }).catch(() => {});
+  // Повторы — только почтой: релей-копия уже лежит в очереди получателя,
+  // повтор на релей жёг бы суточный лимит издателя.
   setTimeout(() => { sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 3000);
   setTimeout(() => { sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 7000);
 }
