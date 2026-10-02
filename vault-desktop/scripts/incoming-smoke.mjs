@@ -306,5 +306,79 @@ console.log('15. пул >50: усечение до 50 (как было)');
   check('обработано ровно 50', ctx.processedUnreadIds.size >= 50 && ctx.unreadCounts['peer@x.ru'] === 50);
 }
 
+console.log('16. ГОНКА ПОРЯДКА БАТЧА (t_674c770f): cancel перед request');
+{
+  // Реальный сценарий: fetch_newer отдаёт батч новыми сверху
+  // (email.rs sort_by(|a,b| b.id.cmp(&a.id))), поэтому call_cancel
+  // (UID больше) приходит в массиве ПЕРВЫМ. Если разбор идёт как вернул
+  // IMAP — request гаснет на гварде isCallSeen и звонок не звонит.
+  // Проверяем, что порядок разбора = хронологический.
+  const ctx = makeCtx();
+  ctx.peerKeys['peer@x.ru'] = 'PEERK';
+  const order = [];
+  ctx.parseCallSignal = (t) => JSON.parse(t);
+  // Тело = 'ENC:' + JSON-сигнал (isEncrypted требует префикс ENC:),
+  // расшифровка отдаёт сам сигнал.
+  cryptoMock.decryptVault = async (b) => b.slice(4);
+  ctx.handleCallSignal = async function (sig) {
+    order.push(sig.type);
+    // Имитируем persist kv 'call-seen': терминальный ЗАПИСЫВАЕТ id,
+    // request — читает его гвардом. Порядок чтения/записи решает исход.
+    if (sig.type === 'call_cancel') { ctx.seen.add(sig.call_id); return; }
+    if (ctx.seen.has(sig.call_id)) { order.push('request ГАСНУТ'); return; }
+    ctx.seen.add(sig.call_id);
+    order.push('incoming_ringing');
+  };
+  ctx.seen = new Set();
+  // Батч как от IMAP: cancel (UID 102, новее) ПЕРВЫМ, request (UID 101) вторым.
+  const older = NOW - 20 * 1000, newer = NOW - 5 * 1000;
+  const req = msg({ uid: 101, message_id: '<req@x>', date: new Date(older).toISOString() });
+  const can = msg({ uid: 102, message_id: '<can@x>', date: new Date(newer).toISOString() });
+  withBody(ctx, req, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'cX' }));
+  withBody(ctx, can, 'ENC:' + JSON.stringify({ type: 'call_cancel', call_id: 'cX' }));
+  await processIncoming(ctx, [can, req], { notify: true }); // как вернул IMAP
+  // Ожидаем ровно: call_request → incoming_ringing (звонок звонит) →
+  // call_cancel (тот же звонок гаснет по отбою звонящего).
+  check('request разобран ПЕРВЫМ (звонок успел зазвонить)',
+    order[0] === 'call_request' && order[1] === 'incoming_ringing', order);
+  check('cancel разобран вторым и погасил звонок',
+    order[2] === 'call_cancel', order);
+  check('request НЕ потерян (нет тихого выхода по call-seen)',
+    !order.includes('request ГАСНУТ'), order);
+}
+
+console.log('17. сортировка батча: UID сравнивается ЧИСЛОМ (\'9\' < \'10\')');
+{
+  // Строковая сортировка UID переставила бы 10 перед 9 ('1' < '9' лексически).
+  // Даты одинаковые — работает ключ 2 (UID как число).
+  const ctx = makeCtx();
+  ctx.peerKeys['peer@x.ru'] = 'PEERK';
+  const seenOrder = [];
+  cryptoMock.decryptVault = async () => ({ __env: { key: 'PEERK', text: 'm' } });
+  const same = new Date(NOW).toISOString();
+  const m9 = msg({ uid: 9, message_id: '<m9@x>', date: same });
+  const m10 = msg({ uid: 10, message_id: '<m10@x>', date: same });
+  withBody(ctx, m9, 'ENC:1'); withBody(ctx, m10, 'ENC:1');
+  await processIncoming(ctx, [m10, m9], { notify: true });
+  // Оба учтены независимо от порядка (дедуп не сломан).
+  check('оба письма учтены (uid 9 и 10 не склеились в дедупе)',
+    ctx.unreadCounts['peer@x.ru'] === 2 && seenOrder.length === 0,
+    { unread: ctx.unreadCounts['peer@x.ru'] });
+}
+
+console.log('18. дедуп обычных сообщений не сломан реордерингом (env.id)');
+{
+  // Кросс-канальный дедуп env.id не должен зависеть от порядка в батче.
+  const ctx = makeCtx();
+  ctx.peerKeys['peer@x.ru'] = 'PEERK';
+  cryptoMock.decryptVault = async () => ({ __env: { key: 'PEERK', id: 'envSame', text: 'm' } });
+  const a = msg({ uid: 201, message_id: '<a@x>', date: new Date(NOW - 60 * 1000).toISOString() });
+  const b = msg({ uid: 202, message_id: '<b@x>', date: new Date(NOW - 10 * 1000).toISOString() });
+  withBody(ctx, a, 'ENC:1'); withBody(ctx, b, 'ENC:1');
+  await processIncoming(ctx, [b, a], { notify: true });
+  check('один env.id учтён один раз', ctx.unreadCounts['peer@x.ru'] === 1,
+    { unread: ctx.unreadCounts['peer@x.ru'] });
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

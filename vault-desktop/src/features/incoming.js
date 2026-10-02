@@ -19,11 +19,37 @@ import * as ChannelsFeature from './channels.js';
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
 
+// Сравнение писем для разбора батча: ХРОНОЛОГИЯ, старые первыми.
+// Ключ 1 — Date-заголовок (UID между папками несравнимы: в INBOX и в Спам
+// счётчики свои), ключ 2 — UID как число (в пределах папки это порядок
+// доставки). Строковое сравнение UID не годится: '9' > '10' лексически.
+function byArrival(a, b) {
+  const ta = Date.parse(a.date || '') || 0;
+  const tb = Date.parse(b.date || '') || 0;
+  if (ta !== tb) return ta - tb;
+  const ua = Number(a.uid || a.id) || 0;
+  const ub = Number(b.uid || b.id) || 0;
+  if (ua !== ub) return ua - ub;
+  return 0;
+}
+
 // ── Драйвер: батч-доставка тел по папкам + цикл классификации ──────────────
 export async function processIncoming(ctx, fetched, { notify = false } = {}) {
   if (!fetched || !fetched.length || !ctx.cryptoReady) return;
   const myEmail = (ctx.email || '').toLowerCase();
-  const pool = fetched.slice(0, MAX_POOL);
+  // Срез ДО сортировки: MAX_POOL отбирает 50 НОВЕЙШИХ писем батча (как было).
+  // ПОРЯДОК РАЗБОРА — хронологический, а не «как вернул IMAP».
+  // Rust отдаёт батч новыми сверху (email.rs: sort_by(|a,b| b.id.cmp(&a.id)) —
+  // в fetch_folder и в fetch_newer), и processIncoming шёл по нему как есть.
+  // Для обычных писем порядок безразличен (дедуп по env.id/Message-ID+папка
+  // идемпотентен), но для звонка он был фатальным: в одном батче call_cancel
+  // (UID больше, пришёл позже) разбирался ПЕРВЫМ и успевал записать call_id
+  // в persist kv 'call-seen' (calls.js: case 'call_cancel' → rememberCallSeen),
+  // после чего call_request с тем же call_id гас на гварде isCallSeen —
+// без рингтона, без экрана, без «пропущенного». Обратный порядок даёт
+  // корректный сценарий: звонок успевает зазвонить и сразу гаснет по своему
+  // же отбою. См. docs/CALL-MAIL-PATH-DIAGNOSIS.md §3 (слой 3), t_674c770f.
+  const pool = fetched.slice(0, MAX_POOL).slice().sort(byArrival);
   await ensureBodies(ctx, pool);
   for (const m of pool) {
     const from = ctx.senderEmail(m.from);
@@ -87,9 +113,17 @@ async function classify(ctx, m, from) {
       const plain = await crypto.decryptVault(body);
       // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
       // бейджи, не в уведомления) — уходят в state machine звонка.
+      // AWAIT (было fire-and-forget): handleCallSignal внутри ходит в
+      // persist kv 'call-seen' (isCallSeen/rememberCallSeen), и при
+      // параллельном запуске двух сигналов одного call_id (request + его
+      // cancel в одном батче) терминальный успевал записать kv РАНЬШЕ,
+      // чем request дочитал свой isCallSeen, — звонок гас без рингтона.
+      // Порядок разбора батча (processIncoming: byArrival) + последовательный
+      // await дают request → cancel строго по порядку доставки.
       const callSig = ctx.parseCallSignal(plain);
       if (callSig) {
-        ctx.handleCallSignal(callSig, from).catch(e => console.warn('[call] signal failed:', e));
+        try { await ctx.handleCallSignal(callSig, from); }
+        catch (e) { console.warn('[call] signal failed:', e); }
         return null;
       }
       // Presence (M2): {presence:1, ts} — heartbeat «я онлайн» от пира.
