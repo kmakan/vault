@@ -32,6 +32,24 @@ import java.net.URL
  */
 class VaultFirebaseMessagingService : FirebaseMessagingService() {
 
+    /**
+     * Самоисцеление wake-канала (t_44e210b4). Сервис поднимается, когда
+     * Firebase SDK живёт в этом процессе (ротация токена, доставка пуша,
+     * старт приложения) — дешёвое напоминание «а привязан ли reg_token
+     * на РЕЛЕЕ?». Релей при этом мог перезапуститься и забыть привязку.
+     * Один POST в фоне, идемпотентно на сервере.
+     *
+     * VaultForegroundService здесь не трогаем намеренно.
+     */
+    override fun onCreate() {
+        super.onCreate()
+        try {
+            registerDevice(applicationContext)
+        } catch (e: Throwable) {
+            Log.w(TAG, "onCreate: re-register failed: " + e.message)
+        }
+    }
+
     override fun onMessageReceived(msg: RemoteMessage) {
         // payload (data-only, от relay /relay/fcm): type, call_id, from, name,
         // total, urgent, ring, click
@@ -152,6 +170,24 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
 
         private const val REGISTER_TIMEOUT_MS = 10_000
 
+        /**
+         * Анти-пачка для [registerDevice]: один запуск приложения дёргает
+         * регистрацию из нескольких точек (onCreate → getToken, создание
+         * WebView, JS-мост VaultFcm.register) — за секунды. Регистрация
+         * копеечная (POST ~200 байт), но и лишних запросов не хочется.
+         *
+         * ВАЖНО: это НЕ «кэш регистрации». Кэш жил в prefs и переживал
+         * рестарт релея, из-за чего клиент молчал, а привязка на релее
+         * была потеряна (t_44e210b4). Эта метка живёт только в памяти
+         * процесса: перезапуск приложения = свежий POST, то есть клиент
+         * чинит wake-канал сам даже без серверного персиста.
+         */
+        private const val REGISTER_MIN_INTERVAL_MS = 30_000L
+
+        /** Момент последней попытки регистрации (только в памяти процесса). */
+        @Volatile
+        private var lastRegisterAtMs = 0L
+
         /** Сохранить FCM reg_token (переживает перезапуск процесса). */
         @JvmStatic
         fun saveRegToken(context: Context, token: String) {
@@ -190,11 +226,25 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         /**
-         * Зарегистрировать накопленный reg_token на relay. Идемпотентно
-         * (сервер перезаписывает привязку), без сети — тихий no-op.
+         * Зарегистрировать reg_token на relay (идемпотентно: сервер
+         * перезаписывает привязку).
+         *
+         * ВАЖНО (t_44e210b4): здесь НЕТ «строгого» кэша
+         * «уже зарегистрированы для этой пары url+токен → молча выйти».
+         * Такой кэш переживал рестарт РЕЛЕЯ, а привязка reg_token к теме
+         * жила только в памяти релея: после рестарта клиент думал, что
+         * «зарегистрирован», релей — что нет. На проде VAULT_RELAY_NTFY_URL
+         * не задан, поэтому запасного канала не было → wake-канал мёртв
+         * целиком (не будит ни звонок, ни сообщение при закрытом приложении).
+         *
+         * Теперь: регистрируемся при каждом вызове (POST ~200 байт, копейки),
+         * а [REGISTER_MIN_INTERVAL_MS] гасит только ПАЧКУ вызовов в пределах
+         * одного старта приложения (onCreate → getToken → webview → JS-мост
+         * дёргают registerDevice несколько раз за секунды).
          */
         @JvmStatic
-        fun registerDevice(context: Context) {
+        @JvmOverloads
+        fun registerDevice(context: Context, force: Boolean = false) {
             val reg = regToken(context) ?: run {
                 Log.i(TAG, "registerDevice: no reg_token yet (waiting for getToken)")
                 return
@@ -212,20 +262,41 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
                 Log.i(TAG, "registerDevice: no relay read-token yet (deferred)")
                 return
             }
-            // Уже зарегистрированы для этой пары (url + токен) — не долбим сеть.
-            if (prefs.getString(K_REGISTERED_TOKEN, null) == reg &&
-                prefs.getString(K_REGISTERED_URL, null) == url
-            ) return
             val fp = prefs.getString(K_FP, null)
+            // Диагностика кэша: та же пара или нет (в лог, а не в return).
+            val samePair = prefs.getString(K_REGISTERED_TOKEN, null) == reg &&
+                prefs.getString(K_REGISTERED_URL, null) == url
+            // Анти-пачка: не чаще раза в REGISTER_MIN_INTERVAL_MS (кроме force).
+            val now = System.currentTimeMillis()
+            if (!force) {
+                val elapsed = now - lastRegisterAtMs
+                if (elapsed < REGISTER_MIN_INTERVAL_MS) {
+                    Log.i(
+                        TAG,
+                        "registerDevice: skip (called ${elapsed}ms after last attempt, " +
+                            "min interval ${REGISTER_MIN_INTERVAL_MS}ms; relay re-registers " +
+                            "on every app start)"
+                    )
+                    return
+                }
+            }
+            // Ставим метку ДО похода в сеть: пачка вызовов не должна
+            // превратиться в пачку POST'ов. Неудачу метка не отменяет —
+            // следующий вызов (смена url/токена, новый запуск) попробует снова.
+            lastRegisterAtMs = now
             Thread({
                 if (postRegister(url, readToken, reg, fp)) {
                     prefs.edit()
                         .putString(K_REGISTERED_URL, url)
                         .putString(K_REGISTERED_TOKEN, reg)
                         .apply()
-                    Log.i(TAG, "registerDevice: registered for push at $url")
+                    Log.i(
+                        TAG,
+                        "registerDevice: registered for push at $url" +
+                            if (samePair) " (re-registering unchanged url+token: relay may have restarted)" else ""
+                    )
                 } else {
-                    Log.w(TAG, "registerDevice: registration failed (will retry later)")
+                    Log.w(TAG, "registerDevice: registration failed (will retry on next app start)")
                 }
             }, "vault-fcm-register").apply { isDaemon = true }.start()
         }

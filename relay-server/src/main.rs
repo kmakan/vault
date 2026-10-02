@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use vault_relay::fcm::FcmSender;
+use vault_relay::persist::{self, PersistedState};
 use vault_relay::store::Store;
 use vault_relay::{ServerKeys, Scope};
 
@@ -64,19 +65,80 @@ pub struct AppState {
     /// «Настройки → Звонки → входящий»): token_hash → URL mp3. Клиент
     /// присылает его при регистрации (/relay/register) и может обновить
     /// через /relay/ringtone; ntfy-вайк звонка играет ИМЕННО его, а не
-    /// жёстко прописанный RING_URL. In-memory: рестарт релея → дефолт
-    /// (DEFAULT_RING_URL), клиент перешлёт URL при ближайшей регистрации —
-    /// приемлемо, звук вернётся сам.
+    /// жёстко прописанный RING_URL. Персистится в state.json (тот же
+    /// класс проблемы, что у topic_fcm: после рестарта релея кастомный
+    /// рингтон слетал на дефолт, пока клиент не перерегистрируется).
     pub topic_ringtone: std::sync::Mutex<std::collections::HashMap<String, String>>,
     /// FCM Part B: отправитель пушей Firebase Cloud Messaging v1. None =
     /// FCM выключен (нет VAULT_FCM_KEY/файла/валидного ключа) — доставка
     /// «будильника» идёт через ntfy-мост, поведение как до FCM.
     pub fcm: Option<Arc<FcmSender>>,
     /// FCM-регистрация получателя: hash(read-токен) → FCM reg_token.
-    /// Заполняется POST /relay/fcm/register. In-memory: после рестарта релея
-    /// клиент перерегистрируется (как ntfy-topic, он и так переподписывается).
-    /// Присутствие записи = «доставляем этому получателю через FCM».
+    /// Заполняется POST /relay/fcm/register. ПЕРСИСТИТСЯ в state.json
+    /// (VAULT_RELAY_STATE): без этого рестарт релея обнулял карту, клиент
+    /// не перерегистрировался (кэш в prefs переживал рестарт), и при
+    /// незаданном VAULT_RELAY_NTFY_URL wake-канал становился МЁРТВЫМ
+    /// целиком (ветка «нечем будить» в relay_pub молчала). Присутствие
+    /// записи = «доставляем этому получателю через FCM».
     pub topic_fcm: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Куда писать состояние при перезапуске (vault_relay::persist).
+    /// None = персист выключен (VAULT_RELAY_STATE=off или путь не задан
+    /// только в тестах) — тогда поведение как до t_44e210b4.
+    pub state_path: Option<std::path::PathBuf>,
+}
+
+impl AppState {
+    /// Поднять AppState с загруженным состоянием (вызывается из main).
+    pub fn new(
+        store: Store,
+        keys: ServerKeys,
+        allow_anonymous_pub: bool,
+        ntfy_url: String,
+        unlimited_key: Option<String>,
+        free_daily_limit: u32,
+        fcm: Option<Arc<FcmSender>>,
+        state_path: Option<std::path::PathBuf>,
+    ) -> Self {
+        let (topic_fcm, topic_ringtone) = match &state_path {
+            Some(p) => {
+                let st = PersistedState::load(p);
+                (st.topic_fcm, st.topic_ringtone)
+            }
+            None => (HashMap::new(), HashMap::new()),
+        };
+        Self {
+            store,
+            keys,
+            allow_anonymous_pub,
+            metrics: Metrics::default(),
+            registrations: std::sync::Mutex::new(HashMap::new()),
+            ntfy_url,
+            unlimited_key,
+            daily_pub: std::sync::Mutex::new(HashMap::new()),
+            free_daily_limit,
+            token_bindings: std::sync::Mutex::new(HashMap::new()),
+            last_seen: std::sync::Mutex::new(HashMap::new()),
+            topic_ringtone: std::sync::Mutex::new(topic_ringtone),
+            fcm,
+            topic_fcm: std::sync::Mutex::new(topic_fcm),
+            state_path,
+        }
+    }
+
+    /// Атомарно записать topic_fcm + topic_ringtone в state.json.
+    /// Вызывается из всех мест, меняющих эти карты. Ошибка записи НЕ
+    /// фатальна для запроса (клиенту уже отвечено 200), но громко логируется:
+    /// иначе следующий рестарт тихо уронит wake-канал снова.
+    pub fn persist(&self) {
+        let Some(path) = &self.state_path else { return };
+        let st = PersistedState::snapshot(
+            &self.topic_fcm.lock().expect("topic_fcm lock"),
+            &self.topic_ringtone.lock().expect("topic_ringtone lock"),
+        );
+        if let Err(e) = st.save_atomic(path) {
+            tracing::error!(path = %path.display(), error = %e, "state: save failed");
+        }
+    }
 }
 
 #[derive(Default)]
@@ -342,9 +404,27 @@ pub async fn relay_pub(
                     };
                     // Отдельная задача: сетевое ожидание не держит обработчик
                     // pub. Ошибка — в лог, не фатальна (конверт в очереди).
-                    tokio::spawn(async move {
-                        if let Err(e) = sender.send(&reg, &push).await {
-                            tracing::error!(error = %e, "fcm send failed (envelope still queued)");
+                    tokio::spawn({
+                        let app = app.clone();
+                        let topic = topic.clone();
+                        async move {
+                            if let Err(e) = sender.send(&reg, &push).await {
+                                // reg_token сгорел (переустановка приложения,
+                                // смена устройства) → FCM отвечает
+                                // UNREGISTERED. Привязка больше не нужна:
+                                // удаляем и сохраняем, иначе она живёт в
+                                // state.json вечно и шлёт в никуда.
+                                if e.contains("UNREGISTERED") {
+                                    let mut m = app.topic_fcm.lock().expect("topic_fcm lock");
+                                    if m.remove(&topic).is_some() {
+                                        drop(m);
+                                        app.persist();
+                                        tracing::info!("fcm: unregistered reg_token dropped for topic");
+                                    }
+                                } else {
+                                    tracing::error!(error = %e, "fcm send failed (envelope still queued)");
+                                }
+                            }
                         }
                     });
                 }
@@ -856,6 +936,10 @@ async fn relay_fcm_register(
         .lock()
         .expect("topic_fcm lock")
         .insert(tok.hash.clone(), reg);
+    // Привязка переживает рестарт релея — иначе после рестарта клиент
+    // (кэш «уже зарегистрирован» в prefs) не придёт второй раз, а будить
+    // будет нечем (ntfy на проде не настроен) → мёртвый wake-канал.
+    app.persist();
     // reg_token в лог НЕ пишем (это адрес доставки, секрет клиента).
     tracing::info!("fcm: device registered for push");
     (StatusCode::OK, AxumJson(serde_json::json!({"ok": true}))).into_response()
@@ -887,6 +971,11 @@ async fn relay_get_ringtone(
         return err(StatusCode::UNAUTHORIZED, "bad token");
     };
     let ring = ringtone_resolve(&app.topic_ringtone, &t.hash, req.ringtone.as_deref());
+    // Клиент прислал новый звук → сохраняем на диск (переживает рестарт).
+    // Простое «прочитать свой звук» (поле пустое) диск не трогает.
+    if ring.is_some() && req.ringtone.is_some() {
+        app.persist();
+    }
     AxumJson(serde_json::json!({ "ringtone": ring })).into_response()
 }
 
@@ -963,6 +1052,11 @@ async fn relay_register(
     // S3: заодно сохраняем рингтон звонка из настроек клиента (если
     // прислан валидный http-URL) — тема = hash этого же токена.
     ringtone_resolve(&app.topic_ringtone, &topic, req.ringtone.as_deref());
+    // Кастомный рингтон тоже переживает рестарт релея (иначе звук слетает
+    // на дефолт до следующей выдачи токена).
+    if norm_ringtone(req.ringtone.as_deref()).is_some() {
+        app.persist();
+    }
     app.metrics.register_ok.fetch_add(1, Ordering::Relaxed);
     tracing::info!("register: token issued (unlimited={promo_ok}, days={days})");
     (StatusCode::OK, AxumJson(RegisterOk { token, topic, exp, unlimited: promo_ok })).into_response()
@@ -993,24 +1087,30 @@ async fn main() {
     if !ntfy_url.is_empty() {
         tracing::info!("ntfy wake-up bridge: {ntfy_url}");
     }
-    let state = Arc::new(AppState {
-        store: Store::new(),
-        keys: ServerKeys::new(server_key),
+    // FCM Part B: VAULT_FCM_KEY пуст/файл битый → fcm=None, сервер живёт
+    // на ntfy-мосте (поведение до FCM). Ошибка уже залогирована в from_env.
+    let fcm = FcmSender::from_env().map(Arc::new);
+    // Персист привязок FCM/рингтонов (t_44e210b4): без него рестарт релея
+    // обнулял topic_fcm, клиент не перерегистрировался, а ntfy-моста на проде
+    // нет → wake-канал мёртв. Путь — VAULT_RELAY_STATE (off = выключить).
+    let state_path = persist::state_path_from_env();
+    match &state_path {
+        Some(p) => tracing::info!("state file: {}", p.display()),
+        None => tracing::warn!(
+            "{} set to off — FCM bindings and ringtones will NOT survive a restart",
+            persist::ENV_STATE_PATH
+        ),
+    }
+    let state = Arc::new(AppState::new(
+        Store::new(),
+        ServerKeys::new(server_key),
         allow_anonymous_pub,
-        metrics: Metrics::default(),
-        registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
         ntfy_url,
         unlimited_key,
-        daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
         free_daily_limit,
-        token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
-        last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
-        topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
-        // FCM Part B: VAULT_FCM_KEY пуст/файл битый → fcm=None, сервер живёт
-        // на ntfy-мосте (поведение до FCM). Ошибка уже залогирована в from_env.
-        fcm: FcmSender::from_env().map(Arc::new),
-        topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
-    });
+        fcm,
+        state_path,
+    ));
     tracing::info!(
         "vault-relay listening on {addr}, anon_pub={allow_anonymous_pub}, free_daily_limit={free_daily_limit}"
     );
@@ -1107,24 +1207,19 @@ mod tests {
     }
 
     /// AppState для тестов маршрутов: FCM выключен (None) и ntfy пуст —
-    /// сеть не трогаем никогда.
+    /// сеть не трогаем никогда. Персист выключен (state_path=None):
+    /// юниты не должны писать файлы в WorkingDirectory.
     fn app_state(k: ServerKeys) -> Arc<AppState> {
-        Arc::new(AppState {
-            store: Store::new(),
-            keys: k,
-            allow_anonymous_pub: true,
-            metrics: Metrics::default(),
-            registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
-            ntfy_url: String::new(),
-            unlimited_key: None,
-            daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
-            free_daily_limit: 0,
-            token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
-            last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
-            topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
-            fcm: None,
-            topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
-        })
+        Arc::new(AppState::new(
+            Store::new(),
+            k,
+            true,
+            String::new(),
+            None,
+            0,
+            None,
+            None,
+        ))
     }
 
     fn auth_headers(token: &str) -> HeaderMap {
@@ -1375,30 +1470,104 @@ mod tests {
     /// Хранилище живёт в AppState и собирается без сети — поле на месте.
     #[test]
     fn app_state_carries_empty_ringtone_store() {
-        let app = AppState {
-            store: Store::new(),
-            keys: keys(),
-            allow_anonymous_pub: true,
-            metrics: Metrics::default(),
-            registrations: std::sync::Mutex::new(std::collections::HashMap::new()),
-            ntfy_url: String::new(),
-            unlimited_key: None,
-            daily_pub: std::sync::Mutex::new(std::collections::HashMap::new()),
-            free_daily_limit: 0,
-            token_bindings: std::sync::Mutex::new(std::collections::HashMap::new()),
-            last_seen: std::sync::Mutex::new(std::collections::HashMap::new()),
-            topic_ringtone: std::sync::Mutex::new(std::collections::HashMap::new()),
-            // Тесты не читают VAULT_FCM_KEY и тем более fcm-key.json:
-            // FCM выключен, доставка проверяется через ntfy-ветку и юниты.
-            fcm: None,
-            topic_fcm: std::sync::Mutex::new(std::collections::HashMap::new()),
-        };
+        let app = AppState::new(
+            Store::new(),
+            keys(),
+            true,
+            String::new(),
+            None,
+            0,
+            None,
+            None,
+        );
         assert!(app.topic_ringtone.lock().unwrap().is_empty());
         let (_token, hash) = fresh_topic(&app.keys, 4_102_444_800);
         assert_eq!(ringtone_or_default(&app.topic_ringtone, &hash), DEFAULT_RING_URL);
         let ring = "https://vault-msg.ru/sounds/ring_incoming_classic.mp3";
         assert_eq!(ringtone_resolve(&app.topic_ringtone, &hash, Some(ring)).as_deref(), Some(ring));
         assert_eq!(ringtone_or_default(&app.topic_ringtone, &hash), ring);
+    }
+
+    /// t_44e210b4: привязка FCM и рингтон ПЕРЕЖИВАЮТ рестарт релея.
+    /// Сценарий бага: рестарт → topic_fcm пуст → клиент не перерегистрируется
+    /// (кэш в prefs) → при незаданном VAULT_RELAY_NTFY_URL будить нечем.
+    /// Здесь: подняли AppState на пустом файле, «зарегистрировали» клиента,
+    /// пересоздали AppState из того же файла (имитация рестарта) и проверяем,
+    /// что и reg_token, и рингтон на месте.
+    #[test]
+    fn fcm_binding_survives_relay_restart() {
+        let dir = std::env::temp_dir().join(format!(
+            "vault-relay-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let path = dir.join("state.json");
+
+        // «Процесс 1»: поднимаемся на пустом state.json, клиент регистрируется.
+        let app1 = AppState::new(
+            Store::new(),
+            keys(),
+            true,
+            String::new(),
+            None,
+            0,
+            None,
+            Some(path.clone()),
+        );
+        let (_tok, hash) = fresh_topic(&app1.keys, 4_102_444_800);
+        assert!(app1.topic_fcm.lock().unwrap().is_empty());
+        app1.topic_fcm
+            .lock()
+            .unwrap()
+            .insert(hash.clone(), "reg-token-live-1".to_string());
+        ringtone_resolve(
+            &app1.topic_ringtone,
+            &hash,
+            Some("https://vault-msg.ru/sounds/ring_incoming_pulse.mp3"),
+        );
+        app1.persist();
+        assert!(path.exists(), "persist must write the state file");
+        drop(app1);
+
+        // «Рестарт релея»: новый процесс читает тот же файл.
+        let app2 = AppState::new(
+            Store::new(),
+            keys(),
+            true,
+            String::new(),
+            None,
+            0,
+            None,
+            Some(path.clone()),
+        );
+        assert_eq!(
+            app2.topic_fcm.lock().unwrap().get(&hash).map(String::as_str),
+            Some("reg-token-live-1"),
+            "FCM binding must survive restart — otherwise the wake channel is dead"
+        );
+        assert_eq!(
+            ringtone_or_default(&app2.topic_ringtone, &hash),
+            "https://vault-msg.ru/sounds/ring_incoming_pulse.mp3",
+            "custom ringtone must survive restart"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Персист выключен (VAULT_RELAY_STATE=off) → persist() no-op, файл не
+    /// создаётся: поведение как до t_44e210b4, ничего не ломается.
+    #[test]
+    fn persist_is_noop_when_state_path_disabled() {
+        let app = app_state(keys());
+        app.topic_fcm
+            .lock()
+            .unwrap()
+            .insert("deadbeef".repeat(8), "reg".to_string());
+        app.persist(); // не должно падать
+        assert_eq!(app.topic_fcm.lock().unwrap().len(), 1);
     }
 
     /// S4: клик по обычному пушу = просто открыть приложение (без query).

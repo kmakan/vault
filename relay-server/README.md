@@ -22,3 +22,23 @@ token = b64url(key_id ‖ scope ‖ expiry ‖ HMAC-SHA256(server_key, ...))
 
 ## Запуск
 VAULT_RELAY_KEY=<64 hex> VAULT_RELAY_ADDR=127.0.0.1:8091 VAULT_RELAY_ANON_PUB=1 vault-relay
+
+## Персист привязок (VAULT_RELAY_STATE)
+Привязки FCM-токенов (тема → reg_token) и per-topic рингтоны звонка
+живут в одном JSON-файле и ПЕРЕЖИВАЮТ рестарт релея. Без этого после
+рестарта будить нечем: клиент считает, что зарегистрирован (кэш в prefs),
+релей — что нет, а запасного ntfy-моста на проде нет.
+
+- Путь: `VAULT_RELAY_STATE`, дефолт `./vault-relay-state.json`
+  (WorkingDirectory сервиса). Рекомендуется абсолютный путь, напр.
+  `/home/maksim/vault-relay/state.json` — иначе смена WorkingDirectory
+  в unit-файле тихо «теряет» привязки.
+- `VAULT_RELAY_STATE=off` — персист выключен (поведение как до t_44e210b4).
+- Формат: `{"v":1,"saved_at":<unix>,"topic_fcm":{<тема>:<reg_token>},
+  "topic_ringtone":{<тема>:<url>}}`. Запись атомарная (temp + rename),
+  права 0600 (в файле лежат reg_token'ы — адреса доставки).
+- Битый/отсутствующий файл НЕ мешает старту: релей поднимается с пустыми
+  картами и чинит их первым же POST /relay/fcm/register.
+- TTL по времени не вводится: запись живёт до следующей регистрации того
+  же токена, а сгоревший reg_token вычищается по ответу FCM
+  `UNREGISTERED`.
