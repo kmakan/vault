@@ -3,7 +3,6 @@ package com.vault.vault
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 
 /**
@@ -18,19 +17,15 @@ class VaultBootReceiver : BroadcastReceiver() {
         try {
             val prefs = context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
             if (!prefs.getBoolean("push_mode", false)) {
-                // ЭКО-НЕЗАВИСИМОСТЬ: в эко push-режим выключен, но сервис
-                // ОБЯЗАН подняться — он несёт health-чек релея и переключает
-                // доставку на почту, если релей не поднялся вместе с
-                // телефоном (иначе после ребута звонки не доходили бы, пока
-                // пользователь не откроет приложение руками).
+                // ЭКО-НЕЗАВИСИМОСТЬ: в eco push-режим выключен, но «нет службы» не
+                // значит «нет присмотра за релеем»: будильник ACTION_ECO_HEALTH
+                // (PendingIntent в системе) переживает и ребут, поэтому после
+                // загрузки достаточно взвести его заново. Если релей не
+                // поднимется вместе с телефоном, будильник сам переключит
+                // доставку на почту (иначе после ребута звонки не доходили бы,
+                // пока пользователь не откроет приложение руками).
                 if (prefs.getBoolean("eco_mode", false)) {
-                    Log.i("VaultRust", "boot: eco mode — starting quiet service (relay health + mail fallback)")
-                    val svc = Intent(context, VaultForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(svc)
-                    } else {
-                        context.startService(svc)
-                    }
+                    Log.i("VaultRust", "boot: eco mode — relay health alarm re-armed (no resident service)")
                     VaultForegroundService.enterEcoRelayWatch(context)
                 } else {
                     Log.i("VaultRust", "boot: push mode off, eco off, skip")

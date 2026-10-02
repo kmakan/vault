@@ -283,29 +283,26 @@ class MainActivity : TauriActivity() {
     }
 
     // Foreground-сервис: держит процесс живым в фоне (приём звонков).
-    // 0.1.181: в eco (релей жив) сервис НЕ стартуем вовсе — доставка в фоне
-    // несёт отдельный ntfy-клиент (UnifiedPush), FGS = иконка в шторке, а
-    // Android API31+ прицеливает ЛЮБОЕ FGS-уведомление до LOW. Классический
-    // (не-eco) режим — стартуем как раньше.
+    // ЭКО-ЗАКОН: в eco (релей включён и жив) службы Vault в памяти НЕТ —
+    // доставку несёт сам релей (FCM/ntfy-пуш, отдельный процесс), а
+    // здоровье релея проверяет будильник AlarmManager (ACTION_ECO_HEALTH),
+    // который переживает смерть процесса и при падении релея вернёт
+    // классический режим с IMAP-монитором. Android API31+ прицеливает
+    // ЛЮБОЕ FGS-уведомление до LOW — иконка в шторке висела бы вечно, а
+    // вместе с ней и процесс не спал бы. Поэтому в eco сервис не
+    // поднимаем вовсе. Классический (не-eco) режим — стартуем как раньше.
     val ecoOn = try { VaultForegroundService.ecoModeEnabled(this) } catch (e: Throwable) { false }
     if (ecoOn) {
-      // ЭКО-НЕЗАВИСИМОСТЬ: сервис в эко поднимаем В ТИХОМ режиме (quiet FGS,
-      // IMPORTANCE_MIN — в шторке не рендерится). Раньше здесь был отказ от
-      // старта, и вместе с ним исчезал носитель доставки: при упавшем релее
-      // никто (ни эко-тикер в WebView, ни FCM) не мог переключить доставку на
-      // почту. Тихий сервис нужен ровно для этого — health-чек релея каждые
-      // 60с и переход в классический (IMAP) режим, если релей недоступен.
+      // ЭКО-НЕЗАВИСИМОСТЬ: «нет службы» ≠ «нет доставки». Убитый eco-сервис
+      // больше не означает, что при падении релея никто не заметит: будильник
+      // ACTION_ECO_HEALTH живёт в системе (PendingIntent), поднимает службу
+      // при срабатывании и переключает доставку на почту.
       try {
-        val svc = Intent(this, VaultForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-          startForegroundService(svc)
-        } else {
-          startService(svc)
-        }
+        VaultForegroundService.cancelScheduledRestart(this)
         VaultForegroundService.enterEcoRelayWatch(this)
-        Log.i("VaultRust", "eco mode: quiet service started (relay delivery + mail fallback armed)")
+        Log.i("VaultRust", "eco mode: foreground service not started (relay delivery + health alarm armed)")
       } catch (e: Throwable) {
-        Log.w("VaultRust", "eco quiet startForegroundService failed: " + e.message)
+        Log.w("VaultRust", "eco enterEcoRelayWatch failed: " + e.message)
       }
     } else {
       try {

@@ -33,6 +33,16 @@ class VaultForegroundService : Service() {
     // Wifi-lock: не даёт Wi-Fi уйти в сон, иначе TCP-соединение IMAP рвётся.
     private var wifiLock: WifiManager.WifiLock? = null
 
+    // Контракт startForegroundService: если сервис подняли через
+    // startForegroundService (холодный FCM-пуш звонка, старт из UI), то
+    // startForeground() обязателен в пределах 5с, иначе Android 12+ роняет
+    // процесс (RemoteServiceException). Флаг сбрасывается после первого
+    // onStartCommand — дальше сервис считается «уже в foreground».
+    // Нужен, чтобы в эко-режиме (режим НЕ гасим, а лишь кратко выполняем
+    // onStartCommand и stopSelf) не мерцать FGS на каждом тёплом старте.
+    @Volatile
+    private var fgContractPending: Boolean = true
+
     // Natives из libvault_desktop.so: headless
     // IMAP-монитор живёт в Rust-таске внутри ЭТОГО процесса. ОБЯЗАТЕЛЬНО
     // экземплярные методы (не companion!): JNI-символ внешнего метода
@@ -140,16 +150,18 @@ class VaultForegroundService : Service() {
         wifiLock = null
         // Headless-монитор: глушим Rust-задачу вместе с сервисом.
         try { nativeStopMonitor() } catch (_: Throwable) {}
-        // ЭКО-НЕЗАВИСИМОСТЬ: в eco сервис больше НЕ «гаснет насовсем».
-        // Раньше (0.1.181) он просто не воскресал, и при упавшем релее в
-        // телефоне не оставалось НИЧЕГО, что проверяло бы релей → фолбэк по
-        // почте не наступал никогда (в логе — ноль строк). Теперь в eco
-        // будильник AlarmManager перепроверяет /health каждые ECO_HEALTH_PERIOD_MS;
-        // релей мёртв → тот же эко-сервис сам переходит в классический путь
-        // (wake+wifi locks + nativeStartMonitor), звонок доходит по почте.
+        // ЭКО-НЕЗАВИСИМОСТЬ: в эко служба уходит из памяти САМА (onStartCommand
+        // эко-ветка → shutdownEcoService), и её убийка — штатное состояние,
+        // а не авария. Раньше (0.1.181) воскрешения не было вовсе, и при
+        // упавшем релее в телефоне не оставалось НИЧЕГО, что проверяло бы
+        // релей → фолбэк по почте не наступал никогда (в логе — ноль строк).
+        // Теперь будильник AlarmManager (ACTION_ECO_HEALTH) перевзводится
+        // здесь: он переживает смерть процесса, поднимет службу, проба
+        // /health решит — снова уйти в эко или уйти в почтовый фолбэк.
         if (ecoMode) {
-            scheduleEcoHealthCheck(this, ECO_HEALTH_PERIOD_MS)
-            Log.i("VaultRust", "service destroyed in eco — eco health-check re-armed (mail fallback armed)")
+            enterEcoRelayWatch(this)
+            Log.i("VaultRust", "service destroyed in eco — relay-health alarm re-armed " +
+                "(no resurrection: relay delivery does not need the service)")
         } else {
             scheduleRestart(this)
             Log.i("VaultRust", "service resurrect scheduled (classic mode keeps process alive)")
@@ -161,12 +173,12 @@ class VaultForegroundService : Service() {
     // onTaskRemoved и вскоре убивает сервис. Перезапускаем его.
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // В eco службу тоже нужно воскресить: её задача = релеить relay-health
-        // (каждые 60с) и вовремя уйти в почтовый фолбэк. Без будильника после
+        // В eco службы в памяти нет, и воскрешать её не нужно: её задача = следить за релеем, а это делает будильник AlarmManager
+        // (будильник AlarmManager, переживает смерть процесса). Без перевзвода
         // смахивания из recents фолбэк не наступал бы никогда.
         if (ecoMode) {
-            scheduleEcoHealthCheck(this, ECO_HEALTH_PERIOD_MS)
-            Log.i("VaultRust", "onTaskRemoved (eco): relay health-check re-armed (mail fallback armed)")
+            enterEcoRelayWatch(this)
+            Log.i("VaultRust", "onTaskRemoved (eco): relay health-check re-armed (service stays stopped)")
         } else {
             Log.i("VaultRust", "onTaskRemoved: scheduling service restart")
             scheduleRestart(this)
@@ -186,43 +198,47 @@ class VaultForegroundService : Service() {
             // воскрешает через scheduleRestart/scheduleEcoHealthCheck.
             if (!ecoMode && !mailFallbackActive) {
                 Log.i("VaultRust", "eco-watch: alarm fired but eco is off — ignored")
-                return START_STICKY
+                return START_NOT_STICKY
             }
-            // Контракт foregroundService: сервис поднят системой, значит
-            // startForeground обязан быть в пределах 5с даже когда мы почти
-            // сразу уйдём в фолбэк (классический FGS). Ставим тихий — он же
-            // и есть «эко жив, релей на месте»; фолбэк переставит на обычный.
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIF_ID, buildQuietNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    startForeground(NOTIF_ID, buildQuietNotification())
-                }
-            } catch (e: Throwable) {
-                Log.w("VaultRust", "eco-watch: alarm startForeground failed: " + e.message)
-            }
+            // БУДИЛЬНИК = КОРОТКИЙ ВИЗИТ, а не повод снова стать резидентным.
+            // Сервис поднят будильником (PendingIntent живёт в системе, процесс
+            // мог быть давно убит) → в onStartCommand попадает cold-процесс.
+            // Постоянного foreground здесь НЕТ: тихий FGS нужен только на время
+            // самой пробы (и как подготовка к фолбэку, где enterRelayFallbackMail
+            // переставит его на обычный классический), а по результату пробы:
+            //   релей здоров → scheduleEcoHealthCheck(IDLE) + shutdownEcoService
+            //                  (stopForeground(REMOVE) + stopSelf) — службы нет;
+            //   релей мёртв  → enterRelayFallbackMail: классический FGS + IMAP.
+            // startForeground здесь обязателен: сервис стартовал из будильника в
+            // фоне, а при уходе в почтовый фолбэк Android 12+ требует, чтобы
+            // FGS был заявлен (точные будильники дают временный allowlist).
+            startForegroundTransient()
             try {
                 onEcoHealthAlarm(applicationContext)
             } catch (e: Throwable) {
                 Log.w("VaultRust", "eco-watch: alarm handler failed: " + e.message)
             }
-            return START_STICKY
+            // Проба идёт в отдельном потоке (runEcoHealthDecision), поэтому
+            // решение «остаться / уйти в фолбэк» принимает он сам и там же
+            // снимает foreground + stopSelf. START_NOT_STICKY: резидентности
+            // быть не должно ни в одном из двух исходов (в фолбэке сервис
+            // живёт своей классической жизнью и воскресает scheduleRestart).
+            return START_NOT_STICKY
         }
-        // ЭКО-РЕЖИМ: сервис НЕ self-stop, а «тихий» (quiet) — релей-доставка
-        // быстрее и экономнее, но СЛУЖБА ЖИВЁТ и каждые ECO_HEALTH_PERIOD_MS
-        // проверяет релей. Это ровно тот пробел, из-за которого при
-        // systemctl stop vault-relay звонок не доходил ВООБЩЕ: eco гасил
-        // сервис (stopSelf + stopService), процесс умирал, а health-чек жил
-        // только в JS-тикере внутри WebView — который тоже мёртв без процесса.
+        // ЭКО-РЕЖИМ: релей жив → СЛУЖБЫ В ПАМЯТИ НЕТ (схема 0.1.188).
         //
-        // Теперь: релей жив  → эко (быстро, экономно, тихая иконка MIN);
-        //          релей мёртв → тот же сервис САМ уходит в классический путь
-        //          (wake+wifi locks + nativeStartMonitor) = доставка по почте;
-        //          релей ожил  → САМ возвращается в эко.
+        // Пробел, из-за которого в 0.1.181 eco гасил службу целиком (stopSelf +
+        // stopService) и при падении релея доставки не оставалось НИЧЕГО,
+        // закрыт теперь не резидентностью, а БУДИЛЬНИКОМ: health-чек релея живёт
+        // в AlarmManager (ACTION_ECO_HEALTH) и переживает смерть процесса, так
+        // что службе не нужно быть постоянной ради проверки релея.
+        //
+        // Итого три состояния:
+        //   релей жив   → эко, службы в памяти нет (эта ветка: stopSelf),
+        //                 доставку несёт FCM/ntfy релея;
+        //   релей мёртв → будильник поднимает службу и уводит её в классический
+        //                 путь (wake+wifi locks + nativeStartMonitor) = почта;
+        //   релей ожил  → обратно сюда же (leaveRelayFallbackMail → stopSelf).
         if (ecoMode) {
             cancelScheduledRestart(this)
             try {
@@ -233,9 +249,8 @@ class VaultForegroundService : Service() {
             // FCM-пуш звонка), startForeground() ОБЯЗАТЕЛЕН — иначе Android
             // 12+ убивает процесс (RemoteServiceException), а вместе с ним
             // живой звонок и кнопки шторки. Иконка в шторке живёт только до
-            // конца звонка (dismissIncomingCall в eco-режиме сам вернёт
-            // сервис в quiet-режим) — без phoneCall FGS экран звонка из фона
-            // не откроется вообще (BAL).
+            // конца звонка (dismissIncomingCall в эко сам погасит службу) —
+            // без phoneCall FGS экран звонка из фона не откроется вообще (BAL).
             if (intent?.getBooleanExtra(EXTRA_CALL_MODE_KEY, false) == true) {
                 enterCallMode(this)
                 // enterCallMode на API < 30 НЕ вызывает startForeground —
@@ -257,29 +272,47 @@ class VaultForegroundService : Service() {
                     }
                 }
                 Log.i("VaultRust", "eco: call-mode — FGS phoneCall (icon until call ends)")
-                // START_STICKY: eco-сервис теперь нужен и ПОСЛЕ звонка (health-чек
-                // релея). Раньше здесь был NOT_STICKY + ecoStop → death списка.
+                // START_STICKY: во время звонка процесс нужен. После звонка
+                // dismissIncomingCall уводит службу в «релей жив → службы
+                // нет» (shutdownEcoService), поэтому рестарт системы здесь
+                // ничего лишнего не поднимет.
                 return START_STICKY
             }
-            // Обычный eco-запуск: тихий FGS (канал IMPORTANCE_MIN — в шторке
-            // не рендерится, звука/вибрации нет) + арматура health-чека релея.
-            // Тихий канал = экономия батареи эко; сам факт FGS держит процесс,
-            // чтобы health-чек вообще мог выполняться в фоне.
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIF_ID, buildQuietNotification(),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                    )
-                } else {
-                    startForeground(NOTIF_ID, buildQuietNotification())
-                }
-            } catch (e: Throwable) {
-                Log.w("VaultRust", "eco quiet startForeground failed: " + e.message)
-            }
+            // ЭКО + РЕЛЕЙ ЖИВ → СЛУЖБЫ В ПАМЯТИ НЕТ (схема 0.1.188).
+            //
+            // Регресс 0.1.195 держал здесь тихий FGS 24/7 «ради health-чека
+            // релея». Это ровно то, что пользователь и требовал убрать:
+            // включённый живой релей = доставку несёт FCM/ntfy-пуш релея,
+            // Vault-служба в этом не участвует, а процесс, который она держит,
+            // не даёт телефону спать (Doze/App Standby выключены). Экономии
+            // батареи при живом релее тогда не существует.
+            //
+            // Health-чек релея при этом НЕ теряется: его несёт будильник
+            // AlarmManager (ACTION_ECO_HEALTH, requestCode 1,
+            // setExactAndAllowWhileIdle) — PendingIntent живёт в системе и
+            // переживает смерть процесса. Ниже мы лишь перевзводим будильник и
+            // гасим службу; когда будильник сработает, сервис поднимется
+            // КОРОТКО (см. ветку ACTION_ECO_HEALTH выше) — проба релея, и
+            // либо снова stopSelf(), либо enterRelayFallbackMail().
             enterEcoRelayWatch(this)
-            Log.i("VaultRust", "eco: quiet service alive (relay delivery + mail fallback armed)")
-            return START_STICKY
+            // Контракт startForegroundService: если сервис подняли именно так
+            // (холодный FCM-пуш / MainActivity / BootReceiver), Android требует
+            // startForeground() в пределах 5с. Выполняем контракт тихим
+            // уведомлением и СРАЗУ снимаем его — постоянного FGS не остаётся.
+            if (fgContractPending) {
+                fgContractPending = false
+                startForegroundTransient()
+            }
+            // Гасим всё, что могло удерживать процесс: IMAP-монитор, ntfy-стрим,
+            // wake+wifi locks, foreground-уведомление. Будильник переживёт нас.
+            try { stopNtfyStream() } catch (_: Throwable) {}
+            try { nativeStopMonitor() } catch (_: Throwable) {}
+            releaseLocks()
+            stopForegroundRemove()
+            Log.i("VaultRust", "eco: onStartCommand — relay alive, service stopped in-memory " +
+                "(delivery via relay FCM/ntfy; relay-health alarm re-armed, no resident service)")
+            stopSelf()
+            return START_NOT_STICKY
         }
         try {
             // КЛАССИЧЕСКИЙ режим: FGS с уведомлением. Тип foreground —
@@ -527,15 +560,57 @@ class VaultForegroundService : Service() {
         wifiLock = null
     }
 
+    // ЭКО-СЛОЖКА: снять foreground-статус и уведомление.
+    // stopForeground(REMOVE) убирает и сам факт FGS (иконку в шторке), и
+    // уведомление NOTIF_ID; после этого служба перестаёт держать процесс и
+    // Doze/App Standby снова работают как положено. Режим совместимости для
+    // API < 24 — старый stopForeground(true).
+    fun stopForegroundRemove() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Throwable) {}
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.cancel(NOTIF_ID)
+        } catch (_: Throwable) {}
+    }
+
+    // Кратковременный foreground для СТАРТА САМОГО СЕРВИСА.
+    // Вызывается только в onStartCommand (или его ветке эко-будильника) —
+    // чтобы выполнить контракт startForegroundService. Держится ровно до
+    // конца текущего onStartCommand, дальше снимается через
+    // stopForegroundRemove(): постоянной тихой службы в эко больше нет.
+    fun startForegroundTransient() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID, buildQuietNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIF_ID, buildQuietNotification())
+            }
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "transient startForeground failed: " + e.message)
+        }
+    }
+
     companion object {
         // M2.3: эко-режим — форс-стоп сервиса пользователем (без авторестарта)
         // ECO-ФИКС 0.1.176: флаг больше не используется — eco больше НЕ убивает
         // сервис. Оставлен для совместимости со ссылками в коде, всегда false.
         @Volatile var ecoStoppedByUser: Boolean = false
 
-        // ECO-ФИКС 0.1.176: сервис ЖИВЁТ в eco, но в «тихом» режиме —
-        // процесс не убивается системой во сне (звонки доходят),
-        // при этом БЕЗ wakeLock/wifiLock, ntfy-стрима и IMAP-монитора.
+        // ECO-ФИКС 0.1.176: в eco сервис НЕ живёт (регресс 0.1.195 вернул
+        // тихий FGS 24/7 — пользователь его отверг). Доставку при живом
+        // реле несёт FCM/ntfy релея, а здоровье релея проверяет будильник
+        // AlarmManager, переживающий смерть процесса.
         // Персистится в prefs «eco_mode» — единственный источник правды
         // для нового процесса сервиса (in-memory ecoMode обнуляется).
         @Volatile var ecoMode: Boolean = false
@@ -594,13 +669,14 @@ class VaultForegroundService : Service() {
                 Log.i("VaultRust", "ecoStop skipped: call active — service kept until call ends")
                 return
             }
-            // ЭКО-НЕЗАВИСИМОСТЬ: eco больше НЕ означает «сервис мёртв».
-            // Сервис переводится в ТИХИЙ режим (quiet FGS, канал
-            // IMPORTANCE_MIN — не рендерится в шторке, без звука) и каждые
-            // ECO_HEALTH_PERIOD_MS проверяет релей. Релей мёртв → сам
-            // переключается в классический путь (почта). Это ровно тот пробел,
-            // из-за которого при systemctl stop vault-relay звонок не доходил
-            // вообще: stopService убивал единственного носителя доставки.
+            // ЭКО-ЗАКОН: eco = «службы Vault в памяти НЕТ, доставку несёт релей».
+            // Сервис НЕ переводится в тихий FGS (регресс 0.1.195): он
+            // останавливается — stopForeground(REMOVE) + stopSelf, без IMAP,
+            // без ntfy-стрима, без locks. Проверку «жив ли релей» несёт
+            // будильник AlarmManager (ACTION_ECO_HEALTH), он переживает
+            // смерть процесса; на падении релея будильник поднимает службу
+            // и уводит её в классический почтовый режим. Поэтому убийство
+            // службы здесь больше не означает «доставки не будет».
             ecoMode = true
             ecoStoppedByUser = false
             context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
@@ -618,30 +694,19 @@ class VaultForegroundService : Service() {
             val inst = instance
             if (inst != null) {
                 // Сервис жив: глушим ntfy-стрим и IMAP-монитор, снимаем
-                // locks — и ОСТАЁМСЯ жить (quiet). Никакого stopService.
-                try { inst.stopNtfyStream() } catch (_: Throwable) {}
-                try { inst.nativeStopMonitor() } catch (_: Throwable) {}
-                try { inst.releaseLocks() } catch (_: Throwable) {}
-                enterEcoRelayWatch(context)
-                Log.i("VaultRust", "eco: service in quiet mode (relay delivery, mail fallback armed)")
+                // locks, снимаем foreground и останавливаем службу. Это НЕ
+                // «сервис мёртв навсегда»: остаётся будильник проверки релея,
+                // который при падении релея вернёт классический режим.
+                shutdownEcoService(context, "ecoStop (relay alive)")
             } else {
-                // Сервиса нет — поднимаем его в тихом eco-режиме: onStartCommand
-                // поставит quiet FGS и health-чек. Так релей перестаёт быть
-                // единственной опорой доставки (иначе фолбэк неоткуда брать).
+                // Сервиса нет — поднимать нечего и незачем: доставку несёт
+                // реле (FCM/ntfy), а следить за его здоровьем будет
+                // будильник. Раньше здесь был startForegroundService «ради
+                // тихого FGS» — это и есть регресс 0.1.195 (резидентная
+                // служба при живом релее = никакой экономии батареи).
                 cancelScheduledRestart(context)
-                try {
-                    val svc = Intent(context, VaultForegroundService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(svc)
-                    } else {
-                        context.startService(svc)
-                    }
-                    enterEcoRelayWatch(context)
-                    Log.i("VaultRust", "eco: quiet service started (relay delivery, mail fallback armed)")
-                } catch (e: Throwable) {
-                    Log.w("VaultRust", "eco quiet start failed: " + e.message)
-                    enterEcoRelayWatch(context)
-                }
+                enterEcoRelayWatch(context)
+                Log.i("VaultRust", "eco: service not resident (relay delivery, relay-health alarm armed)")
             }
         }
 
@@ -1026,8 +1091,23 @@ class VaultForegroundService : Service() {
         // уже существующие health-чек, AlarmManager-будильник (как
         // scheduleRestart) и существующий классический режим службы.
 
-        /** Период eco-health-чека. Тот же интервал, что health-чек в relay.js. */
+        /** Период eco-health-чека, когда служба ЖИВА и несёт доставку
+         *  (классика или почтовый фолбэк): релея надо ловить быстро. */
         private const val ECO_HEALTH_PERIOD_MS = 60_000L
+
+        /** Период eco-health-чека в состоянии «релей ЖИВ, службы в памяти НЕТ».
+         *
+         *  Осознанно редко (15 мин вместо 60 с): в этом состоянии единственная
+         *  работа Vault — убедиться, что релей ещё жив. Доставку при живом
+         *  реле несёт FCM/ntfy-пуш самого релея (VaultFirebaseMessagingService),
+         *  она работает БЕЗ нашего процесса вообще, поэтому от частоты этого
+         *  опроса она не зависит. Каждая проба = подъём cold-процесса из
+         *  Doze, поэтому 60-секундный опрос при нерезидентном процессе —
+         *  это ровно тот расход, ради которого эко-режим и существует.
+         *  Реальная цена: падение релея будет замечено на этом интервале
+         *  (в фолбэк уходим с первой-третьей неудачной пробой).
+         */
+        private const val ECO_HEALTH_PERIOD_IDLE_MS = 15 * 60_000L
         /** Столько неудачных /health подряд → уходим в почтовый фолбэк. */
         private const val ECO_HEALTH_FAIL_LIMIT = 3
         /** Неудач подряд, после которых пробуем эко ещё раз (anti-flap). */
@@ -1040,20 +1120,87 @@ class VaultForegroundService : Service() {
         /** Прод-релей — тот же дефолт, что DEFAULT_RELAY_URL в relay-client.js. */
         private const val DEFAULT_RELAY_URL = "https://vault-msg.ru/relay"
 
-        // In-memory счётчик неудач: переживает только текущий процесс,
-        // персист не нужен (процесс = эпоха; при рестарте счётчик сбросится,
-        // а AlarmManager всё равно перезапустит проверку с нуля).
+        // Счётчик неудачных /health подряд. В эко-режиме он живёт в РАЗНЫХ процессах
+        // (служба штатно умирает после каждой пробы), поэтому счётчик обязан
+        // переживать процесс — иначе лимит ECO_HEALTH_FAIL_LIMIT не набирался
+        // бы НИКОГДА и почтовый фолбэк не наступал бы (регресс был бы тихим).
+        // Значение хранится в prefs (K_RELAY_HEALTH_FAILS); in-memory — кэш
+        // на время текущей классической/фолбэк-сессии.
         @Volatile
         private var relayHealthFails = 0
+
+        /// Прочитать сохранённый счётчик неудач (cold-процесс после пробы).
+        private fun loadRelayFails(context: Context): Int = try {
+            context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                .getInt(K_RELAY_HEALTH_FAILS, 0)
+        } catch (e: Throwable) { 0 }
+
+        /// Сохранить счётчик неудач (чтобы следующий cold-процесс продолжил).
+        private fun saveRelayFails(context: Context, fails: Int) {
+            relayHealthFails = fails
+            try {
+                context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
+                    .edit().putInt(K_RELAY_HEALTH_FAILS, fails).apply()
+            } catch (_: Throwable) {}
+        }
         // Фолбэк активен? (классический путь внутри эко-сессии)
         @Volatile
         private var mailFallbackActive = false
 
-        /// Войти в «тихий» эко: сервис жив, релей-будильник взведён.
-        /// Идемпотентна — зовётся из onStartCommand, ecoStop, dismissIncomingCall.
+        /// Войти в эко-наблюдение: взвести будильник проверки релея.
+        /// Идемпотентна — зовётся из onStartCommand, onDestroy, onTaskRemoved,
+        /// ecoStop, dismissIncomingCall, BootReceiver, MainActivity.
+        /// Период выбирается по состоянию (ecoHealthPeriodMs).
         @JvmStatic
         fun enterEcoRelayWatch(context: Context) {
-            scheduleEcoHealthCheck(context, ECO_HEALTH_PERIOD_MS)
+            scheduleEcoHealthCheck(context, ecoHealthPeriodMs())
+        }
+
+        /// Период следующей проверки релея для ТЕКУЩЕГО состояния.
+        ///  - фолбэк активен (релей мёртв, доставка по почте): ECO_HEALTH_PERIOD_MS * 2
+        ///    = 120 с. Реже, чем 60 с, чтобы не жечь батарею почтовым IDLE,
+        ///    но достаточно часто, чтобы поймать оживание релея.
+        ///  - фолбэка нет (релей жив, службы в памяти нет): ECO_HEALTH_PERIOD_IDLE_MS
+        ///    = 15 мин — доставка идёт пушем релея и от нашего опроса не зависит.
+        private fun ecoHealthPeriodMs(): Long =
+            if (mailFallbackActive) ECO_HEALTH_PERIOD_MS * 2 else ECO_HEALTH_PERIOD_IDLE_MS
+
+        /// РЕЛЕЙ ЖИВ → СЛУЖБЫ В ПАМЯТИ НЕТ (закон эко-режима).
+        ///
+        /// Гасим всё, что удерживает процесс: foreground-статус и уведомление,
+        /// wake+wifi locks, headless IMAP-монитор, ntfy-стрим — и останавливаем
+        /// службу. Доставку при живом реле несёт FCM/ntfy релея, она живёт в
+        /// отдельном процессе/приложении и от нашего процесса не зависит.
+        /// Следить за релеем продолжает будильник AlarmManager (переживает
+        /// смерть процесса) — поэтому здесь достаточно перевзвести его.
+        ///
+        /// Вызывается при входе в эко из JS (ecoStop), после завершения звонка
+        /// (dismissIncomingCall) и после успешной пробы релея из будильника.
+        @JvmStatic
+        fun shutdownEcoService(context: Context, reason: String) {
+            // Будильник взводим ДО всех проверок и гарантированно: даже если
+            // ниже всплывёт «идёт звонок» (S6), цепочка проверок релея не
+            // должна оборваться — иначе падение релея останется незамеченным
+            // навсегда. Тот же requestCode/action → повторный вызов лишь
+            // ПЕРЕСТАВЛЯЕТ тот же будильник, дубликатов не будет.
+            cancelScheduledRestart(context)
+            enterEcoRelayWatch(context)
+            // S6: во время активного звонка службу не гасим (рингтон,
+            // уведомление звонка и таймер гудка ещё нужны).
+            if (callActive) {
+                Log.i("VaultRust", "eco shutdown skipped ($reason): call active")
+                return
+            }
+            val inst = instance
+            if (inst != null) {
+                try { inst.stopNtfyStream() } catch (_: Throwable) {}
+                try { inst.nativeStopMonitor() } catch (_: Throwable) {}
+                try { inst.releaseLocks() } catch (_: Throwable) {}
+                try { inst.stopForegroundRemove() } catch (_: Throwable) {}
+                try { inst.stopSelf() } catch (_: Throwable) {}
+            }
+            Log.i("VaultRust", "eco: service stopped ($reason) — no resident service, " +
+                "delivery via relay, relay-health alarm armed")
         }
 
         /// Отменить eco-health-чек (эко выключили / ушли в классику).
@@ -1135,23 +1282,28 @@ class VaultForegroundService : Service() {
         /// Решение по результату health-чека. Вынесено из onEcoHealthAlarm,
         /// чтобы сетевой вызов жил в отдельном потоке.
         private fun runEcoHealthDecision(context: Context) {
+            // Эко-служба НЕРЕЗИДЕНТНА: каждая проба — холодный процесс, поэтому
+            // счётчик неудач продолжаем с того, что осталось в prefs, а не с нуля.
+            relayHealthFails = loadRelayFails(context)
             val healthy = probeRelayHealth(context)
             if (healthy) {
-                relayHealthFails = 0
+                saveRelayFails(context, 0)
                 if (mailFallbackActive) {
                     // Релей ожил → возвращаемся в эко (мягко, без звонка).
                     Log.i("VaultRust", "eco-watch: relay healthy again → leaving mail fallback")
                     leaveRelayFallbackMail(context, "relay recovered")
+                    return
                 }
-                scheduleEcoHealthCheck(context, ECO_HEALTH_PERIOD_MS)
+                // РЕЛЕЙ ЖИВ, ФОЛБЭКА НЕТ → эко-закон: службы в памяти быть не
+                // должно. Перевзводим будильник на редкий ECO_HEALTH_PERIOD_IDLE_MS
+                // (это делает shutdownEcoService) и гасим службу: cold-визит
+                // будильника закончен, процесс освобождён под Doze/App Standby.
+                shutdownEcoService(context, "relay healthy")
                 return
             }
             relayHealthFails++
             Log.w("VaultRust", "eco-watch: relay health fail #$relayHealthFails/$ECO_HEALTH_FAIL_LIMIT")
-            val prefs = try {
-                context.getSharedPreferences("vault_prefs", Context.MODE_PRIVATE)
-            } catch (e: Throwable) { null }
-            try { prefs?.edit()?.putInt(K_RELAY_HEALTH_FAILS, relayHealthFails)?.apply() } catch (_: Throwable) {}
+            saveRelayFails(context, relayHealthFails)
             val limit = if (mailFallbackActive) ECO_HEALTH_FAIL_RETRY else ECO_HEALTH_FAIL_LIMIT
             if (relayHealthFails >= limit) {
                 enterRelayFallbackMail(context, "relay unreachable ($relayHealthFails fails)")
@@ -1160,11 +1312,20 @@ class VaultForegroundService : Service() {
             // несёт IMAP-монитор, но релей надо продолжать опрашивать, чтобы
             // поймать оживание и вернуть быструю релейную доставку (п. 2б
             // задания: это фолбэк-ПЕРЕКЛЮЧЕНИЕ, а не отмена эко).
+            // Пока фолбэк не включился, релей ещё считается живым, но уже есть
+            // подозрение → часто (ECO_HEALTH_PERIOD_MS), чтобы ECO_HEALTH_FAIL_LIMIT
+            // неудач набрались за разумное время, а не за 45 минут.
             // В фолбэке — вдвое реже, чтобы не жечь батарею почтовым IDLE.
-            scheduleEcoHealthCheck(
-                context,
-                if (mailFallbackActive) ECO_HEALTH_PERIOD_MS * 2 else ECO_HEALTH_PERIOD_MS
-            )
+            scheduleEcoHealthCheck(context, ecoHealthPeriodMs())
+            // Релей недоверен, но фолбэк ещё не включился → доставки в этом
+            // процессе всё равно нет (почтовый монитор не поднят). Значит
+            // процесс должен умереть: иначе будильник поднял бы его «на
+            // 60 секунд проверки», а он остался бы жить с тихим FGS — это
+            // ровно тот регресс 0.1.195, который убираем. Отсюда растёт и
+            // частота следующей пробы: раз в ECO_HEALTH_PERIOD_MS.
+            if (!mailFallbackActive) {
+                shutdownEcoService(context, "relay unhealthy, fallback not reached yet")
+            }
         }
 
         /// GET <relay>/health — тот же контракт, что relayHealthUrl() в
@@ -1258,7 +1419,7 @@ class VaultForegroundService : Service() {
             }
         }
 
-        /// Релей ожил → обратно в тихий эко (если пользователь не выключал
+        /// Релей ожил → обратно в эко (если пользователь не выключал
         /// эко вручную). Симметрично фолбэку, чтобы не «залипнуть» в почте.
         private fun leaveRelayFallbackMail(context: Context, reason: String) {
             mailFallbackActive = false
@@ -1277,25 +1438,11 @@ class VaultForegroundService : Service() {
                 return
             }
             ecoMode = true
-            val svc = instance
-            if (svc != null) {
-                try { svc.nativeStopMonitor() } catch (_: Throwable) {}
-                try { svc.releaseLocks() } catch (_: Throwable) {}
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        svc.startForeground(
-                            NOTIF_ID, svc.buildQuietNotification(),
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                        )
-                    } else {
-                        @Suppress("DEPRECATION")
-                        svc.startForeground(NOTIF_ID, svc.buildQuietNotification())
-                    }
-                } catch (e: Throwable) {
-                    Log.w("VaultRust", "eco-watch: back to quiet FGS failed: " + e.message)
-                }
-            }
-            enterEcoRelayWatch(context)
+            // Релей жив → доставку снова несёт реле (FCM/ntfy), а IMAP-монитор
+            // и locks больше не нужны. Эко-закон: службы в памяти нет — вместо
+            // «тихого FGS на всю жизнь» (регресс 0.1.195) глушим службу и
+            // оставляем только будильник проверки релея на ECO_HEALTH_PERIOD_IDLE_MS.
+            shutdownEcoService(context, "relay recovered")
             Log.i("VaultRust", "eco-watch: back to ECO ($reason) — relay delivery primary again")
         }
 
@@ -1984,36 +2131,24 @@ class VaultForegroundService : Service() {
                 // Вернуть FGS из phoneCall обратно в dataSync.
                 instance?.let { svc ->
                     exitCallMode(svc)
-                    // S5-BAL: в эко-режиме сервис поднят только ради звонка
+                    // S5-BAL: в эко-режиме служба живёт ТОЛЬКО ради звонка
                     // (startForegroundService с call-флагом, иконка — лишь до
-                    // его конца). После звонка гасим сервис — иконка не
-                    // висит, что и требуется эко-режимом.
+                    // его конца). После звонка её нужно погасить — эко-закон:
+                    // релей жив, доставку несёт релей, иконки в шторке быть
+                    // не должно.
                     if (ecoMode) {
-                        // ЭКО-НЕЗАВИСИМОСТЬ: раньше здесь был stopSelf() —
-                        // после звонка в эко не оставалось вообще ничего, и
-                        // ретроспективно ЛЮБОЙ упавший релей означал «доставки
-                        // нет». Теперь сервис возвращается в тихий eco (quiet FGS
-                        // + health-чек релея), а если релей уже помечен мёртвым
-                        // (mailFallback) — остаётся в классическом почтовом
-                        // режиме. Ранний выход по callActive (S6) выше сохранён.
+                        // ЭКО-НЕЗАВИСИМОСТЬ: раньше здесь был возврат в тихий
+                        // FGS «навсегда» (регресс 0.1.195) — то есть после
+                        // каждого звонка в шторке снова висела Vault-служба.
+                        // Теперь: если релей уже помечен мёртвым (mailFallback) —
+                        // остаёмся в классическом почтовом режиме; если релей
+                        // жив — гасим службу (shutdownEcoService уважает S6 и
+                        // перевзводит будильник проверки релея).
                         if (mailFallbackActive) {
                             Log.i("VaultRust", "eco: call ended — staying in mail fallback (relay down)")
                         } else {
-                            try {
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    svc.startForeground(
-                                        NOTIF_ID, svc.buildQuietNotification(),
-                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                                    )
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    svc.startForeground(NOTIF_ID, svc.buildQuietNotification())
-                                }
-                            } catch (e: Throwable) {
-                                Log.w("VaultRust", "eco quiet restore failed: " + e.message)
-                            }
-                            enterEcoRelayWatch(context)
-                            Log.i("VaultRust", "eco: call ended — back to quiet eco (icon cleared)")
+                            shutdownEcoService(context, "call ended, relay alive")
+                            Log.i("VaultRust", "eco: call ended — service stopped (icon cleared)")
                         }
                     }
                 }
