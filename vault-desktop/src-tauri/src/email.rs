@@ -24,7 +24,7 @@ use native_tls::{TlsConnector, TlsStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -115,7 +115,19 @@ pub struct EmailClient {
     /// Папка, выбранная в текущей сессии (использует только IDLE-путь:
     /// select делается один раз и переиспользуется, пока папка не сменилась).
     selected_folder: Option<String>,
+    /// Серия неудач IDLE/соединения подряд — основа backoff (2с→5с→15с→30с→60с).
+    fail_streak: u32,
+    /// Счётчик переподключений: попадает в лог, чтобы шторм реконнектов был
+    /// виден без разбора каждой строки «imap: connected».
+    reconnects: u32,
+    /// До какого момента новые CONNECT-попытки отбрасываются (серия неудач).
+    connect_retry_after: Option<Instant>,
 }
+
+/// Ступени backoff (сек) по номеру неудачи: 2с → 5с → 15с → 30с → плато 60с.
+/// Сбрасывается при первой успешной операции: восстановившееся соединение
+/// возвращается к нормальному темпу сразу, не дожидаясь конца лестницы.
+const BACKOFF_STEPS_SEC: [u64; 5] = [2, 5, 15, 30, 60];
 
 impl EmailClient {
     pub fn new(config: EmailConfig) -> Self {
@@ -123,6 +135,76 @@ impl EmailClient {
             config,
             imap_session: None,
             selected_folder: None,
+            fail_streak: 0,
+            reconnects: 0,
+            connect_retry_after: None,
+        }
+    }
+
+    /// Есть ли живая IMAP-сессия.
+    pub fn is_connected(&self) -> bool {
+        self.imap_session.is_some()
+    }
+
+    /// Текущая серия неудач (для диагностических логов).
+    pub fn fail_streak(&self) -> u32 {
+        self.fail_streak
+    }
+
+    /// Пауза для ТЕКУЩЕЙ серии неудач (без изменения счётчика).
+    pub fn backoff_delay(&self) -> Duration {
+        let idx = (self.fail_streak.saturating_sub(1) as usize).min(BACKOFF_STEPS_SEC.len() - 1);
+        Duration::from_secs(BACKOFF_STEPS_SEC[idx])
+    }
+
+    /// Засчитать неудачу в лестнице backoff; вернуть паузу до следующей попытки.
+    pub fn note_failure(&mut self) -> Duration {
+        self.fail_streak = self.fail_streak.saturating_add(1);
+        let delay = self.backoff_delay();
+        // Следующая CONNECT-попытка (из любого вызывающего) не раньше конца паузы:
+        // серия неудач не должна превращаться в серию TCP+TLS-рукопожатий.
+        self.connect_retry_after = Some(Instant::now() + delay);
+        delay
+    }
+
+    /// Успех — лестница backoff сброшена, следующий сбой снова начнётся с 2с.
+    pub fn note_success(&mut self) {
+        self.fail_streak = 0;
+        self.connect_retry_after = None;
+    }
+
+    /// Подключиться ТОЛЬКО если сессии ещё нет.
+    ///
+    /// Зачем: IDLE-мониторы зовут это каждый тик (7с). Раньше они вызывали
+    /// connect_imap() безусловно — то есть КАЖДЫЕ 7 секунд создавали новое
+    /// TCP+TLS+login-соединение и печатали «imap: connected», даже когда
+    /// старое было живо. Это и есть постоянный шторм подключений в logcat
+    /// (батарея/трафик/риск троттлинга провайдера). Теперь соединение
+    /// переиспользуется, а пересоздаётся только при реальном обрыве.
+    pub async fn ensure_connected(&mut self) -> Result<()> {
+        if self.imap_session.is_some() {
+            return Ok(());
+        }
+        // Активная пауза после серии неудач: не идём к провайдеру раньше времени.
+        if let Some(t) = self.connect_retry_after {
+            if Instant::now() < t {
+                return Err(anyhow::anyhow!("IMAP connect backoff active"));
+            }
+        }
+        match self.connect_imap().await {
+            Ok(()) => {
+                self.note_success();
+                Ok(())
+            }
+            Err(e) => {
+                let delay = self.note_failure();
+                log::warn!(
+                    "imap: connect failed (streak={}, next attempt in {}s): {e}",
+                    self.fail_streak,
+                    delay.as_secs()
+                );
+                Err(e)
+            }
         }
     }
 
@@ -356,6 +438,16 @@ impl EmailClient {
     /// сетевой сбой). Конфиг уже хранится в клиенте, поэтому можно просто
     /// заново подключиться без участия UI.
     pub async fn reconnect_imap(&mut self) -> Result<()> {
+        self.reconnects = self.reconnects.saturating_add(1);
+        // Лог ровно ОДИН раз на реальное переподключение, с номером и причиной:
+        // при шторме видно «imap: reconnect #N (streak=…)», а не сотни
+        // безликих «imap: connected». Успех/провал самого коннекта пишет
+        // connect_imap (connected / connect to … failed).
+        log::info!(
+            "imap: reconnect #{} (streak={})",
+            self.reconnects,
+            self.fail_streak
+        );
         if let Some(mut session) = self.imap_session.take() {
             let _ = session.logout();
         }
@@ -795,6 +887,8 @@ impl EmailClient {
             let _ = session.logout();
         }
         self.selected_folder = None;
+        self.fail_streak = 0;
+        self.connect_retry_after = None;
     }
 
     // ── IMAP IDLE (Фаза 1.5 звонков) ────────────────────────────────────────
@@ -807,18 +901,65 @@ impl EmailClient {
     // невозможны. Основной клиент (поллинг/UI) не должен об этом знать.
     pub async fn idle_wait(&mut self, folder: &str, timeout: Duration) -> Result<IdleOutcome> {
         match self.idle_wait_once(folder, timeout).await {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) => {
+                self.note_success();
+                Ok(outcome)
+            }
             Err(first_err) => {
-                // Сервер оборвал IDLE-соединение (Gmail рвёт ~каждые 24-29 мин,
+                // Сервер оборвал IDLE-соединение (провайдер рвёт idle-сессии,
                 // сетевой сбой) — переподключаемся и пробуем ещё раз.
-                self.reconnect_imap().await?;
-                self.idle_wait_once(folder, timeout).await.map_err(|e| {
-                    anyhow::anyhow!(
+                //
+                // BACKOFF: раньше каждый вызов idle_wait при ошибке дёргал
+                // reconnect_imap() без всякой паузы. В сочетании с двумя
+                // параллельными IDLE-циклами на один аккаунт это давало
+                // серию reconnect'ов раз в 1–2 секунды («imap: connected»
+                // десятками строк в logcat). Теперь перед переподключением
+                // выдерживается ступень лестницы 2с→5с→15с→30с→60с, а сам
+                // reconnect_imap_rate_limited откладывает попытку, если
+                // пауза ещё не истекла. Успех сбрасывает лестницу.
+                let delay = self.note_failure();
+                log::warn!(
+                    "imap: idle_wait failed (streak={}, reconnect in {}s): {first_err}",
+                    self.fail_streak,
+                    delay.as_secs()
+                );
+                self.reconnect_imap_rate_limited().await?;
+                match self.idle_wait_once(folder, timeout).await {
+                    Ok(outcome) => {
+                        self.note_success();
+                        Ok(outcome)
+                    }
+                    Err(e) => Err(anyhow::anyhow!(
                         "IDLE retry failed after reconnect: {e} (original: {first_err})"
-                    )
-                })
+                    )),
+                }
             }
         }
+    }
+
+    /// Переподключение с учётом лестницы backoff: если пауза после
+    /// предыдущей неудачи ещё не истекла — ждём её остаток и только затем
+    /// идём к провайдеру. Это ограничивает частоту реконнектов при серии
+    /// сбоев (и не даёт «штормить» IMAP-сервер).
+    ///
+    /// Публичный метод: тем же ограниченным реконнектом пользуется быстрый
+    /// путь звонков (email_fetch_incremental_fast), который дёргается из JS
+    /// по таймеру — без лестницы серия сбоев давала бы новое TCP+TLS каждый
+    /// тик (7с).
+    pub async fn reconnect_imap_rate_limited(&mut self) -> Result<()> {
+        if let Some(t) = self.connect_retry_after {
+            let now = Instant::now();
+            if now < t {
+                let wait = t - now;
+                log::info!(
+                    "imap: backoff wait {}s before reconnect #{}",
+                    wait.as_secs(),
+                    self.reconnects + 1
+                );
+                tokio::time::sleep(wait).await;
+            }
+        }
+        self.reconnect_imap().await
     }
 
     async fn idle_wait_once(&mut self, folder: &str, timeout: Duration) -> Result<IdleOutcome> {

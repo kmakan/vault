@@ -392,9 +392,19 @@ fn decrypt_symmetric(ciphertext: String, key: String) -> Result<String, String> 
 /// и падать «Timed out waiting for email client lock».
 /// Слот 2 — IMAP IDLE-клиент (Фаза 1.5 звонков): отдельная сессия, чтобы
 /// IDLE (блокирующее ожидание) не держал lock основной сессии поллинга/UI.
+/// Владелец IDLE — Rust-монитор (email_start_idle_monitor, слот 1). Слот 2
+/// держит клиента команды email_idle_wait — это РЕЗЕРВ на стороне JS: цикл
+/// api.idleWait включается только если email_idle_start упал, поэтому одновременно
+/// слот 1 и слот 2 не работают (иначе на один аккаунт висело бы два IDLE).
+/// Слот 3 — «быстрый» клиент звонков (email_fetch_incremental_fast):
+/// раньше он СОЗДАВАЛСЯ и логинился заново на каждом страховочном тике
+/// (раз в 7с) — это был второй источник постоянных переподключений.
+/// Теперь сессия переиспользуется между тиками и пересоздаётся только
+/// при реальном обрыве.
 pub struct EmailState(
     pub Mutex<Option<EmailClient>>,
     pub Mutex<Option<EmailConfig>>,
+    pub Mutex<Option<EmailClient>>,
     pub Mutex<Option<EmailClient>>,
 );
 
@@ -407,7 +417,12 @@ pub struct IncrementalFetchResult {
 
 impl Default for EmailState {
     fn default() -> Self {
-        Self(Mutex::new(None), Mutex::new(None), Mutex::new(None))
+        Self(
+            Mutex::new(None),
+            Mutex::new(None),
+            Mutex::new(None),
+            Mutex::new(None),
+        )
     }
 }
 
@@ -465,15 +480,23 @@ async fn email_idle_start(
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            // Подключение (после сбоя — переподключение с backoff).
-            if let Err(e) = client.connect_imap().await {
-                eprintln!("[idle-monitor] connect failed: {e}");
-                for _ in 0..15 {
+            // Подключение — ТОЛЬКО если сессии нет (ensure_connected), плюс
+            // backoff после серии неудач. Раньше здесь стоял безусловный
+            // connect_imap(): каждая итерация цикла (раз в 7с) создавала
+            // НОВОЕ TCP+TLS+login-соединение и печатала «imap: connected» —
+            // то есть постоянный шторм подключений в logcat при полностью
+            // рабочем ящике. Теперь соединение живёт, пока живо.
+            if let Err(e) = client.ensure_connected().await {
+                // Пауза уже выдержана внутри ensure_connected (лестница
+                // 2с→5с→15с→30с→60с). Ждём кусок её, чтобы stop был быстрым.
+                let wait = client.backoff_delay().min(Duration::from_secs(2));
+                eprintln!("[idle-monitor] connect backoff {}s: {e}", wait.as_secs());
+                for _ in 0..((wait.as_millis() as u64) / 100).max(1) {
                     if stop.load(Ordering::SeqCst) {
                         running.store(false, Ordering::SeqCst);
                         return;
                     }
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 continue;
             }
@@ -482,8 +505,18 @@ async fn email_idle_start(
             let changed = match client.idle_wait("INBOX", Duration::from_secs(7)).await {
                 Ok(o) => o == IdleOutcome::Changed,
                 Err(e) => {
+                    // idle_wait уже выдержал backoff и переподключился внутри.
+                    // Даём паузу перед следующим витком, чтобы при устойчивом
+                    // сбое не крутить цикл вхолостую.
+                    let wait = client.backoff_delay().min(Duration::from_secs(5));
                     eprintln!("[idle-monitor] idle failed: {e}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    for _ in 0..((wait.as_millis() as u64) / 100).max(1) {
+                        if stop.load(Ordering::SeqCst) {
+                            running.store(false, Ordering::SeqCst);
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                     continue;
                 }
             };
@@ -538,7 +571,17 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
         .map_err(|e| format!("Failed to connect: {e}"))?;
 
     *guard = Some(client);
+    drop(guard);
     *state.1.lock().await = Some(config);
+    // Смена аккаунта/конфига обесценивает и фоновые сессии (слоты 2 и 3):
+    // они держат клиента со СТАРЫМ конфигом. Иначе «быстрый» клиент
+    // звонков продолжил бы ходить в прежний ящик (или падал на каждом тике).
+    if let Some(mut c) = state.2.lock().await.take() {
+        c.disconnect();
+    }
+    if let Some(mut c) = state.3.lock().await.take() {
+        c.disconnect();
+    }
     Ok(true)
 }
 
@@ -630,18 +673,64 @@ async fn email_fetch_incremental_fast(
         .map_err(|_| "Timed out waiting for config lock".to_string())?
         .clone()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    let mut client = EmailClient::new(cfg);
-    client
-        .connect_imap()
+    // Постоянная сессия в слоте 3: раньше здесь каждый страховочный тик
+    // (раз в 7с) создавал НОВЫЙ EmailClient и делал полный TCP+TLS+login —
+    // вторая (после IDLE-монитора) причина постоянных «imap: connected».
+    // Теперь клиент живёт между тиками; при обрыве — reconnect_imap()
+    // с тем же backoff-лестницей.
+    let mut guard = t_timeout(Duration::from_secs(10), state.3.lock())
         .await
-        .map_err(|e| format!("Failed to connect for fast fetch: {e}"))?;
-    let result = t_timeout(Duration::from_secs(30), client.fetch_newer(&cursors))
-        .await
-        .map_err(|_| "Fast incremental fetch timed out".to_string())?
-        .map_err(|e| e.to_string())
-        .map(|(messages, cursors)| IncrementalFetchResult { messages, cursors });
-    let _ = client.disconnect();
-    result
+        .map_err(|_| "Timed out waiting for fast client lock".to_string())?;
+    if guard.is_none() {
+        *guard = Some(EmailClient::new(cfg.clone()));
+    }
+    let client = guard.as_mut().expect("just set");
+    // ensure_connected: сессия переиспользуется между тиками, а новый
+    // TCP+TLS поднимается только при реальном обрыве (+ backoff-лестница при
+    // серии неудач). Прежде здесь стоял безусловный connect_imap() — каждое
+    // срабатывание страховочного таймера (раз в 7с) открывало новое соединение
+    // с ящиком, даже когда старое было живо.
+    if let Err(e) = t_timeout(Duration::from_secs(20), client.ensure_connected()).await {
+        return Err(format!("Failed to connect for fast fetch: {e}"));
+    }
+    let to_result = |r: anyhow::Result<(Vec<EmailMessage>, HashMap<String, u32>)>| {
+        r.map(|(messages, cursors)| IncrementalFetchResult { messages, cursors })
+            .map_err(|e| e.to_string())
+    };
+    let first = t_timeout(Duration::from_secs(30), client.fetch_newer(&cursors)).await;
+    match first {
+        Ok(Ok(v)) => {
+            client.note_success();
+            to_result(Ok(v)).map_err(|e| e)
+        }
+        Ok(Err(first_err)) => {
+            // Сессия рассыпалась — засчитываем неудачу в лестнице и делаем
+            // ОДИН ограниченный реконнект с повтором. note_failure() ставит
+            // connect_retry_after, reconnect_imap_rate_limited() выжидает
+            // остаток паузы (2с→5с→15с→30с→60с): серия сбоев больше не даёт
+            // новый TCP+TLS на каждом тике таймера. Без этого быстрый путь
+            // был второй половиной шторма подключений.
+            let delay = client.note_failure();
+            log::warn!(
+                "imap: fast fetch failed (streak={}, reconnect in {}s): {first_err}",
+                client.fail_streak(),
+                delay.as_secs()
+            );
+            t_timeout(Duration::from_secs(20), client.reconnect_imap_rate_limited())
+                .await
+                .map_err(|_| format!("Fast reconnect timed out (original: {first_err})"))?
+                .map_err(|e| format!("Fast reconnect failed: {e} (original: {first_err})"))?;
+            match t_timeout(Duration::from_secs(30), client.fetch_newer(&cursors)).await {
+                Ok(Ok(v)) => {
+                    client.note_success();
+                    to_result(Ok(v)).map_err(|e| e)
+                }
+                Ok(Err(e)) => Err(format!("Fast fetch retry failed: {e} (original: {first_err})")),
+                Err(_) => Err("Fast incremental fetch timed out (retry)".to_string()),
+            }
+        }
+        Err(_) => Err("Fast incremental fetch timed out".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -831,6 +920,11 @@ async fn email_disconnect(
     if let Some(mut client) = idle.take() {
         client.disconnect();
     }
+    // И «быстрый» клиент звонков (слот 3) — постоянная сессия между тиками.
+    let mut fast = state.3.lock().await;
+    if let Some(mut client) = fast.take() {
+        client.disconnect();
+    }
     *state.1.lock().await = None;
     Ok(())
 }
@@ -841,11 +935,15 @@ struct IdleResult {
     changed: bool,
 }
 
-/// IMAP IDLE: блокируется до появления нового письма в `folder` или до
-/// истечения `timeout_ms`. Сигнализация звонков call_* доходит за ~1с вместо
-/// 3с ускоренного поллинга. Использует ОТДЕЛЬНУЮ сессию (слот 2 EmailState) —
-/// основная (поллинг/UI) не блокируется. Фолбэк при ошибке/неподдержке IDLE —
-/// ускоренный поллинг во фронте.
+/// РЕЗЕРВНЫЙ IMAP IDLE (владелец IDLE — монитор email_start_idle_monitor).
+/// Блокируется до появления нового письма в `folder` или истечения
+/// `timeout_ms`; сигнализация звонков call_* доходит за ~1с вместо 3с
+/// ускоренного поллинга. Своя сессия (слот 2 EmailState) — основная
+/// (поллинг/UI) не блокируется.
+///
+/// Вызывается из JS ТОЛЬКО когда монитор не поднялся (см. features/relay.js
+/// idleLoop): держать второй IDLE параллельно монитору нельзя — это ровно тот
+/// двойной IDLE, из-за которого штормили подключения.
 #[tauri::command]
 async fn email_idle_wait(
     state: State<'_, EmailState>,

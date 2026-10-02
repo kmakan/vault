@@ -575,13 +575,18 @@ async fn run_loop(stop: Arc<AtomicBool>) {
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        if let Err(e) = client.connect_imap().await {
-            log::warn!("[svc-monitor] connect failed: {e}");
-            for _ in 0..15 {
+        // Подключаемся ТОЛЬКО если сессии нет (ensure_connected) + backoff.
+        // Безусловный connect_imap() здесь создавал новое TCP+TLS-соединение
+        // на КАЖДОЙ итерации цикла (раз в 7с) — постоянный шторм подключений
+        // в logcat при живом ящике.
+        if let Err(e) = client.ensure_connected().await {
+            let wait = client.backoff_delay().min(Duration::from_secs(2));
+            log::warn!("[svc-monitor] connect backoff {}s: {e}", wait.as_secs());
+            for _ in 0..((wait.as_millis() as u64) / 100).max(1) {
                 if stop.load(Ordering::SeqCst) {
                     return;
                 }
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
             continue;
         }
@@ -600,7 +605,15 @@ async fn run_loop(stop: Arc<AtomicBool>) {
             Ok(o) => o == IdleOutcome::Changed,
             Err(e) => {
                 log::warn!("[svc-monitor] idle failed: {e}");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                // Пауза по лестнице backoff (idle_wait уже переподключился
+                // внутри): при устойчивом сбое не крутим цикл вхолостую.
+                let wait = client.backoff_delay().min(Duration::from_secs(5));
+                for _ in 0..((wait.as_millis() as u64) / 100).max(1) {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
                 continue;
             }
         };

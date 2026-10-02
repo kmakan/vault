@@ -1033,10 +1033,18 @@ export default {
       callClockTimer: null,
       callRingTimer: null,
       callResendTimer: null,
-      // IMAP IDLE-цикл (Фаза 1.5): активность/флаг остановки.
+      // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       ecoMode: false,
       _idleStop: false,
+      // Владелец IDLE — Rust-монитор (email_start_idle_monitor). Флаг
+      // поднимается после успешного api.idleStart и сбрасывается в
+      // stopPolling/эко: повторный idleLoop при поднятом мониторе обязан
+      // быть no-op, иначе каждый сигнал звонка создавал бы новое TCP+TLS.
+      _idleMonitorUp: false,
+      // Таймер страховочного быстрого фетча (СПАМ + сигналы звонков, 7с).
+      _fastFetchTimer: null,
+      _fastFetchBusy: false,
       // ЗВУКИ ЗВОНКА: WAV-ассеты. Desktop — cpal в Rust
       // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
       callSoundEl: null,
@@ -1597,6 +1605,8 @@ export default {
     }).catch(e => console.warn('[video] listen frame failed:', e));
     // Rust IDLE-монитор: «mail-changed» приходит из tokio-таска
     // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.
+    // Это единственный канал от IDLE (JS api.idleWait в цикле не крутится —
+    // иначе на аккаунт висело бы два IDLE-соединения).
     // Обработка идемпотентна к JS-поллингу: дедуп по uid|folder + processedUnreadIds.
     this._unlistenMailChanged = tauriListen('mail-changed', async (ev) => {
       const p = ev && ev.payload;
@@ -1715,7 +1725,11 @@ export default {
           this.runAutoclean(); // плановая автоочистка при входе
           this.startPolling()
           if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
-          else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+          // Владелец IDLE — Rust-монитор (событие «mail-changed»), JS-цикла
+          // api.idleWait больше нет: один IDLE на аккаунт, без второго
+          // соединения в шторм. Резервный JS-цикл включается только если
+          // монитор не поднялся.
+          else this.idleLoop();
           // Presence (M2): heartbeat-таймер, если тумблер включён (kv,
           // per-account). Восстанавливается на входе, глушится на выходе.
           try { if (await PresenceFeature.isEnabled(this)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
@@ -1810,6 +1824,7 @@ export default {
     startRelayTicker() { return RelayFeature.startRelayTicker(this); },
     enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(this); },
     idleLoop() { return RelayFeature.idleLoop(this); },
+    stopFastFetchTimer() { return RelayFeature.stopFastFetchTimer(this); },
     startPolling(intervalMs = 30000) { return RelayFeature.startPolling(this, intervalMs); },
     stopPolling() { return RelayFeature.stopPolling(this); },
     onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
@@ -2319,7 +2334,7 @@ export default {
         if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); } // eco: служба отключена, доставка через релей
         this.startPolling()
         if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
-        else this.idleLoop(); // постоянный IMAP IDLE — быстрая доставка звонков (~1с)
+        else this.idleLoop(); // Rust-монитор IDLE — доставка звонков/писем
         this.loadEmails().catch(e => {
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
             this.loginError = e.message;

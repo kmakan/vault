@@ -80,6 +80,9 @@ function makeCtx(over = {}) {
     _pollingActive: false,
     _idleActive: false,
     _idleStop: false,
+    _idleMonitorUp: false,
+    _fastFetchTimer: null,
+    _fastFetchBusy: false,
     _relayTicker: null,
     _relayFails: 0,
     _lastRelayHealth: 0,
@@ -186,38 +189,75 @@ console.log('3. startPolling/stopPolling');
   check('stopPolling чистит таймер', ctx2.pollTimer === null && !timers.has(ctx2.pollTimer));
 }
 
-// ── 4. idleLoop ─────────────────────────────────────────────────
-console.log('4. idleLoop');
+// ── 4. idleLoop: один владелец IDLE ──────────────────────────────
+console.log('4. idleLoop (владелец IDLE — Rust-монитор, JS-цикл только резерв)');
 {
+  // 4.1 Монитор поднялся → JS НЕ крутит api.idleWait в цикле
   timers.clear();
   const ctx = makeCtx();
   apiMock.calls.length = 0;
-  // idleWait сразу «ломается» → фолбэк на поллинг + ретрай через 60с
-  apiMock.idleWait = async () => { throw new Error('IDLE not supported'); };
-  const p = R.idleLoop(ctx);
-  await p;
-  check('IDLE-сбой: idleStart попытан, монитор-предупреждение — не бросается', apiMock.calls.some(c => c[0] === 'idleStart'));
-  check('IDLE-сбой: ретрай-таймер 60с запланирован', [...timers.values()].some(t => t.kind === 't' && t.ms === 60000));
-  // повторный вход заблокирован пока _idleActive
+  let idleWaitCalls = 0;
+  apiMock.idleWait = async () => { idleWaitCalls++; return { changed: false }; };
+  await R.idleLoop(ctx);
+  check('монитор: idleStart вызван', apiMock.calls.some(c => c[0] === 'idleStart'));
+  check('монитор: api.idleWait в цикле НЕ вызывается (нет двойного IDLE)', idleWaitCalls === 0);
+  check('монитор: флаг владельца _idleMonitorUp', ctx._idleMonitorUp === true);
+  check('монитор: таймер быстрого фетча поднят (7с)', !!ctx._fastFetchTimer && timers.get(ctx._fastFetchTimer).ms === 7000);
+  // повторный idleLoop/startFastPolling при живом мониторе — no-op:
+  // ни нового idleStart (новый TCP+TLS), ни второго таймера
+  const idleStartCount = apiMock.calls.filter(c => c[0] === 'idleStart').length;
+  const timerId = ctx._fastFetchTimer;
+  await R.idleLoop(ctx);
+  check('повторный idleLoop при живом мониторе — no-op (без нового idleStart)',
+    apiMock.calls.filter(c => c[0] === 'idleStart').length === idleStartCount);
+  check('повторный idleLoop — таймер не задвоен', ctx._fastFetchTimer === timerId);
+  // тик таймера зовёт быстрый фетч
+  let fastFetch = 0;
+  apiMock.fetchEmailsIncrementalFast = async () => { fastFetch++; return { messages: [], cursors: {} }; };
+  await fire('i', ctx._fastFetchTimer);
+  check('тик таймера → быстрый фетч (СПАМ/звонки)', fastFetch === 1);
+  // stopPolling гасит таймер и сбрасывает флаг владельца
+  R.stopPolling(ctx);
+  check('stopPolling: таймер погашен, флаг владельца сброшен',
+    ctx._fastFetchTimer === null && !timers.has(timerId) && ctx._idleMonitorUp === false);
+  apiMock.fetchEmailsIncrementalFast = async (acc, cursors) => ({ messages: [], cursors });
+
+  // 4.2 Монитор не поднялся → резервный JS-цикл IDLE
+  timers.clear();
+  const ctxB = makeCtx();
+  apiMock.calls.length = 0;
+  apiMock.idleStart = async () => { apiMock.calls.push(['idleStart-fail']); throw new Error('Not connected to email server'); };
+  idleWaitCalls = 0;
+  apiMock.idleWait = async () => { idleWaitCalls++; throw new Error('IDLE not supported'); };
+  await R.idleLoop(ctxB);
+  check('резерв: idleStart упал — JS-цикл IDLE подхватил', idleWaitCalls >= 1);
+  check('резерв: флаг владельца НЕ поднят', ctxB._idleMonitorUp === false);
+  check('резерв: страховочный таймер не поднят (иначе два источника)', ctxB._fastFetchTimer === null);
+  check('резерв: ретрай-таймер 60с запланирован', [...timers.values()].some(t => t.kind === 't' && t.ms === 60000));
+  apiMock.idleStart = async (c) => { apiMock.calls.push(['idleStart', c]); };
+
+  // повторный вход заблокирован пока _idleActive (резервный цикл живой)
   const ctx2 = makeCtx();
   ctx2._idleActive = true;
+  const idleStartBefore = apiMock.calls.length;
   await R.idleLoop(ctx2);
-  check('_idleActive — повторный вход no-op', apiMock.calls.filter(c => c[0] === 'idleStart').length >= 1);
+  check('_idleActive — повторный вход no-op', apiMock.calls.length === idleStartBefore);
   // не залогинен — no-op
   const ctx3 = makeCtx({ isLoggedIn: false });
   const beforeCalls = apiMock.calls.length;
   await R.idleLoop(ctx3);
   check('не залогинен — no-op', apiMock.calls.length === beforeCalls);
-  // _idleStop: корректный выход (idleWait меняет на changed)
+  // _idleStop: корректный выход резервного цикла
+  timers.clear();
+  const ctx4 = makeCtx({ _idleMonitorUp: true }); // форсируем резервный путь
+  ctx4._idleMonitorUp = false;
+  apiMock.idleStart = async () => { throw new Error('no monitor'); };
   apiMock.idleWait = async () => ({ changed: true });
-  const ctx4 = makeCtx();
-  let fastCalls = 0;
-  ctx4.loadEmailsFast = undefined; // ctx-метод loadEmailsFast вызывается внутри — мок через объект
-  // idleLoop зовёт loadEmailsFast(ctx) — модульную; она пойдёт в api-мок: ок
   const p4 = R.idleLoop(ctx4);
   ctx4._idleStop = true; // выходим после первой итерации
   await p4;
   check('_idleStop: цикл вышел, флаги сброшены', ctx4._idleActive === false && ctx4._idleStop === false);
+  apiMock.idleStart = async (c) => { apiMock.calls.push(['idleStart', c]); };
 }
 
 // ── 5. startRelayTicker + resilience ───────────────────────────
