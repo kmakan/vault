@@ -166,6 +166,25 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
         private const val K_REGISTERED_URL = "fcm_registered_url"
         private const val K_REGISTERED_TOKEN = "fcm_registered_token"
 
+        /**
+         * Нормализация адреса релея — ТОЛЬКО ДЛЯ СРАВНЕНИЯ и для чтения при
+         * обращении к сети. Тот же приём, что в
+         * VaultForegroundService.probeRelayHealth (`trim().trimEnd('/')`).
+         *
+         * ЗАЧЕМ: гейт pushReady сравнивал «сырые» строки (K_REGISTERED_URL vs
+         * K_RELAY_URL). Если JS/настройки когда-нибудь сохранят relay url со
+         * слэшем в конце (или без), сравнение навсегда даёт «не равны» →
+         * pushReady=false навсегда → служба остаётся резидентной в эко, закон
+         * «релей жив → службы нет» перестаёт выполняться. Классика при этом
+         * работает, поэтому баг был тихим.
+         *
+         * Ничего в prefs эта функция НЕ пишет — формат хранения не меняем.
+         * Сравнение делается регистронезависимо (equals(ignoreCase = true)):
+         * хост в URL регистронезависим.
+         */
+        private fun normalizeRelayUrl(s: String?): String =
+            s?.trim()?.trimEnd('/').orEmpty()
+
         /** Наш релей (prod). Тот же адрес, что DEFAULT_RELAY_URL в relay-client.js. */
         private const val DEFAULT_RELAY_URL = "https://vault-msg.ru/relay"
 
@@ -213,8 +232,7 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
         @JvmStatic
         fun setRelayCredentials(context: Context, relayUrl: String?, readToken: String?, fp: String?) {
             try {
-                val url = relayUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-                    ?: DEFAULT_RELAY_URL
+                val url = normalizeRelayUrl(relayUrl).ifEmpty { DEFAULT_RELAY_URL }
                 val e = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 e.putString(K_RELAY_URL, url)
                 if (!readToken.isNullOrEmpty()) e.putString(K_RELAY_TOKEN, readToken)
@@ -386,6 +404,16 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
                                 ?: DEFAULT_RELAY_URL
                             val regUrl = prefs.getString(K_REGISTERED_URL, null)
                             val regToken = prefs.getString(K_REGISTERED_TOKEN, null)
+                            // Сравнение адресов — по нормализованному виду и
+                            // регистронезависимо (см. normalizeRelayUrl).
+                            // «Сырое» сравнение залипало: url со слэшем в конце
+                            // и без давали вечный «registered url != current
+                            // relay url» → pushReady=false навсегда → служба
+                            // остаётся резидентной при живом релее (тихая потеря
+                            // экономии батареи). В лог пишем ИСХОДНЫЕ значения —
+                            // так видно, что именно лежит в prefs.
+                            val urlNorm = normalizeRelayUrl(url)
+                            val regUrlNorm = normalizeRelayUrl(regUrl)
                             when {
                                 // Пользователь ещё не залогинился — relay-креды
                                 // не приходили, регистрация не выполнялась.
@@ -393,7 +421,7 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
                                     "not registered on relay yet (no relay creds)"
                                 // Сменился relay (или первый заход на него) —
                                 // K_REGISTERED_URL от прошлого, push уйдёт не туда.
-                                regUrl != url ->
+                                !regUrlNorm.equals(urlNorm, ignoreCase = true) ->
                                     "registered url != current relay url ($regUrl != $url)"
                                 // Токен ротировали, а зарегистрирован (на релее)
                                 // старый — привязка битая, пуш не дойдёт.

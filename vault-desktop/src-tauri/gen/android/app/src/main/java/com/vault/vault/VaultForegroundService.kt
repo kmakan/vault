@@ -1466,6 +1466,36 @@ class VaultForegroundService : Service() {
                     leaveRelayFallbackMail(context, "relay recovered")
                     return
                 }
+                // ЭСТАФЕТА ПО БУДИЛЬНИКУ: пуш мог стать готовым ПОЗЖЕ, чем
+                // служба была поднята в классике эко-гейтом (onStartCommand) —
+                // например, регистрация на релее прошла в процессе, который
+                // сразу после записи K_REGISTERED_* убили, и хендофф из
+                // registerDevice не успел отработать. Тогда служба осталась бы
+                // классической до следующего старта приложения: доставка
+                // работает, но экономии батареи нет. Поэтому на УЖЕ
+                // существующем health-будильнике переоцениваем гейт заново и
+                // не ждём запуска приложения.
+                //
+                // Условие «служба сейчас резидентна» = instance != null: именно
+                // её и нужно сложить в эко. Эко выключено пользователем — не
+                // наша забота (это не «резидентность из-за отсутствия пуша»).
+                if (ecoModeEnabled(context) && instance != null && pushReady(context)) {
+                    Log.i(
+                        "VaultRust",
+                        "eco-watch: push became ready → handing off to eco (no resident service)"
+                    )
+                    // Тот же путь, что эстафета из успешного registerDevice:
+                    // внутри уже есть все инварианты — не гасим при callActive
+                    // (S6), не ломаем работающий mailFallbackActive (пуш готов ≠
+                    // релей жив), повторная проверка pushReady.
+                    ecoHandoffAfterPushReady(context)
+                    // Будильник перевзводим ВСЕГДА: ecoHandoffAfterPushReady мог
+                    // выйти раньше (звонок → эко останется до конца звонка), а
+                    // релей надо опрашивать в любом случае — иначе падение
+                    // релея после ухода в эко осталось бы незамеченным.
+                    scheduleEcoHealthCheck(context, ecoHealthPeriodMs())
+                    return
+                }
                 // РЕЛЕЙ ЖИВ, ФОЛБЭКА НЕТ → эко-закон: службы в памяти быть не
                 // должно. Перевзводим будильник на редкий ECO_HEALTH_PERIOD_IDLE_MS
                 // (это делает shutdownEcoService) и гасим службу: cold-визит
