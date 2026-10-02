@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -295,10 +296,120 @@ class VaultFirebaseMessagingService : FirebaseMessagingService() {
                         "registerDevice: registered for push at $url" +
                             if (samePair) " (re-registering unchanged url+token: relay may have restarted)" else ""
                     )
+                    // ЭСТАФЕТА: только СЕЙЧАС пуш-канал стал готовым. Если эко
+                    // включено, а служба держалась в классике из-за отсутствия
+                    // пуша, аккуратно складываем её в эко. ecoStop сам
+                    // уважает S6 (@Volatile callActive) и ничего не сделает
+                    // во время звонка. Всё в try/catch: эстафета не должна
+                    // ломать саму регистрацию.
+                    try {
+                        VaultForegroundService.ecoHandoffAfterPushReady(context.applicationContext)
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "eco handoff after registration failed: " + e.message)
+                    }
                 } else {
                     Log.w(TAG, "registerDevice: registration failed (will retry on next app start)")
                 }
             }, "vault-fcm-register").apply { isDaemon = true }.start()
+        }
+
+        /**
+         * Пакет Google Play Services. На де-гугленных телефонах (Huawei,
+         * часть китайских прошивок, эмуляторы) его нет вовсе → Firebase
+         * getToken() падает, reg_token не появляется, relay_pub нечего
+         * будить. Проверяем через PackageManager, а НЕ через
+         * GoogleApiAvailability: новых зависимостей не добавляем
+         * (play-services-base есть транзитивно, но не объявлен в
+         * app/build.gradle.kts, и опираться на транзитивность нельзя).
+         */
+        private const val GMS_PACKAGE = "com.google.android.gms"
+
+        /**
+         * Есть ли Google Play Services (т.е. может ли FCM вообще работать).
+         * Без try/catch наружу: любой сбой = «сервисов нет» (безопасный ответ —
+         * не выключать эко, а оставить классическую доставку почтой).
+         */
+        private fun playServicesAvailable(context: Context): Boolean {
+            return try {
+                context.packageManager.getPackageInfo(GMS_PACKAGE, 0)
+                true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        /**
+         * ГОТОВ ЛИ ПУШ-КАНАЛ — гейт для эко-режима.
+         *
+         * ЭКО-ЗАКОН (0.1.201, критично для ПЕРВОГО запуска): нерезидентная
+         * эко-схема «релей жив → службы Vault в памяти нет» держится на том,
+         * что релей ДОСТАВЛЯЕТ пуш (FCM). Если пуша нет, а служба погашена,
+         * то на чистой установке у нового пользователя не приходит НИЧЕГО
+         * (звонки и сообщения при закрытом приложении), и он об этом даже
+         * не узнает. Поэтому эко разрешаем ТОЛЬКО когда пуш реально работает:
+         *
+         *   pushReady = (Google Play Services есть)
+         *             AND (есть fcm_reg_token)
+         *             AND (успешная регистрация на relay)
+         *             AND (url регистрации == текущий relay url)
+         *             AND (зарегистрированный токен == текущий reg_token)
+         *
+         * Если false — эко НЕ применяется, доставка идёт классическим путём
+         * (FGS + nativeStartMonitor, почта): он работает всегда и без
+         * Google-сервисов.
+         *
+         * Вызовы редкие (старт службы / будильник / boot), кэшировать нечего.
+         */
+        @JvmStatic
+        fun pushReady(context: Context): Boolean = pushNotReadyReason(context).isEmpty()
+
+        /**
+         * Причина, по которой пуш-канал НЕ готов ("" = готов). Строкой —
+         * её же пишем в лог `eco: push not ready (<причина>) → classic
+         * delivery (mail)`, чтобы по логу был виден конкретный обрыв.
+         */
+        @JvmStatic
+        fun pushNotReadyReason(context: Context): String {
+            return try {
+                if (!playServicesAvailable(context)) {
+                    "no Google Play Services ($GMS_PACKAGE not installed)"
+                } else {
+                    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    val reg = prefs.getString(K_REG_TOKEN, null)
+                    when {
+                        reg.isNullOrEmpty() ->
+                            // Нет сети/аккаунта Play при первом запуске —
+                            // Firebase getToken() ещё не отдал токен.
+                            "no FCM reg_token yet"
+                        else -> {
+                            val url = prefs.getString(K_RELAY_URL, DEFAULT_RELAY_URL)
+                                ?: DEFAULT_RELAY_URL
+                            val regUrl = prefs.getString(K_REGISTERED_URL, null)
+                            val regToken = prefs.getString(K_REGISTERED_TOKEN, null)
+                            when {
+                                // Пользователь ещё не залогинился — relay-креды
+                                // не приходили, регистрация не выполнялась.
+                                regUrl.isNullOrEmpty() ->
+                                    "not registered on relay yet (no relay creds)"
+                                // Сменился relay (или первый заход на него) —
+                                // K_REGISTERED_URL от прошлого, push уйдёт не туда.
+                                regUrl != url ->
+                                    "registered url != current relay url ($regUrl != $url)"
+                                // Токен ротировали, а зарегистрирован (на релее)
+                                // старый — привязка битая, пуш не дойдёт.
+                                regToken != reg ->
+                                    "registered token != current reg_token"
+                                else -> ""
+                            }
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                // Любой сбой prefs/пакетов = считаем «пуш НЕ готов»: эко
+                // отключаем, доставку ведём почтой. Исключение наружу не
+                // выпускаем — вызывают из onStartCommand и BootReceiver.
+                "push check failed: " + (e.message ?: e.javaClass.simpleName)
+            }
         }
 
         /** POST <relay>/fcm/register {reg_token, fp} → true при 2xx. */

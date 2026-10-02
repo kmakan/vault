@@ -131,9 +131,46 @@ class VaultForegroundService : Service() {
     private fun startHeadlessMonitor() {
         try {
             nativeStartMonitor(applicationContext.dataDir.absolutePath)
+            headlessMonitorOn = true
             Log.i("VaultRust", "headless IMAP monitor started (mail delivery)")
         } catch (e: Throwable) {
             Log.w("VaultRust", "nativeStartMonitor failed: " + e.message)
+        }
+    }
+
+    /**
+     * Поднят ли уже headless IMAP-монитор. Нужен эко-гейту: и onStartCommand,
+     * и shutdownEcoService могут вернуть службу в классику, а второй
+     * nativeStartMonitor поднял бы вторую IMAP-сессию (дубли доставки).
+     */
+    @Volatile
+    private var headlessMonitorOn = false
+
+    fun headlessMonitorRunning(): Boolean = headlessMonitorOn
+
+    fun headlessMonitorOff() {
+        headlessMonitorOn = false
+    }
+
+    /**
+     * Обычный (классический) foreground — то же, что делает конец
+     * onStartCommand вне эко. Вынесено, чтобы эко-ветка (эко-гейт по
+     * pushReady) и эстафеты могли перевести живую службу в классический
+     * режим «на лету», без пересоздания сервиса и без обрыва звонка.
+     */
+    fun startClassicForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIF_ID, buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startForeground(NOTIF_ID, buildNotification())
+            }
+        } catch (e: Throwable) {
+            Log.w("VaultRust", "classic startForeground failed: " + e.message)
         }
     }
 
@@ -278,6 +315,42 @@ class VaultForegroundService : Service() {
                 // ничего лишнего не поднимет.
                 return START_STICKY
             }
+            // ── ЭКО-ГЕЙТ (0.1.201): пуш-канал ГОТОВ? ────────────────────
+            // Нерезидентная эко-схема («релей жив → службы Vault в памяти
+            // нет») держится на том, что релей ДОСТАВЛЯЕТ пуш по FCM. Если
+            // пуша нет — гасить службу нельзя: релей_pub нечего будить
+            // (VAULT_RELAY_NTFY_URL на проде не задан), и у нового
+            // пользователя на чистой установке не приходит НИЧЕГО — ни звонков,
+            // ни сообщений при закрытом приложении, без всякого уведомления
+            // об этом. Условия «пуша нет»: нет Google Play Services
+            // (де-гугленные телефоны/Huawei/эмуляторы), нет сети/аккаунта Play
+            // при первом запуске, не залогинен (relay-креды не пришли).
+            // Во всех этих случаях идём КЛАССИЧЕСКИМ путём: FGS +
+            // nativeStartMonitor (почта) — работает всегда и без Google.
+            val pushWhy = pushNotReadyReasonOrEmpty(this)
+            if (pushWhy.isNotEmpty()) {
+                Log.i("VaultRust", "eco: push not ready ($pushWhy) → classic delivery (mail)")
+                // Эко как выбор пользователя остаётся включённым (prefs не
+                // трогаем) — но резидентность вынужденная. Возврат в эко
+                // произойдёт, когда пуш появится: либо по эстафете из
+                // registerDevice (VaultFirebaseMessagingService), либо по
+                // этому же будильнику ACTION_ECO_HEALTH.
+                try {
+                    // ecoMode здесь НЕ трогаем: он отражает ВЫБОР пользователя
+                    // (его же держит prefs «eco_mode»). Иначе будильник
+                    // ACTION_ECO_HEALTH увидел бы «эко выключено» и больше не
+                    // опрашивал релей — а значит, не заметил бы и момент, когда
+                    // пуш наконец появился. С экоMode == true будильник и сам
+                    // вернёт доставку в эко при первом же успешном shutdownEcoService.
+                    enterEcoRelayWatch(this)
+                    acquireLocks()
+                    startHeadlessMonitor()
+                    startClassicForeground()
+                } catch (e: Throwable) {
+                    Log.w("VaultRust", "eco: classic fallback setup failed: " + e.message)
+                }
+                return START_STICKY
+            }
             // ЭКО + РЕЛЕЙ ЖИВ → СЛУЖБЫ В ПАМЯТИ НЕТ (схема 0.1.188).
             //
             // Регресс 0.1.195 держал здесь тихий FGS 24/7 «ради health-чека
@@ -307,6 +380,7 @@ class VaultForegroundService : Service() {
             // wake+wifi locks, foreground-уведомление. Будильник переживёт нас.
             try { stopNtfyStream() } catch (_: Throwable) {}
             try { nativeStopMonitor() } catch (_: Throwable) {}
+            headlessMonitorOn = false
             releaseLocks()
             stopForegroundRemove()
             Log.i("VaultRust", "eco: onStartCommand — relay alive, service stopped in-memory " +
@@ -778,6 +852,70 @@ class VaultForegroundService : Service() {
             }
         }
 
+        /**
+         * Причина «пуш не готов» ("" = готов). Прокладка над
+         * VaultFirebaseMessagingService.pushNotReadyReason: держит единственную
+         * реализацию проверки в FCM-классе (там живут ключи prefs) и гарантирует,
+         * что наружу не вылетит исключение — вызываем из onStartCommand,
+         * BootReceiver и MainActivity.
+         */
+        private fun pushNotReadyReasonOrEmpty(context: Context): String {
+            return try {
+                VaultFirebaseMessagingService.pushNotReadyReason(context)
+            } catch (e: Throwable) {
+                "push check failed: " + (e.message ?: e.javaClass.simpleName)
+            }
+        }
+
+        /** Готов ли пуш-канал (см. VaultFirebaseMessagingService.pushReady). */
+        @JvmStatic
+        fun pushReady(context: Context): Boolean = pushNotReadyReasonOrEmpty(context).isEmpty()
+
+        /**
+         * ЭСТАФЕТА: пуш только что успешно зарегистрирован на релее. Если эко
+         * включено и служба держалась в классике «из-за отсутствия пуша» —
+         * складываем её в эко. Зовётся из VaultFirebaseMessagingService сразу
+         * после успешного POST /fcm/register.
+         *
+         * Проверки дублируем ЗДЕСЬ, а не полагаемся только на ecoStop: хендофф
+         * вызывается из фонового потока регистрации, а не из UI.
+         *
+         * Инварианты:
+         *  - НЕ гасим службу во время звонка (S6, @Volatile callActive);
+         *  - не трогаем режим, если эко выключено пользователем;
+         *  - если релей уже помечен мёртвым (mailFallbackActive) — не мешаем
+         *    работающей почтовой доставке, вернёмся через leaveRelayFallbackMail.
+         */
+        @JvmStatic
+        fun ecoHandoffAfterPushReady(context: Context) {
+            try {
+                if (!ecoModeEnabled(context)) return
+                // Службы нет — складывать нечего; её поднимет MainActivity/будильник,
+                // и та уже увидит pushReady == true и уйдёт в эко.
+                if (instance == null) return
+                // S6: во время звонка служба нужна (рингтон, уведомление, таймер
+                // гудка). После звонка dismissIncomingCall сам вернёт её в эко.
+                if (callActive) {
+                    Log.i("VaultRust", "eco handoff: push ready, but call active — deferred to call end")
+                    return
+                }
+                // Релей мёртвый → идёт почтовый фолбэк. Ломать его из-за
+                // «пуш стал готов» нельзя: пуш готов ≠ релей жив.
+                if (mailFallbackActive) {
+                    Log.i("VaultRust", "eco handoff: push ready, but relay down — staying in mail fallback")
+                    return
+                }
+                if (!pushReady(context)) {
+                    Log.i("VaultRust", "eco handoff: push still not ready — skipped")
+                    return
+                }
+                Log.i("VaultRust", "eco handoff: push ready + eco on — handing service over to relay delivery")
+                ecoStop(context)
+            } catch (e: Throwable) {
+                Log.w("VaultRust", "eco handoff failed: " + e.message)
+            }
+        }
+
         /// Eco-режим сохранён? (для MainActivity: не стартовать сервис при эко)
         @JvmStatic
         fun ecoModeEnabled(context: Context): Boolean {
@@ -1185,6 +1323,39 @@ class VaultForegroundService : Service() {
             // ПЕРЕСТАВЛЯЕТ тот же будильник, дубликатов не будет.
             cancelScheduledRestart(context)
             enterEcoRelayWatch(context)
+            // ЭКО-ГЕЙТ (0.1.201): гасить службу можно ТОЛЬКО когда доставку
+            // действительно несёт релей, т.е. пуш-канал готов. Иначе на чистой
+            // установке (нет Play Services / нет токена / не залогинен) мы бы
+            // погасили единственное, что доставляет — релей шлёт через FCM,
+            // которого нет. Классика (почта) работает всегда.
+            // Важно: в ЭТОЙ точке (эко по часам health-чека, выключение эко из
+            // UI) экземпляр живой и стоит в классике — туда и возвращаемся.
+            val pushWhy = pushNotReadyReasonOrEmpty(context)
+            if (pushWhy.isNotEmpty()) {
+                Log.i(
+                    "VaultRust",
+                    "eco: push not ready ($pushWhy) → classic delivery (mail)"
+                )
+                val svc = instance
+                if (svc != null && !callActive) {
+                    // Возвращаем службу в классический почтовый режим «на лету»
+                    // (без stopSelf — звонок/процесс не прерываем). ecoMode НЕ
+                    // трогаем: он отражает выбор пользователя, и его сброс
+                    // оборвал бы цепочку ACTION_ECO_HEALTH (см. ветку эко-гейта
+                    // в onStartCommand). Режим «классика из-за отсутствия пуша»
+                    // различает именно сам pushReady.
+                    try {
+                        svc.acquireLocks()
+                        // Монитор уже может быть поднят (напр. эко-гейтом в
+                        // onStartCommand) — повторный старт не нужен и лишний.
+                        if (!svc.headlessMonitorRunning()) {
+                            svc.startHeadlessMonitor()
+                        }
+                        svc.startClassicForeground()
+                    } catch (_: Throwable) {}
+                }
+                return
+            }
             // S6: во время активного звонка службу не гасим (рингтон,
             // уведомление звонка и таймер гудка ещё нужны).
             if (callActive) {
@@ -1195,6 +1366,7 @@ class VaultForegroundService : Service() {
             if (inst != null) {
                 try { inst.stopNtfyStream() } catch (_: Throwable) {}
                 try { inst.nativeStopMonitor() } catch (_: Throwable) {}
+                inst.headlessMonitorOff()
                 try { inst.releaseLocks() } catch (_: Throwable) {}
                 try { inst.stopForegroundRemove() } catch (_: Throwable) {}
                 try { inst.stopSelf() } catch (_: Throwable) {}

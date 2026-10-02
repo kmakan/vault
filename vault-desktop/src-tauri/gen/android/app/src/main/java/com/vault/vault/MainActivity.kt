@@ -293,6 +293,38 @@ class MainActivity : TauriActivity() {
     // поднимаем вовсе. Классический (не-eco) режим — стартуем как раньше.
     val ecoOn = try { VaultForegroundService.ecoModeEnabled(this) } catch (e: Throwable) { false }
     if (ecoOn) {
+      // ЭКО-ГЕЙТ (0.1.201): нерезидентную эко-схему («релей жив → службы
+      // Vault в памяти нет») разрешаем ТОЛЬКО когда пуш-канал реально готов:
+      // Play Services есть, reg_token получен, регистрация на релее успешна и
+      // её url совпадает с текущим. Иначе (де-гугленный телефон, нет сети на
+      // первом запуске, ещё не залогинен) погасив службу на ПЕРВОМ запуске, мы
+      // оставили бы нового пользователя вообще без доставки — релей_pub нечего
+      // будить, а починить это на его устройстве мы уже не сможем. Поэтому в
+      // этом случае поднимаем службу как в обычном режиме: FGS + IMAP-монитор
+      // (почта) работает всегда и без Google-сервисов.
+      val pushWhy = try {
+        VaultFirebaseMessagingService.pushNotReadyReason(this)
+      } catch (e: Throwable) {
+        "push check failed: " + e.message
+      }
+      if (pushWhy.isNotEmpty()) {
+        Log.i("VaultRust", "eco: push not ready ($pushWhy) → classic delivery (mail)")
+        try {
+          val svc = Intent(this, VaultForegroundService::class.java)
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svc)
+          } else {
+            startService(svc)
+          }
+          // Будильник оставляем: когда пуш появится, эстафета из registerDevice
+          // (или сам будильник) вернёт доставку в эко.
+          VaultForegroundService.enterEcoRelayWatch(this)
+          Log.i("VaultRust", "eco mode: foreground service started anyway (no push yet)")
+        } catch (e: Throwable) {
+          Log.w("VaultRust", "eco classic start failed: " + e.message)
+        }
+        return
+      }
       // ЭКО-НЕЗАВИСИМОСТЬ: «нет службы» ≠ «нет доставки». Убитый eco-сервис
       // больше не означает, что при падении релея никто не заметит: будильник
       // ACTION_ECO_HEALTH живёт в системе (PendingIntent), поднимает службу

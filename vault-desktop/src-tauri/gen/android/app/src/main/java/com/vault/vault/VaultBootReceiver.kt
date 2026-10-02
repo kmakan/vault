@@ -25,8 +25,36 @@ class VaultBootReceiver : BroadcastReceiver() {
                 // доставку на почту (иначе после ребута звонки не доходили бы,
                 // пока пользователь не откроет приложение руками).
                 if (prefs.getBoolean("eco_mode", false)) {
-                    Log.i("VaultRust", "boot: eco mode — relay health alarm re-armed (no resident service)")
-                    VaultForegroundService.enterEcoRelayWatch(context)
+                    // ЭКО-ГЕЙТ (0.1.201): эко = «службы в памяти нет, доставку
+                    // несёт релей пушем». Пока пуш-канал НЕ готов (нет Google
+                    // Play Services, нет reg_token, не залогинен), релем пуши
+                    // неотправить нечего — и после ребута у нового пользователя
+                    // не придёт ни звонка, ни сообщения. Поэтому в таком случае
+                    // поднимаем службу как в классике (FGS + IMAP-монитор,
+                    // почта): работает всегда и без Google-сервисов.
+                    val pushWhy = try {
+                        VaultFirebaseMessagingService.pushNotReadyReason(context)
+                    } catch (e: Throwable) {
+                        "push check failed: " + e.message
+                    }
+                    if (pushWhy.isNotEmpty()) {
+                        Log.i(
+                            "VaultRust",
+                            "boot: eco: push not ready ($pushWhy) → classic delivery (mail)"
+                        )
+                        val svc = Intent(context, VaultForegroundService::class.java)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            context.startForegroundService(svc)
+                        } else {
+                            context.startService(svc)
+                        }
+                        // Будильник тоже взводим: когда пуш появится, эстафета
+                        // после успешной регистрации вернёт доставку в эко.
+                        VaultForegroundService.enterEcoRelayWatch(context)
+                    } else {
+                        Log.i("VaultRust", "boot: eco mode — relay health alarm re-armed (no resident service)")
+                        VaultForegroundService.enterEcoRelayWatch(context)
+                    }
                 } else {
                     Log.i("VaultRust", "boot: push mode off, eco off, skip")
                 }
