@@ -494,8 +494,27 @@ class MainActivity : TauriActivity() {
     } catch (e: Throwable) {
       Log.w("VaultRust", "webview keep-alive onResume failed: " + e.message)
     }
-    // Headless-монитор: паузу НЕ снимаем — JS keep-alive продолжает доставлять
-    // и свёрнутым. Монитор понадобится только если activity уничтожат.
+    // Headless-монитор: паузу НЕ снимаем здесь — JS keep-alive ещё может
+    // доставить, пока активность видима (диалог поверх, кратковременный уход).
+    // Снятие паузы — в onStop (приложение реально не видно).
+  }
+
+  // ДОСТАВКА БЕЗ РЕЛЕЯ (и без работы JS в фоне): приложение НЕ ВИДНО
+  // (Home/другой экран/погашенный экран) — JS-цикл троттлится и письмо-вызов
+  // успевает истечь по 10-минутному порогу, а headless-монитор молчал, считая
+  // что «JS доставит сам» (флаг paused снимался только в onDestroy). В итоге
+  // при недоступном релее звонок не доходил вовсе. Теперь при невидимости
+  // активность отдаёт доставку нативному IMAP-монитору (IDLE → decrypt →
+  // showMessage/showIncomingCall), а при возврате в UI (onResume) — снова JS.
+  override fun onStop() {
+    super.onStop()
+    try {
+      appVisible = false
+      nativePauseMonitor(false)
+      Log.i("VaultRust", "onStop: headless monitor un-paused (app not visible)")
+    } catch (e: Throwable) {
+      Log.w("VaultRust", "onStop nativePauseMonitor(false) failed: " + e.message)
+    }
   }
 
   // Headless-монитор: Rust-сторона держит монитор на паузе, пока
