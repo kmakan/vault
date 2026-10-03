@@ -1,4 +1,9 @@
 fn main() {
+    // TURN-креды вшиваются в бинарь при СБОРКЕ (03.10): без проброса
+    // rerun-if-env-changed cargo не пересобирает пакет при смене кредов,
+    // и option_env! в media.rs вернёт прошлое (пустое) значение.
+    println!("cargo:rerun-if-env-changed=VAULT_TURN_CRED");
+    println!("cargo:rerun-if-env-changed=VAULT_TURN_HOST");
     // Android (23.08): ndk-sys (тянется cpal → AAudio) линкует `-laaudio`,
     // но cargo не знает системный путь NDK — падает «unable to find library
     // -laaudio». Добавляем sysroot нужного таргета в путь поиска библиотек.

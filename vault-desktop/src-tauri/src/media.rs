@@ -331,9 +331,12 @@ impl CallMediaManager {
         //
         // TURN: свой coturn (185.180.199.237:3478, realm vault-msg.ru,
         // статическая пара vault:<секрет из /etc/coturn/vault-secret>).
-        // Секрет НЕ хардкодим в бинарнике: читаем из env VAULT_TURN_CRED
-        // (user:pass), кладём в tauri-конфиг/manifest при сборке. Если env
-        // нет — TURN-сервер просто не включается, остаётся STUN-only
+        // Секрет НЕ коммитим в git: он попадает в бинарь при СБОРКЕ через
+        // переменную VAULT_TURN_CRED в окружении сборщика (в Android-сборке
+        // окружения процесса на устройстве нет — читать env в рантайме
+        // бесполезно). Формат: "user:pass". Runtime env имеет приоритет
+        // (dev/тесты, переопределение без пересборки). Если кред нет ни там,
+        // ни там — TURN просто не включается, остаётся STUN-only
         // (не ломает desktop↔desktop в одной сети, где host-кандидаты
         // достаточны). Это и есть «X2TURN из Phase 3», который был TODO.
         let stun_urls = vec![
@@ -348,14 +351,24 @@ impl CallMediaManager {
             urls: stun_urls.clone(),
             ..Default::default()
         };
-        // TURN-сервер: добавляем ТОЛЬКО если задан VAULT_TURN_CRED.
-        // Формат env: "user:pass". URL: turn:HOST:PORT (по умолчанию наш VPS).
+        // TURN-сервер: добавляем ТОЛЬКО если доступен кред (runtime env или
+        // вшитый при сборке). Формат: "user:pass". URL: turn:HOST:PORT
+        // (по умолчанию наш VPS).
         let mut ice_servers = vec![dev_ice];
-        if let Ok(cred) = std::env::var("VAULT_TURN_CRED") {
+        // Приоритет: runtime env (dev/тесты) → compile-time (вшито в бинарь
+        // при сборке через VAULT_TURN_CRED в окружении сборщика).
+        // option_env! = None, если при сборке переменной не было → STUN-only,
+        // как раньше. Значение секрета здесь НЕ логируется.
+        let cred = std::env::var("VAULT_TURN_CRED")
+            .ok()
+            .or_else(|| option_env!("VAULT_TURN_CRED").map(|s| s.to_owned()));
+        if let Some(cred) = cred.as_deref() {
             if let Some((user, pass)) = cred.split_once(':') {
                 if !user.is_empty() && !pass.is_empty() {
                     let host = std::env::var("VAULT_TURN_HOST")
-                        .unwrap_or_else(|_| "185.180.199.237".to_owned());
+                        .ok()
+                        .or_else(|| option_env!("VAULT_TURN_HOST").map(|s| s.to_owned()))
+                        .unwrap_or_else(|| "185.180.199.237".to_owned());
                     let turn_urls = vec![
                         format!("turn:{host}:3478"),
                         format!("turn:{host}:3478?transport=tcp"),
