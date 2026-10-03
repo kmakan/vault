@@ -1596,12 +1596,18 @@ export default {
     // M3: remote-видео — Rust-reader шлёт base64 VP8-кадр.
     // Роутинг в features/video.js (декодер), как остальные 4 listener'а
     // звонков; кадры идут только текущему звонку.
-    this._unlistenVideoFrame = tauriListen('call-video-frame', (ev) => {
+    this._unlistenVideoFrame = tauriListen('call-video-frame', async (ev) => {
       const p = ev && ev.payload;
       const cid = p && p.callId;
       if (!cid || !this.currentCall || this.currentCall.call_id !== cid) return;
-      if (!this.callVideoOn) return; // видео выключено — кадры не рисуем
-      Video.decodeFrame(p.frame, p.timestamp);
+      // Auto-start: собеседник шлёт видео, а у нас оно выключено —
+      // включаем приём (без камеры), иначе кадры летят впустую и
+      // пользователь не видит, что звонок уже видео. Камера при этом
+      // НЕ включается — только отображение remote-видео.
+      if (!this.callVideoOn) {
+        try { await this.startCallVideo(); } catch (e) { console.warn('[video] auto-start failed:', e); return; }
+      }
+      Video.decodeFrame(p.rgba, p.width, p.height);
     }).catch(e => console.warn('[video] listen frame failed:', e));
     // Rust IDLE-монитор: «mail-changed» приходит из tokio-таска
     // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.

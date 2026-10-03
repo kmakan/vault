@@ -1128,6 +1128,16 @@ export class ApiClient {
   async mediaVideoStop(callId) {
     return await invoke('media_video_stop', { callId });
   }
+  // Видео (M3): открыть Rust-писатель кадров звонка (RTP-writer + видео-трек).
+  // Вызывается из features/video.js::startCamera ДО первого mediaVideoFrame —
+  // иначе Rust отбрасывает кадры («camera not started for this call»).
+  async mediaCameraStart(callId) {
+    return await invoke('media_camera_start', { callId });
+  }
+  // Видео (M3): стоп камеры/writer'а. `callId` необязателен (все сессии).
+  async mediaCameraStop(callId) {
+    return await invoke('media_camera_stop', { callId });
+  }
   // Видео (M3): закодированный кадр локальной камеры → Rust
   // (E2E-шифр + RTP-пакетизация). 30fps, fire-and-forget.
   async mediaVideoFrame(callId, frame) {

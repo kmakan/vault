@@ -57,6 +57,7 @@ use rtc::peer_connection::configuration::media_engine::{
 };
 use rtc::rtp::codec::vp8::Vp8Packet;
 use rtc::rtp::packetizer::Depacketizer;
+use rtc::media::io::sample_builder::SampleBuilder;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
@@ -983,51 +984,82 @@ impl CallMediaManager {
                 }
             };
             eprintln!("[video] remote track received — decoding frames to UI");
-            let mut depacketizer = Vp8Packet::default();
+            // VP8-кадр шифруется ЦЕЛИКОМ на отправке (write_video_loop:
+            // media_encrypt_frame до write_sample), а write_sample режет
+            // шифротекст на N RTP-пакетов. Поэтому на приёме нельзя
+            // дешифровать каждый пакет отдельно — сначала SampleBuilder
+            // собирает ВСЕ пакеты кадра в один буфер (по marker-биту и
+            // sequence), потом дешифровка собранного кадра целиком.
+            // (Аудио не страдает: Opus-кадр умещается в один RTP-пакет.)
+            let mut sample_builder = SampleBuilder::new(32, Vp8Packet::default(), crate::video::VP8_CLOCK_RATE);
+            // Rust-декодер: VP8 → RGBA (WebKitGTK не рисует VideoFrame в canvas).
+            // Canvas получает готовый RGBA-буфер через ImageData.putImageData.
+            let mut vp8_decoder = match crate::vp8_decoder::Vp8Decoder::new() {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    eprintln!("[video] VP8 decoder init failed: {e} — no remote video");
+                    None
+                }
+            };
+            let mut n_pkts: u64 = 0;
+            let mut n_samples: u64 = 0;
+            let mut n_emit: u64 = 0;
+            let mut n_dec_err: u64 = 0;
             loop {
                 tokio::select! {
                     ev = track.poll() => {
                         let Some(ev) = ev else { break };
                         match ev {
                             TrackRemoteEvent::OnRtpPacket(pkt) => {
-                                // E2E-расшифровка (как в audio read_remote_loop,
-                                // но для видео): payload зашифран целиком.
-                                let payload = match &media_key {
-                                    Some(k) => {
-                                        match crate::crypto::media_decrypt_frame(k, &pkt.payload) {
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                eprintln!("[video] media decrypt: {e}");
-                                                continue;
+                                n_pkts += 1;
+                                if n_pkts % 100 == 1 {
+                                    eprintln!("[video] reader: pkts={n_pkts} samples={n_samples} emit={n_emit} dec_err={n_dec_err}");
+                                }
+                                sample_builder.push(pkt);
+                                // pop() отдаёт собранный кадр только когда он
+                                // полный (все фрагменты + marker). Неполный
+                                // кадр = None — ждём следующий пакет.
+                                while let Some(sample) = sample_builder.pop() {
+                                    n_samples += 1;
+                                    // E2E-расшифровка собранного кадра целиком.
+                                    let frame: Vec<u8> = match &media_key {
+                                        Some(k) => {
+                                            match crate::crypto::media_decrypt_frame(k, &sample.data) {
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    n_dec_err += 1;
+                                                    if n_dec_err <= 3 {
+                                                        eprintln!("[video] media decrypt: {e} (sample_len={})", sample.data.len());
+                                                    }
+                                                    continue;
+                                                }
                                             }
                                         }
-                                    }
-                                    None => pkt.payload.to_vec(),
-                                };
-                                // Депакетизация VP8: снимает RTP-заголовок
-                                // кадра (picture ID и пр.), выдаёт чистый
-                                // VP8-битстрим кадра.
-                                let frame = match depacketizer.depacketize(&Bytes::from(payload)) {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        eprintln!("[video] depacketize: {e}");
+                                        None => sample.data.to_vec(),
+                                    };
+                                    if frame.is_empty() {
                                         continue;
                                     }
-                                };
-                                if frame.is_empty() {
-                                    continue;
+                                    // Rust-декодер: VP8 → RGBA
+                                    let (rgba, w, h) = match vp8_decoder.as_mut().and_then(|d| d.decode(&frame)) {
+                                        Some(r) => r,
+                                        None => continue, // декодер не инициализирован или кадр не готов
+                                    };
+                                    n_emit += 1;
+                                    if n_emit <= 2 || n_emit % 150 == 0 {
+                                        eprintln!("[video] emit frame #{n_emit} {}x{} len={}", w, h, rgba.len());
+                                    }
+                                    // Кадр в UI: RGBA-буфер для canvas.
+                                    let _ = app.emit(
+                                        "call-video-frame",
+                                        serde_json::json!({
+                                            "callId": cid,
+                                            "width": w,
+                                            "height": h,
+                                            "rgba": base64::engine::general_purpose::STANDARD.encode(&rgba),
+                                        }),
+                                    );
                                 }
-                                // Кадр в UI: байты VP8-фрейма. UI декодирует
-                                // через WebCodecs VideoDecoder('vp8').
-                                let _ = app.emit(
-                                    "call-video-frame",
-                                    serde_json::json!({
-                                        "callId": cid,
-                                        // base64: tauri events — JSON, бинарка
-                                        // через строку (как релей/вложения).
-                                        "frame": base64::engine::general_purpose::STANDARD.encode(&frame),
-                                    }),
-                                );
                             }
                             TrackRemoteEvent::OnEnded | TrackRemoteEvent::OnEnding => {
                                 // Трек умер — гасим слот, чтобы следующий
