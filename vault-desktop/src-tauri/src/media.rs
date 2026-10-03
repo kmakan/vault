@@ -375,12 +375,27 @@ impl CallMediaManager {
             .and_then(|c| c.split_once(':'))
             .map(|(u, p)| (u.to_owned(), p.to_owned()))
             .unwrap_or_default();
-        ice_servers.push(RTCIceServer {
-            urls: turn_urls,
-            username,
-            credential,
-        });
-        log::info!("[media] TURN enabled: {host}:3478 (open relay)");
+        // webrtc-rs НЕ умеет анонимный TURN: пустые username/credential +
+        // turn: URL → «turn server credentials required» при создании
+        // PeerConnection (поймано живьём 03.10 на стороне callee —
+        // accept падал, SDP-ответ не уходил, звонок висел 90с до
+        // connect_timeout). Пока coturn — open relay (без auth), TURN с
+        // пустыми кредами всё равно не работает, поэтому:
+        //   креды есть  → TURN в список (настоящий relay-путь);
+        //   кредов нет  → TURN ПРОПУСКАЕМ, остаются STUN-only (поведение
+        //                 ≤0.1.205, host/srflx в одной LAN работает).
+        if !username.is_empty() && !credential.is_empty() {
+            log::info!("[media] TURN enabled: {host}:3478 user={username}");
+            ice_servers.push(RTCIceServer {
+                urls: turn_urls,
+                username,
+                credential,
+            });
+        } else {
+            log::warn!(
+                "[media] TURN skipped: no credentials (webrtc-rs requires them even for open relays) — STUN only"
+            );
+        }
         Self {
             calls: HashMap::new(),
             ice_servers,
