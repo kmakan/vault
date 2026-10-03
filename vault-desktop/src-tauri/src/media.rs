@@ -351,37 +351,36 @@ impl CallMediaManager {
             urls: stun_urls.clone(),
             ..Default::default()
         };
-        // TURN-сервер: добавляем ТОЛЬКО если доступен кред (runtime env или
-        // вшитый при сборке). Формат: "user:pass". URL: turn:HOST:PORT
-        // (по умолчанию наш VPS).
+        // TURN-сервер: ВСЕГДА активен (03.10). Наш coturn на VPS — open relay
+        // (/etc/turnserver.conf без auth), креды не нужны. Без TURN под мобильным
+        // CGNAT ICE не собирается → видео/аудио не проходит вне одной LAN.
+        // URL: turn:HOST:PORT (по умолчанию наш VPS).
         let mut ice_servers = vec![dev_ice];
-        // Приоритет: runtime env (dev/тесты) → compile-time (вшито в бинарь
-        // при сборке через VAULT_TURN_CRED в окружении сборщика).
-        // option_env! = None, если при сборке переменной не было → STUN-only,
-        // как раньше. Значение секрета здесь НЕ логируется.
+        // Хост можно переопределить (dev/тесты): runtime env → compile-time env.
+        let host = std::env::var("VAULT_TURN_HOST")
+            .ok()
+            .or_else(|| option_env!("VAULT_TURN_HOST").map(|s| s.to_owned()))
+            .unwrap_or_else(|| "185.180.199.237".to_owned());
+        let turn_urls = vec![
+            format!("turn:{host}:3478"),
+            format!("turn:{host}:3478?transport=tcp"),
+        ];
+        // Опциональный кред (если когда-нибудь закроем open relay): runtime env
+        // VAULT_TURN_CRED="user:pass" или вшитый при сборке. Сейчас не нужен.
         let cred = std::env::var("VAULT_TURN_CRED")
             .ok()
             .or_else(|| option_env!("VAULT_TURN_CRED").map(|s| s.to_owned()));
-        if let Some(cred) = cred.as_deref() {
-            if let Some((user, pass)) = cred.split_once(':') {
-                if !user.is_empty() && !pass.is_empty() {
-                    let host = std::env::var("VAULT_TURN_HOST")
-                        .ok()
-                        .or_else(|| option_env!("VAULT_TURN_HOST").map(|s| s.to_owned()))
-                        .unwrap_or_else(|| "185.180.199.237".to_owned());
-                    let turn_urls = vec![
-                        format!("turn:{host}:3478"),
-                        format!("turn:{host}:3478?transport=tcp"),
-                    ];
-                    ice_servers.push(RTCIceServer {
-                        urls: turn_urls,
-                        username: user.to_owned(),
-                        credential: pass.to_owned(),
-                    });
-                    log::info!("[media] TURN enabled: {host}:3478 user={user}");
-                }
-            }
-        }
+        let (username, credential) = cred
+            .as_deref()
+            .and_then(|c| c.split_once(':'))
+            .map(|(u, p)| (u.to_owned(), p.to_owned()))
+            .unwrap_or_default();
+        ice_servers.push(RTCIceServer {
+            urls: turn_urls,
+            username,
+            credential,
+        });
+        log::info!("[media] TURN enabled: {host}:3478 (open relay)");
         Self {
             calls: HashMap::new(),
             ice_servers,
