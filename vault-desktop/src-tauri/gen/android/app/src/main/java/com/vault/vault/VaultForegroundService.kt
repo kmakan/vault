@@ -43,6 +43,17 @@ class VaultForegroundService : Service() {
     @Volatile
     private var fgContractPending: Boolean = true
 
+    // Активно ли сейчас КЛАССИЧЕСКОЕ (видимое) foreground-уведомление NOTIF_ID?
+    // Нужно ветке ACTION_ECO_HEALTH: будильник поднимает службу через
+    // startForegroundTransient() (тихое уведомление) ВЫШЕ любых проверок — ради
+    // FGS-контракта. Если к тому моменту эко уже выключили, а классическая
+    // служба жива, её надо вернуть в прежний вид (перерисовать уведомление),
+    // а НЕ гасить: воскрешение после stopSelf идёт через scheduleRestart с
+    // обычным startService, который на Android 12+ может быть отклонён как
+    // фоновый старт — тогда доставка просто исчезла бы.
+    @Volatile
+    private var classicForegroundActive: Boolean = false
+
     // Natives из libvault_desktop.so: headless
     // IMAP-монитор живёт в Rust-таске внутри ЭТОГО процесса. ОБЯЗАТЕЛЬНО
     // экземплярные методы (не companion!): JNI-символ внешнего метода
@@ -169,6 +180,7 @@ class VaultForegroundService : Service() {
                 @Suppress("DEPRECATION")
                 startForeground(NOTIF_ID, buildNotification())
             }
+            classicForegroundActive = true
         } catch (e: Throwable) {
             Log.w("VaultRust", "classic startForeground failed: " + e.message)
         }
@@ -230,11 +242,34 @@ class VaultForegroundService : Service() {
         // эко / релей мёртв → почта» принимается здесь, а не там, где
         // ecoMode уже разобран по остальным признакам.
         if (intent?.action == ACTION_ECO_HEALTH) {
+            // FGS-КОНТРАКТ ДО ЛЮБЫХ ПРОВЕРОК. Будильник взведён через
+            // PendingIntent.getForegroundService (см. scheduleEcoHealthCheck),
+            // т.е. система поднимает службу как foreground и ждёт
+            // startForeground() в пределах ~5с на ЛЮБУЮ ветку, включая
+            // «эко выключено — ignored»: иначе ANR «did not call
+            // startForeground()». Тихий foreground держится ровно до конца
+            // текущего onStartCommand и снимается по итогу пробы.
+            startForegroundTransient()
             // Эко выключили (пользователем или JS) — будильник доживает свою
             // минуту. Ничего не поднимаем: классический режим сам себя
             // воскрешает через scheduleRestart/scheduleEcoHealthCheck.
             if (!ecoMode && !mailFallbackActive) {
                 Log.i("VaultRust", "eco-watch: alarm fired but eco is off — ignored")
+                // FGS-контракт уже закрыт вызовом выше. Если к этому моменту
+                // жива классическая служба (эко выключили, пока висел будильник),
+                // startForegroundTransient перерисовала уведомление в тихое —
+                // возвращаем классическое уведомление. Гасить такую службу
+                // НЕЛЬЗЯ: её воскрешение после stopSelf идёт через
+                // scheduleRestart с обычным startService, который Android 12+
+                // может отклонить как фоновый старт — доставка просто исчезла бы.
+                if (classicForegroundActive) {
+                    startClassicForeground()
+                } else {
+                    // Службы в памяти не было (холодный старт из будильника) —
+                    // тихий foreground тут же снимаем, чтобы уведомление не зависло.
+                    stopForegroundRemove()
+                    stopSelf()
+                }
                 return START_NOT_STICKY
             }
             // БУДИЛЬНИК = КОРОТКИЙ ВИЗИТ, а не повод снова стать резидентным.
@@ -246,10 +281,6 @@ class VaultForegroundService : Service() {
             //   релей здоров → scheduleEcoHealthCheck(IDLE) + shutdownEcoService
             //                  (stopForeground(REMOVE) + stopSelf) — службы нет;
             //   релей мёртв  → enterRelayFallbackMail: классический FGS + IMAP.
-            // startForeground здесь обязателен: сервис стартовал из будильника в
-            // фоне, а при уходе в почтовый фолбэк Android 12+ требует, чтобы
-            // FGS был заявлен (точные будильники дают временный allowlist).
-            startForegroundTransient()
             try {
                 onEcoHealthAlarm(applicationContext)
             } catch (e: Throwable) {
@@ -648,6 +679,7 @@ class VaultForegroundService : Service() {
                 stopForeground(true)
             }
         } catch (_: Throwable) {}
+        classicForegroundActive = false
         try {
             val nm = getSystemService(NotificationManager::class.java)
             nm?.cancel(NOTIF_ID)
@@ -670,6 +702,7 @@ class VaultForegroundService : Service() {
                 @Suppress("DEPRECATION")
                 startForeground(NOTIF_ID, buildQuietNotification())
             }
+            classicForegroundActive = false
         } catch (e: Throwable) {
             Log.w("VaultRust", "transient startForeground failed: " + e.message)
         }
@@ -1381,10 +1414,23 @@ class VaultForegroundService : Service() {
             try {
                 val intent = Intent(context, VaultForegroundService::class.java)
                     .setAction(ACTION_ECO_HEALTH)
-                val pi = PendingIntent.getService(
-                    context, 1, intent,
-                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-                )
+                // ТОТ ЖЕ getForegroundService (и та же проверка API), что и в
+                // scheduleEcoHealthCheck. Ключ PendingIntent включает тип
+                // отправителя (startService vs startForegroundService),
+                // поэтому пара с getService здесь не совпала бы:
+                // FLAG_NO_CREATE вернул бы null и отмена eco-health-будильника
+                // молча ничего бы не делала.
+                val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(
+                        context, 1, intent,
+                        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                    )
+                } else {
+                    PendingIntent.getService(
+                        context, 1, intent,
+                        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                    )
+                }
                 if (pi != null) {
                     val am = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                     am.cancel(pi)
@@ -1399,14 +1445,41 @@ class VaultForegroundService : Service() {
         /// Взвести будильник health-чека релея. Отдельный action (ACTION_ECO_HEALTH)
         /// и отдельный requestCode (1) — чтобы не путать с будильником
         /// scheduleRestart (requestCode 0) и гасить их независимо.
+        ///
+        /// ВАЖНО: именно getForegroundService, а НЕ getService. Будильник
+        /// поднимает службу из фона (точный alarm setExactAndAllowWhileIdle),
+        /// и Android 12+ для обычного startService пишет «Background start not
+        /// allowed», СЛУЖБА НЕ СТАРТУЕТ и onStartCommand НЕ выполняется.
+        /// Последствие хуже «просто не сработало»: раз onStartCommand не
+        /// выполнился, scheduleEcoHealthCheck не перевзводится → ЦЕПОЧКА
+        /// health-чеков обрывается навсегда (до перезапуска приложения), и
+        /// оживший релей об этом не узнает.
+        /// getForegroundService даёт временный allowlist (точные будильники в
+        /// него входят) и вместе с ним FGS-контракт: система ждёт
+        /// startForeground() в пределах ~5с — его закрывает
+        /// startForegroundTransient() в ветке ACTION_ECO_HEALTH.
+        /// Пара: cancelEcoHealthCheck ниже обязана использовать тот же
+        /// getForegroundService — ключ PendingIntent включает тип отправителя
+        /// (startService vs startForegroundService), иначе FLAG_NO_CREATE не
+        /// найдёт запись и отмена будильника молча перестанет работать.
         private fun scheduleEcoHealthCheck(context: Context, delayMs: Long) {
             try {
                 val intent = Intent(context, VaultForegroundService::class.java)
                     .setAction(ACTION_ECO_HEALTH)
-                val pi = PendingIntent.getService(
-                    context, 1, intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
+                // getForegroundService есть с API 26; minSdk проекта = 24,
+                // поэтому на Android 7.x остаётся getService — там запрета
+                // на фоновый старт службы ещё нет (он с Android 8/12+).
+                val pi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    PendingIntent.getForegroundService(
+                        context, 1, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                } else {
+                    PendingIntent.getService(
+                        context, 1, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                }
                 val am = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 // setExactAndAllowWhileIdle: срабатывает и в Doze (экран
                 // выключен) — без этого фолбэк не наступал бы, пока
