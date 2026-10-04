@@ -129,6 +129,32 @@ pub struct EmailClient {
 /// возвращается к нормальному темпу сразу, не дожидаясь конца лестницы.
 const BACKOFF_STEPS_SEC: [u64; 5] = [2, 5, 15, 30, 60];
 
+/// Вычислить дедлайн следующей CONNECT-попытки и остаток паузы.
+///
+/// Вынесено в свободную функцию, чтобы правило можно было покрыть тестом без
+/// `EmailConfig` и без сети. Ключевое свойство — **дедлайн не продлевается**:
+/// если активная пауза ещё не истекла, возвращается тот же самый момент и тот
+/// же остаток, сколько был до этой неудачи. Иначе серия неудач (а фаст-путь
+/// «сессии нет → ошибка → note_failure» повторяется каждые ~3мс) бесконечно
+/// сдвигала бы дедлайн вперёд, и пауза не истекала бы НИКОГДА — сессия не
+/// строилась бы никогда (livelock, телефон X50, 04.10.2026, 0.1.210).
+///
+/// `(fail_streak, deadline, now) -> (новый deadline, остаток)`
+fn next_connect_deadline(
+    fail_streak: u32,
+    deadline: Option<Instant>,
+    now: Instant,
+) -> (Option<Instant>, Duration) {
+    match deadline {
+        Some(existing) if existing > now => (Some(existing), existing - now),
+        _ => {
+            let idx = (fail_streak.saturating_sub(1) as usize).min(BACKOFF_STEPS_SEC.len() - 1);
+            let delay = Duration::from_secs(BACKOFF_STEPS_SEC[idx]);
+            (Some(now + delay), delay)
+        }
+    }
+}
+
 impl EmailClient {
     pub fn new(config: EmailConfig) -> Self {
         Self {
@@ -160,11 +186,28 @@ impl EmailClient {
     /// Засчитать неудачу в лестнице backoff; вернуть паузу до следующей попытки.
     pub fn note_failure(&mut self) -> Duration {
         self.fail_streak = self.fail_streak.saturating_add(1);
-        let delay = self.backoff_delay();
-        // Следующая CONNECT-попытка (из любого вызывающего) не раньше конца паузы:
-        // серия неудач не должна превращаться в серию TCP+TLS-рукопожатий.
-        self.connect_retry_after = Some(Instant::now() + delay);
-        delay
+        // ДЕДЛАЙН МОНОТОННЫЙ: новая неудача НЕ передвигает его вперёд.
+        //
+        // Зачем: прежний код писал `connect_retry_after = now + delay` на КАЖДОЙ
+        // неудаче. При активном фаст-пути (тик каждые ~3мс, пока сессии нет)
+        // дедлайн непрерывно сдвигался вперёд, поэтому пауза НИКОГДА не
+        // истекала: ensure_connected() вечно возвращал «IMAP connect backoff
+        // active», а reconnect_imap_rate_limited() вечно писал «deferred».
+        // На живом тесте (телефон X50, 04.10, 0.1.210) это выглядело как
+        // 32 «reconnect deferred» за 40с при streak=492 и НУЛЕ успешных
+        // подключений — livelock номер два, уже без шторма TCP, но с тем же
+        // корнем: сессия никогда не строилась.
+        //
+        // Теперь: активная (ещё не истёкшая) пауза НЕ продлевается — новые
+        // неудачи лишь считаются в streak, но дедлайн остаётся тем, что был
+        // назначен ПЕРВОЙ неудачей серии. Иначе серия снова уводит дедлайн
+        // вперёд и он не истекает никогда (ровно тот же livelock).
+        // Когда паузы нет (первая неудача серии / предыдущая истекла) —
+        // назначаем now + delay. Успех через note_success() сбрасывает всё.
+        let now = Instant::now();
+        let (deadline, remaining) = next_connect_deadline(self.fail_streak, self.connect_retry_after, now);
+        self.connect_retry_after = deadline;
+        remaining
     }
 
     /// Успех — лестница backoff сброшена, следующий сбой снова начнётся с 2с.
@@ -1106,4 +1149,84 @@ fn extract_header(header: &str, name: &str) -> Option<String> {
         .find(|line| line.to_lowercase().starts_with(&name.to_lowercase()))
         .and_then(|line| line.splitn(2, ':').nth(1))
         .map(|value| value.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Регресс на livelock №2 (живой тест, телефон X50, 04.10.2026, 0.1.210):
+    /// серия неудач не должна БЕСКОНЕЧНО отодвигать дедлайн следующего CONNECT.
+    /// Прежний код писал `now + delay` на каждой неудаче, поэтому при
+    /// фаст-пути (тик каждые ~3мс) пауза не истекала НИКОГДА: 32 «reconnect
+    /// deferred» за 40с при streak=492 и нул успешных подключений.
+    #[test]
+    fn connect_deadline_is_not_extended_by_failure_series() {
+        let t0 = Instant::now();
+        // Первая неудача серии: пауза назначается по лестнице (streak=1 → 2с).
+        let (mut deadline, remaining) = next_connect_deadline(1, None, t0);
+        assert_eq!(remaining, Duration::from_secs(2));
+        let first_deadline = deadline.expect("дедлайн назначен");
+
+        // 500 неудач подряд, каждая через 3мс (тик фаст-пути). Дедлайн обязан
+        // остаться ТОТ ЖЕ — иначе пауза не истекает никогда.
+        for i in 2..=500u32 {
+            let now = t0 + Duration::from_millis(3 * (i - 1) as u64);
+            let (new_deadline, _) = next_connect_deadline(i, deadline, now);
+            assert_eq!(
+                new_deadline,
+                deadline,
+                "неудача #{i} передвинула дедлайн: {new_deadline:?} != {deadline:?}"
+            );
+            deadline = new_deadline;
+        }
+        assert_eq!(deadline, Some(first_deadline));
+
+        // Спустя 2с пауза ИСТЕКАЕТ: следующая неудача назначает новую паузу.
+        let after = first_deadline + Duration::from_millis(1);
+        let (d2, r2) = next_connect_deadline(500, deadline, after);
+        assert_eq!(r2, Duration::from_secs(60), "после истечения — плато 60с");
+        assert!(d2 > deadline, "истёкшая пауза должна назначать новую");
+    }
+
+    /// Без предыдущей серии лестница идёт 2с → 5с → 15с → 30с → 60с (плато).
+    /// Каждая ступень «начинается» после полного истечения предыдущей.
+    #[test]
+    fn backoff_ladder_then_plateau() {
+        let t0 = Instant::now();
+        let mut deadline: Option<Instant> = None;
+        let mut offset = Duration::ZERO;
+        for (streak, want) in [
+            (1u32, 2u64),
+            (2, 5),
+            (3, 15),
+            (4, 30),
+            (5, 60),
+            (6, 60),
+            (99, 60),
+        ] {
+            let now = t0 + offset;
+            let (d, r) = next_connect_deadline(streak, deadline, now);
+            assert_eq!(r, Duration::from_secs(want), "ступень streak={streak}");
+            deadline = d;
+            offset = d.expect("дедлайн") - t0;
+        }
+    }
+
+    /// note_success() обязан полностью сбрасывать лестницу backoff:
+    /// после успеха deadline = None → паузы нет, и ensure_connected()
+    /// сразу идёт к провайдеру (лестница начинается заново с 2с).
+    #[test]
+    fn note_success_resets_backoff() {
+        let t0 = Instant::now();
+        // Глубокая серия неудач назначает плато 60с.
+        let (deadline, r) = next_connect_deadline(7, None, t0);
+        assert_eq!(r, Duration::from_secs(60));
+        assert!(deadline.is_some());
+
+        // note_success() → connect_retry_after = None.
+        let after_success: Option<Instant> = None;
+        let (_, r2) = next_connect_deadline(1, after_success, t0);
+        assert_eq!(r2, Duration::from_secs(2), "после успеха лестница с 2с");
+    }
 }
