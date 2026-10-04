@@ -602,16 +602,28 @@ async fn email_fetch_messages(state: State<'_, EmailState>) -> Result<Vec<EmailM
     match t_timeout(Duration::from_secs(30), client.fetch_messages()).await {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(first_err)) => {
-            // Gmail обрывает idle-соединения — переподключаемся и повторяем
-            // один раз (reconnect тоже с таймаутом).
-            t_timeout(Duration::from_secs(15), client.reconnect_imap())
+            // Сессия рассыпалась — засчитываем неудачу в лестнице и делаем ОДИН
+            // ограниченный реконнект с повтором. Без note_failure() +
+            // reconnect_imap_rate_limited() полный скан был одним из виновников
+            // шторма подключений (reconnect #127 за 6 минут): каждый вызов
+            // поднимал новый TCP+TLS без паузы, streak оставался 0.
+            let delay = client.note_failure();
+            log::warn!(
+                "imap: fetch failed (streak={}, reconnect in {}s): {first_err}",
+                client.fail_streak(),
+                delay.as_secs()
+            );
+            t_timeout(Duration::from_secs(15), client.reconnect_imap_rate_limited())
                 .await
                 .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
                 .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-            t_timeout(Duration::from_secs(30), client.fetch_messages())
+            let retry = t_timeout(Duration::from_secs(30), client.fetch_messages())
                 .await
-                .map_err(|_| "Full scan timed out (retry)".to_string())?
-                .map_err(|e| e.to_string())
+                .map_err(|_| "Full scan timed out (retry)".to_string())?;
+            if retry.is_ok() {
+                client.note_success();
+            }
+            retry.map_err(|e| e.to_string())
         }
         Err(_) => Err("Full scan timed out".to_string()),
     }
@@ -648,11 +660,24 @@ async fn email_fetch_incremental(
         match to_result(client.fetch_newer(&cursors).await) {
             Ok(v) => Ok(v),
             Err(first_err) => {
-                t_timeout(Duration::from_secs(20), client.reconnect_imap())
+                // Тот же backoff, что в быстром пути: иначе поллинг каждые
+                // несколько секунд поднимал новый TCP+TLS без паузы — вклад в
+                // шторм реконнектов.
+                let delay = client.note_failure();
+                log::warn!(
+                    "imap: incremental fetch failed (streak={}, reconnect in {}s): {first_err}",
+                    client.fail_streak(),
+                    delay.as_secs()
+                );
+                t_timeout(Duration::from_secs(20), client.reconnect_imap_rate_limited())
                     .await
                     .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
                     .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-                to_result(client.fetch_newer(&cursors).await)
+                let retry = to_result(client.fetch_newer(&cursors).await);
+                if retry.is_ok() {
+                    client.note_success();
+                }
+                retry
             }
         }
     })
@@ -759,17 +784,28 @@ async fn email_fetch_body(
     {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(first_err)) => {
-            t_timeout(Duration::from_secs(15), client.reconnect_imap())
+            // Поштучный фетч тоже идёт по лестнице backoff: иначе N писем
+            // подряд давали N реконнектов без паузы.
+            let delay = client.note_failure();
+            log::warn!(
+                "imap: fetch body failed (streak={}, reconnect in {}s): {first_err}",
+                client.fail_streak(),
+                delay.as_secs()
+            );
+            t_timeout(Duration::from_secs(15), client.reconnect_imap_rate_limited())
                 .await
                 .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
                 .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-            t_timeout(
+            let retry = t_timeout(
                 Duration::from_secs(25),
                 client.fetch_message_body(&uid, &folder),
             )
             .await
-            .map_err(|_| "Timed out fetching body (retry)".to_string())?
-            .map_err(|e| e.to_string())
+            .map_err(|_| "Timed out fetching body (retry)".to_string())?;
+            if retry.is_ok() {
+                client.note_success();
+            }
+            retry.map_err(|e| e.to_string())
         }
         Err(_) => Err("Timed out fetching message body".to_string()),
     }
