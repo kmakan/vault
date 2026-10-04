@@ -923,7 +923,12 @@ impl EmailClient {
                     self.fail_streak,
                     delay.as_secs()
                 );
-                self.reconnect_imap_rate_limited().await?;
+                // max_wait = полный IDLE-таймаут: паузу ждать есть где, и она
+                // не приведёт к выходу по таймауту вызывающего. При превышении
+                // reconnect_imap_rate_limited сбросит битую сессию и вернёт
+                // управление — восстановление доделает следующий тик.
+                self.reconnect_imap_rate_limited(timeout)
+                    .await?;
                 match self.idle_wait_once(folder, timeout).await {
                     Ok(outcome) => {
                         self.note_success();
@@ -946,11 +951,46 @@ impl EmailClient {
     /// путь звонков (email_fetch_incremental_fast), который дёргается из JS
     /// по таймеру — без лестницы серия сбоев давала бы новое TCP+TLS каждый
     /// тик (7с).
-    pub async fn reconnect_imap_rate_limited(&mut self) -> Result<()> {
+    pub async fn reconnect_imap_rate_limited(&mut self, max_wait: Duration) -> Result<()> {
+        // СЕССИЮ ВЫБРАСЫВАЕМ ДО паузы, а не после неё.
+        //
+        // Это и есть фикс livelock'а, наблюдённого на телефоне 04.10
+        // (0.1.209): «imap: connected» = 0 при streak=335 и
+        // «backoff wait 59s before reconnect #4» каждые 15с. Прежний код
+        // спал остаток паузы ВНУТРИ этой функции, а все вызывающие в lib.rs
+        // оборачивали её в t_timeout(15s/20s). Пауза 60с туда физически не
+        // помещалась → t_timeout срывал функцию ДО reconnect_imap(), битая
+        // сессия оставалась в self.imap_session (is_some() == true), поэтому
+        // даже ensure_connected() её не трогал. Следующий тик повторял то
+        // же самое — восстановление становилось невозможным навсегда, и
+        // клиент пил CPU каждые 15с вместо построения соединения.
+        //
+        // Теперь: битая сессия сбрасывается немедленно, поэтому любой
+        // последующий путь (ensure_connected / fetch_*) увидит «нет сессии»
+        // и построит соединение сам, когда пауза истечёт. Состояние после
+        // обрыва таймаута — всегда восстановимое.
+        if let Some(mut session) = self.imap_session.take() {
+            let _ = session.logout();
+        }
         if let Some(t) = self.connect_retry_after {
             let now = Instant::now();
             if now < t {
                 let wait = t - now;
+                // Пауза не помещается в бюджет вызывающего — НЕ спим здесь,
+                // а отдаём управление: сессия уже сброшена, reconnect доделает
+                // ближайший тик. Иначе снова выйдем по таймауту.
+                if wait > max_wait {
+                    log::info!(
+                        "imap: reconnect deferred, backoff {}s left > caller budget {}s (session dropped, retry later)",
+                        wait.as_secs(),
+                        max_wait.as_secs()
+                    );
+                    return Err(anyhow::anyhow!(
+                        "IMAP reconnect deferred: backoff {}s exceeds caller budget {}s",
+                        wait.as_secs(),
+                        max_wait.as_secs()
+                    ));
+                }
                 log::info!(
                     "imap: backoff wait {}s before reconnect #{}",
                     wait.as_secs(),
