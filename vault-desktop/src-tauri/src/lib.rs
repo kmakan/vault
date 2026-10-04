@@ -818,26 +818,51 @@ async fn email_fetch_bodies(
     state: State<'_, EmailState>,
 ) -> Result<Vec<(String, String)>, String> {
     let folder = folder.unwrap_or_else(|| "INBOX".to_string());
-    // UI-фетч тел на ОТДЕЛЬНОМ соединении: imap 2.4.1 синхронный — его
-    // uid_fetch НЕ прерывается t_timeout (идёт до сокет-таймаута 30с).
-    // На общем клиенте (поллинг + reconnect + retry) один такой фетч
-    // держал lock 60-90с, и ВСЕ параллельные fetch_bodies падали по
-    // lock-таймауту. Отдельный клиент
-    // из config: поллинг и UI не конкурируют вообще.
-    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
-        .await
-        .map_err(|_| "Timed out waiting for config lock".to_string())?
-        .clone()
+    // Батчевый фетч тел идёт через ОБЩИЙ клиент из слота 0, а не через
+    // новый EmailClient + connect_imap() на каждый вызов: тот вариант
+    // поднимал новый TCP+TLS на каждый батч и плодил IMAP-шторм
+    // (connect → обрыв ~30с → reconnect → connect …), плюс не делил
+    // лестницу backoff (note_failure/fail_streak), поэтому её streak
+    // всегда оставался 0 и паузы между реконнектами не было.
+    //
+    // Батч бывает долгим (до 60с), поэтому блокировать слот 0 нельзя:
+    // try_lock + «Busy, retry later» вместо ожидания. Пока слот занят
+    // поллингом/UI-операцией, UI покажет ошибку и повторит.
+    let Ok(mut guard) = state.0.try_lock() else {
+        return Err("Busy, retry later".to_string());
+    };
+    let client = guard
+        .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    let mut client = EmailClient::new(cfg);
-    client
-        .connect_imap()
-        .await
-        .map_err(|e| format!("Failed to connect for bodies: {e}"))?;
-    t_timeout(Duration::from_secs(60), client.fetch_bodies(&uids, &folder))
-        .await
-        .map_err(|_| "Timed out fetching message bodies".to_string())?
-        .map_err(|e| e.to_string())
+    match t_timeout(Duration::from_secs(60), client.fetch_bodies(&uids, &folder)).await {
+        Ok(Ok(v)) => {
+            client.note_success();
+            Ok(v)
+        }
+        Ok(Err(first_err)) => {
+            // Рассинхрон сессии (fetch_bodies возвращает Err, когда ВСЕ тела
+            // пустые) на общем долгоживущем соединении — лечим реконнектом
+            // по лестнице backoff, как это делают fetch_messages/fetch_body.
+            let delay = client.note_failure();
+            log::warn!(
+                "imap: fetch_bodies failed (streak={}, reconnect in {}s): {first_err}",
+                client.fail_streak(),
+                delay.as_secs()
+            );
+            t_timeout(Duration::from_secs(15), client.reconnect_imap_rate_limited())
+                .await
+                .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
+                .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
+            let retry = t_timeout(Duration::from_secs(60), client.fetch_bodies(&uids, &folder))
+                .await
+                .map_err(|_| "Timed out fetching message bodies (retry)".to_string())?;
+            if retry.is_ok() {
+                client.note_success();
+            }
+            retry.map_err(|e| e.to_string())
+        }
+        Err(_) => Err("Timed out fetching message bodies".to_string()),
+    }
 }
 
 /// Скопировать эскроу-письмо из спама/ToMyself во INBOX.
@@ -848,20 +873,20 @@ async fn email_copy_to_inbox(
     folder: String,
     state: State<'_, EmailState>,
 ) -> Result<(), String> {
-    let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
-        .await
-        .map_err(|_| "Timed out waiting for config lock".to_string())?
-        .clone()
+    // COPY тоже идёт через общий клиент из слота 0: новый EmailClient +
+    // connect_imap() на каждый вызов (как было) давал ещё один TCP+TLS
+    // в и без того штормящий IMAP-пул. Операция быстрая, но слот 0 всё
+    // равно не блокируем — try_lock, при конкуренции «Busy, retry later».
+    let Ok(mut guard) = state.0.try_lock() else {
+        return Err("Busy, retry later".to_string());
+    };
+    let client = guard
+        .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    let mut client = EmailClient::new(cfg);
-    client
-        .connect_imap()
-        .await
-        .map_err(|e| format!("Failed to connect: {e}"))?;
     t_timeout(Duration::from_secs(30), client.copy_to_inbox(&folder, &uid))
         .await
-        .map_err(|_| "Timed out copying to inbox".to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|_| "Timed out copying to inbox".to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()))
 }
 
 #[tauri::command]
@@ -875,6 +900,10 @@ async fn email_send(
     // своим транспортом. Иначе при зависшей IMAP-сессии (сломанный сокет —
     // каждая операция упирается в 30с таймаут) отправка ждала бы lock и
     // падала «Timed out waiting for email client lock».
+    // EmailClient здесь — ТОЛЬКО контейнер EmailConfig для lettre-транспорта:
+    // send_email() не обращается к imap_session и не открывает IMAP-соединение
+    // (новый EmailClient просто создаётся с imap_session: None). Поэтому на
+    // IMAP-шторм это не влияет — SMTP-соединение своё, короткоживущее.
     let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
         .map_err(|_| "Timed out waiting for config lock".to_string())?
@@ -913,6 +942,9 @@ async fn email_send_dod(
     message_id: String,
     state: State<'_, EmailState>,
 ) -> Result<bool, String> {
+    // Как и в email_send: EmailClient — только контейнер EmailConfig для
+    // lettre (SMTP через send_email_with_id). imap_session не используется,
+    // IMAP-соединение не открывается → на IMAP-шторм не влияет.
     let cfg = t_timeout(Duration::from_secs(10), state.1.lock())
         .await
         .map_err(|_| "Timed out waiting for config lock".to_string())?
