@@ -183,6 +183,48 @@ impl EmailClient {
         Duration::from_secs(BACKOFF_STEPS_SEC[idx])
     }
 
+    /// Отличать «сервера нет такой папки» от сетевого сбоя.
+    ///
+    /// Имена папок приходят ИЗ ДАННЫХ (настройки папок), а не из кода, и
+    /// формируются динамически. Если такой папки на сервере нет, SELECT
+    /// возвращает `No such folder` / `No such mailbox` (в тексте ошибки,
+    /// вместе с мусором вроде `select RELAY failed: No Response:
+    /// [CLIENTBUG] SELECT No such folder`). Это НЕ сетевая неудача: TCP жив,
+    /// TLS жив, авторизация прошла — просто ящик не создан/удалён.
+    ///
+    /// Зачем отдельная проверка (живой тест, телефон X50, 0.1.211, 04.10.2026):
+    /// клиент считал такую ошибку полноценным сетевым сбоем, звал
+    /// `note_failure()`, растил streak и уходил в backoff на 60с. За 110с
+    /// наблюдения — 59 записей «imap: reconnect deferred» при streak≈60 и
+    /// всего 8 ФАКТИЧЕСКИХ переподключений. То есть на отсутствующую папку
+    /// тратилось столько же ресурсов, сколько на реальный сетевой обрыв:
+    /// лестница backoff не отличала «сеть упала» от «папки нет».
+    ///
+    /// Проверяется ВЕСЬ цепочка источников (`source()`), а не только верхний
+    /// контекст: ошибка SELECT оборачивается в `anyhow::Context` («select
+    /// {folder} failed: …»), и верхний слой сам по себе не содержит признака.
+    /// Регистр не важен — провайдеры пишут по-разному.
+    pub fn is_missing_folder_error(err: &anyhow::Error) -> bool {
+        let is_missing = |text: &str| {
+            let t = text.to_ascii_lowercase();
+            t.contains("no such folder") || t.contains("no such mailbox")
+        };
+        // Строка цепочки целиком — ловит вложенные варианты вроде
+        // «No Response: [CLIENTBUG] SELECT No such folder».
+        if is_missing(&format!("{err:?}")) {
+            return true;
+        }
+        // Пошаговый обход цепочки — не зависит от формата Debug-вывода.
+        let mut src: Option<&(dyn std::error::Error + 'static)> = err.source();
+        while let Some(e) = src {
+            if is_missing(&e.to_string()) {
+                return true;
+            }
+            src = e.source();
+        }
+        false
+    }
+
     /// Засчитать неудачу в лестнице backoff; вернуть паузу до следующей попытки.
     pub fn note_failure(&mut self) -> Duration {
         self.fail_streak = self.fail_streak.saturating_add(1);
@@ -240,6 +282,17 @@ impl EmailClient {
                 Ok(())
             }
             Err(e) => {
+                // Ошибка «нет такой папки» — не сетевая: не засчитываем её в
+                // лестницу backoff (streak остаётся, дедлайн не продлевается).
+                // Иначе удалённый/несуществующий ящик из настроек папок
+                // выжигал бы streak до плато 60с и ронял реальные обновления.
+                if Self::is_missing_folder_error(&e) {
+                    log::info!(
+                        "imap: connect attempt reported missing folder \
+                         (no streak, no backoff): {e}"
+                    );
+                    return Err(e);
+                }
                 let delay = self.note_failure();
                 log::warn!(
                     "imap: connect failed (streak={}, next attempt in {}s): {e}",
@@ -418,7 +471,18 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        session.select(folder)?;
+        // Папки из настроек — динамические, сервер мог не создать/удалить ящик.
+        // Отсутствие папки НЕ должно выглядеть как сетевой сбой: возвращаем
+        // пустой результат, чтобы вызывающий цикл просто пропустил эту папку
+        // (без реконнекта и без роста streak). Реальные ошибки сети — в Err.
+        if let Err(e) = session.select(folder) {
+            let err = anyhow::anyhow!("select {folder} failed: {e}");
+            if Self::is_missing_folder_error(&err) {
+                eprintln!("[email] folder {folder} missing on server — skipped");
+                return Ok(Vec::new());
+            }
+            return Err(err);
+        }
 
         let message_ids = session.uid_search("ALL")?;
         let mut messages = Vec::new();
@@ -562,7 +626,18 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        session.select(folder)?;
+        // Нет такой папки → пустой результат и max_uid = 0. Ноль важен: пустой
+        // результат НЕ продвигает курсор (см. collect() в fetch_newer), поэтому
+        // пропущенный ящик не «отравляет» курсор и не заставляет клиент
+        // переподключаться. Реальные ошибки сети идут в Err как раньше.
+        if let Err(e) = session.select(folder) {
+            let err = anyhow::anyhow!("select {folder} failed: {e}");
+            if Self::is_missing_folder_error(&err) {
+                eprintln!("[email] folder {folder} missing on server — skipped");
+                return Ok((Vec::new(), 0));
+            }
+            return Err(err);
+        }
 
         let uid_list = match last_uid {
             None => session.uid_search("ALL")?,
@@ -753,9 +828,30 @@ impl EmailClient {
         // failed» навсегда (звонок при смахнутом приложении не показывался).
         // Также проверяем UIDVALIDITY? Достаточно Err: невозможно определить
         // папку — честный Err (caller делает retry).
-        let sel = session
-            .select(folder)
-            .map_err(|e| anyhow::anyhow!("select {folder} failed: {e}"))?;
+        let sel = match session.select(folder) {
+            Ok(sel) => sel,
+            Err(e) => {
+                let err = anyhow::anyhow!("select {folder} failed: {e}");
+                // Отсутствующая папка — не сетевой сбой и не рассинхрон:
+                // reconnect+retry её не создаст, вызывающий в lib.rs будет
+                // повторять попытки и в итоге уйдёт в backoff на 60с
+                // (шторм реконнектов, телефон X50, 04.10.2026). Возвращаем
+                // пустое тело БЕЗ Err — цикл пропустит эту папку и пойдёт
+                // дальше. Отличие от «теряем письмо»: здесь письма в папке
+                // физически нет, пустой кэш тела корректен.
+                if Self::is_missing_folder_error(&err) {
+                    eprintln!("[email] body fetch: folder {folder} missing — skipped");
+                    let _ = session.select("INBOX");
+                    return Ok(String::new());
+                }
+                return Err(err);
+            }
+        };
+        // Папки берутся из настроек и могут отсутствовать на сервере (удалены,
+        // не созданы провайдером). Это НЕ рассинхрон сессии: переподключение
+        // не поможет — папки всё так же нет. Пустое тело из-за РЕАЛЬНОГО
+        // рассинхрона по-прежнему даёт Err (проверка body.is_empty() ниже),
+        // чтобы вызывающий всё-таки сделал reconnect и повторил.
         if sel.exists == 0 {
             anyhow::bail!("select {folder}: mailbox empty (select failed silently?)");
         }
@@ -817,7 +913,20 @@ impl EmailClient {
         // ВСЕГДА select(folder), включая INBOX: на новом соединении (теперь
         // каждый fetch_bodies — отдельный клиент) папка не выбрана, uid_fetch
         // без select возвращает пусто.
-        let _ = session.select(folder);
+        //
+        // Отсутствующая папка — не рассинхрон: без проверки ошибки select все
+        // uid_fetch ниже вернули бы пусто, сработал bail «Empty body for ALL N
+        // uids», и вызывающий в lib.rs пошёл переподключаться по кругу
+        // (шторм реконнектов, телефон X50, 04.10.2026). Отдаём пустой батч
+        // без Err — цикл пропустит папку. Реальная ошибка сети — в Err.
+        if let Err(e) = session.select(folder) {
+            let err = anyhow::anyhow!("select {folder} failed: {e}");
+            if Self::is_missing_folder_error(&err) {
+                eprintln!("[fetch_bodies] folder={folder} missing on server — skipped");
+                return Ok(Vec::new());
+            }
+            return Err(err);
+        }
 
         let mut out = Vec::with_capacity(uids.len());
         let mut empty_uids: Vec<String> = Vec::new();
@@ -949,6 +1058,16 @@ impl EmailClient {
                 Ok(outcome)
             }
             Err(first_err) => {
+                // Отсутствие папки — НЕ сетевая неудача: не растим streak и не
+                // переподключаемся (лестница backoff остаётся для настоящих
+                // обрывов). Цикл просто пропустит эту папку.
+                if Self::is_missing_folder_error(&first_err) {
+                    log::info!(
+                        "imap: idle_wait skip — folder missing on server \
+                         (no streak, no reconnect): {first_err}"
+                    );
+                    return Ok(IdleOutcome::TimedOut);
+                }
                 // Сервер оборвал IDLE-соединение (провайдер рвёт idle-сессии,
                 // сетевой сбой) — переподключаемся и пробуем ещё раз.
                 //
@@ -1056,7 +1175,22 @@ impl EmailClient {
             .context("Not connected to IMAP server")?;
         // SELECT делаем только при смене папки — это один round-trip.
         if self.selected_folder.as_deref() != Some(folder) {
-            session.select(folder)?;
+            if let Err(e) = session.select(folder) {
+                let err = anyhow::anyhow!("select {folder} failed: {e}");
+                // Нет такой папки — это НЕ обрыв сети. Сессия жива, просто
+                // ящик удалён/не создан. Возвращаем «таймаут без новых писем»:
+                // IDLE-цикл просто пропустит эту папку, БЕЗ note_failure() и
+                // БЕЗ переподключения. Иначе клиент на каждый несуществующий
+                // ящик растил streak и уходил в backoff на 60с (X50, 0.1.211).
+                if Self::is_missing_folder_error(&err) {
+                    log::info!(
+                        "imap: idle skip folder {folder} — no such folder on server \
+                         (not a network failure, keeping session)"
+                    );
+                    return Ok(IdleOutcome::TimedOut);
+                }
+                return Err(err);
+            }
             self.selected_folder = Some(folder.to_string());
         }
         let handle = session
@@ -1228,5 +1362,29 @@ mod tests {
         let after_success: Option<Instant> = None;
         let (_, r2) = next_connect_deadline(1, after_success, t0);
         assert_eq!(r2, Duration::from_secs(2), "после успеха лестница с 2с");
+    }
+
+    /// Разделение «нет такой папки» и сетевого сбоя (живой тест, телефон X50,
+    /// 04.10.2026, 0.1.211): 59 «reconnect deferred» при streak≈60 и 8
+    /// реальных переподключений — клиент растил streak на ответ сервера об
+    /// отсутствующем ящике. Отсутствие папки обязано распознаваться и НЕ
+    /// обрабатываться как сетевая неудача.
+    #[test]
+    fn is_missing_folder_error_true_for_missing_folder() {
+        // Точная строка из лога провайдера (папка из настроек, имя динамическое).
+        let missing = anyhow::anyhow!(
+            "select RELAY failed: No Response: [CLIENTBUG] SELECT No such folder"
+        );
+        assert!(
+            EmailClient::is_missing_folder_error(&missing),
+            "«No such folder» обязан распознаваться как отсутствие папки"
+        );
+
+        // Сетевой сбой — обычный Err, лестница backoff обязана применяться.
+        let network = anyhow::anyhow!("select &BCEEPwQwBDw- failed: unexpected EOF");
+        assert!(
+            !EmailClient::is_missing_folder_error(&network),
+            "unexpected EOF — сетевой сбой, не отсутствие папки"
+        );
     }
 }
