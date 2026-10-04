@@ -129,32 +129,6 @@ pub struct EmailClient {
 /// возвращается к нормальному темпу сразу, не дожидаясь конца лестницы.
 const BACKOFF_STEPS_SEC: [u64; 5] = [2, 5, 15, 30, 60];
 
-/// Вычислить дедлайн следующей CONNECT-попытки и остаток паузы.
-///
-/// Вынесено в свободную функцию, чтобы правило можно было покрыть тестом без
-/// `EmailConfig` и без сети. Ключевое свойство — **дедлайн не продлевается**:
-/// если активная пауза ещё не истекла, возвращается тот же самый момент и тот
-/// же остаток, сколько был до этой неудачи. Иначе серия неудач (а фаст-путь
-/// «сессии нет → ошибка → note_failure» повторяется каждые ~3мс) бесконечно
-/// сдвигала бы дедлайн вперёд, и пауза не истекала бы НИКОГДА — сессия не
-/// строилась бы никогда (livelock, телефон X50, 04.10.2026, 0.1.210).
-///
-/// `(fail_streak, deadline, now) -> (новый deadline, остаток)`
-fn next_connect_deadline(
-    fail_streak: u32,
-    deadline: Option<Instant>,
-    now: Instant,
-) -> (Option<Instant>, Duration) {
-    match deadline {
-        Some(existing) if existing > now => (Some(existing), existing - now),
-        _ => {
-            let idx = (fail_streak.saturating_sub(1) as usize).min(BACKOFF_STEPS_SEC.len() - 1);
-            let delay = Duration::from_secs(BACKOFF_STEPS_SEC[idx]);
-            (Some(now + delay), delay)
-        }
-    }
-}
-
 impl EmailClient {
     pub fn new(config: EmailConfig) -> Self {
         Self {
@@ -183,73 +157,14 @@ impl EmailClient {
         Duration::from_secs(BACKOFF_STEPS_SEC[idx])
     }
 
-    /// Отличать «сервера нет такой папки» от сетевого сбоя.
-    ///
-    /// Имена папок приходят ИЗ ДАННЫХ (настройки папок), а не из кода, и
-    /// формируются динамически. Если такой папки на сервере нет, SELECT
-    /// возвращает `No such folder` / `No such mailbox` (в тексте ошибки,
-    /// вместе с мусором вроде `select RELAY failed: No Response:
-    /// [CLIENTBUG] SELECT No such folder`). Это НЕ сетевая неудача: TCP жив,
-    /// TLS жив, авторизация прошла — просто ящик не создан/удалён.
-    ///
-    /// Зачем отдельная проверка (живой тест, телефон X50, 0.1.211, 04.10.2026):
-    /// клиент считал такую ошибку полноценным сетевым сбоем, звал
-    /// `note_failure()`, растил streak и уходил в backoff на 60с. За 110с
-    /// наблюдения — 59 записей «imap: reconnect deferred» при streak≈60 и
-    /// всего 8 ФАКТИЧЕСКИХ переподключений. То есть на отсутствующую папку
-    /// тратилось столько же ресурсов, сколько на реальный сетевой обрыв:
-    /// лестница backoff не отличала «сеть упала» от «папки нет».
-    ///
-    /// Проверяется ВЕСЬ цепочка источников (`source()`), а не только верхний
-    /// контекст: ошибка SELECT оборачивается в `anyhow::Context` («select
-    /// {folder} failed: …»), и верхний слой сам по себе не содержит признака.
-    /// Регистр не важен — провайдеры пишут по-разному.
-    pub fn is_missing_folder_error(err: &anyhow::Error) -> bool {
-        let is_missing = |text: &str| {
-            let t = text.to_ascii_lowercase();
-            t.contains("no such folder") || t.contains("no such mailbox")
-        };
-        // Строка цепочки целиком — ловит вложенные варианты вроде
-        // «No Response: [CLIENTBUG] SELECT No such folder».
-        if is_missing(&format!("{err:?}")) {
-            return true;
-        }
-        // Пошаговый обход цепочки — не зависит от формата Debug-вывода.
-        let mut src: Option<&(dyn std::error::Error + 'static)> = err.source();
-        while let Some(e) = src {
-            if is_missing(&e.to_string()) {
-                return true;
-            }
-            src = e.source();
-        }
-        false
-    }
-
     /// Засчитать неудачу в лестнице backoff; вернуть паузу до следующей попытки.
     pub fn note_failure(&mut self) -> Duration {
         self.fail_streak = self.fail_streak.saturating_add(1);
-        // ДЕДЛАЙН МОНОТОННЫЙ: новая неудача НЕ передвигает его вперёд.
-        //
-        // Зачем: прежний код писал `connect_retry_after = now + delay` на КАЖДОЙ
-        // неудаче. При активном фаст-пути (тик каждые ~3мс, пока сессии нет)
-        // дедлайн непрерывно сдвигался вперёд, поэтому пауза НИКОГДА не
-        // истекала: ensure_connected() вечно возвращал «IMAP connect backoff
-        // active», а reconnect_imap_rate_limited() вечно писал «deferred».
-        // На живом тесте (телефон X50, 04.10, 0.1.210) это выглядело как
-        // 32 «reconnect deferred» за 40с при streak=492 и НУЛЕ успешных
-        // подключений — livelock номер два, уже без шторма TCP, но с тем же
-        // корнем: сессия никогда не строилась.
-        //
-        // Теперь: активная (ещё не истёкшая) пауза НЕ продлевается — новые
-        // неудачи лишь считаются в streak, но дедлайн остаётся тем, что был
-        // назначен ПЕРВОЙ неудачей серии. Иначе серия снова уводит дедлайн
-        // вперёд и он не истекает никогда (ровно тот же livelock).
-        // Когда паузы нет (первая неудача серии / предыдущая истекла) —
-        // назначаем now + delay. Успех через note_success() сбрасывает всё.
-        let now = Instant::now();
-        let (deadline, remaining) = next_connect_deadline(self.fail_streak, self.connect_retry_after, now);
-        self.connect_retry_after = deadline;
-        remaining
+        let delay = self.backoff_delay();
+        // Следующая CONNECT-попытка (из любого вызывающего) не раньше конца паузы:
+        // серия неудач не должна превращаться в серию TCP+TLS-рукопожатий.
+        self.connect_retry_after = Some(Instant::now() + delay);
+        delay
     }
 
     /// Успех — лестница backoff сброшена, следующий сбой снова начнётся с 2с.
@@ -282,17 +197,6 @@ impl EmailClient {
                 Ok(())
             }
             Err(e) => {
-                // Ошибка «нет такой папки» — не сетевая: не засчитываем её в
-                // лестницу backoff (streak остаётся, дедлайн не продлевается).
-                // Иначе удалённый/несуществующий ящик из настроек папок
-                // выжигал бы streak до плато 60с и ронял реальные обновления.
-                if Self::is_missing_folder_error(&e) {
-                    log::info!(
-                        "imap: connect attempt reported missing folder \
-                         (no streak, no backoff): {e}"
-                    );
-                    return Err(e);
-                }
                 let delay = self.note_failure();
                 log::warn!(
                     "imap: connect failed (streak={}, next attempt in {}s): {e}",
@@ -471,18 +375,7 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        // Папки из настроек — динамические, сервер мог не создать/удалить ящик.
-        // Отсутствие папки НЕ должно выглядеть как сетевой сбой: возвращаем
-        // пустой результат, чтобы вызывающий цикл просто пропустил эту папку
-        // (без реконнекта и без роста streak). Реальные ошибки сети — в Err.
-        if let Err(e) = session.select(folder) {
-            let err = anyhow::anyhow!("select {folder} failed: {e}");
-            if Self::is_missing_folder_error(&err) {
-                eprintln!("[email] folder {folder} missing on server — skipped");
-                return Ok(Vec::new());
-            }
-            return Err(err);
-        }
+        session.select(folder)?;
 
         let message_ids = session.uid_search("ALL")?;
         let mut messages = Vec::new();
@@ -626,18 +519,7 @@ impl EmailClient {
             .as_mut()
             .context("Not connected to IMAP server")?;
 
-        // Нет такой папки → пустой результат и max_uid = 0. Ноль важен: пустой
-        // результат НЕ продвигает курсор (см. collect() в fetch_newer), поэтому
-        // пропущенный ящик не «отравляет» курсор и не заставляет клиент
-        // переподключаться. Реальные ошибки сети идут в Err как раньше.
-        if let Err(e) = session.select(folder) {
-            let err = anyhow::anyhow!("select {folder} failed: {e}");
-            if Self::is_missing_folder_error(&err) {
-                eprintln!("[email] folder {folder} missing on server — skipped");
-                return Ok((Vec::new(), 0));
-            }
-            return Err(err);
-        }
+        session.select(folder)?;
 
         let uid_list = match last_uid {
             None => session.uid_search("ALL")?,
@@ -828,30 +710,9 @@ impl EmailClient {
         // failed» навсегда (звонок при смахнутом приложении не показывался).
         // Также проверяем UIDVALIDITY? Достаточно Err: невозможно определить
         // папку — честный Err (caller делает retry).
-        let sel = match session.select(folder) {
-            Ok(sel) => sel,
-            Err(e) => {
-                let err = anyhow::anyhow!("select {folder} failed: {e}");
-                // Отсутствующая папка — не сетевой сбой и не рассинхрон:
-                // reconnect+retry её не создаст, вызывающий в lib.rs будет
-                // повторять попытки и в итоге уйдёт в backoff на 60с
-                // (шторм реконнектов, телефон X50, 04.10.2026). Возвращаем
-                // пустое тело БЕЗ Err — цикл пропустит эту папку и пойдёт
-                // дальше. Отличие от «теряем письмо»: здесь письма в папке
-                // физически нет, пустой кэш тела корректен.
-                if Self::is_missing_folder_error(&err) {
-                    eprintln!("[email] body fetch: folder {folder} missing — skipped");
-                    let _ = session.select("INBOX");
-                    return Ok(String::new());
-                }
-                return Err(err);
-            }
-        };
-        // Папки берутся из настроек и могут отсутствовать на сервере (удалены,
-        // не созданы провайдером). Это НЕ рассинхрон сессии: переподключение
-        // не поможет — папки всё так же нет. Пустое тело из-за РЕАЛЬНОГО
-        // рассинхрона по-прежнему даёт Err (проверка body.is_empty() ниже),
-        // чтобы вызывающий всё-таки сделал reconnect и повторил.
+        let sel = session
+            .select(folder)
+            .map_err(|e| anyhow::anyhow!("select {folder} failed: {e}"))?;
         if sel.exists == 0 {
             anyhow::bail!("select {folder}: mailbox empty (select failed silently?)");
         }
@@ -913,20 +774,7 @@ impl EmailClient {
         // ВСЕГДА select(folder), включая INBOX: на новом соединении (теперь
         // каждый fetch_bodies — отдельный клиент) папка не выбрана, uid_fetch
         // без select возвращает пусто.
-        //
-        // Отсутствующая папка — не рассинхрон: без проверки ошибки select все
-        // uid_fetch ниже вернули бы пусто, сработал bail «Empty body for ALL N
-        // uids», и вызывающий в lib.rs пошёл переподключаться по кругу
-        // (шторм реконнектов, телефон X50, 04.10.2026). Отдаём пустой батч
-        // без Err — цикл пропустит папку. Реальная ошибка сети — в Err.
-        if let Err(e) = session.select(folder) {
-            let err = anyhow::anyhow!("select {folder} failed: {e}");
-            if Self::is_missing_folder_error(&err) {
-                eprintln!("[fetch_bodies] folder={folder} missing on server — skipped");
-                return Ok(Vec::new());
-            }
-            return Err(err);
-        }
+        let _ = session.select(folder);
 
         let mut out = Vec::with_capacity(uids.len());
         let mut empty_uids: Vec<String> = Vec::new();
@@ -1058,16 +906,6 @@ impl EmailClient {
                 Ok(outcome)
             }
             Err(first_err) => {
-                // Отсутствие папки — НЕ сетевая неудача: не растим streak и не
-                // переподключаемся (лестница backoff остаётся для настоящих
-                // обрывов). Цикл просто пропустит эту папку.
-                if Self::is_missing_folder_error(&first_err) {
-                    log::info!(
-                        "imap: idle_wait skip — folder missing on server \
-                         (no streak, no reconnect): {first_err}"
-                    );
-                    return Ok(IdleOutcome::TimedOut);
-                }
                 // Сервер оборвал IDLE-соединение (провайдер рвёт idle-сессии,
                 // сетевой сбой) — переподключаемся и пробуем ещё раз.
                 //
@@ -1085,12 +923,7 @@ impl EmailClient {
                     self.fail_streak,
                     delay.as_secs()
                 );
-                // max_wait = полный IDLE-таймаут: паузу ждать есть где, и она
-                // не приведёт к выходу по таймауту вызывающего. При превышении
-                // reconnect_imap_rate_limited сбросит битую сессию и вернёт
-                // управление — восстановление доделает следующий тик.
-                self.reconnect_imap_rate_limited(timeout)
-                    .await?;
+                self.reconnect_imap_rate_limited().await?;
                 match self.idle_wait_once(folder, timeout).await {
                     Ok(outcome) => {
                         self.note_success();
@@ -1113,46 +946,11 @@ impl EmailClient {
     /// путь звонков (email_fetch_incremental_fast), который дёргается из JS
     /// по таймеру — без лестницы серия сбоев давала бы новое TCP+TLS каждый
     /// тик (7с).
-    pub async fn reconnect_imap_rate_limited(&mut self, max_wait: Duration) -> Result<()> {
-        // СЕССИЮ ВЫБРАСЫВАЕМ ДО паузы, а не после неё.
-        //
-        // Это и есть фикс livelock'а, наблюдённого на телефоне 04.10
-        // (0.1.209): «imap: connected» = 0 при streak=335 и
-        // «backoff wait 59s before reconnect #4» каждые 15с. Прежний код
-        // спал остаток паузы ВНУТРИ этой функции, а все вызывающие в lib.rs
-        // оборачивали её в t_timeout(15s/20s). Пауза 60с туда физически не
-        // помещалась → t_timeout срывал функцию ДО reconnect_imap(), битая
-        // сессия оставалась в self.imap_session (is_some() == true), поэтому
-        // даже ensure_connected() её не трогал. Следующий тик повторял то
-        // же самое — восстановление становилось невозможным навсегда, и
-        // клиент пил CPU каждые 15с вместо построения соединения.
-        //
-        // Теперь: битая сессия сбрасывается немедленно, поэтому любой
-        // последующий путь (ensure_connected / fetch_*) увидит «нет сессии»
-        // и построит соединение сам, когда пауза истечёт. Состояние после
-        // обрыва таймаута — всегда восстановимое.
-        if let Some(mut session) = self.imap_session.take() {
-            let _ = session.logout();
-        }
+    pub async fn reconnect_imap_rate_limited(&mut self) -> Result<()> {
         if let Some(t) = self.connect_retry_after {
             let now = Instant::now();
             if now < t {
                 let wait = t - now;
-                // Пауза не помещается в бюджет вызывающего — НЕ спим здесь,
-                // а отдаём управление: сессия уже сброшена, reconnect доделает
-                // ближайший тик. Иначе снова выйдем по таймауту.
-                if wait > max_wait {
-                    log::info!(
-                        "imap: reconnect deferred, backoff {}s left > caller budget {}s (session dropped, retry later)",
-                        wait.as_secs(),
-                        max_wait.as_secs()
-                    );
-                    return Err(anyhow::anyhow!(
-                        "IMAP reconnect deferred: backoff {}s exceeds caller budget {}s",
-                        wait.as_secs(),
-                        max_wait.as_secs()
-                    ));
-                }
                 log::info!(
                     "imap: backoff wait {}s before reconnect #{}",
                     wait.as_secs(),
@@ -1175,22 +973,7 @@ impl EmailClient {
             .context("Not connected to IMAP server")?;
         // SELECT делаем только при смене папки — это один round-trip.
         if self.selected_folder.as_deref() != Some(folder) {
-            if let Err(e) = session.select(folder) {
-                let err = anyhow::anyhow!("select {folder} failed: {e}");
-                // Нет такой папки — это НЕ обрыв сети. Сессия жива, просто
-                // ящик удалён/не создан. Возвращаем «таймаут без новых писем»:
-                // IDLE-цикл просто пропустит эту папку, БЕЗ note_failure() и
-                // БЕЗ переподключения. Иначе клиент на каждый несуществующий
-                // ящик растил streak и уходил в backoff на 60с (X50, 0.1.211).
-                if Self::is_missing_folder_error(&err) {
-                    log::info!(
-                        "imap: idle skip folder {folder} — no such folder on server \
-                         (not a network failure, keeping session)"
-                    );
-                    return Ok(IdleOutcome::TimedOut);
-                }
-                return Err(err);
-            }
+            session.select(folder)?;
             self.selected_folder = Some(folder.to_string());
         }
         let handle = session
@@ -1283,108 +1066,4 @@ fn extract_header(header: &str, name: &str) -> Option<String> {
         .find(|line| line.to_lowercase().starts_with(&name.to_lowercase()))
         .and_then(|line| line.splitn(2, ':').nth(1))
         .map(|value| value.trim().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Регресс на livelock №2 (живой тест, телефон X50, 04.10.2026, 0.1.210):
-    /// серия неудач не должна БЕСКОНЕЧНО отодвигать дедлайн следующего CONNECT.
-    /// Прежний код писал `now + delay` на каждой неудаче, поэтому при
-    /// фаст-пути (тик каждые ~3мс) пауза не истекала НИКОГДА: 32 «reconnect
-    /// deferred» за 40с при streak=492 и нул успешных подключений.
-    #[test]
-    fn connect_deadline_is_not_extended_by_failure_series() {
-        let t0 = Instant::now();
-        // Первая неудача серии: пауза назначается по лестнице (streak=1 → 2с).
-        let (mut deadline, remaining) = next_connect_deadline(1, None, t0);
-        assert_eq!(remaining, Duration::from_secs(2));
-        let first_deadline = deadline.expect("дедлайн назначен");
-
-        // 500 неудач подряд, каждая через 3мс (тик фаст-пути). Дедлайн обязан
-        // остаться ТОТ ЖЕ — иначе пауза не истекает никогда.
-        for i in 2..=500u32 {
-            let now = t0 + Duration::from_millis(3 * (i - 1) as u64);
-            let (new_deadline, _) = next_connect_deadline(i, deadline, now);
-            assert_eq!(
-                new_deadline,
-                deadline,
-                "неудача #{i} передвинула дедлайн: {new_deadline:?} != {deadline:?}"
-            );
-            deadline = new_deadline;
-        }
-        assert_eq!(deadline, Some(first_deadline));
-
-        // Спустя 2с пауза ИСТЕКАЕТ: следующая неудача назначает новую паузу.
-        let after = first_deadline + Duration::from_millis(1);
-        let (d2, r2) = next_connect_deadline(500, deadline, after);
-        assert_eq!(r2, Duration::from_secs(60), "после истечения — плато 60с");
-        assert!(d2 > deadline, "истёкшая пауза должна назначать новую");
-    }
-
-    /// Без предыдущей серии лестница идёт 2с → 5с → 15с → 30с → 60с (плато).
-    /// Каждая ступень «начинается» после полного истечения предыдущей.
-    #[test]
-    fn backoff_ladder_then_plateau() {
-        let t0 = Instant::now();
-        let mut deadline: Option<Instant> = None;
-        let mut offset = Duration::ZERO;
-        for (streak, want) in [
-            (1u32, 2u64),
-            (2, 5),
-            (3, 15),
-            (4, 30),
-            (5, 60),
-            (6, 60),
-            (99, 60),
-        ] {
-            let now = t0 + offset;
-            let (d, r) = next_connect_deadline(streak, deadline, now);
-            assert_eq!(r, Duration::from_secs(want), "ступень streak={streak}");
-            deadline = d;
-            offset = d.expect("дедлайн") - t0;
-        }
-    }
-
-    /// note_success() обязан полностью сбрасывать лестницу backoff:
-    /// после успеха deadline = None → паузы нет, и ensure_connected()
-    /// сразу идёт к провайдеру (лестница начинается заново с 2с).
-    #[test]
-    fn note_success_resets_backoff() {
-        let t0 = Instant::now();
-        // Глубокая серия неудач назначает плато 60с.
-        let (deadline, r) = next_connect_deadline(7, None, t0);
-        assert_eq!(r, Duration::from_secs(60));
-        assert!(deadline.is_some());
-
-        // note_success() → connect_retry_after = None.
-        let after_success: Option<Instant> = None;
-        let (_, r2) = next_connect_deadline(1, after_success, t0);
-        assert_eq!(r2, Duration::from_secs(2), "после успеха лестница с 2с");
-    }
-
-    /// Разделение «нет такой папки» и сетевого сбоя (живой тест, телефон X50,
-    /// 04.10.2026, 0.1.211): 59 «reconnect deferred» при streak≈60 и 8
-    /// реальных переподключений — клиент растил streak на ответ сервера об
-    /// отсутствующем ящике. Отсутствие папки обязано распознаваться и НЕ
-    /// обрабатываться как сетевая неудача.
-    #[test]
-    fn is_missing_folder_error_true_for_missing_folder() {
-        // Точная строка из лога провайдера (папка из настроек, имя динамическое).
-        let missing = anyhow::anyhow!(
-            "select RELAY failed: No Response: [CLIENTBUG] SELECT No such folder"
-        );
-        assert!(
-            EmailClient::is_missing_folder_error(&missing),
-            "«No such folder» обязан распознаваться как отсутствие папки"
-        );
-
-        // Сетевой сбой — обычный Err, лестница backoff обязана применяться.
-        let network = anyhow::anyhow!("select &BCEEPwQwBDw- failed: unexpected EOF");
-        assert!(
-            !EmailClient::is_missing_folder_error(&network),
-            "unexpected EOF — сетевой сбой, не отсутствие папки"
-        );
-    }
 }
