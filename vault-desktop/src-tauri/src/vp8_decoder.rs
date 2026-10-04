@@ -2,7 +2,7 @@
 //! Заменяет JS VideoDecoder — WebKitGTK не рисует VideoFrame в canvas.
 //! На входе: VP8-битстрим (кадр). На выходе: RGBA-буфер для canvas.
 
-use std::ffi::{c_int, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 use std::ptr;
 
 // libc::malloc/free — для vpx_codec_ctx (libvpx выделяет внутри себя,
@@ -13,15 +13,19 @@ use std::ptr;
 // FFI к libvpx (минимальный набор для VP8-декодера)
 #[repr(C)]
 struct vpx_codec_ctx {
-    _private: [u8; 0],
+    // Opaque — libvpx выделяет внутри. Не [u8; 0] — это zero-size UB.
+    // Достаточно для vpx_codec_ctx_t (~512 байт на 1.17).
+    _private: [u8; 1024],
 }
 
+// vpx_codec_dec_cfg_t: в системном /usr/include/vpx/vpx_decoder.h
+// ровно ТРИ поля (threads, w, h). Поле allow_lowbitdepth — из старой
+// модификации; оставленное лишнее поле ломало бы ABI-совместимость cfg.
 #[repr(C)]
 struct vpx_codec_dec_cfg {
     threads: c_uint,
     w: c_uint,
     h: c_uint,
-    allow_lowbitdepth: c_uint,
 }
 
 #[repr(C)]
@@ -70,7 +74,9 @@ extern "C" {
         iter: *mut *mut c_void,
     ) -> *mut vpx_image;
     fn vpx_codec_destroy(ctx: *mut vpx_codec_ctx) -> c_int;
-    fn vpx_codec_error(ctx: *mut vpx_codec_ctx) -> *const u8;
+    // Возвращает `const char*` — c_char (i8 на x86), а НЕ u8:
+    // иначе CStr::from_ptr получает *const i8 и падает компиляция.
+    fn vpx_codec_error(ctx: *mut vpx_codec_ctx) -> *const i8;
 }
 
 const VPX_DECODER_ABI_VERSION: c_int = 12;
@@ -86,7 +92,6 @@ impl Vp8Decoder {
             threads: 4,
             w: 0,
             h: 0,
-            allow_lowbitdepth: 0,
         };
         let ctx = unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<vpx_codec_ctx>()) as *mut vpx_codec_ctx };
         if ctx.is_null() {
@@ -180,3 +185,66 @@ impl Drop for Vp8Decoder {
 }
 
 unsafe impl Send for Vp8Decoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Настоящий VP8 key-frame 16x16 (серый Y=128), сгенерирован vpxenc 1.17:
+    ///   vpxenc --codec=vp8 -w 16 -h 16 --ivf gray.ivf  →  кадр без IVF-обёртки.
+    /// Ручные байты из спецификации декодер libvpx отвергает
+    /// («Bitstream not supported by this decoder») — нужен настоящий энтропийный код.
+    const VP8_KEYFRAME_16X16: &[u8] = &[
+        0xb0, 0x02, 0x00, 0x9d, 0x01, 0x2a, 0x10, 0x00, 0x10, 0x00, 0x00, 0x47, 0x08, 0x85, 0x85,
+        0x88, 0x85, 0x84, 0x88, 0x02, 0x02, 0x00, 0x0e, 0xb2, 0x7f, 0xf2, 0xfa, 0xb9, 0x08, 0x55,
+        0x00, 0xfe, 0xf8, 0xa8, 0xe7, 0xfe, 0xaf, 0xff, 0xff, 0x4d, 0xfb, 0xe1, 0x8a, 0x1f, 0xc2,
+        0xac, 0xe8, 0x4b, 0x4a, 0xfc, 0x28, 0x3c, 0xee, 0x26, 0x32, 0x3a, 0xa6, 0x9d, 0xa2, 0xa2,
+        0xb7, 0x3f, 0xb8, 0xe8, 0x0f, 0x79, 0xb3, 0x43, 0xb4, 0xe6, 0xfa, 0x1f, 0x7b, 0x7a, 0xe9,
+        0x26, 0xf0, 0x97, 0xf3, 0x74, 0x30, 0x58, 0x00,
+    ];
+
+    #[test]
+    fn decodes_vp8_keyframe_to_rgba() {
+        let Ok(mut dec) = Vp8Decoder::new() else {
+            // libvpx нет в системе — тест не применим, но это не падение.
+            eprintln!("[vp8] libvpx unavailable, skipping");
+            return;
+        };
+        let out = dec.decode(VP8_KEYFRAME_16X16);
+        let (rgba, w, h) = out.expect("valid key-frame must decode");
+        assert_eq!((w, h), (16, 16), "unexpected frame size");
+        assert_eq!(rgba.len(), 16 * 16 * 4, "RGBA buffer must be w*h*4");
+        // Пиксели серые: R≈G≈B, альфа 255.
+        assert_eq!(rgba[3], 255, "alpha must be opaque");
+        assert!(
+            rgba[0].abs_diff(rgba[1]) <= 2 && rgba[1].abs_diff(rgba[2]) <= 2,
+            "grey input must yield near-grey RGB: {:?}",
+            &rgba[..3]
+        );
+    }
+
+    #[test]
+    fn rejects_garbage_without_panic() {
+        let Ok(mut dec) = Vp8Decoder::new() else {
+            return;
+        };
+        // Мусор не должен паниковать (особенно при abort-профиле) —
+        // максимум None.
+        assert!(dec.decode(&[0xde, 0xad, 0xbe, 0xef]).is_none());
+    }
+
+    #[test]
+    fn context_is_not_zero_sized() {
+        // Регрессия: zero-size аллокация ctx = heap corruption.
+        assert!(
+            std::mem::size_of::<vpx_codec_ctx>() >= 512,
+            "ctx buffer must cover real vpx_codec_ctx_t"
+        );
+    }
+
+    #[test]
+    fn dec_cfg_matches_c_abi() {
+        // В C vpx_codec_dec_cfg_t — ровно 3 × unsigned int = 12 байт.
+        assert_eq!(std::mem::size_of::<vpx_codec_dec_cfg>(), 12);
+    }
+}

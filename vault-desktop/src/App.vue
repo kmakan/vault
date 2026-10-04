@@ -1607,7 +1607,7 @@ export default {
       if (!this.callVideoOn) {
         try { await this.startCallVideo(); } catch (e) { console.warn('[video] auto-start failed:', e); return; }
       }
-      Video.decodeFrame(p.rgba, p.width, p.height);
+      Video.decodeFrame(p);
     }).catch(e => console.warn('[video] listen frame failed:', e));
     // Rust IDLE-монитор: «mail-changed» приходит из tokio-таска
     // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.

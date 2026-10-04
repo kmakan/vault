@@ -232,6 +232,7 @@ export function stopCamera() {
 
 let decoder = null;
 let canvasCtx = null;
+let remoteCanvasEl = null; // canvas для remote-видео (RGBA path)
 
 /**
  * Запустить приём remote-видео: Rust-reader (media_video_start) шлёт
@@ -242,11 +243,24 @@ let canvasCtx = null;
  * @returns {boolean} true если декодер запущен
  */
 export async function startRemoteVideo(callId, canvasEl) {
-  if (!('VideoDecoder' in window)) {
-    console.warn('[video] VideoDecoder unavailable — no remote video');
-    return false;
-  }
   if (decoder) return true;
+
+  // Сохраняем canvas для RGBA path (Rust vp8_decoder шлёт RGBA, не VP8)
+  remoteCanvasEl = canvasEl;
+  if (canvasEl) {
+    canvasEl.width = VIDEO_WIDTH;
+    canvasEl.height = VIDEO_HEIGHT;
+    canvasCtx = canvasEl.getContext('2d');
+  }
+
+  // WebCodecs нужен ТОЛЬКО для VP8-пути (Android: Rust шлёт VP8-битстрим).
+  // На desktop кадры приходят готовым RGBA из Rust vp8_decoder, а WebKitGTK
+  // VideoDecoder не имеет вовсе — ранний return по его отсутствию гасил
+  // desktop-видео целиком (startCallVideo получал false и выключал videoOn).
+  if (!('VideoDecoder' in window)) {
+    console.log('[video] VideoDecoder unavailable — RGBA path (Rust decoder)');
+    return true;
+  }
 
   decoder = new VideoDecoder({
     output: (frame) => {
@@ -267,6 +281,35 @@ export async function startRemoteVideo(callId, canvasEl) {
   return true;
 }
 
+/**
+ * Обработчик события 'call-video-frame'.
+ *
+ * Два формата от Rust (media.rs):
+ *   - { rgba, width, height } — desktop: VP8 уже декодирован в Rust (libvpx).
+ *   - { vp8 }                — Android: сырой VP8, декодируем здесь WebCodecs.
+ */
+export function decodeFrame(payload) {
+  const p = payload || {};
+  if (p.vp8) { decodeVp8Chunk(p.vp8); return; }
+  if (p.rgba) decodeRgbaFrame(p.rgba, p.width, p.height);
+}
+
+function decodeVp8Chunk(base64Vp8) {
+  if (!decoder || decoder.state !== 'configured') return;
+  try {
+    const raw = atob(base64Vp8);
+    const data = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
+    decoder.decode(new EncodedVideoChunk({
+      type: 'key',
+      timestamp: performance.now() * 1000,
+      data,
+    }));
+  } catch (e) {
+    // Битый/пропущенный кадр — следующий key-frame восстановит поток.
+  }
+}
+
 function drawFrame(canvasEl, frame) {
   if (!canvasEl) return;
   if (!canvasCtx || canvasCtx.canvas !== canvasEl) {
@@ -283,14 +326,18 @@ function drawFrame(canvasEl, frame) {
 export function stopRemoteVideo() {
   try { if (decoder) { decoder.flush().catch(() => {}); decoder.close(); } } catch (e) {}
   decoder = null;
+  // Очищаем canvas: убираем последний кадр (чёрный экран), иначе
+  // при hangup остаётся «замёрзшее» видео.
+  if (canvasCtx && canvasCtx.canvas) {
+    canvasCtx.clearRect(0, 0, canvasCtx.canvas.width, canvasCtx.canvas.height);
+  }
   canvasCtx = null;
 }
 
 /**
- * Декодировать один RGBA-кадр (обработчик события call-video-frame).
- * Rust (vp8_decoder) шлёт готовый RGBA-буфер — VP8 уже декодирован в Rust.
+ * Отрисовать готовый RGBA-кадр (desktop: Rust vp8_decoder декодировал VP8).
  */
-export function decodeFrame(base64Rgba, width, height) {
+function decodeRgbaFrame(base64Rgba, width, height) {
   if (!canvasCtx || !canvasCtx.canvas) return;
   try {
     // base64 → Uint8Array → ImageData → canvas

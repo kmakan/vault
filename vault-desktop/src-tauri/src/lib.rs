@@ -19,6 +19,7 @@ mod media;
 mod storage;
 // Видеозвонки (M3, шаг 2/3): захват камеры + запись кадров в VP8-трек звонка.
 mod video;
+#[cfg(not(target_os = "android"))]
 mod vp8_decoder;
 // Headless IMAP-монитор для FGS-процесса: уведомления при убитом
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.

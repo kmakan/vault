@@ -994,6 +994,12 @@ impl CallMediaManager {
             let mut sample_builder = SampleBuilder::new(32, Vp8Packet::default(), crate::video::VP8_CLOCK_RATE);
             // Rust-декодер: VP8 → RGBA (WebKitGTK не рисует VideoFrame в canvas).
             // Canvas получает готовый RGBA-буфер через ImageData.putImageData.
+            //
+            // Android: системной libvpx в NDK нет (линковка `-lvpx` падает),
+            // поэтому vp8_decoder скомпилирован только для non-android.
+            // Там кадр уходит в JS как VP8-битстрим — WebView (Chrome)
+            // декодирует через WebCodecs VideoDecoder.
+            #[cfg(not(target_os = "android"))]
             let mut vp8_decoder = match crate::vp8_decoder::Vp8Decoder::new() {
                 Ok(d) => Some(d),
                 Err(e) => {
@@ -1040,25 +1046,36 @@ impl CallMediaManager {
                                     if frame.is_empty() {
                                         continue;
                                     }
-                                    // Rust-декодер: VP8 → RGBA
-                                    let (rgba, w, h) = match vp8_decoder.as_mut().and_then(|d| d.decode(&frame)) {
-                                        Some(r) => r,
+                                    // Rust-декодер (non-android): VP8 → RGBA.
+                                    // Android: шлём VP8-битстрим, JS декодирует.
+                                    #[cfg(not(target_os = "android"))]
+                                    let payload = match vp8_decoder.as_mut().and_then(|d| d.decode(&frame)) {
+                                        Some((rgba, w, h)) => {
+                                            n_emit += 1;
+                                            if n_emit <= 2 || n_emit % 150 == 0 {
+                                                eprintln!("[video] emit frame #{n_emit} {w}x{h} len={}", rgba.len());
+                                            }
+                                            serde_json::json!({
+                                                "callId": cid,
+                                                "width": w,
+                                                "height": h,
+                                                "rgba": base64::engine::general_purpose::STANDARD.encode(&rgba),
+                                            })
+                                        }
                                         None => continue, // декодер не инициализирован или кадр не готов
                                     };
-                                    n_emit += 1;
-                                    if n_emit <= 2 || n_emit % 150 == 0 {
-                                        eprintln!("[video] emit frame #{n_emit} {}x{} len={}", w, h, rgba.len());
-                                    }
-                                    // Кадр в UI: RGBA-буфер для canvas.
-                                    let _ = app.emit(
-                                        "call-video-frame",
+                                    #[cfg(target_os = "android")]
+                                    let payload = {
+                                        n_emit += 1;
+                                        if n_emit <= 2 || n_emit % 150 == 0 {
+                                            eprintln!("[video] emit VP8 frame #{n_emit} len={}", frame.len());
+                                        }
                                         serde_json::json!({
                                             "callId": cid,
-                                            "width": w,
-                                            "height": h,
-                                            "rgba": base64::engine::general_purpose::STANDARD.encode(&rgba),
-                                        }),
-                                    );
+                                            "vp8": base64::engine::general_purpose::STANDARD.encode(&frame),
+                                        })
+                                    };
+                                    let _ = app.emit("call-video-frame", payload);
                                 }
                             }
                             TrackRemoteEvent::OnEnded | TrackRemoteEvent::OnEnding => {
