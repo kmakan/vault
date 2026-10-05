@@ -2527,7 +2527,12 @@ export default {
     // Вызывается при fingerprint-матчинге у ПОЛУЧАТЕЛЯ (поллинг/loadMessages).
     async migrateChatHistory(oldEmail, newEmail) {
       try {
-        const ns = this.email || 'anon';
+        // ВАЖНО: здесь переименовывается ключ ЧАТА С СОБЕСЕДНИКОМ
+        // (chat-cache:<email пира>), когда пир сменил почту, а не наш
+        // account-namespace. Поэтому account идёт через резолвер
+        // (identity = fp:<fingerprint>), а пир остаётся почтой — она
+        // транспорт и в ключе чата.
+        const ns = this.email ? await accountNamespace(this.email) : 'anon';
         const oldKey = 'chat-cache:' + oldEmail;
         const newKey = 'chat-cache:' + newEmail;
         const oldCache = await db.kvGet(ns, oldKey);
@@ -2535,6 +2540,7 @@ export default {
           const existing = await db.kvGet(ns, newKey);
           if (!existing) {
             await db.kvSet(ns, newKey, oldCache);
+            await db.kvDelete(ns, oldKey);
             console.log('[identity] chat history migrated:', oldEmail, '→', newEmail);
           }
         }
