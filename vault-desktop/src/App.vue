@@ -886,7 +886,7 @@
 <script>
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import api, { db } from './api.js';
+import api, { db, accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './api.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
@@ -1970,13 +1970,13 @@ export default {
     // loadChatFlags). Повреждённый блоб — тихо пустой список.
     async loadIgnoredUsers() {
       try {
-        const raw = await db.kvGet(this.email || 'anon', 'ignored-users');
+        const raw = await db.kvGet(await accountNamespace(this.email), 'ignored-users');
         this.ignoredUsers = raw ? (JSON.parse(raw) || {}) : {};
       } catch (e) { this.ignoredUsers = {}; }
     },
     async saveIgnoredUsers() {
       try {
-        await db.kvSet(this.email || 'anon', 'ignored-users', JSON.stringify(this.ignoredUsers));
+        await db.kvSet(await accountNamespace(this.email), 'ignored-users', JSON.stringify(this.ignoredUsers));
       } catch (e) { /* kv недоступен — список живёт в памяти до перезапуска */ }
     },
     // Заблокирован ли отправитель для НАС (смена почты не помогает:
@@ -2197,6 +2197,15 @@ export default {
         this.fingerprint = await crypto.fingerprint();
         this.cryptoReady = true;
         await this.loadStoredPeerKeys();
+        // Ключ теперь есть → пересчитываем namespace на fp:<fingerprint> и
+        // ОДИН раз переносим накопленные email-строки. Без сброса кэша
+        // резолвер остался бы на legacy-емейле (fp закэширован как '' до
+        // загрузки ключа), и весь трек fp-идентичности был бы мёртвым.
+        resetAccountNamespaceCache();
+        if (this.email) {
+          try { await ensureAccountNamespace(this.email); }
+          catch (e) { console.warn('[identity] namespace bootstrap failed:', e); }
+        }
       } catch (error) {
         console.error('Crypto init failed:', error);
       }
@@ -2313,6 +2322,13 @@ export default {
         this.userId = data.user_id;
         this.isLoggedIn = true;
         initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
+        // Namespace = fp:<fingerprint>. На ручном входе initCrypto из mounted
+        // уже отработал, но мог сработать ДО появления this.email — тогда кэш
+        // резолвера остался на legacy-емейле и миграция не запустилась бы.
+        // Сбрасываем кэш и переносим накопленные email-строки один раз.
+        resetAccountNamespaceCache();
+        try { await ensureAccountNamespace(this.email); }
+        catch (e) { console.warn('[identity] namespace bootstrap failed:', e); }
         await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
         this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
         this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
@@ -2470,27 +2486,27 @@ export default {
         this.contacts = [];
       }
     },
-    // Смена почты: перенос всех локальных данных аккаунта из старого
-    // namespace в новый (история чатов, счётчики, пометки, курсоры).
+    // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
+    // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по
+    // префиксу (chat-cache/unread-/accepted-/…) — терялись черновики,
+    // архив/mute чатов, дедуп звонков и relay-настройки, а таблицы
+    // chat_history/body_cache/tombstones/imap_cursors не трогались вовсе
+    // (2+ МБ истории просто оставались под старым адресом).
+    // Теперь перенос делает Rust одной транзакцией по ВСЕМ таблицам с
+    // колонкой account (db_account_migrate), а email → лишь транспорт:
+    // identity = fingerprint публичного ключа.
     async migrateAccountData(oldEmail, newEmail) {
       try {
-        if (!oldEmail || !newEmail || oldEmail === newEmail) return;
-        // Все строки kv: [account, key, value] — переносим принадлежащие
-        // старому аккаунту.
-        const all = await invoke('db_kv_get_all');
-        if (!all || !all.length) return;
-        let moved = 0;
-        for (const [acc, k, v] of all) {
-          if (acc !== oldEmail) continue;
-          const relevant = k.startsWith('chat-cache:') || k.startsWith('unread-') ||
-            k.startsWith('accepted-') || k.startsWith('declined-') ||
-            k.startsWith('invited-') || k.startsWith('tombstone') ||
-            k.startsWith('cursor-') || k.startsWith('processed-');
-          if (!relevant) continue;
-          const exists = await db.kvGet(newEmail, k);
-          if (!exists) { await db.kvSet(newEmail, k, v); moved++; }
+        if (!oldEmail || !newEmail) return;
+        // ns = fp:<fingerprint> (ключ стабилен при смене почты) либо legacy-емейл.
+        const ns = await accountNamespace(newEmail);
+        if (!ns || ns === oldEmail) {
+          console.log('[identity] namespace unchanged, nothing to migrate');
+          return;
         }
-        console.log('[identity] account data migrated:', oldEmail, '→', newEmail, 'moved', moved);
+        const report = await invoke('db_account_migrate', { fromAccount: oldEmail, toAccount: ns });
+        const moved = report && typeof report.total === 'number' ? report.total : 0;
+        console.log(`[identity] account data migrated: ${oldEmail} → ${ns} (moved ${moved})`);
       } catch (e) {
         console.warn('[identity] migrateAccountData failed:', e);
       }
@@ -2692,7 +2708,7 @@ export default {
         this.channels = await ChannelsFeature.loadChannels();
         // last_ts > 0 у подписчика = есть непрочитанное (считаем по post-логу kv)
         for (const ch of this.channels) {
-          const posts = JSON.parse((await db.kvGet(this.email || 'anon', 'channel-posts:' + ch.id)) || '[]');
+          const posts = JSON.parse((await db.kvGet(await accountNamespace(this.email), 'channel-posts:' + ch.id)) || '[]');
           this.channelPosts[ch.id] = posts;
           this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
           this.channelAvatars[ch.id] = (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '';
@@ -2731,7 +2747,9 @@ export default {
       posts.sort((a, b) => a.ts - b.ts);
       this.channelPosts[chId] = posts.slice(-200); // локальный лог компактный
       this.channelUnread[chId] = (this.channelUnread[chId] || 0) + 1;
-      db.kvSet(this.email || 'anon', 'channel-posts:' + chId, JSON.stringify(this.channelPosts[chId])).catch(() => {});
+      accountNamespace(this.email).then(ns =>
+        db.kvSet(ns, 'channel-posts:' + chId, JSON.stringify(this.channelPosts[chId])).catch(() => {})
+      );
     },
     noteChannelHello(chId, senderEmail) {
       console.log('[channel] hello from', senderEmail, '→ chan', chId);
@@ -3332,14 +3350,14 @@ export default {
       // Реактивность: новый объект массива, иначе Vue не увидит изменение.
       this.starredMap = { ...this.starredMap, [key]: Array.from(list) };
       try {
-        if (list.size) await db.kvSet(this.email || 'anon', 'starred:' + key, JSON.stringify(Array.from(list)));
-        else await db.kvDelete(this.email || 'anon', 'starred:' + key);
+        if (list.size) await db.kvSet(await accountNamespace(this.email), 'starred:' + key, JSON.stringify(Array.from(list)));
+        else await db.kvDelete(await accountNamespace(this.email), 'starred:' + key);
       } catch (e) { /* kv недоступен — живёт в памяти до перезапуска */ }
     },
     async loadStarredFor(chatKey) {
       if (!chatKey || chatKey === '__notes__') return;
       try {
-        const raw = await db.kvGet(this.email || 'anon', 'starred:' + chatKey);
+        const raw = await db.kvGet(await accountNamespace(this.email), 'starred:' + chatKey);
         const arr = raw ? JSON.parse(raw) : [];
         this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
       } catch (e) { /* тихо */ }
@@ -5080,20 +5098,20 @@ export default {
     },
     async loadUnreadCounts() {
       try {
-        const raw = await db.kvGet(this.email || 'anon', 'unread-counts');
+        const raw = await db.kvGet(await accountNamespace(this.email), 'unread-counts');
         this.unreadCounts = raw ? JSON.parse(raw) : {};
-        const seenRaw = await db.kvGet(this.email || 'anon', 'unread-seen');
+        const seenRaw = await db.kvGet(await accountNamespace(this.email), 'unread-seen');
         this.processedUnreadIds = new Set(seenRaw ? JSON.parse(seenRaw) : []);
       } catch (e) { this.unreadCounts = {}; this.processedUnreadIds = new Set(); }
     },
     async saveUnreadSeen() {
       try {
-        await db.kvSet(this.email || 'anon', 'unread-seen', JSON.stringify(Array.from(this.processedUnreadIds)));
+        await db.kvSet(await accountNamespace(this.email), 'unread-seen', JSON.stringify(Array.from(this.processedUnreadIds)));
       } catch (e) { /* kv недоступен — дедуп живёт в памяти до перезапуска */ }
     },
     async saveUnreadCounts() {
       try {
-        await db.kvSet(this.email || 'anon', 'unread-counts', JSON.stringify(this.unreadCounts));
+        await db.kvSet(await accountNamespace(this.email), 'unread-counts', JSON.stringify(this.unreadCounts));
       } catch (e) { /* kv недоступен — счётчики живут в памяти до перезапуска */ }
     },
     async resetUnread(chatKey) {
@@ -5762,7 +5780,11 @@ export default {
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
     async initLocalDb() {
-      const accEmail = this.email || 'anon';  // tombstones/body-cache: account = email
+      // tombstones/body-cache: account = identity namespace (fp:<fingerprint>,
+      // см. accountNamespace). До загрузки ключа резолвер отдаёт legacy-емейл —
+      // это нормально: перенос на fp делает ensureAccountNamespace из
+      // initCrypto сразу после, строки лежат в той же базе.
+      const accEmail = this.email ? await accountNamespace(this.email) : 'anon';
       const accLocal = 'local';               // cursors/emails: account = 'local' (getEmailAccounts → id='local')
       try {
         const tombs = await db.tombstonesLoad(accEmail);

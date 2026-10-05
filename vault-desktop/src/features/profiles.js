@@ -18,7 +18,7 @@
 // Инвариант nameOf: name == email — это НЕ имя, а fallback старых
 // клиентов; показываем только настоящее имя.
 
-import api, { db } from '../api.js';
+import api, { db, accountNamespace } from '../api.js';
 import crypto from '../crypto.js';
 
 // ── Резолв имён/аватаров ───────────────────────────────────────
@@ -87,10 +87,12 @@ export function avatarOf(ctx, email) {
 }
 
 // ── Хранилище ──────────────────────────────────────────────────
-export function loadLocalProfiles(ctx) {
+// Асинхронные: namespace аккаунта резолвится через accountNamespace
+// (идентичность = fingerprint). Вызывающие не ждут результат — как раньше.
+export async function loadLocalProfiles(ctx) {
   try {
     // SQLite kv_store.
-    db.kvGet(ctx.email || 'anon', 'local-profiles').then(v => {
+    db.kvGet(await accountNamespace(ctx.email), 'local-profiles').then(v => {
       if (v) ctx.localProfiles = JSON.parse(v);
     }).catch(() => {});
     ctx.localProfiles = ctx.localProfiles || {};
@@ -99,9 +101,9 @@ export function loadLocalProfiles(ctx) {
   }
 }
 
-export function saveLocalProfiles(ctx) {
+export async function saveLocalProfiles(ctx) {
   try {
-    db.kvSet(ctx.email || 'anon', 'local-profiles', JSON.stringify(ctx.localProfiles)).catch(() => {});
+    db.kvSet(await accountNamespace(ctx.email), 'local-profiles', JSON.stringify(ctx.localProfiles)).catch(() => {});
   } catch (e) {
     console.error('Failed to save local profiles:', e);
   }
@@ -117,12 +119,12 @@ export async function loadProfiles(ctx) {
 
 // --- Статус «О себе»: свой bio в kv_store, уходит в profile-конверте
 export async function getBio(ctx) {
-  try { return (await db.kvGet(ctx.email || 'anon', 'bio')) || ''; } catch { return ''; }
+  try { return (await db.kvGet(await accountNamespace(ctx.email), 'bio')) || ''; } catch { return ''; }
 }
 
 export async function setBio(ctx, text) {
   const v = String(text || '').slice(0, 200);
-  await db.kvSet(ctx.email || 'anon', 'bio', v);
+  await db.kvSet(await accountNamespace(ctx.email), 'bio', v);
   ctx.myBio = v;
   return v;
 }

@@ -69,6 +69,99 @@ const db = {
     invoke('db_autoclean_purge', { account, keysJson }),
 };
 
+// ── Account namespace (identity = fingerprint) ─────────────────
+// Клиент больше НЕ передаёт емейл в db.*: резолвер сам выбирает namespace
+// (fp:<fingerprint> если ключ загружен, иначе legacy-емейл) и ОДИН раз
+// переносит старые строки под новый namespace (db_account_migrate —
+// идемпотентная, вся работа на стороне Rust). Емейл — транспорт, не
+// идентичность: смена почты больше не теряет историю/черновики/тумбстоуны.
+//
+// Кэш модульный (по аналогии с relay-client.js cachedFp/cachedFpAccount):
+// крипто-команда get_fingerprint не бесплатная, а резолвер дёргается из
+// десятков мест (черновики, флаги чатов, body-cache, история).
+let _accountNs = null;      // последний вычисленный namespace
+let _accountNsFor = null;   // email, для которого он вычислен
+let _cachedFp = null;       // fingerprint публичного ключа (или '' если нет ключа)
+let _cachedFpKey = null;    // public_key, для которого закэширован _cachedFp
+let _nsMigrated = false;    // миграция namespace уже выполнялась в этой сессии
+
+// Fingerprint нашего публичного ключа. Пустая строка = ключ ещё не загружен
+// (или ошибка) → вызывающий код работает на legacy-емейле, вход не блокируем.
+//
+// Кэш привязан к ЗНАЧЕНИЮ public_key, а не к факту вызова: ключ может
+// появиться позже (вход по recovery-мнемонике грузит пару после первого
+// резолвера). Тогда _cachedFp пересчитывается сам, без ручного сброса.
+async function accountFingerprint() {
+  const pk = (cryptoClient && cryptoClient.publicKey) || '';
+  if (_cachedFp !== null && _cachedFpKey === pk) return _cachedFp;
+  if (!pk) {
+    _cachedFp = '';
+    _cachedFpKey = '';
+    return _cachedFp;
+  }
+  try {
+    const fp = await cryptoClient.fingerprint();
+    _cachedFp = String(fp || '').trim().toLowerCase();
+  } catch (e) {
+    // Сбой крипто-команды — не падаем: legacy-емейл, вход не блокируем.
+    console.log('[identity] fingerprint unavailable:', e && e.message || e);
+    _cachedFp = '';
+  }
+  _cachedFpKey = pk;
+  return _cachedFp;
+}
+
+// Namespace аккаунта для вызова db.*/history.*.
+// Кэш валиден для пары (public_key, email): смена почты даёт другой email,
+// появление ключа — другой public_key → пересчёт.
+export async function accountNamespace(email) {
+  const em = String(email || '').trim().toLowerCase();
+  const pk = (cryptoClient && cryptoClient.publicKey) || '';
+  if (_accountNs !== null && _accountNsFor === em && _cachedFpKey === pk) return _accountNs;
+  const fp = await accountFingerprint();
+  let ns = em;
+  try {
+    const resolved = await invoke('db_account_namespace', { fp, email: em });
+    if (resolved) ns = String(resolved);
+  } catch (e) {
+    // Резолвер недоступен (нет команды/БД) — емейл, вход не блокируем.
+    console.log('[identity] account namespace resolve failed:', e && e.message || e);
+    ns = em;
+  }
+  _accountNs = ns;
+  _accountNsFor = em;
+  return ns;
+}
+
+// Сброс кэшей резолвера (экспорт для точечных вызовов; сам факт смены
+// ключа/почты и так инвалидирует кэш — см. accountFingerprint).
+export function resetAccountNamespaceCache() {
+  _accountNs = null;
+  _accountNsFor = null;
+  _cachedFp = null;
+  _cachedFpKey = null;
+  _nsMigrated = false;
+}
+
+// Резолв + одноразовый перенос legacy-строк (старый емейл → fp-namespace).
+// Вызывается при входе/смене почты, когда ключ уже загружен. Команда
+// db_account_migrate идемпотентна, но и вызываем её мы ровно ОДИН раз на пару.
+export async function ensureAccountNamespace(email) {
+  const ns = await accountNamespace(email);
+  const em = String(email || '').trim().toLowerCase();
+  if (_nsMigrated || !ns.startsWith('fp:') || !em || em === ns) return ns;
+  // Ставим флаг ДО вызова: пара (старый адрес → fp) повторно не обрабатывается.
+  _nsMigrated = true;
+  try {
+    const report = await invoke('db_account_migrate', { fromAccount: em, toAccount: ns });
+    const moved = report && typeof report.total === 'number' ? report.total : 0;
+    console.log(`[identity] namespace migrated: ${em} → ${ns} (moved ${moved})`);
+  } catch (e) {
+    console.warn('[identity] namespace migration failed:', e);
+  }
+  return ns;
+}
+
 // ── Duress-защита ──────────────────────────────────────────────
 export const duressApi = {
   getConfig: () => invoke('duress_get_config'),
@@ -239,7 +332,7 @@ export class ApiClient {
   // и пропавшие аватары. Метод вызывается при входе, переносит данные один
   // раз (маркер vault-kv-migrated) и чистит localStorage (квота ~5МБ).
   async migrateLegacyLocalStorage() {
-    const acc = this.email || 'anon';
+    const acc = await accountNamespace(this.email);
     try {
       if (localStorage.getItem('vault-kv-migrated')) return;
       // 1. Профили/аватары.
@@ -315,7 +408,7 @@ export class ApiClient {
   async getDisplayName() {
     if (this._displayName !== undefined) return this._displayName;
     try {
-      this._displayName = (await db.kvGet(this.email || 'anon', 'display-name')) || null;
+      this._displayName = (await db.kvGet(await accountNamespace(this.email), 'display-name')) || null;
     } catch (e) {
       this._displayName = null;
     }
@@ -323,7 +416,7 @@ export class ApiClient {
   }
   async setDisplayName(name) {
     this._displayName = name || null;
-    try { await db.kvSet(this.email || 'anon', 'display-name', name || ''); } catch (e) { /* ignore */ }
+    try { await db.kvSet(await accountNamespace(this.email), 'display-name', name || ''); } catch (e) { /* ignore */ }
   }
 
   // --- Модель контактов почтовый мессенджер
@@ -609,7 +702,7 @@ export class ApiClient {
   // ящике, и без пометки после удаления контакта снова «активируются».
   async getDeclinedContacts() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'declined-contacts')) || '[]');
+      return JSON.parse((await db.kvGet(await accountNamespace(this.email), 'declined-contacts')) || '[]');
     } catch (e) {
       return [];
     }
@@ -619,13 +712,13 @@ export class ApiClient {
       const arr = await this.getDeclinedContacts();
       if (!arr.includes(key)) {
         arr.push(key);
-        await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(arr));
+        await db.kvSet(await accountNamespace(this.email), 'declined-contacts', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
   async getAcceptedContacts() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'accepted-contacts')) || '[]');
+      return JSON.parse((await db.kvGet(await accountNamespace(this.email), 'accepted-contacts')) || '[]');
     } catch (e) {
       return [];
     }
@@ -635,7 +728,7 @@ export class ApiClient {
       const arr = await this.getAcceptedContacts();
       if (!arr.includes(key)) {
         arr.push(key);
-        await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(arr));
+        await db.kvSet(await accountNamespace(this.email), 'accepted-contacts', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
@@ -647,7 +740,7 @@ export class ApiClient {
   // android появился без принятия — UID 278, legacy-accept без пометки).
   async getInvitedSenders() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'invited-senders')) || '[]');
+      return JSON.parse((await db.kvGet(await accountNamespace(this.email), 'invited-senders')) || '[]');
     } catch (e) {
       return [];
     }
@@ -657,14 +750,14 @@ export class ApiClient {
       const arr = await this.getInvitedSenders();
       if (!arr.includes(email)) {
         arr.push(email);
-        await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
+        await db.kvSet(await accountNamespace(this.email), 'invited-senders', JSON.stringify(arr));
       }
     } catch (e) { /* ignore */ }
   }
   async removeInvitedSender(email) {
     try {
       const arr = (await this.getInvitedSenders()).filter(e => e !== email);
-      await db.kvSet(this.email || 'anon', 'invited-senders', JSON.stringify(arr));
+      await db.kvSet(await accountNamespace(this.email), 'invited-senders', JSON.stringify(arr));
     } catch (e) { /* ignore */ }
   }
   // --- Одноразовый sweep старых handshake-писем (v0.1.9, модель почтовый мессенджер) ---
@@ -676,7 +769,7 @@ export class ApiClient {
   // (invites → declined, accepts → accepted), чтобы они больше не всплывали.
   async sweepStaleHandshake() {
     try {
-      const done = await db.kvGet(this.email || 'anon', 'handshake-sweep-done');
+      const done = await db.kvGet(await accountNamespace(this.email), 'handshake-sweep-done');
       if (done) return; // уже сделано для этого аккаунта — не повторяем
       const all = await this.fetchAllHandshake();
       const declined = await this.getDeclinedContacts();
@@ -695,10 +788,10 @@ export class ApiClient {
         if (!accepted.includes(key)) { accepted.push(key); changed = true; }
       }
       if (changed) {
-        await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(declined));
-        await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(accepted));
+        await db.kvSet(await accountNamespace(this.email), 'declined-contacts', JSON.stringify(declined));
+        await db.kvSet(await accountNamespace(this.email), 'accepted-contacts', JSON.stringify(accepted));
       }
-      await db.kvSet(this.email || 'anon', 'handshake-sweep-done', '1');
+      await db.kvSet(await accountNamespace(this.email), 'handshake-sweep-done', '1');
     } catch (e) { /* ignore */ }
   }
   async sendContactInvite(email, publicKey) {
@@ -835,7 +928,7 @@ export class ApiClient {
         const key = `${sender}|${m.uid}`;
         if (!declined.includes(key)) {
           declined.push(key);
-          await db.kvSet(this.email || 'anon', 'declined-contacts', JSON.stringify(declined));
+          await db.kvSet(await accountNamespace(this.email), 'declined-contacts', JSON.stringify(declined));
         }
       }
       const accepted = await this.getAcceptedContacts();
@@ -845,7 +938,7 @@ export class ApiClient {
         const key = `${sender}|${m.uid}`;
         if (!accepted.includes(key)) {
           accepted.push(key);
-          await db.kvSet(this.email || 'anon', 'accepted-contacts', JSON.stringify(accepted));
+          await db.kvSet(await accountNamespace(this.email), 'accepted-contacts', JSON.stringify(accepted));
         }
       }
     } catch (e) {
@@ -1348,7 +1441,7 @@ async mediaSoundStop() {
       const akey = `${groupId}|${payload.uid}`;
       if (!accepted.includes(akey)) {
         accepted.push(akey);
-        await db.kvSet(this.email || 'anon', 'accepted-invites', JSON.stringify(accepted));
+        await db.kvSet(await accountNamespace(this.email), 'accepted-invites', JSON.stringify(accepted));
       }
     }
     // Добавляем СЕБЯ как участника (роль Member) — import_group добавляет
@@ -1407,20 +1500,20 @@ async mediaSoundStop() {
       for (const k of [...declined, ...accepted]) {
         if (k.startsWith(gidPrefix) && !declined.includes(k)) declined.push(k);
       }
-      await db.kvSet(this.email || 'anon', 'declined-invites', JSON.stringify(declined));
+      await db.kvSet(await accountNamespace(this.email), 'declined-invites', JSON.stringify(declined));
     }
     return { ok: true };
   }
   async getDeclinedInvites() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'declined-invites')) || '[]');
+      return JSON.parse((await db.kvGet(await accountNamespace(this.email), 'declined-invites')) || '[]');
     } catch (e) {
       return [];
     }
   }
   async getAcceptedInvites() {
     try {
-      return JSON.parse((await db.kvGet(this.email || 'anon', 'accepted-invites')) || '[]');
+      return JSON.parse((await db.kvGet(await accountNamespace(this.email), 'accepted-invites')) || '[]');
     } catch (e) {
       return [];
     }

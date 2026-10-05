@@ -14,7 +14,7 @@
 // Инвариант: ошибки канала НЕ роняют state machine — релей-копия уходит
 // первой (~1с), SMTP-письмо — фоновый дублирующий канал с ретраями.
 
-import api, { db } from '../api.js';
+import api, { db, accountNamespace } from '../api.js';
 import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
@@ -37,7 +37,7 @@ export function setPendingNativeCallDecision(action) {
 // перезапуска не даёт старым конвертам снова дёргать state machine.
 export async function isCallSeen(ctx, callId) {
   try {
-    const raw = await db.kvGet(ctx.email || 'anon', 'call-seen');
+    const raw = await db.kvGet(await accountNamespace(ctx.email), 'call-seen');
     const set = raw ? new Set(JSON.parse(raw)) : new Set();
     return set.has(callId);
   } catch (e) { return false; }
@@ -45,16 +45,16 @@ export async function isCallSeen(ctx, callId) {
 
 export async function rememberCallSeen(ctx, callId) {
   try {
-    const raw = await db.kvGet(ctx.email || 'anon', 'call-seen');
+    const raw = await db.kvGet(await accountNamespace(ctx.email), 'call-seen');
     const set = raw ? new Set(JSON.parse(raw)) : new Set();
     set.add(callId);
     // Храним последние 100 call_id (старые не нужны)
     if (set.size > 100) {
       const arr = Array.from(set);
       arr.splice(0, arr.length - 100);
-      await db.kvSet(ctx.email || 'anon', 'call-seen', JSON.stringify(arr));
+      await db.kvSet(await accountNamespace(ctx.email), 'call-seen', JSON.stringify(arr));
     } else {
-      await db.kvSet(ctx.email || 'anon', 'call-seen', JSON.stringify(Array.from(set)));
+      await db.kvSet(await accountNamespace(ctx.email), 'call-seen', JSON.stringify(Array.from(set)));
     }
   } catch (e) { /* тихо */ }
 }

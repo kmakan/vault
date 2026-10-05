@@ -10,7 +10,7 @@
 // Интервал 5 минут (выбор юзера 14.09); «онлайн» живёт 2×интервала + буфер,
 // чтобы точка не гасла из-за задержки SMTP одного письма.
 
-import api, { db } from '../api.js';
+import api, { db, accountNamespace } from '../api.js';
 import crypto from '../crypto.js';
 
 export const PRESENCE_INTERVAL_MS = 5 * 60 * 1000;   // отправка heartbeat
@@ -23,13 +23,13 @@ const HB_SENT_AT = '_presenceHbSentAt';
 
 export async function isEnabled(ctx) {
   try {
-    return (await db.kvGet(ctx.email || 'anon', 'presence-enabled')) === '1';
+    return (await db.kvGet(await accountNamespace(ctx.email), 'presence-enabled')) === '1';
   } catch (e) { return false; }
 }
 
 export async function setEnabled(ctx, on) {
   try {
-    await db.kvSet(ctx.email || 'anon', 'presence-enabled', on ? '1' : '0');
+    await db.kvSet(await accountNamespace(ctx.email), 'presence-enabled', on ? '1' : '0');
   } catch (e) { /* kv недоступен — остаётся in-memory */ }
   if (on) startHeartbeats(ctx);
   else stopHeartbeats(ctx);

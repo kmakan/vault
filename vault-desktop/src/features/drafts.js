@@ -8,7 +8,7 @@
 // операции идут через очередь на статике модуля, иначе параллельные
 // saveDraft/restoreDraft затирают друг друга (гонка kv).
 
-import { db } from '../api.js';
+import { db, accountNamespace } from '../api.js';
 
 // Сериализует операции с kv-блобом черновиков (гонка save/restore).
 let DRAFT_QUEUE = Promise.resolve();
@@ -28,11 +28,11 @@ export function saveDraft(ctx) {
   const text = ctx.newMessage || '';
   draftRun(async () => {
     try {
-      const raw = await db.kvGet(ctx.email || 'anon', 'drafts');
+      const raw = await db.kvGet(await accountNamespace(ctx.email), 'drafts');
       const drafts = raw ? JSON.parse(raw) : {};
       if (text.trim()) drafts[chatKey] = text;
       else delete drafts[chatKey];
-      await db.kvSet(ctx.email || 'anon', 'drafts', JSON.stringify(drafts));
+      await db.kvSet(await accountNamespace(ctx.email), 'drafts', JSON.stringify(drafts));
     } catch (e) { /* kv недоступен — черновик живёт до смены чата */ }
   });
 }
@@ -42,7 +42,7 @@ export function saveDraft(ctx) {
 export async function restoreDraft(ctx, chatKey) {
   return draftRun(async () => {
     try {
-      const raw = await db.kvGet(ctx.email || 'anon', 'drafts');
+      const raw = await db.kvGet(await accountNamespace(ctx.email), 'drafts');
       const drafts = raw ? JSON.parse(raw) : {};
       ctx.newMessage = drafts[chatKey] || '';
     } catch (e) { /* ignore */ }

@@ -12,7 +12,7 @@
 // Инвариант mergeHistory: история — источник правды, письма только
 // ДОБАВЛЯЮТ новое; уже показанное не затирается и не «мерцает».
 
-import { db } from '../api.js';
+import { db, accountNamespace } from '../api.js';
 import { saveHistory, loadHistory } from '../history.js';
 
 // ── Ключи ──────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ export function chatCacheKey(ctx, chat) {
 // восстановления сессии.
 export async function loadBodyCache(ctx) {
   try {
-    const rows = await db.bodyCacheLoadAll(ctx.email || 'anon');
+    const rows = await db.bodyCacheLoadAll(await accountNamespace(ctx.email));
     const bodies = {};
     const order = [];
     for (const [key, body] of rows || []) {
@@ -60,11 +60,12 @@ export function cacheBody(ctx, key, body) {
   ctx.bodyCacheSaveTimer = setTimeout(() => persistBodyCache(ctx), 2000);
 }
 
-export function persistBodyCache(ctx) {
+export async function persistBodyCache(ctx) {
   // SQLite-персистенция (debounce сохранён в cacheBody): каждое тело — своя
   // строка body_cache(account, cache_key, body). localStorage не используется.
-  const acc = ctx.email || 'anon';
+  // account = namespace идентичности (fp:<fingerprint>), не емейл.
   try {
+    const acc = await accountNamespace(ctx.email);
     for (const k of Object.keys(ctx.emailBodyCache)) {
       db.bodyCacheSet(acc, k, ctx.emailBodyCache[k]).catch(() => {});
     }
@@ -78,14 +79,14 @@ export function persistBodyCache(ctx) {
 // Хранится в SQLite kv_store.
 export async function loadChatCache(ctx, chat) {
   try {
-    const raw = await db.kvGet(ctx.email || 'anon', 'chat-cache:' + chat);
+    const raw = await db.kvGet(await accountNamespace(ctx.email), 'chat-cache:' + chat);
     return raw ? JSON.parse(raw) : null;
   } catch (e) {
     return null;
   }
 }
 
-export function saveChatCache(ctx, chat, list) {
+export async function saveChatCache(ctx, chat, list) {
   try {
     // email-объект письма не персистим (тяжёлый и не нужен для рендера).
     // attachment персистим: без него из кэша пропадают плеер аудио,
@@ -106,7 +107,7 @@ export function saveChatCache(ctx, chat, list) {
       // «Пропущенный звонок» и т.п.
       callEvent: m.callEvent || undefined,
     }));
-    db.kvSet(ctx.email || 'anon', 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
+    db.kvSet(await accountNamespace(ctx.email), 'chat-cache:' + chat, JSON.stringify(slim)).catch(() => {});
   } catch (e) { /* quota — не критично */ }
 }
 

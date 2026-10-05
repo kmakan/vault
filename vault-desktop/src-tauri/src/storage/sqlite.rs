@@ -668,6 +668,195 @@ impl Storage {
             .execute("DELETE FROM emails WHERE account=?1", params![account])?;
         Ok(())
     }
+
+    // ─── Account namespace (идентичность = fingerprint) ─────────
+    //
+    // Модель — как в Delta Chat: идентичность аккаунта это fingerprint
+    // ПУБЛИЧНОГО КЛЮЧА, а email — только транспорт (куда ходим за письмами).
+    // Поэтому namespace строк в sqlite НЕ привязан к адресу: смена почты не
+    // должна ни терять историю/тумбстоуны/черновики, ни создавать второе
+    // пустое пространство. Старые строки лежат в той же базе — их нужно
+    // ОДИН РАЗ перенести (см. migrate_account_namespace).
+    //
+    // Пустой fp (ключ ещё не загружен / не сгенерирован) → legacy-фallback
+    // на email: вход не блокируем, данные не теряем, миграция доделается
+    // при следующем вызове, когда ключ уже есть.
+
+    /// Нормализованный namespace аккаунта: fp есть → `fp:<fp>` (lowercase),
+    /// нет → email (lowercase).
+    pub fn normalize_account(&self, fp: String, email: String) -> Result<String> {
+        let fp = fp.trim().to_lowercase();
+        if fp.is_empty() {
+            return Ok(email.trim().to_lowercase());
+        }
+        Ok(format!("fp:{}", fp))
+    }
+
+    /// Резолв namespace для клиента: fp есть → `fp:<fp>`, нет → email.
+    ///
+    /// Отдельно от normalize_account: когда fp ПУСТОЙ, неизвестно, какой
+    /// именно fp-namespace принадлежит этому email (одна база — много
+    /// аккаунтов), поэтому определить «уже мигрирован ли аккаунт» по этому
+    /// вызову невозможно. Отдаём email-namespace и НЕ трогаем данные; перенос
+    /// выполнит клиент (api.js ensureAccountNamespace), когда ключ загружен.
+    pub fn resolve_account(&self, fp: String, email: String) -> Result<String> {
+        Ok(self.normalize_account(fp, email)?)
+    }
+
+    /// Есть ли хоть одна строка под account (в любой из account-таблиц).
+    pub fn account_has_rows(&self, account: &str) -> Result<bool> {
+        for table in ACCOUNT_TABLES {
+            let sql = format!("SELECT 1 FROM {} WHERE account=?1 LIMIT 1", table.name);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let mut rows = stmt.query(params![account])?;
+            if rows.next()?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Одноразовая миграция namespace email → fp:<fp>: переносит строки из
+    /// ВСЕХ таблиц с колонкой `account` (kv_store, chat_history, body_cache,
+    /// tombstones, imap_cursors, emails). Конфликт (строка уже есть под fp) →
+    /// оставляем новую. Идемпотентно: повторный вызов ничего не делает.
+    ///
+    /// Одна транзакция на все таблицы: откат при ошибке не оставляет наполовину
+    /// перенесённый аккаунт. Таблицы БЕЗ колонки account (users, chats, messages,
+    /// contacts, encryption_keys, settings) не затрагиваются.
+    pub fn migrate_account_namespace(
+        &self,
+        old_account: &str,
+        new_account: &str,
+    ) -> Result<MigrationReport> {
+        let old_account = old_account.trim().to_lowercase();
+        let new_account = new_account.trim().to_lowercase();
+        let mut report = MigrationReport::default();
+
+        // No-op: пустые/глобальные/совпадающие namespace. 'anon' — настройки
+        // приложения, 'local' — курсоры/конверты IMAP-транспорта: их перенос
+        // в fp-namespace сломал бы глобальные настройки.
+        let is_global = |a: &str| a.is_empty() || a == "anon" || a == "local";
+        if is_global(&old_account) || is_global(&new_account) || old_account == new_account {
+            return Ok(report);
+        }
+
+        self.conn.execute("BEGIN IMMEDIATE", [])?;
+        match self.migrate_account_tx(&old_account, &new_account, &mut report) {
+            Ok(()) => {
+                self.conn.execute("COMMIT", [])?;
+                Ok(report)
+            }
+            Err(e) => {
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
+    /// Тело миграции — вызывается внутри уже открытой транзакции.
+    fn migrate_account_tx(
+        &self,
+        old_account: &str,
+        new_account: &str,
+        report: &mut MigrationReport,
+    ) -> Result<()> {
+        for table in ACCOUNT_TABLES {
+            let count_sql = format!("SELECT COUNT(*) FROM {} WHERE account=?1", table.name);
+            let n: i64 = self
+                .conn
+                .query_row(&count_sql, params![old_account], |r| r.get(0))?;
+            if n == 0 {
+                continue;
+            }
+            let columns = table.columns.join(", ");
+            let mut selects: Vec<String> = Vec::with_capacity(table.columns.len());
+            for col in table.columns {
+                if *col == "account" {
+                    selects.push("?2".to_string());
+                } else {
+                    selects.push((*col).to_string());
+                }
+            }
+            let select_list = selects.join(", ");
+            // INSERT OR IGNORE: строка, уже существующая под новым namespace,
+            // НЕ перетирается (новое значение авторитетнее старого).
+            let insert_sql = format!(
+                "INSERT OR IGNORE INTO {} ({}) SELECT {} FROM {} WHERE account=?1",
+                table.name, columns, select_list, table.name
+            );
+            self.conn
+                .execute(&insert_sql, params![old_account, new_account])
+                .with_context(|| format!("migrate {}: copy rows", table.name))?;
+            // Старые строки удаляем ВСЕГДА: иначе после переноса остался бы
+            // дубль, а при конфликте — мёртвая копия под старым адресом.
+            let delete_sql = format!("DELETE FROM {} WHERE account=?1", table.name);
+            self.conn
+                .execute(&delete_sql, params![old_account])
+                .with_context(|| format!("migrate {}: delete old rows", table.name))?;
+            report.set(table.name, n as usize);
+            report.total += n as usize;
+        }
+        Ok(())
+    }
+}
+
+/// Таблицы с колонкой `account` — единственные, которые участвуют в миграции
+/// namespace. Список РОВНО тот, что создаётся в init_tables.
+static ACCOUNT_TABLES: &[AccountTable] = &[
+    AccountTable { name: "kv_store", columns: &["account", "key", "value"] },
+    AccountTable {
+        name: "chat_history",
+        columns: &["account", "chat_key", "messages_json", "updated_at"],
+    },
+    AccountTable { name: "body_cache", columns: &["account", "cache_key", "body"] },
+    AccountTable { name: "tombstones", columns: &["account", "msg_id", "mid"] },
+    AccountTable { name: "imap_cursors", columns: &["account", "folder", "uid"] },
+    AccountTable {
+        name: "emails",
+        columns: &[
+            "account",
+            "uid",
+            "folder",
+            "from_addr",
+            "to_addr",
+            "subject",
+            "date",
+            "is_read",
+            "message_id",
+        ],
+    },
+];
+
+struct AccountTable {
+    name: &'static str,
+    columns: &'static [&'static str],
+}
+
+/// Отчёт об одноразовом переносе namespace (для лога на клиенте).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MigrationReport {
+    pub kv_store: usize,
+    pub chat_history: usize,
+    pub body_cache: usize,
+    pub tombstones: usize,
+    pub imap_cursors: usize,
+    pub emails: usize,
+    pub total: usize,
+}
+
+impl MigrationReport {
+    fn set(&mut self, table: &str, n: usize) {
+        match table {
+            "kv_store" => self.kv_store = n,
+            "chat_history" => self.chat_history = n,
+            "body_cache" => self.body_cache = n,
+            "tombstones" => self.tombstones = n,
+            "imap_cursors" => self.imap_cursors = n,
+            "emails" => self.emails = n,
+            _ => {}
+        }
+    }
 }
 
 // ─── Data Types ──────────────────────────────────────────────
@@ -742,4 +931,261 @@ pub struct StorageStats {
     pub messages: i64,
     pub contacts: i64,
     pub unread: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Каждый тест открывает СВОЮ базу во временном каталоге. Storage::open(None)
+    /// — это живая ~/.local/share/com.vault.vault/vault.db, её не трогаем.
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_storage() -> Storage {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!("vault-ns-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_file(&path);
+        Storage::open(Some(&path)).expect("open test db")
+    }
+
+    fn put_row(s: &Storage, table: &str, cols: &[&str], vals: &[&str]) {
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            cols.join(", "),
+            vec!["?"; cols.len()].join(", ")
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            vals.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        s.conn.execute(&sql, params.as_slice()).expect("insert");
+    }
+
+    fn count_where(s: &Storage, table: &str, account: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) FROM {} WHERE account=?1", table);
+        s.conn
+            .query_row(&sql, params![account], |r| r.get(0))
+            .expect("count")
+    }
+
+    fn put_email(s: &Storage, account: &str, uid: &str, subject: &str) {
+        put_row(
+            s,
+            "emails",
+            &[
+                "account", "uid", "folder", "from_addr", "to_addr", "subject", "date",
+                "is_read", "message_id",
+            ],
+            &[
+                account, uid, "INBOX", "peer@x.com", account, subject,
+                "Mon, 1 Jan 2026 00:00:00 +0000", "0", "<mid@x>",
+            ],
+        );
+    }
+
+    // ── 1) normalize_account ──────────────────────────────────
+    #[test]
+    fn normalize_account_fp_and_email() {
+        let s = test_storage();
+        // fp → fp:<lowercase-fp>, обрезка пробелов и приведение регистра.
+        assert_eq!(
+            s.normalize_account("  ABCdef123  ".into(), "User@X.com".into()).unwrap(),
+            "fp:abcdef123"
+        );
+        // Пустой fp (ключ не загружен) → legacy-фолбэк на email.
+        assert_eq!(
+            s.normalize_account("".into(), "  User@X.com ".into()).unwrap(),
+            "user@x.com"
+        );
+        // Только пробелы у fp — тоже пусто.
+        assert_eq!(s.normalize_account("   ".into(), "a@b.c".into()).unwrap(), "a@b.c");
+        // Email есть, но fp важнее: идентичность = ключ, почта = транспорт.
+        assert_eq!(
+            s.normalize_account("deadbeef".into(), "a@b.c".into()).unwrap(),
+            "fp:deadbeef"
+        );
+    }
+
+    // ── 2) resolve_account ────────────────────────────────────
+    #[test]
+    fn resolve_account_fp_and_email() {
+        let s = test_storage();
+        assert_eq!(
+            s.resolve_account("ABC123".into(), "user@x.com".into()).unwrap(),
+            "fp:abc123"
+        );
+        assert_eq!(
+            s.resolve_account("".into(), "User@X.com".into()).unwrap(),
+            "user@x.com"
+        );
+    }
+
+    // ── 3) перенос строки из КАЖДОЙ из 6 таблиц ───────────────
+    #[test]
+    fn migrate_moves_row_in_every_account_table() {
+        let s = test_storage();
+        let old = "old@x.com";
+        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "v1"]);
+        put_row(
+            &s,
+            "chat_history",
+            &["account", "chat_key", "messages_json", "updated_at"],
+            &[old, "peer@x.com", "[]", "2026-01-01T00:00:00Z"],
+        );
+        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[old, "INBOX:7", "body"]);
+        put_row(&s, "tombstones", &["account", "msg_id", "mid"], &[old, "m1", ""]);
+        put_row(&s, "imap_cursors", &["account", "folder", "uid"], &[old, "INBOX", "42"]);
+        put_email(&s, old, "7", "hi");
+
+        let ns = "fp:abc";
+        let rep = s.migrate_account_namespace(old, ns).unwrap();
+
+        assert_eq!(rep.kv_store, 1);
+        assert_eq!(rep.chat_history, 1);
+        assert_eq!(rep.body_cache, 1);
+
+        assert_eq!(rep.tombstones, 1);
+        assert_eq!(rep.imap_cursors, 1);
+        assert_eq!(rep.emails, 1);
+        assert_eq!(rep.total, 6);
+
+        // Перенесены ЗНАЧЕНИЯ, а не только PK; старых строк не осталось.
+        assert_eq!(s.kv_get(ns, "drafts").unwrap().as_deref(), Some("v1"));
+        assert_eq!(s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(), Some("body"));
+        assert!(s.load_history(ns, "peer@x.com").unwrap().is_some());
+        assert_eq!(s.load_cursors(ns).unwrap().get("INBOX"), Some(&42));
+        assert_eq!(s.load_tombstones(ns).unwrap().len(), 1);
+        let mails = s.load_emails(ns).unwrap();
+        assert_eq!(mails.len(), 1);
+        assert_eq!(mails[0].subject, "hi");
+        for t in ["kv_store", "chat_history", "body_cache", "tombstones", "imap_cursors", "emails"] {
+            assert_eq!(count_where(&s, t, old), 0, "{} still has old rows", t);
+        }
+    }
+
+    // ── 4) идемпотентность ────────────────────────────────────
+    #[test]
+    fn migrate_is_idempotent() {
+        let s = test_storage();
+        let old = "old@x.com";
+        let ns = "fp:abc";
+        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "v1"]);
+        put_row(
+            &s,
+            "chat_history",
+            &["account", "chat_key", "messages_json", "updated_at"],
+            &[old, "peer@x.com", "[]", "2026-01-01T00:00:00Z"],
+        );
+
+        let first = s.migrate_account_namespace(old, ns).unwrap();
+        assert_eq!(first.total, 2);
+        let second = s.migrate_account_namespace(old, ns).unwrap();
+        assert_eq!(second.total, 0);
+        assert_eq!(second.kv_store, 0);
+        assert_eq!(second.chat_history, 0);
+
+        // Ни дублей, ни потерь.
+        assert_eq!(count_where(&s, "kv_store", ns), 1);
+        assert_eq!(count_where(&s, "chat_history", ns), 1);
+        assert_eq!(s.kv_get(ns, "drafts").unwrap().as_deref(), Some("v1"));
+    }
+
+    // ── 5) конфликт по PK: строка под fp уже есть ─────────────
+    #[test]
+    fn migrate_conflict_keeps_existing_fp_row() {
+        let s = test_storage();
+        let old = "old@x.com";
+        let ns = "fp:abc";
+        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "OLD"]);
+        put_row(&s, "kv_store", &["account", "key", "value"], &[ns, "drafts", "NEW"]);
+        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[old, "INBOX:7", "OLD"]);
+        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[ns, "INBOX:7", "NEW"]);
+
+        let rep = s.migrate_account_namespace(old, ns).unwrap();
+        assert_eq!(rep.total, 2);
+
+        // Существующее значение под fp НЕ перетёрто, старая строка удалена.
+        assert_eq!(s.kv_get(ns, "drafts").unwrap().as_deref(), Some("NEW"));
+        assert_eq!(s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(), Some("NEW"));
+        assert_eq!(count_where(&s, "kv_store", old), 0);
+        assert_eq!(count_where(&s, "body_cache", old), 0);
+        assert_eq!(count_where(&s, "kv_store", ns), 1);
+        assert_eq!(count_where(&s, "body_cache", ns), 1);
+    }
+
+    // ── 6) одинаковые аккаунты → no-op ───────────────────────
+    #[test]
+    fn migrate_same_account_is_noop() {
+        let s = test_storage();
+        let acc = "user@x.com";
+        put_row(&s, "kv_store", &["account", "key", "value"], &[acc, "drafts", "v1"]);
+        let rep = s.migrate_account_namespace(acc, acc).unwrap();
+        assert_eq!(rep.total, 0);
+        assert_eq!(count_where(&s, "kv_store", acc), 1);
+        // Регистр/пробелы нормализуются — это тот же namespace.
+        let rep2 = s.migrate_account_namespace(" User@X.com ", "USER@x.com").unwrap();
+        assert_eq!(rep2.total, 0);
+        assert_eq!(count_where(&s, "kv_store", "user@x.com"), 1);
+    }
+
+    // ── 7) пустой аккаунт / 'anon' → безопасный no-op ──────────
+    #[test]
+    fn migrate_empty_and_global_namespace_is_noop() {
+        let s = test_storage();
+        put_row(&s, "kv_store", &["account", "key", "value"], &["anon", "eco-mode", "1"]);
+        put_row(&s, "kv_store", &["account", "key", "value"], &["user@x.com", "drafts", "v1"]);
+
+        for (from, to) in [
+            ("", "fp:abc"),
+            ("   ", "fp:abc"),
+            ("anon", "fp:abc"),
+            ("user@x.com", ""),
+            ("user@x.com", "anon"),
+            ("user@x.com", "local"),
+        ] {
+            let rep = s.migrate_account_namespace(from, to).unwrap();
+            assert_eq!(rep.total, 0, "no-op expected for {:?} -> {:?}", from, to);
+        }
+        // Ничего не потеряно и ничего не перенесено.
+        assert_eq!(count_where(&s, "kv_store", "anon"), 1);
+        assert_eq!(count_where(&s, "kv_store", "user@x.com"), 1);
+        assert_eq!(count_where(&s, "kv_store", "fp:abc"), 0);
+    }
+
+    // ── account_has_rows ──────────────────────────────────────
+    #[test]
+    fn account_has_rows_checks_all_tables() {
+        let s = test_storage();
+        assert!(!s.account_has_rows("old@x.com").unwrap());
+        put_email(&s, "old@x.com", "1", "s");
+        assert!(s.account_has_rows("old@x.com").unwrap());
+        assert!(!s.account_has_rows("fp:zzz").unwrap());
+    }
+
+    // ── Таблицы без колонки account не затрагиваются ───────────
+    #[test]
+    fn migrate_does_not_touch_tables_without_account_column() {
+        let s = test_storage();
+        s.conn
+            .execute(
+                "INSERT INTO users (id, email, username, created_at, is_self) VALUES ('u1','old@x.com','n','t',1)",
+                [],
+            )
+            .unwrap();
+        s.conn
+            .execute("INSERT INTO settings (key, value) VALUES ('k','v')", [])
+            .unwrap();
+        let rep = s.migrate_account_namespace("old@x.com", "fp:abc").unwrap();
+        assert_eq!(rep.total, 0);
+        let email: String = s
+            .conn
+            .query_row("SELECT email FROM users WHERE id='u1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(email, "old@x.com");
+        let val: String = s
+            .conn
+            .query_row("SELECT value FROM settings WHERE key='k'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(val, "v");
+    }
 }

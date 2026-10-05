@@ -9,12 +9,16 @@
 // истины вообще.
 // Заметки для себя (__notes__) сюда НЕ пишутся — они живут в localStorage.
 
-import { db } from './api.js';
+import { db, accountNamespace } from './api.js';
 
+// ВНИМАНИЕ: account — это уже namespace (fp:<fingerprint>), а не емейл.
+// Резолвер идемпотентен и кэширован, поэтому повторный вызов на каждый
+// save/load безопасен и почти бесплатен. Старые строки под емейлом уже
+// перенесены на стороне Rust (db_account_migrate).
 export async function saveHistory(account, chatKey, messages) {
   if (!account || !chatKey || !Array.isArray(messages)) return;
   try {
-    await db.historySave(account, chatKey, JSON.stringify(messages));
+    await db.historySave(await accountNamespace(account), chatKey, JSON.stringify(messages));
   } catch (e) {
     console.error('saveHistory (sqlite) failed:', e);
   }
@@ -23,7 +27,7 @@ export async function saveHistory(account, chatKey, messages) {
 export async function loadHistory(account, chatKey) {
   if (!account || !chatKey) return null;
   try {
-    const json = await db.historyLoad(account, chatKey);
+    const json = await db.historyLoad(await accountNamespace(account), chatKey);
     if (!json) return null;
     const arr = JSON.parse(json);
     return Array.isArray(arr) ? arr : null;
@@ -35,7 +39,7 @@ export async function loadHistory(account, chatKey) {
 
 export async function clearHistory(account) {
   try {
-    await db.historyClear(account);
+    await db.historyClear(await accountNamespace(account));
   } catch (e) {
     console.error('clearHistory failed:', e);
   }

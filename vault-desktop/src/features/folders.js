@@ -8,7 +8,7 @@
 // Папки здесь владеют полем folder; archived/muted читаются этим же модулем
 // (единый kv-блоб), но изменяются из chat-меню (App.vue, toggleArchive/Mute).
 
-import { db } from '../api.js';
+import { db, accountNamespace } from '../api.js';
 
 // Flag-key of a chat target: group chats by 'group:<id>', DMs by lowercased email.
 export function flagKey(target) {
@@ -25,11 +25,11 @@ export function chatFlagOf(ctx, key) {
 // Load chat flags + folder names from sqlite kv (chat-flags, chat-folders).
 export async function loadChatFlags(ctx) {
   try {
-    const raw = await db.kvGet(ctx.email || 'anon', 'chat-flags');
+    const raw = await db.kvGet(await accountNamespace(ctx.email), 'chat-flags');
     ctx.chatFlags = raw ? JSON.parse(raw) : {};
   } catch (e) { ctx.chatFlags = {}; }
   try {
-    const fr = await db.kvGet(ctx.email || 'anon', 'chat-folders');
+    const fr = await db.kvGet(await accountNamespace(ctx.email), 'chat-folders');
     ctx.chatFoldersNames = fr ? JSON.parse(fr) : [];
   } catch (e) { ctx.chatFoldersNames = []; }
 }
@@ -37,7 +37,7 @@ export async function loadChatFlags(ctx) {
 // Persist chat flags to sqlite kv (folder/archive/mute of all chats).
 export async function saveChatFlags(ctx) {
   try {
-    await db.kvSet(ctx.email || 'anon', 'chat-flags', JSON.stringify(ctx.chatFlags));
+    await db.kvSet(await accountNamespace(ctx.email), 'chat-flags', JSON.stringify(ctx.chatFlags));
   } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
 }
 
@@ -62,7 +62,7 @@ export async function createChatFolder(ctx) {
   if (!name) return;
   if (!ctx.chatFoldersNames.includes(name)) {
     ctx.chatFoldersNames = [...ctx.chatFoldersNames, name];
-    await db.kvSet(ctx.email || 'anon', 'chat-folders', JSON.stringify(ctx.chatFoldersNames));
+    await db.kvSet(await accountNamespace(ctx.email), 'chat-folders', JSON.stringify(ctx.chatFoldersNames));
   }
   await setChatFolder(ctx, name);
   ctx.folderDialogOpen = false;

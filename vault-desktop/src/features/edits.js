@@ -10,7 +10,7 @@
 // («Bad sender»); delete ставит tombstone навсегда (воскресление
 // из письма/истории/All Mail невозможно).
 
-import api, { db } from '../api.js';
+import api, { db, accountNamespace } from '../api.js';
 import crypto from '../crypto.js';
 
 // ── Хранилище wire-правок ─────────────────────────────────────────────────
@@ -54,13 +54,16 @@ export function loadTombstones(ctx) {
   return ctx.tombstonesCache || [];
 }
 
-export function addTombstone(ctx, msgId) {
+// Асинхронные: tombstone пишется в namespace идентичности (fp:<fingerprint>),
+// а не под емейл — иначе после смены почты удалённые сообщения воскресают.
+// Вызывающие не ждут результат (fire-and-forget), как и раньше.
+export async function addTombstone(ctx, msgId) {
   if (!msgId) return;
   const list = ctx.tombstonesCache;
   if (!list.includes(msgId)) {
     list.push(msgId);
     // sqlite persist (async, fire-and-forget)
-    db.tombstoneAdd(ctx.email || 'anon', msgId, '');
+    db.tombstoneAdd(await accountNamespace(ctx.email), msgId, '').catch(() => {});
   }
 }
 
@@ -81,12 +84,12 @@ export function loadMidTombstones(ctx) {
   return ctx.midTombstonesCache || [];
 }
 
-export function addMidTombstone(ctx, mid) {
+export async function addMidTombstone(ctx, mid) {
   if (!mid) return;
   const list = ctx.midTombstonesCache;
   if (!list.includes(mid)) {
     list.push(mid);
-    db.tombstoneAdd(ctx.email || 'anon', '', mid);
+    db.tombstoneAdd(await accountNamespace(ctx.email), '', mid).catch(() => {});
   }
 }
 

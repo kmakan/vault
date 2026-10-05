@@ -1566,6 +1566,27 @@ fn db_kv_set_all(entries: Vec<(String, String, String)>) -> Result<(), String> {
     open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())
 }
 
+// --- Account namespace (идентичность = fingerprint публичного ключа).
+// Аддитив: существующие db_* команды не меняются, клиент сам пре-федит
+// namespace вместо емейла (api.js accountNamespace/ensureAccountNamespace).
+
+#[tauri::command]
+fn db_account_namespace(fp: String, email: String) -> Result<String, String> {
+    open_db()?
+        .resolve_account(fp, email)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn db_account_migrate(
+    fromAccount: String,
+    toAccount: String,
+) -> Result<storage::sqlite::MigrationReport, String> {
+    open_db()?
+        .migrate_account_namespace(&fromAccount, &toAccount)
+        .map_err(|e| e.to_string())
+}
+
 // --- Backup: полный экспорт состояния — ключи + kv_store.
 // JSON можно сохранить в файл и восстановить на другом устройстве/после
 // переустановки.
@@ -1965,6 +1986,8 @@ pub fn run() {
             db_kv_delete,
             db_kv_get_all,
             db_kv_set_all,
+            db_account_namespace,
+            db_account_migrate,
             export_backup,
             import_backup,
             save_backup_to_disk,

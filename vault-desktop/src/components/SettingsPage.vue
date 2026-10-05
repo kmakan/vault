@@ -401,7 +401,7 @@
 </template>
 
 <script>
-import api, { db } from '../api.js';
+import api, { db, accountNamespace } from '../api.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
 import { duressApi } from '../api.js';
@@ -530,7 +530,7 @@ export default {
       this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
       this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
       // Presence (M2): per-account тумблер heartbeat-зелёной точки.
-      this.presenceEnabled = (await db.kvGet(this.email || 'anon', 'presence-enabled')) === '1';
+      this.presenceEnabled = (await db.kvGet(await accountNamespace(this.email), 'presence-enabled')) === '1';
       // Звонки: выбранные рингтоны.
       this.ringtoneIncoming = (await db.kvGet('anon', 'call-ringtone-incoming')) || 'incoming';
       this.ringtoneOutgoing = (await db.kvGet('anon', 'call-ringtone-outgoing')) || 'outgoing';
