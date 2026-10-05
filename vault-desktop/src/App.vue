@@ -2434,6 +2434,7 @@ export default {
         // счётчики, пометки) из namespace старого адреса в новый — иначе
         // переписка «исчезает» после смены адреса.
         await this.migrateAccountData(oldEmail, this.email);
+        await this.migrateOwnGroups(oldEmail, this.email);
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
         await this.loadGroups();
@@ -2511,6 +2512,29 @@ export default {
         console.warn('[identity] migrateAccountData failed:', e);
       }
     },
+    // Смена СВОЕЙ почты: переименовать старый адрес в группах, где мы участник
+    // или создатель. Без этого groups.json остаётся со старым адресом, и после
+    // смены все группы исчезают из UI (фильтр loadGroups сравнивает по email).
+    // Для ПИРОВ этот путь не нужен — у них он срабатывает автоматически при
+    // входящем письме (tryMigrateGroupMember → groups_rename_member).
+    async migrateOwnGroups(oldEmail, newEmail) {
+      if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+      try {
+        const all = await api.getGroups();
+        const old = String(oldEmail).toLowerCase();
+        for (const g of all || []) {
+          const mine = String(g.created_by || '').toLowerCase() === old
+            || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);
+          if (!mine) continue;
+          await invoke('groups_rename_member', {
+            groupId: g.id, oldEmail, newEmail,
+          });
+        }
+        console.log('[identity] own groups renamed:', oldEmail, '→', newEmail);
+      } catch (e) {
+        console.warn('[identity] migrateOwnGroups failed:', e);
+      }
+    },
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
     // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
@@ -2553,10 +2577,22 @@ export default {
         const all = await api.getGroups();
         // groups.json — общий файл на машину для всех аккаунтов. Показываем
         // только группы, где текущий пользователь участник или создатель.
-        this.groups = (all || []).filter(g =>
-          g.created_by === this.email ||
-          (g.members || []).some(m => m.email === this.email)
-        );
+        //
+        // СМЕНА ПОЧТЫ (05.10): сравнение строго по email ломало аккаунт при
+        // переименовании — в groups.json оставался старый адрес, и все группы
+        // исчезали из UI (данные целы, но фильтр их отсекал). Поэтому «свой
+        // адрес» = текущий email + алиасы по тому же peer-ключу
+        // (aliasesOf), а если у участника проставлен fingerprint — сверяем и
+        // по нему: отпечаток не меняется при смене почты ВООБЩЕ.
+        const mine = new Set([String(this.email || '').toLowerCase()]);
+        try { for (const a of (this.aliasesOf(this.email) || [])) mine.add(String(a).toLowerCase()); }
+        catch (e) { /* алиасы недоступны — остаёмся на текущем адресе */ }
+        // Наш fp уже загружен при логине (App.vue: this.fingerprint = crypto.fingerprint()).
+        const myFp = String(this.fingerprint || '').toLowerCase();
+        const isMember = (g) => g.created_by === this.email || mine.has(String(g.created_by || '').toLowerCase())
+          || (g.members || []).some(m => mine.has(String(m.email || '').toLowerCase())
+            || (!!myFp && !!m.fingerprint && String(m.fingerprint).toLowerCase() === myFp));
+        this.groups = (all || []).filter(isMember);
         // Участники групп — тоже контакты (кроме себя): так под приглашённым
         // аккаунтом виден отправитель инвайта (A → B и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));

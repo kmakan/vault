@@ -12,6 +12,7 @@
 //    peer-токены (смена релея = новые токены).
 
 import { invoke } from '@tauri-apps/api/core';
+import { accountNamespace } from './api.js';
 
 // Наш релей (прод). Первый в списке, но НЕ единственный.
 //
@@ -52,6 +53,7 @@ const RING_URLS = {
 // глобальная (leaves in 'anon'). Ошибка чтения = дефолт: релей должен
 // всегда получать валидный URL, иначе звонок вернётся к серверному дефолту.
 export async function preferredRingtoneUrl(account) {
+  account = await accountNamespace(account);
   const name = await invoke('db_kv_get', { account: 'anon', key: 'call-ringtone-incoming' })
     .catch(() => null);
   return RING_URLS[name] || RING_URLS.incoming;
@@ -95,6 +97,7 @@ export function normalizeRelayUrl(url) {
 
 // Список релеев: [{url, myToken, label}] — наш всегда первый (можно удалить).
 export async function getRelays(account) {
+  account = await accountNamespace(account);
   const raw = await invoke('db_kv_get', { account, key: KV_RELAYS }).catch(() => null);
   let list = [];
   try { list = raw ? JSON.parse(raw) : []; } catch (e) { list = []; }
@@ -130,11 +133,13 @@ export async function getRelays(account) {
 }
 
 export async function saveRelays(account, list) {
+  account = await accountNamespace(account);
   await invoke('db_kv_set', { account, key: KV_RELAYS,
     value: JSON.stringify((list || []).filter(r => r.url && normalizeRelayUrl(r.url))) });
 }
 
 export async function addRelay(account, url, myToken, label) {
+  account = await accountNamespace(account);
   const u = normalizeRelayUrl(url);
   if (!u) throw new Error('https:// URL required');
   const list = await getRelays(account);
@@ -146,6 +151,7 @@ export async function addRelay(account, url, myToken, label) {
 }
 
 export async function removeRelay(account, url) {
+  account = await accountNamespace(account);
   const list = (await getRelays(account)).filter(r => r.url !== url);
   await saveRelays(account, list);
   return list;
@@ -154,6 +160,7 @@ export async function removeRelay(account, url) {
 // ───────────────────────── Настройки (kv) ─────────────────────────
 
 export async function getSettings(account) {
+  account = await accountNamespace(account);
   const [kvEnabled, peersRaw, activeRaw] = await Promise.all([
     invoke('db_kv_get', { account, key: KV_ENABLED }).catch(() => null),
     invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null),
@@ -175,6 +182,7 @@ export async function getSettings(account) {
 }
 
 export async function setEnabled(account, on) {
+  account = await accountNamespace(account);
   await invoke('db_kv_set', { account, key: KV_ENABLED, value: on ? '1' : '0' });
 }
 
@@ -190,6 +198,7 @@ let cachedFpAccount = null;
 const fpByPublicKey = new Map(); // module-level cache for fingerprintOf
 
 export async function myFingerprint(account) {
+  account = await accountNamespace(account);
   if (cachedFp && cachedFpAccount === account) return cachedFp;
   try {
     const crypto = await import('./crypto.js');
@@ -221,6 +230,7 @@ export async function fingerprintOf(publicKey) {
 
 // Токены собеседников: { relayUrl: { chatId: token } } — на КАЖДЫЙ релей свой набор.
 export async function setPeerToken(account, relayUrl, chatId, token, peerFp) {
+  account = await accountNamespace(account);
   const raw = await invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null);
   let peers = {};
   try { peers = raw ? JSON.parse(raw) : {}; } catch (e) { peers = {}; }
@@ -259,6 +269,7 @@ export async function setPeerToken(account, relayUrl, chatId, token, peerFp) {
 // источником, что и relayPublish, чтобы лог не врал.
 export async function hasPeerToken(account, chatId, peerFp) {
   try {
+    account = await accountNamespace(account);
     const { relays, peers } = await getSettings(account);
     const id = String(chatId || '').toLowerCase();
     for (const r of relays || []) {
@@ -280,6 +291,7 @@ export async function hasPeerToken(account, chatId, peerFp) {
 
 // Миграция M2.1 → M2.2: плоские peer-токены переносятся на активный релей.
 export async function migrateLegacyPeers(account, relayUrl) {
+  account = await accountNamespace(account);
   const raw = await invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null);
   if (!raw) return;
   let peers;
@@ -310,6 +322,7 @@ export async function relayHealthUrl(url) {
 // Активный релей с авто-фолбэком: если текущий мёртв — пробуем следующий
 // по кругу, первый живой становится активным (и персистим его).
 export async function pickLiveRelay(account) {
+  account = await accountNamespace(account);
   const { enabled, relays, active } = await getSettings(account);
   if (!enabled || !relays.length) return null;
   if (await relayHealthUrl(relays[active].url)) return relays[active];
@@ -341,6 +354,7 @@ let pubChain = Promise.resolve();
 // email: иначе переименование участника группы снова роняет relay-дубль
 // в почту (30–60 с вместо ~1–2 с).
 export async function relayGroupPublish(account, memberEmails, envelopeObj, encryptedBody, memberFps) {
+  account = await accountNamespace(account);
   const { enabled } = await getSettings(account);
   if (!enabled) return;
   const fps = memberFps || {};
@@ -360,6 +374,7 @@ export async function relayGroupPublish(account, memberEmails, envelopeObj, encr
 export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts = {}) {
   const job = async () => {
     try {
+      account = await accountNamespace(account);
       const { enabled, peers, active, relays } = await getSettings(account);
       if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
       // Бесконечная регистрация: при пустом myToken pickLiveRelay не найдёт
@@ -478,6 +493,7 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
 // kv-список. Возвращает true при успехе.
 export async function reRegisterOurRelay(account) {
   try {
+    account = await accountNamespace(account);
     const fp = await myFingerprint(account);
     const r = await rfetch(DEFAULT_RELAY_URL + '/register', {
       method: 'POST',
@@ -507,6 +523,7 @@ export async function reRegisterOurRelay(account) {
 // Дедуп по id в relayConsume (App.vue).
 export async function relayPoll(account) {
   try {
+    account = await accountNamespace(account);
     const { enabled, relays } = await getSettings(account);
     if (!enabled || !relays.length) return [];
     // Бесконечная регистрация: при пустом myToken наш релей не дойдёт до
@@ -579,6 +596,7 @@ let nativeFcmAccount = null;
 // никогда не сработает. Регистрируем заранее, молча.
 export async function ensureOurRelayToken(account) {
   try {
+    account = await accountNamespace(account);
     let { relays } = await getSettings(account);
     let ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
     if (!ours || !ours.myToken) {
@@ -597,6 +615,7 @@ export async function ensureOurRelayToken(account) {
 
 // Живость активного релея (кнопка «проверить» в настройках).
 export async function relayHealth(account) {
+  account = await accountNamespace(account);
   await ensureOurRelayToken(account);
   const { relays, active } = await getSettings(account);
   if (!relays.length) return false;
@@ -618,6 +637,7 @@ const KV_CHAN_CURSOR = 'relay-channel-cursor'; // {relayUrl: {chId: ts}}
 export async function relayChannelPublish(ch, envelopeObj, encryptedBody, account) {
   const job = async () => {
     try {
+      account = await accountNamespace(account);
       if (!ch || !ch.key) return { ok: false, why: 'no-key' };
       const { enabled, relays, active } = await getSettings(account);
       if (!enabled) return { ok: false, why: 'disabled' };
@@ -660,6 +680,7 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
 // курсор лишь экономит трафик. Вызывается из relayConsume для каждого канала.
 export async function relayChannelPoll(ch, account) {
   try {
+    account = await accountNamespace(account);
     if (!ch || !ch.key) return [];
     const { enabled } = await getSettings(account);
     if (!enabled) return [];
