@@ -186,6 +186,9 @@ export async function setEnabled(account, on) {
 let cachedFp = null;
 let cachedFpAccount = null;
 
+// Fingerprint-кеш по public_key (пира) -> fp (аналог myFingerprint, но для чужих ключей)
+const fpByPublicKey = new Map(); // module-level cache for fingerprintOf
+
 export async function myFingerprint(account) {
   if (cachedFp && cachedFpAccount === account) return cachedFp;
   try {
@@ -200,16 +203,46 @@ export async function myFingerprint(account) {
   }
 }
 
+// Отпечаток ПИРА по его public_key (не наш fp — свой уже есть в myFingerprint).
+export async function fingerprintOf(publicKey) {
+  if (!publicKey) return null;
+  if (fpByPublicKey.has(publicKey)) return fpByPublicKey.get(publicKey);
+  try {
+    const fp = await invoke('get_fingerprint', { publicKey });
+    if (fp) {
+      fpByPublicKey.set(publicKey, fp);
+    }
+    return fp;
+  } catch (e) {
+    console.log('[relay] fingerprintOf error:', e && e.message || e);
+    return null;
+  }
+}
+
 // Токены собеседников: { relayUrl: { chatId: token } } — на КАЖДЫЙ релей свой набор.
-export async function setPeerToken(account, relayUrl, chatId, token) {
+export async function setPeerToken(account, relayUrl, chatId, token, peerFp) {
   const raw = await invoke('db_kv_get', { account, key: KV_PEERS }).catch(() => null);
   let peers = {};
   try { peers = raw ? JSON.parse(raw) : {}; } catch (e) { peers = {}; }
   const key = normalizeRelayUrl(relayUrl);
   if (!key) return;
   if (!peers[key]) peers[key] = {};
-  if (token) peers[key][String(chatId).toLowerCase()] = token;
-  else delete peers[key][String(chatId).toLowerCase()];
+  const lowerChatId = String(chatId).toLowerCase();
+  
+  // Always write email key (legacy compatibility)
+  if (token) peers[key][lowerChatId] = token;
+  else delete peers[key][lowerChatId];
+  
+  // Also write fp key if peerFp provided and token is not empty
+  if (peerFp && token) {
+    const fpKey = 'fp:' + peerFp;
+    peers[key][fpKey] = token;
+  } else if (peerFp && !token) {
+    // If token is null (deletion), also remove fp key
+    const fpKey = 'fp:' + peerFp;
+    delete peers[key][fpKey];
+  }
+  
   try {
     await invoke('db_kv_set', { account, key: KV_PEERS, value: JSON.stringify(peers) });
   } catch (e) {
@@ -224,13 +257,21 @@ export async function setPeerToken(account, relayUrl, chatId, token) {
 // Диагностика отправки: известен ли адрес relay-очереди собеседника.
 // Проверяем ВСЕ релеи списка + оперативный mirror (memPeers) — тем же
 // источником, что и relayPublish, чтобы лог не врал.
-export async function hasPeerToken(account, chatId) {
+export async function hasPeerToken(account, chatId, peerFp) {
   try {
     const { relays, peers } = await getSettings(account);
     const id = String(chatId || '').toLowerCase();
     for (const r of relays || []) {
       const mem = memPeers.get((normalizeRelayUrl(r.url) || r.url) + '::' + id);
       if (mem) return true;
+      
+      // Check fp key first if peerFp provided
+      if (peerFp) {
+        const fpKey = 'fp:' + peerFp;
+        if (((peers || {})[r.url] || {})[fpKey]) return true;
+      }
+      
+      // Then check legacy email key
       if (((peers || {})[r.url] || {})[id]) return true;
     }
     return false;
@@ -294,12 +335,19 @@ let pubChain = Promise.resolve();
 // Пейсинг >0.11с между pub'ами: сервер релея ограничивает 10 rps
 // по адресату (§5.4) и считает суточный лимит издателя на каждый pub —
 // подряд идущие запросы отклонялись как rate limit.
-export async function relayGroupPublish(account, memberEmails, envelopeObj, encryptedBody) {
+// memberFps: { email(lower): fingerprint } — не обязателен. Приходит из
+// GroupMember.fingerprint (Rust уже отдаёт 128-hex, стабильный при смене
+// почты). Нужен, чтобы групповая отправка тоже шла по fp-ключу, а не по
+// email: иначе переименование участника группы снова роняет relay-дубль
+// в почту (30–60 с вместо ~1–2 с).
+export async function relayGroupPublish(account, memberEmails, envelopeObj, encryptedBody, memberFps) {
   const { enabled } = await getSettings(account);
   if (!enabled) return;
+  const fps = memberFps || {};
   for (const member of memberEmails) {
     try {
-      await relayPublish(account, member, envelopeObj, encryptedBody);
+      await relayPublish(account, member, envelopeObj, encryptedBody,
+        { peerFp: fps[String(member).toLowerCase()] || null });
     } catch (e) { /* релей опционален — почта доставит */ }
     await new Promise(r => setTimeout(r, 120));
   }
@@ -329,7 +377,46 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
       if (!relay) { console.log('[relay] publish skip: no-live-relay'); return { ok: false, why: 'no-live-relay' }; }
       const relayPeers = peers[relay.url] || {};
       const memKey = (normalizeRelayUrl(relay.url) || relay.url) + '::' + String(chatId).toLowerCase();
-      const to = memPeers.get(memKey) || relayPeers[String(chatId).toLowerCase()];
+      
+      // New lookup order with fingerprint support
+      let to = null;
+      const peerFp = opts.peerFp || null;
+      
+      // 1. Check fp key first if peerFp provided
+      if (peerFp) {
+        const fpKey = 'fp:' + peerFp;
+        to = relayPeers[fpKey];
+        if (to) {
+          console.log('[relay] publish using fp-key:', peerFp, 'for', chatId);
+        }
+      }
+      
+      // 2. Check memPeers (in-memory cache)
+      if (!to) {
+        to = memPeers.get(memKey);
+      }
+      
+      // 3. Check legacy email key
+      let viaEmail = false;
+      if (!to) {
+        to = relayPeers[String(chatId).toLowerCase()];
+        if (to) viaEmail = true;
+      }
+      
+      // 4. Promotion: token найден по email, а fp-ключа нет → создаём его.
+      // Именно этот путь чинит смену почты пира: первый же publish после
+      // переименования «научит» слой его новому fp, и дальше lookup идёт по fp.
+      // ВАЖНО: условие — «нашли по email И fp-ключа нет», а НЕ «to пусто»:
+      // при `!to` этот блок недостижим (шаг 3 уже заполнил to или оставил пустым).
+      if (viaEmail && peerFp) {
+        const fpKey = 'fp:' + peerFp;
+        if (!relayPeers[fpKey]) {
+          // fire-and-forget: не блокируем отправку записью в kv
+          setPeerToken(account, relay.url, chatId, to, peerFp).catch(() => {});
+          console.log('[relay] promoting email token to fp-key:', peerFp, 'for', chatId);
+        }
+      }
+      
       if (!to) { console.log('[relay] publish skip: no-peer-token for', chatId, 'keys:', Object.keys(relayPeers)); return { ok: false, why: 'no-peer-token' }; }
       const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
       const res = await rfetch(relay.url + '/pub', {

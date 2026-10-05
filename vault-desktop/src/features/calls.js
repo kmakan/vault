@@ -163,12 +163,22 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
       // Явная диагностика на стенде: без peer-токена получателя relayPublish
       // выйдет по ветке 'no-peer-token', и звонок уйдёт ТОЛЬКО почтой.
       // Раньше это было видно только по косвенным метрикам релея.
-      const known = await relay.hasPeerToken(ctx.email, peer);
+      let peerFp = null;
+      try {
+        const publicKey = ctx.peerKeys[peer];
+        if (publicKey) {
+          peerFp = await relay.fingerprintOf(publicKey);
+        }
+      } catch (e) {
+        // If fingerprint resolution fails, continue with legacy email-only relay
+        peerFp = null;
+      }
+      const known = await relay.hasPeerToken(ctx.email, peer, peerFp);
       if (!known) console.log('[relay] call: peer token unknown for', peer, '→ email-only');
       // urgent для call_request: сервер обходит last_seen-гейт, чтобы
       // будить только что закрытое приложение (гейт 90с не знал, что
       // «поллил 5с назад» = его убили). Дедуп на клиенте по env.id.
-      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake })
+      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake, peerFp })
         .then(r => {
           // Причина пропуска публикации ВИДНА в логе: relayPublish возвращает
           // {ok:false, why}, но вызывающий код его игнорировал — на стенде
@@ -222,7 +232,20 @@ export async function handleCallSignal(ctx, sig, from) {
         if (r) {
           relay.memLearn(r.url, from, sig.tok); // 0.1.186: синхронный mirror для relayPublish
           const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
-          if (known !== sig.tok) await relay.setPeerToken(ctx.email, r.url, from, sig.tok);
+          
+          // Add peerFp if available
+          let peerFp = null;
+          try {
+            const publicKey = ctx.peerKeys[from];
+            if (publicKey) {
+              peerFp = await relay.fingerprintOf(publicKey);
+            }
+          } catch (e) {
+            // If fingerprint resolution fails, continue without fp
+            peerFp = null;
+          }
+          
+          if (known !== sig.tok) await relay.setPeerToken(ctx.email, r.url, from, sig.tok, peerFp);
         }
       } catch (e) { /* релей опционален */ }
     })();

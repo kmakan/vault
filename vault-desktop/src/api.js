@@ -525,7 +525,15 @@ export class ApiClient {
         const members = (g.members || [])
           .map(m => String(m.email || '').toLowerCase())
           .filter(e => e && e !== this.email);
-        (await import('./relay-client.js')).relayGroupPublish(this.email, members, envelopeObj, content);
+        // Отпечатки участников (GroupMember.fingerprint, 128-hex) — чтобы
+        // relay-дубль в группе шёл по fp-ключу и переживал смену почты
+        // участником. Пустые пропускаем: relayPublish сам откатится на email.
+        const memberFps = {};
+        for (const m of (g.members || [])) {
+          const e = String(m.email || '').toLowerCase();
+          if (e && m.fingerprint) memberFps[e] = String(m.fingerprint);
+        }
+        (await import('./relay-client.js')).relayGroupPublish(this.email, members, envelopeObj, content, memberFps);
       } catch (e) { /* релей опционален — почта доставит */ }
     }
     // STEALTH: пустая тема (как 1:1). Получатель классифицирует по

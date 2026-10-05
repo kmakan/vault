@@ -4803,7 +4803,18 @@ export default {
             // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
               const envObj = JSON.parse(envelope);
-              const pub = relay.relayPublish(this.email, this.activeChat, envObj, content);
+              // Resolve peer fingerprint from peerKeys for fingerprint-based relay
+              let peerFp = null;
+              try {
+                const publicKey = this.peerKeys[this.activeChat];
+                if (publicKey) {
+                  peerFp = await relay.fingerprintOf(publicKey);
+                }
+              } catch (e) {
+                // If fingerprint resolution fails, continue with legacy email-only relay
+                peerFp = null;
+              }
+              const pub = relay.relayPublish(this.email, this.activeChat, envObj, content, { peerFp });
               // §1: обновляем индикатор доставки по результату pub.
               pub.then(r => {
                 if (r && r.why === 'daily-limit') {

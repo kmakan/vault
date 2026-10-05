@@ -153,9 +153,21 @@ async function classify(ctx, m, from) {
             const r = rs.relays[rs.active] || rs.relays[0];
             if (r) {
               const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
+              
+              // Resolve peer fingerprint from the sender's public key (env.key)
+              let peerFp = null;
+              try {
+                if (env.key) {
+                  peerFp = await relay.fingerprintOf(env.key);
+                }
+              } catch (e) {
+                // If fingerprint resolution fails, continue without fp
+                peerFp = null;
+              }
+              
               if (known !== env.tok) {
-                await relay.setPeerToken(ctx.email, r.url, from, env.tok);
-                console.log('[relay] peer token auto-learned:', from);
+                await relay.setPeerToken(ctx.email, r.url, from, env.tok, peerFp);
+                console.log('[relay] peer token auto-learned:', from, peerFp ? '(fp: ' + peerFp + ')' : '');
               }
             }
           } catch (e) { /* релей опционален */ }
