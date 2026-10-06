@@ -50,3 +50,9 @@ __pycache__/
 **/fcm-key.json
 **/service-account.json
 **/service-account*.json
+
+# Store-ассеты (скриншоты для магазинов): содержат РЕАЛЬНЫЕ адреса контактов
+# (kmakan@zoho.com и др.) — в публичный репозиторий нельзя. Хранятся локально,
+# загружаются прямо в консоль RuStore/Play. feature-graphic тоже здесь, чтобы
+# ассеты лежали одним местом.
+store-assets/
