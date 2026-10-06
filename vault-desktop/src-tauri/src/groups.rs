@@ -380,6 +380,49 @@ pub fn filter_own_groups(
         .collect()
 }
 
+/// Массовое заполнение СОБСТВЕННОГО fingerprint у участников во ВСЕХ группах.
+///
+/// Заполняет поле `fingerprint` участников, чей email совпадает с данным
+/// (без учёта регистра) и у которых поле пустое — ленивая миграция старых
+/// groups.json, которые никто не открывал в UI (там fp заполняется только
+/// при открытии группы). Без этого fp-only фильтр `filter_own_groups` такие
+/// группы не находит.
+///
+/// Идемпотентно (как groups_save_member_fingerprints): существующие НЕПУСТЫЕ
+/// fingerprint не затираются; пустой fingerprint после trim — no-op (ничего
+/// не пишем, возвращаем 0). Сохранение — только если что-то обновилось.
+///
+/// Возвращает число обновлённых участников.
+pub fn backfill_my_fingerprint(email: &str, fingerprint: &str) -> Result<usize> {
+    let fp = fingerprint.trim().to_lowercase();
+    // Защита от затирания пустотой: не пишем ничего.
+    if fp.is_empty() {
+        return Ok(0);
+    }
+    let email = email.trim();
+    if email.is_empty() {
+        return Ok(0);
+    }
+
+    let mut groups = load_groups()?;
+    let mut updates = 0usize;
+    for group in groups.values_mut() {
+        for m in group.members.iter_mut() {
+            if !m.fingerprint.is_empty() {
+                continue; // не затираем существующий (идемпотентность)
+            }
+            if m.email.eq_ignore_ascii_case(email) {
+                m.fingerprint = fp.clone();
+                updates += 1;
+            }
+        }
+    }
+    if updates > 0 {
+        save_groups(&groups)?;
+    }
+    Ok(updates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,5 +876,83 @@ mod tests {
         let weird = mk_group("g6", "  Admin@X.COM ", &[("ME@NEW.com", "  ")]);
         let got = filter_own_groups(std::slice::from_ref(&weird), "me@new.com", "", &[]);
         assert_eq!(got.len(), 1);
+    }
+
+    // ─── backfill_my_fingerprint: ленивое заполнение своего fp ───
+
+    #[test]
+    fn test_backfill_fills_empty_fingerprints_across_all_groups() {
+        with_tmp_groups(|| {
+            // 2 группы, участник с пустым fp в обеих.
+            let mut all = HashMap::new();
+            let g1 = mk_group("g1", "a@x.com", &[("me@x.com", "")]);
+            let g2 = mk_group("g2", "b@x.com", &[("me@x.com", "")]);
+            all.insert(g1.id.clone(), g1);
+            all.insert(g2.id.clone(), g2);
+            save_groups(&all).unwrap();
+
+            let updated =
+                backfill_my_fingerprint("me@x.com", "  AABB112233445566  ").unwrap();
+            assert_eq!(updated, 2, "обе группы с пустым fp должны обновиться");
+
+            let groups = load_groups().unwrap();
+            for id in ["g1", "g2"] {
+                let m = &groups.get(id).unwrap().members[0];
+                // trim + lowercase применяются.
+                assert_eq!(m.fingerprint, "aabb112233445566", "fp в {id}");
+            }
+        });
+    }
+
+    #[test]
+    fn test_backfill_does_not_overwrite_existing_fingerprint() {
+        with_tmp_groups(|| {
+            let mut all = HashMap::new();
+            let g1 = mk_group("g1", "a@x.com", &[("me@x.com", "existing")]);
+            all.insert(g1.id.clone(), g1);
+            save_groups(&all).unwrap();
+
+            let updated = backfill_my_fingerprint("me@x.com", "newfp123").unwrap();
+            assert_eq!(updated, 0, "непустой fp не должен перезаписываться");
+
+            let groups = load_groups().unwrap();
+            assert_eq!(groups.get("g1").unwrap().members[0].fingerprint, "existing");
+        });
+    }
+
+    #[test]
+    fn test_backfill_empty_fingerprint_is_noop() {
+        with_tmp_groups(|| {
+            let mut all = HashMap::new();
+            let g1 = mk_group("g1", "a@x.com", &[("me@x.com", "")]);
+            all.insert(g1.id.clone(), g1);
+            save_groups(&all).unwrap();
+
+            let path = std::env::var("VAULT_GROUPS_FILE").unwrap();
+            let before = std::fs::read_to_string(&path).unwrap();
+
+            let updated = backfill_my_fingerprint("me@x.com", "   ").unwrap();
+            assert_eq!(updated, 0, "пустой fp — no-op");
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(before, after, "файл не должен измениться");
+        });
+    }
+
+    #[test]
+    fn test_backfill_case_insensitive_email() {
+        with_tmp_groups(|| {
+            // Email в groups.json записан в другом регистре.
+            let mut all = HashMap::new();
+            let g1 = mk_group("g1", "a@x.com", &[("Me@X.COM", "")]);
+            all.insert(g1.id.clone(), g1);
+            save_groups(&all).unwrap();
+
+            let updated = backfill_my_fingerprint("me@x.com", "FPAA").unwrap();
+            assert_eq!(updated, 1, "регистр email не должен мешать");
+
+            let groups = load_groups().unwrap();
+            assert_eq!(groups.get("g1").unwrap().members[0].fingerprint, "fpaa");
+        });
     }
 }

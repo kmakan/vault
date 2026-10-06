@@ -1150,6 +1150,16 @@ fn groups_load_own(
     Ok(groups::filter_own_groups(&all, &email, &fingerprint, &aliases))
 }
 
+/// Заполнить СОБСТВЕННЫЙ fingerprint у участников во ВСЕХ группах (ленивая
+/// миграция старых groups.json: группы, которые никто не открывал в UI,
+/// иначе остаются с пустым fp и не находятся fp-only фильтром groups_load_own).
+/// Идемпотентно: непустые fingerprint не затираются; пустой fp — no-op (0).
+/// Возвращает число обновлённых участников.
+#[tauri::command]
+fn groups_backfill_my_fingerprint(email: String, fingerprint: String) -> Result<usize, String> {
+    groups::backfill_my_fingerprint(&email, &fingerprint).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
@@ -1970,6 +1980,7 @@ pub fn run() {
             channels_delete,
             groups_rename_member,
             groups_load_own,
+            groups_backfill_my_fingerprint,
             groups_save_member_fingerprints,
             android_open_url,
             duress_get_config,

@@ -2195,6 +2195,13 @@ export default {
           await crypto.saveToStorage();
         }
         this.fingerprint = await crypto.fingerprint();
+        // Fire-and-forget: заполняем свой fingerprint у участников групп, которые
+        // ещё никто не открывал в UI (там fp заполняется лениво при открытии) —
+        // иначе fp-only фильтр «моих групп» их не находит. Вход не блокируем.
+        invoke('groups_backfill_my_fingerprint', {
+          email: this.email || '',
+          fingerprint: String(this.fingerprint || ''),
+        }).catch(() => {});
         this.cryptoReady = true;
         await this.loadStoredPeerKeys();
         // Ключ теперь есть → пересчитываем namespace на fp:<fingerprint> и
