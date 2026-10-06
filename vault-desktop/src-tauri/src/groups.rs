@@ -335,6 +335,51 @@ pub fn delete_group(group_id: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Чистая функция: «мои группы» — fp-first, адрес как fallback.
+///
+/// Идентичность участника = fingerprint публичного ключа; он не меняется при
+/// смене почты. Адрес (email) — это транспорт и legacy-fallback: он работает
+/// только когда fp недоступен (старые группы/базы).
+///
+/// История: регрессия 05–06.10.2026 — строгое сравнение по email отсекало все
+/// группы после смены почты (группы «исчезали», данные были целы).
+pub fn filter_own_groups(
+    groups: &[Group],
+    my_email: &str,
+    my_fingerprint: &str,
+    aliases: &[String],
+) -> Vec<Group> {
+    let email = my_email.trim().to_lowercase();
+    let fp = my_fingerprint.trim().to_lowercase();
+    let mut mine: std::collections::HashSet<String> = std::iter::once(email.clone()).collect();
+    for a in aliases {
+        let v = a.trim().to_lowercase();
+        if !v.is_empty() {
+            mine.insert(v);
+        }
+    }
+
+    groups
+        .iter()
+        .filter(|g| {
+            let cb = g.created_by.trim().to_lowercase();
+            if !cb.is_empty() && (cb == email || mine.contains(&cb)) {
+                return true;
+            }
+            g.members.iter().any(|m| {
+                let me = m.email.trim().to_lowercase();
+                if !me.is_empty() && mine.contains(&me) {
+                    return true;
+                }
+                let mfp = m.fingerprint.trim().to_lowercase();
+                !fp.is_empty() && !mfp.is_empty() && mfp == fp
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,5 +640,198 @@ mod tests {
             let legacy = groups.get("grp_legacy").unwrap();
             assert!(legacy.members[0].fingerprint.is_empty()); // default = ""
         });
+    }
+
+    // ─── Смена СОБСТВЕННОЙ почты (регрессия 05–06.10.2026) ───
+    //
+    // На телефоне после смены koanmak@ya.ru → vault-msg@ya.ru группы исчезли из
+    // UI: в groups.json оставался старый адрес, а UI сравнивал строго по email.
+    // Ниже — проверка данных на уровне Rust, где им и место: после переименования
+    // старый адрес не должен оставаться НИГДЕ, а fingerprint участника (то, что
+    // реально не меняется при смене почты) обязан выжить.
+
+    #[test]
+    fn test_own_email_change_renames_across_all_groups_and_keeps_fingerprint() {
+        with_tmp_groups(|| {
+            let g1 = create_group("Моя", "me@old.com").unwrap();
+            let g2 = create_group("Чужая", "other@x.com").unwrap();
+            add_member(&g2.id, "me@old.com").unwrap();
+            add_member(&g2.id, "third@y.com").unwrap();
+
+            // Проставляем fingerprint владельцу (как при обмене ключами).
+            let mut groups = load_groups().unwrap();
+            for id in [&g1.id, &g2.id] {
+                let gm = groups.get_mut(id).unwrap();
+                for m in gm.members.iter_mut() {
+                    if m.email == "me@old.com" {
+                        m.fingerprint = "fp-mine-0123456789".into();
+                    }
+                }
+            }
+            save_groups(&groups).unwrap();
+
+            // Смена почты: владелец переименовывает себя в ОБЕИХ группах.
+            rename_member(&g1.id, "me@old.com", "me@new.com").unwrap();
+            rename_member(&g2.id, "me@old.com", "me@new.com").unwrap();
+
+            let groups = load_groups().unwrap();
+            // Ни в одной группе не осталось старого адреса…
+            for (id, g) in groups.iter() {
+                assert!(
+                    !g.members.iter().any(|m| m.email == "me@old.com"),
+                    "старый адрес остался участником в группе {id}"
+                );
+                assert_ne!(
+                    g.created_by, "me@old.com",
+                    "старый адрес остался создателем {id}"
+                );
+            }
+            // …а новый есть в обеих, с тем же fingerprint и правами.
+            for id in [&g1.id, &g2.id] {
+                let me = groups
+                    .get(id)
+                    .unwrap()
+                    .members
+                    .iter()
+                    .find(|m| m.email == "me@new.com")
+                    .unwrap_or_else(|| panic!("новый адрес не найден в {id}"));
+                assert_eq!(
+                    me.fingerprint, "fp-mine-0123456789",
+                    "fingerprint обязан пережить смену почты"
+                );
+                assert!(me.key_shared, "факт владения ключом группы сохраняется");
+            }
+            // Чужой участник не тронут.
+            assert!(groups
+                .get(&g2.id)
+                .unwrap()
+                .members
+                .iter()
+                .any(|m| m.email == "third@y.com"));
+            // Права создателя сохранены.
+            assert_eq!(groups.get(&g1.id).unwrap().created_by, "me@new.com");
+        });
+    }
+
+    #[test]
+    fn test_email_change_is_idempotent_and_does_not_touch_absent_member() {
+        with_tmp_groups(|| {
+            let g = create_group("g", "alice@old.com").unwrap();
+            add_member(&g.id, "bob@old.com").unwrap();
+
+            // Переименование отсутствующего участника не должно падать…
+            rename_member(&g.id, "nobody@old.com", "nobody@new.com").unwrap();
+            let after = load_groups().unwrap();
+            assert!(after
+                .get(&g.id)
+                .unwrap()
+                .members
+                .iter()
+                .any(|m| m.email == "bob@old.com"));
+
+            // …а повторное переименование того же адреса — тоже (нет дублей).
+            rename_member(&g.id, "bob@old.com", "bob@new.com").unwrap();
+            rename_member(&g.id, "bob@new.com", "bob@newer.com").unwrap();
+            let stored = load_groups().unwrap();
+            let bobs: Vec<_> = stored
+                .get(&g.id)
+                .unwrap()
+                .members
+                .iter()
+                .filter(|m| m.email.starts_with("bob@"))
+                .collect();
+            assert_eq!(bobs.len(), 1, "не должно появляться дублей участника");
+            assert_eq!(bobs[0].email, "bob@newer.com");
+        });
+    }
+
+    #[test]
+    fn test_rename_member_on_missing_group_errors_instead_of_silently_ok() {
+        with_tmp_groups(|| {
+            let err = rename_member("no-such-group", "a@x.com", "b@y.com");
+            assert!(
+                err.is_err(),
+                "переименование в несуществующей группе — ошибка"
+            );
+        });
+    }
+
+    // ─── filter_own_groups: fp-first, адрес как fallback ───
+
+    fn mk_group(id: &str, created_by: &str, members: &[(&str, &str)]) -> Group {
+        Group {
+            id: id.into(),
+            name: format!("группа {}", id),
+            created_by: created_by.into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            members: members
+                .iter()
+                .map(|(e, f)| GroupMember {
+                    email: e.to_string(),
+                    role: GroupRole::Member,
+                    joined_at: String::new(),
+                    key_shared: false,
+                    fingerprint: f.to_string(),
+                })
+                .collect(),
+            blocked: vec![],
+            encrypted: true,
+            group_key: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_filter_own_groups_fp_first_email_fallback() {
+        let new = "me@new.com";
+        let old = "me@old.com";
+        let my_fp = "aabb11223344";
+
+        let all = vec![
+            // Мой адрес уже переименован при смене почты
+            mk_group("g1", "someone@x.com", &[("me@new.com", "")]),
+            // Адрес не переименован (старый остался в groups.json)
+            mk_group("g2", "other@x.com", &[(old, "")]),
+            // Опознаю только по отпечатку (адрес вообще другой)
+            mk_group("g3", "third@x.com", &[("elsewhere@y.com", my_fp)]),
+            // Чужая группа: другой fp, другой адрес
+            mk_group(
+                "g4",
+                "somebody@z.com",
+                &[("somebody@z.com", "deadbeef0099")],
+            ),
+        ];
+
+        let got = filter_own_groups(&all, new, my_fp, &[old.to_string()]);
+        assert_eq!(
+            got.len(),
+            3,
+            "свои: g1 (новый адрес), g2 (старый адрес = алиас), g3 (по отпечатку)"
+        );
+        assert!(got.iter().all(|g| g.id != "g4"), "чужая группа не попала");
+    }
+
+    #[test]
+    fn test_filter_own_groups_without_fp_or_aliases_uses_email_only() {
+        let renamed = mk_group("g1", "s@x.com", &[("me@new.com", "")]);
+        let stale = mk_group("g2", "s@x.com", &[("me@old.com", "")]);
+        // Нет fp, нет алиасов — находится только группа с текущим адресом.
+        let got = filter_own_groups(&[renamed, stale], "me@new.com", "", &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "g1");
+    }
+
+    #[test]
+    fn test_filter_own_groups_empty_fp_never_matches() {
+        // Участник с fp, но мой fp пуст — матчиться не должен.
+        let tricky = mk_group("g5", "x@y.com", &[("who@y.com", "aabb")]);
+        let got = filter_own_groups(std::slice::from_ref(&tricky), "me@new.com", "", &[]);
+        assert!(got.is_empty(), "пустой fp не должен матчиться");
+    }
+
+    #[test]
+    fn test_filter_own_groups_case_and_whitespace_insensitive() {
+        let weird = mk_group("g6", "  Admin@X.COM ", &[("ME@NEW.com", "  ")]);
+        let got = filter_own_groups(std::slice::from_ref(&weird), "me@new.com", "", &[]);
+        assert_eq!(got.len(), 1);
     }
 }

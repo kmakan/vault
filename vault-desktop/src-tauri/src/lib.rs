@@ -1132,6 +1132,24 @@ struct MemberFingerprintIn {
     fingerprint: String,
 }
 
+/// «Мои группы»: фильтр по fingerprint (первичный) + адресам (текущий и алиасы).
+///
+/// Идентичность = отпечаток публичного ключа: он не меняется при смене почты.
+/// Адрес — legacy-fallback. Именно поэтому после смены email группы, контакты
+/// и каналы продолжают работать: участник опознаётся по отпечатку, а не по
+/// адресу. Логика и тесты — в groups::filter_own_groups.
+#[tauri::command]
+fn groups_load_own(
+    email: String,
+    fingerprint: String,
+    aliases: Vec<String>,
+) -> Result<Vec<groups::Group>, String> {
+    let all = groups::load_groups()
+        .map(|g| g.into_values().collect::<Vec<_>>())
+        .map_err(|e| e.to_string())?;
+    Ok(groups::filter_own_groups(&all, &email, &fingerprint, &aliases))
+}
+
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
@@ -1951,6 +1969,7 @@ pub fn run() {
             channels_add_known_subscriber,
             channels_delete,
             groups_rename_member,
+            groups_load_own,
             groups_save_member_fingerprints,
             android_open_url,
             duress_get_config,

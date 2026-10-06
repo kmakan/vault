@@ -2574,25 +2574,18 @@ export default {
     },
     async loadGroups() {
       try {
-        const all = await api.getGroups();
         // groups.json — общий файл на машину для всех аккаунтов. Показываем
-        // только группы, где текущий пользователь участник или создатель.
-        //
-        // СМЕНА ПОЧТЫ (05.10): сравнение строго по email ломало аккаунт при
-        // переименовании — в groups.json оставался старый адрес, и все группы
-        // исчезали из UI (данные целы, но фильтр их отсекал). Поэтому «свой
-        // адрес» = текущий email + алиасы по тому же peer-ключу
-        // (aliasesOf), а если у участника проставлен fingerprint — сверяем и
-        // по нему: отпечаток не меняется при смене почты ВООБЩЕ.
-        const mine = new Set([String(this.email || '').toLowerCase()]);
-        try { for (const a of (this.aliasesOf(this.email) || [])) mine.add(String(a).toLowerCase()); }
-        catch (e) { /* алиасы недоступны — остаёмся на текущем адресе */ }
-        // Наш fp уже загружен при логине (App.vue: this.fingerprint = crypto.fingerprint()).
-        const myFp = String(this.fingerprint || '').toLowerCase();
-        const isMember = (g) => g.created_by === this.email || mine.has(String(g.created_by || '').toLowerCase())
-          || (g.members || []).some(m => mine.has(String(m.email || '').toLowerCase())
-            || (!!myFp && !!m.fingerprint && String(m.fingerprint).toLowerCase() === myFp));
-        this.groups = (all || []).filter(isMember);
+        // только свои группы. Фильтр — Rust-команда groups_load_own:
+        // идентичность = fingerprint (не меняется при смене почты), адрес и
+        // алиасы — fallback. Логика и тесты — groups::filter_own_groups.
+        let aliases = [];
+        try { aliases = this.aliasesOf(this.email) || []; }
+        catch (e) { /* алиасы недоступны — фильтр сработает по email+fp */ }
+        this.groups = await invoke('groups_load_own', {
+          email: this.email || '',
+          fingerprint: String(this.fingerprint || ''),
+          aliases,
+        });
         // Участники групп — тоже контакты (кроме себя): так под приглашённым
         // аккаунтом виден отправитель инвайта (A → B и наоборот).
         const seen = new Set(this.contacts.map(c => c.email));
