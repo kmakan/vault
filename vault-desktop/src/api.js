@@ -1612,6 +1612,18 @@ async mediaSoundStop() {
       if (avatar && tsNum >= (p._ts || 0)) this._avatarCache.set(email, avatar);
     } catch (e) { /* ignore */ }
   }
+  // Профиль полностью удаляется (смена почты собеседником / удаление
+  // контакта): старый адрес не должен остаться в kv profiles.
+  async deleteProfile(email) {
+    if (!email) return;
+    try {
+      email = String(email).trim().toLowerCase();
+      const profiles = await this.getProfilesAll();
+      delete profiles[email];
+      await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
+      this._avatarCache.delete(email);
+    } catch (e) { /* ignore */ }
+  }
   async getProfile(email) {
     if (!email) return null;
     if (email === this.email) {

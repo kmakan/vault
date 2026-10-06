@@ -3636,6 +3636,20 @@ export default {
                     // Копируем профиль старого адреса на новый (имя/аватар).
                     const oldProf = this.profiles[oldEmail];
                     if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);
+                    // Смена почты: СТАРЫЙ адрес убираем из всех хранилищ
+                    // (диск/память/стабы контактов/профиль) — иначе остаётся
+                    // второй контакт с тем же ключом. Порядок: до setPeerKey,
+                    // чтобы remove_peer_key вычистил старую запись до
+                    // переименования/добавления новой.
+                    if (String(oldEmail).toLowerCase() !== senderNorm) {
+                      try { await crypto.removePeerKey(oldEmail); } catch (e) {}
+                      delete this.peerKeys[oldEmail];
+                      delete this.peerKeysLoaded[oldEmail];
+                      delete this.peerPqKeys[oldEmail];
+                      api.removeContact(oldEmail);
+                      api.deleteProfile(oldEmail);
+                      console.log('[identity] peer renamed: '+oldEmail+' → '+sender);
+                    }
                     // Регистрируем ключ под новым email (peer_keys.json).
                     this.setPeerKey(sender, env.key, env.pq || null);
                   } else if (!this.peerKeys[sender] && env.key !== crypto.publicKey) {
@@ -4935,6 +4949,19 @@ export default {
         }
         const normalized = email.trim().toLowerCase();
         await crypto.savePeerKey(normalized, publicKeyHex, null);
+        // ДЕДУП: тот же ключ уже известен под другим адресом (собеседник
+        // сменил почту) — удаляем старую запись, чтобы контакт не
+        // продублировался (QR от контакта, сменившего почту: одна запись).
+        const oldSame = Object.keys(this.peerKeys).find(
+          k => String(k).toLowerCase() !== normalized && this.peerKeys[k] === publicKeyHex
+        );
+        if (oldSame) {
+          delete this.peerKeys[oldSame];
+          delete this.peerPqKeys[oldSame];
+          delete this.peerKeysLoaded[oldSame];
+          try { await crypto.removePeerKey(oldSame); } catch {}
+          api.removeContact(oldSame);
+        }
         this.peerKeys[normalized] = publicKeyHex;
         this.peerKeysLoaded[normalized] = true;
         // ВЗАИМНОСТЬ: после QR-сканирования/вставки ключа отправляем
