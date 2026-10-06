@@ -33,6 +33,11 @@ const db = {
     invoke('db_history_load', { account, chatKey }),
   historyClear: (account) =>
     invoke('db_history_clear', { account }),
+  // Удаление истории ОДНОГО чата (смена почты собеседником: старый chatKey =
+  // email пира). db_history_clear чистит ВСЮ историю аккаунта — для ренейма
+  // это уничтожило бы остальные переписки.
+  historyClearChat: (account, chatKey) =>
+    invoke('db_history_clear_chat', { account, chatKey }),
   tombstoneAdd: (account, msgId, mid) =>
     invoke('db_tombstone_add', { account, msgId, mid }),
   tombstonesLoad: (account) =>
@@ -1637,6 +1642,119 @@ async mediaSoundStop() {
       this._avatarCache.delete(email);
     } catch (e) { /* ignore */ }
   }
+  // ── СМЕНА ПОЧТЫ СОБЕСЕДНИКОМ: полный ренейм личности во всех слоях ──
+  // Идентичность = публичный ключ, email = транспорт. Когда пир меняет адрес,
+  // старый адрес обязан исчезнуть ВЕЗДЕ, а данные — переехать на новый.
+  //
+  // Зачем отдельный метод: до него ренейм чистил только peer_keys и профиль,
+  // а kv-ключи с email в имени оставались — у пользователя появлялся ВТОРОЙ
+  // контакт, история чата раскалывалась на два chat_key, в группах возникал
+  // второй участник с тем же отпечатком, relay-публикация уходила на оба
+  // адреса (дубли сообщений). Проверено на живых данных 06.10.2026.
+  //
+  // Идемпотентен: повторный вызов с теми же адресами ничего не ломает.
+  async renamePeerIdentity(oldEmail, newEmail) {
+    if (!oldEmail || !newEmail) return;
+    const from = String(oldEmail).trim().toLowerCase();
+    const to = String(newEmail).trim().toLowerCase();
+    if (from === to) return;
+    const ns = await accountNamespace(this.email);
+
+    // 1) Списки контактов: записи формата '<email>|<uid>'.
+    //    Дубли по новому адресу не создаём (Set), старые вычищаем целиком.
+    for (const key of ['accepted-contacts', 'declined-contacts', 'invited-senders']) {
+      try {
+        const raw = JSON.parse((await db.kvGet(ns, key)) || '[]');
+        if (!Array.isArray(raw) || !raw.length) continue;
+        const next = [];
+        const seen = new Set();
+        for (const item of raw) {
+          const s = String(item);
+          const em = s.split('|')[0].toLowerCase();
+          if (em === from) {
+            // Переписываем на новый адрес (uid сохраняем — это порядковый номер
+            // письма-квитанции, он не зависит от адреса).
+            const rewritten = to + s.slice(s.indexOf('|') >= 0 ? s.indexOf('|') : s.length);
+            if (!seen.has(rewritten)) { seen.add(rewritten); next.push(rewritten); }
+          } else if (!seen.has(s)) { seen.add(s); next.push(s); }
+        }
+        if (next.length !== raw.length || next.some((x, i) => x !== raw[i])) {
+          await db.kvSet(ns, key, JSON.stringify(next));
+          console.log('[identity] renamed in', key, ':', from, '→', to);
+        }
+      } catch (e) { /* список недоступен — не критично */ }
+    }
+
+    // 2) relay-peer-tokens: { relayUrl: { chatId(lower): token } }.
+    //    Без этого публикация идёт на ОБА адреса → дубли сообщений.
+    try {
+      const raw = JSON.parse((await db.kvGet(ns, 'relay-peer-tokens')) || '{}');
+      let touched = false;
+      for (const url of Object.keys(raw || {})) {
+        const peers = raw[url];
+        if (!peers || typeof peers !== 'object') continue;
+        if (peers[from] !== undefined) {
+          if (peers[to] === undefined) peers[to] = peers[from];
+          delete peers[from];
+          touched = true;
+        }
+      }
+      if (touched) {
+        await db.kvSet(ns, 'relay-peer-tokens', JSON.stringify(raw));
+        console.log('[identity] relay peer token renamed:', from, '→', to);
+      }
+    } catch (e) { /* ignore */ }
+
+    // 3) Счётчики непрочитанного: ключи — email.
+    try {
+      const raw = JSON.parse((await db.kvGet(ns, 'unread-counts')) || '{}');
+      if (raw && raw[from] !== undefined) {
+        raw[to] = (raw[to] || 0) + raw[from];
+        delete raw[from];
+        await db.kvSet(ns, 'unread-counts', JSON.stringify(raw));
+      }
+    } catch (e) { /* ignore */ }
+
+    // 4) Профиль старого адреса: имя/аватар переезжают, старый ключ уходит.
+    try {
+      const profiles = await this.getProfilesAll();
+      if (profiles[from]) {
+        const p = profiles[from];
+        const target = profiles[to] || {};
+        // Приоритет — непустым полям: новый профиль не должен терять данные.
+        if (p.name && !target.name) target.name = p.name;
+        if (p.avatar && !target.avatar) target.avatar = p.avatar;
+        if (p.local_name && !target.local_name) target.local_name = p.local_name;
+        if (p.bio !== undefined && target.bio === undefined) target.bio = p.bio;
+        if (p._ts !== undefined && (target._ts === undefined || p._ts > target._ts)) target._ts = p._ts;
+        profiles[to] = target;
+        delete profiles[from];
+        await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
+        this._avatarCache.delete(from);
+        console.log('[identity] profile renamed:', from, '→', to);
+      }
+    } catch (e) { /* ignore */ }
+
+    // 5) История чата в sqlite: chat_key = email пира. Без этого переписка
+    //    раскалывается на два ключа (видно на живых данных: koanmak@ya.ru
+    //    и vault-msg@ya.ru с разными сообщениями).
+    try {
+      const oldHist = await db.historyLoad(await ns, from).catch(() => null);
+      if (oldHist && oldHist.length) {
+        const newHist = await db.historyLoad(await ns, to).catch(() => null) || [];
+        // Слияние по id: сообщения нового адреса не теряются.
+        const byId = new Map();
+        for (const m of newHist) if (m && m.id) byId.set(m.id, m);
+        for (const m of oldHist) if (m && m.id && !byId.has(m.id)) byId.set(m.id, m);
+        const merged = Array.from(byId.values());
+        await db.historySave(await ns, to, JSON.stringify(merged));
+        // Только ОДИН этот чат: historyClear(account) стёр бы всю историю.
+        await db.historyClearChat(await ns, from).catch(() => {});
+        console.log('[identity] chat history merged:', from, '→', to, '(' + oldHist.length + ' → ' + merged.length + ')');
+      }
+    } catch (e) { /* история недоступна — не критично */ }
+  }
+
   async getProfile(email) {
     if (!email) return null;
     if (email === this.email) {

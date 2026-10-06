@@ -53,3 +53,52 @@ pub fn clear_history(email: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Delete history of ONE chat only (смена почты собеседником: старый
+/// chat_key = email пира надо убрать, не трогая остальные переписки).
+/// Отсутствующий файл — не ошибка (идемпотентно).
+pub fn clear_chat_history(email: &str, chat_key: &str) -> Result<()> {
+    let path = history_root()?
+        .join(safe_name(email))
+        .join(format!("{}.json", safe_name(chat_key)));
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Смена почты собеседником: переименование chat_key не должно затирать
+    /// переписку ДРУГИХ чатов (clear_chat_history vs clear_history).
+    #[test]
+    fn clear_chat_history_touches_only_that_chat() {
+        // Изоляция: уникальный HOME на тест, чтобы не тронуть реальные данные.
+        let tmp = std::env::temp_dir().join(format!("vault_hist_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("HOME", &tmp);
+        std::env::set_var("XDG_DATA_HOME", tmp.join(".local/share"));
+
+        save_history("acc@x", "old@peer", "[\"old\"]").unwrap();
+        save_history("acc@x", "other@peer", "[\"other\"]").unwrap();
+
+        clear_chat_history("acc@x", "old@peer").unwrap();
+
+        assert!(
+            load_history("acc@x", "old@peer").unwrap().is_none(),
+            "старый чат удалён"
+        );
+        assert!(
+            load_history("acc@x", "other@peer").unwrap().is_some(),
+            "чужой чат цел"
+        );
+        // Идемпотентность: повторный вызов по удалённому — не ошибка.
+        clear_chat_history("acc@x", "old@peer").unwrap();
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+}

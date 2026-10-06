@@ -247,7 +247,8 @@ impl EmailClient {
         // Когда паузы нет (первая неудача серии / предыдущая истекла) —
         // назначаем now + delay. Успех через note_success() сбрасывает всё.
         let now = Instant::now();
-        let (deadline, remaining) = next_connect_deadline(self.fail_streak, self.connect_retry_after, now);
+        let (deadline, remaining) =
+            next_connect_deadline(self.fail_streak, self.connect_retry_after, now);
         self.connect_retry_after = deadline;
         remaining
     }
@@ -374,7 +375,11 @@ impl EmailClient {
         // хотя тот же ящик принимается как «koanmak» или «koanmak@yandex.ru».
         // Для @ya.com отправляем bare-логин; остальные провайдеры работают как прежде.
         let imap_login: &str = if self.config.email.ends_with("@ya.com") {
-            self.config.email.split('@').next().unwrap_or(&self.config.email)
+            self.config
+                .email
+                .split('@')
+                .next()
+                .unwrap_or(&self.config.email)
         } else {
             &self.config.email
         };
@@ -1089,8 +1094,7 @@ impl EmailClient {
                 // не приведёт к выходу по таймауту вызывающего. При превышении
                 // reconnect_imap_rate_limited сбросит битую сессию и вернёт
                 // управление — восстановление доделает следующий тик.
-                self.reconnect_imap_rate_limited(timeout)
-                    .await?;
+                self.reconnect_imap_rate_limited(timeout).await?;
                 match self.idle_wait_once(folder, timeout).await {
                     Ok(outcome) => {
                         self.note_success();
@@ -1308,8 +1312,7 @@ mod tests {
             let now = t0 + Duration::from_millis(3 * (i - 1) as u64);
             let (new_deadline, _) = next_connect_deadline(i, deadline, now);
             assert_eq!(
-                new_deadline,
-                deadline,
+                new_deadline, deadline,
                 "неудача #{i} передвинула дедлайн: {new_deadline:?} != {deadline:?}"
             );
             deadline = new_deadline;
@@ -1372,9 +1375,8 @@ mod tests {
     #[test]
     fn is_missing_folder_error_true_for_missing_folder() {
         // Точная строка из лога провайдера (папка из настроек, имя динамическое).
-        let missing = anyhow::anyhow!(
-            "select RELAY failed: No Response: [CLIENTBUG] SELECT No such folder"
-        );
+        let missing =
+            anyhow::anyhow!("select RELAY failed: No Response: [CLIENTBUG] SELECT No such folder");
         assert!(
             EmailClient::is_missing_folder_error(&missing),
             "«No such folder» обязан распознаваться как отсутствие папки"

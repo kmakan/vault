@@ -830,14 +830,26 @@ impl Storage {
 /// Таблицы с колонкой `account` — единственные, которые участвуют в миграции
 /// namespace. Список РОВНО тот, что создаётся в init_tables.
 static ACCOUNT_TABLES: &[AccountTable] = &[
-    AccountTable { name: "kv_store", columns: &["account", "key", "value"] },
+    AccountTable {
+        name: "kv_store",
+        columns: &["account", "key", "value"],
+    },
     AccountTable {
         name: "chat_history",
         columns: &["account", "chat_key", "messages_json", "updated_at"],
     },
-    AccountTable { name: "body_cache", columns: &["account", "cache_key", "body"] },
-    AccountTable { name: "tombstones", columns: &["account", "msg_id", "mid"] },
-    AccountTable { name: "imap_cursors", columns: &["account", "folder", "uid"] },
+    AccountTable {
+        name: "body_cache",
+        columns: &["account", "cache_key", "body"],
+    },
+    AccountTable {
+        name: "tombstones",
+        columns: &["account", "msg_id", "mid"],
+    },
+    AccountTable {
+        name: "imap_cursors",
+        columns: &["account", "folder", "uid"],
+    },
     AccountTable {
         name: "emails",
         columns: &[
@@ -999,12 +1011,26 @@ mod tests {
             s,
             "emails",
             &[
-                "account", "uid", "folder", "from_addr", "to_addr", "subject", "date",
-                "is_read", "message_id",
+                "account",
+                "uid",
+                "folder",
+                "from_addr",
+                "to_addr",
+                "subject",
+                "date",
+                "is_read",
+                "message_id",
             ],
             &[
-                account, uid, "INBOX", "peer@x.com", account, subject,
-                "Mon, 1 Jan 2026 00:00:00 +0000", "0", "<mid@x>",
+                account,
+                uid,
+                "INBOX",
+                "peer@x.com",
+                account,
+                subject,
+                "Mon, 1 Jan 2026 00:00:00 +0000",
+                "0",
+                "<mid@x>",
             ],
         );
     }
@@ -1015,19 +1041,25 @@ mod tests {
         let s = test_storage();
         // fp → fp:<lowercase-fp>, обрезка пробелов и приведение регистра.
         assert_eq!(
-            s.normalize_account("  ABCdef123  ".into(), "User@X.com".into()).unwrap(),
+            s.normalize_account("  ABCdef123  ".into(), "User@X.com".into())
+                .unwrap(),
             "fp:abcdef123"
         );
         // Пустой fp (ключ не загружен) → legacy-фолбэк на email.
         assert_eq!(
-            s.normalize_account("".into(), "  User@X.com ".into()).unwrap(),
+            s.normalize_account("".into(), "  User@X.com ".into())
+                .unwrap(),
             "user@x.com"
         );
         // Только пробелы у fp — тоже пусто.
-        assert_eq!(s.normalize_account("   ".into(), "a@b.c".into()).unwrap(), "a@b.c");
+        assert_eq!(
+            s.normalize_account("   ".into(), "a@b.c".into()).unwrap(),
+            "a@b.c"
+        );
         // Email есть, но fp важнее: идентичность = ключ, почта = транспорт.
         assert_eq!(
-            s.normalize_account("deadbeef".into(), "a@b.c".into()).unwrap(),
+            s.normalize_account("deadbeef".into(), "a@b.c".into())
+                .unwrap(),
             "fp:deadbeef"
         );
     }
@@ -1037,7 +1069,8 @@ mod tests {
     fn resolve_account_fp_and_email() {
         let s = test_storage();
         assert_eq!(
-            s.resolve_account("ABC123".into(), "user@x.com".into()).unwrap(),
+            s.resolve_account("ABC123".into(), "user@x.com".into())
+                .unwrap(),
             "fp:abc123"
         );
         assert_eq!(
@@ -1051,16 +1084,36 @@ mod tests {
     fn migrate_moves_row_in_every_account_table() {
         let s = test_storage();
         let old = "old@x.com";
-        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "v1"]);
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &[old, "drafts", "v1"],
+        );
         put_row(
             &s,
             "chat_history",
             &["account", "chat_key", "messages_json", "updated_at"],
             &[old, "peer@x.com", "[]", "2026-01-01T00:00:00Z"],
         );
-        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[old, "INBOX:7", "body"]);
-        put_row(&s, "tombstones", &["account", "msg_id", "mid"], &[old, "m1", ""]);
-        put_row(&s, "imap_cursors", &["account", "folder", "uid"], &[old, "INBOX", "42"]);
+        put_row(
+            &s,
+            "body_cache",
+            &["account", "cache_key", "body"],
+            &[old, "INBOX:7", "body"],
+        );
+        put_row(
+            &s,
+            "tombstones",
+            &["account", "msg_id", "mid"],
+            &[old, "m1", ""],
+        );
+        put_row(
+            &s,
+            "imap_cursors",
+            &["account", "folder", "uid"],
+            &[old, "INBOX", "42"],
+        );
         put_email(&s, old, "7", "hi");
 
         let ns = "fp:abc";
@@ -1077,14 +1130,24 @@ mod tests {
 
         // Перенесены ЗНАЧЕНИЯ, а не только PK; старых строк не осталось.
         assert_eq!(s.kv_get(ns, "drafts").unwrap().as_deref(), Some("v1"));
-        assert_eq!(s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(), Some("body"));
+        assert_eq!(
+            s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(),
+            Some("body")
+        );
         assert!(s.load_history(ns, "peer@x.com").unwrap().is_some());
         assert_eq!(s.load_cursors(ns).unwrap().get("INBOX"), Some(&42));
         assert_eq!(s.load_tombstones(ns).unwrap().len(), 1);
         let mails = s.load_emails(ns).unwrap();
         assert_eq!(mails.len(), 1);
         assert_eq!(mails[0].subject, "hi");
-        for t in ["kv_store", "chat_history", "body_cache", "tombstones", "imap_cursors", "emails"] {
+        for t in [
+            "kv_store",
+            "chat_history",
+            "body_cache",
+            "tombstones",
+            "imap_cursors",
+            "emails",
+        ] {
             assert_eq!(count_where(&s, t, old), 0, "{} still has old rows", t);
         }
     }
@@ -1095,7 +1158,12 @@ mod tests {
         let s = test_storage();
         let old = "old@x.com";
         let ns = "fp:abc";
-        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "v1"]);
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &[old, "drafts", "v1"],
+        );
         put_row(
             &s,
             "chat_history",
@@ -1122,17 +1190,40 @@ mod tests {
         let s = test_storage();
         let old = "old@x.com";
         let ns = "fp:abc";
-        put_row(&s, "kv_store", &["account", "key", "value"], &[old, "drafts", "OLD"]);
-        put_row(&s, "kv_store", &["account", "key", "value"], &[ns, "drafts", "NEW"]);
-        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[old, "INBOX:7", "OLD"]);
-        put_row(&s, "body_cache", &["account", "cache_key", "body"], &[ns, "INBOX:7", "NEW"]);
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &[old, "drafts", "OLD"],
+        );
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &[ns, "drafts", "NEW"],
+        );
+        put_row(
+            &s,
+            "body_cache",
+            &["account", "cache_key", "body"],
+            &[old, "INBOX:7", "OLD"],
+        );
+        put_row(
+            &s,
+            "body_cache",
+            &["account", "cache_key", "body"],
+            &[ns, "INBOX:7", "NEW"],
+        );
 
         let rep = s.migrate_account_namespace(old, ns).unwrap();
         assert_eq!(rep.total, 2);
 
         // Существующее значение под fp НЕ перетёрто, старая строка удалена.
         assert_eq!(s.kv_get(ns, "drafts").unwrap().as_deref(), Some("NEW"));
-        assert_eq!(s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(), Some("NEW"));
+        assert_eq!(
+            s.body_cache_get(ns, "INBOX:7").unwrap().as_deref(),
+            Some("NEW")
+        );
         assert_eq!(count_where(&s, "kv_store", old), 0);
         assert_eq!(count_where(&s, "body_cache", old), 0);
         assert_eq!(count_where(&s, "kv_store", ns), 1);
@@ -1144,12 +1235,19 @@ mod tests {
     fn migrate_same_account_is_noop() {
         let s = test_storage();
         let acc = "user@x.com";
-        put_row(&s, "kv_store", &["account", "key", "value"], &[acc, "drafts", "v1"]);
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &[acc, "drafts", "v1"],
+        );
         let rep = s.migrate_account_namespace(acc, acc).unwrap();
         assert_eq!(rep.total, 0);
         assert_eq!(count_where(&s, "kv_store", acc), 1);
         // Регистр/пробелы нормализуются — это тот же namespace.
-        let rep2 = s.migrate_account_namespace(" User@X.com ", "USER@x.com").unwrap();
+        let rep2 = s
+            .migrate_account_namespace(" User@X.com ", "USER@x.com")
+            .unwrap();
         assert_eq!(rep2.total, 0);
         assert_eq!(count_where(&s, "kv_store", "user@x.com"), 1);
     }
@@ -1158,8 +1256,18 @@ mod tests {
     #[test]
     fn migrate_empty_and_global_namespace_is_noop() {
         let s = test_storage();
-        put_row(&s, "kv_store", &["account", "key", "value"], &["anon", "eco-mode", "1"]);
-        put_row(&s, "kv_store", &["account", "key", "value"], &["user@x.com", "drafts", "v1"]);
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &["anon", "eco-mode", "1"],
+        );
+        put_row(
+            &s,
+            "kv_store",
+            &["account", "key", "value"],
+            &["user@x.com", "drafts", "v1"],
+        );
 
         for (from, to) in [
             ("", "fp:abc"),

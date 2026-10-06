@@ -51,13 +51,13 @@ use webrtc::runtime::{channel, Receiver, Sender};
 
 use base64::Engine as _;
 use bytes::Bytes;
+use rtc::media::io::sample_builder::SampleBuilder;
 use rtc::media_stream::MediaStreamTrack;
 use rtc::peer_connection::configuration::media_engine::{
     MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8,
 };
 use rtc::rtp::codec::vp8::Vp8Packet;
 use rtc::rtp::packetizer::Depacketizer;
-use rtc::media::io::sample_builder::SampleBuilder;
 use rtc::rtp_transceiver::rtp_sender::{
     RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters, RTCRtpEncodingParameters,
     RtpCodecKind,
@@ -467,8 +467,7 @@ impl CallMediaManager {
         // (см. `video_slot` у CallSession). Слот, а не канал: кнопку видео
         // можно выключать и включать повторно — каждый video_start берёт
         // трек из слота, а не из израсходованного одноразового канала.
-        let video_slot: Arc<Mutex<Option<Arc<dyn TrackRemote>>>> =
-            Arc::new(Mutex::new(None));
+        let video_slot: Arc<Mutex<Option<Arc<dyn TrackRemote>>>> = Arc::new(Mutex::new(None));
         // Аудио: remote-аудио-трек уходит в audio-pipeline (один трек
         // на звонок — пайплайн запускается один раз, канал не нужен).
         let (track_tx, track_rx) = channel::<Arc<dyn TrackRemote>>(1);
@@ -991,7 +990,8 @@ impl CallMediaManager {
             // собирает ВСЕ пакеты кадра в один буфер (по marker-биту и
             // sequence), потом дешифровка собранного кадра целиком.
             // (Аудио не страдает: Opus-кадр умещается в один RTP-пакет.)
-            let mut sample_builder = SampleBuilder::new(32, Vp8Packet::default(), crate::video::VP8_CLOCK_RATE);
+            let mut sample_builder =
+                SampleBuilder::new(32, Vp8Packet::default(), crate::video::VP8_CLOCK_RATE);
             // Rust-декодер: VP8 → RGBA (WebKitGTK не рисует VideoFrame в canvas).
             // Canvas получает готовый RGBA-буфер через ImageData.putImageData.
             //

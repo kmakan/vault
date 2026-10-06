@@ -156,11 +156,41 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
 pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        if let Some(m) = group.members.iter_mut().find(|m| m.email == old_email) {
-            m.email = new_email.to_string();
-            m.key_shared = true; // ключ группы у него уже есть (шёл в инвайте)
+        let old_lc = old_email.to_lowercase();
+        let new_lc = new_email.to_lowercase();
+        // Смена почты собеседником. ДВА случая, оба обязательны:
+        //
+        // (а) Участника под старым адресом нет, но НОВЫЙ адрес уже есть —
+        //     ничего не делаем (идемпотентность: повторный ренейм/гонка
+        //     писем). Без этой ветки вставка создала бы ВТОРОГО участника.
+        // (б) Оба адреса в группе — переименование превратило бы группу в
+        //     «участник дважды с одним отпечатком» (живые данные 06.10.2026,
+        //     группа «Четыре»). Убираем СТАРУЮ запись, оставляем существующую
+        //     НОВУЮ (она авторитетнее: пришла из свежего инвайта/письма).
+        let old_idx = group
+            .members
+            .iter()
+            .position(|m| m.email.to_lowercase() == old_lc);
+        let new_idx = group
+            .members
+            .iter()
+            .position(|m| m.email.to_lowercase() == new_lc);
+        match (old_idx, new_idx) {
+            (None, _) => { /* старого нет — ренеймить нечего */ }
+            (Some(i), Some(j)) if i != j => {
+                // Дубль: удаляем старую запись, новой помечаем общий ключ.
+                group.members.remove(i);
+                let k = if i < j { j - 1 } else { j };
+                if let Some(m) = group.members.get_mut(k) {
+                    m.key_shared = true;
+                }
+            }
+            (Some(i), _) => {
+                group.members[i].email = new_email.to_string();
+                group.members[i].key_shared = true; // ключ группы у него уже есть
+            }
         }
-        if group.created_by == old_email {
+        if group.created_by.to_lowercase() == old_lc {
             group.created_by = new_email.to_string();
         }
         save_groups(&groups)?;
@@ -652,6 +682,48 @@ mod tests {
     }
 
     #[test]
+    fn test_rename_member_does_not_duplicate_when_new_email_already_member() {
+        // Живые данные 06.10.2026 (группа «Четыре»): телефон сменил почту, и в
+        // группе оказались ОБА адреса с одним отпечатком. Наивный ренейм
+        // превратил бы это в «участник дважды» — а второй участник ломает
+        // счётчик, роли и права. Проверяем: остаётся ОДНА запись с новым
+        // адресом, старая исчезает, дубля нет.
+        with_tmp_groups(|| {
+            let group = create_group("g", "alice@example.com").unwrap();
+            add_member(&group.id, "bob@ya.ru").unwrap();
+            add_member(&group.id, "bob@new.ru").unwrap();
+            rename_member(&group.id, "bob@ya.ru", "bob@new.ru").unwrap();
+
+            let g = load_groups().unwrap().get(&group.id).unwrap().clone();
+            let bobs: Vec<_> = g
+                .members
+                .iter()
+                .filter(|m| m.email == "bob@new.ru")
+                .collect();
+            assert_eq!(
+                bobs.len(),
+                1,
+                "должен остаться РОВНО один участник с новым адресом"
+            );
+            assert!(
+                !g.members.iter().any(|m| m.email == "bob@ya.ru"),
+                "старый адрес обязан исчезнуть"
+            );
+            assert!(bobs[0].key_shared, "ключ группы у участника уже есть");
+
+            // Идемпотентность: повторный ренейм не создаёт дубль и не падает.
+            rename_member(&group.id, "bob@ya.ru", "bob@new.ru").unwrap();
+            let g2 = load_groups().unwrap().get(&group.id).unwrap().clone();
+            let n = g2
+                .members
+                .iter()
+                .filter(|m| m.email == "bob@new.ru")
+                .count();
+            assert_eq!(n, 1, "повторный вызов не должен добавлять участника");
+        });
+    }
+
+    #[test]
     fn test_fingerprint_field_backfill_and_compat() {
         // Поле fingerprint: serde default — старые groups.json (без поля)
         // десериализуются; заполнение не затирает существующее значение.
@@ -891,8 +963,7 @@ mod tests {
             all.insert(g2.id.clone(), g2);
             save_groups(&all).unwrap();
 
-            let updated =
-                backfill_my_fingerprint("me@x.com", "  AABB112233445566  ").unwrap();
+            let updated = backfill_my_fingerprint("me@x.com", "  AABB112233445566  ").unwrap();
             assert_eq!(updated, 2, "обе группы с пустым fp должны обновиться");
 
             let groups = load_groups().unwrap();

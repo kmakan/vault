@@ -426,8 +426,7 @@ mod tests {
     fn with_test_keys<T>(f: impl FnOnce() -> T) -> T {
         let _guard = TMP_LOCK.lock().unwrap();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("ks_{}-{}", std::process::id(), seq));
+        let dir = std::env::temp_dir().join(format!("ks_{}-{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("VAULT_TEST_KEYS_DIR", &dir);
         let result = f();

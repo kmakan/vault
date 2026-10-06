@@ -3680,7 +3680,17 @@ export default {
                   if (knownByKey) {
                     const [oldEmail] = knownByKey;
                     console.log('[identity] fingerprint match:', oldEmail, '→', sender, '— смена почты');
-                    // Переносим историю чата со старого адреса на новый.
+                    // ПОЛНЫЙ РЕНЕЙМ ЛИЧНОСТИ во всех слоях: списки контактов
+                    // (accepted/declined/invited), relay-токены, счётчики
+                    // непрочитанного, профиль и история чата в sqlite.
+                    // Без этого старый адрес остаётся жить рядом с новым →
+                    // ВТОРОЙ контакт и расколотая переписка (живые данные 06.10).
+                    await api.renamePeerIdentity(oldEmail, sender);
+                    // Группы: переименовать адрес во всех, где он участник.
+                    // tryMigrateGroupMember срабатывает только на входящем
+                    // письме и ищет по peerKeys — который ренейм уже почистил.
+                    await this.migratePeerGroups(oldEmail, sender);
+                    // Переносим историю чата со старого адреса на новый (kv).
                     await this.migrateChatHistory(oldEmail, sender);
                     // Копируем профиль старого адреса на новый (имя/аватар).
                     const oldProf = this.profiles[oldEmail];
@@ -6217,11 +6227,44 @@ export default {
       try {
         const newKey = this.peerKeys[from] || this.peerKeys[String(from || '').toLowerCase()];
         if (!newKey) return false;
-        const stale = (group.members || []).find(m => {
-          if (String(m.email || '').toLowerCase() === String(from).toLowerCase()) return false;
-          const mk = this.peerKeys[m.email] || this.peerKeys[String(m.email || '').toLowerCase()];
-          return mk && mk === newKey;
-        });
+        // ПОИСК УСТАРЕВШЕГО УЧАСТНИКА — по ТРЁМ источникам, а не только по
+        // this.peerKeys. Причина: ренейм (fingerprint match) УЖЕ удаляет
+        // старый адрес из peerKeys, и тогда поиск по одному кэшу не находит
+        // участника → groups_rename_member не вызывается → в группе остаются
+        // ДВА участника с одним отпечатком (живые данные 06.10.2026).
+        //   1) in-memory peerKeys (быстрый путь);
+        //   2) файл peer_keys.json на диске (если кэш уже почищен);
+        //   3) поле fingerprint самой группы (groups.json).
+        let diskKeys = null;
+        const loadDiskKeys = async () => {
+          if (diskKeys !== null) return diskKeys;
+          try { diskKeys = (await invoke('load_peer_keys')) || []; }
+          catch (e) { diskKeys = []; }
+          return diskKeys;
+        };
+        let newFp = '';
+        const fpOf = async (hexKey) => {
+          try { return String(await invoke('get_fingerprint', { publicKey: hexKey }) || ''); }
+          catch (e) { return ''; }
+        };
+        const fromLc = String(from).toLowerCase();
+        let stale = null;
+        for (const m of (group.members || [])) {
+          const em = String(m.email || '');
+          if (em.toLowerCase() === fromLc) continue; // уже под новым адресом
+          const emLc = em.toLowerCase();
+          // (1) in-memory
+          const mk = this.peerKeys[em] || this.peerKeys[emLc];
+          if (mk && mk === newKey) { stale = m; break; }
+          // (2) файл на диске
+          const dk = (await loadDiskKeys()).find(k => String(k.email).toLowerCase() === emLc);
+          if (dk && dk.public_key === newKey) { stale = m; break; }
+          // (3) fingerprint самой группы
+          if (m.fingerprint) {
+            if (!newFp) newFp = await fpOf(newKey);
+            if (newFp && String(m.fingerprint) === newFp) { stale = m; break; }
+          }
+        }
         if (!stale) return false;
         console.log('[groups] fingerprint membership match:', stale.email, '→', from, 'in', group.id);
         await invoke('groups_rename_member', {
@@ -6230,11 +6273,40 @@ export default {
         // Локальный объект группы обновляем сразу (Rust уже записал groups.json).
         stale.email = from;
         stale.key_shared = true;
+        if (!stale.fingerprint) stale.fingerprint = newFp || await fpOf(newKey);
         return true;
       } catch (e) {
         console.warn('[groups] migrate member failed:', e && e.message || e);
         return false;
       }
+    },
+    // Смена почты собеседником: переименовать его адрес во ВСЕХ группах, где
+    // он участник или создатель. tryMigrateGroupMember вызывается только при
+    // разборе ВХОДЯЩЕГО письма; если письма нет (или оно уже разобрано) —
+    // группы остаются со старым адресом. Этот проход идемпотентен.
+    async migratePeerGroups(oldEmail, newEmail) {
+      if (!oldEmail || !newEmail) return 0;
+      const oldLc = String(oldEmail).toLowerCase();
+      let n = 0;
+      try {
+        const all = await api.getGroups();
+        for (const g of all || []) {
+          const has = String(g.created_by || '').toLowerCase() === oldLc
+            || (g.members || []).some(m => String(m.email || '').toLowerCase() === oldLc);
+          if (!has) continue;
+          await invoke('groups_rename_member', {
+            groupId: g.id, oldEmail, newEmail,
+          });
+          n++;
+        }
+        if (n) {
+          console.log('[identity] peer groups renamed:', oldEmail, '→', newEmail, '(' + n + ')');
+          try { await this.loadGroups(); } catch (e) { /* перечитаем позже */ }
+        }
+      } catch (e) {
+        console.warn('[identity] migratePeerGroups failed:', e);
+      }
+      return n;
     },
     // Ленивое заполнение fingerprint участников группы из peer_keys.
     // Старые groups.json без поля fingerprint: при открытии группы проставляем

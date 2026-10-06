@@ -766,7 +766,9 @@ async fn email_fetch_incremental_fast(
                     client.note_success();
                     to_result(Ok(v)).map_err(|e| e)
                 }
-                Ok(Err(e)) => Err(format!("Fast fetch retry failed: {e} (original: {first_err})")),
+                Ok(Err(e)) => Err(format!(
+                    "Fast fetch retry failed: {e} (original: {first_err})"
+                )),
                 Err(_) => Err("Fast incremental fetch timed out (retry)".to_string()),
             }
         }
@@ -1167,7 +1169,12 @@ fn groups_load_own(
     let all = groups::load_groups()
         .map(|g| g.into_values().collect::<Vec<_>>())
         .map_err(|e| e.to_string())?;
-    Ok(groups::filter_own_groups(&all, &email, &fingerprint, &aliases))
+    Ok(groups::filter_own_groups(
+        &all,
+        &email,
+        &fingerprint,
+        &aliases,
+    ))
 }
 
 /// Заполнить СОБСТВЕННЫЙ fingerprint у участников во ВСЕХ группах (ленивая
@@ -1347,6 +1354,14 @@ fn db_history_clear(account: String) -> Result<(), String> {
     open_db()?
         .clear_history(&account)
         .map_err(|e| e.to_string())
+}
+
+/// Удалить историю ОДНОГО чата (смена почты собеседником: старый chat_key =
+/// email пира). Отдельная команда, потому что db_history_clear чистит ВСЮ
+/// историю аккаунта — для ренейма это уничтожило бы остальные переписки.
+#[tauri::command]
+fn db_history_clear_chat(account: String, chat_key: String) -> Result<(), String> {
+    crate::history_store::clear_chat_history(&account, &chat_key).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1721,7 +1736,10 @@ async fn delete_account_data(state: State<'_, EmailState>) -> Result<(), String>
 /// каталог приложения. Desktop: каталог загрузок (~/Downloads).
 #[tauri::command]
 fn save_backup_to_disk(app: tauri::AppHandle, json: String) -> Result<String, String> {
-    let file_name = format!("vault-backup-{}.json", chrono::Utc::now().format("%Y-%m-%d"));
+    let file_name = format!(
+        "vault-backup-{}.json",
+        chrono::Utc::now().format("%Y-%m-%d")
+    );
 
     #[cfg(target_os = "android")]
     {
@@ -1970,7 +1988,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init());
     // Плагин мобильный: весь crate под #![cfg(mobile)] — на desktop init() не существует.
-    #[cfg(all(feature = "barcode-scanner", any(target_os = "android", target_os = "ios")))]
+    #[cfg(all(
+        feature = "barcode-scanner",
+        any(target_os = "android", target_os = "ios")
+    ))]
     {
         builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     }
@@ -2052,6 +2073,7 @@ pub fn run() {
             db_history_save,
             db_history_load,
             db_history_clear,
+            db_history_clear_chat,
             db_tombstone_add,
             db_tombstones_load,
             db_tombstones_clear,

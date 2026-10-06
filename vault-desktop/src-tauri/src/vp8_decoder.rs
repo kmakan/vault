@@ -69,10 +69,7 @@ extern "C" {
         user_priv: *mut c_void,
         deadline: c_int,
     ) -> c_int;
-    fn vpx_codec_get_frame(
-        ctx: *mut vpx_codec_ctx,
-        iter: *mut *mut c_void,
-    ) -> *mut vpx_image;
+    fn vpx_codec_get_frame(ctx: *mut vpx_codec_ctx, iter: *mut *mut c_void) -> *mut vpx_image;
     fn vpx_codec_destroy(ctx: *mut vpx_codec_ctx) -> c_int;
     // Возвращает `const char*` — c_char (i8 на x86), а НЕ u8:
     // иначе CStr::from_ptr получает *const i8 и падает компиляция.
@@ -93,24 +90,23 @@ impl Vp8Decoder {
             w: 0,
             h: 0,
         };
-        let ctx = unsafe { std::alloc::alloc_zeroed(std::alloc::Layout::new::<vpx_codec_ctx>()) as *mut vpx_codec_ctx };
+        let ctx = unsafe {
+            std::alloc::alloc_zeroed(std::alloc::Layout::new::<vpx_codec_ctx>())
+                as *mut vpx_codec_ctx
+        };
         if ctx.is_null() {
             return Err("alloc failed".to_string());
         }
         let rc = unsafe {
-            vpx_codec_dec_init_ver(
-                ctx,
-                vpx_codec_vp8_dx(),
-                &cfg,
-                0,
-                VPX_DECODER_ABI_VERSION,
-            )
+            vpx_codec_dec_init_ver(ctx, vpx_codec_vp8_dx(), &cfg, 0, VPX_DECODER_ABI_VERSION)
         };
         if rc != 0 {
             let err = unsafe { std::ffi::CStr::from_ptr(vpx_codec_error(ctx)) }
                 .to_string_lossy()
                 .into_owned();
-            unsafe { std::alloc::dealloc(ctx as *mut u8, std::alloc::Layout::new::<vpx_codec_ctx>()) };
+            unsafe {
+                std::alloc::dealloc(ctx as *mut u8, std::alloc::Layout::new::<vpx_codec_ctx>())
+            };
             return Err(format!("vpx_codec_dec_init: {err}"));
         }
         Ok(Self { ctx })
@@ -179,7 +175,10 @@ impl Drop for Vp8Decoder {
     fn drop(&mut self) {
         unsafe {
             vpx_codec_destroy(self.ctx);
-            std::alloc::dealloc(self.ctx as *mut u8, std::alloc::Layout::new::<vpx_codec_ctx>());
+            std::alloc::dealloc(
+                self.ctx as *mut u8,
+                std::alloc::Layout::new::<vpx_codec_ctx>(),
+            );
         }
     }
 }
