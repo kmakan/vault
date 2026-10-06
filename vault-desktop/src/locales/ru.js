@@ -544,6 +544,23 @@ export default {
   settings_clear_btn: 'Очистить все данные',
   settings_clear_confirm1: 'Вы уверены? Все данные будут удалены навсегда.',
   settings_clear_confirm2: 'Точно удалить?',
+  // Удаление аккаунта (RuStore §5.4)
+  settings_delete_account: 'Удалить аккаунт',
+  settings_delete_account_warning: 'Будут удалены ключи, чаты, настройки, контакты и группы — безвозвратно. Для восстановления нужен ключ из 12 слов.',
+  settings_delete_account_confirm1: 'Удалить аккаунт? Все локальные данные будут стёрты безвозвратно.',
+  settings_delete_account_confirm2: 'Точно удалить аккаунт? Без ключа из 12 слов данные восстановить невозможно.',
+  settings_delete_account_btn: 'Удалить аккаунт',
+  // Политика и условия внутри приложения (RuStore §5.1)
+  settings_privacy_policy: 'Политика конфиденциальности',
+  settings_terms_of_use: 'Условия использования',
+  // Жалоба на контент (RuStore §8.3, UGC)
+  settings_report_content: 'Пожаловаться',
+  report_content_subject: 'Жалоба на контент — Vault',
+  report_content_prompt: 'Тип жалобы (спам / оскорбления / другое):',
+  report_content_type: 'Тип',
+  report_content_sender: 'Email отправителя',
+  report_content_time: 'Время',
+  report_content_msg_id: 'ID сообщения',
   settings_restart_hint: '. Перезапустите приложение.',
   recovery_spam_toast: 'Ключ сохранён в ящик. ПРОВЕРЬТЕ СПАМ: если письмо от Vault попало туда — переложите его во «Входящие», иначе оно будет удалено',
   recovery_spam_folder: 'Эскроу-письмо найдено в папке: ',

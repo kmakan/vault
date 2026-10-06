@@ -1678,6 +1678,39 @@ fn import_backup(json_data: String) -> Result<String, String> {
     Ok(restored.join(", "))
 }
 
+/// Удаление аккаунта (RuStore §5.4): полная очистка локальных данных ВНЕ
+/// webview — IMAP-сессии, ключи (~/.vault/keys), группы, креды почты и
+/// локальная БД. Веб-хранилища (localStorage/IndexedDB) чистит фронт
+/// (api.deleteAccount). НЕ трогаем recovery/escrow (12 слов) — ключ
+/// восстановления хранится у пользователя, не в приложении.
+#[tauri::command]
+async fn delete_account_data(state: State<'_, EmailState>) -> Result<(), String> {
+    // 1. IMAP-клиенты из всех слотов (как в email_disconnect): иначе фоновые
+    //    сессии продолжат ходить в ящик после удаления аккаунта.
+    if let Some(mut client) = state.0.lock().await.take() {
+        client.disconnect();
+    }
+    *state.1.lock().await = None;
+    if let Some(mut client) = state.2.lock().await.take() {
+        client.disconnect();
+    }
+    if let Some(mut client) = state.3.lock().await.take() {
+        client.disconnect();
+    }
+    // 2. Ключи (~/.vault/keys): peer-ключи отдельным вызовом, затем всё
+    //    хранилище целиком — ключевой пары аккаунта на диске не остаётся
+    //    (иначе initCrypto после reload восстановил бы ту же идентичность).
+    key_store::delete_all_peer_keys().map_err(|e| e.to_string())?;
+    key_store::delete_all_keys().map_err(|e| e.to_string())?;
+    // 3. Группы (~/.vault/groups.json) и креды почты (зашифрованный пароль).
+    groups::delete_all_local().map_err(|e| e.to_string())?;
+    let _ = credential_store::delete_credentials();
+    // 4. Локальная БД (vault.db): история, kv (профили/контакты/пометки),
+    //    тумбстоуны, курсоры, кэш тел писем.
+    storage::sqlite::Storage::delete_database().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Сохранить резервную копию на диск и вернуть путь к файлу (для показа в UI).
 ///
 /// Зачем команда: в Android-WebView скачивание через `Blob` + `<a download>` не
@@ -2040,6 +2073,7 @@ pub fn run() {
             db_account_migrate,
             export_backup,
             import_backup,
+            delete_account_data,
             save_backup_to_disk,
             db_emails_save,
             db_emails_load,

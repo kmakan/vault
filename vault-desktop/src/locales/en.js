@@ -543,6 +543,23 @@ export default {
   settings_clear_btn: 'Clear all data',
   settings_clear_confirm1: 'Are you sure? All data will be deleted forever.',
   settings_clear_confirm2: 'Really delete?',
+  // Account deletion (RuStore §5.4)
+  settings_delete_account: 'Delete account',
+  settings_delete_account_warning: 'Keys, chats, settings, contacts and groups will be deleted irreversibly. Restoring requires the 12-word recovery key.',
+  settings_delete_account_confirm1: 'Delete the account? All local data will be erased irreversibly.',
+  settings_delete_account_confirm2: 'Really delete the account? Data cannot be restored without the 12-word key.',
+  settings_delete_account_btn: 'Delete account',
+  // Policy and terms inside the app (RuStore §5.1)
+  settings_privacy_policy: 'Privacy Policy',
+  settings_terms_of_use: 'Terms of Use',
+  // Content report (RuStore §8.3, UGC)
+  settings_report_content: 'Report',
+  report_content_subject: 'Content report — Vault',
+  report_content_prompt: 'Report type (spam / insult / other):',
+  report_content_type: 'Type',
+  report_content_sender: 'Sender email',
+  report_content_time: 'Time',
+  report_content_msg_id: 'Message ID',
   settings_restart_hint: '. Restart the app.',
   recovery_spam_toast: 'Recovery key saved to your mailbox. CHECK SPAM: if the Vault letter landed there, move it to Inbox, otherwise it will be deleted',
   recovery_spam_folder: 'Escrow letter found in folder: ',

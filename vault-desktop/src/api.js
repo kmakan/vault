@@ -324,6 +324,19 @@ export class ApiClient {
     localStorage.removeItem('vault-email');
   }
 
+  // Удаление аккаунта (RuStore §5.4, кнопка в настройках): сначала
+  // Rust-хранилища (IMAP-сессии, ключи ~/.vault/keys, группы, vault.db —
+  // delete_account_data), затем веб-хранилища. Recovery/escrow (12 слов)
+  // НЕ трогаем — ключ восстановления хранится у пользователя. Ошибка
+  // Rust-команды уходит вызывающему ДО очистки веб-хранилищ: «половинчатого»
+  // удаления не бывает.
+  async deleteAccount() {
+    await invoke('delete_account_data');
+    localStorage.clear();
+    indexedDB.deleteDatabase('vault');
+    location.reload();
+  }
+
   // --- Одноразовая миграция localStorage → kv_store
   // Коммиты af77c15–c0a834b перенесли МЕСТО хранения handshake-пометок,
   // профилей и аватаров из localStorage в sqlite kv_store, но НЕ перенесли

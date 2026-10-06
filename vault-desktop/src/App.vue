@@ -317,6 +317,11 @@
               <Icon name="ban" :size="14" />
               {{ isIgnored(msgSenderEmail(messageMenu.msg) || (activeChatType === 'chat' ? activeChat : '')) ? (t('chat_unblock') || 'Разблокировать') : (t('chat_block') || 'Заблокировать') }}
             </button>
+            <!-- §8.3 UGC (модерация RuStore): жалоба на контент — письмо
+                 в поддержку (mailto, серверной жалоб-инфраструктуры нет). -->
+            <button v-if="!messageMenu.msg.callEvent && messageMenu.msg.from !== 'me' && !messageMenu.msg.deleted" @click="reportMessageContent(messageMenu.msg); messageMenu = null">
+              <Icon name="alert" :size="14" /> {{ t('settings_report_content') || 'Пожаловаться' }}
+            </button>
             <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
             <template v-if="messageMenu.phones && messageMenu.phones.length">
               <div class="message-menu-sep"></div>
@@ -2171,6 +2176,50 @@ export default {
     // поэтому тонкая обёртка-метод — шаблон зовёт openUrl).
     openUrl(url) {
       openExternal(String(url)).catch(() => {});
+    },
+    // Внешняя ссылка/mailto: Android — НАТИВНАЯ команда android_open_url
+    // (плагин-opener на Android не доходил до системного обработчика),
+    // desktop — plugin-shell open (xdg-open, mailto открывает почтовый
+    // клиент). Тот же механизм, что openExternalLink в SettingsPage.
+    async openExternalUrl(url) {
+      if (/android/i.test(navigator.userAgent)) {
+        try {
+          await invoke('android_open_url', { url });
+          return;
+        } catch (e) {
+          console.warn('[open] android_open_url failed:', e);
+        }
+      }
+      try {
+        await openExternal(String(url));
+      } catch (e) {
+        console.warn('[open] openExternal failed:', e);
+      }
+    },
+    // §8.3 UGC (модерация RuStore): «Пожаловаться» из меню сообщения —
+    // письмо на support@vault-msg.ru с предзаполненной темой и телом
+    // (тип жалобы, email отправителя, время, id). Серверной жалоб-
+    // инфраструктуры у Vault нет (serverless, email-транспорт) —
+    // механизм mailto, как у «Сообщить об ошибке» в настройках.
+    async reportMessageContent(msg) {
+      const type = await prompt(
+        this.t('report_content_prompt') || 'Тип жалобы (спам / оскорбления / другое):',
+        'спам');
+      if (type === null) return; // отмена
+      const sender = this.msgSenderEmail(msg)
+        || (this.activeChatType === 'chat' ? this.activeChat : '')
+        || '-';
+      const time = msg.time || msg.created_at || msg.date || '-';
+      const lines = [
+        (this.t('report_content_type') || 'Тип') + ': ' + (String(type).trim() || '-'),
+        (this.t('report_content_sender') || 'Email отправителя') + ': ' + sender,
+        (this.t('report_content_time') || 'Время') + ': ' + time,
+        (this.t('report_content_msg_id') || 'ID сообщения') + ': ' + (msg.id || '-'),
+      ];
+      const url = 'mailto:support@vault-msg.ru?subject='
+        + encodeURIComponent(this.t('report_content_subject') || 'Жалоба на контент — Vault')
+        + '&body=' + encodeURIComponent(lines.join('\n'));
+      await this.openExternalUrl(url);
     },
     closeImageViewer() {
       this.viewingImage = null;

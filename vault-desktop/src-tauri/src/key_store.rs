@@ -245,6 +245,18 @@ pub fn delete_all_keys() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Удалить только peer-ключи (без ключевой пары) — путь «Удалить аккаунт»
+/// (RuStore §5.4). Файл убираем целиком: load_peer_keys() при его
+/// отсутствии возвращает []. Повторный вызов / чистая установка — не ошибка.
+pub fn delete_all_peer_keys() -> anyhow::Result<()> {
+    let path = get_keys_dir()?.join(PEER_KEYS_FILE);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +302,37 @@ mod tests {
             // Повторная загрузка НЕ рероллит PQ-пару (стабильный идентификатор)
             let again = load_keypair().unwrap().unwrap();
             assert_eq!(loaded.pq_public_key, again.pq_public_key);
+        });
+    }
+
+    #[test]
+    fn test_delete_all_peer_keys() {
+        with_tmp_keys(|| {
+            // Ключевая пара есть — её НЕ должен тронуть delete_all_peer_keys.
+            let kp = StoredKeyPair {
+                public_key: "own-public-key".to_string(),
+                private_key: "own-private-key".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
+            };
+            save_keypair(&kp).unwrap();
+            let key = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: "abcd1234".to_string(),
+                label: None,
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
+            };
+            add_peer_key(key).unwrap();
+            assert_eq!(load_peer_keys().unwrap().len(), 1);
+
+            delete_all_peer_keys().unwrap();
+            assert!(load_peer_keys().unwrap().is_empty());
+            // Ключевая пара осталась на месте
+            assert!(load_keypair().unwrap().is_some());
+            // Повторный вызов (файл уже удалён) — не ошибка
+            delete_all_peer_keys().unwrap();
         });
     }
 

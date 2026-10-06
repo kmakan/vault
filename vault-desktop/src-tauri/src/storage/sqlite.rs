@@ -8,21 +8,23 @@ pub struct Storage {
     conn: Connection,
 }
 
+/// Путь к файлу БД по умолчанию.
+/// Same root as history_store: ~/.local/share/com.vault.vault/vault.db
+/// (NOT ~/.local/share/vault/ — that dir holds the keystore).
+/// Per-HOME isolation works because data_local_dir() resolves
+/// under the test HOME (vault-test/<acc>-home) too.
+fn default_db_path() -> Result<PathBuf> {
+    let home = dirs::data_local_dir().context("Cannot determine local data directory")?;
+    Ok(home.join("com.vault.vault").join("vault.db"))
+}
+
 #[allow(dead_code)]
 impl Storage {
     /// Open or create the local database
     pub fn open(db_path: Option<&PathBuf>) -> Result<Self> {
         let path = match db_path {
             Some(p) => p.clone(),
-            None => {
-                let home =
-                    dirs::data_local_dir().context("Cannot determine local data directory")?;
-                // Same root as history_store: ~/.local/share/com.vault.vault/vault.db
-                // (NOT ~/.local/share/vault/ — that dir holds the keystore).
-                // Per-HOME isolation works because data_local_dir() resolves
-                // under the test HOME (vault-test/<acc>-home) too.
-                home.join("com.vault.vault").join("vault.db")
-            }
+            None => default_db_path()?,
         };
 
         // Ensure parent directory exists
@@ -490,6 +492,30 @@ impl Storage {
             self.conn
                 .execute(&format!("DELETE FROM {table}"), [])
                 .map_err(|e| anyhow::anyhow!("wipe {table}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Удалить файл БД целиком — путь «Удалить аккаунт» (RuStore §5.4).
+    /// Соединения в open_db() короткоживущие (на каждый invoke), но на всякий
+    /// случай открываем базу и сразу закрываем — SQLite сбросит WAL в основной
+    /// файл. Спутники `-wal`/`-shm` убираем тоже: иначе данные восстанут из wal.
+    /// Отсутствующий файл — не ошибка (повторный вызов / чистая установка).
+    pub fn delete_database() -> Result<()> {
+        let path = default_db_path()?;
+        if path.exists() {
+            drop(Connection::open(&path)?);
+        }
+        for f in [
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+            PathBuf::from(format!("{}-shm", path.display())),
+        ] {
+            match std::fs::remove_file(&f) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         Ok(())
     }

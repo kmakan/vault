@@ -206,6 +206,18 @@
           <span>{{ t('settings_hide_last_seen') }}</span>
           <label class="toggle"><input type="checkbox" v-model="hideLastSeen" /><span class="slider"></span></label>
         </div>
+        <!-- RuStore §5.1: политика и условия доступны ВНУТРИ приложения
+             (помимо ссылки в карточке маркета). -->
+        <div class="setting-row settings-link-row" role="link" tabindex="0"
+             @click="openExternalLink('https://vault-msg.ru/privacy.html')">
+          <span>{{ t('settings_privacy_policy') }}</span>
+          <span class="settings-link-arrow">→</span>
+        </div>
+        <div class="setting-row settings-link-row" role="link" tabindex="0"
+             @click="openExternalLink('https://vault-msg.ru/terms.html')">
+          <span>{{ t('settings_terms_of_use') }}</span>
+          <span class="settings-link-arrow">→</span>
+        </div>
         <div class="setting-row" style="display:block">
           <div style="display:flex;align-items:center;justify-content:space-between">
             <span>{{ t('presence_enable') || 'Показывать, что я онлайн' }}</span>
@@ -394,6 +406,12 @@
         <div class="danger-zone">
           <p>{{ t('settings_clear_warning') }}</p>
           <button @click="clearLocalData" class="danger-btn">{{ t('settings_clear_btn') }}</button>
+        </div>
+        <!-- RuStore §5.4: удаление учётной записи без обращения в поддержку -->
+        <div class="danger-zone" style="margin-top:16px">
+          <p style="margin-bottom:6px;font-weight:600">{{ t('settings_delete_account') }}</p>
+          <p>{{ t('settings_delete_account_warning') }}</p>
+          <button @click="deleteAccount" class="danger-btn">{{ t('settings_delete_account_btn') }}</button>
         </div>
       </div>
     </div>
@@ -800,22 +818,24 @@ export default {
     },
     // «Обновить»: на Android ведём на страницу релизов (пользователь ставит
     // APK сам — маркетов пока нет); ссылка из latest.json, фолбэк — сайт.
-    // window.open в Tauri WebView молча НЕ открывает внешние
-    // ссылки — используем системный opener-плагин (shell:allow-open в
-    // capabilities, тот же механизм, что openExternal в App.vue).
     async openDownloadPage() {
       const isAndroid = /android/i.test(navigator.userAgent);
       const url = (isAndroid && this.updateInfo.apk_url) ||
         this.updateInfo.desktop_url ||
         'https://vault-msg.ru';
-      // плагина молча падал) — зовём НАТИВНУЮ команду android_open_url
-      // (Rust→JNI→VaultForegroundService.openUrlCompat→ACTION_VIEW).
-      // Desktop оставляет anchor-click (там он работает).
+      await this.openExternalLink(url);
+    },
+    // Внешняя ссылка (релизы, политика конфиденциальности, условия): window.open
+    // в Tauri WebView молча НЕ открывает внешние ссылки — Android ведём
+    // НАТИВНОЙ командой android_open_url (Rust→JNI→VaultForegroundService
+    // .openUrlCompat→ACTION_VIEW), desktop — anchor-click, фолбэк системный
+    // opener-плагин (shell:allow-open в capabilities).
+    async openExternalLink(url) {
       if (/android/i.test(navigator.userAgent)) {
         try {
           await invoke('android_open_url', { url });
         } catch (e) {
-          console.warn('[update] android_open_url failed:', e);
+          console.warn('[settings] android_open_url failed:', e);
         }
         return;
       }
@@ -1027,6 +1047,19 @@ export default {
       localStorage.clear();
       indexedDB.deleteDatabase('vault');
       location.reload();
+    },
+    // Удалить аккаунт (RuStore §5.4): полная очистка, включая Rust-хранилища
+    // (ключи ~/.vault/keys, vault.db, IMAP-сессии — delete_account_data).
+    // Двойное подтверждение — как у clearLocalData.
+    async deleteAccount() {
+      if (!(await confirm(this.t('settings_delete_account_confirm1')))) return;
+      if (!(await confirm(this.t('settings_delete_account_confirm2')))) return;
+      try {
+        await api.deleteAccount();
+      } catch (e) {
+        console.error('[settings] deleteAccount failed:', e);
+        alert(String((e && e.message) || e));
+      }
     }
   }
 };
@@ -1198,6 +1231,11 @@ export default {
   font-size: 14px;
   color: #c9d1d9;
 }
+
+/* Строки-ссылки (политика конфиденциальности / условия использования) */
+.settings-link-row { cursor: pointer; }
+.settings-link-row:hover { color: #e6edf3; }
+.settings-link-arrow { color: #58a6ff; }
 
 /* Единая система кнопок (глобальная в App.vue): .btn, .btn-primary,
    .btn-secondary, .btn-danger, .btn-ghost, .btn-sm, .btn-lg.

@@ -533,6 +533,23 @@ export default {
   settings_clear_btn: '清除所有数据',
   settings_clear_confirm1: '确定吗？所有数据将被永久删除。',
   settings_clear_confirm2: '确定删除？',
+  // 删除账户 (RuStore §5.4)
+  settings_delete_account: '删除账户',
+  settings_delete_account_warning: '密钥、聊天、设置、联系人和群组将被永久删除。恢复需要12个单词的密钥。',
+  settings_delete_account_confirm1: '删除账户？所有本地数据将被永久清除。',
+  settings_delete_account_confirm2: '确定删除账户？没有12个单词的密钥将无法恢复数据。',
+  settings_delete_account_btn: '删除账户',
+  // 应用内的隐私政策和使用条款 (RuStore §5.1)
+  settings_privacy_policy: '隐私政策',
+  settings_terms_of_use: '使用条款',
+  // 内容举报 (RuStore §8.3, UGC)
+  settings_report_content: '举报',
+  report_content_subject: '内容举报 — Vault',
+  report_content_prompt: '举报类型（垃圾信息 / 侮辱 / 其他）：',
+  report_content_type: '类型',
+  report_content_sender: '发送者邮箱',
+  report_content_time: '时间',
+  report_content_msg_id: '消息ID',
   settings_restart_hint: '。请重新启动应用。',
   recovery_spam_toast: '恢复密钥已保存到您的邮箱。请检查垃圾邮件：如果 Vault 的邮件进入了垃圾邮件，请将其移至收件箱，否则将被删除',
   recovery_spam_folder: '托管信件位于文件夹：',
