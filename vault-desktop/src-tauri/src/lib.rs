@@ -294,6 +294,8 @@ fn save_peer_key(
     label: Option<String>,
     pq_public_key: Option<String>,
 ) -> Result<(), String> {
+    // GATE от не-адресов (fp:<fingerprint> и прочее) живёт в
+    // key_store::add_peer_key — единая точка записи всех путей + тест.
     let key = StoredPeerKey {
         email,
         public_key,

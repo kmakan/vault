@@ -198,6 +198,8 @@ export class ApiClient {
     this._avatarCache = new Map();
     // Кэш handshake-писем на один тик поллинга (см. fetchAllHandshake).
     this._handshakeCache = null;
+    // Кэш словаря alias (старый → новый адрес собеседника), см. loadAliasMap.
+    this._aliasMap = null;
   }
 
   // --- internal: connect the mailbox over IMAP/SMTP ---
@@ -722,6 +724,54 @@ export class ApiClient {
     } catch (e) { /* ignore */ }
     return set;
   }
+  // ── Смена почты собеседника: словарь alias (старый → новый адрес) ──
+  // Письма в ящике НАВСЕГДА остаются со старым sender — их нельзя
+  // переименовать. Поэтому handshake-логика резолвит адрес через карту
+  // kv `email-aliases` {old: new} ПЕРЕД пометками/попапами/группами.
+  // Без этого каждый поллинг «воскрешал» старый адрес: попап приглашения
+  // не матчился с пометкой `${new}|${uid}`, профиль и участник группы
+  // перезаписывались старым адресом из старых писем (живые данные 06.10).
+  async loadAliasMap() {
+    if (this._aliasMap) return this._aliasMap;
+    try {
+      const ns = await accountNamespace(this.email);
+      this._aliasMap = JSON.parse((await db.kvGet(ns, 'email-aliases')) || '{}');
+    } catch (e) {
+      this._aliasMap = {};
+    }
+    return this._aliasMap;
+  }
+  async resolvePeerAlias(email) {
+    const e = String(email || '').trim().toLowerCase();
+    if (!e) return email;
+    const map = await this.loadAliasMap();
+    return map[e] || email;
+  }
+  async rememberAlias(oldEmail, newEmail) {
+    const o = String(oldEmail || '').trim().toLowerCase();
+    const n = String(newEmail || '').trim().toLowerCase();
+    if (!o || !n || o === n) return;
+    try {
+      const map = await this.loadAliasMap();
+      if (map[o] === n) return;
+      map[o] = n;
+      this._aliasMap = map;
+      const ns = await accountNamespace(this.email);
+      await db.kvSet(ns, 'email-aliases', JSON.stringify(map));
+      console.log('[identity] alias remembered:', o, '→', n);
+    } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }
+  }
+  // Тот же публичный ключ уже известен под ЛЮБЫМ адресом (identity =
+  // ключ, адрес = транспорт). Гейт попапов/accept: старое письмо от
+  // прежнего адреса с уже известным ключом не может дать ни дубль-контакт,
+  // ни попап — независимо от карты alias.
+  async isKnownPeerKey(publicKeyHex) {
+    if (!publicKeyHex) return false;
+    try {
+      const peers = await invoke('load_peer_keys');
+      return (peers || []).some(pk => pk.public_key === publicKeyHex);
+    } catch (e) { return false; }
+  }
   // ── Handshake-пометки: sqlite kv_store ──
   // Персистентные списки обработанных handshake-писем (invite/accept/delete).
   // Ключ = `${sender}|${uid}` (как tombstones): письма навсегда остаются в
@@ -911,8 +961,12 @@ export class ApiClient {
     const peers = await this.loadPeerKeyEmails();
     const out = [];
     for (const m of invites) {
-      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
-      if (!sender || sender === this.email) continue;
+      const senderRaw = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
+      if (!senderRaw || senderRaw === this.email) continue;
+      // Смена почты: резолвим старый адрес письма → текущий. Пометки
+      // declined/accepted хранятся под НОВЫМ адресом, письмо — под старым.
+      const sender = await this.resolvePeerAlias(senderRaw);
+      if (sender === this.email) continue;
       if (declined.includes(`${sender}|${m.uid}`)) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
       // Примечание: фильтра «удалён МНОЙ/удалил меня» здесь НЕТ — новые
@@ -922,6 +976,9 @@ export class ApiClient {
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
       if (!parsed.public_key) continue;
+      // Identity = публичный ключ: ключ уже в peer_keys (пусть под другим
+      // адресом или fp:-записью) — контакт уже известен, попап не нужен.
+      if (await this.isKnownPeerKey(parsed.public_key)) continue;
       // ts обязателен: saveProfile молча выходит при ts=0, и аватар
       // из инвайта никогда не сохранялся бы (баг: пустые аватары на телефоне).
       await this.saveProfile(sender, parsed.sender_name, parsed.sender_avatar,
@@ -948,10 +1005,13 @@ export class ApiClient {
       this._handshakeCache = null;
       const all = await this.fetchAllHandshake();
       const declined = await this.getDeclinedContacts();
+      // Смена почты: пометки ищутся fetchPendingContactInvites по
+      // резолвнутому (текущему) адресу — сравниваем и пишем по нему же.
+      const want = await this.resolvePeerAlias(email);
       for (const m of all.invites) {
         const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
-        if (sender !== email) continue;
-        const key = `${sender}|${m.uid}`;
+        if (sender !== email && await this.resolvePeerAlias(sender) !== want) continue;
+        const key = `${want}|${m.uid}`;
         if (!declined.includes(key)) {
           declined.push(key);
           await db.kvSet(await accountNamespace(this.email), 'declined-contacts', JSON.stringify(declined));
@@ -960,8 +1020,8 @@ export class ApiClient {
       const accepted = await this.getAcceptedContacts();
       for (const m of all.accepts) {
         const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
-        if (sender !== email) continue;
-        const key = `${sender}|${m.uid}`;
+        if (sender !== email && await this.resolvePeerAlias(sender) !== want) continue;
+        const key = `${want}|${m.uid}`;
         if (!accepted.includes(key)) {
           accepted.push(key);
           await db.kvSet(await accountNamespace(this.email), 'accepted-contacts', JSON.stringify(accepted));
@@ -1012,8 +1072,12 @@ export class ApiClient {
     const invited = await this.getInvitedSenders();
     const out = [];
     for (const m of accepts) {
-      const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
-      if (!sender || sender === this.email) continue;
+      const senderRaw = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
+      if (!senderRaw || senderRaw === this.email) continue;
+      // Смена почты: accept-письмо старого адреса резолвится в текущий —
+      // гейт invited/пометки/сохранение ключа идут по НОВОМУ адресу.
+      const sender = await this.resolvePeerAlias(senderRaw);
+      if (sender === this.email) continue;
       if (accepted.includes(`${sender}|${m.uid}`)) continue;
       const parsed = m.parsed || {};
       if (!parsed.sender && !parsed.public_key) continue;
@@ -1439,14 +1503,28 @@ async mediaSoundStop() {
     throw new Error('addGroupMember: приглашение требует зашифрованный ключ группы — используйте inviteGroupMember через UI');
   }
   async acceptGroupInvite(groupId, invitePayload) {
-    const payload = invitePayload || {};
+    // Копия: резолвим адреса по alias (смена почты собеседника), исходный
+    // payload не трогаем.
+    const payload = { ...(invitePayload || {}) };
     // Импортируем группу с ключом из инвайта. Роли и создатель приходят из
     // инвайта (created_by + members) — Rust сливает их с локальными.
     // Роли нормализуем к модели Admin/Member (legacy Moderator → Member).
+    // Смена почты: резолвим все адреса письма (sender/created_by/members) —
+    // иначе groups_import добавил бы УСТАРЕВШИЕ адреса участников из
+    // старого письма-инвайта (воскрешение дублей).
+    if (payload.sender) payload.sender = await this.resolvePeerAlias(payload.sender);
+    if (payload.created_by) payload.created_by = await this.resolvePeerAlias(payload.created_by);
     const validRoles = ['Admin', 'Member'];
-    const inviteMembers = Array.isArray(payload.members)
-      ? payload.members
-          .filter(m => m && m.email)
+    let inviteMembers = Array.isArray(payload.members) ? payload.members.filter(m => m && m.email) : null;
+    if (inviteMembers) {
+      const fixed = [];
+      for (const m of inviteMembers) {
+        fixed.push({ ...m, email: await this.resolvePeerAlias(m.email) });
+      }
+      inviteMembers = fixed;
+    }
+    const inviteMembersFinal = inviteMembers
+      ? inviteMembers
           .map(m => ({ email: m.email, role: m.role === 'Moderator' ? 'Member' : (validRoles.includes(m.role) ? m.role : 'Member') }))
       : null;
     await invoke('groups_import', {
@@ -1455,7 +1533,7 @@ async mediaSoundStop() {
       groupKey: payload.group_key,
       sender: payload.sender,
       createdBy: payload.created_by || null,
-      members: inviteMembers,
+      members: inviteMembersFinal,
     });
     // Персистим ключ принятого инвайта («group_id|uid»). handledInviteKeys в
     // App.vue — только in-memory и сбрасывается при перезапуске; без этой
@@ -1600,7 +1678,12 @@ async mediaSoundStop() {
       // Регистр: заголовки From бывают «Имя <Mail@X>» — ключ храним
       // в нижнем регистре, чтобы nameOf/avatarOf находили профиль
       // независимо от регистра в письме.
-      email = String(email).trim().toLowerCase();
+      const rawEmail = String(email).trim().toLowerCase();
+      email = rawEmail;
+      // Смена почты собеседника: старое письмо не должно воскрешать
+      // профиль под СТАРЫМ адресом при каждом поллинге (лог 06.10:
+      // `[profile] save koanmak@ya.ru` ×5 на цикл).
+      email = await this.resolvePeerAlias(email);
       const profiles = await this.getProfilesAll();
       const p = profiles[email] || {};
       // Непустые значения обновляют. Пустой avatar НЕ стирает существующий:
@@ -1615,6 +1698,11 @@ async mediaSoundStop() {
       // (fetchPendingAccepts и др.); он не должен ни затирать свежие данные,
       // ни блокировать их (письмо с реальным ts обязано пройти).
       if (!tsNum) return;
+      // Fallback-имя старых клиентов: name == адрес отправителя. После
+      // alias-резолва адрес УЖЕ новый, а в name приходит СТАРЫЙ — без
+      // этой проверки старый адрес сохранился бы как «имя» контакта
+      // (лог 06.10: `save vault-msg@ya.ru name=koanmak@ya.ru`).
+      if (name === rawEmail) name = null;
       if (name && name !== email && tsNum >= (p._ts || 0)) p.name = name;
       if (avatar && tsNum >= (p._ts || 0)) p.avatar = avatar;
       if (bio !== undefined && bio !== null && tsNum >= (p._ts || 0)) {
@@ -1659,6 +1747,11 @@ async mediaSoundStop() {
     const to = String(newEmail).trim().toLowerCase();
     if (from === to) return;
     const ns = await accountNamespace(this.email);
+
+    // 0) Словарь alias: письма в ящике навсегда остаются со старым
+    //    sender. Без резолва все пометки/попапы/профили «воскрешают»
+    //    старый адрес при каждом поллинге (диагностика 06.10.2026).
+    await this.rememberAlias(from, to);
 
     // 1) Списки контактов: записи формата '<email>|<uid>'.
     //    Дубли по новому адресу не создаём (Set), старые вычищаем целиком.
@@ -1809,6 +1902,10 @@ async mediaSoundStop() {
         console.warn('[invites] unparseable invite body, uid', m.uid);
         continue;
       }
+      // Смена почты собеседника: попап и принятие — по текущему адресу,
+      // даже если письмо-инвайт ушло со старого (пометки accepted/declined
+      // хранятся под текущим адресом).
+      if (parsed.sender) parsed.sender = await this.resolvePeerAlias(parsed.sender);
       // Уже отклонён/принят ЛЮБОЙ экземпляр этой группы (ключи «group_id|uid»).
       const gidPrefix = `${parsed.group_id}|`;
       if (declined.some(k => k.startsWith(gidPrefix))) continue;
@@ -1854,15 +1951,21 @@ async mediaSoundStop() {
     for (const m of groupAccepts) {
       const payload = m.parsed || {};
       if (!payload.group_id) continue;
+      // Смена почты: резолвим sender — иначе СТАРОЕ accept-письмо каждый
+      // поллинг добавляет в группу СТАРЫЙ адрес (воскрешение дубля,
+      // поймано на живых данных: groups.json перезаписан старым участником
+      // через 3 минуты после старта).
+      const sender = await this.resolvePeerAlias(payload.sender);
+      if (!sender) continue;
       // Идемпотентно добавляем принявшего участника (обёртка не падает, если уже участник).
       try {
-        await invoke('groups_add_member', { groupId: payload.group_id, email: payload.sender });
+        await invoke('groups_add_member', { groupId: payload.group_id, email: sender });
       } catch (e) {
         // уже участник или временная ошибка — игнорируем
       }
-      this.saveProfile(payload.sender, payload.sender_name, payload.sender_avatar,
+      this.saveProfile(sender, payload.sender_name, payload.sender_avatar,
         Date.parse(m.date) || Date.now());
-      out.push({ group_id: payload.group_id, sender: payload.sender });
+      out.push({ group_id: payload.group_id, sender });
     }
     return out;
   }

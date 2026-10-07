@@ -111,6 +111,15 @@ pub fn load_peer_keys() -> anyhow::Result<Vec<StoredPeerKey>> {
 }
 
 pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
+    // ADDRESS GATE: peer_keys индексируется по email — только настоящие
+    // адреса. Строки вида fp:<fingerprint> (account-namespace) и прочие
+    // идентификаторы создавали «контакт-отпечаток» в списке (живой баг
+    // 06.10.2026: запись fp:2b:e1:... в peer_keys, добавленная 27.09).
+    // Единая точка ВСЕХ записей (invite-accept, accept, ручная вставка).
+    let em = key.email.trim();
+    if !em.contains('@') || em.to_lowercase().starts_with("fp:") {
+        anyhow::bail!("peer key address must be an email, got: {}", key.email);
+    }
     // SELF-KEY GUARD: saving one's own public key as a peer's key silently
     // breaks ECDH in BOTH directions (encrypt-to-self / decrypt mismatch).
     // stale invite sent from a shared-HOME instance carried the sender's own
@@ -513,6 +522,51 @@ mod tests {
             assert_eq!(keys[0].email, "same@x");
             assert_eq!(keys[0].label.as_deref(), Some("V2"));
             assert_eq!(keys[0].pq_public_key.as_deref(), Some("pq2"));
+        });
+    }
+
+    #[test]
+    fn test_add_peer_key_rejects_non_email_address() {
+        // ADDRESS GATE (живой баг 06.10.2026): запись-«отпечаток»
+        // fp:<fingerprint> попала в peer_keys и показывалась в UI как
+        // контакт. Не-email / fp:-префикс должен отвергаться на записи.
+        with_tmp_keys(|| {
+            for bad in [
+                "fp:2b:e1:c9:30:d1:b9:1b:85:aa:bb".to_string(),
+                "  FP:2b:e1:aa  ".to_string(),   // регистр + пробелы
+                "not-an-email".to_string(),       // без '@'
+                "".to_string(),                   // пусто
+            ] {
+                let rec = StoredPeerKey {
+                    email: bad.clone(),
+                    public_key: "deadbeef".to_string(),
+                    label: None,
+                    added_at: "2024-01-01T00:00:00Z".to_string(),
+                    pq_public_key: None,
+                };
+                let err = add_peer_key(rec).unwrap_err();
+                assert!(
+                    err.to_string().contains("must be an email"),
+                    "должен отвергнуть {:?}, получил: {}",
+                    bad,
+                    err
+                );
+            }
+            assert!(
+                load_peer_keys().unwrap().is_empty(),
+                "ни одна не-email запись не должна сохраниться"
+            );
+
+            // Настоящий адрес — проходит.
+            let good = StoredPeerKey {
+                email: "peer@example.com".to_string(),
+                public_key: "ffff0000".to_string(),
+                label: None,
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
+            };
+            add_peer_key(good).unwrap();
+            assert_eq!(load_peer_keys().unwrap().len(), 1);
         });
     }
 }
