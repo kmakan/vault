@@ -79,7 +79,7 @@ async function ensureBodies(ctx, pool) {
     );
     if (!missing.length) continue;
     try {
-      const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+      const bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
       for (const m of missing) {
         const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
         if (b) ctx.cacheBody(`${folder}:${m.uid || m.id}`, b);

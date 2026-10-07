@@ -198,6 +198,12 @@ export class ApiClient {
     this._avatarCache = new Map();
     // Кэш handshake-писем на один тик поллинга (см. fetchAllHandshake).
     this._handshakeCache = null;
+    // Сессионный кэш распарсенных handshake-писем (folder:uid → item|null):
+    // тело письма неизменно — парсим ОДИН раз, а не каждый поллинг.
+    this._handshakeParsed = null;
+    // Источник метаданных для handshake (это this.emails из loadEmails:
+    // sqlite + инкремент). Без полного IMAP-скана в каждом тике.
+    this._emailsSource = null;
     // Кэш словаря alias (старый → новый адрес собеседника), см. loadAliasMap.
     this._aliasMap = null;
   }
@@ -514,7 +520,7 @@ export class ApiClient {
       if (!fetchable.length) continue;
       const uids = fetchable.map(m => m.uid || m.id);
       try {
-        bodiesByFolder[folder] = await this.fetchEmailBodies(folder, uids);
+        bodiesByFolder[folder] = await this.fetchBodiesDbFirst(folder, uids);
       } catch (e) {
         console.log('[getGroupMessages] batch failed folder=' + folder + ' n=' + uids.length + ' err=' + (e && e.message || e));
       }
@@ -906,7 +912,18 @@ export class ApiClient {
     if (this._handshakeCache) return this._handshakeCache;
     const out = { invites: [], accepts: [], deletes: [], groupInvites: [], groupAccepts: [] };
     try {
-      const msgs = await this.fetchEmails('local');
+      // МЕТАДАННЫЕ — ИЗ БД (правило 07.10: из почты только после последнего
+      // маркера). Прежний путь делал ПОЛНЫЙ IMAP-скан (email_fetch_messages:
+      // INBOX 250 + Junk 150 + Sent…) КАЖДЫЕ 30с — processInvites сбрасывает
+      // _handshakeCache на каждом тике. Плюс батч-фетч ВСЕХ handshake-тел
+      // каждые 30с, хотя тела уже лежат в body_cache (602/602 у стенда).
+      let msgs = (Array.isArray(this._emailsSource) && this._emailsSource.length)
+        ? this._emailsSource
+        : null;
+      if (!msgs) {
+        try { msgs = await db.emailsLoad('local'); } catch (e) { msgs = null; }
+      }
+      if (!msgs || !msgs.length) msgs = await this.fetchEmails('local'); // первый вход: БД ещё пуста
       // Кандидаты: пустая тема (новый стелс-формат) ИЛИ legacy-маркер в теме.
       const candidates = msgs.filter(m => {
         const s = m.subject || '';
@@ -917,42 +934,72 @@ export class ApiClient {
           || s.startsWith('VaultGroupInvite: ')
           || s.startsWith('VaultGroupAccept: ');
       });
-      const bodies = await this.batchFetchBodies(candidates);
+      // ПАРСИНГ — РАЗ ЗА СЕССИЮ: тело письма неизменно, ключ folder:uid
+      // (uid уникален только в рамках папки). Непарсенные ещё (новые после
+      // курсора) → тела: СНАЧАЛА БД body_cache, IMAP только для отсутствую-
+      // щих; провал фетча НЕ кэшируется — ретрай следующим тиком.
+      if (!this._handshakeParsed) this._handshakeParsed = new Map();
+      const keyOf = m => `${m.folder || 'INBOX'}:${String(m.uid ?? m.id)}`;
+      const need = candidates.filter(m => !this._handshakeParsed.has(keyOf(m)));
+      if (need.length) {
+        const byFolder = {};
+        for (const m of need) (byFolder[m.folder || 'INBOX'] = byFolder[m.folder || 'INBOX'] || []).push(m);
+        for (const [folder, list] of Object.entries(byFolder)) {
+          let bodies = null;
+          try {
+            bodies = await this.fetchBodiesDbFirst(folder, list.map(m => String(m.uid ?? m.id)));
+          } catch (e) {
+            console.warn('[fetchAllHandshake] bodies failed folder=' + folder + ' n=' + list.length + ' err=' + (e && e.message || e));
+            continue; // не кэшируем — ретрай следующим тиком
+          }
+          for (const m of list) {
+            const body = bodies[String(m.uid ?? m.id)] || '';
+            if (!body) continue; // пусто/нет — не кэшируем, ретрай позже
+            this._handshakeParsed.set(keyOf(m), this._parseHandshakeItem(m, body));
+          }
+        }
+      }
       for (const m of candidates) {
-        const subject = m.subject || '';
-        const body = bodies[String(m.uid || m.id)] || '';
-        let parsed = null;
-        if (body) {
-          try { parsed = urlSafeB64Decode(body); } catch (e) { parsed = null; }
-        }
-        let kind = parsed && parsed.kind || null;
-        if (!kind) {
-          if (subject.startsWith('VaultContactInvite: ')) kind = 'invite';
-          else if (subject.startsWith('VaultContactAccept: ')) kind = 'accept';
-          else if (subject.startsWith('VaultContactDelete: ')) kind = 'delete';
-          else if (subject.startsWith('VaultGroupInvite: ')) kind = 'group-invite';
-          else if (subject.startsWith('VaultGroupAccept: ')) kind = 'group-accept';
-        }
-        if (!kind) continue;
-        const item = {
-          uid: m.uid || m.id,
-          id: m.uid || m.id,
-          date: m.date,
-          folder: m.folder || 'INBOX',
-          subject,
-          parsed,
-        };
-        if (kind === 'invite') out.invites.push(item);
-        else if (kind === 'accept') out.accepts.push(item);
-        else if (kind === 'delete') out.deletes.push(item);
-        else if (kind === 'group-invite') out.groupInvites.push(item);
-        else if (kind === 'group-accept') out.groupAccepts.push(item);
+        const item = this._handshakeParsed.get(keyOf(m));
+        if (!item) continue;
+        if (item.kind === 'invite') out.invites.push(item);
+        else if (item.kind === 'accept') out.accepts.push(item);
+        else if (item.kind === 'delete') out.deletes.push(item);
+        else if (item.kind === 'group-invite') out.groupInvites.push(item);
+        else if (item.kind === 'group-accept') out.groupAccepts.push(item);
       }
     } catch (e) {
       console.error('fetchAllHandshake failed:', e);
     }
     this._handshakeCache = out;
     return out;
+  }
+  // Тело письма → item ({uid,id,date,folder,subject,parsed,kind}) | null
+  // (не наш формат: не декодируется / без kind — чужая почта).
+  _parseHandshakeItem(m, body) {
+    const subject = m.subject || '';
+    let parsed = null;
+    if (body) {
+      try { parsed = urlSafeB64Decode(body); } catch (e) { parsed = null; }
+    }
+    let kind = parsed && parsed.kind || null;
+    if (!kind) {
+      if (subject.startsWith('VaultContactInvite: ')) kind = 'invite';
+      else if (subject.startsWith('VaultContactAccept: ')) kind = 'accept';
+      else if (subject.startsWith('VaultContactDelete: ')) kind = 'delete';
+      else if (subject.startsWith('VaultGroupInvite: ')) kind = 'group-invite';
+      else if (subject.startsWith('VaultGroupAccept: ')) kind = 'group-accept';
+    }
+    if (!kind) return null;
+    return {
+      uid: m.uid || m.id,
+      id: m.uid || m.id,
+      date: m.date,
+      folder: m.folder || 'INBOX',
+      subject,
+      parsed,
+      kind,
+    };
   }
   async fetchPendingContactInvites() {
     const { invites } = await this.fetchAllHandshake();
@@ -1030,25 +1077,6 @@ export class ApiClient {
     } catch (e) {
       console.warn('markContactHandshakeDone failed:', e);
     }
-  }
-  // Батч-фетч тел писем по папкам (один IMAP-вызов на папку) — обёртка над
-  // fetchEmailBodies, возвращает {uid: body}. Пустые тела пропускаются.
-  async batchFetchBodies(list) {
-    const out = {};
-    const byFolder = {};
-    for (const m of list) {
-      const f = m.folder || 'INBOX';
-      (byFolder[f] = byFolder[f] || []).push(m);
-    }
-    for (const [folder, msgs] of Object.entries(byFolder)) {
-      try {
-        const bodies = await this.fetchEmailBodies(folder, msgs.map(m => m.uid || m.id));
-        Object.assign(out, bodies);
-      } catch (e) {
-        console.warn('[batchFetchBodies] failed folder=' + folder + ' n=' + msgs.length + ' err=' + (e && e.message || e));
-      }
-    }
-    return out;
   }
   async sendContactAccept(email, publicKey) {
     const name = (await this.getDisplayName()) || this.email;
@@ -1415,6 +1443,40 @@ async mediaSoundStop() {
     const out = {};
     for (const [uid, body] of list || []) out[String(uid)] = body;
     return out;
+  }
+  // ТЕЛА ПИСЕМ: сначала sqlite body_cache (БД), IMAP — ТОЛЬКО для тех, кого
+  // в БД нет (новые после курсора / ещё не фетчнутые). Правило 07.10:
+  // «сообщения берутся из БД, из почты — после последнего маркера».
+  async fetchBodiesDbFirst(folder, uids) {
+    const f = folder || 'INBOX';
+    const out = {};
+    const missing = [];
+    let acc = null;
+    try { acc = await accountNamespace(this.email); } catch (e) { acc = this.email || 'anon'; }
+    for (const raw of uids) {
+      const uid = String(raw);
+      let b = null;
+      try { b = await db.bodyCacheGet(acc, `${f}:${uid}`); } catch (e) { b = null; }
+      if (b) out[uid] = b;
+      else missing.push(uid);
+    }
+    if (missing.length) {
+      const fetched = await this.fetchEmailBodies(f, missing);
+      for (const uid of Object.keys(fetched || {})) {
+        const body = fetched[uid];
+        if (!body) continue;
+        out[uid] = body;
+        // Сразу в БД — следующий раз письмо читается из body_cache, а не IMAP.
+        db.bodyCacheSet(acc, `${f}:${uid}`, body).catch(() => {});
+      }
+    }
+    return out;
+  }
+  // Источник метаданных для fetchAllHandshake: loadEmails кладёт сюда
+  // актуальный this.emails (sqlite + инкремент) — без гонки на fire-and-
+  // forget emailsSave.
+  setEmailsSource(list) {
+    if (Array.isArray(list) && list.length) this._emailsSource = list;
   }
 
   async sendEmail(accountId, emailData = {}) {

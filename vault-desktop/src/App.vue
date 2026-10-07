@@ -3479,11 +3479,19 @@ export default {
       // и не кэшируем). Старые письма в this.messages остаются после
       // showHistoryFirst — блок скрывает именно НОВОЕ.
       const ignored = this.isIgnored(email);
+      // Письма, уже сохранённые в истории чата (mid = Message-ID), из почты
+      // НЕ перефетчивем: история — источник правды из БД, IMAP — только за
+      // новыми после последнего курсора (правило 07.10). Реакции/квитанции/
+      // правки в историю не пишутся — их mid здесь нет, они обрабатываются
+      // как раньше (тела берутся из body_cache, см. fetchBodiesDbFirst).
+      const inHist = new Set((this.messages || []).map(m => m && m.mid).filter(Boolean));
       const relatedAll = this.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
-          return !ignored && aliases.some(a => f.includes(a) || t.includes(a));
+          if (ignored || !aliases.some(a => f.includes(a) || t.includes(a))) return false;
+          if (m.message_id && inHist.has(m.message_id)) return false;
+          return true;
         })
         // Свежие сверху. Расшифровываем только последние 30: фетч тела идёт
         // по одному письму (с переключением папки) — на всю переписку это
@@ -3530,9 +3538,9 @@ export default {
             // весь loadMessages и чат застревал на slim-кэше без вложений
             let bodies = {};
             try {
-              bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+              bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
             } catch (e) {
-              console.log('[loadMessages] fetchEmailBodies failed folder=' + folder + ' n=' + missing.length + ' err=' + (e && e.message || e));
+              console.log('[loadMessages] fetchBodiesDbFirst failed folder=' + folder + ' n=' + missing.length + ' err=' + (e && e.message || e));
             }
             console.log('[loadMessages] fetched bodies n=' + Object.keys(bodies).length);
             if (stale()) return;
@@ -5152,6 +5160,9 @@ export default {
         merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         if (merged.length > 2000) merged.length = 2000;
         this.emails = merged;
+        // Источник метаданных для fetchAllHandshake (в памяти: без гонки
+        // на fire-and-forget emailsSave ниже).
+        api.setEmailsSource(this.emails);
         // ПЕРСИСТ: envelope cache в sqlite — при перезапуске письма
         // восстанавливаются без полного IMAP-скана (курсоры согласованы).
         try {
@@ -5871,7 +5882,7 @@ export default {
         const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
         if (missing.length) {
           try {
-            const bodies = await api.fetchEmailBodies(folder, missing.map(m => m.uid || m.id));
+            const bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
             for (const m of missing) {
               const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
               if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
