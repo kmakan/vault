@@ -2491,6 +2491,14 @@ export default {
         // переписка «исчезает» после смены адреса.
         await this.migrateAccountData(oldEmail, this.email);
         await this.migrateOwnGroups(oldEmail, this.email);
+        // localStorage-хранилища (заметки/реакции/правки/томбстоуны) и свой
+        // профиль в kv keyed по email — ошибка миграции не должна ломать
+        // смену почты.
+        try {
+          await this.migrateLocalStores(oldEmail, this.email);
+        } catch (e) {
+          console.warn('[identity] local stores migrate failed:' + e);
+        }
         await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
         await this.loadContacts(); // peer_keys общие — контакты остаются
         await this.loadGroups();
@@ -2589,6 +2597,140 @@ export default {
         console.log('[identity] own groups renamed:', oldEmail, '→', newEmail);
       } catch (e) {
         console.warn('[identity] migrateOwnGroups failed:', e);
+      }
+    },
+    // Смена СВОЕЙ почты: переносим email-ключевые localStorage-хранилища
+    // (заметки/квитанции чтения/реакции/правки/томбстоуны) со старого
+    // адреса на новый. Ключи писались по raw this.email — регистр не
+    // гарантирован, поэтому при пустом источнике пробуем lowercase-вариант.
+    // Отсутствие источника — норма (не ошибка). Каждый префикс в своём
+    // try/catch: повреждённый JSON одного хранилища не блокирует остальные;
+    // битый JSON источника — просто удаляем источник, цель не трогаем.
+    async migrateLocalStores(oldEmail, newEmail) {
+      if (!oldEmail || !newEmail || oldEmail === newEmail) return;
+      // isArray: хранилище — JSON-массив (заметки), иначе JSON-объект.
+      const prefixes = [
+        { key: 'vault-notes-', isArray: true },        // заметки для себя (id)
+        { key: 'vault-reads-sent-' },   // квитанции чтения (объект)
+        { key: 'vault-reactions-' },    // реакции (features/reactions.js)
+        { key: 'vault-edits-' },        // правки (features/edits.js)
+        { key: 'vault-tombstones-' },   // томбстоуны (features/edits.js)
+        { key: 'vault-mid-tombstones-' }, // tombstones по mid (features/edits.js)
+      ];
+      for (const { key: p, isArray } of prefixes) {
+        try {
+          const dstKey = p + newEmail;
+          let srcKey = p + oldEmail;
+          let srcVal = localStorage.getItem(srcKey);
+          if (!srcVal) {
+            // Ключ мог быть записан в другом регистре (raw this.email).
+            const alt = p + String(oldEmail).toLowerCase();
+            if (alt !== srcKey) {
+              srcVal = localStorage.getItem(alt);
+              if (srcVal) srcKey = alt;
+            }
+          }
+          if (!srcVal) continue;            // источника нет — это норма
+          if (srcKey === dstKey) continue;  // ключ совпал — переносить нечего
+          const rawDst = localStorage.getItem(dstKey);
+          if (rawDst === null || rawDst === undefined) {
+            // Цели нет — просто копируем.
+            localStorage.setItem(dstKey, srcVal);
+            localStorage.removeItem(srcKey);
+            continue;
+          }
+          let src;
+          try {
+            src = JSON.parse(srcVal);
+          } catch (eb) {
+            // Битый JSON источника — удаляем источник, цель не трогаем.
+            localStorage.removeItem(srcKey);
+            continue;
+          }
+          if (isArray) {
+            // Массивы: [...source, ...target] с дедупликацией по полю id,
+            // приоритет элемента ЦЕЛИ (позиция — первое вхождение).
+            if (!Array.isArray(src)) { localStorage.removeItem(srcKey); continue; }
+            let dst;
+            try {
+              dst = JSON.parse(rawDst);
+            } catch (eb) {
+              // Битая цель — источник валиден, записываем его.
+              localStorage.setItem(dstKey, srcVal);
+              localStorage.removeItem(srcKey);
+              continue;
+            }
+            if (!Array.isArray(dst)) {
+              localStorage.setItem(dstKey, srcVal);
+              localStorage.removeItem(srcKey);
+              continue;
+            }
+            const merged = [];
+            const byId = new Map();
+            const put = (item) => {
+              if (item && typeof item === 'object' && item.id != null) {
+                if (byId.has(item.id)) merged[byId.get(item.id)] = item; // цель побеждает
+                else { byId.set(item.id, merged.length); merged.push(item); }
+              } else {
+                merged.push(item); // без id — не дедуплицируем
+              }
+            };
+            src.forEach(put);
+            dst.forEach(put);
+            localStorage.setItem(dstKey, JSON.stringify(merged));
+            localStorage.removeItem(srcKey);
+            continue;
+          }
+          // Остальные хранилища — объекты: merge, цель побеждает.
+          let dst = null;
+          try {
+            dst = JSON.parse(rawDst);
+          } catch (eb) {
+            dst = null; // битая цель — остаётся источник
+          }
+          localStorage.setItem(dstKey, JSON.stringify(Object.assign({}, src || {}, dst || {})));
+          localStorage.removeItem(srcKey);
+        } catch (e) {
+          console.warn('[identity] local store migrate failed:', p, e);
+        }
+      }
+      await this.migrateOwnProfile(oldEmail, newEmail);
+    },
+    // Смена СВОЕЙ почты: копируем свой профиль {name, avatar, bio, _ts,
+    // local_name} в kv-профили (namespace 'anon', ключ 'profiles', ключи
+    // lowercase — см. api.js saveProfile/getProfilesAll). Старый ключ НЕ
+    // удаляем: аватар может лежать под старым адресом как алиас.
+    async migrateOwnProfile(oldEmail, newEmail) {
+      try {
+        const profiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
+        const old = String(oldEmail).toLowerCase();
+        const neu = String(newEmail).toLowerCase();
+        if (!profiles[old] || old === neu) return;
+        if (!profiles[neu]) {
+          profiles[neu] = Object.assign({}, profiles[old]); // копия целиком
+        } else {
+          // Цель есть — заполняем только пустые/отсутствующие поля из
+          // старого (пустой avatar не затирает новый).
+          const dst = profiles[neu];
+          const src = profiles[old];
+          for (const k of Object.keys(src || {})) {
+            const cur = dst[k];
+            const val = src[k];
+            if ((cur === undefined || cur === null || cur === '')
+              && val !== undefined && val !== null && val !== '') {
+              dst[k] = val;
+            }
+          }
+        }
+        await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
+        // In-memory: профиль в шапке/контактах сразу после смены почты.
+        if (this.profiles && typeof this.profiles === 'object') {
+          this.profiles[neu] = profiles[neu];
+        }
+        this.userAvatarUrl = (profiles[neu] || {}).avatar || this.userAvatarUrl;
+        console.log('[identity] own profile migrated:', old, '→', neu);
+      } catch (e) {
+        console.warn('[identity] migrateOwnProfile failed:', e);
       }
     },
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
