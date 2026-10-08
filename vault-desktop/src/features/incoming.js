@@ -218,10 +218,36 @@ async function classify(ctx, m, from) {
         } catch (e) { /* не этим ключом */ }
       }
       if (matched) {
+        // ANTI-PING-PONG: старое письмо (ts ≤ порога) не переименовывает
+        // назад — пропускаем обработку целиком (содержимое уже в истории).
+        const _idTs = new Date(m.date || 0).getTime() || 0;
+        if (!(await api.identityLetterFresh(matched.env.key, _idTs))) {
+          console.log('[identity] stale letter — rename skipped (poll):', from, '→', matched.knownEmail);
+          return null;
+        }
         console.log('[identity] fingerprint match:', matched.knownEmail, '→', from, '— смена почты (poll)');
+        // ПОЛНЫЙ ренейм личности — паритет с путём из App.vue (loadMessages):
+        // списки пометок, alias-словарь, relay-токены, счётчики, профиль,
+        // история. Без этого слои рассинхронизировались: имя/почта расходились,
+        // группы и пометки откатывались на старый адрес (живые данные 08.10).
+        await api.renamePeerIdentity(matched.knownEmail, from);
+        // Группы: переименовать адрес участника во всех, где он числится.
+        await ctx.migratePeerGroups(matched.knownEmail, from);
         // Переносим историю чата со старого адреса на новый.
         await ctx.migrateChatHistory(matched.knownEmail, from);
+        // СТАРЫЙ адрес убираем из всех хранилищ — иначе второй контакт
+        // с тем же ключом (порядок: до setPeerKey, как в App.vue).
+        if (String(matched.knownEmail).toLowerCase() !== String(from).toLowerCase()) {
+          try { await crypto.removePeerKey(matched.knownEmail); } catch (e) { /* ignore */ }
+          delete ctx.peerKeys[matched.knownEmail];
+          delete (ctx.peerKeysLoaded || {})[matched.knownEmail];
+          delete (ctx.peerPqKeys || {})[matched.knownEmail];
+          api.removeContact(matched.knownEmail);
+          api.deleteProfile(matched.knownEmail);
+        }
         ctx.setPeerKey(from, matched.env.key, matched.env.pq || null);
+        // Порог ренейма = дата этого (свежего) письма.
+        await api.bumpIdentityRenameTs(matched.env.key, _idTs);
         // Профиль со старого адреса переносим на новый.
         const oldProf = ctx.profiles[matched.knownEmail];
         if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);

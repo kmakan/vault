@@ -751,7 +751,11 @@ export class ApiClient {
     const e = String(email || '').trim().toLowerCase();
     if (!e) return email;
     const map = await this.loadAliasMap();
-    return map[e] || email;
+    if (!map[e]) return email;
+    // Цепочки A→B→C (две смены подряд) — идём до конца с защитой от цикла.
+    let cur = e; const seen = new Set([e]);
+    while (map[cur] && !seen.has(map[cur])) { seen.add(map[cur]); cur = map[cur]; }
+    return cur;
   }
   async rememberAlias(oldEmail, newEmail) {
     const o = String(oldEmail || '').trim().toLowerCase();
@@ -760,12 +764,43 @@ export class ApiClient {
     try {
       const map = await this.loadAliasMap();
       if (map[o] === n) return;
+      // АНТИ-ЦИКЛ: смена A→B→A оставляла карту {A:B, B:A} — резолв зацикливался,
+      // а «победитель» зависел от порядка перечитывания писем (живые данные
+      // 08.10: имя/почта расходились, группы откатывались). Текущий адрес (n)
+      // не может сам быть алиасом — удаляем устаревшую запись, где он ключ.
+      delete map[n];
       map[o] = n;
       this._aliasMap = map;
       const ns = await accountNamespace(this.email);
       await db.kvSet(ns, 'email-aliases', JSON.stringify(map));
       console.log('[identity] alias remembered:', o, '→', n);
     } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }
+  }
+  // ── ANTI-PING-PONG: порог «новизны» письма для ренейма идентичности ──
+  // Старые письма с прежним адресом пира навсегда остаются в ящике. При
+  // перечитывании fingerprint-матч переименовывал туда-обратно без меры:
+  // итог зависел от порядка обработки (живые данные 08.10.2026 — имя/email
+  // расходились, группы откатывались на старый адрес, дубли контактов и
+  // попапы приглашений). Правило: ренейм применяется ТОЛЬКО к письму,
+  // новее порога; порог монотонно растёт → финальное состояние сходится к
+  // адресу из САМОГО СВЕЖЕГО письма при любом порядке обработки.
+  // Ключ kv: 'identity-rename-ts:' + <pubkey hex пира> в ns аккаунта.
+  async identityLetterFresh(fpHex, mailTs) {
+    if (!fpHex || !mailTs) return true;
+    try {
+      const ns = await accountNamespace(this.email);
+      const th = Number(await db.kvGet(ns, 'identity-rename-ts:' + String(fpHex).toLowerCase()) || 0);
+      return mailTs > th;
+    } catch (e) { return true; }
+  }
+  async bumpIdentityRenameTs(fpHex, mailTs) {
+    if (!fpHex || !mailTs) return;
+    try {
+      const ns = await accountNamespace(this.email);
+      const key = 'identity-rename-ts:' + String(fpHex).toLowerCase();
+      const th = Number(await db.kvGet(ns, key) || 0);
+      if (mailTs > th) await db.kvSet(ns, key, String(mailTs));
+    } catch (e) { /* ignore */ }
   }
   // Тот же публичный ключ уже известен под ЛЮБЫМ адресом (identity =
   // ключ, адрес = транспорт). Гейт попапов/accept: старое письмо от
@@ -858,14 +893,21 @@ export class ApiClient {
       const accepted = await this.getAcceptedContacts();
       let changed = false;
       for (const m of all.invites) {
-        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
-        if (!sender || sender === this.email) continue;
+        const senderRaw = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactInvite: '.length).trim();
+        if (!senderRaw || senderRaw === this.email) continue;
+        // Смена почты: резолвим старый адрес письма → текущий, иначе пометка
+        // пишется под старым адресом и дублирует запись нового (живые данные
+        // 08.10: accepted-contacts с ОБОИМИ адресами у одного uid).
+        const sender = await this.resolvePeerAlias(senderRaw);
+        if (sender === this.email) continue;
         const key = `${sender}|${m.uid}`;
         if (!declined.includes(key)) { declined.push(key); changed = true; }
       }
       for (const m of all.accepts) {
-        const sender = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
-        if (!sender || sender === this.email) continue;
+        const senderRaw = m.parsed ? m.parsed.sender : (m.subject || '').slice('VaultContactAccept: '.length).trim();
+        if (!senderRaw || senderRaw === this.email) continue;
+        const sender = await this.resolvePeerAlias(senderRaw);
+        if (sender === this.email) continue;
         const key = `${sender}|${m.uid}`;
         if (!accepted.includes(key)) { accepted.push(key); changed = true; }
       }

@@ -3829,6 +3829,14 @@ export default {
                   );
                   if (knownByKey) {
                     const [oldEmail] = knownByKey;
+                    // ANTI-PING-PONG: старое письмо (ts ≤ порога) не должно
+                    // переименовывать назад — пропускаем письмо целиком
+                    // (его содержимое уже в истории после миграции чата).
+                    const _idTs = new Date(m.date || 0).getTime() || 0;
+                    if (!(await api.identityLetterFresh(env.key, _idTs))) {
+                      console.log('[identity] stale letter — rename skipped:', sender, '→', oldEmail);
+                      return null;
+                    }
                     console.log('[identity] fingerprint match:', oldEmail, '→', sender, '— смена почты');
                     // ПОЛНЫЙ РЕНЕЙМ ЛИЧНОСТИ во всех слоях: списки контактов
                     // (accepted/declined/invited), relay-токены, счётчики
@@ -3861,6 +3869,8 @@ export default {
                     }
                     // Регистрируем ключ под новым email (peer_keys.json).
                     this.setPeerKey(sender, env.key, env.pq || null);
+                    // Порог ренейма = дата этого (свежего) письма.
+                    await api.bumpIdentityRenameTs(env.key, _idTs);
                   } else if (!this.peerKeys[sender] && env.key !== crypto.publicKey) {
                     // Незнакомый ключ с нового адреса: сохраняем как есть —
                     // контакт появится после обмена ключами (инвайт/QR).
