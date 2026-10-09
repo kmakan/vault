@@ -152,14 +152,27 @@ pub fn encrypt_cmd(
     Ok(base64::engine::general_purpose::STANDARD.encode(&output))
 }
 
+/// base64 из письма: игнорируем пробельные переносы SMTP и ВОССТАНАВЛИВАЕМ
+/// пэйдинг, который исторически съедал decode_quoted_printable (см. email.rs).
+/// Валидный base64 всегда кратен 4 → re-pad не меняет корректные тела, но
+/// лечит уже закэшированные повреждённые (нет перечитывания IMAP).
+fn b64_decode_mail(ciphertext: &str) -> anyhow::Result<Vec<u8>> {
+    let mut cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
+    let rem = cleaned.len() % 4;
+    if rem != 0 {
+        cleaned.push_str(&"=".repeat(4 - rem));
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(cleaned)
+        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))
+}
+
 pub fn decrypt_cmd(
     ciphertext: &str,
     private_key: &str,
     peer_public_key: Option<&str>,
 ) -> anyhow::Result<String> {
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(ciphertext)
-        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
+    let decoded = b64_decode_mail(ciphertext)?;
 
     if decoded.len() < NONCE_LEN {
         anyhow::bail!("Ciphertext too short");
@@ -263,12 +276,8 @@ pub fn decrypt_vault_cmd(
 ) -> anyhow::Result<String> {
     use chacha20poly1305::aead::Payload;
 
-    // SMTP-переносы (fold ≤76 колонок) оставляют в теле \n — base64-декодер
-    // должен их игнорировать, иначе НИ ОДНО входящее письмо не расшифруется.
-    let cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(&cleaned)
-        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
+    // Пробелы/переносы SMTP + восстановление пэйдинга — см. b64_decode_mail.
+    let decoded = b64_decode_mail(ciphertext)?;
 
     if decoded.len() < NONCE_LEN {
         anyhow::bail!("Ciphertext too short");
@@ -360,14 +369,9 @@ pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<S
 
 /// Symmetric decrypt with a raw 32-byte hex key (for group shared keys)
 pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<String> {
-    // Групповые сообщения идут через SMTP: отправка фолдит base64 строками ≤76
-    // (спам-фильтр), и письмо приходит с '\n' внутри. Строгий base64-декодер
-    // падает на переносах → сообщение не расшифровывается. Игнорируем все
-    // пробельные символы.
-    let cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(&cleaned)
-        .map_err(|e| anyhow::anyhow!("Invalid base64: {}", e))?;
+    // Групповые сообщения идут через SMTP: пробельные переносы ≤76 колонок +
+    // восстановление пэйдинга — см. b64_decode_mail.
+    let decoded = b64_decode_mail(ciphertext)?;
 
     if decoded.len() < NONCE_LEN {
         anyhow::bail!("Ciphertext too short");

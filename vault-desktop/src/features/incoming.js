@@ -319,7 +319,11 @@ async function classify(ctx, m, from) {
           // аватара (24ч rate-limit внутри replyGroupAvatarHeal).
           try {
             const robj = JSON.parse(plain);
-            if (robj && robj.hav === 1) { await ctx.replyGroupAvatarHeal(g.id); return null; }
+            if (robj && robj.hav === 1) {
+              console.log('[classify] hav seen:', g.id);
+              await ctx.replyGroupAvatarHeal(g.id);
+              return null;
+            }
           } catch (e) { /* не JSON-сервис */ }
         }
         if (env) {

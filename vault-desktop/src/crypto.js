@@ -191,7 +191,13 @@ export class CryptoClient {
       // so strip ALL whitespace first (same lesson as decryptVault /
       // decrypt_symmetric_cmd). Without this, group mails arriving via SMTP
       // were silently dropped by isEncrypted before decryption.
-      const decoded = atob(String(text || '').replace(/\s+/g, ''));
+      const stripped = String(text || '').replace(/\s+/g, '');
+      // re-pad: decode_quoted_printable старых сборок съедал пэйдинг '='
+      // перед финальным CRLF (тело на 1 символ короче → atob бросал и письмо
+      // считалось незашифрованным). Валидный base64 кратен 4 → re-pad
+      // не меняет корректные тела, лечит уже закэшированные повреждённые.
+      const padded = stripped + '='.repeat((4 - (stripped.length % 4)) % 4);
+      const decoded = atob(padded);
       return decoded.length >= 25 && this.privateKey !== null;
     } catch {
       return false;

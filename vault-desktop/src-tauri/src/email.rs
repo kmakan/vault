@@ -1221,14 +1221,29 @@ pub(crate) fn decode_quoted_printable(input: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'=' => {
-                // Soft line break: "=\r\n" or "=\n" → skip entirely
+                // Soft line break: "=\r\n" или "=\n" → пропускаем, НО только
+                // если после перевода есть содержимое. "=\r\n" в КОНЦЕ тела =
+                // base64-пэйдинг ('==') + финальный CRLF служебного 7bit-тела,
+                // а не QP-перенос: старая ветка съедала один '=' (68→67 символов,
+                // atob бросал → isEncrypted=false → письмо молча отбрасывалось;
+                // живой баг X50 09.10: hav/meta-письма не распознавались как
+                // зашифрованные — аватарки не восстанавливались).
                 if i + 1 < bytes.len() && (bytes[i + 1] == b'\r' || bytes[i + 1] == b'\n') {
-                    i += if i + 2 < bytes.len() && bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
-                        3
-                    } else {
+                    let eol = if i + 2 < bytes.len()
+                        && bytes[i + 1] == b'\r'
+                        && bytes[i + 2] == b'\n'
+                    {
                         2
+                    } else {
+                        1
                     };
-                    continue;
+                    let after = i + 1 + eol;
+                    if after < bytes.len() {
+                        i = after; // настоящий QP-перенос: продолжение есть
+                        continue;
+                    }
+                    // Конец тела: '=' — это пэйдинг base64 → литерал
+                    // (CRLF ниже отдаётся как есть; потребители режут пробелы).
                 }
                 // Hex escape: =XX
                 if i + 2 < bytes.len() {
@@ -1292,6 +1307,32 @@ fn extract_header(header: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Регрессия X50 09.10.2026: кадр 49Б → base64 68 символов с '==',
+    /// RFC822.TEXT заканчивается CRLF. Старый decode принимал '==\r\n' за
+    /// QP soft-break и съедал '=' (67 символов) → isEncrypted=false →
+    /// hav/meta-письма молча отбрасывались.
+    #[test]
+    fn qp_keeps_base64_padding_before_final_crlf() {
+        // Инвариант потребителей (isEncrypted/decrypt): после strip-whitespace
+        // форма должна совпасть с исходным base64 ЦЕЛИКОМ, включая пэйдинг.
+        // Старый код терял '=' → 67 символов (%4 != 0) → atob/декодер падали.
+        let strip = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+        let raw = "gbgdGPmguO+L19LJeVo537gZSu3xWjA2FvPb1Jk3HhuGFHnEgR/f/FELEZK/AVIG0A==\r\n";
+        let out = strip(&decode_quoted_printable(raw));
+        assert_eq!(out, strip(raw));
+        assert_eq!(out.len() % 4, 0, "пэйдинг потерян: {} символов", out.len());
+        let single = "YWJjZA=\r\n"; // одинарный пэйдинг + CRLF
+        assert_eq!(strip(&decode_quoted_printable(single)), strip(single));
+    }
+
+    #[test]
+    fn qp_soft_breaks_and_escapes_still_work() {
+        assert_eq!(decode_quoted_printable("abc=\r\ndef"), "abcdef");
+        assert_eq!(decode_quoted_printable("abc=\ndef"), "abcdef");
+        assert_eq!(decode_quoted_printable("a=3Db"), "a=b");
+        assert_eq!(decode_quoted_printable("keep=tail"), "keep=tail");
+    }
 
     /// Регресс на livelock №2 (живой тест, телефон X50, 04.10.2026, 0.1.210):
     /// серия неудач не должна БЕСКОНЕЧНО отодвигать дедлайн следующего CONNECT.

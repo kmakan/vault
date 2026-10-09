@@ -935,6 +935,7 @@ import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
+import * as GroupAvatarsFeature from './features/group-avatars.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
@@ -4475,7 +4476,7 @@ export default {
               }
             } catch (e) { /* ключ не загрузился — группу пропускаем */ }
           }
-          if (!groupKey) break;
+          if (!groupKey) { console.log('[group] meta-scan no-key:', g.id); break; }
           try {
             const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
             if (!body || !crypto.isEncrypted(body)) continue;
@@ -4485,7 +4486,14 @@ export default {
             // (мета-скан смотрит последние письма участников). Отвечаем и
             // ищем дальше — hav не является meta, применять нечего.
             if (obj && obj.hav === 1) {
-              await this.replyGroupAvatarHeal(g.id);
+              // Ответ ТОЛЬКО если ещё не отвечали на это письмо; помечаем
+              // applied-sig УСПЕШНОЙ ответ (replyHeal → true) — при ошибке
+              // uid остаётся в обходе и поллинг повторит.
+              const answered = await this.replyGroupAvatarHeal(g.id);
+              if (answered && !alreadyApplied.has(appliedSig)) {
+                alreadyApplied.add(appliedSig);
+                await db.kvSet('anon', appliedKey, [...alreadyApplied].join(','));
+              }
               continue;
             }
             // gavatar-heal: конверт сообщения нёс gavatar — лечим kv (guard
@@ -4891,70 +4899,17 @@ export default {
         console.error('Failed to broadcast group avatar:', e);
       }
     },
-    // ── Heal аватарки группы (самовосстановление + heal-протокол) ──────────
-    // Heal из сообщения: групповой конверт нёс gavatar — кладём в kv, если
-    // отличается и НЕпусто. Пустой/не-строка игнорируется (guard на входе) —
-    // пустое значение НИКОГДА не пишется в kv.
+    // ── Heal аватарки группы — ВСЯ логика в features/group-avatars.js ──────
+    // (изоляция фичи, правило t_7c3929d2: новые фичи не размазывать по
+    // App.vue — здесь только обёртки-делегаты, зависимости через this=ctx).
     async healGroupAvatarFromMessage(groupId, gavatar) {
-      if (!gavatar || typeof gavatar !== 'string') return;
-      const cur = await db.kvGet('anon', 'group-avatar:' + groupId);
-      if (cur !== gavatar) {
-        await db.kvSet('anon', 'group-avatar:' + groupId, gavatar);
-        this.groupAvatars[groupId] = gavatar;
-        console.log('[group] avatar healed from message:', groupId);
-      }
+      return GroupAvatarsFeature.healFromMessage(this, groupId, gavatar);
     },
-    // Heal-ответ на запрос {hav:1}: у МЕНЯ аватар этой группы непустой —
-    // отвечаю участникам meta-письмом {meta:1, avatar}. Rate-limit 24ч
-    // (kv-флаг avatar-heal-replied:<gid>). Запрашивающий (kv пуст) ответ не
-    // шлёт — защита от петли по построению.
     async replyGroupAvatarHeal(groupId) {
-      try {
-        const my = await db.kvGet('anon', 'group-avatar:' + groupId);
-        if (!my) return; // у меня тоже пусто — не отвечаю (защита от петли)
-        const flagKey = 'avatar-heal-replied:' + groupId;
-        const last = Number((await db.kvGet('anon', flagKey)) || 0);
-        if (last && Date.now() - last < 24 * 3600 * 1000) return; // 24ч rate-limit
-        let groupKey = this.groupKeys[groupId];
-        if (!groupKey && this.cryptoReady) {
-          try {
-            const kd = await api.getMyGroupKey(groupId);
-            if (kd && kd.group_key) { this.groupKeys[groupId] = kd.group_key; groupKey = kd.group_key; }
-          } catch (e) { /* ключ недоступен */ }
-        }
-        if (!groupKey) return; // нечем шифровать — тихо выходим
-        const content = await crypto.encryptWithGroupKey(JSON.stringify({ meta: 1, avatar: my }), groupKey);
-        await api.sendGroupMeta(groupId, content);
-        await db.kvSet('anon', flagKey, String(Date.now()));
-        console.log('[group] avatar-heal replied:', groupId);
-      } catch (e) {
-        console.warn('[group] avatar-heal reply failed:', groupId, e);
-      }
+      return GroupAvatarsFeature.replyHeal(this, groupId);
     },
-    // Heal-запрос: kv-аватар группы ПУСТ — просим участников прислать его
-    // сервис-письмом {hav:1} (шифруется групповым ключом, как meta).
-    // Rate-limit 24ч (kv-флаг avatar-heal-sent:<gid>). Нет ключа группы —
-    // тихо пропускаем (не падаем). Вызывается fire-and-forget из loadGroups.
     async requestGroupAvatarHeal(groupId) {
-      try {
-        const flagKey = 'avatar-heal-sent:' + groupId;
-        const last = Number((await db.kvGet('anon', flagKey)) || 0);
-        if (last && Date.now() - last < 24 * 3600 * 1000) return; // 24ч rate-limit
-        let groupKey = this.groupKeys[groupId];
-        if (!groupKey && this.cryptoReady) {
-          try {
-            const kd = await api.getMyGroupKey(groupId);
-            if (kd && kd.group_key) { this.groupKeys[groupId] = kd.group_key; groupKey = kd.group_key; }
-          } catch (e) { /* ключ недоступен */ }
-        }
-        if (!groupKey) return; // нечем шифровать — тихо пропускаем группу
-        const content = await crypto.encryptWithGroupKey(JSON.stringify({ hav: 1 }), groupKey);
-        await api.sendGroupMeta(groupId, content);
-        await db.kvSet('anon', flagKey, String(Date.now()));
-        console.log('[group] avatar-heal requested:', groupId);
-      } catch (e) {
-        console.warn('[group] avatar-heal request failed:', groupId, e);
-      }
+      return GroupAvatarsFeature.requestHeal(this, groupId);
     },
     onAvatarFileSelect(e) {
       const file = e.target.files[0];
