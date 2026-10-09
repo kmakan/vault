@@ -46,3 +46,26 @@ issue for security bugs.
 |---------|-----------|
 | 0.1.x (latest) | ✅ |
 | older | ❌ (pre-release) |
+
+## Where secrets live (never in git)
+
+- Private keys stay on the user's device (`~/.vault/` on desktop, app
+  keystore on Android); export only by explicit user action.
+- Build signing keys: keystores live outside the repo (e.g.
+  `~/.local/share/vault/*.keystore`); passwords in chmod-600 files, never
+  in git, CI env, or shell history.
+- `.env`, `google-services.json`, `fcm-key.json` are `.gitignore`d;
+  provider credentials are app passwords, not primary passwords.
+- Test-mailbox credentials: `scripts/.email_test_env` (untracked).
+- Store assets with real contact addresses: `store-assets/` in
+  `.gitignore` (1ca5a98).
+
+## Routine audit checklist
+
+- `cargo audit` in `vault-desktop/src-tauri`, `relay-server`, `vault-client`.
+- `npm audit --omit=dev` in `vault-desktop`.
+- Secret scan over history: `git log -p | grep -iE 'passw|secret|key *='`.
+- Review `.gitignore` before every public push of `release/public`.
+- Rotate immediately on any leak: leak = rotation, never "check later".
+- Vendored `~/whisper/vendor/imap` (assert→error patch): re-apply on every
+  upstream crate bump.
