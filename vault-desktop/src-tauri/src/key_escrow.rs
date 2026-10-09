@@ -243,18 +243,32 @@ mod tests {
         // нормализация: лишние пробелы/регистр допустимы при вводе
         validate_mnemonic(&format!("  {}  ", m1.to_uppercase())).expect("normalized valid");
 
-        // Коррупт чексаммы: заменяем слово на «abandon». Если первое слово
-        // случайно само «abandon», подстановка ничего не меняет и проверка
-        // бессмысленна — тогда шлём второе слово. Раньше тест флакал
-        // (~1/44 шанс), потому что bad == m1 и assert пропускался.
-        let first = m1.split_whitespace().next().unwrap();
-        let word = if first == "abandon" {
-            "ability"
-        } else {
-            "abandon"
-        };
-        let bad = m1.replacen(first, word, 1);
-        assert_ne!(bad, m1, "corrupted mnemonic must differ");
+        // Коррупт чексаммы: заменяем первое отличающееся слово на
+        // «abandon»/«ability». ВАЖНО: у 12-словной мнемоники чексамма
+        // ВСЕГО 4 бита — смена одного слова даёт ВАЛИДНУЮ новую сумму
+        // с вероятностью 1/16, поэтому одна подстановка флакала
+        // (~6–25% прогонов: «checksum must fail» на валидной замене).
+        // Перебираем позиции (строго по индексу, не подстрокой), пока
+        // checksum реально не сломается — P(все 12 коллизий) = 16^-12
+        // ≈ 0, тест детерминирован.
+        let words: Vec<&str> = m1.split_whitespace().collect();
+        let mut bad: Option<String> = None;
+        for (i, w) in words.iter().enumerate() {
+            let repl = if *w == "abandon" {
+                "ability"
+            } else {
+                "abandon"
+            };
+            let mut cand_words = words.clone();
+            cand_words[i] = repl;
+            let cand = cand_words.join(" ");
+            assert_ne!(cand, m1, "corrupted mnemonic must differ");
+            if validate_mnemonic(&cand).is_err() {
+                bad = Some(cand);
+                break;
+            }
+        }
+        let bad = bad.expect("some word swap must break the 4-bit checksum");
         assert!(validate_mnemonic(&bad).is_err(), "checksum must fail");
     }
 
