@@ -312,8 +312,20 @@ async function classify(ctx, m, from) {
       }
       if (!gk) continue;
       try {
-        const env = ctx.parseEnvelope(await crypto.decryptWithGroupKey(body, gk));
+        const plain = await crypto.decryptWithGroupKey(body, gk);
+        const env = ctx.parseEnvelope(plain);
+        if (!env) {
+          // Сервис-письма группы: hav = запрос аватарки — отвечаем владельцу
+          // аватара (24ч rate-limit внутри replyGroupAvatarHeal).
+          try {
+            const robj = JSON.parse(plain);
+            if (robj && robj.hav === 1) { await ctx.replyGroupAvatarHeal(g.id); return null; }
+          } catch (e) { /* не JSON-сервис */ }
+        }
         if (env) {
+          // Самовосстановление аватарки группы из конверта сообщения
+          // (guard на непустое — внутри метода).
+          if (env.gavatar) await ctx.healGroupAvatarFromMessage(g.id, env.gavatar);
           chatKey = 'group:' + g.id; title = g.name || '';
           // env.id — ключ кросс-канального дедупа (relay-копия и
           // email-копия одного сообщения несут ОДИН конверт).
