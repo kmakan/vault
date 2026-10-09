@@ -533,9 +533,9 @@ mod tests {
         with_tmp_keys(|| {
             for bad in [
                 "fp:2b:e1:c9:30:d1:b9:1b:85:aa:bb".to_string(),
-                "  FP:2b:e1:aa  ".to_string(),   // регистр + пробелы
-                "not-an-email".to_string(),       // без '@'
-                "".to_string(),                   // пусто
+                "  FP:2b:e1:aa  ".to_string(), // регистр + пробелы
+                "not-an-email".to_string(),    // без '@'
+                "".to_string(),                // пусто
             ] {
                 let rec = StoredPeerKey {
                     email: bad.clone(),

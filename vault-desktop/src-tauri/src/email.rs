@@ -1229,14 +1229,12 @@ pub(crate) fn decode_quoted_printable(input: &str) -> String {
                 // живой баг X50 09.10: hav/meta-письма не распознавались как
                 // зашифрованные — аватарки не восстанавливались).
                 if i + 1 < bytes.len() && (bytes[i + 1] == b'\r' || bytes[i + 1] == b'\n') {
-                    let eol = if i + 2 < bytes.len()
-                        && bytes[i + 1] == b'\r'
-                        && bytes[i + 2] == b'\n'
-                    {
-                        2
-                    } else {
-                        1
-                    };
+                    let eol =
+                        if i + 2 < bytes.len() && bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
+                            2
+                        } else {
+                            1
+                        };
                     let after = i + 1 + eol;
                     if after < bytes.len() {
                         i = after; // настоящий QP-перенос: продолжение есть
