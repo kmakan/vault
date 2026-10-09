@@ -52,6 +52,24 @@ pub trait SetReadTimeout {
     ///
     /// See also `std::net::TcpStream::set_read_timeout`.
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()>;
+
+    /// Get the timeout currently in effect for subsequent reads.
+    ///
+    /// Returns `None` if reads currently have no timeout (i.e. they block
+    /// indefinitely). This is used to remember a transport's configured
+    /// timeout before an IDLE wait temporarily overrides it, so that the
+    /// original value can be restored afterwards.
+    ///
+    /// The default implementation returns `Ok(None)`, which preserves the
+    /// previous no-timeout semantics for custom transports that only
+    /// implement [`set_read_timeout`](Self::set_read_timeout). Transports
+    /// that want their configured timeout to survive an IDLE wait **must**
+    /// override this getter to report the real current timeout.
+    ///
+    /// See also `std::net::TcpStream::read_timeout`.
+    fn read_timeout(&self) -> Result<Option<Duration>> {
+        Ok(None)
+    }
 }
 
 impl<'a, T: Read + Write + 'a> Handle<'a, T> {
@@ -174,12 +192,29 @@ impl<'a, T: SetReadTimeout + Read + Write + 'a> Handle<'a, T> {
     }
 
     fn timed_wait(mut self, timeout: Duration, reconnect: bool) -> Result<WaitOutcome> {
+        // Remember the transport's currently configured read timeout before we
+        // temporarily override it, so we can restore it afterwards. Restoring
+        // (rather than unconditionally clearing) is what keeps the caller's
+        // configured timeout in effect for the DONE/terminate read below (which
+        // runs when this `Handle` is dropped) and for any subsequent commands.
+        let previous = self.session.stream.get_ref().read_timeout()?;
         self.session
             .stream
             .get_mut()
             .set_read_timeout(Some(timeout))?;
         let res = self.wait_inner(reconnect);
-        let _ = self.session.stream.get_mut().set_read_timeout(None).is_ok();
+        // Restore the previous read timeout before returning (and thus before
+        // the `Drop` impl runs `terminate`, which writes DONE and reads a tagged
+        // response). This must happen on both the success and the error path so
+        // the socket is never left without its configured timeout.
+        if let Err(e) = self.session.stream.get_mut().set_read_timeout(previous) {
+            // Surface the restore failure instead of silently ignoring it, but
+            // prefer not to mask the original wait outcome when the wait already
+            // errored.
+            if res.is_ok() {
+                return Err(e);
+            }
+        }
         res
     }
 }
@@ -195,11 +230,308 @@ impl<'a> SetReadTimeout for TcpStream {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
         TcpStream::set_read_timeout(self, timeout).map_err(Error::Io)
     }
+
+    fn read_timeout(&self) -> Result<Option<Duration>> {
+        TcpStream::read_timeout(self).map_err(Error::Io)
+    }
 }
 
 #[cfg(feature = "tls")]
 impl<'a> SetReadTimeout for TlsStream<TcpStream> {
     fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
         self.get_ref().set_read_timeout(timeout).map_err(Error::Io)
+    }
+
+    fn read_timeout(&self) -> Result<Option<Duration>> {
+        self.get_ref().read_timeout().map_err(Error::Io)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Client;
+    use std::io::ErrorKind;
+
+    const THIRTY: Duration = Duration::from_secs(30);
+    const FIVE: Duration = Duration::from_secs(5);
+    const SEVEN: Duration = Duration::from_secs(7);
+
+    /// A transport that records the *real* read timeout it is configured with,
+    /// the full history of values passed to `set_read_timeout`, and the timeout
+    /// that was in effect when the DONE response (following a `DONE` write) was
+    /// read. This exercises the live IDLE algorithm end-to-end rather than
+    /// re-implementing it.
+    ///
+    /// Data is handed out one byte per `read` call so that `BufStream` cannot
+    /// read ahead across command boundaries: this guarantees that the read of
+    /// the DONE response actually goes through this transport (and observes its
+    /// current timeout) instead of being served from `BufStream`'s buffer.
+    #[derive(Debug)]
+    struct FakeStream {
+        read_buf: Vec<u8>,
+        read_pos: usize,
+        /// When the buffer is exhausted, return this error kind instead of EOF.
+        exhausted_err: Option<ErrorKind>,
+        /// The transport's currently configured read timeout.
+        read_timeout: Option<Duration>,
+        /// Every value passed to `set_read_timeout`, in order.
+        set_history: Vec<Option<Duration>>,
+        written_buf: Vec<u8>,
+        /// Set once a `DONE` command has been written; cleared when the next
+        /// read observes the timeout (that read is the DONE-response read).
+        done_pending: bool,
+        /// Timeout observed on the read that consumed the DONE response.
+        done_read_timeout: Option<Option<Duration>>,
+    }
+
+    impl FakeStream {
+        fn new(previous: Option<Duration>, script: &str, exhausted_err: Option<ErrorKind>) -> Self {
+            FakeStream {
+                read_buf: script.as_bytes().to_vec(),
+                read_pos: 0,
+                exhausted_err,
+                read_timeout: previous,
+                set_history: Vec::new(),
+                written_buf: Vec::new(),
+                done_pending: false,
+                done_read_timeout: None,
+            }
+        }
+
+        fn current_timeout(&self) -> Option<Duration> {
+            self.read_timeout
+        }
+
+        fn done_read_timeout(&self) -> Option<Option<Duration>> {
+            self.done_read_timeout
+        }
+
+        fn set_history(&self) -> &[Option<Duration>] {
+            &self.set_history
+        }
+    }
+
+    impl Read for FakeStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            // The first read after a `DONE` write reads the DONE response, so
+            // it observes whatever timeout is currently configured on the
+            // transport. Capture it exactly once.
+            if self.done_pending {
+                self.done_read_timeout = Some(self.read_timeout);
+                self.done_pending = false;
+            }
+            if self.read_pos >= self.read_buf.len() {
+                return match self.exhausted_err {
+                    Some(kind) => Err(io::Error::new(kind, "FakeStream exhausted")),
+                    None => Ok(0),
+                };
+            }
+            buf[0] = self.read_buf[self.read_pos];
+            self.read_pos += 1;
+            Ok(1)
+        }
+    }
+
+    impl Write for FakeStream {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written_buf.extend_from_slice(buf);
+            if self.written_buf.ends_with(b"DONE") || self.written_buf.ends_with(b"DONE\r\n") {
+                self.done_pending = true;
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SetReadTimeout for FakeStream {
+        fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<()> {
+            self.read_timeout = timeout;
+            self.set_history.push(timeout);
+            Ok(())
+        }
+
+        fn read_timeout(&self) -> Result<Option<Duration>> {
+            Ok(self.read_timeout)
+        }
+    }
+
+    fn login(stream: FakeStream) -> crate::Session<FakeStream> {
+        Client::new(stream)
+            .login("user", "pass")
+            .expect("artificial login should succeed")
+    }
+
+    // previous Some(30s) -> wait change -> again Some(30s); the DONE-response
+    // read saw the restored 30s, and a subsequent NOOP still sees 30s.
+    #[test]
+    fn restores_previous_some_after_mailbox_change() {
+        let script = "a1 OK Logged in\r\n\
+                      + idling\r\n\
+                      * 1 EXISTS\r\n\
+                      a2 OK IDLE terminated\r\n\
+                      a3 OK NOOP completed\r\n";
+        let mut session = login(FakeStream::new(Some(THIRTY), script, None));
+
+        let outcome = session.idle().unwrap().wait_with_timeout(FIVE).unwrap();
+        assert_eq!(outcome, WaitOutcome::MailboxChanged);
+
+        {
+            let s = session.stream.get_ref();
+            assert_eq!(
+                s.current_timeout(),
+                Some(THIRTY),
+                "timeout must be restored"
+            );
+            assert_eq!(
+                s.done_read_timeout(),
+                Some(Some(THIRTY)),
+                "DONE read must be bounded by the restored timeout, not None"
+            );
+            assert_eq!(
+                s.set_history(),
+                &[Some(FIVE), Some(THIRTY)],
+                "idle timeout set, then previous restored"
+            );
+        }
+
+        session.noop().unwrap();
+        assert_eq!(
+            session.stream.get_ref().current_timeout(),
+            Some(THIRTY),
+            "timeout stays configured after IDLE + follow-up command"
+        );
+    }
+
+    // IDLE read timeout surfaces as WaitOutcome::TimedOut; previous Some(30s) is
+    // restored and the DONE read is bounded (not None).
+    #[test]
+    fn idle_timeout_wouldblock_restores_previous() {
+        let script = "a1 OK Logged in\r\n+ idling\r\n";
+        let mut session = login(FakeStream::new(
+            Some(THIRTY),
+            script,
+            Some(ErrorKind::WouldBlock),
+        ));
+
+        let outcome = session.idle().unwrap().wait_with_timeout(FIVE).unwrap();
+        assert_eq!(outcome, WaitOutcome::TimedOut);
+
+        let s = session.stream.get_ref();
+        assert_eq!(s.current_timeout(), Some(THIRTY));
+        assert_eq!(s.done_read_timeout(), Some(Some(THIRTY)));
+    }
+
+    // Same as above but the socket reports TimedOut rather than WouldBlock.
+    #[test]
+    fn idle_timeout_timedout_restores_previous() {
+        let script = "a1 OK Logged in\r\n+ idling\r\n";
+        let mut session = login(FakeStream::new(
+            Some(THIRTY),
+            script,
+            Some(ErrorKind::TimedOut),
+        ));
+
+        let outcome = session.idle().unwrap().wait_with_timeout(FIVE).unwrap();
+        assert_eq!(outcome, WaitOutcome::TimedOut);
+
+        let s = session.stream.get_ref();
+        assert_eq!(s.current_timeout(), Some(THIRTY));
+        assert_eq!(s.done_read_timeout(), Some(Some(THIRTY)));
+    }
+
+    // A genuine I/O failure during the wait is surfaced as Err, and the previous
+    // Some(30s) is still restored (both on the normal path and on Drop).
+    #[test]
+    fn io_failure_during_wait_restores_previous() {
+        let script = "a1 OK Logged in\r\n+ idling\r\n";
+        let mut session = login(FakeStream::new(
+            Some(THIRTY),
+            script,
+            Some(ErrorKind::Other),
+        ));
+
+        let res = session.idle().unwrap().wait_with_timeout(FIVE);
+        assert!(res.is_err(), "I/O failure must propagate as an error");
+
+        let s = session.stream.get_ref();
+        assert_eq!(s.current_timeout(), Some(THIRTY), "restored on Err path");
+        assert_eq!(
+            s.done_read_timeout(),
+            Some(Some(THIRTY)),
+            "Drop/terminate read is bounded by the restored timeout"
+        );
+    }
+
+    // A genuine None stays None after IDLE completes (no timeout is invented).
+    #[test]
+    fn previous_none_stays_none() {
+        let script = "a1 OK Logged in\r\n\
+                      + idling\r\n\
+                      * 1 EXISTS\r\n\
+                      a2 OK IDLE terminated\r\n";
+        let mut session = login(FakeStream::new(None, script, None));
+
+        let outcome = session.idle().unwrap().wait_with_timeout(FIVE).unwrap();
+        assert_eq!(outcome, WaitOutcome::MailboxChanged);
+
+        let s = session.stream.get_ref();
+        assert_eq!(s.current_timeout(), None);
+        assert_eq!(s.done_read_timeout(), Some(None));
+        assert_eq!(s.set_history(), &[Some(FIVE), None]);
+    }
+
+    // Two sequential waits with different idle-timeouts must not overwrite the
+    // originally configured 30s.
+    #[test]
+    fn sequential_waits_do_not_clobber_original() {
+        let script = "a1 OK Logged in\r\n\
+                      + idling\r\n\
+                      * 1 EXISTS\r\n\
+                      a2 OK IDLE terminated\r\n\
+                      + idling\r\n\
+                      * 2 EXISTS\r\n\
+                      a3 OK IDLE terminated\r\n";
+        let mut session = login(FakeStream::new(Some(THIRTY), script, None));
+
+        let o1 = session.idle().unwrap().wait_with_timeout(FIVE).unwrap();
+        assert_eq!(o1, WaitOutcome::MailboxChanged);
+        let o2 = session.idle().unwrap().wait_with_timeout(SEVEN).unwrap();
+        assert_eq!(o2, WaitOutcome::MailboxChanged);
+
+        let s = session.stream.get_ref();
+        assert_eq!(s.current_timeout(), Some(THIRTY));
+        assert_eq!(
+            s.set_history(),
+            &[Some(FIVE), Some(THIRTY), Some(SEVEN), Some(THIRTY)],
+            "each wait sets its idle timeout and restores the original 30s; no None leak"
+        );
+    }
+
+    // The `SetReadTimeout` impl for `TcpStream` must delegate its getter to the
+    // real socket. Verified over a loopback connection (no external network or
+    // secrets). The `TlsStream` getter is the same one-line delegation to
+    // `get_ref().read_timeout()` and is covered by inspection (constructing a
+    // `TlsStream` would require real certificate/handshake infrastructure).
+    #[test]
+    fn tcpstream_read_timeout_getter_delegates() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut stream = TcpStream::connect(addr).unwrap();
+        let _server = listener.accept().unwrap().0;
+
+        SetReadTimeout::set_read_timeout(&mut stream, Some(THIRTY)).unwrap();
+        assert_eq!(
+            SetReadTimeout::read_timeout(&stream).unwrap(),
+            Some(THIRTY),
+            "TcpStream getter must report the configured timeout"
+        );
+
+        SetReadTimeout::set_read_timeout(&mut stream, None).unwrap();
+        assert_eq!(SetReadTimeout::read_timeout(&stream).unwrap(), None);
     }
 }
