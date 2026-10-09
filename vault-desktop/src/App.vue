@@ -948,6 +948,7 @@ import { setPendingNativeCallDecision } from './features/calls.js';
 import * as ProfilesFeature from './features/profiles.js';
 import * as PresenceFeature from './features/presence.js';
 import * as ChannelsFeature from './features/channels.js';
+import * as RecoveryFeature from './features/recovery.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -4804,44 +4805,11 @@ export default {
     },
     // Поиск эскроу-письма в последних письмах + восстановление по словам.
     // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
+    // Логика вынесена в features/recovery.js (изоляция фичи, ctx-паттерн):
+    // parse/unwrap кандидата устойчивы к чужим/битым письмам, import_backup
+    // бросается наружу. App.vue — только тонкий делегат.
     async recoverFromEscrow(mnemonic) {
-      console.log('[recovery] step 1: validate mnemonic');
-      if (!(await crypto.recoveryValidateMnemonic(mnemonic))) {
-        throw new Error('Неверный формат ключа (нужно 12 слов)');
-      }
-      console.log('[recovery] step 2: fetch emails');
-      const msgs = await api.fetchEmails(this.email);
-      console.log('[recovery] step 3: got', msgs.length, 'msgs, filtering empty subject');
-      const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
-      console.log('[recovery] step 4: candidates', candidates.length, 'byFolder');
-      const byFolder = {};
-      for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
-      for (const [folder, list] of Object.entries(byFolder)) {
-        console.log('[recovery] step 5: fetch bodies from', folder, list.length, 'msgs');
-        const uids = list.map((m) => m.uid);
-        let bodies = [];
-        try {
-          bodies = await invoke('email_fetch_bodies', { uids: uids.map(String), folder });
-        } catch (e) {
-          console.warn('[recovery] fetch_bodies failed:', e);
-          continue;
-        }
-        console.log('[recovery] step 6: got', bodies.length, 'bodies, parsing');
-        for (const [, body] of bodies || []) {
-          const wrappedJson = await crypto.recoveryParseEscrowEmail(body);
-          if (!wrappedJson) {
-            console.log('[recovery]   parseEscrowEmail returned null');
-            continue;
-          }
-          console.log('[recovery] step 7: unwrapping…');
-          const backupJson = await crypto.recoveryUnwrapBackup(wrappedJson, mnemonic);
-          console.log('[recovery] step 8: import_backup');
-          await invoke('import_backup', { jsonData: backupJson });
-          return true;
-        }
-      }
-      console.log('[recovery] no escrow found');
-      return false;
+      return RecoveryFeature.recoverFromEscrow(this, mnemonic, { api, crypto, invoke });
     },
 
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и
