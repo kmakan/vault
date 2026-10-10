@@ -1971,7 +1971,7 @@ pub fn run() {
     #[cfg(not(mobile))]
     {
         if let Err(e) = backup_import::recover_pending_default() {
-            log::error!("vault: recovery import barrier failed on startup: {e}");
+            log::error!("vault: recovery import barrier failed on startup: {e:?}");
             eprintln!("vault: не удалось восстановить прерванный импорт. Запуск остановлен.");
             std::process::exit(1);
         }
