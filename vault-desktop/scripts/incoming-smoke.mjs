@@ -25,6 +25,12 @@ const apiMock = {
   saveProfile: (...a) => { apiMock.profileCalls.push(a); },
   getMyGroupKey: null,
   profileCalls: [],
+  // контракт api.identityLetterFresh (api.js:884): письмо свежее порога → true
+  identityLetterFresh: async () => true,
+  renamePeerIdentity: async () => {},
+  bumpIdentityRenameTs: async () => {},
+  removeContact: () => {},
+  deleteProfile: () => {},
 };
 // relay-мок
 const relayMock = {
@@ -103,6 +109,7 @@ function makeCtx(over = {}) {
     migrateChatHistory: async () => {},
     setPeerKey: () => {},
     tryMigrateGroupMember: async () => false,
+    migratePeerGroups: async () => {},
     chatVisible: () => false,
     isMuted: () => false,
     t: (k) => 'NEW',

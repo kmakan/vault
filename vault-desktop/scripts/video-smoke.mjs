@@ -18,6 +18,8 @@ const apiMock = {
   stops: [],           // [ callId ]
   mediaVideoFrame: async (callId, data) => { apiMock.frames.push({ callId, data }); },
   mediaVideoStart: async (callId) => { apiMock.starts.push(callId); },
+  mediaCameraStart: async (callId) => { apiMock.cameraStarts = (apiMock.cameraStarts || 0) + 1; },
+  mediaCameraStop: async (callId) => { apiMock.cameraStops = (apiMock.cameraStops || 0) + 1; },
   mediaVideoStop: async (callId) => { apiMock.stops.push(callId); },
 };
 globalThis.__apiMock = apiMock;
@@ -115,7 +117,7 @@ class VideoDecoder {
     this._decoded = [];
     decoders.push(this);
   }
-  configure(cfg) { this.config = cfg; }
+  configure(cfg) { this.config = cfg; this.state = 'configured'; }
   decode(chunk) {
     if (!this.init || !this.init.output) return;
     // Декодер восстанавливает кадр из чанка (мок: копия данных).
@@ -127,6 +129,8 @@ class VideoDecoder {
   flush() { return Promise.resolve(); }
   close() { this.closed = true; }
 }
+// ImageData — браузерный API; в Node нет. Минимальный мок для RGBA-пути.
+globalThis.ImageData = class ImageData { constructor(data, width, height) { this.data = data; this.width = width; this.height = height; } };
 globalThis.VideoEncoder = VideoEncoder;
 // EncodedVideoChunk — его создаёт decodeFrame из base64-кадра Rust.
 class EncodedVideoChunk {
@@ -193,7 +197,7 @@ async function tick(n = 1) {
 // canvas-мок: запоминает, что в него нарисовали.
 function makeCanvas(w = 640, h = 480) {
   const c = { width: w, height: h, _drawn: [], _ctx: null,
-    getContext: () => (c._ctx = { canvas: c, drawImage: (...a) => c._drawn.push(a) }) };
+    getContext: () => (c._ctx = { canvas: c, drawImage: (...a) => c._drawn.push(a), putImageData: (...a) => c._drawn.push(a), clearRect: () => {} }) };
   return c;
 }
 
@@ -335,7 +339,7 @@ console.log('5. startRemoteVideo + decodeFrame (remote VP8 → canvas)');
   // Кадр из Rust приходит как base64 VP8.
   const payload = new Uint8Array([1, 2, 3, 4, 5]);
   const b64 = Buffer.from(payload).toString('base64');
-  V.decodeFrame(b64, 123456);
+  V.decodeFrame({ vp8: b64 }); // контракт App.vue:1621 — объект {vp8|rgba}
   await tick(3);
   check('decodeFrame: кадр дошёл до декодера', dec._decoded.length === 1, dec._decoded.length);
   check('decodeFrame: декодер отдал кадр на отрисовку', canvas._drawn.length === 1, canvas._drawn.length);
@@ -349,11 +353,11 @@ console.log('5. startRemoteVideo + decodeFrame (remote VP8 → canvas)');
 
   // Битый кадр — не роняет звонок: video.js глотает ошибку декодирования,
   // декодер остаётся жив.
-  await V.decodeFrame('!!не-base64!!', 0);
+  await V.decodeFrame({ vp8: '!!не-base64!!' });
   await tick(2);
   check('битый кадр не бросается (graceful degradation)', dec.closed === false);
   check('после битого кадра декодер принимает следующий',
-    (V.decodeFrame(Buffer.from(payload).toString('base64'), 0), await tick(2), dec._decoded.length >= 1), dec._decoded.length);
+    (V.decodeFrame({ vp8: Buffer.from(payload).toString('base64') }), await tick(2), dec._decoded.length >= 1), dec._decoded.length);
 
   V.stopRemoteVideo();
   await tick(2);
@@ -377,7 +381,7 @@ console.log('6. Нет VideoDecoder (старый WebView) — no remote video')
   delete globalThis.VideoDecoder;
   const canvas = makeCanvas();
   const ok = await V.startRemoteVideo('call-E', canvas);
-  check('startRemoteVideo вернул false (декодер недоступен)', ok === false, ok);
+  check('startRemoteVideo вернул true (RGBA-путь без VideoDecoder, video.js:260 — desktop не гаснет)', ok === true, ok);
   check('декодер не создан', decoders.length === 0, decoders.length);
   // decodeFrame не падает и без декодера.
   let safe = true;
@@ -407,7 +411,7 @@ console.log('7. Сквозной поток видеозвонка (мок-ст�
   const sentBefore = apiMock.frames.length;
 
   // Симулируем входящий remote-кадр.
-  V.decodeFrame(Buffer.from(new Uint8Array([9, 9, 9])).toString('base64'), 1000);
+  V.decodeFrame({ rgba: Buffer.from(new Uint8Array([9, 9, 9, 255])).toString('base64'), width: 1, height: 1 }); // RGBA-путь desktop (video.js:340)
   await tick(3);
   check('remote-кадр отрисован', remoteCanvas._drawn.length === 1, remoteCanvas._drawn.length);
 
