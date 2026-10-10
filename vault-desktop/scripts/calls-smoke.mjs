@@ -43,12 +43,13 @@ const histMock = {
   loadHistory: async (a, c) => histMock.store[c] ? JSON.parse(JSON.stringify(histMock.store[c])) : null,
 };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
-writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a);');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
+writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => null; export const hasPeerToken = async () => false;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
+globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__relayMock = relayMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__histMock = histMock;
@@ -371,7 +372,7 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   const t3 = [...timers.entries()].find(([, t]) => t.ms === 3000);
   const t7 = [...timers.entries()].find(([, t]) => t.ms === 7000);
   await fireTimer(t3[0]); await fireTimer(t7[0]);
-  check('sendTerminalRepeat: 3 попытки, все viaRelay=false', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 3 && relayMock.pubs.length === 0);
+  check('sendTerminalRepeat: 3 письма; релей — ровно 1 первое отправление с wake=false', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 3 && relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === false);
   // watchdog: 90с без медиа → auto hangup
   timers.clear();
   const wd = makeCtx({ callState: 'active', currentCall: { call_id: 'w1', peer: 'peer@x.ru' }, callMediaConnected: false });
