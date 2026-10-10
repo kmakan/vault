@@ -1963,10 +1963,18 @@ pub fn run() {
     // guarded-функций key_store и без Storage::open(None) — рекурсии/дедлока
     // нет). При ошибке восстановления — аварийно останавливаем старт
     // фикс-сообщением (НЕ генерируем ключи, не читаем частичный стор).
-    if let Err(e) = backup_import::recover_pending_default() {
-        log::error!("vault: recovery import barrier failed on startup: {e}");
-        eprintln!("vault: не удалось восстановить прерванный импорт. Запуск остановлен.");
-        std::process::exit(1);
+    // REGRESSION FIX (10.10, пойман device-приёмкой на эмуляторе): на mobile
+    // HOME появляется только в setup() — ранний вызов здесь падал
+    // «Cannot determine local data directory» и exit(1) крутил старт в
+    // крэш-луп (FORTIFY SIGABRT). На mobile барьер вызывается в setup()
+    // сразу после set_var("HOME"); fail-closed семантика не меняется.
+    #[cfg(not(mobile))]
+    {
+        if let Err(e) = backup_import::recover_pending_default() {
+            log::error!("vault: recovery import barrier failed on startup: {e}");
+            eprintln!("vault: не удалось восстановить прерванный импорт. Запуск остановлен.");
+            std::process::exit(1);
+        }
     }
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2133,6 +2141,17 @@ pub fn run() {
             {
                 if let Ok(dir) = app.path().app_data_dir() {
                     std::env::set_var("HOME", dir);
+                }
+                // Барьер восстановления (t_12f15e61): на mobile — ПОСЛЕ HOME
+                // (см. регрессию-крэш-луп в run(), пойману device-приёмкой).
+                // Команды ещё не зарегистрированы (commands run after setup),
+                // fail-closed сохранён: Err → остановка запуска.
+                if let Err(e) = backup_import::recover_pending_default() {
+                    log::error!("vault: recovery import barrier failed on startup: {e}");
+                    eprintln!(
+                        "vault: не удалось восстановить прерванный импорт. Запуск остановлен."
+                    );
+                    std::process::exit(1);
                 }
             }
 

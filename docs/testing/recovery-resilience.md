@@ -246,5 +246,10 @@ active→finished (rename+fsync)→удаление→снятие маркер�
   создавал пустой файл», «нечитаемый маркер = fail-open» + checkpoint-фазы
   (stage/publish/target1-2/sql-delete-insert/after:commit). Обрыв моделируется
   return-control, НЕ реальным kill -9; device-E2E — t_b5da2e97.
+- Порядок старта: НА MOBILE барьер вызывается в `setup()` СРАУЗУ ПОСЛЕ
+  `set_var("HOME")`, не в `run()` — ранний вызов падал «Cannot determine
+  local data directory» и `exit(1)` крутил старт в крэш-луп (поймано
+  device-приёмкой на эмуляторе 10.10; `cargo check`/host-тесты это не ловят —
+  ловит только запуск на Android).
 - Гони: `cargo test --lib --offline backup_import` и полный `cargo test --lib --offline`.
 
