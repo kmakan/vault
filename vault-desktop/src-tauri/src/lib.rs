@@ -9,6 +9,7 @@ mod email;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
+mod backup_import;
 #[allow(dead_code)]
 mod history_store;
 mod key_escrow;
@@ -1663,28 +1664,8 @@ fn export_backup() -> Result<String, String> {
 
 #[tauri::command]
 fn import_backup(json_data: String) -> Result<String, String> {
-    let data: serde_json::Value = serde_json::from_str(&json_data).map_err(|e| e.to_string())?;
-    let mut restored = Vec::new();
-    // 1. Ключи (keypair + peer_keys) — через существующий import_keys.
-    if let Some(keys) = data.get("keys") {
-        let meta = key_store::import_keys(&keys.to_string()).map_err(|e| e.to_string())?;
-        restored.push(format!("keys: {}", meta.key_count));
-    }
-    // 2. kv_store — полная замена (профили, пометки, курсоры, кэши).
-    if let Some(kv) = data.get("kv_store").and_then(|v| v.as_array()) {
-        let entries: Vec<(String, String, String)> = kv
-            .iter()
-            .filter_map(|row| {
-                let a = row.get(0)?.as_str()?.to_string();
-                let k = row.get(1)?.as_str()?.to_string();
-                let v = row.get(2)?.as_str()?.to_string();
-                Some((a, k, v))
-            })
-            .collect();
-        open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())?;
-        restored.push(format!("kv_store: {}", entries.len()));
-    }
-    Ok(restored.join(", "))
+    // Тонкий делегат: разбор+валидация+атомарное применение в backup_import.
+    backup_import::import_backup(&json_data).map_err(|e| e.to_string())
 }
 
 /// Удаление аккаунта (RuStore §5.4): полная очистка локальных данных ВНЕ
@@ -1975,6 +1956,17 @@ pub fn run() {
                 .with_max_level(log::LevelFilter::Debug)
                 .with_tag("VaultRust"),
         );
+    }
+    // ── Барьер восстановления на старте (t_12f15e61) ──────────────────
+    // ДО Builder: если при прошлом запуске импорт оборвался на середине,
+    // доводим/откатываем активный журнал из RAW-резолва путей (без публичных
+    // guarded-функций key_store и без Storage::open(None) — рекурсии/дедлока
+    // нет). При ошибке восстановления — аварийно останавливаем старт
+    // фикс-сообщением (НЕ генерируем ключи, не читаем частичный стор).
+    if let Err(e) = backup_import::recover_pending_default() {
+        log::error!("vault: recovery import barrier failed on startup: {e}");
+        eprintln!("vault: не удалось восстановить прерванный импорт. Запуск остановлен.");
+        std::process::exit(1);
     }
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

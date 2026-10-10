@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ pub struct Storage {
 /// (NOT ~/.local/share/vault/ — that dir holds the keystore).
 /// Per-HOME isolation works because data_local_dir() resolves
 /// under the test HOME (vault-test/<acc>-home) too.
-fn default_db_path() -> Result<PathBuf> {
+pub(crate) fn default_db_path() -> Result<PathBuf> {
     let home = dirs::data_local_dir().context("Cannot determine local data directory")?;
     Ok(home.join("com.vault.vault").join("vault.db"))
 }
@@ -22,6 +22,16 @@ fn default_db_path() -> Result<PathBuf> {
 impl Storage {
     /// Open or create the local database
     pub fn open(db_path: Option<&PathBuf>) -> Result<Self> {
+        // t_12f15e61: default-путь (None) — сначала барьер восстановления
+        // импорта: захватываем keys-guard (он же делает recover_pending из
+        // журнала) и отпускаем его ДО открытия БД. Guard нужен только на время
+        // recovery; само соединение его не держит. Явный путь (Some) — тестовый
+        // изолированный доступ, БЕЗ default-guard (изоляция тестов).
+        if db_path.is_none() {
+            let keys_dir = crate::key_store::get_keys_dir_raw();
+            let _guard = crate::key_store::acquire_guard_for_dir(&keys_dir)?;
+            // _guard.drop() здесь: recover уже выполнён внутри захвата.
+        }
         let path = match db_path {
             Some(p) => p.clone(),
             None => default_db_path()?,
@@ -163,6 +173,16 @@ impl Storage {
                 is_read INTEGER NOT NULL DEFAULT 0,
                 message_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (account, folder, uid)
+            );
+
+            -- Приватная таблица маркера коммита импорта (t_12f15e61). НЕ kv_store
+            -- и НЕ экспортируемые KV: только txid завершённого атомарного импорта.
+            -- Используется recovery, чтобы отличить «откат» (маркера нет) от
+            -- «коммит» (маркер есть). txid никогда не переиспользуется; сирота
+            -- маркера безвредна.
+            CREATE TABLE IF NOT EXISTS backup_import_commits (
+                txid TEXT PRIMARY KEY,
+                committed_at TEXT NOT NULL
             );
             ",
         )?;
@@ -646,6 +666,110 @@ impl Storage {
             )?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    // ─── backup_import: crate-private доступ для ops (t_12f15e61) ──────────
+    // conn остаётся приватным; наружу отдаём узкие помощники, чтобы движок
+    // импорта мог сделать KV-замену + маркер коммита в ОДНОЙ транзакции, не
+    // ломая RAII-семантику kv_set_all (d0963f8).
+
+    /// RAW-открытие соединения к БД по произвольному пути для движка импорта.
+    /// Создаёт родителя и таблицу маркера; PRAGMA synchronous=FULL/WAL — чтобы
+    /// маркер коммита был durable ДО возврата управления. НЕ рекурсивно в
+    /// Storage::open(None) — используется recovery без guard-рекурсии.
+    pub(crate) fn open_raw_for_import(db_path: &std::path::Path) -> Result<Connection> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(db_path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kv_store (
+                account TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (account, key)
+            );
+            CREATE TABLE IF NOT EXISTS backup_import_commits (
+                txid TEXT PRIMARY KEY,
+                committed_at TEXT NOT NULL
+            );",
+        )?;
+        Ok(conn)
+    }
+
+    /// Проверка наличия durable-маркера коммита txid. Ok(false) — маркера нет
+    /// (БД/таблицы может не существовать). Ok(true) — коммит зафиксирован.
+    /// Используется recovery для выбора old/new без печати содержимого.
+    pub(crate) fn marker_present_raw(db_path: &std::path::Path, txid: &str) -> Result<bool> {
+        if !db_path.exists() {
+            return Ok(false);
+        }
+        let conn = Connection::open(db_path)?;
+        // Таблицы может не быть (чистая БД) — тогда маркера заведомо нет.
+        let has_table: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='backup_import_commits'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !has_table {
+            return Ok(false);
+        }
+        let present: bool = conn
+            .query_row(
+                "SELECT 1 FROM backup_import_commits WHERE txid=?1",
+                params![txid],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(present)
+    }
+
+    /// Замена KV + запись маркера коммита txid в ОДНОЙ транзакции BEGIN IMMEDIATE.
+    /// `entries: None` — keys-only импорт: KV НЕ трогаем, ставим только маркер.
+    /// `Some(…)` — полная замена KV (пустой slice = очистка), как kv_set_all.
+    /// RAII-семантика: любая ошибка откатывает и KV-часть, и маркер. Возвращает
+    /// Ok только при успешном COMMIT обоих.
+    pub(crate) fn commit_kv_and_marker_raw(
+        db_path: &std::path::Path,
+        txid: &str,
+        entries: Option<&[(String, String, String)]>,
+    ) -> Result<()> {
+        let conn = Self::open_raw_for_import(db_path)?;
+        let tx = conn.unchecked_transaction()?;
+        if let Some(entries) = entries {
+            tx.execute("DELETE FROM kv_store", [])?;
+            for (account, key, value) in entries {
+                tx.execute(
+                    "INSERT INTO kv_store (account, key, value) VALUES (?1, ?2, ?3)",
+                    params![account, key, value],
+                )?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO backup_import_commits (txid, committed_at) VALUES (?1, ?2)",
+            params![txid, chrono::Utc::now().to_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Снять маркер коммита (cleanup, только ПОСЛЕ удаления журнала + fsync
+    /// родителя). Идемпотентно: отсутствие маркера/таблицы — не ошибка.
+    pub(crate) fn clear_marker_raw(db_path: &std::path::Path, txid: &str) -> Result<()> {
+        if !db_path.exists() {
+            return Ok(());
+        }
+        let conn = Self::open_raw_for_import(db_path)?;
+        conn.execute(
+            "DELETE FROM backup_import_commits WHERE txid=?1",
+            params![txid],
+        )?;
         Ok(())
     }
 
