@@ -204,6 +204,14 @@ bounded full-scan реализован/проверен; конкретный э
 
 ## 7. Оставшиеся границы
 
+### KV rollback — t_38684c20
+
+`Storage::kv_set_all` удалял старый KV ДО `BEGIN`. RED на duplicate PK:
+1 pass / 1 fail, вместо прежней записи оставалась первая новая. Теперь
+DELETE и весь INSERT находятся в rusqlite RAII Transaction; ошибка откатывает
+их вместе и возвращает соединение в autocommit. GREEN: 2/0, success и empty
+replacement проверены. Это НЕ атомарность keypair/peers + DB (t_12f15e61).
+
 - `import_backup` последовательно пишет keypair/peers/SQLite. JS guard не
   делает Rust disk-import транзакцией: I/O-сбой после первой записи может
   оставить частичный backup. Не заявлять rollback старой личности/данных

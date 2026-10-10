@@ -634,15 +634,18 @@ impl Storage {
     }
 
     pub fn kv_set_all(&self, entries: &[(String, String, String)]) -> Result<()> {
-        self.conn.execute("DELETE FROM kv_store", [])?;
-        self.conn.execute("BEGIN TRANSACTION", [])?;
+        // DELETE belongs to the same transaction as every INSERT. The RAII
+        // transaction rolls back on ANY error, restoring the old KV snapshot
+        // and leaving the connection usable (no manual open BEGIN leak).
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM kv_store", [])?;
         for (account, key, value) in entries {
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO kv_store (account, key, value) VALUES (?1, ?2, ?3)",
                 params![account, key, value],
             )?;
         }
-        self.conn.execute("COMMIT", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -985,6 +988,40 @@ mod tests {
         let path = std::env::temp_dir().join(format!("vault-ns-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         Storage::open(Some(&path)).expect("open test db")
+    }
+
+    #[test]
+    fn kv_replace_failure_rolls_back_delete_and_partial_insert() {
+        let s = test_storage();
+        s.kv_set("old", "profile", "preserve-me").unwrap();
+        let before = s.kv_get_all().unwrap();
+        let entries = vec![
+            ("new".into(), "duplicate".into(), "first".into()),
+            ("new".into(), "duplicate".into(), "second".into()),
+        ];
+        assert!(s.kv_set_all(&entries).is_err());
+        assert_eq!(
+            s.kv_get_all().unwrap(),
+            before,
+            "old KV lost on failed import"
+        );
+        assert!(
+            s.conn.is_autocommit(),
+            "failed import left an open transaction"
+        );
+        s.kv_set("old", "after-error", "still-writable").unwrap();
+    }
+
+    #[test]
+    fn kv_replace_success_and_empty_are_complete_replacements() {
+        let s = test_storage();
+        s.kv_set("old", "profile", "replace-me").unwrap();
+        let entries = vec![("new".into(), "profile".into(), "restored".into())];
+        s.kv_set_all(&entries).unwrap();
+        assert_eq!(s.kv_get_all().unwrap(), entries);
+        assert!(s.conn.is_autocommit());
+        s.kv_set_all(&[]).unwrap();
+        assert!(s.kv_get_all().unwrap().is_empty() && s.conn.is_autocommit());
     }
 
     fn put_row(s: &Storage, table: &str, cols: &[&str], vals: &[&str]) {
