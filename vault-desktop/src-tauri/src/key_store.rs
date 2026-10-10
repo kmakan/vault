@@ -169,6 +169,7 @@ impl KeysGuard {
         state.depth = 1;
         drop(state);
         if let Err(e) = crate::backup_import::recover_pending_dir(keys_dir) {
+            log::error!("keys guard: recover_pending_dir failed: {e:?}");
             let _ = lock_file.unlock();
             let mut st = match GUARD_STATE.lock() {
                 Ok(g) => g,

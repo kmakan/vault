@@ -2147,7 +2147,7 @@ pub fn run() {
                 // Команды ещё не зарегистрированы (commands run after setup),
                 // fail-closed сохранён: Err → остановка запуска.
                 if let Err(e) = backup_import::recover_pending_default() {
-                    log::error!("vault: recovery import barrier failed on startup: {e}");
+                    log::error!("vault: recovery import barrier failed on startup: {e:?}");
                     eprintln!(
                         "vault: не удалось восстановить прерванный импорт. Запуск остановлен."
                     );
