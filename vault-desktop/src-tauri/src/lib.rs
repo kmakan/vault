@@ -591,51 +591,43 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
 
 #[tauri::command]
 async fn email_fetch_messages(state: State<'_, EmailState>) -> Result<Vec<EmailMessage>, String> {
-    // Полный скан (fetchPendingContactInvites/Accepts при входе) НЕ должен
-    // блокировать UI-фетчи: если клиент занят — возвращаем пусто, инвайты
-    // подхватятся следующим тиком. Иначе на большом INBOX полный скан
-    // держит lock десятки секунд и fetch_bodies падает.
+    email_fetch_messages_inner(&state).await
+}
+
+async fn email_fetch_messages_inner(state: &EmailState) -> Result<Vec<EmailMessage>, String> {
+    // Занят — это НЕ «нет писем». Прежде при try_lock-неудаче возвращалось
+    // Ok(пусто), и recovery ложно считал, что эскроу-писем нет. Теперь честная
+    // ошибка: UI перепробует, а не уйдёт в ложный зелёный «пустой ящик».
     let Ok(mut guard) = state.0.try_lock() else {
-        return Ok(Vec::new());
+        return Err("Email client busy; retry full scan".to_string());
     };
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match t_timeout(Duration::from_secs(30), client.fetch_messages()).await {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(first_err)) => {
-            // Сессия рассыпалась — засчитываем неудачу в лестнице и делаем ОДИН
-            // ограниченный реконнект с повтором. Без note_failure() +
-            // reconnect_imap_rate_limited() полный скан был одним из виновников
-            // шторма подключений (reconnect #127 за 6 минут): каждый вызов
-            // поднимал новый TCP+TLS без паузы, streak оставался 0.
+    // Дедлайн полного скана — 30с, единственный. fetch_messages_with_timeout
+    // РЕАЛЬНО прерывает блокирующий I/O (shutdown сокета), поэтому по истечении
+    // нет смысла в автоматическом ретрае ещё на 75с: таймаут = нездоровая
+    // сессия/сервер, следующий deliberate attempt сам переподключится через
+    // ensure_connected после backoff.
+    match client.fetch_messages().await {
+        Ok(v) => {
+            client.note_success();
+            Ok(v)
+        }
+        Err(e) => {
+            // Реальная ошибка (сеть/parse/таймаут внутри fetch): засчитываем в
+            // лестницу backoff и возвращаем сразу. Сессия уже сброшена на Err
+            // (fetch_messages_with_timeout), слот переиспользуем — следующий
+            // вызов ensure_connected переподключится после паузы. НЕ делаем
+            // немедленный 75с-ретрай-шторм.
             let delay = client.note_failure();
             log::warn!(
-                "imap: fetch failed (streak={}, reconnect in {}s): {first_err}",
+                "imap: fetch failed (streak={}, next connect in {}s): {e}",
                 client.fail_streak(),
                 delay.as_secs()
             );
-            // max_wait меньше таймаута t_timeout(15s), чтобы ожидание паузы
-            // плюс сам reconnect в него помещались. Если пауза длиннее —
-            // функция сбрасывает битую сессию и возвращает управление без
-            // сна (см. reconnect_imap_rate_limited), соединение построит
-            // ближайший тик.
-            t_timeout(
-                Duration::from_secs(15),
-                client.reconnect_imap_rate_limited(Duration::from_secs(3)),
-            )
-            .await
-            .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
-            .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-            let retry = t_timeout(Duration::from_secs(30), client.fetch_messages())
-                .await
-                .map_err(|_| "Full scan timed out (retry)".to_string())?;
-            if retry.is_ok() {
-                client.note_success();
-            }
-            retry.map_err(|e| e.to_string())
+            Err(e.to_string())
         }
-        Err(_) => Err("Full scan timed out".to_string()),
     }
 }
 

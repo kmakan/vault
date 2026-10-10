@@ -23,6 +23,7 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::Shutdown;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -112,6 +113,26 @@ struct SpecialFolders {
 pub struct EmailClient {
     config: EmailConfig,
     imap_session: Option<Session<TlsStream<TcpStream>>>,
+    /// Незашифрованная сторона ТОГО ЖЕ TCP-соединения, что под `imap_session`.
+    ///
+    /// Зачем: `fetch_messages_with_timeout` гоняет полный скан (LIST + SELECT +
+    /// UID SEARCH + UID FETCH по папкам) в `spawn_blocking` на owned-сессии и
+    /// оборачивает JoinHandle в `tokio::time::timeout`. Но весь wire-обмен
+    /// imap-крейта — СИНХРОННЫЙ блокирующий read_until: один зависший/заторможённый
+    /// ответ сервера (троттлинг Gmail, drip) блокирует ОС-поток навсегда, и tokio-
+    /// таймаут такой future сам по себе НЕ прерывает — он просто бросает будущее,
+    /// а поток продолжает висеть на read. Чтобы таймаут стал реальным, нужно
+    /// разорвать само соединение: `shutdown(Both)` на этой копии закрывает TCP, и
+    /// заблокированный `read_until` немедленно возвращает ошибку (ConnectionLost),
+    /// поток выходит из spawn_blocking.
+    ///
+    /// Клон сделан через `TcpStream::try_clone()` ДО TLS-оборачивания — он разделяет
+    /// тот же underlying socket (тот же fd), поэтому shutdown виден TLS-читателю.
+    /// Используется ТОЛЬКО для отмены; отладку/сырой доступ не ведём. Жизненный цикл
+    /// жёстко связан с `imap_session`: клон создаётся и хранится ТОЛЬКО при успешном
+    /// login вместе с сессией и убирается там же, где снимается сессия — иначе клон
+    /// удержал бы закрытую TCP-соединение (fd leak / stale connection).
+    imap_socket: Option<TcpStream>,
     /// Папка, выбранная в текущей сессии (использует только IDLE-путь:
     /// select делается один раз и переиспользуется, пока папка не сменилась).
     selected_folder: Option<String>,
@@ -160,6 +181,7 @@ impl EmailClient {
         Self {
             config,
             imap_session: None,
+            imap_socket: None,
             selected_folder: None,
             fail_streak: 0,
             reconnects: 0,
@@ -311,7 +333,10 @@ impl EmailClient {
         let tls = TlsConnector::builder()
             .build()
             .context("Failed to create TLS connector")?;
+        self.connect_imap_with_tls(&tls)
+    }
 
+    fn connect_imap_with_tls(&mut self, tls: &TlsConnector) -> Result<()> {
         // Ручное соединение вместо imap::connect(): imap::connect() внутри себя
         // делает TcpStream::connect + TLS handshake, но НЕ ставит таймаут на
         // чтение/запись. BufStream-обёртка imap-крейта читает блокирующим
@@ -366,6 +391,14 @@ impl EmailClient {
             .context("Failed to set read timeout")?;
         tcp.set_write_timeout(Some(timeout))
             .context("Failed to set write timeout")?;
+        // Клон TCP ДО TLS-оборачивания: разделяет тот же underlying fd, поэтому
+        // shutdown(Both) на клоне разрывает соединение, заблокированное внутри
+        // TLS-читателя (нужно для реального таймаута полного скана, см. imap_socket).
+        // Fail-closed: если клон не сделан — не держим сессию без ручки отмены,
+        // иначе зависший read снова стал бы неотменяемым.
+        let cancel_socket = tcp
+            .try_clone()
+            .context("Failed to clone IMAP TCP handle for cancellation")?;
         let ssl_stream = tls
             .connect(&self.config.imap_server, tcp)
             .context("Failed TLS handshake")?;
@@ -387,7 +420,10 @@ impl EmailClient {
             .login(imap_login, &self.config.password)
             .map_err(|e| anyhow::anyhow!("IMAP login failed: {}", e.0))?;
 
+        // Ручку отмены храним ТОЛЬКО при живых сессии И сокете — пара синхронна.
         self.imap_session = Some(session);
+        self.imap_socket = Some(cancel_socket);
+        self.selected_folder = None;
         Ok(())
     }
 
@@ -425,22 +461,8 @@ impl EmailClient {
             if out.all.is_none() && attrs.iter().any(|a| a == "\\all") {
                 out.all = Some(name.to_string());
             }
-            if out.junk.is_none() && attrs.iter().any(|a| a == "\\junk" || a == "\\spam") {
-                out.junk = Some(name.to_string());
-            }
             if out.sent.is_none() && attrs.iter().any(|a| a == "\\sent") {
                 out.sent = Some(name.to_string());
-            }
-            // Фолбэк по имени — для провайдеров без атрибутов (Spam, Junk,
-            // «Спам», [Gmail]/Spam). Берём только если атрибут не нашёлся.
-            if out.junk.is_none()
-                && (name_l == "spam"
-                    || name_l == "junk"
-                    || name_l == "спам"
-                    || name_l.ends_with("/spam")
-                    || name_l.ends_with("/junk"))
-            {
-                out.junk = Some(name.to_string());
             }
             if out.sent.is_none()
                 && (name_l == "sent"
@@ -450,100 +472,23 @@ impl EmailClient {
             {
                 out.sent = Some(name.to_string());
             }
-            // «Письма себе» (mail.ru: INBOX/ToMyself, локаль «Письма себе»).
-            // Автосортировка провайдера прячет From==To из INBOX — эскроу-письмо
-            // восстановления аккаунта было бы невидимо.
-            if out.self_letters.is_none()
-                && (name_l.ends_with("/tomyself")
-                    || name_l == "tomyself"
-                    || name_l == "myself"
-                    || name_l.ends_with("/myself")
-                    || name_l == "письма себе"
-                    || name_l.ends_with("/письма себе")
-                    || name_l.ends_with("/letters to myself")
-                    || name_l == "letters to myself")
-            {
-                out.self_letters = Some(name.to_string());
+            // junk + «письма себе» — общий классификатор с полным сканом
+            // (classify_folder), чтобы оба пути видели одни и те же папки.
+            match classify_folder(&attrs, name) {
+                FolderKind::Junk => {
+                    if out.junk.is_none() {
+                        out.junk = Some(name.to_string());
+                    }
+                }
+                FolderKind::SelfLetters => {
+                    if out.self_letters.is_none() {
+                        out.self_letters = Some(name.to_string());
+                    }
+                }
+                FolderKind::Other => {}
             }
         }
         out
-    }
-
-    /// Fetch the most recent `limit` messages from one mailbox, newest first.
-    fn fetch_folder(&mut self, folder: &str, limit: usize) -> Result<Vec<EmailMessage>> {
-        let session = self
-            .imap_session
-            .as_mut()
-            .context("Not connected to IMAP server")?;
-
-        // Папки из настроек — динамические, сервер мог не создать/удалить ящик.
-        // Отсутствие папки НЕ должно выглядеть как сетевой сбой: возвращаем
-        // пустой результат, чтобы вызывающий цикл просто пропустил эту папку
-        // (без реконнекта и без роста streak). Реальные ошибки сети — в Err.
-        if let Err(e) = session.select(folder) {
-            let err = anyhow::anyhow!("select {folder} failed: {e}");
-            if Self::is_missing_folder_error(&err) {
-                eprintln!("[email] folder {folder} missing on server — skipped");
-                return Ok(Vec::new());
-            }
-            return Err(err);
-        }
-
-        let message_ids = session.uid_search("ALL")?;
-        let mut messages = Vec::new();
-
-        let mut uids: Vec<u32> = message_ids.iter().copied().collect();
-        uids.sort_by(|a, b| b.cmp(a));
-        uids.truncate(limit);
-
-        // Один round-trip вместо поштучных uid_fetch: на ящике с тысячами
-        // писем последовательные запросы занимали минуты, и поллинг/клик
-        // по чату «зависали» (а то и умирали по таймауту).
-        // Ошибка батч-фетча пробрасывается наверх (НЕ молчаливый пустой
-        // if-let-Ok глотал ошибку, и приложение молча видело пустой ящик.
-        if !uids.is_empty() {
-            let uid_set = uids
-                .iter()
-                .map(|u| u.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            let data = session
-                .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
-                .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
-            for fetch in data.iter() {
-                let uid = fetch.uid.unwrap_or_default().to_string();
-                let flags = fetch.flags();
-                let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
-
-                if let Some(header) = fetch.header() {
-                    let header_str = String::from_utf8_lossy(header);
-                    let from = extract_header(&header_str, "From:")
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let to =
-                        extract_header(&header_str, "To:").unwrap_or_else(|| "Unknown".to_string());
-                    let subject = extract_header(&header_str, "Subject:")
-                        .unwrap_or_else(|| "(no subject)".to_string());
-                    let date = extract_header(&header_str, "Date:")
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let message_id = extract_header(&header_str, "Message-ID:").unwrap_or_default();
-
-                    messages.push(EmailMessage {
-                        id: uid,
-                        from,
-                        to,
-                        subject,
-                        date,
-                        is_read,
-                        folder: folder.to_string(),
-                        message_id,
-                        size: fetch.size.unwrap_or(0),
-                    });
-                }
-            }
-        }
-
-        messages.sort_by(|a, b| b.id.cmp(&a.id));
-        Ok(messages)
     }
 
     /// Переустановить IMAP-соединение (сервер оборвал его — idle-таймаут,
@@ -563,57 +508,110 @@ impl EmailClient {
         if let Some(mut session) = self.imap_session.take() {
             let _ = session.logout();
         }
+        // Ручку отмены убираем вместе с сессией (см. imap_socket): иначе клон
+        // удержал бы закрытое TCP-соединение.
+        self.imap_socket = None;
         self.connect_imap().await
     }
 
     /// Fetch recent messages. Folder strategy: ONLY
     /// INBOX + Junk. Sent is NEVER read: the sender's copies are found in
     /// Junk/INBOX (Gmail self-BCC behaviour) or not needed (outgoing messages
+    ///
+    /// Прод-обёртка с боевым бюджетом 30с. Вся логика — в `fetch_messages_with_timeout`.
     pub async fn fetch_messages(&mut self) -> Result<Vec<EmailMessage>> {
-        let folders = self.find_special_folders();
+        self.ensure_connected().await?;
+        self.fetch_messages_with_timeout(Duration::from_secs(30))
+            .await
+    }
 
-        let mut messages = self.fetch_folder("INBOX", 250)?;
-        let mut seen: HashSet<String> = messages
-            .iter()
-            .filter(|m| !m.message_id.is_empty())
-            .map(|m| m.message_id.clone())
-            .collect();
+    /// Полный скан с РЕАЛЬНЫМ дедлайном (budget).
+    ///
+    /// Проблема, которую это чинит: весь wire-обмен imap-крейта — синхронный
+    /// блокирующий `read_until`. Прежний `fetch_messages` был `async`, но его тело
+    /// (LIST → SELECT → UID SEARCH → UID FETCH по папкам → SELECT INBOX) не содержало
+    /// ни одного `.await`, т.е. целиком блокировало ОС-поток рантайма. Обёртка
+    /// `tokio::time::timeout(30s, future)` на такой future бессмысленна: по истечении
+    /// таймер не может опроситься, пока поток заблокирован. Per-read timeout не
+    /// ограничивает общий бюджет при drip-ответах. Это воспроизводимо на локальном
+    /// TLS-IMAP; причинность исторического эпизода Gmail не установлена.
+    ///
+    /// Решение: весь скан выполняется в `spawn_blocking` на ЗАХВАЧЕННОЙ (owned) сессии,
+    /// а JoinHandle оборачивается в `timeout(budget)`. По истечении вызываем
+    /// `imap_socket.shutdown(Both)` — это закрывает настоящий TCP и немедленно
+    /// будит заблокированный `read_until` (ConnectionLost), воркер завершается.
+    /// Только тогда таймаут настоящий и прерывает реальный I/O.
+    ///
+    /// Возврат сессии: на успех — восстанавливаем сессию и клон сокета; на ошибке
+    /// (в т.ч. таймаут) — сессия/клон сброшены БЕЗ logout (logout битого пира —
+    /// ещё одна запись, которая сама может зависнуть). Повторное использование
+    /// слота после дропа возможно: следующий вызов ensure_connected построит новую.
+    pub async fn fetch_messages_with_timeout(
+        &mut self,
+        budget: Duration,
+    ) -> Result<Vec<EmailMessage>> {
+        self.selected_folder = None;
+        // Ручку отмены и сессию забираем ДО старта воркера: shutdown и restore
+        // делаем на &mut self вне blocking-потока. Сессия без сокета — не отменяема,
+        // поэтому такой скан честно отказываемся запускать (fail-closed).
+        let session = self
+            .imap_session
+            .take()
+            .context("Not connected to IMAP server")?;
+        let mut cancellation = ImapScanCancellation(Some(
+            self.imap_socket
+                .take()
+                .context("IMAP session missing cancellation handle (imap_socket)")?,
+        ));
 
-        if let Some(junk) = &folders.junk {
-            match self.fetch_folder(junk, 150) {
-                Ok(junk_msgs) => {
-                    for m in junk_msgs {
-                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                            continue;
-                        }
-                        messages.push(m);
-                    }
+        // Сам full-scan целиком — в blocking-потоке на owned-сессии. LIST тоже
+        // внутри: дедлайн покрывает весь путь, не только UID FETCH. Воркер ВСЕГДА
+        // возвращает (session, Result): на успех вызывающий восстановит сессию в
+        // паре с сокетом, на провал/таймаут — выбросит (сессия уже None). Тест ловит
+        // именно факт завершения воркера после shutdown.
+        let mut worker = tokio::task::spawn_blocking(move || {
+            let (session, result) = full_scan_on_session(session);
+            (session, result)
+        });
+
+        // deadline = spawn_blocking + реальный сокет: по истечении shutdown рвёт
+        // настоящий blocked read, воркер гарантированно завершается (не detached).
+        match tokio::time::timeout(budget, &mut worker).await {
+            // Воркер успел: результат валиден.
+            Ok(Ok((session, result))) => match result {
+                Ok(messages) => {
+                    // Успех — восстанавливаем и сессию, и сокет в паре.
+                    self.imap_session = Some(session);
+                    self.imap_socket = cancellation.0.take();
+                    self.selected_folder = Some("INBOX".to_string());
+                    Ok(messages)
                 }
-                // The Junk folder may be missing/unreachable — do not fail the
-                // whole fetch, INBOX is already retrieved.
-                Err(e) => eprintln!("[email] junk folder {junk} fetch failed: {e}"),
+                Err(e) => {
+                    // Реальная ошибка I/O/парсинга — не partial-success. Сессию и
+                    // сокет выбрасываем БЕЗ logout (битый пир). Воркер вернул
+                    // session по значению — он дропнется здесь, TCP закроется.
+                    drop(session);
+                    Err(e)
+                }
+            },
+            Ok(Err(join_err)) => {
+                // Паника воркера — соединение в неизвестном состоянии. Рвём сокет
+                // (страховка) и бросаем.
+                Err(anyhow::anyhow!("full scan worker panicked: {join_err}"))
+            }
+            Err(_elapsed) => {
+                // Настоящий таймаут: рвём TCP, чтобы заблокированный read_until
+                // немедленно вернулся и поток вышел из spawn_blocking. Клон сокета
+                // (cancel_socket) здесь же и уходит в drop — он разделял fd с
+                // сессией, shutdown уже закрыл соединение. Сессия остаётся None:
+                // late-воркер её НЕ reinstates (join больше не await'им).
+                worker.abort(); // Also cancel a job that has not started yet.
+                Err(anyhow::anyhow!(
+                    "Full scan timed out after {}s (connection reset)",
+                    budget.as_secs()
+                ))
             }
         }
-
-        // «Письма себе» (mail.ru: INBOX/ToMyself) — эскроу-письмо Key Recovery
-        // прячется туда автосортировкой провайдера (From==To). Читаем и её.
-        if let Some(selfl) = &folders.self_letters {
-            match self.fetch_folder(selfl, 100) {
-                Ok(self_msgs) => {
-                    for m in self_msgs {
-                        if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
-                            continue;
-                        }
-                        messages.push(m);
-                    }
-                }
-                Err(e) => eprintln!("[email] self-letters folder {selfl} fetch failed: {e}"),
-            }
-        }
-
-        // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной.
-        let _ = self.imap_session.as_mut().map(|s| s.select("INBOX"));
-        Ok(messages)
     }
 
     /// Fetch messages in one mailbox: either the most recent `limit`
@@ -1043,6 +1041,7 @@ impl EmailClient {
         if let Some(mut session) = self.imap_session.take() {
             let _ = session.logout();
         }
+        self.imap_socket = None;
         self.selected_folder = None;
         self.fail_streak = 0;
         self.connect_retry_after = None;
@@ -1138,6 +1137,7 @@ impl EmailClient {
         if let Some(mut session) = self.imap_session.take() {
             let _ = session.logout();
         }
+        self.imap_socket = None;
         if let Some(t) = self.connect_retry_after {
             let now = Instant::now();
             if now < t {
@@ -1294,6 +1294,18 @@ fn fold_lines(body: &str) -> String {
         .join("\n")
 }
 
+// Dropping a JoinHandle alone does not stop a running spawn_blocking task.
+// This guard shuts down the socket on deadline AND future cancellation.
+struct ImapScanCancellation(Option<TcpStream>);
+
+impl Drop for ImapScanCancellation {
+    fn drop(&mut self) {
+        if let Some(socket) = self.0.take() {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
+    }
+}
+
 fn extract_header(header: &str, name: &str) -> Option<String> {
     header
         .lines()
@@ -1301,6 +1313,254 @@ fn extract_header(header: &str, name: &str) -> Option<String> {
         .and_then(|line| line.splitn(2, ':').nth(1))
         .map(|value| value.trim().to_string())
 }
+/// Тип папки по результату классификации одной LIST-записи.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FolderKind {
+    Junk,
+    SelfLetters,
+    Other,
+}
+
+/// Классификация одного LIST-имени папки (junk / «письма себе» / прочее).
+/// Чистая функция над атрибутами+именем — без сетевого I/O, поэтому общая для
+/// `find_special_folders` и для строгого полного скана. Порядок «победила
+/// первая» сохранён как в find_special_folders: junk проверяется раньше
+/// self_letters. Атрибуты передаются как строки Custom(...) — ровно те, что
+/// find_special_folders сравнивает («\\all», «\\junk», …).
+fn classify_folder(attrs: &[String], name: &str) -> FolderKind {
+    let name_l = name.to_ascii_lowercase();
+    // Спам-папка: атрибут \Junk/\Spam, иначе имя Spam/Junk/Спам/[Gmail]/Spam.
+    let junk_attr = attrs.iter().any(|a| a == "\\junk" || a == "\\spam");
+    let junk_name = name_l == "spam"
+        || name_l == "junk"
+        || name_l == "спам"
+        || name_l.ends_with("/spam")
+        || name_l.ends_with("/junk");
+    if junk_attr || junk_name {
+        return FolderKind::Junk;
+    }
+
+    // «Письма себе» — автосортировка провайдера (From==To). Побеждает первая
+    // (см. doc у classify_folder).
+    let self_name = name_l.ends_with("/tomyself")
+        || name_l == "tomyself"
+        || name_l == "myself"
+        || name_l.ends_with("/myself")
+        || name_l == "письма себе"
+        || name_l.ends_with("/письма себе")
+        || name_l.ends_with("/letters to myself")
+        || name_l == "letters to myself";
+    if self_name {
+        return FolderKind::SelfLetters;
+    }
+
+    FolderKind::Other
+}
+
+/// Строгая классификация LIST-имён: `LIST` обязателен и его ошибки НЕ глотаются.
+/// Возвращает (junk, self_letters). Отличается от `find_special_folders` только
+/// обработкой ошибок: find_special_folders при любой ошибке LIST возвращает
+/// `None` (для обратной совместимости инкрементального пути), а здесь ошибка LIST
+/// пробрасывается — полный скан не должен выдавать ложное «нет писем» при сбое.
+fn list_special_folders_strict(
+    session: &mut Session<TlsStream<TcpStream>>,
+) -> Result<(Option<String>, Option<String>)> {
+    let names = session
+        .list(None, Some("*"))
+        .map_err(|e| anyhow::anyhow!("LIST failed: {e}"))?;
+
+    let mut junk: Option<String> = None;
+    let mut self_letters: Option<String> = None;
+
+    for name in names.iter() {
+        let folder_name = name.name().to_string();
+        let attrs: Vec<String> = name
+            .attributes()
+            .iter()
+            .filter_map(|a| {
+                if let imap::types::NameAttribute::Custom(s) = a {
+                    Some(s.to_ascii_lowercase())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        match classify_folder(&attrs, &folder_name) {
+            FolderKind::Junk => {
+                if junk.is_none() {
+                    junk = Some(folder_name);
+                }
+            }
+            FolderKind::SelfLetters => {
+                if self_letters.is_none() {
+                    self_letters = Some(folder_name);
+                }
+            }
+            FolderKind::Other => {}
+        }
+    }
+
+    Ok((junk, self_letters))
+}
+
+/// Тело полного скана над &mut-сессией. Вынесено из `full_scan_on_session`,
+/// чтобы тот гарантированно вернул сессию наружу (по значению) при любом исходе.
+///
+/// Полностью повторяет прежний `fetch_messages`: LIST → INBOX(250) → Junk(150) →
+/// Self(100) → SELECT INBOX, dedup по непустому Message-ID без изменений,
+/// лимиты/набор папок прежние (Sent/All НЕ читаются). Отличия от старого
+/// поведения — только в обработке ошибок (см. тело): LIST и настоящий
+/// I/O/timeout/parse в Junk/Self больше не прглатываются молча.
+fn full_scan_body(session: &mut Session<TlsStream<TcpStream>>) -> Result<Vec<EmailMessage>> {
+    // LIST — строго: сбой/таймаут на LIST пробрасываем, не делаем вид что папок нет.
+    let (junk, self_letters) = list_special_folders_strict(session)?;
+
+    // INBOX — строго: без писем в INBOX по сети/timeout это ошибка, не пустой Ok.
+    let mut messages = scan_folder(session, "INBOX", 250)?;
+    let mut seen: HashSet<String> = messages
+        .iter()
+        .filter(|m| !m.message_id.is_empty())
+        .map(|m| m.message_id.clone())
+        .collect();
+
+    // Junk: необязательная папка может отсутствовать (пропускаем как раньше), но
+    // настоящая ошибка I/O/timeout/parse пробрасывается — не green-partial-empty.
+    if let Some(junk) = &junk {
+        match scan_folder(session, junk, 150) {
+            Ok(junk_msgs) => {
+                for m in junk_msgs {
+                    if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                        continue;
+                    }
+                    messages.push(m);
+                }
+            }
+            Err(e) if EmailClient::is_missing_folder_error(&e) => {
+                log::info!("[email] full scan: junk folder {junk} missing, skipped: {e}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // «Письма себе» — та же логика: отсутствие — пропуск, реальный сбой — ошибка.
+    if let Some(selfl) = &self_letters {
+        match scan_folder(session, selfl, 100) {
+            Ok(self_msgs) => {
+                for m in self_msgs {
+                    if !m.message_id.is_empty() && !seen.insert(m.message_id.clone()) {
+                        continue;
+                    }
+                    messages.push(m);
+                }
+            }
+            Err(e) if EmailClient::is_missing_folder_error(&e) => {
+                log::info!("[email] full scan: self-letters folder {selfl} missing, skipped: {e}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Вернуть сессию в INBOX — последующие вызовы ожидают её выбранной. Старый
+    // код игнорировал результат этого select; на успехе всего скана делаем строго:
+    // не смогли вернуть INBOX — скан неполноценен (дедлайн покрывает и этот шаг).
+    session
+        .select("INBOX")
+        .map_err(|e| anyhow::anyhow!("final SELECT INBOX failed: {e}"))?;
+
+    Ok(messages)
+}
+
+/// Полный скан на ЗАХВАЧЕННОЙ (owned) сессии. Выполняется в blocking-потоке
+/// `fetch_messages_with_timeout`. Возвращает `(session, Result)`: сессия — ВСЕГДА,
+/// чтобы вызывающий решил судьбу слота (восстановить на успех / выбросить на
+/// провал/таймаут), а не оставить мусор в потоке.
+fn full_scan_on_session(
+    mut session: Session<TlsStream<TcpStream>>,
+) -> (Session<TlsStream<TcpStream>>, Result<Vec<EmailMessage>>) {
+    let result = full_scan_body(&mut session);
+    (session, result)
+}
+
+/// Скан одной папки: SELECT → UID SEARCH ALL → UID FETCH (самые свежие `limit`).
+/// Эквивалент прежнего `fetch_folder`, но работает над &mut-сессией (без доступа
+/// к `self`), чтобы вызываться из blocking-потока. Парсинг писем и порядок
+/// сортировки — без изменений (id DESC), поля EmailMessage совпадают с прежними.
+fn scan_folder(
+    session: &mut Session<TlsStream<TcpStream>>,
+    folder: &str,
+    limit: usize,
+) -> Result<Vec<EmailMessage>> {
+    // Папки из настроек — динамические. Отсутствие папки НЕ выглядит как сетевой
+    // сбой: пустой результат, вызывающий цикл пропускает её. Реальные ошибки — Err.
+    if let Err(e) = session.select(folder) {
+        let err = anyhow::anyhow!("select {folder} failed: {e}");
+        if EmailClient::is_missing_folder_error(&err) {
+            eprintln!("[email] full scan: folder {folder} missing on server — skipped");
+            return Ok(Vec::new());
+        }
+        return Err(err);
+    }
+
+    let message_ids = session
+        .uid_search("ALL")
+        .with_context(|| format!("uid_search in {folder} failed"))?;
+    let mut messages = Vec::new();
+
+    let mut uids: Vec<u32> = message_ids.iter().copied().collect();
+    uids.sort_by(|a, b| b.cmp(a));
+    uids.truncate(limit);
+
+    // Один round-trip вместо поштучных uid_fetch. Ошибка батч-фетча
+    // пробрасывается наверх (НЕ молчаливый пустой — иначе приложение молча
+    // видело бы пустой ящик при реальном сбое).
+    if !uids.is_empty() {
+        let uid_set = uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let data = session
+            .uid_fetch(&uid_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
+            .with_context(|| format!("UID FETCH failed in folder {folder}"))?;
+        for fetch in data.iter() {
+            let uid = fetch.uid.unwrap_or_default().to_string();
+            let flags = fetch.flags();
+            let is_read = flags.iter().any(|f| matches!(f, imap::types::Flag::Seen));
+
+            if let Some(header) = fetch.header() {
+                let header_str = String::from_utf8_lossy(header);
+                let from =
+                    extract_header(&header_str, "From:").unwrap_or_else(|| "Unknown".to_string());
+                let to =
+                    extract_header(&header_str, "To:").unwrap_or_else(|| "Unknown".to_string());
+                let subject = extract_header(&header_str, "Subject:")
+                    .unwrap_or_else(|| "(no subject)".to_string());
+                let date =
+                    extract_header(&header_str, "Date:").unwrap_or_else(|| "Unknown".to_string());
+                let message_id = extract_header(&header_str, "Message-ID:").unwrap_or_default();
+
+                messages.push(EmailMessage {
+                    id: uid,
+                    from,
+                    to,
+                    subject,
+                    date,
+                    is_read,
+                    folder: folder.to_string(),
+                    message_id,
+                    size: fetch.size.unwrap_or(0),
+                });
+            }
+        }
+    }
+
+    messages.sort_by(|a, b| b.id.cmp(&a.id));
+    Ok(messages)
+}
+
+#[cfg(test)]
+#[path = "email/full_scan_tests.rs"]
+mod full_scan_tests;
 
 #[cfg(test)]
 mod tests {
