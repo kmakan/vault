@@ -221,3 +221,29 @@ replacement проверены. Это НЕ атомарность keypair/peers
 - Step 5 Preview safety-прогон завершён, full-scan-прогон упал по
   `429 Daily free limit reached` с частичными правками. PM довела Rust
   вручную и повторила реальные гейты; отчёт Cline не заменяет верификацию.
+
+## Атомарный disk-import — t_12f15e61 (c4e28fe)
+
+Гарантия: полный parse ДО любых записей → staged before/after (fsync файла+каталога)
+→ durable active-журнал `.recovery-import/<txid>` (allowlist имён, манифест без
+байтов ключей, mode 700/600, symlink reject) → promote целей (fsynced temp+rename+
+parent fsync) ДО SQL → KV-замена + commit-маркер в ОДНОЙ BEGIN IMMEDIATE → cleanup
+active→finished (rename+fsync)→удаление→снятие маркера.
+
+- Сбой ДО COMMIT: откат к old-байтам журнала; `old_present=false` → цель УДАЛЯЕТСЯ
+  (не создаётся пустой placeholder); журнал сохраняется → recover идемпотентен.
+- Неоднозначный COMMIT (Err после фактического COMMIT / обрыв сразу после него):
+  решение ТОЛЬКО по durable-маркеру в БД; нечитаемый маркер = fail-closed Err
+  (журнал не трогаем), а НЕ «маркер отсутствует».
+- generic `key_store::import_keys` идёт тем же движком: keys-only KV не трогает
+  (`entries: None`), битый поздний peer валит весь импорт (filter_map удалён).
+- Локи: ProcessLock на том же LOCK_FILE берёт вызывающая обёртка
+  (`recover_pending`, стартовый барьер) и `apply`; guard-путь (`recover_pending_dir`,
+  `apply_under_guard`) работает под уже захваченным KeysGuard flock. Вложенный
+  flock одного файла (второй OFD на том же потоке) = дедлок — не добавлять.
+- Тесты `backup_import` (25): RED-регрессии «keys-only стирал KV», «rollback
+  создавал пустой файл», «нечитаемый маркер = fail-open» + checkpoint-фазы
+  (stage/publish/target1-2/sql-delete-insert/after:commit). Обрыв моделируется
+  return-control, НЕ реальным kill -9; device-E2E — t_b5da2e97.
+- Гони: `cargo test --lib --offline backup_import` и полный `cargo test --lib --offline`.
+
