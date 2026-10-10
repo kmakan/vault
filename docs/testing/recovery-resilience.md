@@ -215,7 +215,8 @@ replacement проверены. Это НЕ атомарность keypair/peers
 - `import_backup` последовательно пишет keypair/peers/SQLite. JS guard не
   делает Rust disk-import транзакцией: I/O-сбой после первой записи может
   оставить частичный backup. Не заявлять rollback старой личности/данных
-  доказанным; нужен отдельный staged import + rollback/fault-injection гейт.
+  доказанным; закрыто разделом «Атомарный disk-import — t_12f15e61 (c4e28fe)» ниже
+(стaged import + rollback + fault-injection гейт: 25 тестов backup_import).
 - Новая сборка не установленa на X50, публичная версия остаётся 0.1.219.
   До безопасной device-приёмки не merge в stable, не публиковать релиз.
 - Step 5 Preview safety-прогон завершён, full-scan-прогон упал по
