@@ -111,11 +111,25 @@ Baseline vendor/imap: 51 lib-тест зелёный (данные PM). Суще
 cd /home/maksim/whisper/vault-desktop/src-tauri && cargo check --offline && cargo test --lib --offline
 ```
 
-PM: cargo check/build/fmt прошли; **94 lib-теста passed, 0 failed**
-(86 прежних + 8 TLS/full-scan). Полный shipping-крейт прошёл
-`cargo check --target aarch64-linux-android --offline` с NDK 27.0.12077973.
+PM (перепроверено 12.10.2026): cargo check/build/fmt прошли;
+**121 lib-тест passed, 0 failed** (рост с 94 — от других слитых фич:
+backup_import, duress, video, crypto_pq; сам full-scan даёт 8 TLS-тестов).
+Полный shipping-крейт прошёл `cargo check --target aarch64-linux-android
+--offline` с NDK 27.0.12077973.
 Это компиляция Android/TLS кода, НЕ Android TLS runtime и НЕ готовый APK.
 Сборку/установку APK этот документ НЕ описывает и НЕ обещает.
+
+⚠️ ENV-ДРЕЙФ линкера (12.10.2026): arm64-check падал НЕ из-за кода, а из-за
+окружения, потерянного между сессиями. `/tmp/ndk-bin` содержал только
+симлинки llvm-ar/llvm-ranlib. Симптомы: `aarch64-linux-android-clang++: No
+such file` (oboe-sys) и ring `sizeof(size_t)!=sizeof(uintptr_t)`
+(`__ANDROID_API__` пуст → clang без NDK sysroot тянет resource-заголовки).
+ВАЖНО: симлинк `aarch64-linux-android-clang → …-android24-clang` НЕ работает —
+bash-wrapper ищет `clang` рядом с собой через `dirname $0`, а симлинк не
+даёт clang найти sysroot. Лечение: **exec-обёртка**
+(`#!/bin/sh; exec <ndk>/bin/aarch64-linux-android24-clang "$@"`) + отдельная
+обёртка `clang++` → `…-android24-clang++` + `PATH=/tmp/ndk-bin`. Тогда clang
+сам находит sysroot (`__ANDROID_MIN_SDK 24`, `__SIZEOF_SIZE_T__ 8`).
 
 ## 4. Уже подтверждено ранее (B6b, 09.10) — НЕ считать незавершённым Leg B
 
@@ -187,10 +201,12 @@ template-check **28 компонентов**, Vite green.
 включены; тест доверяет своему CA, никаких production TLS bypass.
 
 - Reproducer старого механизма: `timeout(40ms)` вокруг sync wire-body
-  вернулся лишь через **356.89ms** (socket timeout 350ms), heartbeat starved.
+  вернулся лишь через **354.8ms** (socket timeout 350ms), heartbeat starved
+  (перепроверено 12.10.2026; ранее 356.89ms — стабильно в пределах jitter).
   Это демонстрация дефекта, не запуск исторической версии на Gmail.
-- LIST/SELECT/SEARCH/FETCH/final SELECT stall: **121.19–121.36ms** при
-  бюджете 120ms, heartbeat жив. Peer EOF проверен; sentinel на единственном
+- LIST/SELECT/SEARCH/FETCH/final SELECT stall: **121.3ms** при
+  бюджете 120ms, heartbeat жив (перепроверено 12.10.2026, все 5 стадий
+  121.26–121.38ms). Peer EOF проверен; sentinel на единственном
   blocking-потоке доказывает, что worker действительно вышел.
 - Drip без tagged completion, внешняя отмена future, healthy headers/empty
   subject/dedup/session, missing optional vs broken Junk/Self, два timeout
@@ -201,6 +217,29 @@ template-check **28 компонентов**, Vite green.
 **Не закрывать t_fabe43e0 утверждением «причина Gmail доказана»:** общий
 bounded full-scan реализован/проверен; конкретный эпизод 09.10 и device
 приёмка новой сборки ещё не подтверждены.
+
+### 6.1 Что закрыто, что осталось (переоценка 12.10.2026)
+
+**Закрыто локально (гейты зелёные):** механика wire-path. Reproducer
+доказывает, что `tokio::time::timeout` поверх СИНХРОННОГО `read_until`
+бесполезен (354.8ms при 40ms-дедлайне, heartbeat starved), а `spawn_blocking`
++ `shutdown(Both)` даёт РЕАЛЬНЫЙ бюджет (121.3ms, heartbeat жив, worker
+выходит — sentinel на единственном blocking-потоке). Путь `email_fetch_messages`
+→ `fetch_messages_with_timeout` → `full_scan_on_session` покрыт end-to-end:
+busy/disconnected как видимые ошибки, missing-vs-broken folder, drip,
+внешняя отмена, повторный timeout+reconnect.
+
+**Остаётся открытым (офлайн недоступно):** историческая ПРИЧИННОСТЬ именно
+эпизода 09.10 на Gmail (8422 письма, зависание `recoverFromEscrow` на step 2).
+Локальный reproducer демонстрирует КЛАСС дефекта, но не воспроизводит живой
+Gmail-троттлинг. Чтобы закрыть причинность, нужно одно из (оба — на стороне
+устройства/реального ящика, вне headless-скоупа):
+1. Живой прогон на большом ящике (>5k писем) со старым и новым кодом — сравнить
+   hang vs bounded.
+2. Device-приёмка новой сборки на X50 (сейчас запрещено трогать офлайн).
+
+Рекомендация: `t_fabe43e0` держать в `review` до живого/device-подтверждения;
+механика-фикс готов к мержу в stable.
 
 ## 7. Оставшиеся границы
 
