@@ -125,17 +125,19 @@ impl ProcessLock {
     /// Заблокировать процесс на время импорта. LOCK_FILE создаётся 0600 и
     /// НИКОГДА не удаляется (живёт постоянно).
     pub(crate) fn acquire(keys_dir: &Path) -> Result<Self> {
-        ensure_dir_0700(keys_dir)?;
+        ensure_dir_0700(keys_dir)
+            .map_err(|e| anyhow!("{ERR_IO}: ensure_dir {e:?}"))?;
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
             .open(lock_path(keys_dir))
-            .with_context(|| ERR_IO)?;
+            .map_err(|e| anyhow!("{ERR_IO}: open {:?}: {e:?}", lock_path(keys_dir)))?;
         set_mode(&lock_path(keys_dir), 0o600);
         // flock: блокирует до освобождения другим владельцем. Ошибка — Err.
-        file.lock().map_err(|_| anyhow!(ERR_IO))?;
+        // std::fs::File::lock на Android = Unsupported — используем flock(2).
+        crate::file_lock::lock_exclusive(&file).map_err(|e| anyhow!("{ERR_IO}: flock: {e:?}"))?;
         Ok(Self { file })
     }
 }
@@ -143,7 +145,7 @@ impl ProcessLock {
 impl Drop for ProcessLock {
     fn drop(&mut self) {
         // Разблокировка (файл остаётся на диске — не удаляем).
-        let _ = self.file.unlock();
+        let _ = crate::file_lock::unlock(&self.file);
     }
 }
 

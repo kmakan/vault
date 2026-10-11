@@ -150,9 +150,9 @@ impl KeysGuard {
             .read(true)
             .write(true)
             .open(&lock_path)?;
-        lock_file
-            .lock()
-            .map_err(|_| anyhow::anyhow!("keys guard: lock failed"))?;
+        // std::fs::File::lock на Android = Unsupported — flock(2).
+        crate::file_lock::lock_exclusive(&lock_file)
+            .map_err(|e| anyhow::anyhow!("keys guard: lock failed: {e}"))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -170,7 +170,7 @@ impl KeysGuard {
         drop(state);
         if let Err(e) = crate::backup_import::recover_pending_dir(keys_dir) {
             log::error!("keys guard: recover_pending_dir failed: {e:?}");
-            let _ = lock_file.unlock();
+            let _ = crate::file_lock::unlock(&lock_file);
             let mut st = match GUARD_STATE.lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
@@ -201,7 +201,7 @@ impl Drop for KeysGuard {
             return;
         }
         if let Some(f) = &self.lock_file {
-            let _ = f.unlock();
+            let _ = crate::file_lock::unlock(f);
         }
         let mut state = match GUARD_STATE.lock() {
             Ok(g) => g,

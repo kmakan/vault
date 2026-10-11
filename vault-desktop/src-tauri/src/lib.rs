@@ -1,3 +1,4 @@
+
 // Android library entry point — re-exports main.rs for Tauri cdylib
 mod audio;
 mod channels;
@@ -5,6 +6,7 @@ mod credential_store;
 mod crypto;
 mod crypto_pq;
 mod duress;
+mod file_lock;
 mod email;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как

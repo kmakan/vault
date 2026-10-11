@@ -6895,6 +6895,7 @@ dependencies = [
  "imap",
  "jni 0.21.1",
  "lettre",
+ "libc",
  "log",
  "ml-kem",
  "native-tls",
