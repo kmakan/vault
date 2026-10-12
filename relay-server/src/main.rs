@@ -165,6 +165,8 @@ impl AppState {
 #[derive(Default)]
 pub struct Metrics {
     pub pub_ok: AtomicU64,
+    /// Публикации, авторизованные личным write-токеном в `Authorization`.
+    pub pub_hdr: AtomicU64,
     pub pub_anon: AtomicU64,
     /// Публикации, авторизованные read-токеном отправителя из тела (`tok`) —
     /// штатный путь клиента без заголовка Authorization.
@@ -239,6 +241,22 @@ pub struct PubOk {
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_QUEUE: usize = 200;
 
+/// Как отправитель предъявил креды в `/relay/pub`. Метрики по способам
+/// (`pub_hdr`/`pub_tok`/`pub_anon`/`channel_pub`) пишутся только для
+/// УСПЕШНЫХ публикаций, поэтому `pub_ok` — их сумма: по метрикам видно,
+/// что анонимных публикаций (релей «открыт») нет.
+#[derive(Clone, Copy)]
+enum Authz {
+    /// Личный write-токен в заголовке `Authorization`.
+    Header,
+    /// Write-токен канала в заголовке `Authorization`.
+    Channel,
+    /// Свой read-токен в теле (`tok`) — штатный путь клиента.
+    Body,
+    /// Кредов нет (допустимо только при VAULT_RELAY_ANON_PUB=1).
+    Anon,
+}
+
 /// Креды отправителя без заголовка `Authorization`: собственный read-токен
 /// из тела (`tok`). Клиент шлёт его с M2.4, им же считается суточный лимит и
 /// проверяется привязка токена к fp ниже. Годен только НЕпросроченный личный
@@ -293,12 +311,19 @@ pub async fn relay_pub(
         return err(StatusCode::PAYMENT_REQUIRED, "recipient subscription expired");
     }
     let is_channel = to_tok.scope == Scope::ChannelRead;
+    // Способ авторизации отправителя: запоминаем здесь, а метрику пишем только
+    // после успешной постановки в очередь (см. `pub_ok` ниже) — тогда отказы
+    // по rate-limit, привязке и суточному лимиту не попадают в pub_tok/pub_anon
+    // и по метрикам видно, что все принятые публикации атрибутированы.
+    let authz;
     // Анонимный publish (§9.1): без заголовка — только если разрешено конфигом.
     // Канальные очереди — ИСКЛЮЧЕНИЕ: анонимный pub в канал запрещён всегда,
     // publish возможен только write-токеном этого же канала (link: kid==kid).
     if let Some(auth) = auth_header(&headers) {
         match vault_relay::parse(&app.keys, &auth) {
-            Some(t) if t.scope == Scope::Write && !t.is_expired() && !is_channel => {}
+            Some(t) if t.scope == Scope::Write && !t.is_expired() && !is_channel => {
+                authz = Authz::Header;
+            }
             Some(t) if t.scope == Scope::ChannelWrite && !t.is_expired() => {
                 if !is_channel {
                     app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
@@ -308,7 +333,7 @@ pub async fn relay_pub(
                     app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
                     return err(StatusCode::FORBIDDEN, "channel token does not match queue");
                 }
-                app.metrics.channel_pub.fetch_add(1, Ordering::Relaxed);
+                authz = Authz::Channel;
             }
             Some(_) => return err(StatusCode::FORBIDDEN, "token scope mismatch"),
             None => {
@@ -322,11 +347,11 @@ pub async fn relay_pub(
     } else if has_sender_token(&app, &req) {
         // Креды отправителя — свой read-токен в теле `tok` (штатный путь
         // клиента): публикация авторизована и атрибутируема (hash токена).
-        app.metrics.pub_tok.fetch_add(1, Ordering::Relaxed);
+        authz = Authz::Body;
     } else if app.allow_anonymous_pub {
         // Совместимость со старыми сборками: без Authorization и без `tok`
         // (kill-switch для легаси; в проде выключено).
-        app.metrics.pub_anon.fetch_add(1, Ordering::Relaxed);
+        authz = Authz::Anon;
     } else {
         app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         return err(StatusCode::UNAUTHORIZED, "sender token required");
@@ -400,6 +425,14 @@ pub async fn relay_pub(
     };
     app.store.push(&to_tok.hash, envelope, MAX_QUEUE);
     app.metrics.pub_ok.fetch_add(1, Ordering::Relaxed);
+    // Разбивка УСПЕШНЫХ публикаций по способу авторизации; сумма обязана
+    // сходиться с pub_ok (инвариант закреплён тестом).
+    match authz {
+        Authz::Header => app.metrics.pub_hdr.fetch_add(1, Ordering::Relaxed),
+        Authz::Channel => app.metrics.channel_pub.fetch_add(1, Ordering::Relaxed),
+        Authz::Body => app.metrics.pub_tok.fetch_add(1, Ordering::Relaxed),
+        Authz::Anon => app.metrics.pub_anon.fetch_add(1, Ordering::Relaxed),
+    };
     // M2.3-b: ntfy wake-up получателю (at-most-once, тише ошибки):
     // topic = хэш read-токена (opaque). Содержимое НЕ раскрывается —
     // «есть новое» + счётчик. Телефон, подписанный на topic, просыпается
@@ -834,8 +867,9 @@ fn now() -> u64 {
 pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
     let m = &app.metrics;
     let body = format!(
-        "pub_ok {}\npub_anon {}\npub_tok {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nregister_keep {}\nlimit_hit {}\nchannel_pub {}\n",
+        "pub_ok {}\npub_hdr {}\npub_anon {}\npub_tok {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nregister_keep {}\nlimit_hit {}\nchannel_pub {}\n",
         m.pub_ok.load(Ordering::Relaxed),
+        m.pub_hdr.load(Ordering::Relaxed),
         m.pub_anon.load(Ordering::Relaxed),
         m.pub_tok.load(Ordering::Relaxed),
         m.poll_hits.load(Ordering::Relaxed),
@@ -2053,10 +2087,13 @@ mod tests {
     }
 
     fn pub_req(to: &str, tok: Option<&str>) -> PubRequest {
+        // id уникален на вызов: сервер дедуплицирует по id, а тестам нужно
+        // различать публикации (иначе вторая — no-op в очереди).
+        static N: AtomicU64 = AtomicU64::new(0);
         PubRequest {
             v: 1,
             to: to.into(),
-            id: "env-anti-anon".into(),
+            id: format!("env-anti-anon-{}", N.fetch_add(1, Ordering::Relaxed)),
             exp: now() + 600,
             body: "aGVsbG8=".into(),
             tok: tok.map(str::to_string),
@@ -2065,6 +2102,11 @@ mod tests {
             wake: false,
             urgent: None,
         }
+    }
+
+    fn with_fp(mut r: PubRequest, fp: &str) -> PubRequest {
+        r.fp = Some(fp.to_string());
+        r
     }
 
     async fn pub_status(app: &Arc<AppState>, req: PubRequest) -> StatusCode {
@@ -2152,5 +2194,40 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(app.metrics.pub_anon.load(Ordering::Relaxed), 1);
         assert_eq!(app.store.peek(&hash, 0).expect("queue").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pub_metrics_breakdown_sums_to_pub_ok() {
+        // Инвариант: pub_ok = pub_hdr + pub_tok + pub_anon + channel_pub.
+        // Только по нему можно доказать по проду, что анонимных публикаций
+        // (релей «открыт») нет: отказы в разбивку не попадают.
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_910);
+        let (sender, _sender_hash) = fresh_topic(&k, 4_102_444_911);
+        let app = app_state_no_anon(k);
+
+        // 1) успех с кредами из тела — привязываем токен к «a:fp».
+        let ok = pub_status(&app, with_fp(pub_req(&to, Some(&sender)), "a:fp")).await;
+        assert_eq!(ok, StatusCode::OK);
+
+        // 2) тот же токен с чужим fp — отказ, в pub_tok попасть не должен.
+        let req = with_fp(pub_req(&to, Some(&sender)), "b:fp");
+        let bad = pub_status(&app, req).await;
+        assert_eq!(bad, StatusCode::FORBIDDEN, "чужой fp отбит");
+
+        // 3) без кред — отказ (ANON_PUB=0).
+        let anon = pub_status(&app, pub_req(&to, None)).await;
+        assert_eq!(anon, StatusCode::UNAUTHORIZED);
+
+        let m = &app.metrics;
+        let ok_n = m.pub_ok.load(Ordering::Relaxed);
+        let sum = m.pub_hdr.load(Ordering::Relaxed)
+            + m.pub_tok.load(Ordering::Relaxed)
+            + m.pub_anon.load(Ordering::Relaxed)
+            + m.channel_pub.load(Ordering::Relaxed);
+        assert_eq!(ok_n, 1, "успешна ровно одна публикация");
+        assert_eq!(ok_n, sum, "разбивка сходится с pub_ok");
+        assert_eq!(m.pub_tok.load(Ordering::Relaxed), 1, "только успешная");
+        assert_eq!(m.pub_anon.load(Ordering::Relaxed), 0, "анонимных нет");
     }
 }
