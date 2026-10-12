@@ -166,6 +166,9 @@ impl AppState {
 pub struct Metrics {
     pub pub_ok: AtomicU64,
     pub pub_anon: AtomicU64,
+    /// Публикации, авторизованные read-токеном отправителя из тела (`tok`) —
+    /// штатный путь клиента без заголовка Authorization.
+    pub pub_tok: AtomicU64,
     pub poll_hits: AtomicU64,
     pub ws_sessions: AtomicU64,
     pub rejected: AtomicU64,
@@ -236,10 +239,29 @@ pub struct PubOk {
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_QUEUE: usize = 200;
 
+/// Креды отправителя без заголовка `Authorization`: собственный read-токен
+/// из тела (`tok`). Клиент шлёт его с M2.4, им же считается суточный лимит и
+/// проверяется привязка токена к fp ниже. Годен только НЕпросроченный личный
+/// read-токен: канальные/write-токены предъявляются через `Authorization`.
+fn has_sender_token(app: &Arc<AppState>, req: &PubRequest) -> bool {
+    match req.tok.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => matches!(
+            vault_relay::parse(&app.keys, s),
+            Some(t) if t.scope == Scope::Read && !t.is_expired()
+        ),
+        None => false,
+    }
+}
+
 /// POST /relay/pub — положить конверт в очередь токена получателя.
-/// Токен отправителя НЕ обязателен (политика §9.1 в конфиге):
-/// read-токен в `to` — единственная адресация.
+/// Адресация — read-токен в `to` (capability, известен только собеседникам).
+/// Отправитель предъявляет креды одним из двух способов: заголовок
+/// `Authorization` (личный write-токен / write-токен канала) либо свой
+/// read-токен в теле `tok` (клиент шлёт его с M2.4). Чистая анонимность
+/// (ни заголовка, ни `tok`) допускается ТОЛЬКО при VAULT_RELAY_ANON_PUB=1 —
+/// это совместимость со старыми сборками, в проде выключено.
 pub async fn relay_pub(
+
     State(app): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
@@ -297,11 +319,17 @@ pub async fn relay_pub(
     } else if is_channel {
         app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
         return err(StatusCode::UNAUTHORIZED, "channel write token required");
-    } else if !app.allow_anonymous_pub {
-        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
-        return err(StatusCode::UNAUTHORIZED, "token required");
-    } else {
+    } else if has_sender_token(&app, &req) {
+        // Креды отправителя — свой read-токен в теле `tok` (штатный путь
+        // клиента): публикация авторизована и атрибутируема (hash токена).
+        app.metrics.pub_tok.fetch_add(1, Ordering::Relaxed);
+    } else if app.allow_anonymous_pub {
+        // Совместимость со старыми сборками: без Authorization и без `tok`
+        // (kill-switch для легаси; в проде выключено).
         app.metrics.pub_anon.fetch_add(1, Ordering::Relaxed);
+    } else {
+        app.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        return err(StatusCode::UNAUTHORIZED, "sender token required");
     }
     // Rate-limit на publish (§5.4): 10 rps по ключу авторизации или по IP-фолбэку.
     if !vault_relay::rate::allow_pub(&req.to) {
@@ -806,9 +834,10 @@ fn now() -> u64 {
 pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
     let m = &app.metrics;
     let body = format!(
-        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nregister_keep {}\nlimit_hit {}\nchannel_pub {}\n",
+        "pub_ok {}\npub_anon {}\npub_tok {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nregister_keep {}\nlimit_hit {}\nchannel_pub {}\n",
         m.pub_ok.load(Ordering::Relaxed),
         m.pub_anon.load(Ordering::Relaxed),
+        m.pub_tok.load(Ordering::Relaxed),
         m.poll_hits.load(Ordering::Relaxed),
         m.ws_sessions.load(Ordering::Relaxed),
         m.rejected.load(Ordering::Relaxed),
@@ -2001,5 +2030,127 @@ mod tests {
             let (s, _j) = reg(&app, Some("aa:bb"), None).await;
             assert_eq!(s, StatusCode::OK);
         }
+    }
+
+    // ── Publish: креды отправителя обязательны (анонимность выключена) ──
+    //
+    // Политика: адресация — read-токен получателя (`to`), но отправитель
+    // обязан предъявить свои креды: заголовок Authorization ЛИБО свой
+    // read-токен в теле (`tok`, шлёт клиент с M2.4). «Чистая анонимность»
+    // допустима только при VAULT_RELAY_ANON_PUB=1 (совместимость).
+
+    fn app_state_no_anon(k: ServerKeys) -> Arc<AppState> {
+        Arc::new(AppState::new(
+            Store::new(),
+            k,
+            false, // VAULT_RELAY_ANON_PUB=0
+            String::new(),
+            None,
+            0,
+            None,
+            None,
+        ))
+    }
+
+    fn pub_req(to: &str, tok: Option<&str>) -> PubRequest {
+        PubRequest {
+            v: 1,
+            to: to.into(),
+            id: "env-anti-anon".into(),
+            exp: now() + 600,
+            body: "aGVsbG8=".into(),
+            tok: tok.map(str::to_string),
+            from: Some("anna@example.com".into()),
+            fp: None,
+            wake: false,
+            urgent: None,
+        }
+    }
+
+    async fn pub_status(app: &Arc<AppState>, req: PubRequest) -> StatusCode {
+        relay_pub(
+            State(app.clone()),
+            ConnectInfo("127.0.0.1:1234".parse().expect("addr")),
+            HeaderMap::new(),
+            AxumJson(req),
+        )
+        .await
+        .status()
+    }
+
+    #[tokio::test]
+    async fn pub_without_credentials_rejected_when_anon_disabled() {
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_901);
+        let app = app_state_no_anon(k);
+        let s = pub_status(&app, pub_req(&to, None)).await;
+        assert_eq!(
+            s,
+            StatusCode::UNAUTHORIZED,
+            "без Authorization и без tok публикация запрещена"
+        );
+        assert_eq!(app.metrics.pub_anon.load(Ordering::Relaxed), 0);
+        assert_eq!(app.metrics.pub_ok.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn pub_with_sender_token_ok_when_anon_disabled() {
+        let k = keys();
+        let (to, hash) = fresh_topic(&k, 4_102_444_902);
+        let (sender, _sender_hash) = fresh_topic(&k, 4_102_444_903);
+        let app = app_state_no_anon(k);
+        let s = pub_status(&app, pub_req(&to, Some(&sender))).await;
+        assert_eq!(s, StatusCode::OK, "свой read-токен в теле — это креды");
+        assert_eq!(app.metrics.pub_tok.load(Ordering::Relaxed), 1);
+        assert_eq!(app.metrics.pub_anon.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            app.store.peek(&hash, 0).expect("queue").len(),
+            1,
+            "конверт лёг в очередь получателя"
+        );
+    }
+
+    #[tokio::test]
+    async fn pub_with_expired_sender_token_rejected_when_anon_disabled() {
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_904);
+        let (expired, _) = fresh_topic(&k, 1); // 1970 — протух
+        let app = app_state_no_anon(k);
+        let s = pub_status(&app, pub_req(&to, Some(&expired))).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "протухший токен — не креды");
+    }
+
+    #[tokio::test]
+    async fn pub_with_garbage_sender_token_rejected_when_anon_disabled() {
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_904);
+        let app = app_state_no_anon(k);
+        let s = pub_status(&app, pub_req(&to, Some("not-a-token"))).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "мусор в tok — не креды");
+    }
+
+    #[tokio::test]
+    async fn pub_with_write_token_in_body_is_not_sender_credential() {
+        // В теле допустим только личный READ-токен; write-скоруп идёт
+        // заголовком Authorization и здесь кредой не считается.
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_904);
+        let write = issue(&k, Scope::Write, 4_102_444_904);
+        let app = app_state_no_anon(k);
+        let s = pub_status(&app, pub_req(&to, Some(&write))).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn pub_anonymous_still_allowed_when_anon_enabled() {
+        // Kill-switch: при ANON_PUB=1 старое поведение сохраняется
+        // (легаси-сборки без `tok` продолжают работать).
+        let k = keys();
+        let (to, hash) = fresh_topic(&k, 4_102_444_905);
+        let app = app_state(k); // anon = true
+        let s = pub_status(&app, pub_req(&to, None)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(app.metrics.pub_anon.load(Ordering::Relaxed), 1);
+        assert_eq!(app.store.peek(&hash, 0).expect("queue").len(), 1);
     }
 }

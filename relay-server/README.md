@@ -5,11 +5,19 @@ Push-ускоритель поверх email-транспорта: дублир�
 wire-формат конвертов не меняется, email-путь остаётся единственным
 источником истины (relay упал = тихая деградация, ничего не теряется).
 
-Дизайн: docs/design/relay-protocol.md. Политика publish (анонимный/по
-write-токену) — конфиг VAULT_RELAY_ANON_PUB, оба режима поддерживаются.
+Дизайн: docs/design/relay-protocol.md. Отправитель публикации обязан
+предъявить креды: заголовок `Authorization: VaultRelay <write-token>` (для
+каналов — write-токен канала) ЛИБО свой read-токен в теле `tok` — так шлёт
+клиент с M2.4, им же считается суточный лимит и проверяется привязка к fp.
+«Чистая анонимность» (ни заголовка, ни `tok`) допускается только при
+`VAULT_RELAY_ANON_PUB=1` — совместимость со старыми сборками; в проде
+выключено (`=0`), тогда публикация без кредов получает 401. Метрики:
+`pub_tok` — публикации с кредами из тела, `pub_anon` — анонимные
+(kill-switch включён), `rejected` — отказы.
 
 ## API
-- POST /relay/pub   {v,to,id,exp,body} → 200 {mid} | 400 | 402 | 413 | 429
+- POST /relay/pub   {v,to,id,exp,body,tok,fp} → 200 {mid} | 400 | 401 | 402 | 413 | 429
+  (401 = отправитель не предъявил кредов, а ANON_PUB=0)
 - GET  /relay/poll?wait=N  (Authorization: VaultRelay <read-token>) → [конверты] | 204
 - GET  /relay/ws    WebSocket: hello → msg → ack (at-least-once, не-ack'нутые возвращаются)
 - GET  /metrics, /health
@@ -21,7 +29,9 @@ token = b64url(key_id ‖ scope ‖ expiry ‖ HMAC-SHA256(server_key, ...))
 пользователей, логов тел — только счётчики в /metrics.
 
 ## Запуск
-VAULT_RELAY_KEY=<64 hex> VAULT_RELAY_ADDR=127.0.0.1:8091 VAULT_RELAY_ANON_PUB=1 vault-relay
+VAULT_RELAY_KEY=<64 hex> VAULT_RELAY_ADDR=127.0.0.1:8091 VAULT_RELAY_ANON_PUB=0 vault-relay
+# ANON_PUB: 0 = анонимная публикация запрещена (прод). Дефолт в коде — 1
+# (совместимость при отсутствии переменной), поэтому в юните ставим явный 0.
 
 ## Персист привязок (VAULT_RELAY_STATE)
 Привязки FCM-токенов (тема → reg_token) и per-topic рингтоны звонка
