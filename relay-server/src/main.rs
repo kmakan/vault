@@ -92,6 +92,13 @@ pub struct AppState {
     /// Персистится в state.json: иначе рестарт релея снова ломал бы
     /// адреса очереди у всех, кто перерегистрируется.
     pub fp_tokens: std::sync::Mutex<HashMap<String, FpToken>>,
+    /// t_b8f44bdf: принимать ли «заявку» уже имеющегося токена (`keep` в
+    /// /relay/register) — клиент связывает fp → токен ДО протухания, чтобы
+    /// адрес очереди не сменился. Kill-switch `VAULT_RELAY_KEEP_CLAIM=0`
+    /// (дефолт — включено): `keep` безвреден, но fp не аутентифицирован
+    /// (см. docs/CALL-DELIVERY-INCIDENT-2026-10-12.md), поэтому выключатель
+    /// нужен, если решим не поддерживать заявку в проде.
+    pub keep_claim: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -130,6 +137,11 @@ impl AppState {
             topic_fcm: std::sync::Mutex::new(topic_fcm),
             state_path,
             fp_tokens: std::sync::Mutex::new(fp_tokens),
+            keep_claim: std::sync::atomic::AtomicBool::new(
+                std::env::var("VAULT_RELAY_KEEP_CLAIM")
+                    .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+                    .unwrap_or(true),
+            ),
         }
     }
 
@@ -165,6 +177,9 @@ pub struct Metrics {
     pub limit_hit: AtomicU64,
     /// M2 channels: сколько постов опубликовано в канальные очереди.
     pub channel_pub: AtomicU64,
+    /// t_b8f44bdf: сколько раз клиент подтвердил СВОЙ текущий токен (`keep`) —
+    /// связка fp → токен записана без выдачи нового (адрес стабилен).
+    pub register_keep: AtomicU64,
 }
 
 // ───────────────────────── Публикация (§5.1) ─────────────────────────
@@ -791,7 +806,7 @@ fn now() -> u64 {
 pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
     let m = &app.metrics;
     let body = format!(
-        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nlimit_hit {}\nchannel_pub {}\n",
+        "pub_ok {}\npub_anon {}\npoll_hits {}\nws_sessions {}\nrejected {}\nqueued {}\nregister_ok {}\nregister_reuse {}\nregister_keep {}\nlimit_hit {}\nchannel_pub {}\n",
         m.pub_ok.load(Ordering::Relaxed),
         m.pub_anon.load(Ordering::Relaxed),
         m.poll_hits.load(Ordering::Relaxed),
@@ -800,6 +815,7 @@ pub async fn metrics(State(app): State<Arc<AppState>>) -> Response {
         app.store.total(),
         m.register_ok.load(Ordering::Relaxed),
         m.register_reuse.load(Ordering::Relaxed),
+        m.register_keep.load(Ordering::Relaxed),
         m.limit_hit.load(Ordering::Relaxed),
         m.channel_pub.load(Ordering::Relaxed),
     );
@@ -1035,6 +1051,14 @@ struct RegisterReq {
     /// поле не шлют.
     #[serde(default)]
     ringtone: Option<String>,
+    /// t_b8f44bdf: «заявка» токена, который у клиента УЖЕ есть. Устройства,
+    /// получившие токен до появления карты fp (v1, 30 дней), при протухании
+    /// сменили бы адрес очереди ещё раз. Присланный токен записывается как
+    /// связка fp → токен: нового токена нет, IP-квота не тратится.
+    /// Принимается только валидный (не протухший) read-токен, не привязанный
+    /// к ДРУГОМУ fp; иначе — обычная выдача.
+    #[serde(default)]
+    keep: Option<String>,
 }
 
 /// fp из запроса: trim + нижний регистр (`aa:bb:...`). Регистр приводим к
@@ -1096,6 +1120,62 @@ async fn relay_register(
                         .into_response();
                 }
                 // install → test: выдаём новый токен ниже (осознанная смена).
+            }
+        }
+    }
+
+    // (1b) ЗАЯВКА уже имеющегося токена (keep, t_b8f44bdf). Устройства,
+    // получившие токен ДО появления карты fp (v1), при протухании сменили бы
+    // адрес очереди ещё раз. Клиент предъявляет свой текущий токен, и сервер
+    // записывает связку fp → токен ЗАРАНЕЕ. Нового токена нет, IP-квота не
+    // тратится. Порядок важен: блок (1) уже отдал бы свой токен, если запись
+    // живая, — сюда попадаем только без живой записи.
+    if app.keep_claim.load(Ordering::Relaxed) {
+        if let (Some(fp_ref), Some(keep_raw)) = (fp.as_deref(), req.keep.as_deref()) {
+            let keep_tok = keep_raw.trim();
+            if let Some(t) = vault_relay::parse(&app.keys, keep_tok) {
+                // (а) токен валиден и не протух + это адрес очереди аккаунта
+                // (read-scope; write/канальные токены адресом очереди не являются).
+                if t.scope == Scope::Read && !t.is_expired() {
+                    // (в) токен не привязан к ДРУГОМУ fp: первый владелец — ок
+                    // (привязываем), чужой fp → заявку отвергаем и идём обычным
+                    // путём выдачи (как раньше).
+                    if check_token_binding(&app, &t.hash, &req.fp) {
+                        let kind = Kind::of(&t);
+                        // (б) для этого fp живой записи нет (иначе вышли бы в
+                        // блоке (1)): записываем заявленный токен.
+                        {
+                            let mut map = app.fp_tokens.lock().expect("fp_tokens lock");
+                            map.insert(
+                                fp_ref.to_string(),
+                                FpToken {
+                                    token: keep_tok.to_string(),
+                                    kind: kind.as_str().to_string(),
+                                    exp: t.expiry,
+                                },
+                            );
+                        }
+                        app.metrics.register_keep.fetch_add(1, Ordering::Relaxed);
+                        ringtone_resolve(&app.topic_ringtone, &t.hash, req.ringtone.as_deref());
+                        app.persist();
+                        tracing::info!(
+                            fp = %fp_ref,
+                            kind = kind.as_str(),
+                            "register: kept existing token (fp → token recorded)"
+                        );
+                        return (
+                            StatusCode::OK,
+                            AxumJson(RegisterOk {
+                                token: keep_tok.to_string(),
+                                topic: t.hash,
+                                exp: t.expiry,
+                                unlimited: kind.is_unlimited(),
+                                kind: kind.as_str().to_string(),
+                            }),
+                        )
+                            .into_response();
+                    }
+                }
             }
         }
     }
@@ -1302,7 +1382,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vault_relay::tokens::{issue, parse};
+    use vault_relay::tokens::{issue, issue_install, issue_test, parse};
 
     fn keys() -> ServerKeys {
         ServerKeys::new([7u8; 32])
@@ -1735,6 +1815,15 @@ mod tests {
         fp: Option<&str>,
         promo: Option<&str>,
     ) -> (StatusCode, serde_json::Value) {
+        reg_full(app, fp, promo, None).await
+    }
+
+    async fn reg_full(
+        app: &Arc<AppState>,
+        fp: Option<&str>,
+        promo: Option<&str>,
+        keep: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         let resp = relay_register(
             State(app.clone()),
             sock(),
@@ -1742,6 +1831,7 @@ mod tests {
                 promo: promo.map(str::to_string),
                 fp: fp.map(str::to_string),
                 ringtone: None,
+                keep: keep.map(str::to_string),
             }),
         )
         .await;
@@ -1812,6 +1902,94 @@ mod tests {
         let (_s3, _j3) = reg(&app, None, None).await;
         let (s4, _j4) = reg(&app, None, None).await;
         assert_eq!(s4, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // ── t_b8f44bdf: заявка текущего токена (`keep`) ──────────────────────
+
+    #[tokio::test]
+    async fn register_keep_records_existing_token_for_fp() {
+        // Устройство с УЖЕ выданным токеном (получен до появления карты fp)
+        // заявляет его: сервер записывает связку fp → токен, нового токена не
+        // выдаёт и адрес очереди не меняет.
+        let app = app_state_with_key(keys(), None);
+        let tok = issue_install(&app.keys, now() as u32);
+        let (s, j) = reg_full(&app, Some("aa:bb:cc:dd:ee:ff"), None, Some(&tok)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["token"], tok, "заявленный токен остаётся адресом очереди");
+        assert_eq!(j["kind"], "install");
+        assert_eq!(j["unlimited"], false);
+        assert_eq!(app.metrics.register_keep.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            app.metrics.register_ok.load(Ordering::Relaxed),
+            0,
+            "заявка — не новая выдача"
+        );
+        // Запись живая: следующая регистрация того же fp отдаёт тот же токен.
+        let (_s2, j2) = reg(&app, Some("aa:bb:cc:dd:ee:ff"), None).await;
+        assert_eq!(j2["token"], tok);
+        assert_eq!(app.metrics.register_reuse.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn register_keep_preserves_token_kind() {
+        // Заявка не понижает вид: тестовый (промо) токен остаётся тестовым.
+        let app = app_state_with_key(keys(), None);
+        let tok = issue_test(&app.keys, now() as u32);
+        let (_s, j) = reg_full(&app, Some("fp-t"), None, Some(&tok)).await;
+        assert_eq!(j["token"], tok);
+        assert_eq!(j["kind"], "test");
+        assert_eq!(j["unlimited"], true);
+    }
+
+    #[tokio::test]
+    async fn register_keep_rejects_token_bound_to_another_fp() {
+        let app = app_state_with_key(keys(), None);
+        // Токен принадлежит аккаунту A (привязка создана при выдаче).
+        let (_s1, ja) = reg(&app, Some("fp-a"), None).await;
+        let tok_a = ja["token"].as_str().expect("token").to_string();
+        // Аккаунт B пытается заявить чужой токен: не присваиваем его.
+        let (s2, jb) = reg_full(&app, Some("fp-b"), None, Some(&tok_a)).await;
+        assert_eq!(s2, StatusCode::OK);
+        assert_ne!(jb["token"], tok_a, "чужой токен не присваивается");
+        assert_eq!(app.metrics.register_keep.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn register_keep_rejects_expired_token() {
+        // Протухший токен заявлять бессмысленно: он уже не адрес очереди.
+        // issue_install(keys, 0) = срок «1970 + 10 лет» (заведомо в прошлом).
+        let app = app_state_with_key(keys(), None);
+        let dead = issue_install(&app.keys, 0);
+        let (_s, j) = reg_full(&app, Some("fp-y"), None, Some(&dead)).await;
+        assert_ne!(j["token"], dead);
+        assert_eq!(app.metrics.register_keep.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn register_keep_does_not_consume_ip_quota() {
+        // 4 заявки с 4 разных fp: квота (3 новых выдачи в сутки на IP)
+        // тратится только на НОВУЮ выдачу, иначе 4-я получила бы 429.
+        let app = app_state_with_key(keys(), None);
+        for i in 0..4 {
+            let tok = issue_install(&app.keys, now() as u32);
+            let fp = format!("fp-keep-{}", i);
+            let (s, j) = reg_full(&app, Some(&fp), None, Some(&tok)).await;
+            assert_eq!(s, StatusCode::OK, "заявка №{} израсходовала квоту", i + 1);
+            assert_eq!(j["token"], tok);
+        }
+        assert_eq!(app.metrics.register_keep.load(Ordering::Relaxed), 4);
+    }
+
+    #[tokio::test]
+    async fn register_keep_ignored_when_disabled() {
+        // Kill-switch VAULT_RELAY_KEEP_CLAIM=0: заявка не принимается,
+        // поведение как до фичи — обычная выдача нового токена.
+        let app = app_state_with_key(keys(), None);
+        app.keep_claim.store(false, Ordering::Relaxed);
+        let tok = issue_install(&app.keys, now() as u32);
+        let (_s, j) = reg_full(&app, Some("fp-x"), None, Some(&tok)).await;
+        assert_ne!(j["token"], tok, "при выключенном keep выдаётся новый токен");
+        assert_eq!(app.metrics.register_keep.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
