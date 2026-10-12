@@ -152,3 +152,19 @@ Diagnostic-Code: smtp; 554 5.7.1 Message rejected under suspicion of SPAM
 - `vault-desktop/src/features/calls.js` — затухающие повторы, `onMailBounce`,
   пилюля `undeliverable`.
 - `vault-desktop/src/locales/{ru,en,zh}.js` — тексты пилюли/тоста.
+
+---
+
+## Ротация промо-ключа (12.10.2026)
+
+Во время разбора значение `VAULT_RELAY_UNLIMITED_KEY` (промо-ключ безлимита)
+случайно попало в вывод команды. Ключ ротирован:
+
+- новый ключ сгенерирован на сервере (`openssl rand -hex 32`), в чат не выводился;
+- заменён в `/home/maksim/vault-relay/env` и `env.bak-20261001-1938` (права 600);
+- `vault-relay.service` перезапущен, процесс поднял новый env;
+- проверено по факту: `POST /relay/register` с новым промо → `unlimited: true`
+  (`kind: test`), без промо → `unlimited: false`;
+- локальная копия в `~/Notes/Projects/mailcipher/secrets.md` обновлена.
+
+Значение нигде не печатается; старый ключ больше недействителен.
