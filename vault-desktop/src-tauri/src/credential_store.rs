@@ -174,7 +174,7 @@ mod tests {
     fn with_temp_dir<F: FnOnce(PathBuf)>(f: F) {
         let _guard = TEST_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("vault-cred-test-{}", rand::random::<u64>()));
-        std::env::set_var("VAULT_CREDENTIALS_DIR", &dir);
+        crate::set_env_safe("VAULT_CREDENTIALS_DIR", &dir);
         f(dir.clone());
         let _ = fs::remove_dir_all(&dir);
         std::env::remove_var("VAULT_CREDENTIALS_DIR");

@@ -1,5 +1,17 @@
 
 // Android library entry point — re-exports main.rs for Tauri cdylib
+
+/// Thread-safe set_env: setenv(3) на Android/Linux не является thread-safe.
+/// Если другие потоки одновременно вызывают getenv, это даёт
+/// `pthread_mutex_lock called on a destroyed mutex` (FORTIFY).
+/// Блокируем все вызовы set_var через Mutex.
+static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn set_env_safe(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var(key, value);
+}
+
 mod audio;
 mod channels;
 mod credential_store;
@@ -1946,7 +1958,7 @@ pub fn run() {
     // не видны — ICE-gathering падал молча («ICE gathering timed out»).
     let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     if std::env::var("VAULT_LOG_INIT").is_err() {
-        std::env::set_var("VAULT_LOG_INIT", "1");
+        set_env_safe("VAULT_LOG_INIT", "1");
         let _ = env_logger::Builder::new()
             .filter_level(log::LevelFilter::Info)
             .parse_filters(&rust_log)
@@ -2142,7 +2154,7 @@ pub fn run() {
             #[cfg(mobile)]
             {
                 if let Ok(dir) = app.path().app_data_dir() {
-                    std::env::set_var("HOME", dir);
+                    set_env_safe("HOME", dir);
                 }
                 // Барьер восстановления (t_12f15e61): на mobile — ПОСЛЕ HOME
                 // (см. регрессию-крэш-луп в run(), пойману device-приёмкой).

@@ -123,7 +123,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeStart
     };
     // HOME обязателен: в service-процессе env пуст, dirs::home_dir() → None.
     // Тот же каталог, что lib.rs setup ставит в activity-процессе.
-    std::env::set_var("HOME", &dir);
+    crate::set_env_safe("HOME", &dir);
     log::info!("[svc-monitor] HOME={dir}");
 
     // Старый цикл (если жив) получает stop и завершается; задача-стартер

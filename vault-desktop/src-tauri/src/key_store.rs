@@ -511,7 +511,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("vault-keys-test-{}-{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("VAULT_KEYS_DIR", &dir);
+        crate::set_env_safe("VAULT_KEYS_DIR", &dir);
         let result = f();
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("VAULT_KEYS_DIR");
@@ -663,7 +663,7 @@ mod tests {
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("ks_{}-{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("VAULT_TEST_KEYS_DIR", &dir);
+        crate::set_env_safe("VAULT_TEST_KEYS_DIR", &dir);
         let result = f();
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("VAULT_TEST_KEYS_DIR");
