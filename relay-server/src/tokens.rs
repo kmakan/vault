@@ -52,6 +52,51 @@ impl Scope {
     }
 }
 
+/// Срок жизни бесплатного (установочного) и тестового токена. Токен обязан
+/// быть СТАБИЛЬНЫМ: смена токена = смена адреса очереди, и собеседники,
+/// знающие старый адрес, молча теряют канал (инцидент 12.10: миграция kv
+/// потеряла relay-list → перерегистрация → вызовы уходили в мёртвую очередь).
+/// Поэтому «простой» токен живёт 10 лет, а ограничение — суточный лимит
+/// конвертов (VAULT_RELAY_FREE_DAILY_LIMIT). Тестовый/платный — без лимита.
+pub const TOKEN_LIFETIME_DAYS: u32 = 3650;
+
+/// Вид токена — ЯВНЫЙ, вместо прежней эвристики «expiry > now+365д = premium».
+/// Раньше простой токен выдавался на 30 дней: (а) протухал → перерегистрация
+/// → смена адреса очереди; (б) эвристика не давала выдать долгий простой
+/// токен (он бы сразу стал «premium»). Теперь вид зашит в тариф v2-токена:
+/// Free = установочный (суточный лимит), Trial = тестовый (безлимит),
+/// Pro/Business = платный (каркас, биллинга пока нет).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// Установка приложения: 100 конвертов/сутки, живёт 10 лет.
+    Install,
+    /// Тестовый (промо-ключ): без суточного лимита, живёт 10 лет.
+    Test,
+    /// Платный: без лимита; срок — оплаченный период (402-гейт).
+    Paid,
+}
+
+impl Kind {
+    pub fn of(t: &Token) -> Self {
+        match t.plan {
+            Plan::Free => Kind::Install,
+            Plan::Trial => Kind::Test,
+            Plan::Pro | Plan::Business => Kind::Paid,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Install => "install",
+            Kind::Test => "test",
+            Kind::Paid => "paid",
+        }
+    }
+    /// Есть ли суточный лимит конвертов.
+    pub fn is_unlimited(self) -> bool {
+        !matches!(self, Kind::Install)
+    }
+}
+
 /// Тариф подписки в v2-токене (design §2.3). `#[repr(u8)]` — сырой байт в
 /// токене. Маппинг неизвестного значения → Free (fail-open по тарифу,
 /// fail-closed по HMAC: MAC всё равно проверяется по сырому байту).
@@ -157,6 +202,10 @@ pub struct Token {
     /// (привязка: publish в очередь канала возможен только write-токеном
     /// этого канала; подделка = знать broadcast-ключ).
     pub key_id: u64,
+    /// Версия формата токена: 1 (45 Б) или 2 (63 Б). Нужна, чтобы отличить
+    /// легаси-v1 promo-токен (10 лет) от нового установочного v2 (тоже
+    /// 10 лет): у v1 вид определяется старым правилом по сроку.
+    pub v: u8,
     /// Тариф подписки (design §2.3). v1 и канальные токены → `Plan::Free`.
     pub plan: Plan,
     /// Идентификатор подписки (design §2.3). v1 и канальные токены → 0.
@@ -227,6 +276,21 @@ pub fn issue_v2(
     b64url(&raw)
 }
 
+/// Выдать установочный (простой) read-токен: фактически бессрочный (10 лет),
+/// ограничение — суточный лимит конвертов на издателя. Адрес очереди
+/// СТАБИЛЕН: повторная регистрация того же fp обязана вернуть этот же токен.
+pub fn issue_install(keys: &ServerKeys, now: u32) -> String {
+    let exp = now.saturating_add(TOKEN_LIFETIME_DAYS.saturating_mul(86400));
+    issue_v2(keys, Scope::Read, Plan::Free, 0, exp)
+}
+
+/// Выдать тестовый (промо-ключ) read-токен: тот же срок, но без суточного
+/// лимита — явный вид `test`, а не эвристика по сроку.
+pub fn issue_test(keys: &ServerKeys, now: u32) -> String {
+    let exp = now.saturating_add(TOKEN_LIFETIME_DAYS.saturating_mul(86400));
+    issue_v2(keys, Scope::Read, Plan::Trial, 0, exp)
+}
+
 /// Разобрать и проверить токен. None = битый/поддельный/неизвестный key_id.
 ///
 /// Версия выбирается СТРОГО по длине декодированных байт (design §2.1):
@@ -270,6 +334,7 @@ fn parse_v1(keys: &ServerKeys, raw: &[u8]) -> Option<Token> {
             expiry,
             hash: hex(&raw[13..45]),
             key_id,
+            v: 1,
             plan: Plan::Free,
             sub: 0,
             dev_nonce: 0,
@@ -289,6 +354,7 @@ fn parse_v1(keys: &ServerKeys, raw: &[u8]) -> Option<Token> {
         expiry,
         hash: hex(&mac),
         key_id,
+        v: 1,
         plan: Plan::Free,
         sub: 0,
         dev_nonce: 0,
@@ -325,6 +391,7 @@ fn parse_v2(keys: &ServerKeys, raw: &[u8]) -> Option<Token> {
         expiry: paid_until,
         hash: hex(&mac),
         key_id,
+        v: 2,
         plan: Plan::from_byte(plan_raw),
         sub,
         dev_nonce,
@@ -634,5 +701,46 @@ mod tests {
         assert_eq!(parsed.sub, 0);
         assert_eq!(parsed.dev_nonce, 0);
         assert_eq!(parsed.paid_until, exp);
+    }
+
+    #[test]
+    fn version_is_exposed() {
+        let k = keys();
+        let v1 = parse(&k, &issue(&k, Scope::Read, 4102444800)).expect("v1");
+        assert_eq!(v1.v, 1);
+        let v2 = parse(&k, &issue_v2(&k, Scope::Read, Plan::Pro, 1, 4102444800)).expect("v2");
+        assert_eq!(v2.v, 2);
+    }
+
+    #[test]
+    fn install_token_long_lived_but_limited_kind() {
+        let k = keys();
+        let now = now_u32();
+        let p = parse(&k, &issue_install(&k, now)).expect("install parses");
+        assert_eq!(p.v, 2);
+        assert_eq!(p.plan, Plan::Free);
+        assert_eq!(Kind::of(&p), Kind::Install);
+        assert!(!Kind::of(&p).is_unlimited());
+        // Стабильность: срок — 10 лет, а не 30 дней (иначе перерегистрация
+        // каждые 30 дней меняла бы адрес очереди).
+        assert_eq!(p.expiry, now + TOKEN_LIFETIME_DAYS * 86400);
+        assert!(!p.is_expired());
+    }
+
+    #[test]
+    fn test_token_is_unlimited_kind() {
+        let k = keys();
+        let p = parse(&k, &issue_test(&k, now_u32())).expect("test parses");
+        assert_eq!(p.plan, Plan::Trial);
+        assert_eq!(Kind::of(&p), Kind::Test);
+        assert!(Kind::of(&p).is_unlimited());
+    }
+
+    #[test]
+    fn kind_strings_are_stable() {
+        // Контракт с клиентом/state.json: строки вида менять нельзя.
+        assert_eq!(Kind::Install.as_str(), "install");
+        assert_eq!(Kind::Test.as_str(), "test");
+        assert_eq!(Kind::Paid.as_str(), "paid");
     }
 }

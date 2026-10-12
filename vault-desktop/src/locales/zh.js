@@ -195,6 +195,9 @@ export default {
   call_declined: '通话已拒绝',
   call_canceled: '通话已取消',
   call_ended: '通话结束',
+  // 通话邮件被服务商退回（DSN）——对方未收到。
+  call_undeliverable: '邮件未送达',
+  call_undeliverable_toast: '邮件服务器退回了通话消息：{reason}。通话已取消——请启用中继或检查地址。',
   call_back: '回拨',
   // 通话设置
   settings_calls: '通话',

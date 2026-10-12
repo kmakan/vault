@@ -1888,6 +1888,7 @@ export default {
     parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
     async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
     async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
+    async onMailBounce(recipients, reason) { return CallsFeature.onMailBounce(this, recipients, reason); },
     async startCall() { return CallsFeature.startCall(this); },
     async acceptCall() { return CallsFeature.acceptCall(this); },
     async rejectCall() { return CallsFeature.rejectCall(this); },

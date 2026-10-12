@@ -283,7 +283,7 @@ console.log('5. lifecycle');
   const cid = ctx.currentCall && ctx.currentCall.call_id;
   check('startCall → outgoing_ringing + hasLocalOffer', ctx.callState === 'outgoing_ringing' && ctx.currentCall.hasLocalOffer === true);
   check('call_request ушел с offer+kemct', cryptoMock.encVault.some(p => { try { const b = JSON.parse(p); return b.type === 'call_request' && b.sdp === 'OFFER_SDP' && b.kemct === 'KEMCT'; } catch (e) { return false; } }));
-  check('ринг-таймер 300с + ретрансляция 15с', timers.get(ctx.callRingTimer).ms === 300000 && timers.get(ctx.callResendTimer).ms === 15000);
+  check('ринг-таймер 300с + 1-й повтор через 5с (затухание, не 15с-лавина)', timers.get(ctx.callRingTimer).ms === 300000 && timers.get(ctx.callResendTimer).ms === 5000);
   // ретрансляция тикает (viaRelay=false)
   relayMock.pubs.length = 0;
   await fireTimer(ctx.callResendTimer);
@@ -357,13 +357,30 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   apiMock.calls.length = 0;
   C.startSignalResend(ctx, 'peer@x.ru', { type: 'call_accept', call_id: 'q1' }, 'q1');
   const st = timers.get(ctx._signalResendTimer);
-  check('resend-таймер 10с', st && st.ms === 10000);
+  check('resend-таймер: 1-я пауза 5с', st && st.ms === 5000);
+  check('лест revпов: [5с,15с,45с,120с] — не больше 4 писем на вызов',
+    JSON.stringify(C.SIGNAL_RESEND_DELAYS_MS) === JSON.stringify([5000, 15000, 45000, 120000]),
+    C.SIGNAL_RESEND_DELAYS_MS);
   await fireTimer(ctx._signalResendTimer);
   check('resend тик повторяет сигнал почтой', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
   // media connected → resend самоостанавливается
   ctx.callMediaConnected = true;
   await fireTimer(ctx._signalResendTimer);
   check('media connected → resend остановлен', ctx._signalResendTimer === null);
+  // ЗАТУХАНИЕ (инцидент 12.10.2026): лавина писем сожгла почтовый резерв
+  // (Яндекс: 554 5.7.1 SPAM). Максимум 4 повтора, дальше паузы нет.
+  const cap = makeCtx({ currentCall: { call_id: 'cap1', peer: 'peer@x.ru' }, callState: 'active', callMediaConnected: false });
+  apiMock.calls.length = 0;
+  C.startSignalResend(cap, 'peer@x.ru', { type: 'call_accept', call_id: 'cap1' }, 'cap1');
+  const delays = [];
+  for (let i = 0; i < 6 && cap._signalResendTimer; i++) {
+    delays.push(timers.get(cap._signalResendTimer).ms);
+    await fireTimer(cap._signalResendTimer);
+  }
+  check('ровно 4 повтора по [5000,15000,45000,120000]',
+    JSON.stringify(delays) === JSON.stringify([5000, 15000, 45000, 120000]), delays);
+  check('после 4-го повтора пауза не взводится (лавины нет)', cap._signalResendTimer === null);
+  check('ровно 4 письма за цикл ожидания', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 4);
   // sendTerminalRepeat: 3 отправки (сейчас + 3с + 7с)
   timers.clear();
   apiMock.calls.length = 0;
@@ -426,6 +443,44 @@ console.log('8. playCallSound/stopCallSound');
   const s2 = makeCtx();
   C.stopCallSound(s2);
   check('stopCallSound desktop → mediaSoundStop', apiMock.calls.some(c => c[0] === 'soundStop'));
+}
+
+// ── 9. Баунс письма-вызова → мгновенная отмена (12.10.2026) ─────
+console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
+{
+  // Регресс-цена: раньше DSN не разбирался вовсе (incoming.js отбрасывает
+  // не-шифртекст) → вызов висел в гудках и писал «нет ответа», хотя письмо
+  // отбито провайдером.
+  const ctx = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b1', peer: 'peer@x.ru' } });
+  toasts.length = 0;
+  const hit = await C.onMailBounce(ctx, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  check('баунс про собеседника → вызов отменён', hit === true && ctx.callState === 'idle', { state: ctx.callState });
+  check('тост с причиной показан', toasts.length === 1, toasts);
+  check('пилюля undeliverable (не «нет ответа»)', ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.messages.map(m => m.callEvent));
+  check('иконка лейбла — phone-off', C.callPillIcon({ callEvent: { kind: 'undeliverable' } }) === 'phone-off');
+  check('лейбл undeliverable', C.callEventLabel(ctx, { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
+
+  // Регистр и алиасы: адрес в DSN может быть в другом регистре.
+  const up = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b2', peer: 'Peer@X.ru' } });
+  const upHit = await C.onMailBounce(up, ['PEER@x.ru'], '550 5.1.1 User unknown');
+  check('регистр адреса не мешает', upHit === true && up.callState === 'idle');
+
+  // Чужой адресат: баунс не про наш звонок — НЕ гасим живой вызов.
+  const other = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b3', peer: 'peer@x.ru' } });
+  const otherHit = await C.onMailBounce(other, ['someone@ya.ru'], '550');
+  check('чужой получатель → вызов не тронут', otherHit === false && other.callState === 'outgoing_ringing');
+
+  // Адрес не распознали (незнакомый провайдер): тоже не гасим — ложная
+  // отмена живого вызова хуже лишних минут гудков.
+  const unparsed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b4', peer: 'peer@x.ru' } });
+  const unparsedHit = await C.onMailBounce(unparsed, [], '');
+  check('пустой recipients → не гасим', unparsedHit === false && unparsed.callState === 'outgoing_ringing');
+
+  // Живой разговор баунсами не рвём.
+  const live = makeCtx({ callState: 'active', currentCall: { call_id: 'b5', peer: 'peer@x.ru' } });
+  check('active-звонок не рвём', (await C.onMailBounce(live, ['peer@x.ru'], '')) === false && live.callState === 'active');
+
+  timers.clear(); toasts.length = 0;
 }
 
 console.log('');

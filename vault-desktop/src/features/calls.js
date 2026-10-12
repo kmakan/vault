@@ -19,6 +19,16 @@ import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
 
+// ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
+// Инцидент 12.10.2026. Раньше call_request повторялся каждые 15с все 5 минут
+// гудков (~20 писем на один звонок), а call_accept — каждые 10с до соединения.
+// Сотни одинаковых писем с ПУСТОЙ темой сожгли репутацию отправителя: Яндекс
+// начал отбивать наши письма («554 5.7.1 Message rejected under suspicion of
+// SPAM»), и РЕЗЕРВНЫЙ ПОЧТОВЫЙ КАНАЛ УМЕР — а он единственный, когда релей
+// недоступен. Повторы нужны против редкой транзитной потери (SMTP принял, но
+// письмо не дошло) — 4 попытки её покрывают. Лавину — нет.
+export const SIGNAL_RESEND_DELAYS_MS = [5000, 15000, 45000, 120000];
+
 // ── S5-2: решение, принятое кнопкой системного уведомления ──────
 // Сценарий: приложение закрыто, звонок пришёл по FCM, JS о нём не знает
 // (ctx.currentCall=null). Юзер жмёт «Ответить» → CallActionReceiver →
@@ -362,10 +372,8 @@ export async function handleCallSignal(ctx, sig, from) {
         // Собеседник принял — таймер отмены больше не нужен.
         clearTimeout(ctx.callRingTimer);
         ctx.callRingTimer = null;
-        if (ctx.callResendTimer) {
-          clearInterval(ctx.callResendTimer);
-          ctx.callResendTimer = null;
-        }
+        // Гудки кончились — затухающие повторы call_request больше не нужны.
+        stopSignalTimer(ctx, 'callResendTimer');
         // Гудки исходящего → чайм соединения. stop не нужен
         // play сам останавливает предыдущий звук (Rust/HTML5).
         playCallSound(ctx, 'connect', false);
@@ -525,33 +533,30 @@ export async function startCall(ctx) {
   // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
   // попадаем только когда сигналы ушли/идут в фоне.)
   // РЕТРАНСЛЯЦИЯ: email-сигнал может потеряться в транзите
-  // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали
-  // Повторяем call_request каждые 15с пока гудки: приёмник дедупит по
-  // call_id (isCallSeen), дубликаты безопасны. Останавливается в hangup.
-  ctx.callResendTimer = setInterval(async () => {
-    if (ctx.callState !== 'outgoing_ringing' || !ctx.currentCall
-        || ctx.currentCall.call_id !== call_id) {
-      clearInterval(ctx.callResendTimer);
-      ctx.callResendTimer = null;
-      return;
-    }
-    try {
-      // Offer внутри — ретрансляция несёт и его.
-      // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-      // Релей-копия НЕ повторяется (viaRelay=false): конверт уже
-      // лежит в relay-очереди получателя с первого отправления —
-      // повтор только жёг суточный лимит и плодил ntfy-пуши.
-      await sendCallEnvelope(ctx, peer, {
-        type: 'call_request', call_id, sdp: offerSdp,
-        kemct: ctx._pendingKemct || undefined,
-        sender_ek: ctx._pendingSenderEk || undefined,
-      }, { viaRelay: false });
+  // (SMTP принял без ошибки, но письмо не дошло до Gmail — наблюдали).
+  // Приёмник дедупит по call_id (isCallSeen), дубликаты безопасны.
+  // Затухающие повторы: [5с, 15с, 45с, 120с] = не больше 4 писем на вызов
+  // (было ~20 — каждые 15с все 5 минут; см. SIGNAL_RESEND_DELAYS_MS).
+  // Останавливается в hangup/cancelCall/приёме call_accept.
+  scheduleSignalResend(
+    ctx,
+    'callResendTimer',
+    () => ctx.callState === 'outgoing_ringing' && !!ctx.currentCall
+      && ctx.currentCall.call_id === call_id,
+    // Offer внутри — ретрансляция несёт и его.
+    // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
+    // Релей-копия НЕ повторяется (viaRelay=false): конверт уже лежит в
+    // relay-очереди получателя с первого отправления — повтор только жёг
+    // суточный лимит и плодил ntfy-пуши.
+    () => sendCallEnvelope(ctx, peer, {
+      type: 'call_request', call_id, sdp: offerSdp,
+      kemct: ctx._pendingKemct || undefined,
+      sender_ek: ctx._pendingSenderEk || undefined,
+    }, { viaRelay: false }).then(() => {
       ctx._pendingKemct = null; ctx._pendingSenderEk = null;
       console.log('[call] call_request retransmitted', call_id);
-    } catch (e) {
-      console.warn('[call] call_request retransmit failed:', e && e.message || e);
-    }
-  }, 15000);
+    })
+  );
 }
 
 export async function acceptCall(ctx) {
@@ -661,6 +666,9 @@ export async function hangup(ctx, reason) {
           || reason === 'remote_late' || reason === 'preempt') kind = 'missed';
     } else if (wasOutgoing) {
       if (reason === 'timeout') kind = 'no_answer';
+      // Письмо-вызов отбито провайдером (DSN/bounce): до собеседника НЕ
+      // дошло ничего — отдельная пилюля, а не «нет ответа» (12.10.2026).
+      else if (reason === 'bounce') kind = 'undeliverable';
       else if (reason === 'remote_reject') kind = 'declined';
       // call_cancel от собеседника = у него сгорел таймер гудка → нет ответа.
       else if (reason === 'remote' || reason === 'remote_late') kind = 'no_answer';
@@ -671,10 +679,7 @@ export async function hangup(ctx, reason) {
   clearTimeout(ctx.callRingTimer);
   ctx.callRingTimer = null;
   // Ретрансляция call_request — тоже останавливаем.
-  if (ctx.callResendTimer) {
-    clearInterval(ctx.callResendTimer);
-    ctx.callResendTimer = null;
-  }
+  stopSignalTimer(ctx, 'callResendTimer');
   // Ретрансляция call_accept/answer.
   stopSignalResend(ctx);
   // Предохранитель «Соединение…».
@@ -739,6 +744,47 @@ export async function cancelCall(ctx, reason) {
   hangup(ctx, reason || 'cancel');
 }
 
+// ── Отбой письма (DSN/bounce): гасим висящий исходящий вызов ──────────
+// Инцидент 12.10.2026: провайдер отбил письмо-вызов («554 5.7.1 Message
+// rejected under suspicion of SPAM»), но приложение этого не знало и
+// продолжало «звонить»: 5 минут гудков и «нет ответа» у пользователя,
+// хотя до собеседника не дошло ничего — ни письмом (отбой провайдера),
+// ни релеем (адрес очереди был протухший). Разбор DSN — features/bounce.js,
+// здесь только реакция на него.
+//
+// recipients: адреса, которым НЕ доставили (может быть пусто — неизвестный
+// формат). reason: текст ошибки SMTP (для тоста и логов).
+export async function onMailBounce(ctx, recipients = [], reason = '') {
+  const c = ctx.currentCall;
+  // Реагируем только на ВИСЯЩИЙ ИСХОДЯЩИЙ вызов: живой разговор отбой
+  // письма не касается, входящий звонок — тем более.
+  if (!c || ctx.callState !== 'outgoing_ringing') return false;
+  const canon = (v) => {
+    try { return String(ctx.canonicalOf(v) || v || '').toLowerCase(); }
+    catch (e) { return String(v || '').toLowerCase(); }
+  };
+  const peer = canon(c.peer);
+  if (!peer) return false;
+  // Адресат баунса обязан совпасть с собеседником звонка. Если адрес
+  // распознать не удалось (незнакомый провайдер, нестандартный DSN) — НЕ
+  // гасим: ложная отмена живого вызова хуже, чем лишние минуты гудков.
+  const hit = (recipients || []).some(r => canon(r) === peer);
+  if (!hit) {
+    console.log('[call] bounce not for current peer: ' + ((recipients || []).join(',') || '?'));
+    return false;
+  }
+  console.warn('[call] bounce for', peer, '→ отменяем исходящий вызов:', reason || 'undeliverable');
+  try {
+    const msg = ctx.t('call_undeliverable_toast', { reason: reason || peer })
+      || ('Письмо не доставлено: ' + (reason || peer));
+    ctx.showToast(msg, 6000);
+  } catch (e) { /* тост не критичен */ }
+  // cancelCall: шлём собеседнику call_cancel (если он всё-таки получил
+  // конверт релеем) и записываем пилюлю 'undeliverable'.
+  await cancelCall(ctx, 'bounce');
+  return true;
+}
+
 // ── Пропущенные вызовы (пилюли) ────────────────────────────────
 // пропущенный/нет ответа/отклонён/завершён + время + кнопка «Перезвонить».
 // Пилюля — обычное сообщение с полем callEvent; персистится в sqlite
@@ -798,6 +844,7 @@ export function callEventLabel(ctx, msg) {
     declined: 'call_declined',
     canceled: 'call_canceled',
     ended: 'call_ended',
+    undeliverable: 'call_undeliverable',
   }[ev.kind] || 'call_missed';
   let label = ctx.t(key);
   if (ev.kind === 'ended' && ev.duration > 0) {
@@ -855,28 +902,49 @@ export function toggleSpeaker(ctx) {
 // состоянию (call_accept — только в outgoing_ringing, call_sdp —
 // только в active с тем же call_id).
 export function startSignalResend(ctx, peer, payload, call_id) {
-  stopSignalResend(ctx);
-  ctx._signalResendTimer = setInterval(async () => {
-    if (ctx.callState !== 'active' || !ctx.currentCall
-        || ctx.currentCall.call_id !== call_id || ctx.callMediaConnected) {
-      stopSignalResend(ctx);
-      return;
-    }
-    try {
-      // Релей-копия уже доставлена первым отправлением — повтор
-      // только почтой (лимит + лишние пуши).
-      await sendCallEnvelope(ctx, peer, payload, { viaRelay: false });
-      console.log('[call] signal retransmitted:', payload.type, call_id);
-    } catch (e) {
-      console.warn('[call] signal retransmit failed:', e && e.message || e);
-    }
-  }, 10000);
+  scheduleSignalResend(
+    ctx,
+    '_signalResendTimer',
+    () => ctx.callState === 'active' && !!ctx.currentCall
+      && ctx.currentCall.call_id === call_id && !ctx.callMediaConnected,
+    // Релей-копия уже доставлена первым отправлением — повтор только
+    // почтой (лимит + лишние пуши).
+    () => sendCallEnvelope(ctx, peer, payload, { viaRelay: false })
+      .then(() => console.log('[call] signal retransmitted:', payload.type, call_id))
+  );
 }
 
 export function stopSignalResend(ctx) {
-  if (ctx._signalResendTimer) {
-    clearInterval(ctx._signalResendTimer);
-    ctx._signalResendTimer = null;
+  stopSignalTimer(ctx, '_signalResendTimer');
+}
+
+// Планировщик повторов ОДНОГО сигнала с затухающей паузой: одна попытка =
+// одно письмо, всего не больше SIGNAL_RESEND_DELAYS_MS.length. shouldContinue()
+// проверяется перед каждым повтором (звонок мог принять/завершиться/соединиться).
+// Идентификатор таймера лежит в ctx[timerKey] — штатное завершение звонка
+// гасит его через stopSignalTimer (hangup/cancelCall/stopSignalResend).
+function scheduleSignalResend(ctx, timerKey, shouldContinue, send) {
+  stopSignalTimer(ctx, timerKey);
+  let attempt = 0;
+  const arm = () => {
+    const delay = SIGNAL_RESEND_DELAYS_MS[attempt];
+    if (delay === undefined) return; // попытки исчерпаны — молчим, ждём собеседника
+    attempt += 1;
+    ctx[timerKey] = setTimeout(async () => {
+      ctx[timerKey] = null;
+      if (!shouldContinue()) return;
+      try { await send(); }
+      catch (e) { console.warn('[call] signal resend failed:', e && e.message || e); }
+      arm();
+    }, delay);
+  };
+  arm();
+}
+
+function stopSignalTimer(ctx, timerKey) {
+  if (ctx[timerKey]) {
+    clearTimeout(ctx[timerKey]);
+    ctx[timerKey] = null;
   }
 }
 

@@ -15,6 +15,7 @@ import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
 import * as ChannelsFeature from './channels.js';
+import * as BounceFeature from './bounce.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -100,6 +101,22 @@ async function classify(ctx, m, from) {
   if (ctx.isIgnored(from)) return null;
 
   const body = ctx.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
+
+  // Служебное письмо о НЕДОСТАВКЕ (DSN / bounce). Проверяем ДО
+  // crypto.isEncrypted: DSN — обычный текст, и раньше он молча отбрасывался.
+  // Цена ошибки: письмо-вызов отбито провайдером, а вызов висит в гудках до
+  // таймаута и пишет «нет ответа», хотя до собеседника ничего не дошло
+  // (инцидент 12.10.2026). Теперь баунс гасит исходящий вызов сразу.
+  if (BounceFeature.isBounceMessage(from, m.subject)) {
+    const recipients = BounceFeature.bounceRecipients(body);
+    const reason = BounceFeature.bounceReason(body);
+    console.log('[mail] bounce: recipients=' + (recipients.join(',') || '?')
+      + ' reason=' + (reason || '?'));
+    try { await ctx.onMailBounce(recipients, reason); }
+    catch (e) { console.warn('[mail] bounce handling failed:', e && e.message || e); }
+    return null; // служебное письмо: не сообщение, в счётчик/уведомления не идёт
+  }
+
   if (!body || !crypto.isEncrypted(body)) return null;
 
   let chatKey = null; // email (1:1) или 'group:<id>'

@@ -195,6 +195,9 @@ export default {
   call_declined: 'Вызов отклонён',
   call_canceled: 'Звонок отменён',
   call_ended: 'Звонок завершён',
+  // Письмо-вызов отбито провайдером (DSN/bounce) — до собеседника не дошло.
+  call_undeliverable: 'Письмо не доставлено',
+  call_undeliverable_toast: 'Почта отбила письмо: {reason}. Вызов отменён — включите релей или проверьте адрес.',
   call_back: 'Перезвонить',
   // Настройки звонков
   settings_calls: 'Звонки',

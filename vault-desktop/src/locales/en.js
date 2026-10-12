@@ -195,6 +195,9 @@ export default {
   call_declined: 'Call declined',
   call_canceled: 'Call canceled',
   call_ended: 'Call ended',
+  // Call envelope bounced by the provider (DSN) — peer never received it.
+  call_undeliverable: 'Message not delivered',
+  call_undeliverable_toast: 'The mail server rejected the call message: {reason}. Call canceled — enable relay or check the address.',
   call_back: 'Call back',
   // Call settings
   settings_calls: 'Calls',
