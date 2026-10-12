@@ -465,8 +465,10 @@ console.log('20. ЗВОНОК под незнакомым адресом (fp-nam
   await processIncoming(ctx, [m], { notify: true });
   check('сигнал звонка доставлен под новым адресом',
     got.length === 1 && got[0][0] === 'call_request' && got[0][1] === 'c-ns1', got);
-  check('адрес отправителя передан в state machine',
-    got.length === 1 && got[0][2] === 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx', got);
+  check('адрес отправителя — ИЗВЕСТНЫЙ адрес пира, не fp:',
+    got.length === 1 && got[0][2] === 'icemaksim@gmail.com', got);
+  check('fp-адрес не попадает в state machine (иначе currentCall.peer = fp:… → SMTP «Invalid recipient email»)',
+    got.length === 1 && !String(got[0][2]).startsWith('fp:'), got);
   check('звонок НЕ посчитан как сообщение', ctx.unreadCounts['fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx'] === undefined);
 }
 

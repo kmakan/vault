@@ -186,6 +186,22 @@ export class CryptoClient {
   }
 
   isEncrypted(text) {
+    // PQ-ГИБРИД проверяем ДО base64. Гибридный конверт — это
+    // "PQ1:<kemct>|<sender_ek>|<wire>" (lib.rs::encrypt_vault_message) и он
+    // НЕ base64: ':' и '|' вне алфавита, поэтому atob() ниже бросал бы, а
+    // catch возвращал false — и classify() отбрасывал конверт как «не наше
+    // письмо», ПОЛНОСТЬЮ МОЛЧА (ни лога, ни ошибки).
+    //
+    // Отсюда односторонняя поломка на стенде 12.10.2026: как только у пира
+    // появляется PQ-ключ, отправитель начинает слать PQ1 — и получатель
+    // перестаёт понимать от него ВСЁ (сообщения и звонки). Без PQ-ключа
+    // отправка идёт legacy-base64, поэтому «работало», пока ключ не
+    // подтянулся. Обратное направление не задето: там у отправителя PQ-ключа
+    // пира нет.
+    const raw = String(text || '').trim();
+    if (raw.startsWith('PQ1:')) {
+      return this.privateKey !== null && raw.split('|').length === 3;
+    }
     try {
       // SMTP folds base64 at 76 chars with \r\n (RFC 5322) — atob is strict,
       // so strip ALL whitespace first (same lesson as decryptVault /

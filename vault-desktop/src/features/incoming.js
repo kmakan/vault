@@ -236,8 +236,11 @@ async function classify(ctx, m, from) {
           // в конверт уезжал from = fp:<…>). Ловим здесь, до матчинга.
           const callSig = ctx.parseCallSignal(plain);
           if (callSig) {
-            console.log('[call] signal from new address', from, '— доставлен по ключу пира');
-            try { await ctx.handleCallSignal(callSig, from); }
+            // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
+            // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
+            // ответные конверты идут на несуществующий SMTP-адрес.
+            console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
+            try { await ctx.handleCallSignal(callSig, knownEmail); }
             catch (e) { console.warn('[call] signal failed:', e); }
             return null;
           }
