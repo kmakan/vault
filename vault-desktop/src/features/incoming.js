@@ -228,6 +228,19 @@ async function classify(ctx, m, from) {
         crypto.setPeerPublicKey(knownKey);
         try {
           const plain = await crypto.decryptVault(body);
+          // ЗВОНОК под ещё не известным адресом. Конверт расшифрован ключом
+          // пира, но это сигнал, а не письмо личности: ниже матчинг требует
+          // parseEnvelope (у сигнала конверта нет) и он уходил дальше по ветке
+          // «смена почты», где call_* не разбирались — сигнал терялся, и звонок
+          // от десктопа на телефон не доходил вообще (регресс с 25dd18a, где
+          // в конверт уезжал from = fp:<…>). Ловим здесь, до матчинга.
+          const callSig = ctx.parseCallSignal(plain);
+          if (callSig) {
+            console.log('[call] signal from new address', from, '— доставлен по ключу пира');
+            try { await ctx.handleCallSignal(callSig, from); }
+            catch (e) { console.warn('[call] signal failed:', e); }
+            return null;
+          }
           const env = ctx.parseEnvelope(plain);
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.

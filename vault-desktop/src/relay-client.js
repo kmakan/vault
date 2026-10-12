@@ -374,6 +374,15 @@ export async function relayGroupPublish(account, memberEmails, envelopeObj, encr
 export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts = {}) {
   const job = async () => {
     try {
+      // `from` — WIRE-поле конверта: его читает ПИР (incoming.js:
+      // senderEmail(m.from) → peerKeys[from]). Там нужен АДРЕС, а не
+      // namespace аккаунта. Регресс 25dd18a: строка `account = await
+      // accountNamespace(account)` стояла выше и переписывала `account`
+      // на `fp:<…>` — и `from: account` уезжал в сеть отпечатком.
+      // Пир такого адреса не знает → peerKeys[from] пуст → конверт
+      // (в т.ч. call_request) МОЛЧА отбрасывался. Возвращаем `from`
+      // в почту ДО нормализации; account-scoped операции ниже, как и было.
+      const fromEmail = String(account || '').trim().toLowerCase();
       account = await accountNamespace(account);
       const { enabled, peers, active, relays } = await getSettings(account);
       if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
@@ -443,7 +452,7 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
           id: envelopeObj.id || ('rl-' + Date.now()),
           exp,
           body: btoa(unescape(encodeURIComponent(encryptedBody))),
-          from: account,
+          from: fromEmail,
           // M2.4 автообмен: мой read-токен (адрес моей очереди) — получатель
           // запомнит и сможет слать мне пуши. Пользователь ничего не вводит.
           tok: relay.myToken || '',

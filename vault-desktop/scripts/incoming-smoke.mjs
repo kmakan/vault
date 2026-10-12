@@ -445,5 +445,30 @@ console.log('19. баунс не от собеседника-демона, но 
   check('нет unread/notify', notifyMock.fires.length === dsn2Fires0);
 }
 
+console.log('20. ЗВОНОК под незнакомым адресом (fp-namespace) не теряется');
+{
+  // Регресс 12.10.2026: десктоп публиковал конверты с from = fp:<…>
+  // (нормализация account внутри relayPublish, коммит 25dd18a). У пира
+  // такого адреса в peerKeys нет → конверт уходил в ветку «смена почты»,
+  // где call-сигнал НЕ разбирался и молча терялся: звонок от десктопа не
+  // доходил вообще. Теперь сигнал доходит до state machine.
+  const ctx = makeCtx();
+  ctx.peerKeys = { 'icemaksim@gmail.com': 'ANNAK' };
+  ctx.parseCallSignal = (t) => { try { return JSON.parse(t); } catch (e) { return null; } };
+  // Расшифровка по старому ключу срабатывает (fingerprint-матчинг):
+  // первая попытка (новый адрес) — мимо, вторая (известный ключ) — ок.
+  cryptoMock.decryptVault = async (b) => JSON.stringify({ vault: 1, id: 'ev1', type: 'call_request', call_id: 'c-ns1', key: 'ANNAK' });
+  const got = [];
+  ctx.handleCallSignal = async function (sig, from) { got.push([sig.type, sig.call_id, from]); };
+  const m = msg({ from: { address: 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx' }, uid: 20, message_id: '<ns@x>' });
+  withBody(ctx, m, 'ENC:1');
+  await processIncoming(ctx, [m], { notify: true });
+  check('сигнал звонка доставлен под новым адресом',
+    got.length === 1 && got[0][0] === 'call_request' && got[0][1] === 'c-ns1', got);
+  check('адрес отправителя передан в state machine',
+    got.length === 1 && got[0][2] === 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx', got);
+  check('звонок НЕ посчитан как сообщение', ctx.unreadCounts['fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx'] === undefined);
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

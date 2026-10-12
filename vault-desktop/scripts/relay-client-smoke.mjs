@@ -26,9 +26,12 @@ globalThis.window = globalThis; // relay-client трогает window.VaultFcm (
 writeFileSync(MOCKS + '/core.js',
   'export const invoke = (...a) => globalThis.__invoke(...a);');
 writeFileSync(MOCKS + '/api.js',
-  'export const accountNamespace = (e) => String(e || "").trim().toLowerCase();');
+  'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/crypto.js',
   'const c = { fingerprint: async () => globalThis.__fp }; export default c;');
+// По умолчанию namespace = почта (legacy). Тест 8 переключает на fp:,
+// чтобы воспроизвести регресс 25dd18a (from уезжал отпечатком).
+globalThis.__nsOf = (e) => e;
 
 let src = readFileSync(ROOT + '/../src/relay-client.js', 'utf8');
 src = src
@@ -166,6 +169,32 @@ console.log('7. ensureOurRelayToken — заявка фоном');
   check('ensure не ждёт заявку (фон)', fetchCalls.length === 0 && waited < 500, { calls: fetchCalls.length, waited });
   await tick(); await tick();
   check('заявка всё же ушла фоном', fetchCalls.length === 1 && bodyOf(0).keep === 'TOK-BG');
+}
+
+// ── 8. relayPublish: from — АДРЕС, а не namespace (регресс 25dd18a) ──
+// Пир читает конверт как senderEmail(m.from) → peerKeys[from]. Если в from
+// уехал fp:<…> (как делала нормализация account внутри relayPublish), адрес
+// пиру незнаком → конверт, включая call_request, МОЛЧА отбрасывался:
+// десктоп звонил телефону — телефон молчал; телефон звонил десктопу —
+// доходило. Симметрия ломалась односторонне.
+console.log('8. relayPublish — from = адрес, не fp-namespace');
+{
+  kv.clear();
+  setRelays([{ url: RELAY_URL, myToken: 'TOK-MINE', label: 'Vault' }]);
+  kv.set('relay-enabled', '1');
+  kv.set('relay-peer-tokens', JSON.stringify({ [RELAY_URL]: { 'peer@x.ru': 'TOK-PEER' } }));
+  globalThis.__nsOf = (e) => 'fp:aa:bb:cc:dd:ee:ff'; // namespace = отпечаток
+  fetchCalls.length = 0;
+  await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-1' }, 'CIPHER');
+  await tick(); await tick();
+  const pub = fetchCalls.find(c => c.url.endsWith('/pub'));
+  check('публикация ушла', !!pub, fetchCalls.map(c => c.url));
+  if (pub) {
+    const b = JSON.parse(pub.opts.body);
+    check('from = почта отправителя (не fp:)', b.from === 'me@x.ru', b.from);
+    check('to = токен получателя', b.to === 'TOK-PEER', b.to);
+  }
+  globalThis.__nsOf = (e) => e;
 }
 
 console.log('');
