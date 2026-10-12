@@ -193,7 +193,17 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
           // Причина пропуска публикации ВИДНА в логе: relayPublish возвращает
           // {ok:false, why}, но вызывающий код его игнорировал — на стенде
           // это читалось как «звонок ушёл, а на relay-очереди тишина».
-          if (r && r.ok === false) console.log('[relay] call publish skipped for', peer, '→', r.why);
+          if (r && r.ok === false) {
+            console.log('[relay] call publish skipped for', peer, '→', r.why);
+            return;
+          }
+          // Релей принял конверт: адрес очереди живой, пуш ушёл. Значит сигнал
+          // дошёл ОСНОВНЫМ каналом, и почтовая копия ниже — лишь догоняющий
+          // дубль. Помечаем звонок, чтобы её возможный DSN/баунс НЕ гасил
+          // вызов (onMailBounce; инцидент 12.10.2026: баунс почты убивал
+          // вызов, который собеседник уже видел на экране).
+          const call = ctx.currentCall;
+          if (call && call.call_id === payload.call_id) call.relayDelivered = true;
         })
         .catch(e => console.warn('[relay] call publish error:', e && e.message || e));
     } catch (e) { /* релей опционален — email путь живёт */ }
@@ -746,11 +756,17 @@ export async function cancelCall(ctx, reason) {
 
 // ── Отбой письма (DSN/bounce): гасим висящий исходящий вызов ──────────
 // Инцидент 12.10.2026: провайдер отбил письмо-вызов («554 5.7.1 Message
-// rejected under suspicion of SPAM»), но приложение этого не знало и
-// продолжало «звонить»: 5 минут гудков и «нет ответа» у пользователя,
-// хотя до собеседника не дошло ничего — ни письмом (отбой провайдера),
-// ни релеем (адрес очереди был протухший). Разбор DSN — features/bounce.js,
-// здесь только реакция на него.
+// rejected under suspicion of SPAM»), а приложение этого не знало и
+// продолжало «звонить»: 5 минут гудков и «нет ответа» у пользователя.
+// Разбор DSN — features/bounce.js, здесь только реакция на него.
+//
+// ВАЖНО (дефект того же фикса, найден на живом звонке 12.10.2026): почта —
+// ДУБЛИРУЮЩИЙ канал (см. sendCallEnvelope: релей-копия уходит первой и не
+// блокирует SMTP). Когда релей уже принял конверт, баунс почты НИЧЕГО не
+// доказывает: собеседник получил сигнал релеем и видит вызов на экране.
+// Гасить такой вызов нельзя — иначе отбой ПОЧТОВОЙ копии убивает звонок в
+// самом базовом случае (приложение открыто). Поэтому: relayDelivered →
+// баунс игнорируем.
 //
 // recipients: адреса, которым НЕ доставили (может быть пусто — неизвестный
 // формат). reason: текст ошибки SMTP (для тоста и логов).
@@ -759,6 +775,12 @@ export async function onMailBounce(ctx, recipients = [], reason = '') {
   // Реагируем только на ВИСЯЩИЙ ИСХОДЯЩИЙ вызов: живой разговор отбой
   // письма не касается, входящий звонок — тем более.
   if (!c || ctx.callState !== 'outgoing_ringing') return false;
+  // Релей уже доставил этот сигнал (call.relayDelivered, см. sendCallEnvelope).
+  // DSN относится только к почтовому дублю — вызов живёт, ждём ответа.
+  if (c.relayDelivered) {
+    console.log('[call] bounce ignored — call already delivered via relay:', c.call_id);
+    return false;
+  }
   const canon = (v) => {
     try { return String(ctx.canonicalOf(v) || v || '').toLowerCase(); }
     catch (e) { return String(v || '').toLowerCase(); }

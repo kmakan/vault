@@ -106,7 +106,9 @@ async function classify(ctx, m, from) {
   // crypto.isEncrypted: DSN — обычный текст, и раньше он молча отбрасывался.
   // Цена ошибки: письмо-вызов отбито провайдером, а вызов висит в гудках до
   // таймаута и пишет «нет ответа», хотя до собеседника ничего не дошло
-  // (инцидент 12.10.2026). Теперь баунс гасит исходящий вызов сразу.
+  // (инцидент 12.10.2026). Теперь баунс гасит исходящий вызов сразу — но
+  // только если релей-копия НЕ была принята (см. calls.js: onMailBounce:
+  // relayDelivered). Баунс дубля-письма живой (релейный) вызов не рвёт.
   if (BounceFeature.isBounceMessage(from, m.subject)) {
     const recipients = BounceFeature.bounceRecipients(body);
     const reason = BounceFeature.bounceReason(body);

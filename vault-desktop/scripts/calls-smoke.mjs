@@ -31,7 +31,11 @@ const dbMock = {
 };
 const relayMock = {
   pubs: [],
-  relayPublish: (from, to, id, content, opts) => { relayMock.pubs.push({ from, to, id, content, opts }); },
+  result: { ok: true }, // что «вернёт» relayPublish; тест может подменить
+  relayPublish: (from, to, id, content, opts) => {
+    relayMock.pubs.push({ from, to, id, content, opts });
+    return Promise.resolve(relayMock.result);
+  },
 };
 const cryptoMock = {
   encVault: [],
@@ -183,6 +187,23 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   check('тело: vault:1 + id + type + call_id + ts + sdp + kemct + sender_ek',
     body.vault === 1 && body.id && body.type === 'call_request' && body.call_id === 'c1' && typeof body.ts === 'number' && body.sdp === 'SDP1' && body.kemct === 'K' && body.sender_ek === 'E');
   check('SMTP-письмо ушло (stealth sendReadReceipt)', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
+  // relayDelivered: успешная релей-публикация помечает ЗВОНЯЩИЙ вызов —
+  // после этого баунс почтовой копии его НЕ гасит (см. §9, живой звонок
+  // 12.10.2026: релей доставил, почта отбилась как спам, вызов упал).
+  relayMock.pubs.length = 0;
+  const ctxRelayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r1', peer: 'peer@x.ru' } });
+  relayMock.result = { ok: true };
+  await C.sendCallEnvelope(ctxRelayed, 'peer@x.ru', { type: 'call_request', call_id: 'r1' });
+  await new Promise(r => process.nextTick(r));
+  check('успешный релей → currentCall.relayDelivered', ctxRelayed.currentCall.relayDelivered === true);
+  // Провал публикации (нет peer-token / лимит): флаг НЕ ставится — баунс
+  // почты по-прежнему считается доказательством недоставки.
+  const ctxFailed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r2', peer: 'peer@x.ru' } });
+  relayMock.result = { ok: false, why: 'no-peer-token' };
+  await C.sendCallEnvelope(ctxFailed, 'peer@x.ru', { type: 'call_request', call_id: 'r2' });
+  await new Promise(r => process.nextTick(r));
+  check('провал релей → relayDelivered не выставлен', !ctxFailed.currentCall.relayDelivered);
+  relayMock.result = { ok: true };
   // viaRelay=false → только почта
   relayMock.pubs.length = 0;
   await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_end', call_id: 'c1' }, { viaRelay: false });
@@ -459,6 +480,16 @@ console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
   check('пилюля undeliverable (не «нет ответа»)', ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.messages.map(m => m.callEvent));
   check('иконка лейбла — phone-off', C.callPillIcon({ callEvent: { kind: 'undeliverable' } }) === 'phone-off');
   check('лейбл undeliverable', C.callEventLabel(ctx, { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
+
+  // Живой звонок 12.10.2026 (это и был «сброшенный вызов при приложении на
+  // экране»): релей принял call_request, телефон показал входящий, но
+  // ПОЧТОВАЯ копия отбилась как спам — старый код гасил вызов по баунсу.
+  // Теперь при relayDelivered баунс дубля игнорируется: вызов живёт.
+  const relayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b6', peer: 'peer@x.ru', relayDelivered: true } });
+  toasts.length = 0;
+  const relayedHit = await C.onMailBounce(relayed, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  check('relayDelivered → баунс НЕ гасит вызов', relayedHit === false && relayed.callState === 'outgoing_ringing', { state: relayed.callState });
+  check('relayDelivered → нет ложного тоста «письмо не доставлено»', toasts.length === 0, toasts);
 
   // Регистр и алиасы: адрес в DSN может быть в другом регистре.
   const up = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b2', peer: 'Peer@X.ru' } });
