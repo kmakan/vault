@@ -285,7 +285,14 @@ console.log('5. relayTicker + relay-resilience');
   check('health-fail #2', ctx._relayFails === 2);
   ctx._lastRelayHealth = Date.now() - 70000;
   await fire('i', ctx._relayTicker);
-  check('3 фейла в эко → автономный режим (rescue эффекты)', ctx._relayFails === 3 && ctx.ecoAutonomous === true && ctx.relayDeliveryMode === 'email' && toastsSeen === 1);
+  // 0.1.180 (a6dfb98): релей умер → syncEcoWithRelay гасит эко (классика →
+  // доставка по почте через IDLE). Старый v0.1.171 rescue («остаться в эко
+  // автономно») health-тикер больше не триггерит — eco выключается ещё на
+  // первом фейле, поэтому к 3-му фейлу ctx.ecoMode уже false и
+  // enterRelayOfflineRescue недостижим. Сам rescue жив и проверяется в §6
+  // (его дёргает нативный eco-watch в VaultForegroundService, а не тикер).
+  check('3 фейла релея: счётчик дошёл до 3, эко погашено (классика → почта)',
+    ctx._relayFails === 3 && ctx.ecoMode === false && ctx.ecoAutonomous === false);
   // logout: тикер самоочищается
   const ctx2 = makeCtx({ isLoggedIn: false });
   R.startRelayTicker(ctx2);
