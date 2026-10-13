@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import cryptoClient from './crypto.js';
+import { isRecoveryPending as recoveryIsPending, clearRecoveryPending as recoveryClearPending } from './features/recovery-session.js';
 
 // ═════════════════════════════════════════════════════════════════════════
 // Vault Desktop — serverless email transport (phase 2)
@@ -17,6 +18,7 @@ const GMAIL_CONFIG = {
   smtp_server: 'smtp.gmail.com',
   smtp_port: 587,
 };
+
 
 export { db };
 
@@ -178,10 +180,18 @@ export const duressApi = {
 
 export class ApiClient {
   constructor() {
+    // Прерванное восстановление (fix/recovery-resilience): durable-маркер
+    // 'vault-recovery-pending' значит «recovery-вход начат, но ключ ещё не
+    // загружен». Пока он стоит, старый persisted token/email НЕ дают
+    // авто-вход: приложение могло закрыться между логином и импортом ключа,
+    // и доверие durable-состоянию создало бы новую пару вместо
+    // восстановленной. Маркер НЕ удаляем — он снимается только после
+    // успешного восстановления (commitRecoveryLogin).
+    this.recoveryPending = recoveryIsPending();
     const saved = localStorage.getItem('vault-token');
-    this.token = saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
+    this.token = !this.recoveryPending && saved && saved !== 'undefined' && saved !== 'null' ? saved : null;
     const savedEmail = localStorage.getItem('vault-email');
-    this.email = savedEmail || null;
+    this.email = !this.recoveryPending && savedEmail ? savedEmail : null;
     this.password = null; // in-memory ONLY — never persisted to localStorage
     // 'auth' | 'network' | 'none' (ставит restoreSession).
     this.lastRestoreError = null;
@@ -190,7 +200,7 @@ export class ApiClient {
     this.savedConfig = null;
     // On page reload the Tauri Rust email session (EmailState) survives, so a
     // saved email means we can keep fetching without re-login.
-    this.connected = !!savedEmail;
+    this.connected = !this.recoveryPending && !!savedEmail;
     this.emailConfig = null;
     // Local contact stubs added via addContact (serverless: no backend /contacts)
     this.contacts = [];
@@ -233,13 +243,35 @@ export class ApiClient {
   }
 
   // --- Auth (serverless): login === connect the mailbox ---
-  async login(email, password, { remember = true, config = null } = {}) {
+  // deferPersistence=true — РЕЖИМ ВОССТАНОВЛЕНИЯ (fix/recovery-resilience).
+  // Обычный вход не меняется (deferPersistence=false по умолчанию).
+  //
+  // Восстановление аккаунта идёт ЧЕРЕЗ логин (нужен доступ к ящику, где лежит
+  // эскроу-письмо), но коммитить durable-состояние ДО импорта ключа нельзя:
+  // приложение могло бы закрыться/упасть между логином и импортом, и тогда
+  // persisted token/email + credentials утверждали бы «мы вошли», хотя ключей
+  // на диске нет — следующий старт создал бы НОВУЮ пару вместо
+  // восстановленной. Поэтому при deferPersistence здесь остаётся ТОЛЬКО
+  // память (email/password/connected/token); durable token/email,
+  // save_credentials и миграция НЕ выполняются. Их выполняет
+  // commitRecoveryLogin() — после успешного import и перезагрузки ключа.
+  //
+  // Память безопасна: token в памяти не даёт обхода старта, т.к. конструктор
+  // и restoreSession при выставленном маркере игнорируют durable-состояние,
+  // а App при маркере не делает авто-вход.
+  async login(email, password, { remember = true, config = null, deferPersistence = false } = {}) {
     await this.emailConnect({ email, password, ...(config || {}) });
     this.email = email;
     this.password = password; // memory only
     this.connected = true;
     this.token = `serverless-${email}`;
     this._displayName = undefined; // кэш имени привязан к аккаунту
+    if (deferPersistence) {
+      // Восстановление: durable-состояние пока НЕ трогаем. Ни localStorage,
+      // ни credentials, ни миграция — иначе падение между логином и импортом
+      // зафиксировало бы невалидный «вход без ключей».
+      return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
+    }
     localStorage.setItem('vault-token', this.token);
     localStorage.setItem('vault-email', email);
     // Одноразовая миграция localStorage → kv_store: старые пометки/
@@ -265,11 +297,75 @@ export class ApiClient {
     return { ok: true, user_id: email, tokens: { access_token: this.token }, token: this.token };
   }
 
+  // --- Durable-коммит входа после УСПЕШНОГО восстановления ---
+  // Вызывается ТОЛЬКО когда backup уже импортирован И восстановленный ключ
+  // загружен (crypto.initCrypto({allowCreate:false}) === true). До этого
+  // durable-состояние не должно знать о входе.
+  //
+  // Порядок важен: durable token/email → (опц.) credentials → миграция →
+  // снятие маркера ПОСЛЕДНИМ. Если save_credentials упал — маркер остаётся:
+  // durable-состояние неполное, и следующий старт обязан снова пройти через
+  // восстановление, а не молча auto-login'иться без ключей.
+  // Ничего не удаляет: при провале восстановления старые credentials/ключи/
+  // LS-токены пользователя остаются нетронутыми.
+  async commitRecoveryLogin({ remember = true } = {}) {
+    if (!this.email) throw new Error('commitRecoveryLogin: no session in memory');
+    localStorage.setItem('vault-token', this.token);
+    localStorage.setItem('vault-email', this.email);
+    if (remember) {
+      const c = this.emailConfig || {};
+      await invoke('save_credentials', {
+        email: this.email,
+        password: this.password,
+        imapServer: c.imap_server || GMAIL_CONFIG.imap_server,
+        imapPort: c.imap_port || GMAIL_CONFIG.imap_port,
+        smtpServer: c.smtp_server || GMAIL_CONFIG.smtp_server,
+        smtpPort: c.smtp_port || GMAIL_CONFIG.smtp_port,
+      });
+    }
+    // Одноразовая миграция localStorage → kv_store (после commit — на случай
+    // падения между ними durable-вход уже зафиксирован, миграция повторится).
+    this.migrateLegacyLocalStorage().catch(() => {});
+    // Маркер снимаем ПОСЛЕДНИМ: всё durable-состояние уже на месте.
+    if (!recoveryClearPending()) throw new Error('Recovery state could not be committed');
+    this.recoveryPending = false;
+    return true;
+  }
+
+  // --- Сброс ПАМЯТИ сессии после провала восстановления ---
+  // Отличается от logout() принципиально: logout() вызывает
+  // delete_credentials и стирает localStorage — то есть провал восстановления
+  // УНИЧТОЖИЛ бы сохранённый пароль и токены пользователя, после чего он не
+  // смог бы войти даже обычным путём. Здесь чистится только RAM: durable
+  // token/email, credentials и ключи остаются нетронутыми, маркер
+  // 'vault-recovery-pending' остаётся (его снимает только успешный commit).
+  // Никаких invoke — метод безопасен при мёртвой IMAP-сессии.
+  abandonSessionMemory() {
+    this.email = null;
+    this.password = null;
+    this.connected = false;
+    this.emailConfig = null;
+    this.token = null;
+    this._displayName = undefined;
+    return true;
+  }
+
   // --- Auto-login: restore the saved (device-encrypted) mailbox credentials
   // and reconnect IMAP. Returns true on success; false when nothing is saved
   // or the saved password no longer works (caller shows the login screen).
   async restoreSession() {
     this.lastRestoreError = null;
+    // Прерванное восстановление (fix/recovery-resilience): пока маркер
+    // 'vault-recovery-pending' стоит, авто-вход ЗАПРЕЩЁН — даже если
+    // credentials на диске есть. Возврат ДО load_credentials: сохранённые
+    // credentials пользователя НЕ удаляем (сбой восстановления не имеет
+    // права терять пароль), просто не входим. App покажет форму
+    // восстановления с recovery_interrupted.
+    if (this.recoveryPending || recoveryIsPending()) {
+      this.recoveryPending = true;
+      this.lastRestoreError = 'recovery-pending';
+      return false;
+    }
     let creds = null;
     try {
       creds = await invoke('load_credentials');

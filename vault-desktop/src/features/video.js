@@ -233,6 +233,11 @@ export function stopCamera() {
 let decoder = null;
 let canvasCtx = null;
 let remoteCanvasEl = null; // canvas для remote-видео (RGBA path)
+// Монотонный микросекундный timestamp для WebCodecs VP8-пути (Android).
+// performance.now() на быстрых кадрах даёт нестрого возрастающие значения —
+// WebCodecs VideoDecoder это отвергает, поэтому держим свой счётчик с шагом кадра.
+let vp8TsUs = 0;
+const VP8_FRAME_US = Math.round(1_000_000 / VIDEO_FPS); // 33333 @ 30fps
 
 /**
  * Запустить приём remote-видео: Rust-reader (media_video_start) шлёт
@@ -300,9 +305,21 @@ function decodeVp8Chunk(base64Vp8) {
     const raw = atob(base64Vp8);
     const data = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
+    // VP8 frame header: первый байт payload — frame_tag. Бит 0 (младший):
+    //   0 = key frame, 1 = inter frame (delta).
+    // WebCodecs VideoDecoder ТРЕБУЕТ чередования key→delta: поток обязан
+    // начинаться с 'key', и 'delta' ссылается на предыдущий кадр. Прежний код
+    // слал type:'key' на КАЖДЫЙ кадр — декодер VP8 на такой последовательности
+    // либо падал с ошибкой, либо не отдавал кадры (баг: видео есть на десктопе
+    // через RGBA-путь, на телефоне через этот VP8-путь — нет). Определяем
+    // реальный тип по биту 0 VP8 frame_tag.
+    const isKey = data.length > 0 && (data[0] & 0x01) === 0;
+    // Монотонный timestamp: WebCodecs требует строго возрастающих значений.
+    vp8TsUs += VP8_FRAME_US;
     decoder.decode(new EncodedVideoChunk({
-      type: 'key',
-      timestamp: performance.now() * 1000,
+      type: isKey ? 'key' : 'delta',
+      timestamp: vp8TsUs,
+      duration: VP8_FRAME_US,
       data,
     }));
   } catch (e) {
@@ -326,6 +343,7 @@ function drawFrame(canvasEl, frame) {
 export function stopRemoteVideo() {
   try { if (decoder) { decoder.flush().catch(() => {}); decoder.close(); } } catch (e) {}
   decoder = null;
+  vp8TsUs = 0; // новый звонок/повторный старт — с чистого счётчика timestamp
   // Очищаем canvas: убираем последний кадр (чёрный экран), иначе
   // при hangup остаётся «замёрзшее» видео.
   if (canvasCtx && canvasCtx.canvas) {

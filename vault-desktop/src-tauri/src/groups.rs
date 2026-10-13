@@ -475,7 +475,7 @@ mod tests {
             seq
         ));
         let _ = std::fs::remove_file(&path);
-        std::env::set_var("VAULT_GROUPS_FILE", &path);
+        crate::set_env_safe("VAULT_GROUPS_FILE", &path);
         let result = f();
         let _ = std::fs::remove_file(&path);
         std::env::remove_var("VAULT_GROUPS_FILE");

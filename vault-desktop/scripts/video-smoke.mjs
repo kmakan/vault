@@ -18,6 +18,8 @@ const apiMock = {
   stops: [],           // [ callId ]
   mediaVideoFrame: async (callId, data) => { apiMock.frames.push({ callId, data }); },
   mediaVideoStart: async (callId) => { apiMock.starts.push(callId); },
+  mediaCameraStart: async (callId) => { apiMock.cameraStarts = (apiMock.cameraStarts || 0) + 1; },
+  mediaCameraStop: async (callId) => { apiMock.cameraStops = (apiMock.cameraStops || 0) + 1; },
   mediaVideoStop: async (callId) => { apiMock.stops.push(callId); },
 };
 globalThis.__apiMock = apiMock;
@@ -112,21 +114,49 @@ class VideoDecoder {
     this.init = init;
     this.config = null;
     this.closed = false;
+    this.state = 'unconfigured';
     this._decoded = [];
+    this._types = [];      // последовательность type чанков (key/delta)
+    this._sawKey = false;  // WebCodecs: delta до первого key = ошибка
+    this._errors = [];     // инициированные init.error (порядок/типы)
     decoders.push(this);
   }
-  configure(cfg) { this.config = cfg; }
+  configure(cfg) { this.config = cfg; this.state = 'configured'; }
   decode(chunk) {
     if (!this.init || !this.init.output) return;
-    // Декодер восстанавливает кадр из чанка (мок: копия данных).
+    this._decoded.push(chunk);
+    this._types.push(chunk.type);
+    // Эмуляция семантики WebCodecs VideoDecoder:
+    //   - поток обязан начинаться с 'key'; 'delta' до первого key = ошибка
+    //     (декодер нечего ссылаться);
+    //   - тип чанка должен отражать реальный VP8 frame_tag (бит 0 payload):
+    //     'key' ↔ бит0==0, 'delta' ↔ бит0==1. decodeVp8Chunk обязан выставить
+    //     type по payload, а не всегда 'key' (регресс-сторож бага «видео нет
+    //     на телефоне»: delta-кадры, помеченные key, ломают декодер).
+    const firstByte = chunk.data && chunk.data.length ? chunk.data[0] : 0;
+    const realKey = (firstByte & 0x01) === 0;
+    if (chunk.type === 'key') {
+      this._sawKey = true;
+    } else if (!this._sawKey) {
+      const err = new Error('delta frame before any key frame');
+      this._errors.push(err.message);
+      if (this.init.error) this.init.error(err);
+      return;
+    }
+    // Несоответствие заявленного типа и фактического frame_tag — фиксируем,
+    // но не роняем (мок должен ловить именно ошибочную маркировку).
+    if ((chunk.type === 'key') !== realKey) {
+      this._errors.push('type mismatch: chunk=' + chunk.type + ' realKey=' + realKey);
+    }
     const out = makeFakeFrame(this.config ? this.config.codedWidth || 640 : 640, 480);
     out._from = chunk;
-    this._decoded.push(chunk);
     this.init.output(out);
   }
   flush() { return Promise.resolve(); }
-  close() { this.closed = true; }
+  close() { this.closed = true; this.state = 'closed'; }
 }
+// ImageData — браузерный API; в Node нет. Минимальный мок для RGBA-пути.
+globalThis.ImageData = class ImageData { constructor(data, width, height) { this.data = data; this.width = width; this.height = height; } };
 globalThis.VideoEncoder = VideoEncoder;
 // EncodedVideoChunk — его создаёт decodeFrame из base64-кадра Rust.
 class EncodedVideoChunk {
@@ -193,7 +223,7 @@ async function tick(n = 1) {
 // canvas-мок: запоминает, что в него нарисовали.
 function makeCanvas(w = 640, h = 480) {
   const c = { width: w, height: h, _drawn: [], _ctx: null,
-    getContext: () => (c._ctx = { canvas: c, drawImage: (...a) => c._drawn.push(a) }) };
+    getContext: () => (c._ctx = { canvas: c, drawImage: (...a) => c._drawn.push(a), putImageData: (...a) => c._drawn.push(a), clearRect: () => {} }) };
   return c;
 }
 
@@ -332,15 +362,32 @@ console.log('5. startRemoteVideo + decodeFrame (remote VP8 → canvas)');
   check('optimizeForLatency = true (видеозвонок)', dec.config && dec.config.optimizeForLatency === true,
     dec.config && dec.config.optimizeForLatency);
 
-  // Кадр из Rust приходит как base64 VP8.
-  const payload = new Uint8Array([1, 2, 3, 4, 5]);
-  const b64 = Buffer.from(payload).toString('base64');
-  V.decodeFrame(b64, 123456);
+  // Кадр из Rust приходит как base64 VP8. Первый байт payload = VP8 frame_tag;
+  // бит 0 = frame_type (0=key, 1=inter/delta). Первый кадр потока — keyframe,
+  // поэтому первый байт ЧЁТНЫЙ (0x00) — иначе WebCodecs отклонит delta-before-key.
+  // Старый баг: decodeVp8Chunk слал type:'key' на КАЖДЫЙ кадр — delta-кадры
+  // (бит0=1) ломали декодер → видео не появлялось на телефоне (RGBA-путь
+  // десктопа не затронут). Регресс-сторож: мок VideoDecoder фиксирует
+  // несоответствие type ↔ frame_tag и delta-before-key в dec._errors.
+  const keyPayload = new Uint8Array([0x00, 2, 3, 4, 5]);   // бит0=0 → key
+  const deltaPayload = new Uint8Array([0x01, 6, 7, 8, 9]); // бит0=1 → delta
+  const keyB64 = Buffer.from(keyPayload).toString('base64');
+  const deltaB64 = Buffer.from(deltaPayload).toString('base64');
+  V.decodeFrame({ vp8: keyB64 }); // контракт App.vue:1621 — объект {vp8|rgba}
   await tick(3);
   check('decodeFrame: кадр дошёл до декодера', dec._decoded.length === 1, dec._decoded.length);
   check('decodeFrame: декодер отдал кадр на отрисовку', canvas._drawn.length === 1, canvas._drawn.length);
   check('decodeFrame: canvas получил кадр', canvas._drawn[0] && typeof canvas._drawn[0][0] === 'object');
   check('canvas размера 640x480', canvas.width === 640 && canvas.height === 480, { w: canvas.width, h: canvas.height });
+  check('key-кадр помечен type:key (бит0 payload = 0)', dec._types[0] === 'key', dec._types[0]);
+
+  // Delta-кадр ПОСЛЕ keyframe — должен дойти и быть помечен type:delta.
+  V.decodeFrame({ vp8: deltaB64 });
+  await tick(3);
+  check('decodeFrame: delta-кадр после key доходит до декодера', dec._decoded.length === 2, dec._decoded.length);
+  check('delta-кадр помечен type:delta (бит0 payload = 1, НЕ key)', dec._types[1] === 'delta', dec._types[1]);
+  check('декодер не фиксировал ошибок порядка/типа', dec._errors.length === 0, dec._errors);
+  check('delta-кадр отрисован', canvas._drawn.length === 2, canvas._drawn.length);
 
   // Идемпотентность: повторный старт — тот же декодер.
   const ok2 = await V.startRemoteVideo('call-D', canvas);
@@ -349,11 +396,11 @@ console.log('5. startRemoteVideo + decodeFrame (remote VP8 → canvas)');
 
   // Битый кадр — не роняет звонок: video.js глотает ошибку декодирования,
   // декодер остаётся жив.
-  await V.decodeFrame('!!не-base64!!', 0);
+  await V.decodeFrame({ vp8: '!!не-base64!!' });
   await tick(2);
   check('битый кадр не бросается (graceful degradation)', dec.closed === false);
   check('после битого кадра декодер принимает следующий',
-    (V.decodeFrame(Buffer.from(payload).toString('base64'), 0), await tick(2), dec._decoded.length >= 1), dec._decoded.length);
+    (V.decodeFrame({ vp8: Buffer.from(keyPayload).toString('base64') }), await tick(2), dec._decoded.length >= 1), dec._decoded.length);
 
   V.stopRemoteVideo();
   await tick(2);
@@ -361,7 +408,7 @@ console.log('5. startRemoteVideo + decodeFrame (remote VP8 → canvas)');
 
   // После stop кадры игнорируются.
   const drawnAfter = canvas._drawn.length;
-  V.decodeFrame(Buffer.from(payload).toString('base64'), 0);
+  V.decodeFrame({ vp8: Buffer.from(keyPayload).toString('base64') }, 0);
   await tick(2);
   check('после stopRemoteVideo кадры не рисуются', canvas._drawn.length === drawnAfter, canvas._drawn.length);
 }
@@ -377,7 +424,7 @@ console.log('6. Нет VideoDecoder (старый WebView) — no remote video')
   delete globalThis.VideoDecoder;
   const canvas = makeCanvas();
   const ok = await V.startRemoteVideo('call-E', canvas);
-  check('startRemoteVideo вернул false (декодер недоступен)', ok === false, ok);
+  check('startRemoteVideo вернул true (RGBA-путь без VideoDecoder, video.js:260 — desktop не гаснет)', ok === true, ok);
   check('декодер не создан', decoders.length === 0, decoders.length);
   // decodeFrame не падает и без декодера.
   let safe = true;
@@ -407,7 +454,7 @@ console.log('7. Сквозной поток видеозвонка (мок-ст�
   const sentBefore = apiMock.frames.length;
 
   // Симулируем входящий remote-кадр.
-  V.decodeFrame(Buffer.from(new Uint8Array([9, 9, 9])).toString('base64'), 1000);
+  V.decodeFrame({ rgba: Buffer.from(new Uint8Array([9, 9, 9, 255])).toString('base64'), width: 1, height: 1 }); // RGBA-путь desktop (video.js:340)
   await tick(3);
   check('remote-кадр отрисован', remoteCanvas._drawn.length === 1, remoteCanvas._drawn.length);
 

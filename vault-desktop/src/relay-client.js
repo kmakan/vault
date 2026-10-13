@@ -374,6 +374,15 @@ export async function relayGroupPublish(account, memberEmails, envelopeObj, encr
 export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts = {}) {
   const job = async () => {
     try {
+      // `from` — WIRE-поле конверта: его читает ПИР (incoming.js:
+      // senderEmail(m.from) → peerKeys[from]). Там нужен АДРЕС, а не
+      // namespace аккаунта. Регресс 25dd18a: строка `account = await
+      // accountNamespace(account)` стояла выше и переписывала `account`
+      // на `fp:<…>` — и `from: account` уезжал в сеть отпечатком.
+      // Пир такого адреса не знает → peerKeys[from] пуст → конверт
+      // (в т.ч. call_request) МОЛЧА отбрасывался. Возвращаем `from`
+      // в почту ДО нормализации; account-scoped операции ниже, как и было.
+      const fromEmail = String(account || '').trim().toLowerCase();
       account = await accountNamespace(account);
       const { enabled, peers, active, relays } = await getSettings(account);
       if (!enabled) { console.log('[relay] publish skip: disabled'); return { ok: false, why: 'disabled' }; }
@@ -443,7 +452,7 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
           id: envelopeObj.id || ('rl-' + Date.now()),
           exp,
           body: btoa(unescape(encodeURIComponent(encryptedBody))),
-          from: account,
+          from: fromEmail,
           // M2.4 автообмен: мой read-токен (адрес моей очереди) — получатель
           // запомнит и сможет слать мне пуши. Пользователь ничего не вводит.
           tok: relay.myToken || '',
@@ -491,16 +500,29 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
 // Тихая перерегистрация на нашем релее (после 403 или для продления):
 // выдаёт свежий read-токен, привязанный к текущему fp, и обновляет
 // kv-список. Возвращает true при успехе.
+//
+// t_b8f44bdf: вместе с fp отправляем УЖЕ имеющийся токен как `keep`. Сервер
+// записывает связку fp → токен и возвращает ТОТ ЖЕ токен (адрес очереди не
+// меняется). Нужно устройствам, получившим токен до появления карты fp:
+// без заявки при протухании/перерегистрации адрес сменился бы ЕЩЁ РАЗ.
+// Токена нет (чистая установка) → сервер выдаёт новый, как раньше.
 export async function reRegisterOurRelay(account) {
   try {
     account = await accountNamespace(account);
     const fp = await myFingerprint(account);
+    const before = await getSettings(account);
+    const ours = before.relays.find(x => x.url === DEFAULT_RELAY_URL);
+    const keep = (ours && ours.myToken) || '';
     const r = await rfetch(DEFAULT_RELAY_URL + '/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // S3: заодно отдаём серверу рингтон входящего звонка из настроек —
       // ntfy-пуш звонка играет именно его (per-topic на нашем токене).
-      body: JSON.stringify({ fp: fp || '', ringtone: await preferredRingtoneUrl(account) }),
+      body: JSON.stringify({
+        fp: fp || '',
+        ...(keep ? { keep } : {}),
+        ringtone: await preferredRingtoneUrl(account),
+      }),
       connectTimeout: PUB_TIMEOUT_MS,
     });
     if (!r.ok) { console.log('[relay] re-register http', r.status); return false; }
@@ -509,7 +531,11 @@ export async function reRegisterOurRelay(account) {
     const list = rs.relays.filter(x => x.url !== DEFAULT_RELAY_URL);
     list.unshift({ url: DEFAULT_RELAY_URL, myToken: d.token, label: 'Vault' });
     await saveRelays(account, list);
-    console.log('[relay] token re-registered (bound to this account)');
+    if (keep && d.token === keep) {
+      console.log('[relay] token kept (queue address stable)');
+    } else {
+      console.log('[relay] token re-registered (bound to this account)');
+    }
     return true;
   } catch (e) {
     console.log('[relay] re-register error:', e && e.message || e);
@@ -594,6 +620,21 @@ let nativeFcmAccount = null;
 // опрос и publish вообще не доходят до HTTP — фильтр relays.filter(r =>
 // r.myToken) отбрасывает релей ДО запроса, поэтому 403-авторегистрация
 // никогда не сработает. Регистрируем заранее, молча.
+//
+// t_b8f44bdf: если токен УЖЕ есть — один раз за запуск «заявляем» его
+// (`keep`): сервер запишет связку fp → токен ДО протухания, и адрес очереди
+// не сменится. Идемпотентно, IP-квоту не тратит.
+const claimedAccounts = new Set();
+export async function claimOurRelayToken(account) {
+  account = await accountNamespace(account);
+  if (claimedAccounts.has(account)) return false;
+  claimedAccounts.add(account);
+  const { relays } = await getSettings(account);
+  const ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
+  if (!ours || !ours.myToken) return false; // заявлять нечего
+  return reRegisterOurRelay(account);
+}
+
 export async function ensureOurRelayToken(account) {
   try {
     account = await accountNamespace(account);
@@ -604,6 +645,9 @@ export async function ensureOurRelayToken(account) {
       // Свежий токен уже в kv — перечитываем, чтобы отдать мосту актуальный.
       ({ relays } = await getSettings(account));
       ours = relays.find(r => r.url === DEFAULT_RELAY_URL);
+    } else if (!claimedAccounts.has(account)) {
+      // Токен есть → заявляем его фоном (не задерживаем poll/publish).
+      claimOurRelayToken(account).catch(() => {});
     }
     if (ours && ours.myToken && nativeFcmAccount !== account) {
       nativeFcmAccount = account; // до await: publish+poll идут параллельно

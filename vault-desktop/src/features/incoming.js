@@ -15,6 +15,7 @@ import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
 import * as ChannelsFeature from './channels.js';
+import * as BounceFeature from './bounce.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -100,6 +101,24 @@ async function classify(ctx, m, from) {
   if (ctx.isIgnored(from)) return null;
 
   const body = ctx.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
+
+  // Служебное письмо о НЕДОСТАВКЕ (DSN / bounce). Проверяем ДО
+  // crypto.isEncrypted: DSN — обычный текст, и раньше он молча отбрасывался.
+  // Цена ошибки: письмо-вызов отбито провайдером, а вызов висит в гудках до
+  // таймаута и пишет «нет ответа», хотя до собеседника ничего не дошло
+  // (инцидент 12.10.2026). Теперь баунс гасит исходящий вызов сразу — но
+  // только если релей-копия НЕ была принята (см. calls.js: onMailBounce:
+  // relayDelivered). Баунс дубля-письма живой (релейный) вызов не рвёт.
+  if (BounceFeature.isBounceMessage(from, m.subject)) {
+    const recipients = BounceFeature.bounceRecipients(body);
+    const reason = BounceFeature.bounceReason(body);
+    console.log('[mail] bounce: recipients=' + (recipients.join(',') || '?')
+      + ' reason=' + (reason || '?'));
+    try { await ctx.onMailBounce(recipients, reason); }
+    catch (e) { console.warn('[mail] bounce handling failed:', e && e.message || e); }
+    return null; // служебное письмо: не сообщение, в счётчик/уведомления не идёт
+  }
+
   if (!body || !crypto.isEncrypted(body)) return null;
 
   let chatKey = null; // email (1:1) или 'group:<id>'
@@ -209,6 +228,22 @@ async function classify(ctx, m, from) {
         crypto.setPeerPublicKey(knownKey);
         try {
           const plain = await crypto.decryptVault(body);
+          // ЗВОНОК под ещё не известным адресом. Конверт расшифрован ключом
+          // пира, но это сигнал, а не письмо личности: ниже матчинг требует
+          // parseEnvelope (у сигнала конверта нет) и он уходил дальше по ветке
+          // «смена почты», где call_* не разбирались — сигнал терялся, и звонок
+          // от десктопа на телефон не доходил вообще (регресс с 25dd18a, где
+          // в конверт уезжал from = fp:<…>). Ловим здесь, до матчинга.
+          const callSig = ctx.parseCallSignal(plain);
+          if (callSig) {
+            // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
+            // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
+            // ответные конверты идут на несуществующий SMTP-адрес.
+            console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
+            try { await ctx.handleCallSignal(callSig, knownEmail); }
+            catch (e) { console.warn('[call] signal failed:', e); }
+            return null;
+          }
           const env = ctx.parseEnvelope(plain);
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.

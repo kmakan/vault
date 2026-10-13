@@ -27,10 +27,11 @@ const cryptoMock = {
   encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:' + p.length; },
 };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
+globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__cryptoMock = cryptoMock;
 
 let src = readFileSync(ROOT + '/../src/features/profiles.js', 'utf8');

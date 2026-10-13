@@ -31,7 +31,11 @@ const dbMock = {
 };
 const relayMock = {
   pubs: [],
-  relayPublish: (from, to, id, content, opts) => { relayMock.pubs.push({ from, to, id, content, opts }); },
+  result: { ok: true }, // что «вернёт» relayPublish; тест может подменить
+  relayPublish: (from, to, id, content, opts) => {
+    relayMock.pubs.push({ from, to, id, content, opts });
+    return Promise.resolve(relayMock.result);
+  },
 };
 const cryptoMock = {
   encVault: [],
@@ -43,12 +47,13 @@ const histMock = {
   loadHistory: async (a, c) => histMock.store[c] ? JSON.parse(JSON.stringify(histMock.store[c])) : null,
 };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
-writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a);');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
+writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => null; export const hasPeerToken = async () => false;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
+globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__relayMock = relayMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__histMock = histMock;
@@ -182,6 +187,23 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   check('тело: vault:1 + id + type + call_id + ts + sdp + kemct + sender_ek',
     body.vault === 1 && body.id && body.type === 'call_request' && body.call_id === 'c1' && typeof body.ts === 'number' && body.sdp === 'SDP1' && body.kemct === 'K' && body.sender_ek === 'E');
   check('SMTP-письмо ушло (stealth sendReadReceipt)', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
+  // relayDelivered: успешная релей-публикация помечает ЗВОНЯЩИЙ вызов —
+  // после этого баунс почтовой копии его НЕ гасит (см. §9, живой звонок
+  // 12.10.2026: релей доставил, почта отбилась как спам, вызов упал).
+  relayMock.pubs.length = 0;
+  const ctxRelayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r1', peer: 'peer@x.ru' } });
+  relayMock.result = { ok: true };
+  await C.sendCallEnvelope(ctxRelayed, 'peer@x.ru', { type: 'call_request', call_id: 'r1' });
+  await new Promise(r => process.nextTick(r));
+  check('успешный релей → currentCall.relayDelivered', ctxRelayed.currentCall.relayDelivered === true);
+  // Провал публикации (нет peer-token / лимит): флаг НЕ ставится — баунс
+  // почты по-прежнему считается доказательством недоставки.
+  const ctxFailed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r2', peer: 'peer@x.ru' } });
+  relayMock.result = { ok: false, why: 'no-peer-token' };
+  await C.sendCallEnvelope(ctxFailed, 'peer@x.ru', { type: 'call_request', call_id: 'r2' });
+  await new Promise(r => process.nextTick(r));
+  check('провал релей → relayDelivered не выставлен', !ctxFailed.currentCall.relayDelivered);
+  relayMock.result = { ok: true };
   // viaRelay=false → только почта
   relayMock.pubs.length = 0;
   await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_end', call_id: 'c1' }, { viaRelay: false });
@@ -282,7 +304,7 @@ console.log('5. lifecycle');
   const cid = ctx.currentCall && ctx.currentCall.call_id;
   check('startCall → outgoing_ringing + hasLocalOffer', ctx.callState === 'outgoing_ringing' && ctx.currentCall.hasLocalOffer === true);
   check('call_request ушел с offer+kemct', cryptoMock.encVault.some(p => { try { const b = JSON.parse(p); return b.type === 'call_request' && b.sdp === 'OFFER_SDP' && b.kemct === 'KEMCT'; } catch (e) { return false; } }));
-  check('ринг-таймер 300с + ретрансляция 15с', timers.get(ctx.callRingTimer).ms === 300000 && timers.get(ctx.callResendTimer).ms === 15000);
+  check('ринг-таймер 300с + 1-й повтор через 5с (затухание, не 15с-лавина)', timers.get(ctx.callRingTimer).ms === 300000 && timers.get(ctx.callResendTimer).ms === 5000);
   // ретрансляция тикает (viaRelay=false)
   relayMock.pubs.length = 0;
   await fireTimer(ctx.callResendTimer);
@@ -356,13 +378,30 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   apiMock.calls.length = 0;
   C.startSignalResend(ctx, 'peer@x.ru', { type: 'call_accept', call_id: 'q1' }, 'q1');
   const st = timers.get(ctx._signalResendTimer);
-  check('resend-таймер 10с', st && st.ms === 10000);
+  check('resend-таймер: 1-я пауза 5с', st && st.ms === 5000);
+  check('лест revпов: [5с,15с,45с,120с] — не больше 4 писем на вызов',
+    JSON.stringify(C.SIGNAL_RESEND_DELAYS_MS) === JSON.stringify([5000, 15000, 45000, 120000]),
+    C.SIGNAL_RESEND_DELAYS_MS);
   await fireTimer(ctx._signalResendTimer);
   check('resend тик повторяет сигнал почтой', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
   // media connected → resend самоостанавливается
   ctx.callMediaConnected = true;
   await fireTimer(ctx._signalResendTimer);
   check('media connected → resend остановлен', ctx._signalResendTimer === null);
+  // ЗАТУХАНИЕ (инцидент 12.10.2026): лавина писем сожгла почтовый резерв
+  // (Яндекс: 554 5.7.1 SPAM). Максимум 4 повтора, дальше паузы нет.
+  const cap = makeCtx({ currentCall: { call_id: 'cap1', peer: 'peer@x.ru' }, callState: 'active', callMediaConnected: false });
+  apiMock.calls.length = 0;
+  C.startSignalResend(cap, 'peer@x.ru', { type: 'call_accept', call_id: 'cap1' }, 'cap1');
+  const delays = [];
+  for (let i = 0; i < 6 && cap._signalResendTimer; i++) {
+    delays.push(timers.get(cap._signalResendTimer).ms);
+    await fireTimer(cap._signalResendTimer);
+  }
+  check('ровно 4 повтора по [5000,15000,45000,120000]',
+    JSON.stringify(delays) === JSON.stringify([5000, 15000, 45000, 120000]), delays);
+  check('после 4-го повтора пауза не взводится (лавины нет)', cap._signalResendTimer === null);
+  check('ровно 4 письма за цикл ожидания', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 4);
   // sendTerminalRepeat: 3 отправки (сейчас + 3с + 7с)
   timers.clear();
   apiMock.calls.length = 0;
@@ -371,7 +410,7 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   const t3 = [...timers.entries()].find(([, t]) => t.ms === 3000);
   const t7 = [...timers.entries()].find(([, t]) => t.ms === 7000);
   await fireTimer(t3[0]); await fireTimer(t7[0]);
-  check('sendTerminalRepeat: 3 попытки, все viaRelay=false', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 3 && relayMock.pubs.length === 0);
+  check('sendTerminalRepeat: 3 письма; релей — ровно 1 первое отправление с wake=false', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 3 && relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === false);
   // watchdog: 90с без медиа → auto hangup
   timers.clear();
   const wd = makeCtx({ callState: 'active', currentCall: { call_id: 'w1', peer: 'peer@x.ru' }, callMediaConnected: false });
@@ -425,6 +464,54 @@ console.log('8. playCallSound/stopCallSound');
   const s2 = makeCtx();
   C.stopCallSound(s2);
   check('stopCallSound desktop → mediaSoundStop', apiMock.calls.some(c => c[0] === 'soundStop'));
+}
+
+// ── 9. Баунс письма-вызова → мгновенная отмена (12.10.2026) ─────
+console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
+{
+  // Регресс-цена: раньше DSN не разбирался вовсе (incoming.js отбрасывает
+  // не-шифртекст) → вызов висел в гудках и писал «нет ответа», хотя письмо
+  // отбито провайдером.
+  const ctx = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b1', peer: 'peer@x.ru' } });
+  toasts.length = 0;
+  const hit = await C.onMailBounce(ctx, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  check('баунс про собеседника → вызов отменён', hit === true && ctx.callState === 'idle', { state: ctx.callState });
+  check('тост с причиной показан', toasts.length === 1, toasts);
+  check('пилюля undeliverable (не «нет ответа»)', ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.messages.map(m => m.callEvent));
+  check('иконка лейбла — phone-off', C.callPillIcon({ callEvent: { kind: 'undeliverable' } }) === 'phone-off');
+  check('лейбл undeliverable', C.callEventLabel(ctx, { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
+
+  // Живой звонок 12.10.2026 (это и был «сброшенный вызов при приложении на
+  // экране»): релей принял call_request, телефон показал входящий, но
+  // ПОЧТОВАЯ копия отбилась как спам — старый код гасил вызов по баунсу.
+  // Теперь при relayDelivered баунс дубля игнорируется: вызов живёт.
+  const relayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b6', peer: 'peer@x.ru', relayDelivered: true } });
+  toasts.length = 0;
+  const relayedHit = await C.onMailBounce(relayed, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  check('relayDelivered → баунс НЕ гасит вызов', relayedHit === false && relayed.callState === 'outgoing_ringing', { state: relayed.callState });
+  check('relayDelivered → нет ложного тоста «письмо не доставлено»', toasts.length === 0, toasts);
+
+  // Регистр и алиасы: адрес в DSN может быть в другом регистре.
+  const up = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b2', peer: 'Peer@X.ru' } });
+  const upHit = await C.onMailBounce(up, ['PEER@x.ru'], '550 5.1.1 User unknown');
+  check('регистр адреса не мешает', upHit === true && up.callState === 'idle');
+
+  // Чужой адресат: баунс не про наш звонок — НЕ гасим живой вызов.
+  const other = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b3', peer: 'peer@x.ru' } });
+  const otherHit = await C.onMailBounce(other, ['someone@ya.ru'], '550');
+  check('чужой получатель → вызов не тронут', otherHit === false && other.callState === 'outgoing_ringing');
+
+  // Адрес не распознали (незнакомый провайдер): тоже не гасим — ложная
+  // отмена живого вызова хуже лишних минут гудков.
+  const unparsed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b4', peer: 'peer@x.ru' } });
+  const unparsedHit = await C.onMailBounce(unparsed, [], '');
+  check('пустой recipients → не гасим', unparsedHit === false && unparsed.callState === 'outgoing_ringing');
+
+  // Живой разговор баунсами не рвём.
+  const live = makeCtx({ callState: 'active', currentCall: { call_id: 'b5', peer: 'peer@x.ru' } });
+  check('active-звонок не рвём', (await C.onMailBounce(live, ['peer@x.ru'], '')) === false && live.callState === 'active');
+
+  timers.clear(); toasts.length = 0;
 }
 
 console.log('');

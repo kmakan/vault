@@ -948,6 +948,11 @@ import { setPendingNativeCallDecision } from './features/calls.js';
 import * as ProfilesFeature from './features/profiles.js';
 import * as PresenceFeature from './features/presence.js';
 import * as ChannelsFeature from './features/channels.js';
+import * as RecoveryFeature from './features/recovery.js';
+// Durable-маркер прерванного восстановления (fix/recovery-resilience):
+// блокирует авто-вход/обычный логин/генерацию ключей, пока восстановление не
+// закоммичено. Pure-модуль без импортов api/crypto.
+import * as RecoverySession from './features/recovery-session.js';
 
 // Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
 // когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
@@ -1675,6 +1680,22 @@ export default {
       this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || ''
     }
     this.loadLocalProfiles()
+    // ── Прерванное восстановление (fix/recovery-resilience) ──
+    // Durable-маркер 'vault-recovery-pending' значит «recovery-вход начат, но
+    // ключ ещё не загружен и вход не закоммичен». Авто-вход по старому
+    // persisted token/email здесь ЗАПРЕЩЁН: приложение могло закрыться между
+    // логином и импортом ключа, и доверие durable-состоянию + генерация пары
+    // создали бы НОВУЮ личность вместо восстановленной. Показываем форму
+    // восстановления с переведённым сообщением; initCrypto/генерацию и
+    // авто-вход не выполняем вовсе. Уже сохранённые credentials/токены НЕ
+    // удаляем — пользователь должен иметь возможность просто войти.
+    if (RecoverySession.isRecoveryPending()) {
+      this.restoringSession = false;
+      this.isLoggedIn = false;
+      this.showRecovery = true;
+      this.loginError = this.t('recovery_interrupted') || 'recovery_interrupted';
+      return;
+    }
     // Validate saved token
     if (api.token) {
       // Авто-вход: IMAP-сессия Rust умирает при перезапуске приложения, но
@@ -1693,6 +1714,20 @@ export default {
           // Восстанавливаем email в UI (при авто-входе форма не заполнялась,
           // а loadGroups/профили фильтруют по this.email).
           this.email = api.email || this.email;
+          // Крипто-ключ ОБЯЗАН быть загружен ДО isLoggedIn/поллинга
+          // (fix/recovery-resilience). Почта восстановилась, но без ключа
+          // чаты нечитаемы, а генерация новой пары здесь была бы подменой
+          // личности. Если ключа нет — показываем форму входа/
+          // восстановления. Credentials и старые токены НЕ удаляем: вход с
+          // ключом (или восстановление) должен оставаться возможным.
+          const keyReady = await this.initCrypto({ allowCreate: false });
+          if (!keyReady) {
+            this.isLoggedIn = false;
+            this.showRecovery = true;
+            this.loginError = this.t('recovery_missing_keys') || 'recovery_missing_keys';
+            this.restoringSession = false;
+            return;
+          }
           // Перечитываем всё, что привязано к email: в mounted() эти вызовы
           // отработали с пустым email (авто-вход ещё не восстановил его),
           // поэтому локальные имена контактов и свой аватар «пропадали»
@@ -1763,7 +1798,12 @@ export default {
         }
       }
     }
-    await this.initCrypto()
+    // Крипто-состояние при старте — ТОЛЬКО загрузка (allowCreate:false).
+    // Генерация новой пары здесь недопустима: на чистом экране логина и при
+    // отсутствии ключей это создало бы личность, которой у пользователя нет
+    // (и затирало бы ожидание восстановления). Пара создаётся только после
+    // явного обычного логина (см. login()).
+    await this.initCrypto({ allowCreate: false })
   },
   beforeUnmount() {
     this.stopPolling()
@@ -1848,6 +1888,7 @@ export default {
     parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
     async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
     async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
+    async onMailBounce(recipients, reason) { return CallsFeature.onMailBounce(this, recipients, reason); },
     async startCall() { return CallsFeature.startCall(this); },
     async acceptCall() { return CallsFeature.acceptCall(this); },
     async rejectCall() { return CallsFeature.rejectCall(this); },
@@ -2234,15 +2275,38 @@ export default {
       // Update the native window icon (waybar/dock).
       api.setAppIcon(id).catch(() => { /* ignore window icon failures */ });
     },
-    async initCrypto() {
+    // Инициализация крипто-состояния. Возвращает true, если рабочий ключ
+    // (загруженный ИЛИ созданный) на месте, и false, если ключа нет и создавать
+    // нельзя (allowCreate:false) или инициализация упала.
+    //
+    // allowCreate (fix/recovery-resilience): false = «startup/load only» —
+    // при отсутствии ключа на диске НЕ генерировать новую пару. Генерация
+    // допустима ТОЛЬКО после явного обычного логина (allowCreate:true).
+    // Причина: mounted() раньше вызывал initCrypto() безусловно — даже на
+    // чистом экране логина и во время прерванного восстановления — и при
+    // отсутствии ключей создавал НОВУЮ пару. Для восстановления это
+    // катастрофа: новая пара затирает личность аккаунта, который должен был
+    // быть восстановлен из эскроу/файла. Поэтому:
+    //   • startup/auto-login path → allowCreate:false (только загрузка);
+    //   • после import_backup в recovery → allowCreate:false (перезагрузка
+    //     восстановленного ключа; нет ключа = ошибка recovery_missing_keys);
+    //   • обычный логин → allowCreate:true (новому пользователю нужна пара).
+    async initCrypto({ allowCreate = false } = {}) {
       try {
         const result = await crypto.initFromStorage();
         if (result.loaded) {
           this.publicKey = result.keypair.public_key;
-        } else {
+        } else if (allowCreate) {
           const keypair = await crypto.generateKeypair();
           this.publicKey = keypair.public_key;
           await crypto.saveToStorage();
+        } else {
+          // Ключа нет, а генерировать нельзя: сбрасываем готовность и НЕ
+          // создаём пару. Вызывающий обязан показать форму входа/восстановления.
+          console.warn('[crypto] нет сохранённого ключа, генерация запрещена (allowCreate=false)');
+          this.cryptoReady = false;
+          this.publicKey = null;
+          return false;
         }
         this.fingerprint = await crypto.fingerprint();
         // Fire-and-forget: заполняем свой fingerprint у участников групп, которые
@@ -2263,8 +2327,11 @@ export default {
           try { await ensureAccountNamespace(this.email); }
           catch (e) { console.warn('[identity] namespace bootstrap failed:', e); }
         }
+        return true;
       } catch (error) {
         console.error('Crypto init failed:', error);
+        this.cryptoReady = false;
+        return false;
       }
     },
     async loadStoredPeerKeys() {
@@ -2365,9 +2432,20 @@ export default {
       }
     },
     async login() {
+      // Обычный вход НЕ МОЖЕТ обойти прерванное восстановление
+      // (fix/recovery-resilience): пока маркер 'vault-recovery-pending' стоит,
+      // api.login + initCrypto({allowCreate:true}) создали бы НОВУЮ пару
+      // вместо восстановленной и затирали бы личность аккаунта. Оставляем
+      // пользователя на форме восстановления с переведённым сообщением.
+      // Маркер снимает только успешный commitRecoveryLogin.
       this.loginLoading = true;
       this.loginError = '';
       try {
+        if (RecoverySession.isRecoveryPending()) {
+          this.showRecovery = true;
+          this.loginError = this.t('recovery_interrupted') || 'recovery_interrupted';
+          return;
+        }
         // Пользовательские настройки серверов (если заполнены) — иначе
         // дефолты Gmail внутри emailConnect.
         const config = {};
@@ -2377,6 +2455,15 @@ export default {
         if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
         const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
         this.userId = data.user_id;
+        // Новому пользователю нужна крипто-пара — здесь генерация РАЗРЕШЕНА
+        // (явный обычный вход, а не старт/восстановление). Если не удалось ни
+        // загрузить, ни создать ключ — входа нет (ошибка видна в finally).
+        const cryptoReady = await this.initCrypto({ allowCreate: true });
+        if (!cryptoReady) {
+          this.isLoggedIn = false;
+          this.loginError = this.t('recovery_missing_keys') || 'recovery_missing_keys';
+          return;
+        }
         this.isLoggedIn = true;
         initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
         // Namespace = fp:<fingerprint>. На ручном входе initCrypto из mounted
@@ -4573,77 +4660,16 @@ export default {
       this.recoveryFileName = file.name;
     },
     // Восстановление: логин обязателен (доступ к ящику для эскроу-письма),
-    // слова — обязательны; файл — опционален. Порядок:
-    // 1) логин; 2) если файл → расшифровать словами и импорт;
-    // 3) иначе поиск эскроу-письма в ящике и расшифровка словами;
-    // 4) initCrypto подхватит восстановленную пару.
+    // слова — обязательны; файл — опционален.
+    // Изоляция фичи (t_7c3929d2) + устойчивость (fix/recovery-resilience):
+    // вся логика в RecoveryFeature.loginWithRecovery — тут только делегат.
+    // Там: маркер прерванности ДО логина, логин без durable-персиста, импорт
+    // файла/эскроу (без фолбэка), ПЕРЕзагрузка ключа без генерации, durable
+    // commit и снятие маркера последним.
     async loginWithRecovery() {
-      this.loginLoading = true;
-      this.loginError = '';
-      try {
-        const words = this.recoveryWordsInput.trim();
-        if (!(await crypto.recoveryValidateMnemonic(words))) {
-          throw new Error('Неверный ключ восстановления: нужно 12 слов из списка');
-        }
-        const config = {};
-        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
-        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
-        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
-        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
-        const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
-        this.userId = data.user_id;
-
-        let restored = false;
-        if (this.recoveryFileJson.trim()) {
-          // Файл «Резервной копии» — открытый export_backup() (без слов).
-          try {
-            JSON.parse(this.recoveryFileJson);
-            await invoke('import_backup', { jsonData: this.recoveryFileJson });
-            restored = true;
-          } catch (fileErr) {
-            console.warn('backup file import failed:', fileErr);
-          }
-        }
-        if (!restored) {
-          // Основной путь: эскроу-письмо в ящике + 12 слов.
-          restored = await this.recoverFromEscrow(words);
-        }
-        if (!restored) {
-          throw new Error('Эскроу-письмо не найдено в ящике или слова не подходят');
-        }
-
-        this.isLoggedIn = true;
-        initNotifications().catch(() => {});
-        await this.initLocalDb();
-        this.loadUnreadCounts();
-        this.loadLocalProfiles();
-        // 0.1.180: инициализация релей/eco (зеркало login/auto-login):
-        // дефолт — релей ВКЛ (free-100/день) → eco, foreground-служба не
-        // поднимается. Явный выбор юзера (KV '0') уважается навсегда.
-        this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
-        try {
-          const rs = await relay.getSettings(this.email);
-          this.relayEnabled = rs.enabled;
-          if (this.relayEnabled) {
-            await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
-            this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
-          }
-        } catch (e) { /* релей опционален */ }
-        await this.loadBodyCache();
-        await this.loadContacts();
-        await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-        if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); }
-        this.startPolling();
-        if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); }
-        else this.idleLoop();
-        this.loadEmails().catch(() => {});
-        this.showToast(t('recovery_ok'));
-      } catch (error) {
-        this.loginError = error.message || String(error);
-      } finally {
-        this.loginLoading = false;
-      }
+      await RecoveryFeature.loginWithRecovery(this, {
+        api, crypto, invoke, db, relay, RelayFeature, initNotifications, t: this.t,
+      });
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() {
@@ -4804,44 +4830,11 @@ export default {
     },
     // Поиск эскроу-письма в последних письмах + восстановление по словам.
     // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
+    // Логика вынесена в features/recovery.js (изоляция фичи, ctx-паттерн):
+    // parse/unwrap кандидата устойчивы к чужим/битым письмам, import_backup
+    // бросается наружу. App.vue — только тонкий делегат.
     async recoverFromEscrow(mnemonic) {
-      console.log('[recovery] step 1: validate mnemonic');
-      if (!(await crypto.recoveryValidateMnemonic(mnemonic))) {
-        throw new Error('Неверный формат ключа (нужно 12 слов)');
-      }
-      console.log('[recovery] step 2: fetch emails');
-      const msgs = await api.fetchEmails(this.email);
-      console.log('[recovery] step 3: got', msgs.length, 'msgs, filtering empty subject');
-      const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
-      console.log('[recovery] step 4: candidates', candidates.length, 'byFolder');
-      const byFolder = {};
-      for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
-      for (const [folder, list] of Object.entries(byFolder)) {
-        console.log('[recovery] step 5: fetch bodies from', folder, list.length, 'msgs');
-        const uids = list.map((m) => m.uid);
-        let bodies = [];
-        try {
-          bodies = await invoke('email_fetch_bodies', { uids: uids.map(String), folder });
-        } catch (e) {
-          console.warn('[recovery] fetch_bodies failed:', e);
-          continue;
-        }
-        console.log('[recovery] step 6: got', bodies.length, 'bodies, parsing');
-        for (const [, body] of bodies || []) {
-          const wrappedJson = await crypto.recoveryParseEscrowEmail(body);
-          if (!wrappedJson) {
-            console.log('[recovery]   parseEscrowEmail returned null');
-            continue;
-          }
-          console.log('[recovery] step 7: unwrapping…');
-          const backupJson = await crypto.recoveryUnwrapBackup(wrappedJson, mnemonic);
-          console.log('[recovery] step 8: import_backup');
-          await invoke('import_backup', { jsonData: backupJson });
-          return true;
-        }
-      }
-      console.log('[recovery] no escrow found');
-      return false;
+      return RecoveryFeature.recoverFromEscrow(this, mnemonic, { api, crypto, invoke });
     },
 
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и

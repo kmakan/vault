@@ -1,14 +1,29 @@
+
 // Android library entry point — re-exports main.rs for Tauri cdylib
+
+/// Thread-safe set_env: setenv(3) на Android/Linux не является thread-safe.
+/// Если другие потоки одновременно вызывают getenv, это даёт
+/// `pthread_mutex_lock called on a destroyed mutex` (FORTIFY).
+/// Блокируем все вызовы set_var через Mutex.
+static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn set_env_safe(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    std::env::set_var(key, value);
+}
+
 mod audio;
 mod channels;
 mod credential_store;
 mod crypto;
 mod crypto_pq;
 mod duress;
+mod file_lock;
 mod email;
 mod groups;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
+mod backup_import;
 #[allow(dead_code)]
 mod history_store;
 mod key_escrow;
@@ -591,51 +606,43 @@ async fn email_connect(config: EmailConfig, state: State<'_, EmailState>) -> Res
 
 #[tauri::command]
 async fn email_fetch_messages(state: State<'_, EmailState>) -> Result<Vec<EmailMessage>, String> {
-    // Полный скан (fetchPendingContactInvites/Accepts при входе) НЕ должен
-    // блокировать UI-фетчи: если клиент занят — возвращаем пусто, инвайты
-    // подхватятся следующим тиком. Иначе на большом INBOX полный скан
-    // держит lock десятки секунд и fetch_bodies падает.
+    email_fetch_messages_inner(&state).await
+}
+
+async fn email_fetch_messages_inner(state: &EmailState) -> Result<Vec<EmailMessage>, String> {
+    // Занят — это НЕ «нет писем». Прежде при try_lock-неудаче возвращалось
+    // Ok(пусто), и recovery ложно считал, что эскроу-писем нет. Теперь честная
+    // ошибка: UI перепробует, а не уйдёт в ложный зелёный «пустой ящик».
     let Ok(mut guard) = state.0.try_lock() else {
-        return Ok(Vec::new());
+        return Err("Email client busy; retry full scan".to_string());
     };
     let client = guard
         .as_mut()
         .ok_or_else(|| "Not connected to email server".to_string())?;
-    match t_timeout(Duration::from_secs(30), client.fetch_messages()).await {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(first_err)) => {
-            // Сессия рассыпалась — засчитываем неудачу в лестнице и делаем ОДИН
-            // ограниченный реконнект с повтором. Без note_failure() +
-            // reconnect_imap_rate_limited() полный скан был одним из виновников
-            // шторма подключений (reconnect #127 за 6 минут): каждый вызов
-            // поднимал новый TCP+TLS без паузы, streak оставался 0.
+    // Дедлайн полного скана — 30с, единственный. fetch_messages_with_timeout
+    // РЕАЛЬНО прерывает блокирующий I/O (shutdown сокета), поэтому по истечении
+    // нет смысла в автоматическом ретрае ещё на 75с: таймаут = нездоровая
+    // сессия/сервер, следующий deliberate attempt сам переподключится через
+    // ensure_connected после backoff.
+    match client.fetch_messages().await {
+        Ok(v) => {
+            client.note_success();
+            Ok(v)
+        }
+        Err(e) => {
+            // Реальная ошибка (сеть/parse/таймаут внутри fetch): засчитываем в
+            // лестницу backoff и возвращаем сразу. Сессия уже сброшена на Err
+            // (fetch_messages_with_timeout), слот переиспользуем — следующий
+            // вызов ensure_connected переподключится после паузы. НЕ делаем
+            // немедленный 75с-ретрай-шторм.
             let delay = client.note_failure();
             log::warn!(
-                "imap: fetch failed (streak={}, reconnect in {}s): {first_err}",
+                "imap: fetch failed (streak={}, next connect in {}s): {e}",
                 client.fail_streak(),
                 delay.as_secs()
             );
-            // max_wait меньше таймаута t_timeout(15s), чтобы ожидание паузы
-            // плюс сам reconnect в него помещались. Если пауза длиннее —
-            // функция сбрасывает битую сессию и возвращает управление без
-            // сна (см. reconnect_imap_rate_limited), соединение построит
-            // ближайший тик.
-            t_timeout(
-                Duration::from_secs(15),
-                client.reconnect_imap_rate_limited(Duration::from_secs(3)),
-            )
-            .await
-            .map_err(|_| format!("Reconnect timed out (original: {first_err})"))?
-            .map_err(|e| format!("Reconnect failed: {e} (original: {first_err})"))?;
-            let retry = t_timeout(Duration::from_secs(30), client.fetch_messages())
-                .await
-                .map_err(|_| "Full scan timed out (retry)".to_string())?;
-            if retry.is_ok() {
-                client.note_success();
-            }
-            retry.map_err(|e| e.to_string())
+            Err(e.to_string())
         }
-        Err(_) => Err("Full scan timed out".to_string()),
     }
 }
 
@@ -1671,28 +1678,8 @@ fn export_backup() -> Result<String, String> {
 
 #[tauri::command]
 fn import_backup(json_data: String) -> Result<String, String> {
-    let data: serde_json::Value = serde_json::from_str(&json_data).map_err(|e| e.to_string())?;
-    let mut restored = Vec::new();
-    // 1. Ключи (keypair + peer_keys) — через существующий import_keys.
-    if let Some(keys) = data.get("keys") {
-        let meta = key_store::import_keys(&keys.to_string()).map_err(|e| e.to_string())?;
-        restored.push(format!("keys: {}", meta.key_count));
-    }
-    // 2. kv_store — полная замена (профили, пометки, курсоры, кэши).
-    if let Some(kv) = data.get("kv_store").and_then(|v| v.as_array()) {
-        let entries: Vec<(String, String, String)> = kv
-            .iter()
-            .filter_map(|row| {
-                let a = row.get(0)?.as_str()?.to_string();
-                let k = row.get(1)?.as_str()?.to_string();
-                let v = row.get(2)?.as_str()?.to_string();
-                Some((a, k, v))
-            })
-            .collect();
-        open_db()?.kv_set_all(&entries).map_err(|e| e.to_string())?;
-        restored.push(format!("kv_store: {}", entries.len()));
-    }
-    Ok(restored.join(", "))
+    // Тонкий делегат: разбор+валидация+атомарное применение в backup_import.
+    backup_import::import_backup(&json_data).map_err(|e| e.to_string())
 }
 
 /// Удаление аккаунта (RuStore §5.4): полная очистка локальных данных ВНЕ
@@ -1971,7 +1958,7 @@ pub fn run() {
     // не видны — ICE-gathering падал молча («ICE gathering timed out»).
     let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     if std::env::var("VAULT_LOG_INIT").is_err() {
-        std::env::set_var("VAULT_LOG_INIT", "1");
+        set_env_safe("VAULT_LOG_INIT", "1");
         let _ = env_logger::Builder::new()
             .filter_level(log::LevelFilter::Info)
             .parse_filters(&rust_log)
@@ -1983,6 +1970,25 @@ pub fn run() {
                 .with_max_level(log::LevelFilter::Debug)
                 .with_tag("VaultRust"),
         );
+    }
+    // ── Барьер восстановления на старте (t_12f15e61) ──────────────────
+    // ДО Builder: если при прошлом запуске импорт оборвался на середине,
+    // доводим/откатываем активный журнал из RAW-резолва путей (без публичных
+    // guarded-функций key_store и без Storage::open(None) — рекурсии/дедлока
+    // нет). При ошибке восстановления — аварийно останавливаем старт
+    // фикс-сообщением (НЕ генерируем ключи, не читаем частичный стор).
+    // REGRESSION FIX (10.10, пойман device-приёмкой на эмуляторе): на mobile
+    // HOME появляется только в setup() — ранний вызов здесь падал
+    // «Cannot determine local data directory» и exit(1) крутил старт в
+    // крэш-луп (FORTIFY SIGABRT). На mobile барьер вызывается в setup()
+    // сразу после set_var("HOME"); fail-closed семантика не меняется.
+    #[cfg(not(mobile))]
+    {
+        if let Err(e) = backup_import::recover_pending_default() {
+            log::error!("vault: recovery import barrier failed on startup: {e:?}");
+            eprintln!("vault: не удалось восстановить прерванный импорт. Запуск остановлен.");
+            std::process::exit(1);
+        }
     }
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2148,7 +2154,18 @@ pub fn run() {
             #[cfg(mobile)]
             {
                 if let Ok(dir) = app.path().app_data_dir() {
-                    std::env::set_var("HOME", dir);
+                    set_env_safe("HOME", dir);
+                }
+                // Барьер восстановления (t_12f15e61): на mobile — ПОСЛЕ HOME
+                // (см. регрессию-крэш-луп в run(), пойману device-приёмкой).
+                // Команды ещё не зарегистрированы (commands run after setup),
+                // fail-closed сохранён: Err → остановка запуска.
+                if let Err(e) = backup_import::recover_pending_default() {
+                    log::error!("vault: recovery import barrier failed on startup: {e:?}");
+                    eprintln!(
+                        "vault: не удалось восстановить прерванный импорт. Запуск остановлен."
+                    );
+                    std::process::exit(1);
                 }
             }
 

@@ -331,7 +331,8 @@ impl CallMediaManager {
         // сценарий «звонок не доходит» у реальных пользователей).
         //
         // TURN: свой coturn (185.180.199.237:3478, realm vault-msg.ru,
-        // статическая пара vault:<секрет из /etc/coturn/vault-secret>).
+        // статический пользователь vault; секрет — в /etc/turnserver.conf,
+        // отдельного файла /etc/coturn/vault-secret на VPS нет).
         // Секрет НЕ коммитим в git: он попадает в бинарь при СБОРКЕ через
         // переменную VAULT_TURN_CRED в окружении сборщика (в Android-сборке
         // окружения процесса на устройстве нет — читать env в рантайме
@@ -352,9 +353,12 @@ impl CallMediaManager {
             urls: stun_urls.clone(),
             ..Default::default()
         };
-        // TURN-сервер: ВСЕГДА активен (03.10). Наш coturn на VPS — open relay
-        // (/etc/turnserver.conf без auth), креды не нужны. Без TURN под мобильным
-        // CGNAT ICE не собирается → видео/аудио не проходит вне одной LAN.
+        // TURN-сервер поднят, но НЕ открытый: coturn идёт с lt-cred-mech +
+        // статическим user=vault, анонимная аллокация отклоняется (проверено
+        // живой пробой снаружи 12.10: Allocate → error + REALM/NONCE, не успех).
+        // Значит, без кред TURN недоступен — «открытого релея» здесь нет.
+        // Без TURN под мобильным CGNAT ICE не собирается → видео/аудио не
+        // проходит вне одной LAN (известное ограничение, а не открытость).
         // URL: turn:HOST:PORT (по умолчанию наш VPS).
         let mut ice_servers = vec![dev_ice];
         // Хост можно переопределить (dev/тесты): runtime env → compile-time env.
@@ -366,8 +370,10 @@ impl CallMediaManager {
             format!("turn:{host}:3478"),
             format!("turn:{host}:3478?transport=tcp"),
         ];
-        // Опциональный кред (если когда-нибудь закроем open relay): runtime env
-        // VAULT_TURN_CRED="user:pass" или вшитый при сборке. Сейчас не нужен.
+        // Кред ОБЯЗАТЕЛЕН (coturn с lt-cred-mech): runtime env
+        // VAULT_TURN_CRED="user:pass" или вшитый при сборке. Ни один релиз
+        // (включая 0.1.220/0.1.221) собран НЕ был с ним → в поле TURN не
+        // используется ни одним устройством (в логах coturn — ноль аллокаций).
         let cred = std::env::var("VAULT_TURN_CRED")
             .ok()
             .or_else(|| option_env!("VAULT_TURN_CRED").map(|s| s.to_owned()));
@@ -380,8 +386,8 @@ impl CallMediaManager {
         // turn: URL → «turn server credentials required» при создании
         // PeerConnection (поймано живьём 03.10 на стороне callee —
         // accept падал, SDP-ответ не уходил, звонок висел 90с до
-        // connect_timeout). Пока coturn — open relay (без auth), TURN с
-        // пустыми кредами всё равно не работает, поэтому:
+        // connect_timeout). Наш coturn креды ТРЕБУЕТ (lt-cred-mech), поэтому
+        // TURN идёт в список только при наличии пары, а без неё:
         //   креды есть  → TURN в список (настоящий relay-путь);
         //   кредов нет  → TURN ПРОПУСКАЕМ, остаются STUN-only (поведение
         //                 ≤0.1.205, host/srflx в одной LAN работает).
@@ -394,7 +400,7 @@ impl CallMediaManager {
             });
         } else {
             log::warn!(
-                "[media] TURN skipped: no credentials (webrtc-rs requires them even for open relays) — STUN only"
+                "[media] TURN skipped: no credentials (coturn требует auth) — STUN only"
             );
         }
         Self {

@@ -54,6 +54,31 @@ pub struct PersistedState {
     /// hash(read-токен) → URL mp3 рингтона входящего звонка.
     #[serde(default)]
     pub topic_ringtone: HashMap<String, String>,
+    /// fp аккаунта → выданный ему read-токен. Даёт СТАБИЛЬНОСТЬ адреса
+    /// очереди: повторная регистрация с тем же fp возвращает тот же токен.
+    #[serde(default)]
+    pub fp_tokens: HashMap<String, FpToken>,
+}
+
+/// Запись «fp аккаунта → выданный ему read-токен».
+///
+/// Инцидент 12.10.2026: адрес очереди МЕНЯЛСЯ. Миграция kv на fp-namespace
+/// теряла `relay-list` (свой `myToken`), клиент честно перерегистрировался,
+/// `/relay/register` выдавал НОВЫЙ токен — и собеседники, знающие старый
+/// адрес, молча теряли канал (вызовы уходили в мёртвую очередь). Теперь
+/// выдача идемпотентна по fp: повторная регистрация возвращает ТОТ ЖЕ токен.
+/// Смена токена возможна только осознанно — выдача тестового (промо) или
+/// платного вида.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FpToken {
+    /// read-токен = адрес очереди получателя.
+    pub token: String,
+    /// Вид токена: "install" | "test" | "paid" (vault_relay::tokens::Kind).
+    #[serde(default)]
+    pub kind: String,
+    /// unix-сек истечения записи: протухшую не переиспользуем.
+    #[serde(default)]
+    pub exp: u32,
 }
 
 fn now_unix() -> u64 {
@@ -85,17 +110,36 @@ fn valid_ringtone(v: &str) -> bool {
 fn valid_topic(v: &str) -> bool {
     v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit())
 }
+
+/// fp аккаунта: hex-байты через ':'. Не пустой, ограниченной длины, без
+/// пробелов/управляющих символов (защита от мусора и от ключей-«полотенец»).
+fn valid_fp(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_'))
+}
+
+/// read-токен в state.json: base64url (без '='), ограниченной длины.
+fn valid_token(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 128
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
 impl PersistedState {
     /// Снимок текущих in-memory карт.
     pub fn snapshot(
         topic_fcm: &HashMap<String, String>,
         topic_ringtone: &HashMap<String, String>,
+        fp_tokens: &HashMap<String, FpToken>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
             saved_at: now_unix(),
             topic_fcm: topic_fcm.clone(),
             topic_ringtone: topic_ringtone.clone(),
+            fp_tokens: fp_tokens.clone(),
         }
     }
 
@@ -116,10 +160,12 @@ impl PersistedState {
         match serde_json::from_str::<Self>(&text) {
             Ok(mut st) => {
                 let (f, r) = (st.topic_fcm.len(), st.topic_ringtone.len());
+                let fps = st.fp_tokens.len();
                 st.sanitize();
                 tracing::info!(
-                    path = %path.display(), v = st.v, fcm = f, ringtone = r,
+                    path = %path.display(), v = st.v, fcm = f, ringtone = r, fp = fps,
                     kept_fcm = st.topic_fcm.len(), kept_ringtone = st.topic_ringtone.len(),
+                    kept_fp = st.fp_tokens.len(),
                     "state: loaded"
                 );
                 st
@@ -136,6 +182,8 @@ impl PersistedState {
     fn sanitize(&mut self) {
         self.topic_fcm.retain(|k, v| valid_topic(k) && valid_reg_token(v));
         self.topic_ringtone.retain(|k, v| valid_topic(k) && valid_ringtone(v));
+        self.fp_tokens
+            .retain(|k, v| valid_fp(k) && valid_token(&v.token));
         for map in [&mut self.topic_fcm, &mut self.topic_ringtone] {
             if map.len() > MAX_ENTRIES {
                 let extra = map.len() - MAX_ENTRIES;
@@ -145,6 +193,14 @@ impl PersistedState {
                 }
                 tracing::warn!(dropped = extra, "state: entries over cap dropped");
             }
+        }
+        if self.fp_tokens.len() > MAX_ENTRIES {
+            let extra = self.fp_tokens.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.fp_tokens.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.fp_tokens.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: fp entries over cap dropped");
         }
     }
 
@@ -255,6 +311,7 @@ mod tests {
                 t.clone(),
                 "https://vault-msg.ru/ring_incoming_pulse.mp3".to_string(),
             )]),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("save");
 
@@ -288,6 +345,7 @@ mod tests {
         let t = topic('b');
         PersistedState::snapshot(
             &HashMap::from([(t.clone(), "tok".to_string())]),
+            &HashMap::new(),
             &HashMap::new(),
         )
         .save_atomic(&path)
@@ -323,9 +381,10 @@ mod tests {
     fn broken_entries_are_filtered_on_load() {
         let path = tmp_path("filter");
         // Вручную подсовкиваем мусор: не-hex тема, пустой reg_token,
-        // «рингтон» не http. Всё это обязано исчезнуть, валидное — остаться.
+        // «рингтон» не http, битый fp/токен. Всё это обязано исчезнуть,
+        // валидное — остаться.
         let raw = format!(
-            r#"{{"v":1,"topic_fcm":{{"{}":"good-token","{}":"","zz":"tok"}},"topic_ringtone":{{"{}":"ftp://x/y.mp3","{}":"https://ok/r.mp3"}}}}"#,
+            r#"{{"v":1,"topic_fcm":{{"{}":"good-token","{}":"","zz":"tok"}},"topic_ringtone":{{"{}":"ftp://x/y.mp3","{}":"https://ok/r.mp3"}},"fp_tokens":{{"c7:3c:e5:5a:9f:7b:46:6f":{{"token":"AbC-123_xyz","kind":"install","exp":99}},"":{{"token":"x"}},"bad fp":{{"token":"y"}},"aa:bb":{{"token":"not a token"}}}}}}"#,
             topic('1'),
             topic('2'),
             topic('3'),
@@ -343,6 +402,34 @@ mod tests {
             st.topic_ringtone.get(&topic('4')).map(String::as_str),
             Some("https://ok/r.mp3")
         );
+        // fp: остаётся только корректная запись (непустой fp, base64url-токен).
+        assert_eq!(st.fp_tokens.len(), 1);
+        let rec = st.fp_tokens.get("c7:3c:e5:5a:9f:7b:46:6f").expect("fp kept");
+        assert_eq!(rec.token, "AbC-123_xyz");
+        assert_eq!(rec.kind, "install");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn fp_tokens_survive_restart() {
+        // Главное свойство фикса: адрес очереди переживает рестарт релея,
+        // т.е. повторная выдача по тому же fp вернёт тот же токен.
+        let path = tmp_path("fprestart");
+        let fp = "2b:e1:c9:30:d1:b9:1b:85".to_string();
+        let rec = FpToken {
+            token: "Tok_abc-123".to_string(),
+            kind: "install".to_string(),
+            exp: 4102444800,
+        };
+        PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::from([(fp.clone(), rec.clone())]),
+        )
+        .save_atomic(&path)
+        .expect("save");
+        let loaded = PersistedState::load(&path);
+        assert_eq!(loaded.fp_tokens.get(&fp), Some(&rec));
         cleanup(&path);
     }
 

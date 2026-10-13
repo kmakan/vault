@@ -25,6 +25,12 @@ const apiMock = {
   saveProfile: (...a) => { apiMock.profileCalls.push(a); },
   getMyGroupKey: null,
   profileCalls: [],
+  // контракт api.identityLetterFresh (api.js:884): письмо свежее порога → true
+  identityLetterFresh: async () => true,
+  renamePeerIdentity: async () => {},
+  bumpIdentityRenameTs: async () => {},
+  removeContact: () => {},
+  deleteProfile: () => {},
 };
 // relay-мок
 const relayMock = {
@@ -53,10 +59,15 @@ inc = inc
   .replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"')
   .replace("from '../notify.js'", 'from "' + MOCKS + '/notify.js"')
   .replace("from './presence.js'", 'from "' + MOCKS + '/presence.js"')
-  .replace("from './channels.js'", 'from "' + MOCKS + '/channels.js"');
+  .replace("from './channels.js'", 'from "' + MOCKS + '/channels.js"')
+  .replace("from './bounce.js'", 'from "' + MOCKS + '/bounce.js"');
 writeFileSync(MOCKS + '/incoming.mjs', inc);
 // presence-мок: сигналы presence в этих тестах не разбираем (свой смоук)
 writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
+// bounce: РЕАЛЬНЫЙ модуль (чистые функции, без внешних импортов) — проверяем
+// и DSN-ветку incoming.js, и то, что баунс не считается сообщением.
+writeFileSync(MOCKS + '/bounce.js',
+  'export * from ' + JSON.stringify(ROOT + '/src/features/bounce.js') + ';');
 // channels: реальный модуль (проверяем и канальную ветку incoming) с
 // подменой внешним импортов — тот же приём, что в channels-smoke.
 let chan = readFileSync(ROOT + '/src/features/channels.js', 'utf8');
@@ -103,12 +114,19 @@ function makeCtx(over = {}) {
     migrateChatHistory: async () => {},
     setPeerKey: () => {},
     tryMigrateGroupMember: async () => false,
+    migratePeerGroups: async () => {},
     chatVisible: () => false,
     isMuted: () => false,
     t: (k) => 'NEW',
     saveUnreadSeen: async () => {},
     saveUnreadCounts: async () => {},
     callSignals: 0,
+    // DSN-ветка (features/bounce.js): сюда пишем вызовы, тесты читают.
+    bounceCalls: [],
+    onMailBounce: async function (recipients, reason) {
+      this.bounceCalls.push({ recipients, reason });
+      return false;
+    },
   }, over);
 }
 
@@ -378,6 +396,80 @@ console.log('18. дедуп обычных сообщений не сломан 
   await processIncoming(ctx, [b, a], { notify: true });
   check('один env.id учтён один раз', ctx.unreadCounts['peer@x.ru'] === 1,
     { unread: ctx.unreadCounts['peer@x.ru'] });
+}
+
+console.log('18. DSN/баунс (MAILER-DAEMON): распознан до расшифровки, отдан в onMailBounce, НЕ сообщение');
+{
+  // Инцидент 12.10.2026. classify() отбрасывал всё, что не crypto.isEncrypted,
+  // поэтому служебный DSN о недоставке висел мёртвым грузом: письмо-вызов
+  // отбито, а вызов «звонит» 5 минут. Теперь DSN — ветка ДО шифртекста.
+  const ctx = makeCtx();
+  // Тело как у реального Gmail-DSN (uid 8463): Final-Recipient + код SMTP.
+  const dsn = [
+    'Content-Type: message/delivery-status',
+    '',
+    'Final-Recipient: rfc822; peer@x.ru',
+    'Action: failed',
+    'Status: 5.7.1',
+    'Diagnostic-Code: smtp; 554 5.7.1 Message rejected under suspicion of SPAM',
+  ].join('\n');
+  const m = msg({
+    uid: 777, message_id: '<dsn@x>',
+    from: { address: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>' },
+    subject: 'Delivery Status Notification (Failure)',
+  });
+  withBody(ctx, m, dsn);
+  cryptoMock.decryptVault = async () => { throw new Error('DSN не шифруется — вызова быть не должно'); };
+  const dsnFires0 = firesFrom();
+  await processIncoming(ctx, [m], { notify: true });
+  check('onMailBounce вызван 1 раз', ctx.bounceCalls.length === 1, ctx.bounceCalls);
+  const call0 = ctx.bounceCalls[0] || {};
+  check('получатель распознан (peer@x.ru)', (call0.recipients || []).includes('peer@x.ru'), call0);
+  check('причина = 554 5.7.1 SPAM', /554 5\.7\.1/.test(call0.reason || ''), call0);
+  check('DSN не посчитан как сообщение (нет unread/notify)',
+    ctx.unreadCounts['mailer-daemon@googlemail.com'] === undefined && notifyMock.fires.length === dsnFires0);
+}
+
+console.log('19. баунс не от собеседника-демона, но по теме: тема ловит (не только From)');
+{
+  const ctx = makeCtx();
+  const m = msg({
+    uid: 778, message_id: '<dsn2@x>',
+    from: { address: 'postmaster@ya.ru' },
+    subject: 'Undelivered Mail Returned to Sender',
+  });
+  withBody(ctx, m, 'Reporting-MTA: dns\nTo: peer@x.ru\nStatus: 5.1.1');
+  const dsn2Fires0 = firesFrom();
+  await processIncoming(ctx, [m], { notify: true });
+  check('баунс по теме отдан в onMailBounce', ctx.bounceCalls.length === 1, ctx.bounceCalls);
+  check('нет unread/notify', notifyMock.fires.length === dsn2Fires0);
+}
+
+console.log('20. ЗВОНОК под незнакомым адресом (fp-namespace) не теряется');
+{
+  // Регресс 12.10.2026: десктоп публиковал конверты с from = fp:<…>
+  // (нормализация account внутри relayPublish, коммит 25dd18a). У пира
+  // такого адреса в peerKeys нет → конверт уходил в ветку «смена почты»,
+  // где call-сигнал НЕ разбирался и молча терялся: звонок от десктопа не
+  // доходил вообще. Теперь сигнал доходит до state machine.
+  const ctx = makeCtx();
+  ctx.peerKeys = { 'icemaksim@gmail.com': 'ANNAK' };
+  ctx.parseCallSignal = (t) => { try { return JSON.parse(t); } catch (e) { return null; } };
+  // Расшифровка по старому ключу срабатывает (fingerprint-матчинг):
+  // первая попытка (новый адрес) — мимо, вторая (известный ключ) — ок.
+  cryptoMock.decryptVault = async (b) => JSON.stringify({ vault: 1, id: 'ev1', type: 'call_request', call_id: 'c-ns1', key: 'ANNAK' });
+  const got = [];
+  ctx.handleCallSignal = async function (sig, from) { got.push([sig.type, sig.call_id, from]); };
+  const m = msg({ from: { address: 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx' }, uid: 20, message_id: '<ns@x>' });
+  withBody(ctx, m, 'ENC:1');
+  await processIncoming(ctx, [m], { notify: true });
+  check('сигнал звонка доставлен под новым адресом',
+    got.length === 1 && got[0][0] === 'call_request' && got[0][1] === 'c-ns1', got);
+  check('адрес отправителя — ИЗВЕСТНЫЙ адрес пира, не fp:',
+    got.length === 1 && got[0][2] === 'icemaksim@gmail.com', got);
+  check('fp-адрес не попадает в state machine (иначе currentCall.peer = fp:… → SMTP «Invalid recipient email»)',
+    got.length === 1 && !String(got[0][2]).startsWith('fp:'), got);
+  check('звонок НЕ посчитан как сообщение', ctx.unreadCounts['fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx'] === undefined);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

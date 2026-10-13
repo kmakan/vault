@@ -80,8 +80,8 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vault_hist_{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
-        std::env::set_var("HOME", &tmp);
-        std::env::set_var("XDG_DATA_HOME", tmp.join(".local/share"));
+        crate::set_env_safe("HOME", &tmp);
+        crate::set_env_safe("XDG_DATA_HOME", tmp.join(".local/share"));
 
         save_history("acc@x", "old@peer", "[\"old\"]").unwrap();
         save_history("acc@x", "other@peer", "[\"other\"]").unwrap();

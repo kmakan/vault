@@ -17,7 +17,7 @@ const apiMock = {
   sendEdit: async (chat, content) => { apiMock.editSends.push({ chat, content }); },
   sendGroupEdit: async (gid, content) => { apiMock.groupEditSends.push({ gid, content }); },
 };
-apiMock.tombstoneAdd = (acc, msgId, mid) => { apiMock.tombstoneCalls.push({ acc, msgId, mid }); };
+apiMock.tombstoneAdd = async (acc, msgId, mid) => { apiMock.tombstoneCalls.push({ acc, msgId, mid }); };
 
 // crypto-мок: перехват encryptVault/encryptWithGroupKey
 const cryptoMock = {
@@ -36,10 +36,11 @@ globalThis.localStorage = {
   removeItem: (k) => lsBacking.delete(k),
 };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = apiMock; // db-экспорт из api.js = тот же объект
+globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase(); // без fingerprint: тестам нужна только нормализация
 globalThis.__cryptoMock = cryptoMock;
 
 // Подменяем резолвер edits-импортов: копия edits.js с переписанными путями
@@ -93,15 +94,15 @@ console.log('2. Tombstones (msg_id + Message-ID)');
   const ctx = makeCtx();
   check('tombstonesKey', E.tombstonesKey(ctx) === 'vault-tombstones-me@x.ru');
   check('midTombstonesKey', E.midTombstonesKey(ctx) === 'vault-mid-tombstones-me@x.ru');
-  E.addTombstone(ctx, 'm1');
-  E.addTombstone(ctx, 'm1'); // дедуп
+  await E.addTombstone(ctx, 'm1');
+  await E.addTombstone(ctx, 'm1'); // дедуп
   check('addTombstone + дедуп в кэше', ctx.tombstonesCache.length === 1);
   check('addTombstone персист в sqlite (1 раз)', apiMock.tombstoneCalls.length === 1 && apiMock.tombstoneCalls[0].msgId === 'm1');
   check('isTombstoned', E.isTombstoned(ctx, 'm1') === true && E.isTombstoned(ctx, 'mX') === false);
-  E.addMidTombstone(ctx, 'MID-9');
+  await E.addMidTombstone(ctx, 'MID-9');
   check('addMidTombstone + персист', apiMock.tombstoneCalls.some(c => c.mid === 'MID-9') && ctx.midTombstonesCache.length === 1);
   check('isMidTombstoned', E.isMidTombstoned(ctx, 'MID-9') === true);
-  check('addTombstone(null) — тихий no-op', (E.addTombstone(ctx, null), apiMock.tombstoneCalls.length === 2));
+  check('addTombstone(null) — тихий no-op', (await E.addTombstone(ctx, null), apiMock.tombstoneCalls.length === 2));
   check('loadTombstones из кэша', E.loadTombstones(ctx).length === 1);
 }
 

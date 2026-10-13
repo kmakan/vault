@@ -195,6 +195,9 @@ export default {
   call_declined: '通话已拒绝',
   call_canceled: '通话已取消',
   call_ended: '通话结束',
+  // 通话邮件被服务商退回（DSN）——对方未收到。
+  call_undeliverable: '邮件未送达',
+  call_undeliverable_toast: '邮件服务器退回了通话消息：{reason}。通话已取消——请启用中继或检查地址。',
   call_back: '回拨',
   // 通话设置
   settings_calls: '通话',
@@ -465,6 +468,10 @@ export default {
   recovery_btn: '恢复',
   recovery_invalid: '恢复密钥无效：需要列表中的 12 个单词',
   recovery_ok: '账户已恢复：联系人和群组已就位',
+  recovery_not_found: '收件箱中未找到托管信件，或单词不匹配',
+  recovery_missing_keys: '此设备上未找到已恢复的密钥。请尝试备份文件或重新输入单词。',
+  recovery_state_unavailable: '无法安全开始恢复：本地存储不可用。请重新启动应用后重试。',
+  recovery_interrupted: '账户恢复被中断。请输入邮箱、恢复密钥（12 个单词）和（可选）备份文件以完成。',
   keys_import: '导入密钥',
   recovery_title: '恢复密钥',
   recovery_create: '创建恢复密钥',

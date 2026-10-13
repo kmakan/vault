@@ -27,10 +27,11 @@ const histMock = {
 
 // edits-фичи для ctx-моков (filterDeleted/isTombstoned) — реальные из edits.js не нужны,
 // history.js зовёт их через ctx: мокаем по контракту.
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = apiMock;
+globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__histMock = histMock;
 
 // Подменяем резолвер history-импортов: копия с переписанными путями
@@ -91,7 +92,7 @@ console.log('2. Body-cache (FIFO 400 + debounce)');
   check('FIFO: лимит 400 вытесняет старейшее', ctx2.bodyCacheOrder.length === 400 && !('k0' in ctx2.emailBodyCache) && ctx2.emailBodyCache.x2 === 'v2');
   // persistBodyCache: sqlite-мок получает все ключи
   apiMock.bodyRows.length = 0;
-  H.persistBodyCache(ctx2);
+  await H.persistBodyCache(ctx2);
   check('persistBodyCache пишет все тела в sqlite', apiMock.bodyRows.length === 400);
   // loadBodyCache: восстановление
   const ctx3 = makeCtx();
