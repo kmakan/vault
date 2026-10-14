@@ -111,7 +111,8 @@ for (let i = 0; i < 501; i++) bigMap['old-' + i] = i;
 _kv.set('delivered-sent', JSON.stringify(bigMap));
 cryptoMock.decryptVault = async (body) => JSON.stringify({ id: 'msg-' + body.replace('ENC:', ''), vault: 1 });
 await sendDeliveredReceipts(makeCtx(), [{ from: 'a@x.ru', uid: 99, folder: 'INBOX' }]);
-await new Promise(r => setTimeout(r, 50)); // fire-and-forget kvSet
+// kvSet в модуле fire-and-forget (.catch) — ждём, пока промисс выполнится.
+await new Promise(r => setTimeout(r, 200));
 const after = JSON.parse(_kv.get('delivered-sent'));
 check('cap 500: после вызова записей = 500', Object.keys(after).length === 500, Object.keys(after).length);
 
