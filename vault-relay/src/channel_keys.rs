@@ -78,6 +78,59 @@ pub fn verify(entry: &Entry, sig_b64: &str, kid: u64, env_id: &str, body: &str) 
     }
 }
 
+/// Политика приёма запроса регистрации — ЧИСТАЯ функция ради тестов.
+/// Хендлер в main.rs обязан звать ровно её: иначе политика живёт в двух
+/// местах и расходится тихо (как уже было с kid/token).
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegisterDecision {
+    /// Зарегистрировать: kid (канонической строкой) — ключ для карты.
+    Accept { kid: String },
+    /// Отклонить: HTTP-код + текст ошибки для клиента.
+    Reject { status: u16, error: &'static str },
+}
+
+/// owner_scope: 'r' | 'w' — личный токен владельца; owner_expired — протух;
+/// chan_scope: 'c' — read-токен канала, 'C' — write (отказ: право publish —
+///
+/// не адрес очереди); chan_bad — токен канала не разобрался.
+pub fn decide_registration(
+    owner_scope: Option<char>,
+    owner_expired: bool,
+    chan_scope: Option<char>,
+    chan_kid: Option<u64>,
+    pubkey: &str,
+) -> RegisterDecision {
+    use RegisterDecision::{Accept, Reject};
+    let bad = |status, error| Reject { status, error };
+    let Some(os) = owner_scope else {
+        return bad(401, "bad token");
+    };
+    if !matches!(os, 'r' | 'w') {
+        return bad(403, "personal token required");
+    }
+    if owner_expired {
+        return bad(402, "token expired");
+    }
+    let Some(cs) = chan_scope else {
+        return bad(400, "bad channel token");
+    };
+    if cs != 'c' {
+        return bad(400, "channel read token required");
+    }
+    let Some(kid) = chan_kid else {
+        return bad(400, "bad channel token");
+    };
+    let pk = pubkey.trim();
+    if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
+        return bad(400, "bad pubkey");
+    }
+    // Честное ограничение проверки: ed25519-dalek 2.1 принимает в from_bytes
+    // почти любую 32-байтовую строку (включая точки малого порядка) — строгую
+    // проверку делает verify_strict в момент verify. Здесь требуем только hex
+    // форму: подпись под слабым ключом всё равно не пройдёт verify.
+    Accept { kid: kid.to_string() }
+}
+
 /// Проверка для пути, где регистрации может не быть.
 pub fn verify_optional(
     entry: Option<&Entry>,
@@ -185,6 +238,86 @@ mod tests {
         e.pubkey = "zz".into();
         assert!(matches!(verify(&e, SIG, KID, "env-42", "body"), Verdict::Invalid));
         e.pubkey = "ff".into();
+        assert!(matches!(verify(&e, SIG, KID, "env-42", "body"), Verdict::Invalid));
+    }
+
+    // Политика регистрации (ADR-002): единственный источник истины —
+    // decide_registration. Хендлер обязан звать её, а не дублировать.
+    use super::{decide_registration, RegisterDecision};
+
+    const PUB: &str =
+        "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c";
+
+    #[test]
+    fn registration_accepts_owner_read_or_write_with_channel_read() {
+        // /register выдаёт read — владелец с ним ОБЯЗАН регистрироваться.
+        assert!(matches!(
+            decide_registration(Some('r'), false, Some('c'), Some(KID), PUB),
+            RegisterDecision::Accept { .. }
+        ));
+        assert!(matches!(
+            decide_registration(Some('w'), false, Some('c'), Some(KID), PUB),
+            RegisterDecision::Accept { .. }
+        ));
+    }
+
+    #[test]
+    fn registration_kid_is_canonical_u64_string() {
+        // Ключ карты — kid из токена строкой u64: без hex-вариантов '00ab'/'AB'.
+        match decide_registration(Some('r'), false, Some('c'), Some(KID), PUB) {
+            RegisterDecision::Accept { kid } => assert_eq!(kid, KID.to_string()),
+            r => panic!("ожидали Accept, получили {r:?}"),
+        }
+    }
+
+    #[test]
+    fn registration_rejects_channel_write_token() {
+        // Write-токен — право publish, а не адрес очереди: регистрировать по
+        // нему нельзя (иначе подписчик привязал бы очередь к своему ключу).
+        assert_eq!(
+            decide_registration(Some('r'), false, Some('C'), Some(KID), PUB),
+            RegisterDecision::Reject { status: 400, error: "channel read token required" }
+        );
+    }
+
+    #[test]
+    fn registration_rejects_channel_or_personal_tokens() {
+        // Канальный токен вместо личного — не доказательство владения.
+        assert_eq!(
+            decide_registration(Some('c'), false, Some('c'), Some(KID), PUB),
+            RegisterDecision::Reject { status: 403, error: "personal token required" }
+        );
+        // Протухший личный токен — тоже не доказательство.
+        assert_eq!(
+            decide_registration(Some('r'), true, Some('c'), Some(KID), PUB),
+            RegisterDecision::Reject { status: 402, error: "token expired" }
+        );
+        // Битый токен канала.
+        assert_eq!(
+            decide_registration(Some('r'), false, None, None, PUB),
+            RegisterDecision::Reject { status: 400, error: "bad channel token" }
+        );
+    }
+
+    #[test]
+    fn registration_rejects_off_curve_pubkey() {
+        // ed25519-dalek 2.1 НЕ проверяет точку на кривой в from_bytes (принял
+        // даже ff×32) — но verify_strict отвергает подписи под точками малого
+        // порядка. Поэтому здесь честно два уровня:
+        //  (а) мусор вместо hex — отказ сразу на регистрации;
+        assert_eq!(
+            decide_registration(Some('r'), false, Some('c'), Some(KID), "zz"),
+            RegisterDecision::Reject { status: 400, error: "bad pubkey" }
+        );
+        //  (б) точка малого порядка (все-нули) — регистрация проходит, но
+        //  verify под ней обязан отвергать (иначе это был бы вечный Invalid
+        //  без понимания причины — см. verify ниже).
+        let zero = "00".repeat(32);
+        assert!(matches!(
+            decide_registration(Some('r'), false, Some('c'), Some(KID), &zero),
+            RegisterDecision::Accept { .. }
+        ));
+        let e = Entry { owner_hash: "x".into(), pubkey: zero, created_at: 0 };
         assert!(matches!(verify(&e, SIG, KID, "env-42", "body"), Verdict::Invalid));
     }
 }

@@ -1180,11 +1180,16 @@ fn norm_fp(fp: Option<&str>) -> Option<String> {
 
 // ── ADR-002: регистрация публичного ключа подписи канала ──────────────────
 
-/// Запрос регистрации: kid канала + Ed25519 public key (hex 32 Б).
+/// Запрос регистрации: канальный read-токен целиком + Ed25519 public key.
+///
+/// kid (key_id) сервер выводит САМ из токена: key_id — это u64, а JSON-число
+/// после 2^53 теряет точность, и клиент, присылающий kid числом, мог бы молча
+/// подменить канал. Так исключено и расхождение между тем, что
+/// зарегистрировали, и тем, куда потом публикуют.
 #[derive(Deserialize)]
 struct ChannelKeyReq {
-    /// key_id очереди канала (из канальных токенов).
-    kid: u64,
+    /// read-токен канала целиком (см. выше, почему не kid числом).
+    token: String,
     /// Публичный ключ подписи владельца, hex.
     pubkey: String,
 }
@@ -1210,34 +1215,65 @@ async fn relay_channel_key(
     let Some(t) = vault_relay::parse(&app.keys, &auth) else {
         return err(StatusCode::UNAUTHORIZED, "bad token");
     };
-    if t.scope != vault_relay::Scope::Write {
-        return err(StatusCode::FORBIDDEN, "personal write token required");
-    }
-    let pk = req.pubkey.trim();
-    if pk.len() != 64 || !pk.chars().all(|c| c.is_ascii_hexdigit()) {
-        return err(StatusCode::BAD_REQUEST, "bad pubkey");
-    }
-    let kid_s = req.kid.to_string();
-    {
-        let mut m = app.channel_keys.lock().expect("channel_keys lock");
-        if let Some(existing) = m.get(&kid_s) {
-            if existing.pubkey.eq_ignore_ascii_case(pk) {
-                return ok_json();
-            }
-            return err(StatusCode::CONFLICT, "kid already registered");
+    // Политика приёма — ОДНА: channel_keys::decide_registration. Хендлер её
+    // только вызывает: дублировать проверки здесь запрещено (как уже было
+    // с kid/token — две копии тихо разошлись).
+    let chan = vault_relay::parse(&app.keys, &req.token);
+    let owner_scope = match t.scope {
+        vault_relay::Scope::Read => Some('r'),
+        vault_relay::Scope::Write => Some('w'),
+        _ => None,
+    };
+    let (chan_scope, chan_kid) = match chan {
+        Some(c) => (
+            Some(match c.scope {
+                vault_relay::Scope::Read => 'r',
+                vault_relay::Scope::Write => 'w',
+                vault_relay::Scope::ChannelRead => 'c',
+                vault_relay::Scope::ChannelWrite => 'C',
+            }),
+            Some(c.key_id),
+        ),
+        None => (None, None),
+    };
+    match channel_keys::decide_registration(
+        owner_scope,
+        t.is_expired(),
+        chan_scope,
+        chan_kid,
+        &req.pubkey,
+    ) {
+        channel_keys::RegisterDecision::Reject { status, error } => {
+            let code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_REQUEST);
+            return err(code, error);
         }
-        m.insert(
-            kid_s.clone(),
-            channel_keys::Entry {
-                owner_hash: t.hash.clone(),
-                pubkey: pk.to_ascii_lowercase(),
-                created_at: now(),
-            },
-        );
+        channel_keys::RegisterDecision::Accept { kid } => {
+            let kid_s = kid;
+            // pubkey уже проверен политикой (hex + точка кривой): здесь только
+            // нормализация регистра перед записью.
+            let pk = req.pubkey.trim().to_ascii_lowercase();
+            {
+                let mut m = app.channel_keys.lock().expect("channel_keys lock");
+                if let Some(existing) = m.get(&kid_s) {
+                    if existing.pubkey == pk {
+                        return ok_json();
+                    }
+                    return err(StatusCode::CONFLICT, "kid already registered");
+                }
+                m.insert(
+                    kid_s.clone(),
+                    channel_keys::Entry {
+                        owner_hash: t.hash.clone(),
+                        pubkey: pk,
+                        created_at: now(),
+                    },
+                );
+            }
+            app.persist();
+            tracing::info!(kid = %kid_s, "channel-key registered");
+            ok_json()
+        }
     }
-    app.persist();
-    tracing::info!(kid = %kid_s, "channel-key registered");
-    ok_json()
 }
 
 async fn relay_register(

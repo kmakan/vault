@@ -678,6 +678,59 @@ export function isRelayEnvelope(obj) {
 // possession of the token IS the authorization.
 const KV_CHAN_CURSOR = 'relay-channel-cursor'; // {relayUrl: {chId: ts}}
 
+// ADR-002: key_id канала = первые 8 байт канального read-токена, читаем
+// BE. Возвращаем HEX-СТРОКУ: key_id — это u64, а JSON-число после 2^53
+// теряет точность, и молча подменённый kid означал бы подпись не того канала.
+// В релее kid выводится сервером из самого токена, поэтому расхождение
+// исключено по построению (ADR-002 §4).
+function kidHexOfToken(tok) {
+  const b64 = String(tok || '').replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+  let hex = '';
+  for (let i = 0; i < 8; i++) hex += bin.charCodeAt(i).toString(16).padStart(2, '0');
+  return hex;
+}
+
+// ADR-002: регистрация публичного ключа подписи канала на релее. Вызывается
+// один раз на (релей, kid) за сессию; релей идемпотентен при повторе с тем же
+// ключом. Регистрация ПРИНИМАЕТСЯ ТОЛЬКО с личным токеном владельца (read или
+// write): иначе сервер не отличит владельца от подписчика (broadcast-ключ
+// у них общий). Шлём канальный read-токен ЦЕЛИКОМ: kid сервер выводит сам из
+// токена — key_id это u64, а JSON-число после 2^53 теряет точность, так что
+// отдельным полем kid слать нельзя (молча подменённый kid привязал бы ключ
+// не к тому каналу).
+const _chanKeyRegistered = new Set();
+async function ensureChannelKeyRegistered(relay, token) {
+  const kidHex = kidHexOfToken(token);
+  const mark = relay.url + '::' + kidHex;
+  if (_chanKeyRegistered.has(mark)) return;
+  if (!relay.myToken) {
+    console.warn('[channels] нет личного токена — ключ подписи не зарегистрирован');
+    return;
+  }
+  const pubkey = await invoke('channel_signing_key');
+  const res = await rfetch(relay.url + '/channel-key', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader(relay.myToken) },
+    body: JSON.stringify({ token, pubkey }),
+  });
+  // rfetch возвращает fetch-Response (ok/status/json), а не {ok, why}:
+  // успех = HTTP 2xx, иначе читаем тело для диагностики.
+  if (!res || res.ok !== true) {
+    let detail = '';
+    try {
+      const st = res ? res.status : 'no-response';
+      let bodyTxt = '';
+      try { bodyTxt = res ? await res.text() : ''; } catch (e) { /* пусто */ }
+      detail = 'http ' + st + (bodyTxt ? ' ' + bodyTxt.slice(0, 200) : '');
+    } catch (e) { detail = (e && e.message) || 'error'; }
+    // Канал остаётся в v1: публикация уйдёт без подписи, релей её примет.
+    console.warn('[channels] регистрация ключа подписи не удалась:', detail);
+    return;
+  }
+  _chanKeyRegistered.add(mark);
+}
+
 export async function relayChannelPublish(ch, envelopeObj, encryptedBody, account) {
   const job = async () => {
     try {
@@ -690,6 +743,20 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
       const { channelTokens } = await import('./features/channels.js');
       const { read, write } = await channelTokens(ch.key);
       const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
+      const id = envelopeObj.id || ('ch-' + Date.now());
+      const body = btoa(unescape(encodeURIComponent(encryptedBody)));
+      // ADR-002: подпись конверта. Подписывается РОВНО та строка body, что
+      // уйдёт в JSON — иначе релей посчитает другую подпись и отклонит пост.
+      let sig = null;
+      try {
+        await ensureChannelKeyRegistered(relay, read);
+        sig = await invoke('channel_sign_post', { kidHex: kidHexOfToken(read), envId: id, body });
+      } catch (e) {
+        // Не подписываем — публикация уйдёт в v1 и релей её примет. Лучше
+        // пост без подписи, чем потерянный пост: включать REQUIRE_SIG можно
+        // только когда подпись реально есть.
+        console.warn('[channels] подпись не получена, публикация без неё:', e && e.message || e);
+      }
       const res = await rfetch(relay.url + '/pub', {
         method: 'POST',
         headers: {
@@ -699,9 +766,10 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
         body: JSON.stringify({
           v: 1,
           to: read, // адрес общей очереди канала
-          id: envelopeObj.id || ('ch-' + Date.now()),
+          id,
           exp,
-          body: btoa(unescape(encodeURIComponent(encryptedBody))),
+          body,
+          sig, // ADR-002: null для личных/старых сборок, base64url для канала
           wake: false, // пушей на канал нет (общая очередь)
         }),
         connectTimeout: PUB_TIMEOUT_MS,

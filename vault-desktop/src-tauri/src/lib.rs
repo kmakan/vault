@@ -1268,11 +1268,13 @@ fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, St
 // ── Подпись постов канала (ADR-002) ───────────────────────────────────────
 
 /// Ключ подписи владельца канала. Создаётся лениво при первом канале.
-/// Приватный ключ НЕ уходит в JS: наружу отдаётся только подпись.
+/// Наружу отдаётся ТОЛЬКО публичный ключ: приватный живёт в key_store
+/// и в JS не уходит никогда (иначе любой XSS в WebView забирает право
+/// подписи постов канала).
 #[tauri::command]
-fn channel_signing_key() -> Result<(String, String), String> {
+fn channel_signing_key() -> Result<String, String> {
     if let Some(k) = key_store::load_channel_signing_key().map_err(|e| e.to_string())? {
-        return Ok((k.public_key, k.private_key));
+        return Ok(k.public_key);
     }
     let (priv_hex, pub_hex) = channel_signing::generate().map_err(|e| e.to_string())?;
     key_store::save_channel_signing_key(&key_store::StoredChannelSigningKey {
@@ -1281,13 +1283,21 @@ fn channel_signing_key() -> Result<(String, String), String> {
         created_at: chrono::Utc::now().to_rfc3339(),
     })
     .map_err(|e| e.to_string())?;
-    Ok((pub_hex, priv_hex))
+    Ok(pub_hex)
 }
 
-/// Подписать конверт поста/мета канала. kid — адрес очереди (key_id из
-/// канальных токенов). Подпись привязана к каналу, env_id и телу.
+/// Подписать конверт поста/мета канала.
+///
+/// kid передаётся HEX-СТРОКОЙ (16 символов), а не числом: key_id — это u64,
+/// а JSON-число после 2^53 теряет точность. Молча подменившийся kid означал бы
+/// подпись не того канала — самый опасный вид тихой ошибки здесь.
 #[tauri::command]
-fn channel_sign_post(kid: u64, env_id: String, body: String) -> Result<String, String> {
+fn channel_sign_post(kid_hex: String, env_id: String, body: String) -> Result<String, String> {
+    let kid_s = kid_hex.trim();
+    if kid_s.len() != 16 || !kid_s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("bad kid: expected 16 hex chars".into());
+    }
+    let kid = u64::from_str_radix(kid_s, 16).map_err(|e| format!("bad kid: {e}"))?;
     let k = key_store::load_channel_signing_key()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "no channel signing key".to_string())?;

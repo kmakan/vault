@@ -193,12 +193,15 @@ impl PersistedState {
             .retain(|k, v| valid_fp(k) && valid_token(&v.token));
         // Битая запись о канале хуже, чем её отсутствие: без неё канал
         // работает в режиме v1 (миграция), с ней — публикация падает.
-        self.channel_keys
-            .retain(|k, v| k.parse::<u64>().is_ok() && v.pubkey.len() == 64);
-        // Битая запись о канале хуже, чем её отсутствие: без неё канал
-        // работает в режиме v1 (миграция), с ней — публикация падает.
-        self.channel_keys
-            .retain(|k, v| k.parse::<u64>().is_ok() && v.pubkey.len() == 64);
+        // Требуем только hex-форму (64 символа): строгую проверку точки
+        // делает verify_strict в момент verify (dalek 2.1 принимает почти
+        // любую 32-байтовую строку в from_bytes — проверять «кривую» здесь
+        // значило бы врать).
+        self.channel_keys.retain(|k, v| {
+            k.parse::<u64>().is_ok()
+                && v.pubkey.len() == 64
+                && v.pubkey.chars().all(|c| c.is_ascii_hexdigit())
+        });
         for map in [&mut self.topic_fcm, &mut self.topic_ringtone] {
             if map.len() > MAX_ENTRIES {
                 let extra = map.len() - MAX_ENTRIES;
