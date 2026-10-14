@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-template.cjs && vite build",
+    "build": "node scripts/check-template.cjs && node scripts/ctx-coupling-gate.mjs && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
