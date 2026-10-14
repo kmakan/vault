@@ -5,6 +5,11 @@ use std::path::{Path, PathBuf};
 const KEYS_DIR: &str = "keys";
 const KEY_FILE: &str = "keypair.json";
 const PEER_KEYS_FILE: &str = "peer_keys.json";
+/// Ключ подписи постов канала (ADR-002). Лежит ЗДЕСЬ, а не в channels.json:
+/// delete_all_keys() чистит ключи поимённо, и channels.json живёт отдельно
+/// и переносится вместе с каналом — там секрету не место (владелец шлёт
+/// ссылку подписки, это полупубличная точка).
+const CHANNEL_SIGNING_FILE: &str = "channel_signing.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredKeyPair {
@@ -477,7 +482,38 @@ pub fn delete_all_keys() -> anyhow::Result<()> {
     let dir = get_keys_dir()?;
     let _ = fs::remove_file(dir.join(KEY_FILE));
     let _ = fs::remove_file(dir.join(PEER_KEYS_FILE));
+    // ADR-002: ключ подписи каналов — секрет, стирается тем же wipe.
+    let _ = fs::remove_file(dir.join(CHANNEL_SIGNING_FILE));
     Ok(())
+}
+
+
+/// Ключ подписи постов канала (ADR-002). Отсутствие — не ошибка: ключ создаётся
+/// лениво при первом канале владельца.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredChannelSigningKey {
+    pub public_key: String,
+    pub private_key: String,
+    pub created_at: String,
+}
+
+pub fn save_channel_signing_key(k: &StoredChannelSigningKey) -> anyhow::Result<()> {
+    let keys_dir = get_keys_dir_raw();
+    let _guard = acquire_guard_for_dir(&keys_dir)?;
+    ensure_keys_dir_at(&keys_dir)?;
+    let json = serde_json::to_string_pretty(k)?;
+    write_file_0600(&keys_dir.join(CHANNEL_SIGNING_FILE), json.as_bytes())
+}
+
+pub fn load_channel_signing_key() -> anyhow::Result<Option<StoredChannelSigningKey>> {
+    let keys_dir = get_keys_dir_raw();
+    let _guard = acquire_guard_for_dir(&keys_dir)?;
+    let path = keys_dir.join(CHANNEL_SIGNING_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = fs::read_to_string(&path)?;
+    Ok(Some(serde_json::from_str(&data)?))
 }
 
 /// Удалить только peer-ключи (без ключевой пары) — путь «Удалить аккаунт»
@@ -493,7 +529,47 @@ pub fn delete_all_peer_keys() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod channel_signing_wipe_tests {
+    use super::*;
+
+    /// ADR-002: duress-wipe ОБЯЗАН удалять ключ подписи постов канала.
+    /// Это свойство безопасности, а не удобство: пока строка удаления не была
+    /// добавлена, wipe стирал основной ключ, а ключ подписи оставался на диске
+    /// и позволял подписывать посты от имени уже «сброшенного» владельца.
+    #[test]
+    fn delete_all_keys_wipes_channel_signing_key() {
+        with_test_keys(|| {
+            let k = StoredChannelSigningKey {
+                public_key: "pub".into(),
+                private_key: "priv".into(),
+                created_at: "2026-10-14T00:00:00Z".into(),
+            };
+            save_channel_signing_key(&k).expect("save");
+            assert!(load_channel_signing_key().expect("load").is_some(), "ключ сохранён");
+            delete_all_keys().expect("wipe");
+            assert!(
+                load_channel_signing_key().expect("load after wipe").is_none(),
+                "ключ подписи канала пережил duress-wipe"
+            );
+        });
+    }
+
+    /// Обратное свойство: удаление peer-ключей («Удалить аккаунт», RuStore
+    /// §5.4) НЕ трогает ключ подписи — это ключ владельца аккаунта, а не
+    /// собеседника. Если бы трогало, подписка перестала бы работать.
+    #[test]
+    fn deleting_peer_keys_keeps_channel_signing_key() {
+        with_test_keys(|| {
+            save_channel_signing_key(&StoredChannelSigningKey {
+                public_key: "pub".into(),
+                private_key: "priv".into(),
+                created_at: "2026-10-14T00:00:00Z".into(),
+            })
+            .expect("save");
+            delete_all_peer_keys().expect("delete peers");
+            assert!(load_channel_signing_key().expect("load").is_some());
+        });
+    }
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;

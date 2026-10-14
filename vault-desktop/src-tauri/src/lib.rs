@@ -14,6 +14,7 @@ pub fn set_env_safe(key: &str, value: impl AsRef<std::ffi::OsStr>) {
 
 mod audio;
 mod channels;
+mod channel_signing;
 mod credential_store;
 mod crypto;
 mod crypto_pq;
@@ -1264,6 +1265,35 @@ fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, St
     groups::rename_group(&group_id, &new_name).map_err(|e| e.to_string())
 }
 
+// ── Подпись постов канала (ADR-002) ───────────────────────────────────────
+
+/// Ключ подписи владельца канала. Создаётся лениво при первом канале.
+/// Приватный ключ НЕ уходит в JS: наружу отдаётся только подпись.
+#[tauri::command]
+fn channel_signing_key() -> Result<(String, String), String> {
+    if let Some(k) = key_store::load_channel_signing_key().map_err(|e| e.to_string())? {
+        return Ok((k.public_key, k.private_key));
+    }
+    let (priv_hex, pub_hex) = channel_signing::generate().map_err(|e| e.to_string())?;
+    key_store::save_channel_signing_key(&key_store::StoredChannelSigningKey {
+        public_key: pub_hex.clone(),
+        private_key: priv_hex.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+    .map_err(|e| e.to_string())?;
+    Ok((pub_hex, priv_hex))
+}
+
+/// Подписать конверт поста/мета канала. kid — адрес очереди (key_id из
+/// канальных токенов). Подпись привязана к каналу, env_id и телу.
+#[tauri::command]
+fn channel_sign_post(kid: u64, env_id: String, body: String) -> Result<String, String> {
+    let k = key_store::load_channel_signing_key()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no channel signing key".to_string())?;
+    channel_signing::sign_post(&k.private_key, kid, &env_id, &body).map_err(|e| e.to_string())
+}
+
 // ── Broadcast channels (M2, docs/design/channels-protocol.md) ─────────────
 
 /// Пара capability-токенов канала (read/write). Логика — в channels.rs,
@@ -2073,6 +2103,8 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            channel_signing_key,
+            channel_sign_post,
             channels_tokens,
             channels_load,
             channels_create,
