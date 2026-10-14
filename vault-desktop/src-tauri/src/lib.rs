@@ -41,6 +41,11 @@ mod vp8_decoder;
 #[cfg(target_os = "android")]
 mod service_monitor;
 
+// Инварианты headless-монитора (таймауты звонков, реплей-защита, лимит дедупа).
+// Без cfg(android) — намеренно: сам монитор android-only, но его предикаты
+// обязаны тестироваться обычным `cargo test` на хосте (см. monitor_invariants).
+mod monitor_invariants;
+
 /// M2.3-b: push-режим — сервис остаётся жить в режиме ntfy-подписки
 /// (без IMAP/wakeLock). topic = hex-hash read-токена (вычисляет JS),
 /// ntfy_base = https://ntfy.vault-msg.ru (или свой).

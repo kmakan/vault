@@ -54,10 +54,14 @@ fn init_logcat() {
 }
 
 const IDLE_TICK: Duration = Duration::from_secs(7);
-const FRESH_SECS: i64 = 15 * 60; // не уведомлять о письмах старше 15 минут
-const CALL_STALE_MS: i64 = 10 * 60 * 1000; // call_request старше 10 мин — мимо
-const SEEN_CAP: usize = 200; // дедуп-список: последние 200 Message-ID
 const MAX_TRIES: u32 = 3; // попыток доставки письма до отриц. дедупа
+
+// Таймауты/лимиты/предикат свежести живут в monitor_invariants: они не тянут
+// JNI/БД, поэтому тестируются на хосте обычным `cargo test` (в этом модуле
+// они были недоступны — сам файл под #[cfg(target_os = "android")]).
+use crate::monitor_invariants::{
+    date_fresh, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, FRESH_SECS, RING_TIMEOUT_MS, SEEN_CAP,
+};
 
 /// Глобальное состояние headless-монитора (один на процесс).
 struct MonitorState {
@@ -765,7 +769,7 @@ struct CallEntry {
     updated_at: i64, // ms, для TTL-чистки
 }
 
-const CALL_TOMBSTONE_MS: i64 = 10 * 60 * 1000; // надгробие 10 мин
+// CALL_TOMBSTONE_MS (надгробие 10 мин) — в monitor_invariants.
 
 fn call_state_key() -> String {
     "call_state".to_string()
@@ -831,8 +835,7 @@ fn call_get_state(
     calls_load(db, account).get(call_id).cloned()
 }
 
-/// Таймаут звонка без решения (фаза 1): 45с.
-const RING_TIMEOUT_MS: i64 = 45 * 1000;
+/// Таймаут звонка без решения (фаза 1): 45с — в monitor_invariants (RING_TIMEOUT_MS).
 
 /// ringing дольше RING_TIMEOUT_MS → missed + пуш + dismiss уведомления.
 /// Вызывается каждым тиком run_loop (7с) — ретрансляции не сбрасывают
@@ -862,21 +865,8 @@ fn check_ring_timeouts(ctx: &Ctx<'_>) {
 
 // ─────────────────────── Классификация письма ───────────────────────
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// Свежесть по заголовку Date (RFC 2822). Не распарсился — считаем свежим:
-/// окончательно решит ts конверта после расшифровки (CALL_STALE_MS/FRESH_SECS).
-fn date_fresh(date_header: &str) -> bool {
-    match chrono::DateTime::parse_from_rfc2822(date_header.trim()) {
-        Ok(dt) => now_ms() / 1000 - dt.timestamp() < FRESH_SECS,
-        Err(_) => true,
-    }
-}
+/// Свежесть по заголовку Date — см. `monitor_invariants::date_fresh`.
+// (реализация вынесена отсюда, чтобы тестировалась на хосте)
 
 /// Новое письмо из fetch_newer: пре-фильтры → pending-очередь.
 /// Сообщения от ОДНОГО отправителя при включённом ephemeral не сливаются:
@@ -1438,3 +1428,4 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
     let _ = handle;
     Ok(())
 }
+
