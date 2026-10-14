@@ -956,6 +956,7 @@ import * as MigrateFeature from './features/migrate.js';
 import * as InvitesFeature from './features/invites.js';
 import * as GroupMetaFeature from './features/group-meta.js';
 import * as ReceiptsFeature from './features/receipts.js';
+import * as MembersFeature from './features/members.js';
 import * as SendFeature from './features/send.js';
 import * as RecoveryFeature from './features/recovery.js';
 // Durable-маркер прерванного восстановления (fix/recovery-resilience):
@@ -4648,68 +4649,8 @@ export default {
         console.log('[groups] fingerprints backfilled:', group.id);
       } catch (e) { /* тихо: поле некритично, матчинг идёт по peer_keys */ }
     },
-    async inviteSelectedMembers() {
-      // Попап закрываем СРАЗУ — отправка идёт в фоне, итог сообщаем alert'ом.
-      // отправлено приглашение или нет.
-      const emails = [...this.addMemberSelected];
-      if (!this.currentGroup || !emails.length) return;
-      this.showAddMemberPopup = false;
-      this.addMemberSelected = [];
-      this.addMemberQuery = '';
-      const sent = [];
-      const failed = [];
-      const skipped = [];
-      for (const email of emails) {
-        try {
-          // Уже участник ПОД ЭТИМ адресом — явный skip (не тихий continue:
-          // «штатный» попап без отправки маскировал недоставленные инвайты).
-          if ((this.currentGroup.members || []).some(m => m.email === email)) {
-            skipped.push(email + ' — ' + (this.t('already_in_group') || 'уже в группе'));
-            continue;
-          }
-          // Участник ПОД ДРУГИМ адресом с тем же fingerprint (смена почты):
-          // мигрируем адрес в составе группы и шлём инвайт на новый адрес —
-          // а повторный инвайт тихо скипался.
-          const stale = (this.currentGroup.members || []).find(
-            m => m.email !== email && this.emailSharesFingerprint(m.email, email));
-          if (stale) {
-            await invoke('groups_rename_member', {
-              groupId: this.currentGroup.id, oldEmail: stale.email, newEmail: email,
-            });
-            stale.email = email;
-            stale.key_shared = true;
-          }
-          // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
-          // в группу добавляют только установленные контакты.
-          const peerPub = this.peerKeys[email] || null;
-          if (!peerPub) {
-            failed.push(email + ' — ' + (this.t('add_member_no_key') || 'нет ключа: сначала добавьте контакт'));
-            continue;
-          }
-          const groupKeys = await api.getGroupKeys(this.currentGroup.id);
-          if (!groupKeys.length) throw new Error('No group key');
-          const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);
-          await api.inviteGroupMember(this.currentGroup.id, email, enc, this.publicKey);
-          // Помечаем локально как «приглашён» в списке участников (появится после accept).
-          const members = this.currentGroup.members || [];
-          if (!members.some(m => m.email === email)) {
-            members.push({ email, role: 'Member', invited: true });
-          }
-          sent.push(email);
-        } catch (e) {
-          failed.push(email + ' — ' + ((e && e.message) || e));
-        }
-      }
-      // Состав группы перечитываем с диска: groups_rename_member правил
-      // groups.json в Rust-стороне, локальный members мог разойтись.
-      try { await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ } } catch (e) { /* не критично */ }
-      const parts = [];
-      if (sent.length) parts.push((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
-      if (skipped.length) parts.push((this.t('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
-      if (failed.length) parts.push((this.t('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
-      alert(parts.join('\n\n') || (this.t('add_member_nothing') || 'Приглашения не отправлены'));
-    },
+    // ── Приглашение участников (логика в features/members.js) ──
+    async inviteSelectedMembers() { return MembersFeature.inviteSelectedMembers(this); },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     // ── Приглашения в группы (логика в features/invites.js) ──
     async processInvites() { return InvitesFeature.processInvites(this); },
