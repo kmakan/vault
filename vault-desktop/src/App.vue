@@ -949,6 +949,7 @@ import * as ProfilesFeature from './features/profiles.js';
 import * as PresenceFeature from './features/presence.js';
 import * as ChannelsFeature from './features/channels.js';
 import * as AttachmentsFeature from './features/attachments.js';
+import * as EmailsFeature from './features/emails.js';
 import * as RecoveryFeature from './features/recovery.js';
 // Durable-маркер прерванного восстановления (fix/recovery-resilience):
 // блокирует авто-вход/обычный логин/генерацию ключей, пока восстановление не
@@ -5185,150 +5186,8 @@ export default {
         console.error('saveCursors failed:', e);
       }
     },
-    async loadEmails(silent = false) {
-      if (!silent) {
-        this.emailsLoading = true;
-        this.emailError = '';
-      }
-      try {
-        const accounts = await api.getEmailAccounts();
-        // Не сбрасываем this.emails в начале: пока фетч идёт (или падает),
-        // старый список остаётся в UI — клик по чату не видит пустоту.
-        // ПЕРСИСТ: this.emails восстанавливается из sqlite при входе
-        // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
-        // перезапуске и чаты без истории были пустыми.
-        if (!silent && this.emails.length === 0) {
-          try {
-            const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (this.email || 'anon'));
-            if (Array.isArray(stored) && stored.length) {
-              this.emails = stored.map(e => ({
-                uid: e.uid,
-                id: e.uid,
-                from: e.from,
-                to: e.to,
-                subject: e.subject,
-                date: e.date,
-                is_read: e.is_read,
-                folder: e.folder,
-                message_id: e.message_id || '',
-              }));
-            }
-          } catch (e) {
-            console.warn('loadEmails: sqlite restore failed:', e);
-          }
-        }
-        const fetched = [];
-        for (const account of accounts) {
-          try {
-            // Инкрементальный фетч (M1): только письма новее per-folder
-            // UID-курсоров. Первый запуск (нет курсоров) — полный скан
-            // последних писем + инициализация курсоров.
-            // пересканировались последние 50-100 писем каждой папки — это
-            // и лишний трафик, и триггер троттлинга Gmail.
-            // ВАЖНО: больше НЕ делаем полный скан при входе
-            // курсоры в sqlite надёжны, история в sqlite — источник чатов.
-            // Принудительный полный скан с пустыми курсорами ломал INBOX
-            // на больших ящиках (десятки тысяч писем, UID SEARCH ALL
-            // падал с «Unable to parse status response» в imap 2.4.1).
-            const cursors = this.loadCursors(account.id);
-            const res = await api.fetchEmailsIncremental(account.id, cursors);
-            fetched.push(...(res.messages || []));
-            this.saveCursors(account.id, res.cursors);
-          } catch (e) {
-            console.error('Failed to fetch emails for account:', e);
-            if (!silent) this.emailError = 'fetch: ' + (e && e.message || e);
-            // Re-throw "Not connected" so mounted() can ask for the password again
-            if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-              throw e;
-            }
-          }
-        }
-        // Мержим новые письма со старым списком (полный рескан больше не
-        // делается — старые остаются в памяти, новые добавляются сверху).
-        // Дедуп по uid+папка; cap 2000 — старые конверты уходят (история
-        // чатов вскоре будет в IndexedDB, для инвайтов/аватаров хватает).
-        const merged = [...this.emails];
-        const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
-        // Кросс-папочные копии: письмо могло быть проиндексировано из INBOX,
-        // а потом провайдер перенёс его в Спам — старая ссылка (INBOX, uid)
-        // стала мёртвой (тела больше нет). Если в батче пришла копия с тем
-        // же message_id из другой папки — «оживляем» существующую запись:
-        // подставляем живые folder/uid, не плодя дублей в списке.
-        const byMid = new Map();
-        for (const m of merged) {
-          if (m.message_id) byMid.set(m.message_id, m);
-        }
-        for (const m of fetched) {
-          const k = m.uid + '|' + (m.folder || 'INBOX');
-          if (seen.has(k)) continue;
-          if (m.message_id && byMid.has(m.message_id)) {
-            const old = byMid.get(m.message_id);
-            if ((old.folder || 'INBOX') !== (m.folder || 'INBOX')) {
-              old.folder = m.folder;
-              old.uid = m.uid;
-              if (m.id !== undefined) old.id = m.id;
-              old.message_id = m.message_id;
-              seen.add(k);
-            }
-            continue;
-          }
-          seen.add(k);
-          byMid.set(m.message_id, m);
-          merged.push(m);
-        }
-        merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        if (merged.length > 2000) merged.length = 2000;
-        this.emails = merged;
-        // Источник метаданных для fetchAllHandshake (в памяти: без гонки
-        // на fire-and-forget emailsSave ниже).
-        api.setEmailsSource(this.emails);
-        // ПЕРСИСТ: envelope cache в sqlite — при перезапуске письма
-        // восстанавливаются без полного IMAP-скана (курсоры согласованы).
-        try {
-          const acc = accounts[0] ? accounts[0].id : (this.email || 'anon');
-          db.emailsSave(acc, JSON.stringify(this.emails.map(m => ({
-            uid: String(m.uid ?? m.id ?? ''),
-            folder: m.folder || 'INBOX',
-            from: m.from || '',
-            to: m.to || '',
-            subject: m.subject || '',
-            date: m.date || '',
-            is_read: !!m.is_read,
-            message_id: m.message_id || '',
-          }))));
-        } catch (e) {
-          console.warn('loadEmails: sqlite save failed:', e);
-        }
-        console.log(`[Emails] loaded ${this.emails.length} messages (${fetched.length} new)`);
-        // Непрочитанные + PUSH-уведомления: каждый fetched-батч
-        // классифицируем (счётчики непрочитанных — всегда; уведомления —
-        // только при silent=true, НЕ при первом скане после входа, и только
-        // для свежих писем — иначе уведомляли бы обо всей истории ящика и
-        // о догоняющих старых письмах).
-        if (fetched.length) await this.processIncoming(fetched, { notify: silent });
-        // При пустом ящике НЕ показываем красную подсказку — пустой список
-        // и есть норма.
-        // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
-        await this.processInvites();
-        // Аватары групп: meta-письма (VaultGroupMeta) разбираем здесь же, а не
-        // только при открытии группы — иначе участник, не открывавший группу,
-        // новый аватар админа не увидит никогда.
-        await this.syncGroupAvatarsFromMeta();
-        // Квитанции «доставлено»: шлём {delivered:1} сразу при
-        // получении писем поллингом — отправитель видит зелёную точку через
-        // никто не слал — статус висел жёлтым до открытия чата).
-        await this.sendDeliveredReceipts(fetched);
-      } catch (error) {
-        // let "Not connected" propagate to the caller (app restart re-login)
-        if (String(error && error.message || error).toLowerCase().includes('not connected')) {
-          throw error;
-        }
-        console.error('Failed to load emails:', error);
-        if (!silent) this.emailError = 'load: ' + (error && error.message || error);
-      } finally {
-        if (!silent) this.emailsLoading = false;
-      }
-    },
+    // ── Загрузка писем (логика в features/emails.js) — тонкий делегат. ──
+    async loadEmails(silent = false) { return EmailsFeature.loadEmails(this, silent); },
     // ── Непрочитанные + PUSH-уведомления ─────────
     // processIncoming классифицирует КАЖДЫЙ fetched-батч (поллинг или вход):
     // расшифровывает тела, отличает настоящие сообщения от квитанций/
