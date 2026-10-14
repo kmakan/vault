@@ -937,6 +937,7 @@ import * as FoldersFeature from './features/folders.js';
 // check-template.cjs, чтобы разрезолвить спреды в data()).
 import { foldersState } from './features/folders/state.js';
 import { duressState } from './features/duress/state.js';
+import { pollState } from './features/poll/state.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as GroupAvatarsFeature from './features/group-avatars.js';
@@ -1159,7 +1160,6 @@ export default {
       emails: [],
       emailsLoading: false,
       emailError: '',
-      pollTimer: null,
       // Оптимистичные исходящие, ещё не подтверждённые письмом из ящика:
       // chatKey → { msgId: msg }. Поллинг перестраивает messages из IMAP и
       // стирал ещё не доставленное сообщение (оно «появлялось и исчезало»);
@@ -1305,9 +1305,9 @@ export default {
       tombstonesCache: [],
       // Duress-замок: состояние живёт в features/duress/state.js (ADR-001 Этап 1)
       ...duressState(),
-      // Голосования: флаг диалога создания (форма — внутри PollDialog.vue);
-      // агрегация голосов — методы poll* ниже
-      pollDialog: false,
+      // Голосования: состояние (диалог создания + таймер) — features/poll/state.js,
+      // агрегация голосов — методы poll*; форма внутри PollDialog.vue
+      ...pollState(),
       // Пересылка: пересылаемое сообщение (объект) + список целей
       forwardTo: null,
       // Папки чатов: состояние живёт в features/folders.js (ADR-001 Этап 1)

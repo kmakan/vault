@@ -6,6 +6,10 @@
 import api from '../api.js';
 import crypto from '../crypto.js';
 
+// Состояние фичи — в ./poll/state.js (чистый модуль без импортов: его
+// поднимает check-template.cjs для резолва спреда `...pollState()`).
+export { pollState } from './poll/state.js';
+
 // Wire format: one vote = signal email {poll:1, poll_id, option} (same
 // channel as reactions). Envelope card: type:'poll' with poll sub-object.
 // Validation for inbound envelopes.
