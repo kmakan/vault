@@ -107,7 +107,9 @@ const C = await import(MOCKS + '/features/calls.js');
     }
     return null;
   };
-  const converted = ['isCallSeen', 'rememberCallSeen', 'callEventLabel', 'canCallBack'];
+  const converted = ['isCallSeen', 'rememberCallSeen', 'callEventLabel', 'canCallBack',
+    'startCallClock', 'stopCallClock', 'startFastPolling', 'stopFastPolling',
+    'toggleCallMute', 'toggleSpeaker'];
   for (const fn of converted) {
     const body = bodyOf(fn);
     check(`${fn}: функция найдена`, !!body);
@@ -143,6 +145,35 @@ const C = await import(MOCKS + '/features/calls.js');
   // вместо этого роняет сразу и на месте.
   check('старый стиль ctx доставал ЛЮБОЕ поле молча (undefined → NaN, без исключения)',
     outcome.threw === false && Number.isNaN(outcome.value), outcome);
+}
+
+// ── 6. Мутирующие функции: контракт «считает, а не пишет» ───────────
+// Ключевая смена поведения второй партии: раньше toggle/часы писали в ctx
+// сами, и App.vue ни о чём не знал. Теперь фича ВОЗВРАЩАЕТ значение, а
+// состояние принадлежит компоненту. Если бы кто-то вернул мутацию ctx,
+// этот блок перестал бы видеть смену значения — и стал бы красным.
+{
+  check('toggleCallMute(false) → true и НЕ мутирует вход',
+    C.toggleCallMute({ callMuted: false, currentCall: null }) === true);
+  check('toggleCallMute(true) → false',
+    C.toggleCallMute({ callMuted: true, currentCall: null }) === false);
+  check('toggleSpeaker(false) → true',
+    C.toggleSpeaker({ callSpeaker: false, currentCall: null }) === true);
+  check('toggleSpeaker(true) → false',
+    C.toggleSpeaker({ callSpeaker: true, currentCall: null }) === false);
+
+  // Часы: тик обязан приходить СНАРУЖИ. Регресс, который я почти внёс:
+  // пустой setInterval крутился бы вхолостую, и счётчик стоял бы на нуле,
+  // а все проверки времени звонка проходили бы.
+  let ticks = 0;
+  const timer = C.startCallClock(() => { ticks++; });
+  check('startCallClock возвращает хендл таймера', !!timer, typeof timer);
+  check('startCallClock НЕ тикает сам (тик — снаружи)', ticks === 0, ticks);
+  check('stopCallClock(хендл) → null', C.stopCallClock(timer) === null);
+
+  let idle = 0;
+  C.startFastPolling(() => idle++);
+  check('startFastPolling зовёт переданный idleLoop', idle === 1, idle);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

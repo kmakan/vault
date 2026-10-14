@@ -355,7 +355,7 @@ export async function handleCallSignal(ctx, sig, from) {
       if (!(ctx.isAndroid && document.visibilityState === 'visible')) {
         api.mediaShowIncomingCall(ctx.callPeerName || from);
       }
-      startFastPolling(ctx);
+      startFastPolling(() => ctx.idleLoop());
       // Таймер гудка: длительность из настроек (SettingsPage → kv
       // 'call-ring-duration', секунды). Читаем АСИНХРОННО и НЕ блокируем
       // state machine: если kv не ответил — дефолт 180с (было хардкодом).
@@ -489,7 +489,7 @@ export async function startCall(ctx) {
   ctx.lastCallId = call_id;
   ctx.callState = 'outgoing_ringing';
   ctx.callMuted = false;
-  startFastPolling(ctx);
+  startFastPolling(() => ctx.idleLoop());
   // для call_accept может превысить 180с, и звонок сгорал до ответа;
   // окончательно решает call_reject/call_cancel от собеседника).
   ctx.callRingTimer = setTimeout(() => cancelCall(ctx, 'timeout'), 300000);
@@ -696,7 +696,7 @@ export async function hangup(ctx, reason) {
   clearTimeout(ctx._mediaFallbackTimer);
   // Grace-таймер ICE disconnected.
   if (ctx._connLostTimer) { clearTimeout(ctx._connLostTimer); ctx._connLostTimer = null; }
-  stopCallClock(ctx);
+  stopCallClock(ctx.callClockTimer);
   // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
   // headless-логика не ставила missed поверх реального решения.
   if (callId) {
@@ -710,7 +710,7 @@ export async function hangup(ctx, reason) {
   ctx.callMuted = false;
   ctx.callSpeaker = false;
   ctx.callMediaConnected = false;
-  stopFastPolling(ctx);
+  stopFastPolling();
   // Финальный звук: play сам останавливает предыдущий поток
   // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
   // только если звука не будет вовсе.
@@ -900,22 +900,27 @@ export function callBack(ctx) {
 // ── Микрофон/динамик ───────────────────────────────────────────
 // Микрофон звонка (в конфликте ключей с чат-меню «Без звука» — то
 // отдельный метод ниже; Options API не терпит дублей имён).
-export function toggleCallMute(ctx) {
-  ctx.callMuted = !ctx.callMuted;
-  const c = ctx.currentCall;
-  if (c) {
-    api.mediaSetMuted(c.call_id, ctx.callMuted).catch((e) => console.error('[call] set muted failed:', e));
+// ADR-001: переключатели возвращают НОВОЕ значение, а не пишут в ctx.
+// Мутация состояния — на стороне App.vue: так видно, что состояние
+// принадлежит компоненту, а фича его только вычисляет.
+export function toggleCallMute({ callMuted, currentCall }) {
+  const muted = !callMuted;
+  if (currentCall) {
+    api.mediaSetMuted(currentCall.call_id, muted)
+      .catch((e) => console.error('[call] set muted failed:', e));
   }
+  return muted;
 }
 
 // Динамик: Android — speakerphone (earpiece ↔ динамик)
 // desktop — no-op в Rust (вывод и так на динамики).
-export function toggleSpeaker(ctx) {
-  ctx.callSpeaker = !ctx.callSpeaker;
-  const c = ctx.currentCall;
-  if (c) {
-    api.mediaSetSpeaker(c.call_id, ctx.callSpeaker).catch((e) => console.error('[call] set speaker failed:', e));
+export function toggleSpeaker({ callSpeaker, currentCall }) {
+  const speaker = !callSpeaker;
+  if (currentCall) {
+    api.mediaSetSpeaker(currentCall.call_id, speaker)
+      .catch((e) => console.error('[call] set speaker failed:', e));
   }
+  return speaker;
 }
 
 // ── Ретрансляция критичных сигналов ────────────────────────────
@@ -1011,15 +1016,19 @@ export function armMediaFallback(ctx) {
   }, 90000);
 }
 
-export function startCallClock(ctx) {
-  ctx.callClockSec = 0;
-  clearInterval(ctx.callClockTimer);
-  ctx.callClockTimer = setInterval(() => { ctx.callClockSec++; }, 1000);
+// ADR-001: часы звонка больше не мутируют ctx. Функция возвращает id нового
+// интервала; счётчик секунд и сам хендл присваивает вызывающий (App.vue).
+// Тик передаётся явно: раньше он инкрементил ctx.callClockSec изнутри
+// замыкания — если это забыть, таймер молча крутится вхолостую.
+export function startCallClock(onTick) {
+  return setInterval(onTick, 1000);
 }
 
-export function stopCallClock(ctx) {
-  clearInterval(ctx.callClockTimer);
-  ctx.callClockTimer = null;
+// Гасит интервал часов. Принимает ХЕНДЛ, а не контекст: чистить нечего,
+// кроме переданного id. Возвращает null — вызывающий присваивает.
+export function stopCallClock(timer) {
+  clearInterval(timer);
+  return null;
 }
 
 // Быстрый путь сигнализации (Фаза 1.5): IDLE постоянный — его владеет
@@ -1027,11 +1036,11 @@ export function stopCallClock(ctx) {
 // idleLoop. Здесь только гарантия, что режим приёма включён: при
 // поднятом мониторе idleLoop — no-op (без нового TCP+TLS), при
 // погашенном эко — поднимет заново.
-export function startFastPolling(ctx) {
-  ctx.idleLoop();
+export function startFastPolling(idleLoop) {
+  idleLoop();
 }
 
-export function stopFastPolling(ctx) {
+export function stopFastPolling() {
   // IDLE-цикл постоянный — не останавливаем.
 }
 

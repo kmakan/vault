@@ -376,13 +376,17 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   timers.clear();
   apiMock.calls.length = 0;
   const ctx = makeCtx({ currentCall: { call_id: 'q1', peer: 'peer@x.ru' } });
+  // ADR-001: переключатели возвращают новое значение, App.vue его присваивает.
+  // Раньше фича писала в ctx сама — проверка читала ctx.callMuted.
+  const muteDeps = () => ({ callMuted: ctx.callMuted, currentCall: ctx.currentCall });
+  const spkDeps = () => ({ callSpeaker: ctx.callSpeaker, currentCall: ctx.currentCall });
   // mute
-  C.toggleCallMute(ctx);
+  ctx.callMuted = C.toggleCallMute(muteDeps());
   check('toggleCallMute → mediaSetMuted(true)', ctx.callMuted === true && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === true));
-  C.toggleCallMute(ctx);
+  ctx.callMuted = C.toggleCallMute(muteDeps());
   check('повторный mute → false', ctx.callMuted === false && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === false));
   // speaker
-  C.toggleSpeaker(ctx);
+  ctx.callSpeaker = C.toggleSpeaker(spkDeps());
   check('toggleSpeaker → mediaSetSpeaker(true)', ctx.callSpeaker === true && apiMock.calls.some(c => c[0] === 'setSpeaker' && c[2] === true));
   // startSignalResend: тик 10с, повтор пока не connected
   ctx.callState = 'active';
@@ -429,17 +433,18 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   C.armMediaFallback(wd);
   await fireTimer(wd._mediaFallbackTimer);
   check('watchdog 90с → hangup(connect_timeout) + call_end собеседнику', wd.callState === 'idle' && apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
-  // часы
+  // часы — ADR-001: фича возвращает хендл, тик приходит от App.vue.
   const ck = makeCtx();
-  C.startCallClock(ck);
+  ck.callClockSec = 0;
+  ck.callClockTimer = C.startCallClock(() => { ck.callClockSec++; });
   await fireTimer(ck.callClockTimer);
   await fireTimer(ck.callClockTimer);
   check('часы тикают (2с)', ck.callClockSec === 2);
-  C.stopCallClock(ck);
+  ck.callClockTimer = C.stopCallClock(ck.callClockTimer);
   check('stopCallClock', ck.callClockTimer === null);
-  // fastPolling — делегирует idleLoop
+  // fastPolling — делегирует idleLoop (зависимость передаётся функцией)
   let idleCalled = 0;
-  C.startFastPolling({ idleLoop: () => idleCalled++ });
+  C.startFastPolling(() => idleCalled++);
   check('startFastPolling → idleLoop', idleCalled === 1);
 }
 

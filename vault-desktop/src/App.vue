@@ -1923,8 +1923,8 @@ export default {
       callState: this.callState, expCalls: this.expCalls, peerKeys: this.peerKeys,
     }, msg); },
     callBack() { return CallsFeature.callBack(this); },
-    toggleCallMute() { return CallsFeature.toggleCallMute(this); },
-    toggleSpeaker() { return CallsFeature.toggleSpeaker(this); },
+    toggleCallMute() { this.callMuted = CallsFeature.toggleCallMute({ callMuted: this.callMuted, currentCall: this.currentCall }); },
+    toggleSpeaker() { this.callSpeaker = CallsFeature.toggleSpeaker({ callSpeaker: this.callSpeaker, currentCall: this.currentCall }); },
     // M3: видео живёт в features/video.js — здесь только тонкая
     // точка сборки (reactive-флаг + вызов фичи), как у mute/speaker.
     toggleCallVideo() {
@@ -1977,10 +1977,10 @@ export default {
     stopSignalResend() { return CallsFeature.stopSignalResend(this); },
     sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this, peer, type, call_id); },
     armMediaFallback() { return CallsFeature.armMediaFallback(this); },
-    startCallClock() { return CallsFeature.startCallClock(this); },
-    stopCallClock() { return CallsFeature.stopCallClock(this); },
-    startFastPolling() { return CallsFeature.startFastPolling(this); },
-    stopFastPolling() { return CallsFeature.stopFastPolling(this); },
+    startCallClock() { this.callClockSec = 0; this.callClockTimer = CallsFeature.startCallClock(() => { this.callClockSec++; }); },
+    stopCallClock() { this.callClockTimer = CallsFeature.stopCallClock(this.callClockTimer); },
+    startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop()); },
+    stopFastPolling() { return CallsFeature.stopFastPolling(); },
     playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
     stopCallSound() { return CallsFeature.stopCallSound(this); },
     // ── Профили контактов (логика в features/profiles.js) ──
