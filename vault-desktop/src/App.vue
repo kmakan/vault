@@ -953,6 +953,7 @@ import * as EmailsFeature from './features/emails.js';
 import * as GroupsFeature from './features/groups.js';
 import * as MessagesFeature from './features/messages.js';
 import * as MigrateFeature from './features/migrate.js';
+import * as InvitesFeature from './features/invites.js';
 import * as SendFeature from './features/send.js';
 import * as RecoveryFeature from './features/recovery.js';
 // Durable-маркер прерванного восстановления (fix/recovery-resilience):
@@ -4861,95 +4862,8 @@ export default {
       alert(parts.join('\n\n') || (this.t('add_member_nothing') || 'Приглашения не отправлены'));
     },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
-    async processInvites() {
-      // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
-      // перечитывает письма заново — иначе новые инвайты/удаления не видны.
-      api._handshakeCache = null;
-      // Одноразовый sweep (v0.1.9): помечаем ВСЕ старые непокрытые handshake-письма,
-      // чтобы «призрачные» инвайты/accept'ы не всплывали после удаления списков.
-      try { await api.sweepStaleHandshake(); } catch (e) { /* ignore */ }
-      // Обрабатываем accept-письма (добавление принявших участников).
-      try {
-        const accepts = await api.fetchPendingAccepts();
-        if (accepts.length) {
-          await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-          if (this.currentGroup) {
-            await this.loadGroupMessages(this.currentGroup.id);
-            await this.refreshGroupMembers();
-          }
-        }
-      } catch (e) {
-        console.error('processInvites: accepts failed:', e);
-      }
-      // Контакты 1-на-1 (модель почтовый мессенджер): accept-письма → добавляем ключи
-      // ТОЛЬКО от отправителей, которых МЫ пригласили (invited-senders в api.js).
-      // Удаление контакта — строго локальное (deleteContact): никаких писем-
-      // уведомлений, никаких замков, никаких повторных отправок. Старые письма
-      // удалённого контакта помечаются tombstone по uid и не воскрешают его.
-      try {
-        const contactAccepts = await api.fetchPendingContactAccepts();
-        if (contactAccepts.length) {
-          // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
-          // но НЕ в this.peerKeys — перечитываем с диска, иначе selectChat
-          // не найдёт ключ и предложит «добавить контакт».
-          await this.loadStoredPeerKeys();
-          await this.loadContacts();
-          await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-        }
-      } catch (e) {
-        console.error('processInvites: contact accepts failed:', e);
-      }
-      // Собираем непрочитанные инвайты для попапа согласия.
-      try {
-        const invites = await api.fetchPendingInvites();
-        // Вырезаем инвайты, которые уже обрабатываются (accept в полёте —
-        // письмо ещё в ящике, а groups_import мог ещё не завершиться).
-        const fresh = invites.filter(
-          inv => !this.handledInviteKeys.includes(`${inv.group_id}|${inv.uid}`)
-        );
-        if (fresh.length) {
-          // Пока попап показан, очередью управляют accept/decline (splice) —
-          // перезапись от поллинга сбивала invitePopupIndex посреди разбора.
-          if (!this.showInvitePopup) {
-            this.pendingInvites = fresh;
-            this.invitePopupIndex = 0;
-            this.showInvitePopup = true;
-          }
-        } else if (!this.showInvitePopup) {
-          this.pendingInvites = [];
-        }
-      } catch (e) {
-        console.error('processInvites: invites failed:', e);
-      }
-      // Запросы контактов 1-на-1 — попап «Принять/Отклонить».
-      try {
-        const contacts = await api.fetchPendingContactInvites();
-        const fresh = contacts.filter(
-          c => !this.handledContactKeys.includes(`${c.sender}|${c.uid}`)
-        );
-        if (fresh.length) {
-          if (!this.showContactPopup) {
-            this.pendingContacts = fresh;
-            // Групповой попап имеет приоритет; контактный покажем следом.
-            if (!this.showInvitePopup) {
-              this.contactPopupIndex = 0;
-              this.showContactPopup = true;
-            }
-          }
-        } else if (!this.showContactPopup) {
-          this.pendingContacts = [];
-        }
-      } catch (e) {
-        console.error('processInvites: contact invites failed:', e);
-      }
-      try {
-        this.loadProfiles();
-      } catch (e) {
-        console.error('processInvites: loadProfiles failed:', e);
-      }
-    },
+    // ── Приглашения в группы (логика в features/invites.js) ──
+    async processInvites() { return InvitesFeature.processInvites(this); },
     async refreshGroupMembers() {
       if (!this.currentGroup) return;
       try {
