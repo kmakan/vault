@@ -219,5 +219,35 @@ console.log('6. handleFileSelect — лимит провайдера');
   delete globalThis.alert;
 }
 
+// ── 6. Порядок ветвей в MessageItem: DoD-картинка ≠ имя файла ─────
+// Регрессия 14.10: fetchDodAttachment выставляет data/isImage/dodStatus,
+// но НЕ снимает isDod (он нужен для кэша dodCache). Ветка DoD стояла выше
+// ветки isImage, поэтому скачанная картинка навсегда оставалась именем.
+// Гейт шаблонов такое не ловит — здесь проверяем условие напрямую.
+console.log('7. MessageItem: порядок ветвей вложений');
+{
+  const itemSrc = readFileSync(path.join(ROOT, 'src/components/MessageItem.vue'), 'utf8');
+  const appSrc = readFileSync(path.join(ROOT, 'src/App.vue'), 'utf8');
+  const dodBranch = itemSrc.match(/<div[^>]*class="attachment-preview attachment-dod"/);
+  check('ветка DoD-карточки найдена', !!dodBranch);
+
+  const dodCond = itemSrc.match(/v-else-if="([^"]*isDod[^"]*)"/);
+  check('условие ветки DoD найдено', !!dodCond, dodCond && dodCond[1]);
+  check('ветка DoD требует ОТСУТСТВИЯ данных (!msg.attachment.data)',
+    !!dodCond && /!\s*msg\.attachment\.data/.test(dodCond[1]), dodCond && dodCond[1]);
+
+  const iDod = itemSrc.indexOf('attachment-preview attachment-dod');
+  const iImg = itemSrc.search(/v-else-if="[^"]*\.isImage/);
+  check('ветка isImage идёт после DoD (как в шаблоне сейчас)', iDod > 0 && iImg > iDod);
+
+  // Ключевой инвариант фикса: скачанная картинка обязана попасть в <img>.
+  const imgBranch = itemSrc.match(/v-else-if="[^"]*\.isImage[\s\S]{0,220}?<img/);
+  check('ветка изображения рендерит <img> по данным вложения', !!imgBranch);
+  check('просмотрщик открывается кликом по картинке (emit open-image)',
+    /@click="\$emit\('open-image'/.test(itemSrc));
+  check('просмотрщик в App.vue есть (viewingImage → overlay)',
+    appSrc.includes('image-viewer-overlay') && /v-if="viewingImage"/.test(appSrc));
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

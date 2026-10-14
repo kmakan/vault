@@ -52,7 +52,14 @@
       </div>
       <span v-else v-html="linkify(replyBody(msg.content))" @click="$emit('text-click')"></span>
       <span v-if="msg.edited" class="message-edited-badge" :title="t('edited') || 'Отредактировано'">✎</span>
-      <div v-else-if="msg.attachment && msg.attachment.isDod" class="attachment-preview attachment-dod">
+      <!-- ADR-001 fix: DoD-карточка живёт только ПОКА данных нет.
+           Раньше условие было `msg.attachment.isDod`, а fetchDodAttachment
+           выставляет isImage/data/dodStatus='ready', но НЕ снимает isDod
+           (он нужен как признак способа доставки и для кэша dodCache).
+           Ветка DoD стояла выше ветки isImage, поэтому скачанная картинка
+           навсегда оставалась именем файла. Теперь после докачки data есть →
+           falls through в обычную ветку изображения/аудио/текста. -->
+      <div v-else-if="msg.attachment && msg.attachment.isDod && !msg.attachment.data" class="attachment-preview attachment-dod">
         <div class="attachment-file" @click.stop="$emit('dod-download', msg, msg.attachment)">
           <Icon :name="msg.attachment.isImage ? 'image' : 'file'" :size="13" />
           {{ msg.attachment.name }} ({{ dodSizeLabel(msg.attachment) }})
