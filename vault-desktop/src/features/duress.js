@@ -12,6 +12,10 @@ import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
 
+// Состояние фичи — в ./duress/state.js (чистый модуль без импортов: его
+// поднимает check-template.cjs для резолва спреда `...duressState()`).
+export { duressState } from './duress/state.js';
+
 // Lock config from Rust key store (null-safe read).
 async function lockEnabled() {
   try {

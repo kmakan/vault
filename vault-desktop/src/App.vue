@@ -933,9 +933,10 @@ import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
-// Фабрика состояния — из чистого модуля без импортов (его поднимает
-// check-template.cjs, чтобы разрезолвить спред ...foldersState() в data()).
+// Фабрики состояния — из чистых модулей без импортов (их поднимает
+// check-template.cjs, чтобы разрезолвить спреды в data()).
 import { foldersState } from './features/folders/state.js';
+import { duressState } from './features/duress/state.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as GroupAvatarsFeature from './features/group-avatars.js';
@@ -1302,10 +1303,8 @@ export default {
       // (были ошибочно в methods — Vue 3 игнорирует не-функции там,
       //  поля становились нерактивными: кнопка «Опрос» и duress-замок не работали)
       tombstonesCache: [],
-      // Duress-замок: LockScreen поверх UI; duressPending — тихий SOS.
-      duressLocked: false,
-      duressPending: false,
-      duressUnlockedThisSession: false,
+      // Duress-замок: состояние живёт в features/duress/state.js (ADR-001 Этап 1)
+      ...duressState(),
       // Голосования: флаг диалога создания (форма — внутри PollDialog.vue);
       // агрегация голосов — методы poll* ниже
       pollDialog: false,
