@@ -1893,8 +1893,12 @@ export default {
     onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
     onPresenceEnabled(on) { this.presenceSetEnabled(on); },
     // ── Звонки (логика в features/calls.js) ──
-    async isCallSeen(callId) { return CallsFeature.isCallSeen(this, callId); },
-    async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this, callId); },
+    // ADR-001: ниже передаются ЯВНЫЕ зависимости, а не `this`. Сигнатура
+    // фичи — её контракт: она физически не может задеть поле, которого
+    // в списке нет. Ниже — исключения, где зависимостей много и список
+    // разумнее держать в features/ (см. ADR-001-заметку в calls.js).
+    async isCallSeen(callId) { return CallsFeature.isCallSeen(this.email, callId); },
+    async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this.email, callId); },
     parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
     async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
     async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
@@ -1912,9 +1916,12 @@ export default {
     },
     async cancelCall(reason) { return CallsFeature.cancelCall(this, reason); },
     async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this, peer, kind, ts, durationSec, callId); },
-    callEventLabel(msg) { return CallsFeature.callEventLabel(this, msg); },
+    callEventLabel(msg) { return CallsFeature.callEventLabel(this.t, msg); },
     callPillIcon(msg) { return CallsFeature.callPillIcon(msg); },
-    canCallBack(msg) { return CallsFeature.canCallBack(this, msg); },
+    canCallBack(msg) { return CallsFeature.canCallBack({
+      activeChat: this.activeChat, activeChatType: this.activeChatType,
+      callState: this.callState, expCalls: this.expCalls, peerKeys: this.peerKeys,
+    }, msg); },
     callBack() { return CallsFeature.callBack(this); },
     toggleCallMute() { return CallsFeature.toggleCallMute(this); },
     toggleSpeaker() { return CallsFeature.toggleSpeaker(this); },

@@ -67,6 +67,18 @@ src = src
 writeFileSync(MOCKS + '/features-calls.mjs', src);
 const C = await import(MOCKS + '/features-calls.mjs');
 
+// ── ADR-001: адаптеры под ЯВНЫЕ зависимости ─────────────────────
+// Раньше эти функции брали `ctx` целиком и знали 212 полей App.vue.
+// Теперь сигнатура — контракт: функция видит ровно перечисленное.
+// Адаптеры ниже концентрируют «ctx → набор полей», чтобы сами проверки
+// оставались в терминах поведения, а не в терминах разбора контекста.
+const seenEmail = (c) => c.email;
+const labelFn = (c) => c.t;
+const cbDeps = (c) => ({
+  activeChat: c.activeChat, activeChatType: c.activeChatType,
+  callState: c.callState, expCalls: c.expCalls, peerKeys: c.peerKeys,
+});
+
 // ── Управляемые таймеры + Audio ────────────────────────────────
 const timers = new Map();
 let timerSeq = 0;
@@ -147,18 +159,18 @@ console.log('1. Дедуп звонков (kv call-seen)');
 {
   dbMock.kv.clear();
   const ctx = makeCtx();
-  check('isCallSeen несуществующего → false', (await C.isCallSeen(ctx, 'c1')) === false);
-  await C.rememberCallSeen(ctx, 'c1');
-  check('remember→isCallSeen roundtrip', (await C.isCallSeen(ctx, 'c1')) === true);
+  check('isCallSeen несуществующего → false', (await C.isCallSeen(seenEmail(ctx), 'c1')) === false);
+  await C.rememberCallSeen(seenEmail(ctx), 'c1');
+  check('remember→isCallSeen roundtrip', (await C.isCallSeen(seenEmail(ctx), 'c1')) === true);
   // лимит 100: старые вытесняются
-  for (let i = 0; i < 120; i++) await C.rememberCallSeen(ctx, 'x' + i);
+  for (let i = 0; i < 120; i++) await C.rememberCallSeen(seenEmail(ctx), 'x' + i);
   const raw = JSON.parse(dbMock.kv.get('call-seen'));
   check('лимит 100 call_id', raw.length === 100 && !raw.includes('c1'));
   // сбой kv — тихо
   const origGet = dbMock.kvGet;
   dbMock.kvGet = async () => { throw new Error('kv down'); };
-  check('сбой kv → isCallSeen false', (await C.isCallSeen(ctx, 'zz')) === false);
-  await C.rememberCallSeen(ctx, 'zz'); // не бросается
+  check('сбой kv → isCallSeen false', (await C.isCallSeen(seenEmail(ctx), 'zz')) === false);
+  await C.rememberCallSeen(seenEmail(ctx), 'zz'); // не бросается
   dbMock.kvGet = origGet;
 }
 
@@ -239,7 +251,7 @@ console.log('4. handleCallSignal (роутер входящих)');
   const oldTs = Date.now() - 700000;
   await C.handleCallSignal(ctx, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
   check('stale: звонок не поднят', ctx.callState === 'idle');
-  check('stale: call_id запомнен', (await C.isCallSeen(ctx, 'stale1')) === true);
+  check('stale: call_id запомнен', (await C.isCallSeen(seenEmail(ctx), 'stale1')) === true);
   check('stale call_request → missed-пилюля в messages', ctx.messages.some(m => m.id === 'call-stale1' && m.callEvent.kind === 'missed'));
   histMock.store = {};
   // повторный stale того же call_id — НЕ дублирует пилюлю
@@ -257,7 +269,7 @@ console.log('4. handleCallSignal (роутер входящих)');
   check('offer/kemct/senderEk сохранены', ctx2.currentCall.offerSdp === 'OFFER' && ctx2.currentCall.kemct === 'K' && ctx2.currentCall.senderEk === 'E');
   check('ринг-таймер 180с', timers.get(ctx2.callRingTimer) && timers.get(ctx2.callRingTimer).ms === 180000);
   check('звук входящего (desktop) + системный оверлей', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming' && c[2] === true) && apiMock.calls.some(c => c[0] === 'showIncoming'));
-  check('call-seen запомнен при подъёме', (await C.isCallSeen(ctx2, 'new1')) === true);
+  check('call-seen запомнен при подъёме', (await C.isCallSeen(seenEmail(ctx2), 'new1')) === true);
   // ретрансляция того же call_id при живом звонке — дубль, гасится
   await C.handleCallSignal(ctx2, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now() }, 'peer@x.ru');
   check('ретрансляция живого call_id — игнор', ctx2.currentCall && ctx2.currentCall.call_id === 'new1' && ctx2.callState === 'incoming_ringing');
@@ -287,7 +299,7 @@ console.log('4. handleCallSignal (роутер входящих)');
   const act = makeCtx({ callState: 'active', currentCall: { call_id: 'a1', peer: 'peer@x.ru' } });
   await C.handleCallSignal(act, { vault: 1, type: 'call_end', call_id: 'a1', ts: Date.now() }, 'peer@x.ru');
   check('call_end → hangup(remote) → idle + ended-пилюля', act.callState === 'idle' && act.messages.some(m => m.callEvent && m.callEvent.kind === 'ended'));
-  check('терминал запомнен', (await C.isCallSeen(act, 'a1')) === true);
+  check('терминал запомнен', (await C.isCallSeen(seenEmail(act), 'a1')) === true);
   histMock.store = {};
 }
 
@@ -348,14 +360,14 @@ console.log('6. Пилюли пропущенных');
   await C.recordCallEvent(open, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
   check('повторный call_id — пилюля не задвоена', open.messages.length === 2);
   // лейблы
-  check('лейбл ended с длительностью 01:05', C.callEventLabel(open, { callEvent: { kind: 'ended', duration: 65 } }) === 'T:call_ended · 01:05');
-  check('лейбл missed', C.callEventLabel(open, { callEvent: { kind: 'missed', duration: 0 } }) === 'T:call_missed');
-  check('лейбл без callEvent → пусто', C.callEventLabel(open, {}) === '');
+  check('лейбл ended с длительностью 01:05', C.callEventLabel(labelFn(open), { callEvent: { kind: 'ended', duration: 65 } }) === 'T:call_ended · 01:05');
+  check('лейбл missed', C.callEventLabel(labelFn(open), { callEvent: { kind: 'missed', duration: 0 } }) === 'T:call_missed');
+  check('лейбл без callEvent → пусто', C.callEventLabel(labelFn(open), {}) === '');
   // иконки
   check('callPillIcon: ended=phone, остальное phone-off', C.callPillIcon({ callEvent: { kind: 'ended' } }) === 'phone' && C.callPillIcon({ callEvent: { kind: 'missed' } }) === 'phone-off');
   // canCallBack
-  check('canCallBack: idle+ключ+expCalls', C.canCallBack(open, { callEvent: { kind: 'missed' } }) === true);
-  check('canCallBack в active → false', C.canCallBack(makeCtx({ callState: 'active' }), { callEvent: {} }) === false);
+  check('canCallBack: idle+ключ+expCalls', C.canCallBack(cbDeps(open), { callEvent: { kind: 'missed' } }) === true);
+  check('canCallBack в active → false', C.canCallBack(cbDeps(makeCtx({ callState: 'active' })), { callEvent: {} }) === false);
 }
 
 // ── 7. Mute/speaker/ретрансляции/watchdog/часы ──────────────────
@@ -479,7 +491,7 @@ console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
   check('тост с причиной показан', toasts.length === 1, toasts);
   check('пилюля undeliverable (не «нет ответа»)', ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.messages.map(m => m.callEvent));
   check('иконка лейбла — phone-off', C.callPillIcon({ callEvent: { kind: 'undeliverable' } }) === 'phone-off');
-  check('лейбл undeliverable', C.callEventLabel(ctx, { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
+  check('лейбл undeliverable', C.callEventLabel(labelFn(ctx), { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
 
   // Живой звонок 12.10.2026 (это и был «сброшенный вызов при приложении на
   // экране»): релей принял call_request, телефон показал входящий, но

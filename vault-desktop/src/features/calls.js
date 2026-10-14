@@ -45,26 +45,26 @@ export function setPendingNativeCallDecision(action) {
 // ── Дедуп звонков (persist kv 'call-seen') ─────────────────────
 // call_id обработанного звонка (request/accept/end/reject). После
 // перезапуска не даёт старым конвертам снова дёргать state machine.
-export async function isCallSeen(ctx, callId) {
+export async function isCallSeen(email, callId) {
   try {
-    const raw = await db.kvGet(await accountNamespace(ctx.email), 'call-seen');
+    const raw = await db.kvGet(await accountNamespace(email), 'call-seen');
     const set = raw ? new Set(JSON.parse(raw)) : new Set();
     return set.has(callId);
   } catch (e) { return false; }
 }
 
-export async function rememberCallSeen(ctx, callId) {
+export async function rememberCallSeen(email, callId) {
   try {
-    const raw = await db.kvGet(await accountNamespace(ctx.email), 'call-seen');
+    const raw = await db.kvGet(await accountNamespace(email), 'call-seen');
     const set = raw ? new Set(JSON.parse(raw)) : new Set();
     set.add(callId);
     // Храним последние 100 call_id (старые не нужны)
     if (set.size > 100) {
       const arr = Array.from(set);
       arr.splice(0, arr.length - 100);
-      await db.kvSet(await accountNamespace(ctx.email), 'call-seen', JSON.stringify(arr));
+      await db.kvSet(await accountNamespace(email), 'call-seen', JSON.stringify(arr));
     } else {
-      await db.kvSet(await accountNamespace(ctx.email), 'call-seen', JSON.stringify(Array.from(set)));
+      await db.kvSet(await accountNamespace(email), 'call-seen', JSON.stringify(Array.from(set)));
     }
   } catch (e) { /* тихо */ }
 }
@@ -281,8 +281,8 @@ export async function handleCallSignal(ctx, sig, from) {
   // минут неактуальны — игнорируем (и запоминаем call_id).
   if (sig.ts && Date.now() - sig.ts > 600000) {
     console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
-    const alreadySeen = await isCallSeen(ctx, call_id);
-    await rememberCallSeen(ctx, call_id);
+    const alreadySeen = await isCallSeen(ctx.email, call_id);
+    await rememberCallSeen(ctx.email, call_id);
     // Пропущенные вызовы: звонок пришёл, пока нас не было
     // (офлайн/перезапуск) — записываем «Пропущенный звонок» в историю
     // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
@@ -301,8 +301,8 @@ export async function handleCallSignal(ctx, sig, from) {
   // Зомби-гвард: терминальные cancel/end/reject запоминаются
   // request, приехавший ПОЗЖЕ своего cancel, гасится здесь.
   if (type === 'call_request' && !(ctx.currentCall && ctx.currentCall.call_id === call_id)) {
-    if (await isCallSeen(ctx, call_id)) return;
-    await rememberCallSeen(ctx, call_id);
+    if (await isCallSeen(ctx.email, call_id)) return;
+    await rememberCallSeen(ctx.email, call_id);
   }
   // Чужой звонок во время активного — отвечаем занято (call_reject).
   if (ctx.callState !== 'idle' && ctx.currentCall
@@ -446,7 +446,7 @@ export async function handleCallSignal(ctx, sig, from) {
       // которого уже нет (запомненные терминалы гасят его в guard
       // isCallSeen ниже). Свежие cancel не попадали в stale-ветку —
       // потому и не запоминались.
-      await rememberCallSeen(ctx, call_id);
+      await rememberCallSeen(ctx.email, call_id);
       if (ctx.lastCallId !== call_id) ctx.lastCallId = call_id;
       break;
     }
@@ -857,7 +857,7 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
   }
 }
 
-export function callEventLabel(ctx, msg) {
+export function callEventLabel(t, msg) {
   const ev = msg && msg.callEvent;
   if (!ev) return '';
   const key = {
@@ -868,7 +868,7 @@ export function callEventLabel(ctx, msg) {
     ended: 'call_ended',
     undeliverable: 'call_undeliverable',
   }[ev.kind] || 'call_missed';
-  let label = ctx.t(key);
+  let label = t(key);
   if (ev.kind === 'ended' && ev.duration > 0) {
     const m = Math.floor(ev.duration / 60);
     const s = ev.duration % 60;
@@ -883,12 +883,14 @@ export function callPillIcon(msg) {
   return 'phone-off';
 }
 
-export function canCallBack(ctx, msg) {
+// ADR-001: зависимости перечислены в сигнатуре, а не берутся из ctx.
+// Функция физически не может задеть поле, которого здесь нет.
+export function canCallBack({ expCalls, callState, activeChatType, peerKeys, activeChat }, msg) {
   // Перезвонить можно, если звонок не активен и у собеседника есть ключ.
-  return !!(msg && msg.callEvent && ctx.expCalls
-      && ctx.callState === 'idle'
-      && ctx.activeChatType === 'chat'
-      && ctx.peerKeys[ctx.activeChat]);
+  return !!(msg && msg.callEvent && expCalls
+      && callState === 'idle'
+      && activeChatType === 'chat'
+      && peerKeys[activeChat]);
 }
 
 export function callBack(ctx) {
