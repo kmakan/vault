@@ -10,6 +10,18 @@
 
 import { db, accountNamespace } from '../api.js';
 
+// Состояние фичи — в ./folders/state.js (чистый модуль без импортов: его
+// поднимает check-template.cjs для резолва спреда `...foldersState()`).
+// Логика папок, использующая это состояние, — здесь.
+
+export { foldersState } from './folders/state.js';
+
+// Список имён папок для панели — по алфавиту (чистая функция, App.vue
+// делегирует из computed). Сортировка на копии: не мутируем реактивный массив.
+export function sortedFolderNames(names) {
+  return (names || []).slice().sort((a, b) => a.localeCompare(b));
+}
+
 // Flag-key of a chat target: group chats by 'group:<id>', DMs by lowercased email.
 export function flagKey(target) {
   if (target.type === 'group') return 'group:' + target.id;

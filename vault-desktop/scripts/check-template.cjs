@@ -20,6 +20,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { parse: sfcParse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
 const babel = require('@babel/parser');
 
@@ -76,6 +77,95 @@ function findTplLine(tplLines, tplOffset, name) {
   return 0;
 }
 
+/* ── ADR-001 Этап 1: спреды `...featureState()` в data() ──────────────
+ *
+ * Фичи выносят своё состояние в модуль (`foldersState()`), а App.vue
+ * разворачивает спредом. Ни @vue/compiler-sfc, ни наш разбор такой спред
+ * не разрешают — поля выпадали бы из bindings, и E1 ругался бы на КАЖДЫЙ
+ * биндинг фичи (то есть гейт стал бы неучислимым и его перестали бы читать —
+ * хуже, чем гейта нет).
+ *
+ * Поэтому резолвим спреды ЖИВЫМ импортом: поднимаем модуль, вызываем
+ * фабрику, берём настоящие ключи. Не гадаем по AST — берём правду.
+ *
+ * Fail-closed: если модуль/фабрику не удалось поднять — это ПРОБЛЕМА, а не
+ * «молча пропустить». Иначе сломанный импорт тихо отключил бы проверку.
+ */
+async function resolveStateSpreads(descriptor, file, problems) {
+  const script = descriptor.script;
+  if (!script) return {};
+  let ast;
+  try {
+    ast = babel.parse(script.content, { sourceType: 'module' });
+  } catch (e) {
+    problems.push(`${file}: [spread] спреды состояния пропущены, parse: ${e.message}`);
+    return {};
+  }
+
+  // имя локального импорта → путь модуля
+  const importedFrom = new Map();
+  for (const n of ast.program.body) {
+    if (n.type !== 'ImportDeclaration') continue;
+    const spec = n.source.value;
+    for (const s of n.specifiers) {
+      if (s.type === 'ImportSpecifier') importedFrom.set(s.local.name, { spec, name: s.imported.name });
+      else if (s.type === 'ImportDefaultSpecifier') importedFrom.set(s.local.name, { spec, name: 'default' });
+      else if (s.type === 'ImportNamespaceSpecifier') importedFrom.set(s.local.name, { spec, name: '*' });
+    }
+  }
+
+  // спреды внутри возвращаемого объекта data()
+  const wanted = new Set();
+  let dataBody = null;
+  for (const n of ast.program.body) {
+    if (n.type !== 'ExportDefaultDeclaration' || !n.declaration || n.declaration.type !== 'ObjectExpression') continue;
+    const data = n.declaration.properties.find(
+      p => !p.computed && p.key && (p.key.name === 'data' || p.key.value === 'data'));
+    if (!data) continue;
+    // data() {...} — это ObjectMethod (сам узел = тело), а data: function(){}
+    // — Property с .value. Поддерживаем оба.
+    const fnNode = data.type === 'ObjectMethod' ? data : data.value;
+    if (!fnNode || !fnNode.body || !fnNode.body.body) continue;
+    const ret = fnNode.body.body.find(
+      s => s.type === 'ReturnStatement' && s.argument && s.argument.type === 'ObjectExpression');
+    if (ret) dataBody = ret.argument;
+  }
+  if (!dataBody) return {};
+  for (const p of dataBody.properties) {
+    if (p.type !== 'SpreadElement') continue;
+    const a = p.argument;
+    if (a && a.type === 'CallExpression' && a.callee && a.callee.type === 'Identifier') wanted.add(a.callee.name);
+  }
+  if (!wanted.size) return {};
+
+  const out = {};
+  for (const local of wanted) {
+    const imp = importedFrom.get(local);
+    if (!imp || imp.name === '*' || imp.name === 'default') {
+      problems.push(`${file}: [E1-spread] спред ...${local}() — импорт не распознан (нужен именованный импорт фабрики)`);
+      continue;
+    }
+    const modPath = path.resolve(path.dirname(file), imp.spec);
+    try {
+      const mod = await import(pathToFileURL(modPath).href);
+      const fn = mod[imp.name];
+      if (typeof fn !== 'function') {
+        problems.push(`${file}: [E1-spread] ${imp.spec} не экспортирует функцию ${imp.name}`);
+        continue;
+      }
+      const state = fn();
+      if (!state || typeof state !== 'object') {
+        problems.push(`${file}: [E1-spread] ${imp.name}() вернула не объект`);
+        continue;
+      }
+      for (const k of Object.keys(state)) out[k] = 'setup-reactive';
+    } catch (e) {
+      problems.push(`${file}: [E1-spread] не удалось поднять ${imp.spec} для спреда ...${local}(): ${e.message}`);
+    }
+  }
+  return out;
+}
+
 function analyze(file) {
   const problems = [];
   const src = fs.readFileSync(file, 'utf8');
@@ -92,6 +182,17 @@ function analyze(file) {
   } catch (e) {
     return [`${file}: compileScript failed: ${e.message}`];
   }
+
+  // ADR-001 Этап 1: состояние фич приезжает спредом `...featureState()`.
+  // Компилятор такой спред не разворачивает — добавляем ключи сами (см.
+  // resolveStateSpreads). Синхронно нельзя: там живой import().
+  return resolveStateSpreads(descriptor, file, problems).then(spread => {
+    Object.assign(bindings, spread);
+    return analyzeWithBindings(file, descriptor, bindings, problems, src);
+  });
+}
+
+function analyzeWithBindings(file, descriptor, bindings, problems, src) {
 
   const t = compileTemplate({
     source: descriptor.template.content,
@@ -147,7 +248,7 @@ function analyze(file) {
   return problems;
 }
 
-function main() {
+async function main() {
   const root = path.resolve(__dirname, '..');
   const args = process.argv.slice(2);
   const files = args.length
@@ -156,7 +257,7 @@ function main() {
   const all = [];
   for (const f of files) {
     if (!fs.existsSync(f)) { console.error(`нет файла: ${f}`); process.exit(2); }
-    all.push(...analyze(f));
+    all.push(...await analyze(f));
   }
   if (all.length) {
     console.error(`✗ template-check: ${all.length} проблем(ы)`);

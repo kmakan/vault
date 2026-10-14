@@ -933,6 +933,9 @@ import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
+// Фабрика состояния — из чистого модуля без импортов (его поднимает
+// check-template.cjs, чтобы разрезолвить спред ...foldersState() в data()).
+import { foldersState } from './features/folders/state.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as GroupAvatarsFeature from './features/group-avatars.js';
@@ -1308,11 +1311,8 @@ export default {
       pollDialog: false,
       // Пересылка: пересылаемое сообщение (объект) + список целей
       forwardTo: null,
-      // Папки чатов: активная папка + диалог создания в контекстном меню
-      activeFolder: '',
-      folderDialogOpen: false,
-      chatFolderNewName: '',
-      chatFoldersNames: [],
+      // Папки чатов: состояние живёт в features/folders.js (ADR-001 Этап 1)
+      ...foldersState(),
       midTombstonesCache: [],
       // IMAP-курсоры: in-memory кэш + sqlite персист.
       cursorsCache: {},
@@ -1380,9 +1380,9 @@ export default {
     hasArchivedChats() {
       return Object.values(this.chatFlags).some(f => f && f.archived);
     },
-    // Папки чатов: список имён из kv (сортированный).
+    // Папки чатов: список имён из kv (сортировка — features/folders.js).
     chatFoldersList() {
-      return (this.chatFoldersNames || []).slice().sort((a, b) => a.localeCompare(b));
+      return FoldersFeature.sortedFolderNames(this.chatFoldersNames);
     },
     // ── Звонки (M3): строки и таймер для оверлея ──
     callTexts() {
