@@ -77,7 +77,12 @@ pub fn save_groups(groups: &HashMap<String, Group>) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let json = serde_json::to_string_pretty(groups)?;
+    // Сериализуем через BTreeMap: serde_json по HashMap пишет ключи в
+    // случайном порядке, и каждая перезапись groups.json переставляла группы
+    // в файле. С BTreeMap порядок в файле стабилен — файл перестаёт «моргать»
+    // в git/дифф и даёт предсказуемое поведение при чтении.
+    let ordered: std::collections::BTreeMap<&String, &Group> = groups.iter().collect();
+    let json = serde_json::to_string_pretty(&ordered)?;
     // Атомарная запись: временный файл + rename. Прямой fs::write при
     // параллельном доступе (несколько окон/процессов) может оставить файл
     // обрезанным → следующий load получит пустой HashMap → потеря групп.
@@ -458,6 +463,109 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
+
+    // ── Стабильность порядка групп (регресс: «список групп прыгает») ──
+    //
+    // load_groups() отдаёт HashMap, а итерация по нему в Rust рандомизирована
+    // на каждый процесс. Если отдавать UI «как есть», порядок групп меняется
+    // сам — пользователь теряет место в списке. Сортировка обязана быть
+    // детерминированной: created_at убыв., тай-брейкер id.
+
+    fn mk_group_at(id: &str, created_at: &str) -> Group {
+        let mut g = mk_group(id, "owner@x.ru", &[("owner@x.ru", "")]);
+        g.created_at = created_at.to_string();
+        g
+    }
+
+    /// Сортировка для UI: свежие сверху, при равенстве created_at — по id.
+    fn ui_sort(mut v: Vec<Group>) -> Vec<Group> {
+        v.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        v
+    }
+
+    #[test]
+    fn group_order_is_independent_of_hashmap_iteration_order() {
+        // Ключевой регресс: раскладываем ОДНИ И ТЕ ЖЕ группы в HashMap
+        // многократно — сырой порядок итерации плавает, отсортированный нет.
+        let specs = [
+            ("grp_a", "2026-01-01T10:00:00Z"),
+            ("grp_b", "2026-03-01T10:00:00Z"),
+            ("grp_c", "2026-02-01T10:00:00Z"),
+        ];
+        let mut expected: Option<Vec<String>> = None;
+        for round in 0..50 {
+            let map: HashMap<String, Group> = specs
+                .iter()
+                .map(|(id, ca)| (id.to_string(), mk_group_at(id, ca)))
+                .collect();
+            let raw: Vec<String> = map.values().map(|g| g.id.clone()).collect();
+            let sorted: Vec<String> = ui_sort(map.into_values().collect())
+                .into_iter()
+                .map(|g| g.id)
+                .collect();
+            match &expected {
+                None => expected = Some(sorted.clone()),
+                Some(exp) => assert_eq!(
+                    *exp, sorted,
+                    "раунд {round}: отсортированный порядок обязан быть стабилен"
+                ),
+            }
+            // Сырой порядок может совпасть, но не обязан — это и есть суть бага.
+            let _ = raw;
+        }
+        assert_eq!(
+            expected.unwrap(),
+            vec!["grp_b", "grp_c", "grp_a"],
+            "свежие сверху, по created_at убыв."
+        );
+    }
+
+    #[test]
+    fn group_order_tiebreaker_is_stable_on_equal_created_at() {
+        // Одинаковый created_at: порядок обязан определяться id, а не тем,
+        // в каком порядке HashMap выдал элементы.
+        let specs = [("grp_z", "2026-01-01T00:00:00Z"), ("grp_a", "2026-01-01T00:00:00Z"), ("grp_m", "2026-01-01T00:00:00Z")];
+        let map: HashMap<String, Group> = specs
+            .iter()
+            .map(|(id, ca)| (id.to_string(), mk_group_at(id, ca)))
+            .collect();
+        let sorted: Vec<String> = ui_sort(map.into_values().collect())
+            .into_iter()
+            .map(|g| g.id)
+            .collect();
+        assert_eq!(sorted, vec!["grp_a", "grp_m", "grp_z"], "тай-брейкер по id");
+    }
+
+    #[test]
+    fn groups_json_is_written_in_stable_key_order() {
+        // save_groups обязан писать ключи отсортированно: иначе каждая
+        // перезапись переставляет группы в файле (файл «моргает» в диффе).
+        with_tmp_groups(|| {
+            let map: HashMap<String, Group> = [
+                ("grp_c", "2026-01-03T00:00:00Z"),
+                ("grp_a", "2026-01-01T00:00:00Z"),
+                ("grp_b", "2026-01-02T00:00:00Z"),
+            ]
+            .iter()
+            .map(|(id, ca)| (id.to_string(), mk_group_at(id, ca)))
+            .collect();
+            save_groups(&map).expect("save_groups");
+            let path = std::env::var("VAULT_GROUPS_FILE").unwrap();
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let order: Vec<usize> = ["grp_a", "grp_b", "grp_c"]
+                .iter()
+                .map(|k| raw.find(&format!("\"{k}\"")).expect("key present"))
+                .collect();
+            assert!(
+                order[0] < order[1] && order[1] < order[2],
+                "ключи в groups.json должны идти по алфавиту, получено {order:?}"
+            );
+        });
+    }
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
     /// Env vars are process-global, so tests that redirect VAULT_GROUPS_FILE

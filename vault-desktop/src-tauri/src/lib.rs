@@ -1183,12 +1183,19 @@ fn groups_load_own(
     let all = groups::load_groups()
         .map(|g| g.into_values().collect::<Vec<_>>())
         .map_err(|e| e.to_string())?;
-    Ok(groups::filter_own_groups(
-        &all,
-        &email,
-        &fingerprint,
-        &aliases,
-    ))
+    let mut mine = groups::filter_own_groups(&all, &email, &fingerprint, &aliases);
+    // Порядок групп обязан быть детерминированным: groups.json лежит в
+    // HashMap, а итерация по HashMap в Rust рандомизирована на каждый процесс
+    // (SipHash со случайным seed). Без сортировки список в UI прыгал между
+    // перезапусками/перечитываниями — «список групп меняется сам».
+    // Ключ: created_at по убыванию (свежие сверху), тай-брейкер id — чтобы
+    // группы с одинаковым created_at не менялись местами.
+    mine.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(mine)
 }
 
 /// Заполнить СОБСТВЕННЫЙ fingerprint у участников во ВСЕХ группах (ленивая
