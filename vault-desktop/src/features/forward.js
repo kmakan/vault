@@ -6,6 +6,10 @@
 import api from '../api.js';
 import crypto from '../crypto.js';
 
+// Состояние фичи — в ./forward/state.js (чистый модуль без импортов: его
+// поднимает check-template.cjs для резолва спреда `...forwardState()`).
+export { forwardState } from './forward/state.js';
+
 // Targets for forwarding: contacts + groups, excluding the current chat.
 export function forwardTargets(ctx) {
   const list = [];

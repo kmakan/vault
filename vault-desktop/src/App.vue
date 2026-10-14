@@ -938,6 +938,7 @@ import * as FoldersFeature from './features/folders.js';
 import { foldersState } from './features/folders/state.js';
 import { duressState } from './features/duress/state.js';
 import { pollState } from './features/poll/state.js';
+import { forwardState } from './features/forward/state.js';
 import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as GroupAvatarsFeature from './features/group-avatars.js';
@@ -1308,8 +1309,8 @@ export default {
       // Голосования: состояние (диалог создания + таймер) — features/poll/state.js,
       // агрегация голосов — методы poll*; форма внутри PollDialog.vue
       ...pollState(),
-      // Пересылка: пересылаемое сообщение (объект) + список целей
-      forwardTo: null,
+      // Пересылка: состояние (пересылаемое сообщение) — features/forward/state.js
+      ...forwardState(),
       // Папки чатов: состояние живёт в features/folders.js (ADR-001 Этап 1)
       ...foldersState(),
       midTombstonesCache: [],
