@@ -49,7 +49,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const c = {
     isLoggedIn: true,
     cryptoReady: true,
     email: 'me@x.ru',
@@ -57,9 +57,10 @@ function makeCtx(over = {}) {
     peerPqKeys: {},
     emailBodyCache: {},
     senderEmail: (from) => from,
-    cacheBody: (k, v) => { ctx.emailBodyCache[k] = v; },
     parseEnvelope: (txt) => { try { return JSON.parse(txt); } catch { return null; } },
-  }, over);
+  };
+  c.cacheBody = (k, v) => { c.emailBodyCache[k] = v; };
+  return Object.assign(c, over);
 }
 let ctx;
 
