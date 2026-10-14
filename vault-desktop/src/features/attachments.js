@@ -1,0 +1,478 @@
+// Feature module: вложения (файлы/аудио/изображения + download-on-demand).
+// Этап 5 декомпозиции App.vue — изоляция фич-доменов (ctx-паттерн).
+// Пилот ADR-001: первый вынос inline-логики App.vue в отдельный домен.
+//
+// Срезы домена:
+//  - downloadAttachment/downloadDodAttachment/openImageViewer: отдача и
+//    DoD-докачка файла (клик по карточке → data-письмо по Message-ID).
+//  - fetchDodAttachment: расшифровка DoD-тела (групповой/пир-ключ), кэш
+//    dodCache, персист истории.
+//  - toggleVoiceNote: фоновый плеер голосовых (Android native MediaPlayer).
+//  - sendAudioMessage: голосовое = вложение audio/webm в конверте (или
+//    локально в «Заметки для себя»).
+//  - handleFileSelect: выбор файлов, лимиты провайдера/заметок, сжатие
+//    картинок, DoD-разбиение крупных файлов, отправка (группа/1:1/заметки).
+//
+// Инвариант: контент шифруется как обычное сообщение (AAD="VAULT") —
+// БЕЗ шифрования получатель не расшифрует и письмо молча отбросится.
+
+import { invoke } from '@tauri-apps/api/core';
+import api from '../api.js';
+import crypto from '../crypto.js';
+import { downloadBase64 } from '../chatExport.js';
+import { getAttachmentLimitMb } from '../mailProviders.js';
+
+// ── Отдача / просмотр ──────────────────────────────────────────
+export function downloadAttachment(ctx, attachment) {
+  if (!attachment || !attachment.data) return;
+  downloadBase64(attachment.data, attachment.name, attachment.type);
+}
+
+// Полноэкранный просмотр изображения-вложения
+export function openImageViewer(ctx, attachment) {
+  ctx.viewingImage = attachment;
+}
+
+// ── Фоновый плеер голосовых (t_c1c44344, Android) ──────────────
+export async function toggleVoiceNote(ctx, msg, attachment) {
+  if (!ctx.isAndroidClient) return;
+  if (!attachment || !attachment.data) return;
+  if (ctx.voicePlayingId === msg.id) {
+    try { await invoke('voicenote_stop'); } catch (e) { console.warn('[voicenote] stop failed:', e); }
+    ctx.voicePlayingId = '';
+    return;
+  }
+  try {
+    await invoke('voicenote_play', {
+      id: String(msg.id),
+      data: attachment.data,
+      mime: attachment.type || 'audio/webm',
+    });
+    ctx.voicePlayingId = String(msg.id);
+  } catch (e) {
+    console.warn('[voicenote] play failed:', e);
+    ctx.showToast(ctx.t('voice_play_failed') || 'Не удалось воспроизвести', 3000);
+  }
+}
+
+// ── Download-on-demand (M1) ────────────────────────────────────
+export async function fetchDodAttachment(ctx, msg, attachment) {
+  if (!attachment || !attachment.isDod || !attachment.dod) return;
+  if (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading') return;
+  attachment.dodStatus = 'loading';
+  const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
+    ? 'group:' + ctx.currentGroup.id
+    : ctx.activeChat;
+  try {
+    const cached = ctx.dodCache[attachment.dod];
+    if (cached) {
+      attachment.data = cached;
+      attachment.dodStatus = 'ready';
+      ctx.$forceUpdate();
+      return;
+    }
+    const target = (ctx.emails || []).find(m => (m.message_id || '').trim() === attachment.dod.trim());
+    if (!target) throw new Error(ctx.t('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
+    const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
+    if (!body) throw new Error('empty body');
+    let plain = null;
+    const groupKey = ctx.groupKeys[ctx.currentGroup && ctx.currentGroup.id];
+    if (ctx.activeChatType === 'group' && groupKey) {
+      try { plain = await crypto.decryptWithGroupKey(body, groupKey); } catch (e) { plain = null; }
+    }
+    if (plain === null) {
+      const senderEmail = ctx.activeChatType === 'group'
+        ? (msg && msg.sender_id && ctx.senderEmail(msg.sender_id)) || ''
+        : ctx.activeChat;
+      if (senderEmail && ctx.peerKeys[senderEmail]) {
+        crypto.setPeerPublicKey(ctx.peerKeys[senderEmail], ctx.peerPqKeys && ctx.peerPqKeys[senderEmail]);
+        plain = await crypto.decryptVault(body);
+      }
+    }
+    if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
+    const env = ctx.parseEnvelope(plain);
+    const raw = env ? env.text : plain;
+    const obj = JSON.parse(raw);
+    if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');
+    if (String(obj.ref || '') !== attachment.dod.trim()) throw new Error('ref mismatch');
+    attachment.data = obj.data;
+    ctx.dodCache[attachment.dod] = obj.data;
+    attachment.dodStatus = 'ready';
+    attachment.isImage = !!(attachment.type && attachment.type.startsWith('image/'));
+    attachment.isAudio = !!(attachment.type && attachment.type.startsWith('audio/'));
+    attachment.isText = false;
+    ctx.showToast((ctx.t('dod_ready') || 'Файл загружен:') + ' ' + attachment.name, 4000);
+  } catch (e) {
+    console.warn('[dod] fetch failed:', e);
+    attachment.dodStatus = 'error';
+    ctx.showToast((ctx.t('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
+  }
+  ctx.$forceUpdate();
+  try { ctx.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
+}
+
+export async function downloadDodAttachment(ctx, msg, attachment) {
+  if (attachment.dodStatus !== 'ready') {
+    await fetchDodAttachment(ctx, msg, attachment);
+    if (attachment.dodStatus !== 'ready') return;
+  }
+  if (attachment.data) downloadBase64(attachment.data, attachment.name, attachment.type);
+}
+
+// ── Голосовое сообщение (вложение audio/webm или локальная заметка) ──
+export async function sendAudioMessage(ctx, audioData) {
+  // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
+  // шифрования и почты — так же, как текст заметок.
+  if (ctx.activeChat === '__notes__') {
+    const name = `voice-${Date.now()}.webm`;
+    const msg = {
+      id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+      content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+      from: 'me',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      encrypted: false,
+      vault: false,
+      status: 'sent',
+      _notes: true,
+      attachment: {
+        name,
+        type: audioData.mimeType || 'audio/webm',
+        size: audioData.size,
+        data: audioData.base64,
+        isImage: false,
+        isAudio: true,
+      },
+    };
+    const list = ctx.loadNotes();
+    list.push(msg);
+    if (!ctx.saveNotes(list)) {
+      list.pop();
+      ctx.messages = [...list];
+      alert(ctx.t('err_notes_full_voice'));
+      ctx.showAudioRecorder = false;
+      return;
+    }
+    ctx.messages = [...list];
+    ctx.showAudioRecorder = false;
+    ctx.scrollToBottom(true);
+    return;
+  }
+  // Голосовое = вложение audio/webm, зашифрованное как обычное сообщение
+  // (конверт {vault:1,...,text:<JSON вложения>} + encryptVault, AAD="VAULT").
+  const name = `voice-${Date.now()}.webm`;
+  const attachmentPayload = JSON.stringify({
+    vault_attachment: true,
+    name,
+    type: audioData.mimeType || 'audio/webm',
+    size: audioData.size,
+    data: audioData.base64,
+  });
+
+  // Конверт строим ДО оптимистичного показа: его id — ключ слияния с
+  // реальным письмом (иначе поллинг не смог бы заменить предпросмотр,
+  // и голосовое «появлялось и исчезало»).
+  let wire = attachmentPayload;
+  let envelopeId = '';
+  if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+    const groupKey = ctx.groupKeys[ctx.currentGroup.id];
+    if (groupKey) {
+      const envelope = await ctx.buildEnvelope(attachmentPayload);
+      try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+      wire = await crypto.encryptWithGroupKey(envelope, groupKey);
+    }
+  } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
+    crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+    const envelope = await ctx.buildEnvelope(attachmentPayload);
+    try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+    wire = await crypto.encryptVault(envelope);
+  }
+
+  // Оптимистичный предпросмотр у отправителя.
+  const msg = {
+    id: envelopeId || ('local-' + Date.now()),
+    content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+    from: 'me',
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    ts: Date.now(),
+    encrypted: ctx.cryptoReady,
+    status: 'sending',
+    _pendingAt: Date.now(),
+    attachment: {
+      name,
+      type: audioData.mimeType || 'audio/webm',
+      size: audioData.size,
+      data: audioData.base64,
+      isImage: false,
+      isAudio: true,
+    },
+  };
+  ctx.messages.push(msg);
+  const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
+    ? 'group:' + ctx.currentGroup.id
+    : ctx.activeChat;
+  ctx.markPending(chatKey, msg);
+  ctx.showAudioRecorder = false;
+  ctx.scrollToBottom(true);
+
+  if (ctx.activeChat) {
+    try {
+      if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+        // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+        await api.sendGroupMessage(ctx.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
+      } else {
+        await api.sendMessage(ctx.activeChat, wire, audioData.mimeType || 'audio/webm');
+      }
+      msg.status = 'sent';
+    } catch (err) {
+      console.error('Failed to send audio:', err);
+      msg.status = 'failed';
+      alert('Failed to send voice message: ' + (err && err.message || err));
+    }
+    // Персистим финальный статус в историю (иначе после перезапуска
+    ctx.saveCurrentHistory(chatKey);
+  }
+}
+
+
+// ── Выбор файлов-вложений (лимиты, сжатие, DoD-разбиение, отправка) ──
+export async function handleFileSelect(ctx, event) {
+  const files = event.target.files;
+  if (!files || files.length === 0) return;
+
+  for (const file of files) {
+    try {
+      // Для заметок почтовый лимит провайдера неважен (файл никуда не
+      // отправляется), но localStorage ограничен (~5МБ) — не даём выбрать
+      // заведомо непомещающийся файл.
+      if (ctx.activeChat === '__notes__' && file.size > 3 * 1024 * 1024) {
+        alert(`Файл «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ. В «Заметки для себя» вложения хранятся локально (лимит ~5 МБ на весь чат), файлы больше 3 МБ не прикрепляются.`);
+        continue;
+      }
+      // Лимит вложений провайдера (Gmail 25MB, Zoho 25MB, ...): письмо с
+      // base64-телом ~на 33% больше файла, поэтому сравниваем с 70% от
+      // лимита — предупреждаем ДО отправки, пока провайдер не отклонил.
+      const limitMb = getAttachmentLimitMb(ctx.email);
+      const limitBytes = Math.floor(limitMb * 1024 * 1024 * 0.7);
+      if (file.size > limitBytes) {
+        alert(
+          (ctx.t('file_too_large') || 'Файл не пройдёт через почту: лимит вложений вашего провайдера') +
+          ` ~${limitMb} МБ, а «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ.` +
+          (ctx.t('file_too_large_hint') || ' Файл не отправлен.')
+        );
+        continue; // пропускаем файл, остальные отправляем
+      }
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        let base64 = e.target.result.split(',')[1];
+        let fileName = file.name;
+        let fileSize = file.size;
+        let fileType = file.type;
+        // Качество медиа: изображения сжимаются по настройке
+        // «Качество отправляемых медиафайлов» (kv media-quality).
+        // original = без сжатия; high = макс. сторона 1920; low = 1280.
+        if (fileType.startsWith('image/') && fileType !== 'image/gif') {
+          try {
+            const quality = await ctx.mediaQuality();
+            if (quality !== 'original') {
+              const maxSide = quality === 'low' ? 1280 : 1920;
+              const compressed = await ctx.compressImage(e.target.result, maxSide, 0.82);
+              if (compressed && compressed.length < e.target.result.length) {
+                base64 = compressed.split(',')[1];
+                fileType = 'image/jpeg';
+                if (!/\.jpe?g$/i.test(fileName)) fileName = fileName.replace(/\.\w+$/, '') + '.jpg';
+                fileSize = Math.floor(base64.length * 0.75);
+              }
+            }
+          } catch (err) { console.warn('image compress failed:', err); }
+        }
+        const isImage = fileType.startsWith('image/');
+        const isAudio = fileType.startsWith('audio/');
+        const isText = !isImage && !isAudio && ctx.isTextMime(fileType, fileName);
+        let textContent = '';
+        if (isText) {
+          try {
+            textContent = atob(base64);
+            try { textContent = decodeURIComponent(escape(textContent)); } catch { /* уже utf-8 */ }
+          } catch { textContent = ''; }
+          if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
+        }
+
+        // Encode attachment as structured JSON for server storage.
+        // Download-on-demand (M1): файлы крупнее порога уходят ДВУМЯ
+        // письмами — мета-конверт (эта карточка, без данных) + data-письмо
+        // (полный base64) с нейтральным Message-ID. Получатель качает
+        // тело по требованию (клик), а не автоматически при открытии
+        // чата. Малые файлы идут как раньше — одним конвертом.
+        const DOD_THRESHOLD = 1024 * 1024;
+        const useDod = fileSize > DOD_THRESHOLD;
+        let dodMid = '';
+        if (useDod) dodMid = `<vault-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}@${(ctx.email || 'localhost').split('@')[1] || 'localhost'}>`;
+        const attachmentPayload = useDod
+          ? JSON.stringify({
+              vault_attachment: true,
+              name: fileName,
+              type: fileType,
+              size: fileSize,
+              dod: dodMid,
+            })
+          : JSON.stringify({
+              vault_attachment: true,
+              name: fileName,
+              type: fileType,
+              size: fileSize,
+              data: base64,
+            });
+
+        const displayContent = isImage
+          ? `📎 ${fileName}`
+          : `📎 ${fileName} (${(fileSize / 1024).toFixed(1)}KB)`;
+
+        // Заметки для себя: файл хранится ЛОКАЛЬНО (localStorage), без
+        // шифрования и почты — так же, как текст заметок.
+        if (ctx.activeChat === '__notes__') {
+          const noteMsg = {
+            id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+            content: displayContent,
+            from: 'me',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            encrypted: false,
+            vault: false,
+            status: 'sent',
+            _notes: true,
+            attachment: {
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              data: base64,
+              isImage: isImage,
+              isAudio: isAudio,
+              isText: isText,
+              textContent: textContent,
+            },
+          };
+          const noteList = ctx.loadNotes();
+          noteList.push(noteMsg);
+          if (!ctx.saveNotes(noteList)) {
+            noteList.pop();
+            ctx.messages = [...noteList];
+            alert(ctx.t('err_notes_full_file'));
+            return;
+          }
+          ctx.messages = [...noteList];
+          ctx.scrollToBottom(true);
+          return;
+        }
+        // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
+        // зашифрованный как обычное сообщение (AAD="VAULT"). БЕЗ шифрования
+        // получатель не сможет расшифровать (AAD не сойдётся) и письмо
+        // молча отбросится. Конверт строим ДО предпросмотра: его id — ключ
+        // слияния с реальным письмом (иначе поллинг не заменит предпросмотр,
+        // и файл «появится и исчезнет» у отправителя).
+        let wire = attachmentPayload;
+        let envelopeId = '';
+        if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+          const groupKey = ctx.groupKeys[ctx.currentGroup.id];
+          if (groupKey) {
+            const envelope = await ctx.buildEnvelope(attachmentPayload);
+            try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+            wire = await crypto.encryptWithGroupKey(envelope, groupKey);
+          }
+        } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
+          crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+          const envelope = await ctx.buildEnvelope(attachmentPayload);
+          try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+          wire = await crypto.encryptVault(envelope);
+        }
+
+        // Create preview message
+        const msg = {
+          id: envelopeId || ('local-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5)),
+          content: displayContent,
+          from: 'me',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          ts: Date.now(),
+          encrypted: ctx.cryptoReady,
+          status: 'sending',
+          _pendingAt: Date.now(),
+          attachment: {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            data: base64,
+            isImage: isImage,
+            isAudio: isAudio,
+            isText: isText,
+            textContent: textContent,
+          },
+        };
+        ctx.messages.push(msg);
+        const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
+          ? 'group:' + ctx.currentGroup.id
+          : ctx.activeChat;
+        ctx.markPending(chatKey, msg);
+        ctx.scrollToBottom(true);
+
+        if (ctx.activeChat) {
+          // DoD: data-письмо уходит ПЕРВЫМ. Если мета не уйдёт и её
+          // переотправят — data-дубль безвреден (один Message-ID
+          // дедуплируется на приёме), а обратный порядок дал бы
+          // карточку без данных. Сбой data = мета бесполезна → failed.
+          if (useDod) {
+            const dataPayload = JSON.stringify({ vault_dod_data: 1, ref: dodMid, data: base64 });
+            try {
+              if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+                const groupKey = ctx.groupKeys[ctx.currentGroup.id];
+                if (!groupKey) throw new Error('group key unavailable');
+                const dataWire = await crypto.encryptWithGroupKey(await ctx.buildEnvelope(dataPayload), groupKey);
+                const members = await api.getGroupMembers(ctx.currentGroup.id);
+                const failedData = [];
+                for (const member of members || []) {
+                  if (member.email === ctx.email) continue;
+                  try { await api.sendDodEmail(member.email, dataWire, dodMid); }
+                  catch (e) { failedData.push(member.email); }
+                }
+                if (failedData.length) {
+                  console.warn('DoD data partial fail:', failedData);
+                  ctx.showToast((ctx.t('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
+                }
+              } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
+                crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+                const dataWire = await crypto.encryptVault(await ctx.buildEnvelope(dataPayload));
+                await api.sendDodEmail(ctx.activeChat, dataWire, dodMid);
+              } else {
+                throw new Error('crypto not ready');
+              }
+            } catch (err) {
+              console.error('DoD data send failed:', err);
+              msg.status = 'failed';
+              ctx.saveCurrentHistory(chatKey);
+              return;
+            }
+          }
+          try {
+            if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+              // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+              await api.sendGroupMessage(ctx.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
+            } else {
+              await api.sendMessage(ctx.activeChat, wire, file.type);
+            }
+            msg.status = 'sent';
+          } catch (err) {
+            console.error('Failed to send attachment:', err);
+            msg.status = 'failed';
+          }
+          // Персистим финальный статус в историю (иначе после перезапуска
+          ctx.saveCurrentHistory(chatKey);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error('File read error:', err);
+    }
+  }
+
+  // Reset input
+  event.target.value = '';
+}
+
+
