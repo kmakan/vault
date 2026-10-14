@@ -2124,10 +2124,19 @@ export default {
     // ── Вложения (логика в features/attachments.js) — тонкие делегаты,
     // имена сохранены для шаблонных биндингов (гейт check-template). ──
     downloadAttachment(attachment) { return AttachmentsFeature.downloadAttachment(this, attachment); },
-    async toggleVoiceNote(msg, attachment) { return AttachmentsFeature.toggleVoiceNote(this, msg, attachment); },
+    // ADR-001: showToast обёрнут в стрелку — метод компонента теряет this,
+//            если передать его ссылкой (внутри использует состояние).
+async toggleVoiceNote(msg, attachment) {
+      this.voicePlayingId = await AttachmentsFeature.toggleVoiceNote({
+        isAndroidClient: this.isAndroidClient, voicePlayingId: this.voicePlayingId,
+        showToast: (m, ms) => this.showToast(m, ms), t: this.t,
+      }, msg, attachment);
+    },
     async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment); },
     async downloadDodAttachment(msg, attachment) { return AttachmentsFeature.downloadDodAttachment(this, msg, attachment); },
-    openImageViewer(attachment) { return AttachmentsFeature.openImageViewer(this, attachment); },
+    // Было: AttachmentsFeature.openImageViewer(this, attachment) — обёртка без
+// логики, удалена (ADR-001).
+openImageViewer(attachment) { this.viewingImage = attachment; },
     // Открыть ссылку из меню сообщения внешним браузером (через tauri
     // opener-плагин; модульный импорт недоступен шаблону Options API,
     // поэтому тонкая обёртка-метод — шаблон зовёт openUrl).

@@ -29,18 +29,24 @@ export function downloadAttachment(ctx, attachment) {
 }
 
 // Полноэкранный просмотр изображения-вложения
-export function openImageViewer(ctx, attachment) {
-  ctx.viewingImage = attachment;
-}
+// ADR-001: openImageViewer убран как бессмысленная обёртка — он был
+// единственным присваиванием `ctx.viewingImage = attachment`. Держать
+// ради этого отдельную экспортируемую функцию значит платить лишним
+// уровнем перехода за ноль логики. App.vue присваивает прямо.
+// Если здесь появится логика (пре-load, проверка формата) — вернём
+// функцию, но уже с явными зависимостями.
 
 // ── Фоновый плеер голосовых (t_c1c44344, Android) ──────────────
-export async function toggleVoiceNote(ctx, msg, attachment) {
-  if (!ctx.isAndroidClient) return;
-  if (!attachment || !attachment.data) return;
-  if (ctx.voicePlayingId === msg.id) {
+// ADR-001: зависимости в сигнатуре. Возвращает новое значение
+// voicePlayingId — состояние принадлежит компоненту, фича только считает.
+// showToast приходит функцией: её нужно передавать связанной с
+// компонентом (App.vue оборачивает в стрелку), иначе потеряется this.
+export async function toggleVoiceNote({ isAndroidClient, voicePlayingId, showToast, t }, msg, attachment) {
+  if (!isAndroidClient) return voicePlayingId;
+  if (!attachment || !attachment.data) return voicePlayingId;
+  if (voicePlayingId === msg.id) {
     try { await invoke('voicenote_stop'); } catch (e) { console.warn('[voicenote] stop failed:', e); }
-    ctx.voicePlayingId = '';
-    return;
+    return '';
   }
   try {
     await invoke('voicenote_play', {
@@ -48,10 +54,11 @@ export async function toggleVoiceNote(ctx, msg, attachment) {
       data: attachment.data,
       mime: attachment.type || 'audio/webm',
     });
-    ctx.voicePlayingId = String(msg.id);
+    return String(msg.id);
   } catch (e) {
     console.warn('[voicenote] play failed:', e);
-    ctx.showToast(ctx.t('voice_play_failed') || 'Не удалось воспроизвести', 3000);
+    showToast(t('voice_play_failed') || 'Не удалось воспроизвести', 3000);
+    return voicePlayingId;
   }
 }
 

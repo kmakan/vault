@@ -105,8 +105,8 @@ const att0 = () => ({ name: 'a.png', type: 'image/png', data: 'DATA', isImage: t
 // вытаскивает .text, затем JSON.parse(inner) даёт {vault_dod_data:1, ref, data}.
 const dodEnvelope = (ref, data) => JSON.stringify({ vault: 1, id: 'e1', text: JSON.stringify({ vault_dod_data: 1, ref, data }) });
 
-// ── 1. downloadAttachment / openImageViewer ────────────────────
-console.log('1. downloadAttachment + openImageViewer');
+// ── 1. downloadAttachment ────────────────────
+console.log('1. downloadAttachment');
 {
   dl.hits.length = 0;
   A.downloadAttachment(makeCtx(), att0());
@@ -115,9 +115,11 @@ console.log('1. downloadAttachment + openImageViewer');
   A.downloadAttachment(makeCtx(), null);
   A.downloadAttachment(makeCtx(), { name: 'x' });
   check('нет data / нет attachment — тихий no-op', dl.hits.length === 1);
-  const ctx = makeCtx();
-  A.openImageViewer(ctx, att0());
-  check('openImageViewer кладёт вложение в ctx.viewingImage', ctx.viewingImage && ctx.viewingImage.name === 'a.png');
+  // openImageViewer удалён (ADR-001): обёртка без логики, App.vue
+  // присваивает viewingImage сам. Проверяем, что и правда удалён —
+  // иначе кто-то добавит к нему ctx молча.
+  check('openImageViewer больше не экспортируется (нет обёртки без логики)',
+    typeof A.openImageViewer !== 'function');
 }
 
 // ── 2. toggleVoiceNote: play → stop ────────────────────────────
@@ -125,16 +127,23 @@ console.log('2. toggleVoiceNote (фон. плеер, Android)');
 {
   tauri.calls.length = 0;
   const ctx = makeCtx();
-  await A.toggleVoiceNote(ctx, { id: 'm1' }, att0());
+  const deps = () => ({
+    isAndroidClient: ctx.isAndroidClient, voicePlayingId: ctx.voicePlayingId,
+    showToast: (m, ms) => ctx.showToast(m, ms), t: ctx.t,
+  });
+  ctx.voicePlayingId = await A.toggleVoiceNote(deps(), { id: 'm1' }, att0());
   check('play: voicenote_play вызван, voicePlayingId = m1',
     tauri.calls.some(c => c[0] === 'voicenote_play') && ctx.voicePlayingId === 'm1');
-  await A.toggleVoiceNote(ctx, { id: 'm1' }, att0());
+  ctx.voicePlayingId = await A.toggleVoiceNote(deps(), { id: 'm1' }, att0());
   check('повторный клик по активному треку → voicenote_stop, сброс id',
     tauri.calls.some(c => c[0] === 'voicenote_stop') && ctx.voicePlayingId === '');
   const desk = makeCtx({ isAndroidClient: false });
   tauri.calls.length = 0;
-  await A.toggleVoiceNote(desk, { id: 'm2' }, att0());
+  const deskDeps = { isAndroidClient: false, voicePlayingId: '', showToast: () => {}, t: desk.t };
+  await A.toggleVoiceNote(deskDeps, { id: 'm2' }, att0());
   check('не-Android — no-op (play не вызван)', !tauri.calls.some(c => c[0] === 'voicenote_play'));
+  check('не-Android — значение voicePlayingId не меняется',
+    deskDeps.voicePlayingId === '', deskDeps.voicePlayingId);
 }
 
 // ── 3. fetchDodAttachment: кэш / успех / ref-mismatch / not-dod ─

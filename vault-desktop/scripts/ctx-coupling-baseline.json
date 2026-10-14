@@ -1,10 +1,10 @@
 {
-  "totalCtxRefs": 1223,
-  "totalFunctions": 209,
-  "functionsWithCtx": 153,
+  "totalCtxRefs": 1217,
+  "totalFunctions": 208,
+  "functionsWithCtx": 151,
   "modules": {
     "src/features/attachments.js": {
-      "ctxRefs": 133,
+      "ctxRefs": 127,
       "fields": [
         "activeChat",
         "activeChatType",
@@ -16,7 +16,6 @@
         "email",
         "emails",
         "groupKeys",
-        "isAndroidClient",
         "isTextMime",
         "loadNotes",
         "markPending",
@@ -32,11 +31,10 @@
         "showAudioRecorder",
         "showToast",
         "t",
-        "viewingImage",
-        "voicePlayingId"
+        "viewingImage"
       ],
-      "functions": 7,
-      "functionsWithCtx": 6,
+      "functions": 6,
+      "functionsWithCtx": 4,
       "biggestCtxFn": "fetchDodAttachment"
     },
     "src/features/bounce.js": {
