@@ -25,7 +25,8 @@ const cryptoMock = {
 
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
-writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
+writeFileSync(MOCKS + '/presence.js',
+  'export const ingestSignal = (ctxArg) => { if (globalThis.__presReject) { globalThis.__presGotCtx = (ctxArg && ctxArg.__isCtx === true); return true; } return false; }');
 
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
@@ -152,6 +153,23 @@ console.log('5. stale-guard: активный чат сменился → messag
   check('stale → messages не перезаписаны (KEEP сохранён)',
     Array.isArray(ctx.messages) && ctx.messages.length === 1 && ctx.messages[0] === 'KEEP');
 }
+
+// ── 6. presence-сигнал: ingestSignal(ctx,...) без ReferenceError ──
+console.log('6. presence-сигнал через ingestSignal(ctx) — регресс this→ctx');
+{
+  apiMock.myGroupKey = null;
+  apiMock.groupMessages = [gmail('ENC:p', 'peer@x.ru', '<p@x>')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ presence: 1, ts: Date.now() });
+  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, __isCtx: true });
+  globalThis.__presReject = true;   // мок presence вернёт true (сигнал поглощён)
+  globalThis.__presGotCtx = false;
+  let threw = null;
+  try { await G.loadGroupMessages(ctx, 'G1'); } catch (e) { threw = e; }
+  check('presence без ReferenceError, ingestSignal получил ctx (не голый this)',
+    threw === null && globalThis.__presGotCtx === true && ctx.messages.length === 0);
+  globalThis.__presReject = false;
+}
+
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -125,7 +125,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             // Presence: {presence:1, ts} — heartbeat участника; активность
             // без карточки в чате (группы: peer-ключ есть только у 1:1, но
             // сигнал может прийти и по групповому каналу от старых клиентов).
-            if (PresenceFeature.ingestSignal(this, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
+            if (PresenceFeature.ingestSignal(ctx, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
               continue; // presence не рендерится как сообщение
             }
             if (obj && obj.meta === 1 && obj.avatar) {
