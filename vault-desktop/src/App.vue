@@ -955,6 +955,7 @@ import * as MessagesFeature from './features/messages.js';
 import * as MigrateFeature from './features/migrate.js';
 import * as InvitesFeature from './features/invites.js';
 import * as GroupMetaFeature from './features/group-meta.js';
+import * as ReceiptsFeature from './features/receipts.js';
 import * as SendFeature from './features/send.js';
 import * as RecoveryFeature from './features/recovery.js';
 // Durable-маркер прерванного восстановления (fix/recovery-resilience):
@@ -4229,78 +4230,8 @@ export default {
     // жёлтую точку, пока получатель не откроет чат (тогда уходила read).
     // Групповые письма здесь не обрабатываются (шифр групповым ключом —
     // decryptVault с пир-ключом не пройдёт); для групп статусы — как прежде.
-    async sendDeliveredReceipts(fetched) {
-      if (!this.isLoggedIn || !this.cryptoReady || !fetched || !fetched.length) return;
-      const myEmail = (this.email || '').toLowerCase();
-      if (!myEmail) return;
-      // Дедуп в sqlite kv_store (НЕ localStorage — он может переполниться;
-      const acc = this.email || 'anon';
-      let sentMap = {};
-      try {
-        const raw = await db.kvGet(acc, 'delivered-sent');
-        if (raw) sentMap = JSON.parse(raw);
-      } catch (e) { sentMap = {}; }
-      // Кандидаты: входящие от известных пиров (есть ключ — можно расшифровать).
-      const candidates = fetched.filter(m => {
-        const sender = this.senderEmail(m.from);
-        if (!sender || sender.includes(myEmail)) return false;
-        return !!this.peerKeys[sender];
-      });
-      if (!candidates.length) return;
-      const byFolder = {};
-      for (const m of candidates.slice(0, 30)) {
-        const f = m.folder || 'INBOX';
-        (byFolder[f] = byFolder[f] || []).push(m);
-      }
-      const acks = {}; // sender -> [msg_id]
-      for (const [folder, msgs] of Object.entries(byFolder)) {
-        const missing = msgs.filter(m => this.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
-        if (missing.length) {
-          try {
-            const bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
-            for (const m of missing) {
-              const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
-              if (b) this.cacheBody(`${folder}:${m.uid || m.id}`, b);
-            }
-          } catch (e) { continue; }
-        }
-        for (const m of msgs) {
-          const body = this.emailBodyCache[`${folder}:${m.uid || m.id}`] || '';
-          if (!body || !crypto.isEncrypted(body)) continue;
-          const sender = this.senderEmail(m.from);
-          try {
-            crypto.setPeerPublicKey(this.peerKeys[sender], this.peerPqKeys && this.peerPqKeys[sender]);
-            const text = await crypto.decryptVault(body);
-            const env = this.parseEnvelope(text);
-            // Только настоящие сообщения (envelope с id): квитанции/правки/
-            // реакции/legacy — не сообщения, на них квитанция не положена.
-            if (!env || !env.id) continue;
-            if (sentMap[env.id]) continue;
-            (acks[sender] = acks[sender] || []).push(env.id);
-            sentMap[env.id] = Date.now();
-          } catch (e) { /* не vault-письмо или чужой ключ — пропускаем */ }
-        }
-      }
-      if (!Object.keys(acks).length) return;
-      for (const [sender, ids] of Object.entries(acks)) {
-        try {
-          crypto.setPeerPublicKey(this.peerKeys[sender], this.peerPqKeys && this.peerPqKeys[sender]);
-          const content = await crypto.encryptVault(JSON.stringify({ delivered: 1, msg_ids: ids }));
-          await api.sendReadReceipt(sender, content);
-        } catch (e) {
-          console.error('sendDeliveredReceipts failed for ' + sender + ':', e);
-          // SMTP упал — снимаем метки, чтобы квитанция повторилась позже.
-          for (const id of ids) delete sentMap[id];
-        }
-      }
-      // Разрастание карты: держим не более 500 самых свежих записей.
-      const entries = Object.entries(sentMap);
-      if (entries.length > 500) {
-        entries.sort((a, b) => (b[1] || 0) - (a[1] || 0));
-        sentMap = Object.fromEntries(entries.slice(0, 500));
-      }
-      db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
-    },
+    // ── Квитанции о доставке (логика в features/receipts.js) ──
+    async sendDeliveredReceipts(fetched) { return ReceiptsFeature.sendDeliveredReceipts(this, fetched); },
     // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
