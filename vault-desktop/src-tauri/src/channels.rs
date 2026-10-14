@@ -269,6 +269,73 @@ pub fn delete_all_local() -> Result<()> {
     Ok(())
 }
 
+// ── Capability-токены канала (ADR-001: крипто-математика уходит из JS) ──
+//
+// Раньше пара токенов считалась в features/channels.js через WebCrypto
+// (crypto.subtle HMAC-SHA256) и раскладка 45-байтового токена была описана
+// в двух местах: здесь и в релее (~/vault-relay-src/src/tokens.rs,
+// channel_tokens). Две реализации одного формата — это тихий риск: правка
+// на одной стороне ломает другую и всплывает как «каналы перестали работать».
+// Источник истины теперь один — этот код, а второй экземпляр на сервере
+// запинен общими тест-векторами (см. relay_tokens_vectors_match_known_good).
+//
+// Формат v1 (45 Б), base64url без паддинга:
+//     key_id(8) ‖ scope(1) ‖ expiry(4) ‖ mac(32)
+//   mac      = HMAC-SHA256(broadcast_key, label)
+//   key_id   = первые 8 байт mac от read-подписи
+//   scope    = 'c' (read) / 'C' (write)
+//   expiry   = u32::MAX — СЕНТИНЕЛ «бессрочно». Релей отклоняет канальный
+//              токен с любым другим expiry (parse_v1: is_channel() → сверка
+//              u32::MAX), поэтому здесь он жёстко зашит, а не берётся из аргументов.
+pub fn channel_tokens(broadcast_key: &[u8; 32]) -> (String, String) {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mac_of = |label: &[u8]| -> [u8; 32] {
+        let mut mac = HmacSha256::new_from_slice(broadcast_key).expect("32B key");
+        mac.update(label);
+        mac.finalize().into_bytes().into()
+    };
+    let read_mac = mac_of(b"vault-relay-channel-read");
+    let write_mac = mac_of(b"vault-relay-channel-write");
+
+    // key_id — link-связка: write-токен принимается релеем только если его
+    // key_id == key_id очереди, а очередь адресована read-токеном.
+    let mut kid = [0u8; 8];
+    kid.copy_from_slice(&read_mac[..8]);
+
+    let pack = |byte: u8, mac: &[u8; 32]| -> String {
+        let mut raw = Vec::with_capacity(45);
+        raw.extend_from_slice(&kid);
+        raw.push(byte);
+        raw.extend_from_slice(&u32::MAX.to_be_bytes());
+        raw.extend_from_slice(mac);
+        base64url(&raw)
+    };
+    (
+        pack(b'c', &read_mac),
+        pack(b'C', &write_mac),
+    )
+}
+
+fn base64url(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+}
+
+/// Tauri-обёртка: hex-ключ канала (как приходит из JS) → пара токенов.
+#[tauri::command]
+pub fn channel_tokens_cmd(key_hex: String) -> Result<(String, String), String> {
+    let trimmed = key_hex.trim();
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("bad channel key: expected 64 hex chars".into());
+    }
+    let mut key = [0u8; 32];
+    hex::decode_to_slice(trimmed, &mut key).map_err(|e| format!("bad channel key: {e}"))?;
+    Ok(channel_tokens(&key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +393,97 @@ mod tests {
         // Delete
         delete_channel(&ch.id).unwrap();
         assert!(load_channels().unwrap().get(&ch.id).is_none());
+    }
+    // ── Общие тест-векторы клиента и релея ───────────────────────────
+    //
+    // Эталон зафиксирован сверкой с ~/vault-relay-src/src/tokens.rs
+    // (функция channel_tokens, ревизия 14.10). Ключ [7u8; 32] — тот же,
+    // что в релеевом channel_tokens_roundtrip, так что векторы обязаны
+    // совпасть. Если кто-то поменяет раскладку на одной стороне — тест
+    // на этой покраснеет, и «каналы перестали работать» не станет
+    // сюрпризом в проде.
+    const VEC_KEY: [u8; 32] = [7u8; 32];
+    const VEC_READ: &str =
+        "KNCVvmo4Tz1j_____yjQlb5qOE89lbysuEHHW-wSbSJVc4W5gCAIM5cRNzG9";
+    const VEC_WRITE: &str =
+        "KNCVvmo4Tz1D_____-_z_qnZjNcGJrfF91VU_0h3g96hTAI2uR70lQYl9LNh";
+
+    /// Копия функции релея, дословно. Живёт здесь как исполняемый
+    /// «контракт»: пока эта копия и channel_tokens дают один результат на
+    /// эталонном ключе, раскладка не разошлась.
+    fn relay_reference_impl(broadcast_key: &[u8; 32]) -> (String, String) {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mac_of = |label: &[u8]| -> [u8; 32] {
+            let mut mac = HmacSha256::new_from_slice(broadcast_key).expect("32B key");
+            mac.update(label);
+            mac.finalize().into_bytes().into()
+        };
+        let read_mac = mac_of(b"vault-relay-channel-read");
+        let write_mac = mac_of(b"vault-relay-channel-write");
+        let pack = |kid: u64, byte: u8, mac: &[u8; 32]| -> String {
+            let mut raw = Vec::with_capacity(45);
+            raw.extend_from_slice(&kid.to_be_bytes());
+            raw.push(byte);
+            raw.extend_from_slice(&u32::MAX.to_be_bytes());
+            raw.extend_from_slice(mac);
+            base64url(&raw)
+        };
+        let read_kid = u64::from_be_bytes(read_mac[..8].try_into().expect("8"));
+        (pack(read_kid, b'c', &read_mac), pack(read_kid, b'C', &write_mac))
+    }
+
+    #[test]
+    fn channel_tokens_match_shared_vectors() {
+        let (rd, wr) = channel_tokens(&VEC_KEY);
+        assert_eq!(rd, VEC_READ, "read-токен разошёлся с эталоном");
+        assert_eq!(wr, VEC_WRITE, "write-токен разошёлся с эталоном");
+    }
+
+    #[test]
+    fn channel_tokens_match_relay_reference_impl() {
+        assert_eq!(
+            channel_tokens(&VEC_KEY),
+            relay_reference_impl(&VEC_KEY),
+            "клиент и релей разошлись в раскладке токена"
+        );
+    }
+
+    #[test]
+    fn channel_token_layout_is_exact() {
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let read_raw = enc.decode(VEC_READ).expect("b64url");
+        for (tok, scope) in [(VEC_READ, b'c'), (VEC_WRITE, b'C')] {
+            let raw = enc.decode(tok).expect("b64url");
+            assert_eq!(raw.len(), 45, "раскладка должна быть 45 байт");
+            assert_eq!(raw[8], scope);
+            assert_eq!(&raw[9..13], &u32::MAX.to_be_bytes(), "sentinel expiry");
+            assert_eq!(
+                raw[..8],
+                read_raw[..8],
+                "key_id обоих токенов = первые 8 байт mac подписи read"
+            );
+        }
+    }
+
+    #[test]
+    fn channel_tokens_are_deterministic_and_key_dependent() {
+        assert_eq!(channel_tokens(&VEC_KEY).0, channel_tokens(&VEC_KEY).0);
+        assert_ne!(channel_tokens(&VEC_KEY).0, channel_tokens(&[8u8; 32]).0);
+    }
+
+    #[test]
+    fn channel_tokens_cmd_validates_key_hex() {
+        assert!(channel_tokens_cmd("zz".into()).is_err(), "не-hex");
+        assert!(channel_tokens_cmd("07".into()).is_err(), "короткий ключ");
+        let hex = hex::encode(VEC_KEY);
+        let (rd, wr) = channel_tokens_cmd(hex.clone()).expect("валидный ключ");
+        assert_eq!((rd.as_str(), wr.as_str()), (VEC_READ, VEC_WRITE));
+        // Пробелы вокруг — норма (ключ приходит из полей ввода).
+        let (rd2, _) = channel_tokens_cmd(format!("  {hex}  ")).expect("trim");
+        assert_eq!(rd2, VEC_READ);
     }
 
     #[test]

@@ -1266,6 +1266,13 @@ fn groups_rename(group_id: String, new_name: String) -> Result<groups::Group, St
 
 // ── Broadcast channels (M2, docs/design/channels-protocol.md) ─────────────
 
+/// Пара capability-токенов канала (read/write). Логика — в channels.rs,
+/// которая побайтово совпадает с релеем; здесь только мост к JS.
+#[tauri::command]
+fn channels_tokens(key_hex: String) -> Result<(String, String), String> {
+    channels::channel_tokens_cmd(key_hex)
+}
+
 #[tauri::command]
 fn channels_load() -> Result<Vec<channels::Channel>, String> {
     channels::load_channels()
@@ -2066,6 +2073,7 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            channels_tokens,
             channels_load,
             channels_create,
             channels_import,

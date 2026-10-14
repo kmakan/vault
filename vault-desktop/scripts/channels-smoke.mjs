@@ -22,11 +22,32 @@ writeFileSync(path.join(MOCKS, 'crypto.js'), `
 export default { encryptWithGroupKey: async (plain, key) => 'ENC(' + key.slice(0, 4) + ')' + plain };
 `);
 // tauri core-мок (invoke)
+// Мок invoke. channels_tokens — НЕ заглушка: считаем токены независимой
+// реализацией на node:crypto. Это отдельный оракул — если клиентский Rust,
+// этот мок и зафиксированные golden-векторы разойдутся, тест это увидит.
+// Раньше JS счита HMAC сам, и «золотом» служили значения, вычисленные тем же
+// кодом (то есть тест ничего не проверял).
 writeFileSync(path.join(MOCKS, 'core.js'), `
+import { createHmac } from 'node:crypto';
+function channelTokensOracle(keyHex) {
+  const key = Buffer.from(keyHex.trim(), 'hex');
+  if (key.length !== 32) throw new Error('bad channel key');
+  const rd = createHmac('sha256', key).update('vault-relay-channel-read').digest();
+  const wr = createHmac('sha256', key).update('vault-relay-channel-write').digest();
+  const kid = rd.subarray(0, 8);
+  const pack = (scope, mac) => Buffer.concat([
+    kid, Buffer.from([scope]),
+    Buffer.from([0xFF, 0xFF, 0xFF, 0xFF]), // sentinel expiry u32::MAX
+    mac,
+  ]).toString('base64url');
+  return [pack(0x63, rd), pack(0x43, wr)]; // 'c' read, 'C' write
+}
 export const invoke = async (cmd, args) => {
   if (cmd === 'channels_load') return [];
+  if (cmd === 'channels_tokens') return channelTokensOracle(args.keyHex);
   throw new Error('unexpected invoke ' + cmd);
 };
+export { channelTokensOracle };
 `);
 
 // Подменяем спецификаторы через package.json imports нельзя (это не пакет),

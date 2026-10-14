@@ -18,7 +18,29 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/channels-e2e-mocks';
 mkdirSync(MOCKS, { recursive: true });
 writeFileSync(path.join(MOCKS, 'api.js'), 'export const db = { kvGet: async () => null, kvSet: async () => {} }; export default { sendEmail: async () => ({ ok: true }) };');
-writeFileSync(path.join(MOCKS, 'core.js'), 'export const invoke = async () => null;');
+// Мок invoke: channels_tokens считается независимо на node:crypto (не
+// заглушка) — иначе e2e проверял бы только то, что вернулся null.
+// Формат: kid(8) ‖ scope(1) ‖ 0xFFFFFFFF ‖ mac(32), mac = HMAC-SHA256(key,label).
+writeFileSync(path.join(MOCKS, 'core.js'), `
+import { createHmac } from 'node:crypto';
+function channelTokensOracle(keyHex) {
+  const key = Buffer.from(String(keyHex || '').trim(), 'hex');
+  if (key.length !== 32) throw new Error('bad channel key');
+  const rd = createHmac('sha256', key).update('vault-relay-channel-read').digest();
+  const wr = createHmac('sha256', key).update('vault-relay-channel-write').digest();
+  const kid = rd.subarray(0, 8);
+  const pack = (scope, mac) => Buffer.concat([
+    kid, Buffer.from([scope]),
+    Buffer.from([0xFF, 0xFF, 0xFF, 0xFF]),
+    mac,
+  ]).toString('base64url');
+  return [pack(0x63, rd), pack(0x43, wr)];
+}
+export const invoke = async (cmd, args) => {
+  if (cmd === 'channels_tokens') return channelTokensOracle(args.keyHex);
+  return null;
+};
+`);
 let src = readFileSync(ROOT + '/src/features/channels.js', 'utf8')
   .replace("from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`)
   .replace("from '../api.js'", `from "${MOCKS}/api.js"`);

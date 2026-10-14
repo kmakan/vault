@@ -137,35 +137,26 @@ export function buildHelloPayload(channelId) {
 // write token (cross-channel = 403 on the server).
 
 const _chanTokCache = new Map(); // keyHex → {read, write}
-const b64url = (bytes) => {
-  let s = '';
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
 
+// ADR-001: HMAC-SHA256 и раскладка 45-байтового capability-токена уехали в
+// Rust (src-tauri/src/channels.rs::channel_tokens). Раньше считались здесь
+// через crypto.subtle — это была единственная реальная крипто-математика в
+// JS, и по итогу раскладка была описана в двух местах: здесь и в релее
+// (~/vault-relay-src/src/tokens.rs). Правка одной стороны ломала другую
+// тихо и всплывала как «каналы перестали работать». Теперь источник истины
+// один, а совпадение с релеем запинено общими тест-векторами в Rust.
+//
+// Токены ДЕТЕРМИНИРОВАНЫ по ключу канала и никогда не меняются: смена токена
+// = смена адреса очереди, и подписчики со старым адресом молча теряют канал
+// (инцидент 12.10). Поэтому кэш здесь не «оптимизация», а защита от лишних
+// IPC-вызовов.
 export async function channelTokens(keyHex) {
-  const hit = _chanTokCache.get(keyHex);
+  const key = (keyHex || '').trim();
+  const hit = _chanTokCache.get(key);
   if (hit) return hit;
-  if (!/^[0-9a-fA-F]{64}$/.test(keyHex || '')) throw new Error('bad channel key');
-  const raw = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) raw[i] = parseInt(keyHex.substr(i * 2, 2), 16);
-  const macOf = async (label) => {
-    const k = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sig = await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(label));
-    return new Uint8Array(sig);
-  };
-  const rd = await macOf('vault-relay-channel-read');
-  const wr = await macOf('vault-relay-channel-write');
-  const pack = (scopeByte, mac) => {
-    const buf = new Uint8Array(45);
-    buf.set(rd.subarray(0, 8), 0);            // kid = read mac[:8]
-    buf[8] = scopeByte.charCodeAt(0);
-    buf[9] = buf[10] = buf[11] = buf[12] = 0xFF; // sentinel expiry (u32::MAX)
-    buf.set(mac, 13);
-    return b64url(buf);
-  };
-  const out = Object.freeze({ read: pack('c', rd), write: pack('C', wr) });
-  _chanTokCache.set(keyHex, out);
+  const [read, write] = await invoke('channels_tokens', { keyHex: key });
+  const out = Object.freeze({ read, write });
+  _chanTokCache.set(key, out);
   return out;
 }
 
