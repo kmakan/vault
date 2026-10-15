@@ -944,6 +944,7 @@ import * as ReportContent from './features/report-content.js';
 import * as PinWire from './features/group-pin-wire.js';
 import * as Geo from './geo.js';
 import * as Autoclean from './features/autoclean.js';
+import * as ContactsDelete from './features/contacts-delete.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -4478,28 +4479,22 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async deleteContact(email) {
       if (!(await confirm(this.t('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
       try {
-        // удаление СТРОГО ЛОКАЛЬНОЕ — никаких писем
-        // второй стороне (Contact::delete в почтовый мессенджер тоже локальный).
-        await crypto.removePeerKey(email);
-        // Старые handshake-письма от удалённого контакта (invite/accept)
-        // помечаем обработанными по uid — не воскрешат контакт. НОВЫЕ
-        // приглашения от него после удаления доходят (uid не помечен) —
-        // повторное добавление тривиально, как Contact::create в DC.
-        await api.markContactHandshakeDone(email);
-        // Если мы приглашали этого отправителя — снимаем, чтобы его старое
-        // accept-письмо не авто-добавило контакт заново.
-        await api.removeInvitedSender(email);
-        // Чистим и in-memory stubs api.js — иначе контакт «не удаляется»
-        // до перезапуска (getContacts() мержит stubs с диском).
-        await api.removeContact(email);
+        // Четыре шага и их порядок — в features/contacts-delete.js (ADR-003
+        // Этап 3, партия 14). Порядок содержателен: снести ключ, пометить старые
+        // handshake по uid (НОВЫЕ приглашения должны доходить), снять наше
+        // приглашение, убрать stub. Отказ любого шага останавливает остальные —
+        // полуудалённый контакт хуже неудалённого.
+        await ContactsDelete.deleteContactLocally(email);
         delete this.peerKeys[email];
         delete this.peerKeysLoaded[email];
-        if (this.activeChat === email) {
+        const st = ContactsDelete.contactRemovalState(email, this);
+        if (st.closeChat) {
           this.activeChat = null;
-          this.activeChatType = 'chat';
+          this.activeChatType = st.activeChatType;
         }
         await this.loadContacts();
       } catch (e) {
+        // Состояние НЕ применяется: ключ мог снестись, а запись остаться.
         alert('Failed to delete contact: ' + e.message);
       }
     },
