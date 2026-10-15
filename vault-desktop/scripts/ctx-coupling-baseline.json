@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 1221,
-  "totalFunctions": 212,
-  "functionsWithCtx": 151,
+  "totalCtxRefs": 1222,
+  "totalFunctions": 234,
+  "functionsWithCtx": 153,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 127,
@@ -36,6 +36,13 @@
       "functions": 6,
       "functionsWithCtx": 4,
       "biggestCtxFn": "fetchDodAttachment"
+    },
+    "src/features/autoclean.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 6,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/bounce.js": {
       "ctxRefs": 0,
@@ -101,6 +108,13 @@
       "functions": 16,
       "functionsWithCtx": 3,
       "biggestCtxFn": "sendChannelPost"
+    },
+    "src/features/contacts-delete.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 2,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/contacts-load.js": {
       "ctxRefs": 0,
@@ -249,6 +263,13 @@
       "functionsWithCtx": 5,
       "biggestCtxFn": "replyHeal"
     },
+    "src/features/group-meta-broadcast.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 4,
+      "functionsWithCtx": 2,
+      "biggestCtxFn": "buildRenameMetaFields"
+    },
     "src/features/group-meta.js": {
       "ctxRefs": 11,
       "fields": [
@@ -264,6 +285,13 @@
       "functions": 1,
       "functionsWithCtx": 1,
       "biggestCtxFn": "syncGroupAvatarsFromMeta"
+    },
+    "src/features/group-pin-wire.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 4,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/groups-clone.js": {
       "ctxRefs": 0,
@@ -417,6 +445,13 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
+    "src/features/local-db-init.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 2,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
     "src/features/members.js": {
       "ctxRefs": 22,
       "fields": [
@@ -537,7 +572,7 @@
       "biggestCtxFn": "isEnabled"
     },
     "src/features/profiles.js": {
-      "ctxRefs": 66,
+      "ctxRefs": 67,
       "fields": [
         "contactCardEmail",
         "contacts",
@@ -594,6 +629,13 @@
       "functions": 1,
       "functionsWithCtx": 1,
       "biggestCtxFn": "sendDeliveredReceipts"
+    },
+    "src/features/recovery-escrow.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/recovery-session.js": {
       "ctxRefs": 0,
@@ -682,6 +724,13 @@
       "functions": 12,
       "functionsWithCtx": 11,
       "biggestCtxFn": "startFastFetchTimer"
+    },
+    "src/features/report-content.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 3,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/send.js": {
       "ctxRefs": 116,

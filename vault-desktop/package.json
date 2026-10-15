@@ -26,6 +26,7 @@
     "smoke:geo": "node scripts/geo-smoke.mjs",
     "smoke:autoclean": "node scripts/autoclean-smoke.mjs",
     "smoke:contacts-delete": "node scripts/contacts-delete-smoke.mjs",
+    "smoke:recovery-escrow": "node scripts/recovery-escrow-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "smoke:adr002-e2e": "node scripts/adr002-e2e.mjs"

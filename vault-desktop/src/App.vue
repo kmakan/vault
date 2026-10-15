@@ -945,6 +945,7 @@ import * as PinWire from './features/group-pin-wire.js';
 import * as Geo from './geo.js';
 import * as Autoclean from './features/autoclean.js';
 import * as ContactsDelete from './features/contacts-delete.js';
+import * as RecoveryEscrow from './features/recovery-escrow.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -3475,27 +3476,20 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async onRecoveryCreated({ mnemonic }) {
       console.log('[recovery] onRecoveryCreated, words len =', mnemonic ? mnemonic.split(/\s+/).length : 0);
       try {
-        const wrappedJson = await crypto.recoveryWrapBackup(mnemonic);
-        const body = await crypto.recoveryBuildEscrowEmail(wrappedJson);
-        console.log('[recovery] escrow body =', body.slice(0, 120));
-        const res = await api.sendEmail(this.email, {
-          to: this.email,
-          subject: '',
-          body,
-        });
-        console.log('[recovery] sendEmail res =', JSON.stringify(res));
-        if (res && res.ok === false) throw new Error('SMTP refused');
+        // Отправка и проверка результата — в features/recovery-escrow.js
+        // (ADR-003 Этап 3, партия 15). Ключ ТОСТА ТАМ ЖЕ БЫЛ ЗАВЕДЁН НО НЕ
+        // ЧИТАЛСЯ: русский текст был продублирован прямо здесь, и англоязычные
+        // с китайскими получали по-русски самое важное предупреждение
+        // приложения — про то, что через месяц ключ удалят вместе со спамом.
+        const r = await RecoveryEscrow.sendEscrowEmail(this.email, mnemonic, 'recovery_spam_toast');
         // Провайдеры кладут служебные письма в Спам, а Gmail удаляет спам
-        // через ~30 дней — тогда эскроу пропадёт. Сразу объясняем пользователю.
-        this.showToast(
-          'Ключ сохранён в ящик. ПРОВЕРЬТЕ СПАМ: если письмо от Vault попало туда — переложите его во «Входящие», иначе оно будет удалено',
-          10000,
-        );
+        // через ~30 дней — тогда эскроу пропадёт.
+        this.showToast(this.t(r.spamToastKey), 10000);
         // Фоново определяем фактическую папку письма и предупреждаем точечно.
-        this.locateEscrow(wrappedJson);
+        this.locateEscrow(r.wrappedJson);
       } catch (e) {
         console.error('escrow send failed:', e);
-        this.showToast('Не удалось отправить эскроу-письмо: ' + (e.message || e));
+        this.showToast((this.t('recovery_escrow_failed') || 'Не удалось отправить эскроу-письмо: ') + (e.message || e));
       }
     },
     // Ищем только что отправленное эскроу-письмо (совпадение salt+nonce+wrapped)

@@ -132,7 +132,10 @@ export async function setBio(ctx, text) {
 
 export async function onBioSave(ctx, text) {
   await setBio(ctx, text);
-  ctx.showToast('Профиль сохранён — статус уйдёт контактам');
+  // Текст был зашит по-русски, хотя ключ settings_profile_saved есть во всех
+  // трёх локалях и означает ровно то же. Англоязычные и китайские пользователи
+  // видели подтверждение сохранения на русском (ADR-003 партия 15).
+  ctx.showToast(ctx.t('settings_profile_saved'));
 }
 
 // «Сохранить профиль»: ОДНО письмо с именем+аватаром+статусом и

@@ -560,6 +560,7 @@ export default {
   settings_restart_hint: '。请重新启动应用。',
   recovery_spam_toast: '恢复密钥已保存到您的邮箱。请检查垃圾邮件：如果 Vault 的邮件进入了垃圾邮件，请将其移至收件箱，否则将被删除',
   recovery_spam_folder: '托管信件位于文件夹：',
+  recovery_escrow_failed: '无法发送恢复托管邮件：',
   recovery_spam_move: '。请将其移至收件箱——提供商会删除垃圾邮件（Gmail 约 30 天后）。',
   recovery_moved_toast: '托管信件已移至收件箱。请勿删除此邮件——它用于恢复您的账户。',
   recovery_move_fail: '无法自动将信件移至收件箱。请手动将其移至收件箱。请勿删除此邮件——它用于恢复您的账户。',

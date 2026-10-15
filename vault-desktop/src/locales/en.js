@@ -570,6 +570,7 @@ export default {
   settings_restart_hint: '. Restart the app.',
   recovery_spam_toast: 'Recovery key saved to your mailbox. CHECK SPAM: if the Vault letter landed there, move it to Inbox, otherwise it will be deleted',
   recovery_spam_folder: 'Escrow letter found in folder: ',
+  recovery_escrow_failed: 'Failed to send the recovery escrow email: ',
   recovery_spam_move: '. Move it to Inbox — providers delete spam (Gmail after ~30 days).',
   recovery_moved_toast: 'Escrow letter moved to Inbox. Do NOT delete this letter — it is needed to restore your account.',
   recovery_move_fail: 'Could not move the letter to Inbox automatically. Please move it to Inbox manually. Do NOT delete this letter — it is needed to restore your account.',
