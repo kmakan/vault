@@ -943,6 +943,7 @@ import * as AvatarImage from './avatar-image.js';
 import * as ReportContent from './features/report-content.js';
 import * as PinWire from './features/group-pin-wire.js';
 import * as Geo from './geo.js';
+import * as Autoclean from './features/autoclean.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -3786,29 +3787,29 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // 1) SQL-purge конвертов/тел/чат-кэшей старше cutoff (db_autoclean_purge);
     // 2) синхронизация памяти: this.emails и emailBodyCache без старых;
     // 3) повтор при каждом входе (mounted) — не только по клику в настройках.
+    // ADR-003 Этап 3, партия 13: правила отсечения и чистка зеркал — в
+    // features/autoclean.js. Там же три опасных места, размазанных раньше по
+    // этому методу: даты в RFC 2822 считаются в JS, письма без даты не трогаются,
+    // а письма без идентификатора исключаются — ключ 'INBOX:' в purge удалил бы
+    // по префиксу больше, чем задумано.
     async runAutoclean(period) {
       const p = period || (await db.kvGet('anon', 'autoclean-period')) || 'off';
       if (p === 'off' || !this.isLoggedIn) return;
-      const days = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 }[p];
-      if (!days) return;
-      const cutoff = Date.now() - days * 86400000;
+      if (!Autoclean.periodDaysOf(p)) return;
       try {
         const acc = this.email || 'anon';
-        // Даты считаем ЗДЕСЬ: колонка date — сырой заголовок Date (RFC 2822),
-        // в SQL new Date() недоступен. Письма без даты не трогаем.
-        const stale = this.emails.filter(m => m.date && new Date(m.date).getTime() < cutoff);
-        if (!stale.length) return;
-        const keys = stale.map(m => (m.folder || 'INBOX') + ':' + String(m.uid ?? m.id ?? ''))
-          .filter(k => !k.endsWith(':'));
-        const purged = await db.autocleanPurge(acc, JSON.stringify(keys));
-        // Память зеркалим тем же списком.
-        const staleSet = new Set(keys);
-        this.emails = this.emails.filter(m =>
-          !staleSet.has((m.folder || 'INBOX') + ':' + String(m.uid ?? m.id ?? '')));
-        for (const k of keys) delete this.emailBodyCache[k];
-        this.bodyCacheOrder = this.bodyCacheOrder.filter(k => staleSet.has(k) === false);
+        const cutoff = Autoclean.autocleanCutoff(p);
+        const r = await Autoclean.runPurge(acc, {
+          emails: this.emails,
+          emailBodyCache: this.emailBodyCache,
+          bodyCacheOrder: this.bodyCacheOrder,
+        }, cutoff);
+        if (!r.applied) return;
+        this.emails = r.applied.emails;
+        this.emailBodyCache = r.applied.emailBodyCache;
+        this.bodyCacheOrder = r.applied.bodyCacheOrder;
         this.persistBodyCache();
-        console.info('[autoclean] purged', purged, 'bodies /', keys.length, 'msgs, period', p);
+        console.info('[autoclean] purged', r.purged, 'bodies /', r.keys.length, 'msgs, period', p);
       } catch (e) {
         console.warn('[autoclean] failed:', e);
       }
