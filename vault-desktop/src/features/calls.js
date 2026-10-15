@@ -20,6 +20,9 @@ import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
 
+// Re-export для backward-compat (App.vue / smoke ссылаются через C.SIGNAL_RESEND_DELAYS_MS).
+export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
+
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
 // Инцидент 12.10.2026. Раньше call_request повторялся каждые 15с все 5 минут
 // гудков (~20 писем на один звонок), а call_accept — каждые 10с до соединения.
@@ -28,7 +31,10 @@ import { saveHistory, loadHistory } from '../history.js';
 // SPAM»), и РЕЗЕРВНЫЙ ПОЧТОВЫЙ КАНАЛ УМЕР — а он единственный, когда релей
 // недоступен. Повторы нужны против редкой транзитной потери (SMTP принял, но
 // письмо не дошло) — 4 попытки её покрывают. Лавину — нет.
-export const SIGNAL_RESEND_DELAYS_MS = [5000, 15000, 45000, 120000];
+//
+// Таймер/попытки — владелец createCallResender() (call-resend.js), а не в App.data:
+// ctx.callResender  — для accept (call_accept retrans);
+// ctx.callRequestResender — для исходящего call_request retrans.
 
 // ── S5-2: решение, принятое кнопкой системного уведомления ──────
 // Сценарий: приложение закрыто, звонок пришёл по FCM, JS о нём не знает
@@ -384,7 +390,8 @@ export async function handleCallSignal(ctx, sig, from) {
         clearTimeout(ctx.session.callRingTimer);
         ctx.session.setCallRingTimer(null);
         // Гудки кончились — затухающие повторы call_request больше не нужны.
-        stopSignalTimer(ctx, 'callResendTimer');
+        // Таймер — ctx.callRequestResender (createCallResender, call-resend.js).
+        ctx.callRequestResender.stop();
         // Гудки исходящего → чайм соединения. stop не нужен
         // play сам останавливает предыдущий звук (Rust/HTML5).
         playCallSound(ctx, 'connect', false);
@@ -549,16 +556,10 @@ export async function startCall(ctx) {
   // Затухающие повторы: [5с, 15с, 45с, 120с] = не больше 4 писем на вызов
   // (было ~20 — каждые 15с все 5 минут; см. SIGNAL_RESEND_DELAYS_MS).
   // Останавливается в hangup/cancelCall/приёме call_accept.
-  scheduleSignalResend(
-    ctx,
-    'callResendTimer',
+  // Таймер — ctx.callRequestResender (createCallResender, call-resend.js).
+  ctx.callRequestResender.start(
     () => ctx.session.callState === 'outgoing_ringing' && !!ctx.session.currentCall
       && ctx.session.currentCall.call_id === call_id,
-    // Offer внутри — ретрансляция несёт и его.
-    // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-    // Релей-копия НЕ повторяется (viaRelay=false): конверт уже лежит в
-    // relay-очереди получателя с первого отправления — повтор только жёг
-    // суточный лимит и плодил ntfy-пуши.
     () => sendCallEnvelope(ctx, peer, {
       type: 'call_request', call_id, sdp: offerSdp,
       kemct: ctx.session.pendingKemct || undefined,
@@ -689,9 +690,9 @@ export async function hangup(ctx, reason) {
   }
   clearTimeout(ctx.session.callRingTimer);
   ctx.session.setCallRingTimer(null);
-  // Ретрансляция call_request — тоже останавливаем.
-  stopSignalTimer(ctx, 'callResendTimer');
-  // Ретрансляция call_accept/answer.
+  // Ретрансляция call_request — тоже останавливаем (ctx.callRequestResender).
+  ctx.callRequestResender.stop();
+  // Ретрансляция call_accept/answer (ctx.callResender).
   stopSignalResend(ctx);
   // Предохранитель «Соединение…».
   clearTimeout(ctx.session.mediaFallbackTimer);
@@ -932,11 +933,12 @@ export function toggleSpeaker({ callSpeaker, currentCall }) {
 // состоянию (call_accept — только в outgoing_ringing, call_sdp —
 // только в active с тем же call_id).
 export function startSignalResend(ctx, peer, payload, call_id) {
-  scheduleSignalResend(
-    ctx,
-    '_signalResendTimer',
-    () => ctx.session.callState === 'active' && !!ctx.session.currentCall
-      && ctx.session.currentCall.call_id === call_id && !ctx.session.callMediaConnected,
+  if (!ctx.session.currentCall || ctx.session.currentCall.call_id !== call_id) return;
+  // Таймер/попытки — ctx.callResender (createCallResender, call-resend.js).
+  // shouldContinue гасит ресенд при смене звонка/call_state/media-connected.
+  ctx.callResender.start(
+    () => ctx.session.currentCall && ctx.session.currentCall.call_id === call_id
+      && ctx.session.callState === 'active' && !ctx.session.callMediaConnected,
     // Релей-копия уже доставлена первым отправлением — повтор только
     // почтой (лимит + лишние пуши).
     () => sendCallEnvelope(ctx, peer, payload, { viaRelay: false })
@@ -945,37 +947,7 @@ export function startSignalResend(ctx, peer, payload, call_id) {
 }
 
 export function stopSignalResend(ctx) {
-  stopSignalTimer(ctx, '_signalResendTimer');
-}
-
-// Планировщик повторов ОДНОГО сигнала с затухающей паузой: одна попытка =
-// одно письмо, всего не больше SIGNAL_RESEND_DELAYS_MS.length. shouldContinue()
-// проверяется перед каждым повтором (звонок мог принять/завершиться/соединиться).
-// Идентификатор таймера лежит в ctx[timerKey] — штатное завершение звонка
-// гасит его через stopSignalTimer (hangup/cancelCall/stopSignalResend).
-function scheduleSignalResend(ctx, timerKey, shouldContinue, send) {
-  stopSignalTimer(ctx, timerKey);
-  let attempt = 0;
-  const arm = () => {
-    const delay = SIGNAL_RESEND_DELAYS_MS[attempt];
-    if (delay === undefined) return; // попытки исчерпаны — молчим, ждём собеседника
-    attempt += 1;
-    ctx[timerKey] = setTimeout(async () => {
-      ctx[timerKey] = null;
-      if (!shouldContinue()) return;
-      try { await send(); }
-      catch (e) { console.warn('[call] signal resend failed:', e && e.message || e); }
-      arm();
-    }, delay);
-  };
-  arm();
-}
-
-function stopSignalTimer(ctx, timerKey) {
-  if (ctx[timerKey]) {
-    clearTimeout(ctx[timerKey]);
-    ctx[timerKey] = null;
-  }
+  ctx.callResender.stop();
 }
 
 // Повтор терминального сигнала (call_end/call_cancel/call_reject):

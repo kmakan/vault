@@ -982,6 +982,7 @@ import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
 import * as RelayFeature from './features/relay.js';
+import { createCallResender } from './features/call-resend.js';
 import * as CallsFeature from './features/calls.js';
 // S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
 // не был готов — очередь применяется к следующему call_request.
@@ -1097,9 +1098,13 @@ export default {
       // ── Звонки (M3, feature/calls): состояние вынесено в callSession (ADR-004 C).
       // Эти поля — не data(), а computed-прокси на this.callSession.*: calls.js и
       // шаблон пишут this.X, а запись идёт через session.setX() → Vue Proxy.
-      // callVideoOn/callResendTimer/callStartedAt — App-only, остаются в data().
+      // callVideoOn/callStartedAt — App-only, остаются в data().
       callVideoOn: false,
-      callResendTimer: null,
+      // signal-resend: таймер/попытки вынесены в owner createCallResender
+      // (call-resend.js) — ADR-004 F. calls.js делегирует через ctx.callResender
+      // (ресенд call_accept/answer) и ctx.callRequestResender (call_request).
+      callResender: createCallResender(),
+      callRequestResender: createCallResender(),
       // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       // ecoMode — теперь proxy на relay-store (ADR-004 A13).

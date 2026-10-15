@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createCallSession } from '../src/features/call-session.js';
+import { createCallResender } from '../src/features/call-resend.js';
 // семя callSession из перегруженных полей makeCtx (ADR-004 C/D)
 const CALL_SEED_KEYS = [
   'callState', 'currentCall', 'lastCallId', 'callMuted', 'callSpeaker',
@@ -150,9 +151,10 @@ function makeCtx(over = {}) {
     // звонковое состояние — вынесено в ctx.session (createCallSession).
     // seed из параметров makeCtx (callState/currentCall/…) — через toSessionSeed.
     session: createCallSession(toSessionSeed(over)),
-    // App-only (не call-session): таймер ресенда сигналов / ширина звонка.
-    callResendTimer: null,
-    _signalResendTimer: null,
+    // App-only (не call-session): signal-resend таймеры — owner createCallResender
+    // (ADR-004 F). callResender — ресенд call_accept/answer; callRequestResender — call_request.
+    callResender: createCallResender(),
+    callRequestResender: createCallResender(),
     callStartedAt: 0,
     callPeerName: 'Пир',
     // чат-контекст
@@ -349,10 +351,10 @@ console.log('5. lifecycle');
   const cid = ctx.session.currentCall && ctx.session.currentCall.call_id;
   check('startCall → outgoing_ringing + hasLocalOffer', ctx.session.callState === 'outgoing_ringing' && ctx.session.currentCall.hasLocalOffer === true);
   check('call_request ушел с offer+kemct', cryptoMock.encVault.some(p => { try { const b = JSON.parse(p); return b.type === 'call_request' && b.sdp === 'OFFER_SDP' && b.kemct === 'KEMCT'; } catch (e) { return false; } }));
-  check('ринг-таймер 300с + 1-й повтор через 5с (затухание, не 15с-лавина)', timers.get(ctx.session.callRingTimer).ms === 300000 && timers.get(ctx.callResendTimer).ms === 5000);
+  check('ринг-таймер 300с + 1-й повтор через 5с (затухание, не 15с-лавина)', timers.get(ctx.session.callRingTimer).ms === 300000 && timers.get(ctx.callRequestResender.timer).ms === 5000);
   // ретрансляция тикает (viaRelay=false)
   relayMock.pubs.length = 0;
-  await fireTimer(ctx.callResendTimer);
+  await fireTimer(ctx.callRequestResender.timer);
   check('ретрансляция call_request — только почтой', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length >= 1 && relayMock.pubs.length === 0);
   // таймаут гудков
   await fireTimer(ctx.session.callRingTimer);
@@ -427,30 +429,30 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   ctx.session.setCallMediaConnected(false);
   apiMock.calls.length = 0;
   C.startSignalResend(ctx, 'peer@x.ru', { type: 'call_accept', call_id: 'q1' }, 'q1');
-  const st = timers.get(ctx._signalResendTimer);
+  const st = timers.get(ctx.callResender.timer);
   check('resend-таймер: 1-я пауза 5с', st && st.ms === 5000);
   check('лест revпов: [5с,15с,45с,120с] — не больше 4 писем на вызов',
     JSON.stringify(C.SIGNAL_RESEND_DELAYS_MS) === JSON.stringify([5000, 15000, 45000, 120000]),
     C.SIGNAL_RESEND_DELAYS_MS);
-  await fireTimer(ctx._signalResendTimer);
+  await fireTimer(ctx.callResender.timer);
   check('resend тик повторяет сигнал почтой', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
   // media connected → resend самоостанавливается
   ctx.session.setCallMediaConnected(true);
-  await fireTimer(ctx._signalResendTimer);
-  check('media connected → resend остановлен', ctx._signalResendTimer === null);
+  await fireTimer(ctx.callResender.timer);
+  check('media connected → resend остановлен', ctx.callResender.timer === null);
   // ЗАТУХАНИЕ (инцидент 12.10.2026): лавина писем сожгла почтовый резерв
   // (Яндекс: 554 5.7.1 SPAM). Максимум 4 повтора, дальше паузы нет.
   const cap = makeCtx({ currentCall: { call_id: 'cap1', peer: 'peer@x.ru' }, callState: 'active', callMediaConnected: false });
   apiMock.calls.length = 0;
   C.startSignalResend(cap, 'peer@x.ru', { type: 'call_accept', call_id: 'cap1' }, 'cap1');
   const delays = [];
-  for (let i = 0; i < 6 && cap._signalResendTimer; i++) {
-    delays.push(timers.get(cap._signalResendTimer).ms);
-    await fireTimer(cap._signalResendTimer);
+  for (let i = 0; i < 6 && cap.callResender.timer; i++) {
+    delays.push(timers.get(cap.callResender.timer).ms);
+    await fireTimer(cap.callResender.timer);
   }
   check('ровно 4 повтора по [5000,15000,45000,120000]',
     JSON.stringify(delays) === JSON.stringify([5000, 15000, 45000, 120000]), delays);
-  check('после 4-го повтора пауза не взводится (лавины нет)', cap._signalResendTimer === null);
+  check('после 4-го повтора пауза не взводится (лавины нет)', cap.callResender.timer === null);
   check('ровно 4 письма за цикл ожидания', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length === 4);
   // sendTerminalRepeat: 3 отправки (сейчас + 3с + 7с)
   timers.clear();
