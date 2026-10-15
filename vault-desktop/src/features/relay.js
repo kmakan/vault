@@ -23,7 +23,7 @@ import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
 import { relayState } from './relay-idle.js';
-import { sessionStore, mailboxStore } from './session-store.js';
+import { sessionStore, mailboxStore, chatStore } from './session-store.js';
 import { useSession } from './call-session.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
@@ -146,7 +146,7 @@ export function startRelayTicker(ctx) {
           relayState.state.relayOfflineSince = null;
           if ((relayState.isEcoMode()) && !relayState.state.ecoAutonomous) {
             // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
-            ctx.onEcoMode(true, true).catch(() => {});
+            onEcoMode(true, true).catch(() => {});
           }
         }
         // Авто-eco: релей жив и не был отключён пользователем → eco ON.
@@ -332,18 +332,18 @@ export function startPolling(ctx, intervalMs = 30000) {
       await ctx.loadEmails(true);
       // Новые письма могли прийти в любой момент — перерисовываем
       // открытый чат, чтобы не приходилось переоткрывать его вручную.
-      if (ctx.activeChat === '__notes__') {
+      if (chatStore.state.activeChat === '__notes__') {
         // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
         // перезаписал бы пустым списком из IMAP).
-      } else if (ctx.activeChat && ctx.activeChatType === 'chat') {
-        await ctx.loadMessages(ctx.activeChat);
+      } else if (chatStore.state.activeChat && chatStore.state.activeChatType === 'chat') {
+        await ctx.loadMessages(chatStore.state.activeChat);
         // Не выдёргиваем из чтения истории: прокручиваем только если
         // пользователь уже у низа чата.
         ctx.scrollToBottom(false);
-      } else if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+      } else if (chatStore.state.activeChatType === 'group' && chatStore.state.currentGroup) {
         // Группы тоже обновляем поллингом: новые сообщения и реакции
         // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-        await ctx.loadGroupMessages(ctx.currentGroup.id);
+        await ctx.loadGroupMessages(chatStore.state.currentGroup.id);
         ctx.scrollToBottom(false);
       }
     } catch (e) {

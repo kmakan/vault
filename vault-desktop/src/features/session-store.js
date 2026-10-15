@@ -58,14 +58,9 @@ export function createSessionStore() {
   };
 }
 
-// ADR-004 J.2b: owner для загруженных сообщений (быв. data this.emails +
-// emailBodyCache). relay.js пишет через singleton; App.vue читает через
-// reactive proxy тот же объект.
+// ADR-004 J.2b: owner для загруженных сообщений (быв. data this.emails).
 export function createMailboxStore() {
-  const state = {
-    emails: [],
-    emailBodyCache: {},
-  };
+  const state = { emails: [], };
   return {
     state,
     setEmails(list) { state.emails = list || []; return state.emails; },
@@ -77,10 +72,25 @@ export function createMailboxStore() {
       return state.emails;
     },
     clearEmails() { state.emails = []; return state.emails; },
-    cacheBody(key, body) { state.emailBodyCache[key] = body; },
-    getEmailBody(key) { return state.emailBodyCache[key] ?? null; },
   };
 }
+
+// ADR-004 J.3a: owner для UI-чата (быв. data this.activeChat/currentGroup/
+// activeChatType в App.vue). relay.js/calls.js читают через singleton.
+export function createChatStore() {
+  const state = {
+    activeChat: null,
+    currentGroup: null,
+    activeChatType: 'chat',
+  };
+  return {
+    state,
+    setActiveChat(v) { state.activeChat = v ?? null; return state.activeChat; },
+    setCurrentGroup(g) { state.currentGroup = g ?? null; return state.currentGroup; },
+    setActiveChatType(t) { state.activeChatType = t; return state.activeChatType; },
+  };
+}
+export const chatStore = createChatStore();
 export const mailboxStore = createMailboxStore();
 export const sessionStore = createSessionStore();
 export function useSessionStore() { return sessionStore; }

@@ -901,7 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
-import { sessionStore as sessionState, mailboxStore as mailboxState } from './features/session-store.js';
+import { sessionStore as sessionState, mailboxStore as mailboxState, chatStore as chatState } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1059,11 +1059,11 @@ export default {
     // relay-состояние: singleton relayState (relay-idle.js), владелец для
     // relay.js state-machine. App.vue оборачивает reactive() для шаблона.
     const relayStore = reactive(relayState)
-    // J.2b: singleton mailboxStore — relay.js пишет через него, шаблон читает.
     const mailboxStore = reactive(mailboxState)
-    // Владелец состояния звонка (ADR-004, Этап C): вынесено из data().
+    // J.3a: singleton chatStore — state activeChat/currentGroup/activeChatType.
+    const chatStore = reactive(chatState)
     const callSession = useSession();
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, callSession };
   },
   data() {
     return {
@@ -1136,8 +1136,8 @@ export default {
       changeEmailError: '',
       contacts: [],
       contactAliases: {},
-      activeChat: null,
-      // newMessage — черновик composer, теперь proxy на chat-store (A14).
+      // activeChat/currentGroup/activeChatType — proxy на chat-store (J.3a).
+      // newMessage — черновик composer (A14).
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
       // слать копию письма. Теперь во владельце sending-store (ADR-004, A10).
       // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
@@ -1246,9 +1246,8 @@ export default {
       postingChannel: false,
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
-      groupIconMap: {},  // group_id → эмодзи-иконка (выбор при создании)
-      currentGroup: null,
-      activeChatType: 'chat', // 'chat' or 'group'
+      groupIconMap: {},
+      // currentGroup/activeChatType — proxy на chat-store (J.3a).
       newGroupName: '',
       // фото вместо эмодзи-иконок.
       newGroupAvatar: '',
@@ -1399,6 +1398,13 @@ export default {
     emails: {
       get() { return mailboxState.state.emails; },
       set(v) { mailboxState.setEmails(v); },
+    },
+    // Прокси во владельца чата (ADR-004 J.3a).
+    activeChat: { get() { return chatStore.state.activeChat; }, set(v) { chatStore.state.activeChat = v ?? null; } },
+    currentGroup: { get() { return chatStore.state.currentGroup; }, set(v) { chatStore.state.currentGroup = v ?? null; } },
+    activeChatType: {
+      get() { return chatStore.state.activeChatType; },
+      set(v) { chatStore.state.activeChatType = v; },
     },
     // Прокси во владельца relay-состояния (ADR-004 Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
