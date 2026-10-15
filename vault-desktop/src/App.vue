@@ -1484,6 +1484,11 @@ export default {
       get() { return this.callSession.mediaFallbackTimer; },
       set(v) { this.callSession.setMediaFallbackTimer(v); },
     },
+    // Доступ к владельцу состояния звонка для features/calls.js (ADR-004 D).
+    // calls.js использует ctx.session.X / ctx.session.setX() вместо ctx.X.
+    session: {
+      get() { return this.callSession; },
+    },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
       return ForwardFeature.forwardTargets(this);
