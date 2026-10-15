@@ -940,6 +940,7 @@ import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
 import * as ContactsLoad from './features/contacts-load.js';
+import * as GroupsMigrate from './features/groups-migrate.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -4403,62 +4404,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Атомарность: если письмо пришло до того, как мы узнали новый peerKey,
     // матчинга не будет — но матчинг в processIncoming (setPeerKey) уже
     // сохранил ключ к моменту поллинга.
+    // ADR-003 Этап 3: поиск устаревшего участника по трём источникам
+    // (кэш → файл → fingerprint группы) — в features/groups-migrate.js.
+    // Оставить один источник нельзя: ренейм уже вычистил кэш, и группа
+    // осталась бы с двумя участниками на один отпечаток (случай 06.10).
     async tryMigrateGroupMember(group, from) {
-      try {
-        const newKey = this.peerKeys[from] || this.peerKeys[String(from || '').toLowerCase()];
-        if (!newKey) return false;
-        // ПОИСК УСТАРЕВШЕГО УЧАСТНИКА — по ТРЁМ источникам, а не только по
-        // this.peerKeys. Причина: ренейм (fingerprint match) УЖЕ удаляет
-        // старый адрес из peerKeys, и тогда поиск по одному кэшу не находит
-        // участника → groups_rename_member не вызывается → в группе остаются
-        // ДВА участника с одним отпечатком (живые данные 06.10.2026).
-        //   1) in-memory peerKeys (быстрый путь);
-        //   2) файл peer_keys.json на диске (если кэш уже почищен);
-        //   3) поле fingerprint самой группы (groups.json).
-        let diskKeys = null;
-        const loadDiskKeys = async () => {
-          if (diskKeys !== null) return diskKeys;
-          try { diskKeys = (await invoke('load_peer_keys')) || []; }
-          catch (e) { diskKeys = []; }
-          return diskKeys;
-        };
-        let newFp = '';
-        const fpOf = async (hexKey) => {
-          try { return String(await invoke('get_fingerprint', { publicKey: hexKey }) || ''); }
-          catch (e) { return ''; }
-        };
-        const fromLc = String(from).toLowerCase();
-        let stale = null;
-        for (const m of (group.members || [])) {
-          const em = String(m.email || '');
-          if (em.toLowerCase() === fromLc) continue; // уже под новым адресом
-          const emLc = em.toLowerCase();
-          // (1) in-memory
-          const mk = this.peerKeys[em] || this.peerKeys[emLc];
-          if (mk && mk === newKey) { stale = m; break; }
-          // (2) файл на диске
-          const dk = (await loadDiskKeys()).find(k => String(k.email).toLowerCase() === emLc);
-          if (dk && dk.public_key === newKey) { stale = m; break; }
-          // (3) fingerprint самой группы
-          if (m.fingerprint) {
-            if (!newFp) newFp = await fpOf(newKey);
-            if (newFp && String(m.fingerprint) === newFp) { stale = m; break; }
-          }
-        }
-        if (!stale) return false;
-        console.log('[groups] fingerprint membership match:', stale.email, '→', from, 'in', group.id);
-        await invoke('groups_rename_member', {
-          groupId: group.id, oldEmail: stale.email, newEmail: from,
-        });
-        // Локальный объект группы обновляем сразу (Rust уже записал groups.json).
-        stale.email = from;
-        stale.key_shared = true;
-        if (!stale.fingerprint) stale.fingerprint = newFp || await fpOf(newKey);
-        return true;
-      } catch (e) {
-        console.warn('[groups] migrate member failed:', e && e.message || e);
-        return false;
-      }
+      return GroupsMigrate.tryMigrateGroupMember(this.peerKeys, group, from);
     },
     // Смена почты собеседником: переименовать его адрес во ВСЕХ группах, где
     // он участник или создатель. tryMigrateGroupMember вызывается только при
