@@ -1,6 +1,7 @@
 // Node-смоук features/calls.js — семантика звонковой state machine без
 // Vue/Tauri (паттерн incoming-smoke.mjs). Таймеры/Audio — управляемые моки.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -58,13 +59,17 @@ globalThis.__relayMock = relayMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__histMock = histMock;
 
-let src = readFileSync(ROOT + '/../src/features/calls.js', 'utf8');
-src = src
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace("from '../history.js'", 'from "' + MOCKS + '/history.js"');
-writeFileSync(MOCKS + '/features-calls.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/calls.js',
+  MOCKS + '/features-calls.mjs',
+  {
+    '../api.js': 'api.js',
+    '../relay-client.js': 'relay-client.js',
+    '../crypto.js': 'crypto.js',
+    '../history.js': 'history.js',
+  },
+  MOCKS,
+);
 const C = await import(MOCKS + '/features-calls.mjs');
 
 // ── ADR-001: адаптеры под ЯВНЫЕ зависимости ─────────────────────

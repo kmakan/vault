@@ -1,6 +1,7 @@
 // Node-смоук features/profiles.js — семантика профилей/алиасов/presence
 // без Vue/Tauri (паттерн incoming-smoke.mjs). Image/canvas — моки.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -34,11 +35,15 @@ globalThis.__dbMock = dbMock;
 globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__cryptoMock = cryptoMock;
 
-let src = readFileSync(ROOT + '/../src/features/profiles.js', 'utf8');
-src = src
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/features-profiles.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/profiles.js',
+  MOCKS + '/features-profiles.mjs',
+  {
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+  },
+  MOCKS,
+);
 const P = await import(MOCKS + '/features-profiles.mjs');
 
 // ── Image/canvas-моки ──────────────────────────────────────────

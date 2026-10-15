@@ -2,6 +2,7 @@
 // без Vue/Tauri (паттерн incoming-smoke.mjs). Мокаем api/crypto через
 // подмену импортов; localStorage — глобальная заглушка.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -44,11 +45,15 @@ globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowe
 globalThis.__cryptoMock = cryptoMock;
 
 // Подменяем резолвер edits-импортов: копия edits.js с переписанными путями
-let src = readFileSync(ROOT + '/../src/features/edits.js', 'utf8');
-src = src
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/edits.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/edits.js',
+  MOCKS + '/edits.mjs',
+  {
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+  },
+  MOCKS,
+);
 const E = await import(MOCKS + '/edits.mjs');
 
 // ── Хелперы ───────────────────────────────────────────────────

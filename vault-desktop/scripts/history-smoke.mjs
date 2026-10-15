@@ -1,6 +1,7 @@
 // Node-смоук features/history.js — семантика кэшей/истории/оптимистичных
 // исходящих без Vue/Tauri (паттерн incoming-smoke.mjs).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -35,11 +36,15 @@ globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowe
 globalThis.__histMock = histMock;
 
 // Подменяем резолвер history-импортов: копия с переписанными путями
-let src = readFileSync(ROOT + '/../src/features/history.js', 'utf8');
-src = src
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../history.js'", 'from "' + MOCKS + '/history.js"');
-writeFileSync(MOCKS + '/features-history.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/history.js',
+  MOCKS + '/features-history.mjs',
+  {
+    '../api.js': 'api.js',
+    '../history.js': 'history.js',
+  },
+  MOCKS,
+);
 const H = await import(MOCKS + '/features-history.mjs');
 
 // ── Хелперы ───────────────────────────────────────────────────

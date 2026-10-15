@@ -111,7 +111,10 @@ function makeCtx(over = {}) {
     canonicalOf: (e) => null,
     localProfileOf: () => null,
     nameOf: (e) => e,
-    migrateChatHistory: async () => {},
+    // ADR-003 §5.1: одиночный migrateChatHistory вытеснен migrateChatHistoryChain
+    // (перенос по всей цепочке прежних адресов пира). Мок обязан знать новое
+    // имя: иначе вызов падает, а ошибка ловится громким catch — и тест молчит.
+    migrateChatHistoryChain: async () => {},
     setPeerKey: () => {},
     tryMigrateGroupMember: async () => false,
     migratePeerGroups: async () => {},
@@ -298,13 +301,28 @@ console.log('14. смена почты (fingerprint-миграция): ключ 
 {
   const ctx = makeCtx();
   ctx.peerKeys = { 'old@x.ru': 'OLDK' };
-  ctx.migrateChatHistory = async (oldE, newE) => { ctx.migrated = [oldE, newE]; };
+  // ПЕРОД БЫЛ СМЕНЁН ТРИЖДЫ: new → mid → new2. Карта алиасов обязана дойти до
+  // переноса, иначе весь смысл §5.1 теряется и цепочка обходится вхолостую.
+  ctx.contactAliases = { 'new@x.ru': ['mid@x.ru'], 'mid@x.ru': ['old@x.ru'] };
+  // Сигнатура новая: (newEmail, myEmail, contactAliases) — перенос идёт от
+  // ТЕКУЩЕГО адреса по цепочке алиасов, а не от старого к новому напрямую.
+  ctx.migrateChatHistoryChain = async (newE, myE, aliases) => {
+    ctx.migrated = [newE, aliases];
+  };
   ctx.setPeerKey = (e, k) => { ctx.boundKey = [e, k]; };
   cryptoMock.decryptVault = async () => ({ __env: { key: 'OLDK', id: 'fe1', text: 'moved' } });
   const m = msg({ from: { address: 'new@x.ru' }, uid: 14, message_id: '<f@x>' });
   withBody(ctx, m, 'ENC:1');
   await processIncoming(ctx, [m], { notify: true });
-  check('история мигрирована old→new', ctx.migrated && ctx.migrated[0] === 'old@x.ru' && ctx.migrated[1] === 'new@x.ru');
+  // ADR-003 §5.1: перенос теперь идёт ОТ ТЕКУЩЕГО адреса по цепочке алиасов,
+  // поэтому проверяется именно он — а не «со старого на новый». Прежний
+  // одиночный перенос так умел; цепочка умеет больше (ADR-003 §5.1).
+  check('перенос истории вызван для ТЕКУЩЕГО адреса', ctx.migrated && ctx.migrated[0] === 'new@x.ru');
+  check('и получил карту алиасов — без неё цепочка не обойдётся',
+    ctx.migrated && ctx.migrated[1] === ctx.contactAliases);
+  check('карта действительно цепочка, а не плоский список',
+    ctx.contactAliases['new@x.ru'][0] === 'mid@x.ru'
+    && ctx.contactAliases['mid@x.ru'][0] === 'old@x.ru');
   check('ключ привязан к новому адресу', ctx.boundKey && ctx.boundKey[0] === 'new@x.ru' && ctx.boundKey[1] === 'OLDK');
   check('сообщение посчитано по новому адресу', ctx.unreadCounts['new@x.ru'] === 1);
 }

@@ -1,10 +1,13 @@
 // Node-смоук устойчивости восстановления (fix/recovery-resilience).
 // Паттерн recovery-smoke: без Vue/Tauri, живые модули (не копия алгоритма).
 //
-//   • api.js импортируется через data:URI с заменой внешних импортов
+//   • api.js импортируется ФАЙЛОМ в /tmp с заменой внешних импортов
 //     ('@tauri-apps/api/core' → mock invoke, './crypto.js' → mock) — все
 //     остальные строки модуля исполняются как в проде. Никаких реальных
 //     secret-invoke: мок не знает команд, которых не ждёт.
+//     Раньше здесь был data:URI — он не умеет разрешать относительные импорты
+//     вовсе, и смоук лежал сломанным с момента, когда api.js получил
+//     './identity.js'. См. также scripts/smoke-imports.mjs.
 //   • features/recovery.js импортируется напрямую, зависимости
 //     { api, crypto, invoke, db, relay, ... } инъектируются.
 //   • features/recovery-session.js — pure-модуль, тестируется напрямую.
@@ -14,10 +17,15 @@
 // Все данные искусственные (fake@example.invalid), файлов пользователя и
 // сети нет. Тесты детерминированы, без таймеров и обратных вызовов с
 // состоянием результата. Гейт t_b5da2e97.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import { parse as sfcParse, compileScript } from '@vue/compiler-sfc';
 
 const ROOT = import.meta.dirname + '/..';
+const MOCKS = '/tmp/recovery-session-smoke-mocks';
+mkdirSync(MOCKS, { recursive: true });
+// Мок крипто-модуля, на который перенаправляется import из api.js.
+writeFileSync(MOCKS + '/crypto.js', 'export default globalThis.__CRYPTO__;');
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
@@ -95,16 +103,35 @@ async function loadApi(cfg) {
       fingerprint: async () => 'fp-restored',
     },
   };
-  const src = readFileSync(ROOT + '/src/api.js', 'utf8')
-    .replace("import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__INVOKE__;')
-    .replace("import cryptoClient from './crypto.js';", 'const cryptoClient = globalThis.__CRYPTO__;')
-    .replace("from './features/recovery-session.js'", `from '${new URL('../src/features/recovery-session.js', import.meta.url).href}'`);
-  // Уникальная строка-комментарий меняет base64 → Node не переиспользует
-  // закэшированный модуль (иначе invoke/cryptoClient привязались бы к
-  // ПЕРВОМУ loadApi и счётчики calls были бы чужими).
-  const uri = 'data:text/javascript;base64,'
-    + Buffer.from('// loadApi #' + (++__loadSeq) + '\n' + src, 'utf8').toString('base64');
-  return { mod: await import(uri), calls };
+  // Модуль пишется ФАЙЛОМ, а не data: URL.
+  //
+  // data: URL не умеет разрешать относительные импорты вообще (ERR_
+  // UNSUPPORTED_RESOLVE_REQUEST). Как только у src/api.js появился импорт
+  // './identity.js', этот смоук перестал запускаться — и лежал сломанным с тех
+  // пор, никем не замеченный. Абсолютные file:-URL внутри не помогают: не
+  // разрешается ИМЕННО относительный спецификатор в корне data:-модуля.
+  //
+  // Файл в /tmp даёт честное разрешение путей; оставшиеся импорты переводятся
+  // в абсолютные тем же хелпером, что и остальные смоуки.
+  const file = MOCKS + '/api-' + (++__loadSeq) + '.mjs';
+  prepareModuleCopy(
+    ROOT + '/src/api.js',
+    file,
+    // Крипто уходит на мок; таури-зависимость подменяется ниже строкой replace,
+    // потому что это ИМЯ ИМПОРТА, а не путь (хелпер тут не годится).
+    { './crypto.js': 'crypto.js' },
+    MOCKS,
+  );
+  let out = readFileSync(file, 'utf8')
+    .replace("import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__INVOKE__;');
+  // recovery-session подключаем по абсолютному пути, как было раньше.
+  out = out.split(`from '${ROOT}/src/features/recovery-session.js'`)
+           .join(`from '${ROOT}/src/features/recovery-session.js'`);
+  writeFileSync(file, out);
+  // Уникальное имя файла на каждый вызов → Node не переиспользует закэшированный
+  // модуль (иначе invoke/cryptoClient привязались бы к ПЕРВОМУ loadApi и
+  // счётчики calls были бы чужими).
+  return { mod: await import('file://' + file), calls };
 }
 
 // ══════════════════════════════════════════════════════════════════
