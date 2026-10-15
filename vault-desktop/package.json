@@ -22,6 +22,8 @@
     "smoke:local-db": "node scripts/local-db-init-smoke.mjs",
     "smoke:avatar-image": "node scripts/avatar-image-smoke.mjs",
     "smoke:report-content": "node scripts/report-content-smoke.mjs",
+    "smoke:group-pin-wire": "node scripts/group-pin-wire-smoke.mjs",
+    "smoke:geo": "node scripts/geo-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "smoke:adr002-e2e": "node scripts/adr002-e2e.mjs"

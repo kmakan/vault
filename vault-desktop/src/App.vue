@@ -941,6 +941,8 @@ import * as GroupMetaBroadcast from './features/group-meta-broadcast.js';
 import * as LocalDbInit from './features/local-db-init.js';
 import * as AvatarImage from './avatar-image.js';
 import * as ReportContent from './features/report-content.js';
+import * as PinWire from './features/group-pin-wire.js';
+import * as Geo from './geo.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -2926,19 +2928,20 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (!this.isGroupAdmin || !this.currentGroup || !msg || !msg.id) return;
       const gid = this.currentGroup.id;
       const currentlyPinned = await this.readPinned(gid);
-      const pinning = !(currentlyPinned && currentlyPinned.msg_id === msg.id);
-      const pin = {
-        msg_id: msg.id,
-        action: pinning ? 'pin' : 'unpin',
-        preview: String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 140),
-        ts: Date.now(),
-      };
+      // Форма pin-письма и её разбор — в features/group-pin-wire.js (ADR-003
+      // партия 13). Раньше отправитель писал форму здесь, а приёмник читал её
+      // в features/groups.js: две рукописные копии без общей проверки, и
+      // расхождение заменялось бы ТИХО — 'op' вместо 'action' превращал бы
+      // открепление в закрепление, без исключения и без записи в журнал.
+      const decision = PinWire.buildPinDecision(msg, currentlyPinned);
       // Оптимистично применяем локально (SMTP-круг займёт десятки секунд).
-      await this.setPinnedState(gid, pinning ? pin : null);
+      await this.setPinnedState(gid,
+        decision.action === PinWire.PIN_ACTION.PIN ? decision : null);
       try {
         const groupKey = this.groupKeys[gid] || (await api.getMyGroupKey(gid))?.group_key;
         if (!groupKey) return;
-        const content = await crypto.encryptWithGroupKey(JSON.stringify({ pin: 1, msg_id: pin.msg_id, action: pin.action, preview: pin.preview, ts: pin.ts }), groupKey);
+        const content = await crypto.encryptWithGroupKey(
+          JSON.stringify(PinWire.buildPinWirePayload(decision)), groupKey);
         await api.sendGroupMeta(gid, content);
       } catch (e) {
         console.error('pinGroupMessage failed:', e);
@@ -3157,26 +3160,16 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
     // получателей через linkify; никакой специфики конверта не нужно).
+    // ADR-003 Этап 3, партия 13: получение координат и сборка текста — в geo.js.
+    // Там же таймаут с защитой от двойного разрешения: без него поздний ответ
+    // геолокации записал бы поле ввода ПОСЛЕ того, как показано «недоступна».
     async sendGeoMessage() {
-      const coords = await new Promise((resolve) => {
-        let done = false;
-        const finish = (c) => { if (!done) { done = true; clearTimeout(timer); resolve(c); } };
-        const timer = setTimeout(() => finish(null), 8000);
-        try {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => finish(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`),
-            () => finish(null),
-            { timeout: 7000, maximumAge: 300000 },
-          );
-        } catch (e) { finish(null); }
-      });
+      const coords = await Geo.resolveCurrentCoords();
       if (!coords) {
         this.showToast(this.t('geo_err') || 'Геолокация недоступна', 3000);
         return;
       }
-      this.newMessage = (this.t('geo_im_here') || 'Я здесь:') + ' ' + coords +
-        ' — https://www.openstreetmap.org/?mlat=' + coords.split(',')[0].trim() +
-        '&mlon=' + coords.split(',')[1].trim() + '#map=17/' + coords.split(',')[0].trim() + '/' + coords.split(',')[1].trim();
+      this.newMessage = Geo.buildGeoMessage(this.t('geo_im_here') || 'Я здесь:', coords);
       this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
     },
     // ── Пересылка (forward) ────────────────────────────────────────

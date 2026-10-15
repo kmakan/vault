@@ -11,6 +11,7 @@
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
+import * as PinWire from './group-pin-wire.js';
 
 export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
       // Токен загрузки — см. loadMessages (защита от гонки переключения).
@@ -101,15 +102,15 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
               }
               continue; // квитанция не рендерится как сообщение
             }
-            // 1г) Закрепление: {pin:1, msg_id, action:'pin'|'unpin', preview,
-            //     ts} — последнее по ts авторитетно; не рендерится.
-            if (obj && obj.pin === 1 && obj.msg_id) {
-              const ts = obj.ts || Date.parse(msg.created_at || 0) || 0;
-              await ctx.applyPinFromWire(groupId, {
-                msg_id: obj.action === 'unpin' ? null : obj.msg_id,
-                preview: obj.preview || '',
-                ts,
-              });
+            // 1г) Закрепление — форма письма описана в PinWire; здесь она только
+            //     разбирается. Последнее по ts авторитетно; не рендерится.
+            // Разбор формы — PinWire.parsePinWire, тот же модуль строит её на
+            // отправке (ADR-003 партия 13). Раньше форма читалась здесь вручную
+            // и писалась в App.vue: опечатка в имени действия тихо превращала
+            // открепление в закрепление.
+            const pinWire = PinWire.parsePinWire(obj, Date.parse(msg.created_at || 0) || 0);
+            if (pinWire) {
+              await ctx.applyPinFromWire(groupId, pinWire);
               continue;
             }
             // Голос голосования: {poll:1, poll_id, option} — сигнальное
