@@ -69,6 +69,13 @@ const OWNER_FIELDS = new Set([
   'removePendingOutgoing',
   'clearPendingOutgoing',
   'dropBucket',
+  // A11: unreadCounts (chat-store.js). State + API для непрочитанных.
+  'unreadCounts',
+  'incUnread',
+  'clearUnread',
+  'clearAllUnread',
+  'unreadOf',
+  'setUnread',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

@@ -1053,8 +1053,7 @@ export default {
       // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
       mobileChatOpen: false,
       // Счётчики непрочитанных по чатам (email | 'group:<id>' → число).
-      // источник данных Vault); сбрасываются при открытии чата.
-      unreadCounts: {},
+      // Источник данных — chat-store (ADR-004 A11); сбрасываются при открытии чата.
       // флаги чатов email|'group:<id>' →
       // { archived, muted }. Архив скрыт из основного списка (переключатель
       // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
@@ -1377,6 +1376,13 @@ export default {
     },
     pendingOutgoing: {
       get() { return this.sendingStore.state.pendingOutgoing; },
+    },
+    // Прокси во владельца непрочитанных (ADR-004 Этап A11).
+    // unreadCounts больше не data()-свойство, а proxy на chat-store.state.
+    // bulk-load (set) и reset (set) идут через proxy setter → chat.setUnread.
+    unreadCounts: {
+      get() { return this.chat.state.unreadCounts; },
+      set(v) { this.chat.setUnread(v); },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -2483,6 +2489,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.contacts = [];
       this.activeChat = null;
       this.messages = [];
+      this.clearAllUnread();
       this.emails = [];
       this.emailError = '';
       this.pendingInvites = [];
@@ -3384,6 +3391,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     removePendingOutgoing(chatId, msgId) { return this.sendingStore.removePendingOutgoing(chatId, msgId); },
     clearPendingOutgoing() { return this.sendingStore.clearPendingOutgoing(); },
     dropBucket(chatId) { return this.sendingStore.dropBucket(chatId); },
+    // Тонкие прокси во владельца непрочитанных (ADR-004 Этап A11).
+    // unreadOf уже определён ниже (читает через this.unreadCounts proxy).
+    incUnread(chatKey) { return this.chat.incUnread(chatKey); },
+    clearUnread(chatKey) { return this.chat.clearUnread(chatKey); },
+    clearAllUnread() { return this.chat.clearAllUnread(); },
+    setUnread(map) { return this.chat.setUnread(map); },
     async onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
       // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
@@ -3791,7 +3804,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         (!this.isMobile || this.mobileChatOpen);
     },
     unreadOf(chatKey) {
-      return this.unreadCounts[chatKey] || 0;
+      return this.chat.unreadOf(chatKey);
     },
     async loadUnreadCounts() {
       try {
@@ -3812,8 +3825,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       } catch (e) { /* kv недоступен — счётчики живут в памяти до перезапуска */ }
     },
     async resetUnread(chatKey) {
-      if ((this.unreadCounts[chatKey] || 0) > 0) {
-        this.unreadCounts[chatKey] = 0;
+      if (this.unreadOf(chatKey) > 0) {
+        this.clearUnread(chatKey);
         await this.saveUnreadCounts();
       }
     },

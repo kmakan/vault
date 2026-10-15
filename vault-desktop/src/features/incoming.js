@@ -437,7 +437,7 @@ async function countAndNotify(ctx, m, cls, { notify }) {
   const fresh = Date.now() - new Date(m.date || 0).getTime() < FRESH_WINDOW_MS;
   // Счётчик непрочитанных: для новых писем, кроме видимого сейчас чата.
   if (counted && !ctx.chatVisible(chatKey)) {
-    ctx.unreadCounts[chatKey] = (ctx.unreadCounts[chatKey] || 0) + 1;
+    ctx.incUnread(chatKey);
     await ctx.saveUnreadCounts();
   }
   // Уведомление: только тихий поллинг, только свежие письма (старые

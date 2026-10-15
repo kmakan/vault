@@ -98,7 +98,7 @@ function check(name, cond, extra) {
 
 // Простейший ctx: все зависимости явные
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     cryptoReady: true,
     email: 'me@x.ru',
     peerKeys: {},
@@ -142,6 +142,11 @@ function makeCtx(over = {}) {
       return false;
     },
   }, over);
+  // unreadCounts: owner API stub → пишет в data (backward-compat для READS).
+  ctx.incUnread = (k) => { ctx.unreadCounts[k] = (ctx.unreadCounts[k] || 0) + 1; return ctx.unreadCounts[k]; };
+  ctx.unreadOf = (k) => ctx.unreadCounts[k] || 0;
+  ctx.clearUnread = (k) => { delete ctx.unreadCounts[k]; return ctx.unreadCounts; };
+  return ctx;
 }
 
 const NOW = Date.now();

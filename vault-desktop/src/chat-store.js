@@ -41,8 +41,42 @@ export function createChatStore() {
   return {
     // Переписка открытого чата. Порядок важен: сообщения сортируются по времени
     // на месте (calls.js), и сортировка меняет этот массив.
+    // unreadCounts — счётчики непрочитанных по чатам (chat-store владелец,
+    // ADR-004 A11; писателей 2: calls.js + incoming.js, до перехода на owner).
     state: {
       messages: [],
+      unreadCounts: {},
+    },
+
+    // ── unreadCounts (ADR-004 A11) ────────────────────────────────────────────
+    // Инкремент счётчика непрочитанных для чата. Владелец гарантирует
+    // атомарность read-modify-write: раньше два модуля (calls/incoming)
+    // делали `ctx.unreadCounts[k] = (ctx.unreadCounts[k]||0)+1` независимо —
+    // race мог дать 1 вместо 2 при параллельном missed-входящем и email.
+    incUnread(chatKey) {
+      const b = this.state.unreadCounts[chatKey] || 0;
+      this.state.unreadCounts[chatKey] = b + 1;
+      return this.state.unreadCounts[chatKey];
+    },
+    // Сброс счётчика (чат стал видимым / пометка прочитанного).
+    clearUnread(chatKey) {
+      delete this.state.unreadCounts[chatKey];
+      return this.state.unreadCounts;
+    },
+    // Полный сброс (logout/reset), сохраняет реактивность proxy.
+    clearAllUnread() {
+      this.state.unreadCounts = {};
+      return this.state.unreadCounts;
+    },
+    // Текущий счётчик для чата.
+    unreadOf(chatKey) {
+      return this.state.unreadCounts[chatKey] || 0;
+    },
+    // Полная замена (bulk-load из kv после рестарта). Вызывающий решает,
+    // копировать ли массив — см. set(). Используется App.vue loadUnreadCounts.
+    setUnread(map) {
+      this.state.unreadCounts = map || {};
+      return this.state.unreadCounts;
     },
 
     // ── Чтение ───────────────────────────────────────────────────────────

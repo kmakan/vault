@@ -58,6 +58,8 @@ const OWNER_FIELDS = new Set([
 
   'setSending', 'getSending', 'setPendingOutgoing', 'getPendingOutgoingBucket',
   'mergePendingOutgoing', 'removePendingOutgoing', 'clearPendingOutgoing', 'dropBucket',
+  // A11: unreadCounts owner API (chat-store.js)
+  'incUnread', 'clearUnread', 'clearAllUnread', 'unreadOf', 'setUnread',
 ]);
 
 

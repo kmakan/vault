@@ -102,6 +102,18 @@ s.set([{ id: 'u' }, null, { id: 'v' }]);
 ok('removeById игнорирует битые элементы', s.removeById('v') === true && s.state.messages.length === 2);
 
 // ── Независимость как требование, а не как пожелание ────────────────────
+// ── unreadCounts (ADR-004 A11) ──
+const u = createChatStore();
+ok('unreadCounts стартует пустым', JSON.stringify(u.state.unreadCounts) === '{}');
+ok('unreadOf несуществующего → 0', u.unreadOf('peer@x.ru') === 0);
+ok('incUnread инкрементирует', u.incUnread('peer@x.ru') === 1 && u.incUnread('peer@x.ru') === 2);
+ok('unreadOf читает после инкремента', u.unreadOf('peer@x.ru') === 2);
+ok('incUnread чужого чата не трогает текущий', (u.incUnread('other@x.ru'), u.unreadOf('peer@x.ru') === 2 && u.unreadOf('other@x.ru') === 1));
+ok('clearUnread удаляет ключ', (u.clearUnread('peer@x.ru'), u.unreadOf('peer@x.ru') === 0));
+ok('setUnread заменяет бакет целиком', (u.setUnread({ a: 1, b: 2 }), u.unreadOf('a') === 1 && u.unreadOf('b') === 2 && u.unreadOf('peer@x.ru') === 0));
+ok('clearAllUnread сбрасывает всё', (u.clearAllUnread(), JSON.stringify(u.state.unreadCounts) === '{}'));
+ok('incUnread атомарен: 3-кратный вызов даёт 3', (u.incUnread('c'), u.incUnread('c'), u.incUnread('c'), u.unreadOf('c') === 3));
+
 console.log('── гейт: владелец ни от чего снаружи не зависит ──');
 const body = readFileSync(path.join(ROOT, 'src', 'chat-store.js'), 'utf8');
 const imports = [...body.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);

@@ -853,7 +853,7 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
   // Бейдж непрочитанных: пропущенный входящий — как непрочитанное
   // сообщение, если чат сейчас не виден.
   if (kind === 'missed' && !ctx.chatVisible(chatKey)) {
-    ctx.unreadCounts[chatKey] = (ctx.unreadCounts[chatKey] || 0) + 1;
+    ctx.incUnread(chatKey);
     await ctx.saveUnreadCounts();
   }
 }

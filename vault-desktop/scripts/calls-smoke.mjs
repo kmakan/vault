@@ -112,7 +112,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     email: 'me@x.ru',
     isAndroid: false,
     // звонковое состояние
@@ -159,6 +159,12 @@ function makeCtx(over = {}) {
     t: (k) => 'T:' + k,
     idleLoop: () => {},
   }, over);
+  // unreadCounts: owner API stub → пишет в data (backward-compat для READS).
+  // В реальном App.vue — методы-прокси на this.chat.state.unreadCounts.
+  ctx.incUnread = (k) => { ctx.unreadCounts[k] = (ctx.unreadCounts[k] || 0) + 1; return ctx.unreadCounts[k]; };
+  ctx.unreadOf = (k) => ctx.unreadCounts[k] || 0;
+  ctx.clearUnread = (k) => { delete ctx.unreadCounts[k]; return ctx.unreadCounts; };
+  return ctx;
 }
 const toasts = [];
 
