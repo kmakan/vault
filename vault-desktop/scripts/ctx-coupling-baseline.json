@@ -1,5 +1,5 @@
 {
-  "totalCtxRefs": 1222,
+  "totalCtxRefs": 1221,
   "totalFunctions": 242,
   "functionsWithCtx": 152,
   "modules": {
@@ -329,13 +329,14 @@
       "biggestCtxFn": null
     },
     "src/features/groups.js": {
-      "ctxRefs": 46,
+      "ctxRefs": 45,
       "fields": [
         "activeChat",
         "applyEdits",
         "applyPinFromWire",
         "applyPollVotes",
         "applyReactions",
+        "chat",
         "cryptoReady",
         "emails",
         "filterDeleted",
@@ -348,7 +349,6 @@
         "loadSeq",
         "mergeHistory",
         "mergePending",
-        "messages",
         "noteSeen",
         "parseEnvelope",
         "parseMessageContent",

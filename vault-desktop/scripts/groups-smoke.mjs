@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { createChatStore } from '../src/chat-store.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-smoke-mocks';
@@ -54,7 +55,10 @@ function check(name, cond, extra) {
 function makeCtx(over = {}) {
   return Object.assign({
     loadSeq: 1, activeChat: 'group:G1', emails: [], cryptoReady: true,
-    groupKeys: {}, groupAvatars: {}, pendingOutgoing: {}, messages: [],
+    groupKeys: {}, groupAvatars: {}, pendingOutgoing: {},
+    // Модуль-владелец переписки (ADR-004, Этап A1). groups.js пишет через
+    // ctx.chat.set/append/clear, а читает через ctx.chat.state.messages.
+    chat: createChatStore(),
     pinnedMsgId: null, pinnedPreview: '',
     isOwnSender: (sid) => sid === 'me@x.ru',
     isIgnored: () => false,
@@ -84,7 +88,7 @@ console.log('1. нет группового ключа → unencrypted-ренд�
   const ctx = makeCtx({ groupKeys: {}, cryptoReady: false });
   await G.loadGroupMessages(ctx, 'G1');
   check('сообщение отрисовано, from=them, encrypted=false',
-    ctx.messages.length === 1 && ctx.messages[0].from === 'them' && ctx.messages[0].encrypted === false);
+    ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0].from === 'them' && ctx.chat.state.messages[0].encrypted === false);
 }
 
 // ── 2. crypto-фильтр: не расшифровалось = не из группы ─────────
@@ -95,7 +99,7 @@ console.log('2. crypto-фильтр: чужие/1:1 письма отбрасы�
   cryptoMock.decryptWithGroupKey = async () => { throw new Error('AAD mismatch'); };
   const ctx = makeCtx({ groupKeys: { G1: 'GK' } });
   await G.loadGroupMessages(ctx, 'G1');
-  check('не расшифровалось → не рендерится (список пуст)', ctx.messages.length === 0);
+  check('не расшифровалось → не рендерится (список пуст)', ctx.chat.state.messages.length === 0);
 }
 
 // ── 3. классификация: реакция/правка/квитанция НЕ рендерятся ────
@@ -120,7 +124,7 @@ console.log('3. классификация wire-событий (не ренде�
     applyEdits: (list, chat, wire) => { seen.edit = wire; },
   });
   await G.loadGroupMessages(ctx, 'G1');
-  check('реакция/правка/квитанция НЕ в messages (0 карточек)', ctx.messages.length === 0);
+  check('реакция/правка/квитанция НЕ в messages (0 карточек)', ctx.chat.state.messages.length === 0);
   check('реакция ушла в applyReactions (msg_id X)', seen.react && seen.react['X'] && seen.react['X'][0].emoji === '👍');
   check('правка ушла в applyEdits (msg_id Y)', seen.edit && seen.edit['Y'] && seen.edit['Y'][0].text === 'new');
 }
@@ -142,9 +146,9 @@ console.log('4. сообщение из конверта + дедуп по id (N
   };
   const ctx = makeCtx({ groupKeys: { G1: 'GK' } });
   await G.loadGroupMessages(ctx, 'G1');
-  check('дедуп по id конверта: 2 уникальных сообщения (не 3)', ctx.messages.length === 2);
+  check('дедуп по id конверта: 2 уникальных сообщения (не 3)', ctx.chat.state.messages.length === 2);
   check('содержимое конверта (env.text), from=them, encrypted=true',
-    ctx.messages.some(m => m.content === 'одно и то же' && m.encrypted === true));
+    ctx.chat.state.messages.some(m => m.content === 'одно и то же' && m.encrypted === true));
 }
 
 // ── 5. stale-guard: переключение чата отменяет запись ──────────
@@ -154,10 +158,11 @@ console.log('5. stale-guard: активный чат сменился → messag
   apiMock.groupMessages = [gmail('ENC:x', 'peer@x.ru', '<x@x>')];
   cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ vault: 1, id: 'evX', text: 't' });
   // activeChat != 'group:G1' → stale с первого вызова → ранний return
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, activeChat: 'group:OTHER', messages: ['KEEP'] });
+  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, activeChat: 'group:OTHER' });
+  ctx.chat.state.messages = ['KEEP'];
   await G.loadGroupMessages(ctx, 'G1');
   check('stale → messages не перезаписаны (KEEP сохранён)',
-    Array.isArray(ctx.messages) && ctx.messages.length === 1 && ctx.messages[0] === 'KEEP');
+    Array.isArray(ctx.chat.state.messages) && ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0] === 'KEEP');
 }
 
 // ── 6. presence-сигнал: ingestSignal(ctx,...) без ReferenceError ──
@@ -172,7 +177,7 @@ console.log('6. presence-сигнал через ingestSignal(ctx) — регр�
   let threw = null;
   try { await G.loadGroupMessages(ctx, 'G1'); } catch (e) { threw = e; }
   check('presence без ReferenceError, ingestSignal получил ctx (не голый this)',
-    threw === null && globalThis.__presGotCtx === true && ctx.messages.length === 0);
+    threw === null && globalThis.__presGotCtx === true && ctx.chat.state.messages.length === 0);
   globalThis.__presReject = false;
 }
 

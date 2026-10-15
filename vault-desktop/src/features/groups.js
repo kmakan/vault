@@ -242,7 +242,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           // История — основа чата, письма добавляют новое (mergeHistory).
           // Статусы/реакции/правки — к итоговому списку (в истории старые
           // статусы, письмо приносит свежий).
-          const hadMessages = ctx.messages && ctx.messages.length > 0;
+          const hadMessages = ctx.chat.state.messages.length > 0;
           const merged0 = await ctx.mergeHistory(chat, list);
           const statusById = new Map();
           for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
@@ -267,17 +267,17 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           if (!merged.length && hadMessages && !stale()) {
             return;
           }
-          ctx.messages = merged;
-          for (const m of ctx.messages) if (m.expireAt) ctx.scheduleEphemeral(m, chat);
-          ctx.saveChatCache(chat, ctx.messages);
+          ctx.chat.set(merged);
+          for (const m of ctx.chat.state.messages) if (m.expireAt) ctx.scheduleEphemeral(m, chat);
+          ctx.saveChatCache(chat, ctx.chat.state.messages);
           // Локальная история (IndexedDB) — полный архив группы.
           ctx.saveCurrentHistory(chat);
           // Открыли группу — шлём участникам квитанции «просмотрено» по входящим.
-          const incoming = ctx.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
+          const incoming = ctx.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
           ctx.sendReadReceipts(incoming);
         } else {
           // No group key — show as-is (unencrypted)
-          ctx.messages = raw.map(msg => {
+          ctx.chat.set(raw.map(msg => {
             const { text, attachment } = ctx.parseMessageContent(msg.content);
             return {
               ...msg,
@@ -288,10 +288,10 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
               encrypted: false,
               attachment,
             };
-          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          }).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);
-        if (!stale()) ctx.messages = [];
+        if (!stale()) ctx.chat.clear();
       }
 }
