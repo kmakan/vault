@@ -102,7 +102,14 @@ function committedBaseline() {
   if (!existsSync(BASE_FILE)) return null;
   try {
     const { execFileSync } = require_child_process();
-    const out = execFileSync('git', ['show', 'HEAD:scripts/ctx-ratchet-baseline.json'],
+    // Путь в git относителен КОРНЮ РЕПОЗИТОРИЯ, а не рабочему каталогу.
+    // Первая версия звала `git show HEAD:scripts/...` из vault-desktop — такой
+    // путь не существует, команда падала, срабатывал запасной вариант, и prev
+    // становился РАБОЧИМ файлом. То есть эталон сравнивался сам с собой, и
+    // ослабление проходило молча. Проверка git show сделана явной.
+    const rel = execFileSync('git', ['rev-parse', '--show-prefix'],
+      { encoding: 'utf8', cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const out = execFileSync('git', ['show', 'HEAD:' + rel + 'scripts/ctx-ratchet-baseline.json'],
       { encoding: 'utf8', cwd: ROOT, stdio: ['ignore', 'pipe', 'ignore'] });
     return JSON.parse(out);
   } catch (e) {
@@ -149,6 +156,38 @@ if (!existsSync(BASE_FILE)) {
 
 const prev = committedBaseline();
 const problems = [];
+
+// РАБОЧАЯ КОПИЯ ПОТОЛКА НЕ ДОЛЖНА БЫТЬ СЛАБЕЕ ЗАКОММИЧЕННОЙ.
+//
+// Эталон берётся из git, и этого само по себе мало: ослабленный файл остался бы
+// на диске и мог бы попасть в следующий коммит, а закоммиченный потолок при этом
+// ещё держал бы гейт зелёным. То есть момент, когда гейт ослепнут, наступил бы
+// позже — на ревью, где его уже нет.
+if (existsSync(BASE_FILE)) {
+  const work = JSON.parse(readFileSync(BASE_FILE, 'utf8'));
+  const weaker = [];
+  if (work.totals.ctxRefSites > prev.totals.ctxRefSites) {
+    weaker.push('ctxRefSites в файле ' + prev.totals.ctxRefSites + ' → ' + work.totals.ctxRefSites);
+  }
+  if (work.totals.ctxFields > prev.totals.ctxFields) {
+    weaker.push('ctxFields ' + prev.totals.ctxFields + ' → ' + work.totals.ctxFields);
+  }
+  if (work.totals.sharedWriteFields < prev.totals.sharedWriteFields) {
+    weaker.push('sharedWriteFields ' + prev.totals.sharedWriteFields + ' → ' + work.totals.sharedWriteFields);
+  }
+  for (const f of Object.keys(prev.fieldWriters)) {
+    const a = (prev.fieldWriters[f] || []).length;
+    const b = ((work.fieldWriters || {})[f] || []).length;
+    if (b < a) weaker.push('писателей у `' + f + '` в файле ' + a + ' → ' + b);
+  }
+  if (weaker.length) {
+    console.log('✗ ctx-ratchet: потолок ОСЛАБЛЕН в scripts/ctx-ratchet-baseline.json');
+    for (const w of weaker) console.log('   • ' + w);
+    console.log('\n  Эталон — закоммиченная версия. Ослабить можно только коммитом,');
+    console.log('  и он будет виден на ревью. Здесь — попытка ослабить молча.');
+    process.exit(1);
+  }
+}
 
 // 1. Модуль не должен взять новое поле.
 for (const [mod, fields] of Object.entries(current.moduleFields)) {
