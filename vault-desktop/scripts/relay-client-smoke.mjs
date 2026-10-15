@@ -25,6 +25,17 @@ globalThis.window = globalThis; // relay-client трогает window.VaultFcm (
 
 writeFileSync(MOCKS + '/core.js',
   'export const invoke = (...a) => globalThis.__invoke(...a);');
+// ADR-001 Этап 2: идентичность вынесена из api.js в identity.js
+// (identity.js → api/relay-client, иначе транспорт тянул api, а api
+// тянул транспорт — цикл). Мок повторяет НОВУЮ форму, иначе копия
+// исходника не резолвится и тест падает на импорте, а не на логике.
+// ADR-001 Этап 2: транспорт тянет примитив токенов канала статическим
+// импортом. Мок отдаёт детерминированные токены: тест этого смоука
+// про публикацию/токены, а не про вывод capability-токенов.
+writeFileSync(MOCKS + '/channels-tokens.js',
+  'export const channelTokens = async () => ({ read: \'RD\', write: \'WR\' });');
+writeFileSync(MOCKS + '/identity.js',
+  'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/api.js',
   'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/crypto.js',
@@ -37,6 +48,8 @@ let src = readFileSync(ROOT + '/../src/relay-client.js', 'utf8');
 src = src
   .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
   .replace("from './api.js'", 'from "' + MOCKS + '/api.js"')
+  .replace("from './identity.js'", 'from "' + MOCKS + '/identity.js"')
+  .replace("from './channels-tokens.js'", 'from "' + MOCKS + '/channels-tokens.js"')
   .replace("import('./crypto.js')", 'import("' + MOCKS + '/crypto.js")')
   .replace("import.meta.env.VITE_RELAY_URL || ''", "''");
 writeFileSync(MOCKS + '/relay-client.mjs', src);

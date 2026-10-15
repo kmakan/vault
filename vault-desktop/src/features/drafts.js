@@ -8,7 +8,8 @@
 // операции идут через очередь на статике модуля, иначе параллельные
 // saveDraft/restoreDraft затирают друг друга (гонка kv).
 
-import { db, accountNamespace } from '../api.js';
+import { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 
 // Сериализует операции с kv-блобом черновиков (гонка save/restore).
 let DRAFT_QUEUE = Promise.resolve();

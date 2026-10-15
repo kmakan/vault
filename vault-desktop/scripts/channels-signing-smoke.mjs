@@ -70,19 +70,30 @@ globalThis.__tokOf = (keyHex) => TOKENS[keyHex];
 
 writeFileSync(MOCKS + '/core.js',
   'export const invoke = (...a) => globalThis.__invoke(...a);');
+// ADR-001 Этап 2: идентичность вынесена из api.js в identity.js
+// (identity.js → api/relay-client, иначе транспорт тянул api, а api
+// тянул транспорт — цикл). Мок повторяет НОВУЮ форму, иначе копия
+// исходника не резолвится и тест падает на импорте, а не на логике.
+writeFileSync(MOCKS + '/identity.js',
+  'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/api.js',
   'export const accountNamespace = (e) => globalThis.__nsOf(String(e || "").trim().toLowerCase());');
 writeFileSync(MOCKS + '/crypto.js',
   'const c = { fingerprint: async () => globalThis.__fp }; export default c;');
-writeFileSync(MOCKS + '/channels.js',
+// ADR-001 Этап 2: channelTokens уехал из фичи в примитив channels-tokens.js,
+// и транспорт тянет его статическим импортом. Мок — на новом месте.
+writeFileSync(MOCKS + '/channels-tokens.js',
   'export const channelTokens = async (keyHex) => globalThis.__tokOf(keyHex);');
+writeFileSync(MOCKS + '/channels.js', 'export const __noop = 1;');
 
 let src = readFileSync(ROOT + '/../src/relay-client.js', 'utf8');
 src = src
   .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
   .replace("from './api.js'", 'from "' + MOCKS + '/api.js"')
+  .replace("from './identity.js'", 'from "' + MOCKS + '/identity.js"')
   .replace("import('./crypto.js')", 'import(' + JSON.stringify(MOCKS + '/crypto.js') + ')')
   .replace("'./features/channels.js'", JSON.stringify(MOCKS + '/channels.js'))
+  .replace("'./channels-tokens.js'", JSON.stringify(MOCKS + '/channels-tokens.js'))
   .replace("import.meta.env.VITE_RELAY_URL || ''", "''");
 writeFileSync(MOCKS + '/relay-client.mjs', src);
 

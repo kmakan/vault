@@ -126,40 +126,6 @@ export function buildHelloPayload(channelId) {
   return JSON.stringify({ channel: 1, chan: channelId, hello: 1, id: newId('hello_'), ts: Date.now() });
 }
 
-// ── Relay channel tokens (M2 channels-3, design §4.1) ─────────
-// The pair is derived from the 32-byte broadcast key, byte-for-byte like
-// vault-relay/src/tokens.rs::channel_tokens (the server never sees the
-// key; possession of the value IS the authorization):
-//   read  = base64url( kid(8) ‖ 'c' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-read") )
-//   write = base64url( kid(8) ‖ 'C' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-write") )
-// kid = first 8 bytes (BE u64) of the READ mac — links the write token to
-// its queue: publish into a channel only accepted with that channel's own
-// write token (cross-channel = 403 on the server).
-
-const _chanTokCache = new Map(); // keyHex → {read, write}
-
-// ADR-001: HMAC-SHA256 и раскладка 45-байтового capability-токена уехали в
-// Rust (src-tauri/src/channels.rs::channel_tokens). Раньше считались здесь
-// через crypto.subtle — это была единственная реальная крипто-математика в
-// JS, и по итогу раскладка была описана в двух местах: здесь и в релее
-// (~/vault-relay-src/src/tokens.rs). Правка одной стороны ломала другую
-// тихо и всплывала как «каналы перестали работать». Теперь источник истины
-// один, а совпадение с релеем запинено общими тест-векторами в Rust.
-//
-// Токены ДЕТЕРМИНИРОВАНЫ по ключу канала и никогда не меняются: смена токена
-// = смена адреса очереди, и подписчики со старым адресом молча теряют канал
-// (инцидент 12.10). Поэтому кэш здесь не «оптимизация», а защита от лишних
-// IPC-вызовов.
-export async function channelTokens(keyHex) {
-  const key = (keyHex || '').trim();
-  const hit = _chanTokCache.get(key);
-  if (hit) return hit;
-  const [read, write] = await invoke('channels_tokens', { keyHex: key });
-  const out = Object.freeze({ read, write });
-  _chanTokCache.set(key, out);
-  return out;
-}
-
 // Owner-side meta publish (t_09bf424a): name/about/avatar updates travel
 // as a meta-конверт — same relay queue + email dup as posts.
 export async function sendChannelMeta(ch, account) {

@@ -18,7 +18,8 @@
 // Инвариант nameOf: name == email — это НЕ имя, а fallback старых
 // клиентов; показываем только настоящее имя.
 
-import api, { db, accountNamespace } from '../api.js';
+import api, { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
 
 // ── Резолв имён/аватаров ───────────────────────────────────────

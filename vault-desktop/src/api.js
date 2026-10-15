@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import cryptoClient from './crypto.js';
+import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import { isRecoveryPending as recoveryIsPending, clearRecoveryPending as recoveryClearPending } from './features/recovery-session.js';
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -75,99 +76,6 @@ const db = {
   autocleanPurge: (account, keysJson) =>
     invoke('db_autoclean_purge', { account, keysJson }),
 };
-
-// ── Account namespace (identity = fingerprint) ─────────────────
-// Клиент больше НЕ передаёт емейл в db.*: резолвер сам выбирает namespace
-// (fp:<fingerprint> если ключ загружен, иначе legacy-емейл) и ОДИН раз
-// переносит старые строки под новый namespace (db_account_migrate —
-// идемпотентная, вся работа на стороне Rust). Емейл — транспорт, не
-// идентичность: смена почты больше не теряет историю/черновики/тумбстоуны.
-//
-// Кэш модульный (по аналогии с relay-client.js cachedFp/cachedFpAccount):
-// крипто-команда get_fingerprint не бесплатная, а резолвер дёргается из
-// десятков мест (черновики, флаги чатов, body-cache, история).
-let _accountNs = null;      // последний вычисленный namespace
-let _accountNsFor = null;   // email, для которого он вычислен
-let _cachedFp = null;       // fingerprint публичного ключа (или '' если нет ключа)
-let _cachedFpKey = null;    // public_key, для которого закэширован _cachedFp
-let _nsMigrated = false;    // миграция namespace уже выполнялась в этой сессии
-
-// Fingerprint нашего публичного ключа. Пустая строка = ключ ещё не загружен
-// (или ошибка) → вызывающий код работает на legacy-емейле, вход не блокируем.
-//
-// Кэш привязан к ЗНАЧЕНИЮ public_key, а не к факту вызова: ключ может
-// появиться позже (вход по recovery-мнемонике грузит пару после первого
-// резолвера). Тогда _cachedFp пересчитывается сам, без ручного сброса.
-async function accountFingerprint() {
-  const pk = (cryptoClient && cryptoClient.publicKey) || '';
-  if (_cachedFp !== null && _cachedFpKey === pk) return _cachedFp;
-  if (!pk) {
-    _cachedFp = '';
-    _cachedFpKey = '';
-    return _cachedFp;
-  }
-  try {
-    const fp = await cryptoClient.fingerprint();
-    _cachedFp = String(fp || '').trim().toLowerCase();
-  } catch (e) {
-    // Сбой крипто-команды — не падаем: legacy-емейл, вход не блокируем.
-    console.log('[identity] fingerprint unavailable:', e && e.message || e);
-    _cachedFp = '';
-  }
-  _cachedFpKey = pk;
-  return _cachedFp;
-}
-
-// Namespace аккаунта для вызова db.*/history.*.
-// Кэш валиден для пары (public_key, email): смена почты даёт другой email,
-// появление ключа — другой public_key → пересчёт.
-export async function accountNamespace(email) {
-  const em = String(email || '').trim().toLowerCase();
-  const pk = (cryptoClient && cryptoClient.publicKey) || '';
-  if (_accountNs !== null && _accountNsFor === em && _cachedFpKey === pk) return _accountNs;
-  const fp = await accountFingerprint();
-  let ns = em;
-  try {
-    const resolved = await invoke('db_account_namespace', { fp, email: em });
-    if (resolved) ns = String(resolved);
-  } catch (e) {
-    // Резолвер недоступен (нет команды/БД) — емейл, вход не блокируем.
-    console.log('[identity] account namespace resolve failed:', e && e.message || e);
-    ns = em;
-  }
-  _accountNs = ns;
-  _accountNsFor = em;
-  return ns;
-}
-
-// Сброс кэшей резолвера (экспорт для точечных вызовов; сам факт смены
-// ключа/почты и так инвалидирует кэш — см. accountFingerprint).
-export function resetAccountNamespaceCache() {
-  _accountNs = null;
-  _accountNsFor = null;
-  _cachedFp = null;
-  _cachedFpKey = null;
-  _nsMigrated = false;
-}
-
-// Резолв + одноразовый перенос legacy-строк (старый емейл → fp-namespace).
-// Вызывается при входе/смене почты, когда ключ уже загружен. Команда
-// db_account_migrate идемпотентна, но и вызываем её мы ровно ОДИН раз на пару.
-export async function ensureAccountNamespace(email) {
-  const ns = await accountNamespace(email);
-  const em = String(email || '').trim().toLowerCase();
-  if (_nsMigrated || !ns.startsWith('fp:') || !em || em === ns) return ns;
-  // Ставим флаг ДО вызова: пара (старый адрес → fp) повторно не обрабатывается.
-  _nsMigrated = true;
-  try {
-    const report = await invoke('db_account_migrate', { fromAccount: em, toAccount: ns });
-    const moved = report && typeof report.total === 'number' ? report.total : 0;
-    console.log(`[identity] namespace migrated: ${em} → ${ns} (moved ${moved})`);
-  } catch (e) {
-    console.warn('[identity] namespace migration failed:', e);
-  }
-  return ns;
-}
 
 // ── Duress-защита ──────────────────────────────────────────────
 export const duressApi = {

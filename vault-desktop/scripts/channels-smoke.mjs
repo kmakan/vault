@@ -61,6 +61,15 @@ src = src.replace("import('../crypto.js')", 'import("/tmp/channels-smoke-mocks/c
 writeFileSync('/tmp/channels-smoke-feature.mjs', src);
 
 const m = await import('/tmp/channels-smoke-feature.mjs');
+
+// ADR-001 Этап 2: channelTokens уехал из фичи в примитив channels-tokens.js
+// (транспорт не должен зависеть от features/*). Тест грузит примитив по его
+// НОВОМУ месту — иначе он проверял бы копию фичи, где функции уже нет, и
+// зелёный прогон означал бы «протестировали не то».
+let tokSrc = readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'channels-tokens.js'), 'utf8');
+tokSrc = tokSrc.replace("from '@tauri-apps/api/core'", 'from "/tmp/channels-smoke-mocks/core.js"');
+writeFileSync('/tmp/channels-smoke-tokens.mjs', tokSrc);
+const tokens = await import('/tmp/channels-smoke-tokens.mjs');
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ok:', name); } else { fail++; console.log('FAIL:', name); } };
 
@@ -121,11 +130,11 @@ const GOLD = {
   read: 'SV_HjXPp5iRj_____0lfx41z6eYkxBwsz_yjudMQsR5y1y_gjWtvThUEHsVi',
   write: 'SV_HjXPp5iRD_____wggA7nRt299pz5hlBU0WewQCsWWD7JgIIcmkz8csufh',
 };
-const tk = await m.channelTokens(GOLD.key);
+const tk = await tokens.channelTokens(GOLD.key);
 ok('channelTokens read == Rust golden', tk.read === GOLD.read);
 ok('channelTokens write == Rust golden', tk.write === GOLD.write);
-ok('channelTokens кэш идемпотентен', (await m.channelTokens(GOLD.key)) === tk);
-let threw = false; try { await m.channelTokens('zz'); } catch { threw = true; }
+ok('channelTokens кэш идемпотентен', (await tokens.channelTokens(GOLD.key)) === tk);
+let threw = false; try { await tokens.channelTokens('zz'); } catch { threw = true; }
 ok('bad key → throw', threw);
 
 // ── sendChannelPost: relay-паб + email-дубли cap 50 ──

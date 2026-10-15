@@ -32,10 +32,12 @@ const stub = (name, body) => writeFileSync(`${MOCKS}/${name}`, body);
 // relay-client.js (*), crypto.js (default), history.js (save/load).
 await stub('api.js', [
   'export const db = { kvGet: async () => null, kvSet: async () => {} };',
-  'export const accountNamespace = async (e) => "anon:" + e;',
   'export default { mediaSetMuted: async () => {}, mediaSetSpeaker: async () => {} };',
   '',
 ].join('\n'));
+// ADR-001 Этап 2: accountNamespace живёт в identity.js, а не в api.js.
+// Мок повторяет новую форму — иначе копия calls.js не резолвится.
+await stub('identity.js', 'export const accountNamespace = async (e) => "anon:" + e;\n');
 await stub('relay-client.js', 'export const getSettings = async () => ({ enabled: false });\nexport const publish = async () => ({});\n');
 await stub('crypto.js', 'export default {};\n');
 await stub('history.js', 'export const saveHistory = async () => {};\nexport const loadHistory = async () => [];\n');

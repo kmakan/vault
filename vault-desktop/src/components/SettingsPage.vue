@@ -419,7 +419,8 @@
 </template>
 
 <script>
-import api, { db, accountNamespace } from '../api.js';
+import api, { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
 import { duressApi } from '../api.js';

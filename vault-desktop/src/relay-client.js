@@ -12,7 +12,8 @@
 //    peer-токены (смена релея = новые токены).
 
 import { invoke } from '@tauri-apps/api/core';
-import { accountNamespace } from './api.js';
+import { accountNamespace } from './identity.js';
+import { channelTokens } from './channels-tokens.js';
 
 // Наш релей (прод). Первый в списке, но НЕ единственный.
 //
@@ -674,8 +675,9 @@ export function isRelayEnvelope(obj) {
 // Channel delivery is fan-out: ONE pub into the channel queue, every
 // subscriber reads the same queue (peek with a `since` cursor on the server,
 // design channels §4.1). Tokens are derived from the broadcast key client-side
-// (features/channels.js::channelTokens) — the server never sees the key,
-// possession of the token IS the authorization.
+// (channels-tokens.js::channelTokens — примитив, не фича: транспорт не должен
+// зависеть от features/*) — the server never sees the key, possession of the
+// token IS the authorization.
 const KV_CHAN_CURSOR = 'relay-channel-cursor'; // {relayUrl: {chId: ts}}
 
 // ADR-002: key_id канала = первые 8 байт канального read-токена, читаем
@@ -740,7 +742,6 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
       if (!enabled) return { ok: false, why: 'disabled' };
       const relay = await pickLiveRelay(account);
       if (!relay) return { ok: false, why: 'no-live-relay' };
-      const { channelTokens } = await import('./features/channels.js');
       const { read, write } = await channelTokens(ch.key);
       const exp = Math.floor(Date.now() / 1000) + 24 * 3600;
       const id = envelopeObj.id || ('ch-' + Date.now());
@@ -813,7 +814,6 @@ export async function relayChannelPoll(ch, account) {
     if (!enabled) return [];
     const relay = await pickLiveRelay(account);
     if (!relay) return [];
-    const { channelTokens } = await import('./features/channels.js');
     const { read } = await channelTokens(ch.key);
     let cursors = {};
     try { cursors = JSON.parse((await invoke('db_kv_get', { account, key: KV_CHAN_CURSOR }).catch(() => null)) || '{}'); } catch (e) { cursors = {}; }

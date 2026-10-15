@@ -12,7 +12,8 @@
 // Инвариант mergeHistory: история — источник правды, письма только
 // ДОБАВЛЯЮТ новое; уже показанное не затирается и не «мерцает».
 
-import { db, accountNamespace } from '../api.js';
+import { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import { saveHistory, loadHistory } from '../history.js';
 
 // ── Ключи ──────────────────────────────────────────────────────

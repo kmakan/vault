@@ -10,7 +10,8 @@
 // Интервал 5 минут (выбор юзера 14.09); «онлайн» живёт 2×интервала + буфер,
 // чтобы точка не гасла из-за задержки SMTP одного письма.
 
-import api, { db, accountNamespace } from '../api.js';
+import api, { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
 
 export const PRESENCE_INTERVAL_MS = 5 * 60 * 1000;   // отправка heartbeat

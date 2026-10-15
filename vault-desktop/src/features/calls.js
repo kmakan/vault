@@ -14,7 +14,8 @@
 // Инвариант: ошибки канала НЕ роняют state machine — релей-копия уходит
 // первой (~1с), SMTP-письмо — фоновый дублирующий канал с ретраями.
 
-import api, { db, accountNamespace } from '../api.js';
+import api, { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';

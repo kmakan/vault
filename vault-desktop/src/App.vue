@@ -891,7 +891,8 @@
 <script>
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import api, { db, accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './api.js';
+import api, { db } from './api.js';
+import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.

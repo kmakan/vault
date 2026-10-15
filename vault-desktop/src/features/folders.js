@@ -8,7 +8,8 @@
 // Папки здесь владеют полем folder; archived/muted читаются этим же модулем
 // (единый kv-блоб), но изменяются из chat-меню (App.vue, toggleArchive/Mute).
 
-import { db, accountNamespace } from '../api.js';
+import { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 
 // Состояние фичи — в ./folders/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...foldersState()`).

@@ -10,7 +10,8 @@
 // («Bad sender»); delete ставит tombstone навсегда (воскресление
 // из письма/истории/All Mail невозможно).
 
-import api, { db, accountNamespace } from '../api.js';
+import api, { db } from '../api.js';
+import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
 
 // ── Хранилище wire-правок ─────────────────────────────────────────────────

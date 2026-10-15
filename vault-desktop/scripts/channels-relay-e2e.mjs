@@ -1,5 +1,5 @@
 // E2E-смоук доставки каналов (t_09bf424a): ВЛАСНЫЕ функции клиента
-// (channelTokens/send-путь из features/channels.js через smoke-обёртку)
+// (примитив channelTokens из channels-tokens.js + send-путь из features/channels.js)
 // против ЖИВОГО relay-сервера. Криптография здесь непрозрачна (body —
 // opaque), фокус — контракт транспорта: авторизация канала, fan-out,
 // курсор since, изоляция каналов. Запуск:
@@ -14,7 +14,7 @@ import net from 'node:net';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
-// ── реальный фича-модуль (те же channelTokens, что в приложении) ──
+// ── реальные модули приложения: фича + примитив токенов ──
 const MOCKS = '/tmp/channels-e2e-mocks';
 mkdirSync(MOCKS, { recursive: true });
 writeFileSync(path.join(MOCKS, 'api.js'), 'export const db = { kvGet: async () => null, kvSet: async () => {} }; export default { sendEmail: async () => ({ ok: true }) };');
@@ -49,6 +49,14 @@ const { webcrypto } = await import('node:crypto');
 if (!globalThis.crypto || !globalThis.crypto.subtle) Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 const chan = await import(MOCKS + '/channels.js');
 
+// ADR-001 Этап 2: channelTokens живёт в примитиве channels-tokens.js, а не в
+// фиче. Тот же мок core.js (в нём channel_tokens считает независимый оракул на
+// node:crypto), но по настоящему месту функции.
+let tokSrc = readFileSync(ROOT + '/src/channels-tokens.js', 'utf8')
+  .replace("from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`);
+writeFileSync(MOCKS + '/channels-tokens.js', tokSrc);
+const tokens = await import(MOCKS + '/channels-tokens.js');
+
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ok:', name); } else { fail++; console.log('FAIL:', name); } };
 
@@ -72,8 +80,8 @@ if (!up) { console.error('relay не отвечает на', base); process.exit
 try {
   // broadcast-ключи канала A и «чужого» канала B (32B hex, как channels.rs)
   const keyA = 'aa'.repeat(32), keyB = 'bb'.repeat(32);
-  const tokA = await chan.channelTokens(keyA);
-  const tokB = await chan.channelTokens(keyB);
+  const tokA = await tokens.channelTokens(keyA);
+  const tokB = await tokens.channelTokens(keyB);
   ok('токены A≠B', tokA.read !== tokB.read && tokA.write !== tokB.write);
 
   const pub = (body, auth) => fetch(base + '/relay/pub', {

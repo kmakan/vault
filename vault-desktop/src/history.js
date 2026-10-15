@@ -9,7 +9,8 @@
 // истины вообще.
 // Заметки для себя (__notes__) сюда НЕ пишутся — они живут в localStorage.
 
-import { db, accountNamespace } from './api.js';
+import { db } from './api.js';
+import { accountNamespace } from './identity.js';
 
 // ВНИМАНИЕ: account — это уже namespace (fp:<fingerprint>), а не емейл.
 // Резолвер идемпотентен и кэширован, поэтому повторный вызов на каждый
