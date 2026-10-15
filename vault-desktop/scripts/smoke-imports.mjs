@@ -37,8 +37,16 @@ export function absolutizeImports(src, fromDir) {
 //              Имя файла мока, а не путь: полный путь достраивается от mocksDir.
 //              Голый спецификатор ('api.js') Node не разрешает — это молча падает
 //              как ERR_MODULE_NOT_FOUND, поэтому строим путь здесь.
+//   extra    — массив [что_заменить, на_что]. Нужен для мест, где подмена не
+//              импорт:
+//                · динамический импорт import('./crypto.js') — не `from ...`,
+//                  и общий переписыватель импортов его не видит;
+//                · выражения вида import.meta.env.VITE_RELAY_URL || '' — в Node
+//              import.meta.env не существует, и модуль падает при загрузке.
+//              Эти подмены терялись при первой же конвертации, потому что
+//              шаблон искал только `from '...'`; восемь смоуков падали на этом.
 // Возвращает путь к записанной копии.
-export function prepareModuleCopy(realFile, outFile, mocks, mocksDir) {
+export function prepareModuleCopy(realFile, outFile, mocks, mocksDir, extra) {
   mkdirSync(mocksDir, { recursive: true });
   let src = readFileSync(realFile, 'utf8');
   // Сначала моки: они должны выиграть, потому что absolutizeImports идёт после.
@@ -46,6 +54,12 @@ export function prepareModuleCopy(realFile, outFile, mocks, mocksDir) {
     const target = path.isAbsolute(mockFile) ? mockFile : path.join(mocksDir, mockFile);
     src = src.split("from '" + spec + "'").join('from "' + target + '"');
     src = src.split('from "' + spec + '"').join('from "' + target + '"');
+    // Динамический импорт: import('./crypto.js') и import("./crypto.js").
+    src = src.split("import('" + spec + "')").join('import("' + target + '")');
+    src = src.split('import("' + spec + '")').join('import("' + target + '")');
+  }
+  for (const [from, to] of extra || []) {
+    src = src.split(from).join(to);
   }
   src = absolutizeImports(src, path.dirname(realFile));
   writeFileSync(outFile, src);

@@ -1,6 +1,7 @@
 // Node-смоук features/invites.js — обработка входящих приглашений в группы.
 // Мокаем api + ctx-методы. Без Vue/Tauri.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -24,9 +25,14 @@ const apiMock = {
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api;');
 globalThis.__apiMock = apiMock;
 
-let inv = readFileSync(ROOT + '/src/features/invites.js', 'utf8');
-inv = inv.replace("from '../api.js'", 'from "' + MOCKS + '/api.js"');
-writeFileSync(MOCKS + '/invites.mjs', inv);
+prepareModuleCopy(
+  ROOT + '/src/features/invites.js',
+  MOCKS + '/invites.mjs',
+  {
+    '../api.js': 'api.js',
+  },
+  MOCKS,
+);
 const { processInvites } = await import(MOCKS + '/invites.mjs');
 
 let pass = 0, fail = 0;

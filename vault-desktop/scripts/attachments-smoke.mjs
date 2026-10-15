@@ -4,6 +4,7 @@
 // ВЫНЕСЕННУЮ из App.vue логику от регрессий (кэш DoD, play/stop голосовых,
 // лимиты провайдера, заметки) после декомпозиции.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -51,14 +52,18 @@ const apiMock = {
 };
 globalThis.__apiMock = apiMock;
 
-let att = readFileSync(ROOT + '/src/features/attachments.js', 'utf8');
-att = att
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace("from '../chatExport.js'", 'from "' + MOCKS + '/chatExport.js"')
-  .replace("from '../mailProviders.js'", 'from "' + MOCKS + '/mailProviders.js"');
-writeFileSync(MOCKS + '/attachments.mjs', att);
+prepareModuleCopy(
+  ROOT + '/src/features/attachments.js',
+  MOCKS + '/attachments.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+    '../chatExport.js': 'chatExport.js',
+    '../mailProviders.js': 'mailProviders.js',
+  },
+  MOCKS,
+);
 const A = await import(MOCKS + '/attachments.mjs');
 
 // ── Хелперы ────────────────────────────────────────────────────

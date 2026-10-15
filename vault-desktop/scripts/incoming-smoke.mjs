@@ -1,6 +1,7 @@
 // Node-смоук features/incoming.js — семантика router без Vue/Tauri.
 // Мокаем api/crypto/relay/notify через подмену импортов (заглушки в tmp-модулях).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -52,16 +53,20 @@ globalThis.__relayMock = relayMock;
 globalThis.__notifyMock = notifyMock;
 
 // Подменяем резолверincoming-импортов: копия incoming.js с переписанными путями
-let inc = readFileSync(ROOT + '/src/features/incoming.js', 'utf8');
-inc = inc
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"')
-  .replace("from '../notify.js'", 'from "' + MOCKS + '/notify.js"')
-  .replace("from './presence.js'", 'from "' + MOCKS + '/presence.js"')
-  .replace("from './channels.js'", 'from "' + MOCKS + '/channels.js"')
-  .replace("from './bounce.js'", 'from "' + MOCKS + '/bounce.js"');
-writeFileSync(MOCKS + '/incoming.mjs', inc);
+prepareModuleCopy(
+  ROOT + '/src/features/incoming.js',
+  MOCKS + '/incoming.mjs',
+  {
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+    '../relay-client.js': 'relay-client.js',
+    '../notify.js': 'notify.js',
+    './presence.js': 'presence.js',
+    './channels.js': 'channels.js',
+    './bounce.js': 'bounce.js',
+  },
+  MOCKS,
+);
 // presence-мок: сигналы presence в этих тестах не разбираем (свой смоук)
 writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
 // bounce: РЕАЛЬНЫЙ модуль (чистые функции, без внешних импортов) — проверяем
@@ -70,11 +75,15 @@ writeFileSync(MOCKS + '/bounce.js',
   'export * from ' + JSON.stringify(ROOT + '/src/features/bounce.js') + ';');
 // channels: реальный модуль (проверяем и канальную ветку incoming) с
 // подменой внешним импортов — тот же приём, что в channels-smoke.
-let chan = readFileSync(ROOT + '/src/features/channels.js', 'utf8');
-chan = chan
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"');
-writeFileSync(MOCKS + '/channels-real.mjs', chan);
+prepareModuleCopy(
+  ROOT + '/src/features/channels.js',
+  MOCKS + '/channels-real.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    '../api.js': 'api.js',
+  },
+  MOCKS,
+);
 writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
 writeFileSync(MOCKS + '/channels.js', 'export * from "' + MOCKS + '/channels-real.mjs";');
 const { processIncoming } = await import(MOCKS + '/incoming.mjs');

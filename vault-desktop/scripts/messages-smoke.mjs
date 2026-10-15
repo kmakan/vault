@@ -5,6 +5,7 @@
 // (реакция/правка/квитанция/call не рендерятся), envelope→text, дедуп,
 // stale-guard. Поведение 1:1 с исходным inline-методом App.vue.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -24,12 +25,16 @@ writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; exp
 writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
 globalThis.__apiMock = apiMock; globalThis.__dbMock = dbMock; globalThis.__cryptoMock = cryptoMock;
 
-let m = readFileSync(ROOT + '/src/features/messages.js', 'utf8');
-m = m
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace("from './presence.js'", 'from "' + MOCKS + '/presence.js"');
-writeFileSync(MOCKS + '/messages.mjs', m);
+prepareModuleCopy(
+  ROOT + '/src/features/messages.js',
+  MOCKS + '/messages.mjs',
+  {
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+    './presence.js': 'presence.js',
+  },
+  MOCKS,
+);
 const M = await import(MOCKS + '/messages.mjs');
 
 let pass = 0, fail = 0;

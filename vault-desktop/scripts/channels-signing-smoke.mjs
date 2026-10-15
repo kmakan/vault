@@ -19,6 +19,7 @@
 // переписываем импорты копии исходника. Копия, а не сам модуль: иначе тест
 // проверял бы не то, что собирается в приложении.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/channels-signing-smoke-mocks';
@@ -86,16 +87,22 @@ writeFileSync(MOCKS + '/channels-tokens.js',
   'export const channelTokens = async (keyHex) => globalThis.__tokOf(keyHex);');
 writeFileSync(MOCKS + '/channels.js', 'export const __noop = 1;');
 
-let src = readFileSync(ROOT + '/../src/relay-client.js', 'utf8');
-src = src
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from './api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from './identity.js'", 'from "' + MOCKS + '/identity.js"')
-  .replace("import('./crypto.js')", 'import(' + JSON.stringify(MOCKS + '/crypto.js') + ')')
-  .replace("'./features/channels.js'", JSON.stringify(MOCKS + '/channels.js'))
-  .replace("'./channels-tokens.js'", JSON.stringify(MOCKS + '/channels-tokens.js'))
-  .replace("import.meta.env.VITE_RELAY_URL || ''", "''");
-writeFileSync(MOCKS + '/relay-client.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/relay-client.js',
+  MOCKS + '/relay-client.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    './api.js': 'api.js',
+    './identity.js': 'identity.js',
+    './crypto.js': 'crypto.js',
+  },
+  MOCKS,
+  [
+    ["'./features/channels.js'", JSON.stringify(MOCKS + "/channels.js")],
+    ["'./channels-tokens.js'", JSON.stringify(MOCKS + "/channels-tokens.js")],
+    ["import.meta.env.VITE_RELAY_URL || ''", "''"],
+  ],
+);
 
 // ── HTTP-заглушка ────────────────────────────────────────────────────
 const calls = [];

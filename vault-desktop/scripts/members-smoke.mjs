@@ -1,6 +1,7 @@
 // Node-смоук features/members.js — приглашение участников в группу.
 // Мокаем api/crypto/invoke + ctx. Без Vue/Tauri.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -33,12 +34,16 @@ writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; exp
 writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__invokeMock.rename(...a);');
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock; globalThis.__invokeMock = invokeMock;
 
-let m = readFileSync(ROOT + '/src/features/members.js', 'utf8');
-m = m
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/members.mjs', m);
+prepareModuleCopy(
+  ROOT + '/src/features/members.js',
+  MOCKS + '/members.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+  },
+  MOCKS,
+);
 const { inviteSelectedMembers } = await import(MOCKS + '/members.mjs');
 
 let pass = 0, fail = 0;

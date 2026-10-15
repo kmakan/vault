@@ -4,6 +4,7 @@
 //
 // Запуск: node scripts/video-smoke.mjs
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -201,9 +202,14 @@ globalThis.MediaStreamTrackProcessor = class {
 };
 
 // ── Загрузка features/video.js с подменённым импортом api ──────
-let src = readFileSync(ROOT + '/../src/features/video.js', 'utf8');
-src = src.replace("from '../api.js'", 'from "' + MOCKS + '/api.js"');
-writeFileSync(MOCKS + '/features-video.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/video.js',
+  MOCKS + '/features-video.mjs',
+  {
+    '../api.js': 'api.js',
+  },
+  MOCKS,
+);
 const V = await import(MOCKS + '/features-video.mjs');
 
 // ── Хелперы ────────────────────────────────────────────────────

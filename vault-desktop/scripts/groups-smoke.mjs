@@ -5,6 +5,7 @@
 // meta/hav не рендерятся как сообщения), дедуп по id конверта, crypto-фильтр.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-smoke-mocks';
@@ -32,36 +33,17 @@ globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
 globalThis.__cryptoMock = cryptoMock;
 
-let g = readFileSync(ROOT + '/src/features/groups.js', 'utf8');
-g = g
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace("from './presence.js'", 'from "' + MOCKS + '/presence.js"');
-
-// ПЕРЕПИСЫВАНИЕ ОСТАВШИХСЯ ОТНОСИТЕЛЬНЫХ ИМПОРТОВ — ОБЩЕЕ, А НЕ ПО СПИСКУ.
-//
-// Модуль копируется в /tmp, поэтому любой его относительный импорт
-// ../identity.js оттуда разрешается в /tmp/identity.js и падает с
-// ERR_MODULE_NOT_FOUND. Раньше список подменяемых импортов писался руками, и
-// КАЖДОЕ новое добавление в groups.js ломало этот смоук молча — я так сломал
-// его сам, внеся импорт group-pin-wire, и не заметил, потому что смоук не был
-// в моём списке приёмки.
-//
-// Теперь: сначала ВСЕ относительные импорты переводятся в абсолютные пути
-// настоящих файлов, затем те, что нужно подменить, затираются на моки. Новый
-// импорт в groups.js больше не может сломать этот смоук.
-g = g.replace(/(from\s+['"])(\.{1,2}\/[^'"]+)(['"])/g, (m, pre, rel, post) => {
-  // resolve от каталога, а не от dirname: rel уже несёт ./ или ../, и лишний
-  // dirname съедал сегмент features (это и случилось в первой версии).
-  const abs = path.resolve(ROOT + '/src/features', rel);
-  return pre + abs + post;
-});
-g = g
-  .replace("from '" + ROOT + "/src/api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace('from "' + ROOT + '/src/api.js"', 'from "' + MOCKS + '/api.js"')
-  .replace("from '" + ROOT + "/src/crypto.js'", 'from "' + MOCKS + '/crypto.js"')
-  .replace('from "' + ROOT + '/src/crypto.js"', 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/groups.mjs', g);
+prepareModuleCopy(
+  ROOT + '/src/features/groups.js',
+  MOCKS + '/groups.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+    './presence.js': 'presence.js',
+  },
+  MOCKS,
+);
 const G = await import(MOCKS + '/groups.mjs');
 
 let pass = 0, fail = 0;

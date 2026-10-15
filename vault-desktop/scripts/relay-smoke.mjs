@@ -2,6 +2,7 @@
 // Vue/Tauri (паттерн incoming-smoke.mjs). setInterval/setTimeout —
 // управляемые моки (без реального ожидания).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 
@@ -43,11 +44,15 @@ globalThis.__dbMock = dbMock;
 globalThis.__relayMock = relayMock;
 
 // Подмена резолвера: копия relay.js с переписанными путями
-let src = readFileSync(ROOT + '/../src/features/relay.js', 'utf8');
-src = src
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"');
-writeFileSync(MOCKS + '/features-relay.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/features/relay.js',
+  MOCKS + '/features-relay.mjs',
+  {
+    '../api.js': 'api.js',
+    '../relay-client.js': 'relay-client.js',
+  },
+  MOCKS,
+);
 const R = await import(MOCKS + '/features-relay.mjs');
 
 // ── Управляемые таймеры ────────────────────────────────────────

@@ -1,6 +1,7 @@
 // Node-смоук features/group-meta.js — сканирование meta-писем групп.
 // Мокаем api/crypto/db/invoke + ctx. Без Vue/Tauri.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -31,12 +32,16 @@ writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock;
 globalThis.__dbMock = dbMock; globalThis.__invokeMock = invokeMock;
 
-let gm = readFileSync(ROOT + '/src/features/group-meta.js', 'utf8');
-gm = gm
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/group-meta.mjs', gm);
+prepareModuleCopy(
+  ROOT + '/src/features/group-meta.js',
+  MOCKS + '/group-meta.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+  },
+  MOCKS,
+);
 const { syncGroupAvatarsFromMeta } = await import(MOCKS + '/group-meta.mjs');
 
 let pass = 0, fail = 0;

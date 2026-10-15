@@ -4,6 +4,7 @@
 // guards, заметки, шифрование (группа/пир), оптимистичный предпросмотр + статусы,
 // persist. Поведение 1:1 с inline-методом App.vue.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -27,9 +28,21 @@ writeFileSync(MOCKS + '/relay-client.js',
   'export const fingerprintOf = async () => null; export const relayPublish = () => Promise.resolve({ ok: true });');
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock;
 
-let s = readFileSync(ROOT + '/src/features/send.js', 'utf8');
-s = s.replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"').replace("from '../api.js'", 'from "' + MOCKS + '/api.js"').replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"').replace("from '../relay-client.js'", 'from "' + MOCKS + '/relay-client.js"');
-writeFileSync(MOCKS + '/send.mjs', s);
+prepareModuleCopy(
+  ROOT + '/src/features/send.js',
+  MOCKS + '/send.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    // Оригинал писал все четыре .replace В ОДНУ СТРОКУ, и построчный разбор
+    // увидел только первый: остальные моки молча потерялись, а модуль начал
+    // подтягивать настоящие api/crypto/relay-client — и падал на localStorage.
+    // Без них тест проходил бы на подделке, а не на коде.
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+    '../relay-client.js': 'relay-client.js',
+  },
+  MOCKS,
+);
 const S = await import(MOCKS + '/send.mjs');
 
 // браузерные глобалы, отсутствующие в Node (в Tauri/WebView есть)

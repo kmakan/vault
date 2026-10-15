@@ -1,6 +1,7 @@
 // Node-смоук features/receipts.js — квитанции о доставке.
 // Мокаем api/crypto/db + ctx. Без Vue/Tauri.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -36,11 +37,15 @@ writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export defau
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock; globalThis.__dbMock = dbMock;
 
-let rc = readFileSync(ROOT + '/src/features/receipts.js', 'utf8');
-rc = rc
-  .replace("from '../api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from '../crypto.js'", 'from "' + MOCKS + '/crypto.js"');
-writeFileSync(MOCKS + '/receipts.mjs', rc);
+prepareModuleCopy(
+  ROOT + '/src/features/receipts.js',
+  MOCKS + '/receipts.mjs',
+  {
+    '../api.js': 'api.js',
+    '../crypto.js': 'crypto.js',
+  },
+  MOCKS,
+);
 const { sendDeliveredReceipts } = await import(MOCKS + '/receipts.mjs');
 
 let pass = 0, fail = 0;

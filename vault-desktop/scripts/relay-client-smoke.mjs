@@ -5,6 +5,7 @@
 // `keep` (чистая установка) — как раньше; (3) заявка уходит один раз за
 // запуск; (4) ответ сервера (тот же токен / новый) кладётся в kv.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/relay-client-smoke-mocks';
@@ -44,15 +45,21 @@ writeFileSync(MOCKS + '/crypto.js',
 // чтобы воспроизвести регресс 25dd18a (from уезжал отпечатком).
 globalThis.__nsOf = (e) => e;
 
-let src = readFileSync(ROOT + '/../src/relay-client.js', 'utf8');
-src = src
-  .replace("from '@tauri-apps/api/core'", 'from "' + MOCKS + '/core.js"')
-  .replace("from './api.js'", 'from "' + MOCKS + '/api.js"')
-  .replace("from './identity.js'", 'from "' + MOCKS + '/identity.js"')
-  .replace("from './channels-tokens.js'", 'from "' + MOCKS + '/channels-tokens.js"')
-  .replace("import('./crypto.js')", 'import("' + MOCKS + '/crypto.js")')
-  .replace("import.meta.env.VITE_RELAY_URL || ''", "''");
-writeFileSync(MOCKS + '/relay-client.mjs', src);
+prepareModuleCopy(
+  ROOT + '/../src/relay-client.js',
+  MOCKS + '/relay-client.mjs',
+  {
+    '@tauri-apps/api/core': 'core.js',
+    './api.js': 'api.js',
+    './identity.js': 'identity.js',
+    './channels-tokens.js': 'channels-tokens.js',
+    './crypto.js': 'crypto.js',
+  },
+  MOCKS,
+  [
+    ["import.meta.env.VITE_RELAY_URL || ''", "''"],
+  ],
+);
 
 // ── HTTP-заглушка ──────────────────────────────────────────────
 const fetchCalls = [];

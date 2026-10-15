@@ -6,6 +6,7 @@
 // «Not connected», persist. Downstream (processIncoming/processInvites/...)
 // остаются в App.vue и замоканы как ctx-методы.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -39,9 +40,14 @@ writeFileSync(MOCKS + '/api.js',
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
 
-let em = readFileSync(ROOT + '/src/features/emails.js', 'utf8');
-em = em.replace("from '../api.js'", 'from "' + MOCKS + '/api.js"');
-writeFileSync(MOCKS + '/emails.mjs', em);
+prepareModuleCopy(
+  ROOT + '/src/features/emails.js',
+  MOCKS + '/emails.mjs',
+  {
+    '../api.js': 'api.js',
+  },
+  MOCKS,
+);
 const E = await import(MOCKS + '/emails.mjs');
 
 // ── Хелперы ────────────────────────────────────────────────────
