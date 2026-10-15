@@ -80,6 +80,58 @@ ok('по расширению .rs → текст', M.isTextMime('', 'main.rs') =
 ok('по расширению .png → не текст', M.isTextMime('image/png', 'a.png') === false);
 ok('application/octet-stream → не текст', M.isTextMime('application/octet-stream', 'x') === false);
 
+// ── parseMessageContent: вложения и DoD ──────────────────────────────
+// DoD (download-on-demand) — данные НЕ в конверте, а во втором письме. Карточка
+// рисуется сразу, содержимое тянется по клику. Отсюда правило: для DoD НЕЛЬЗЯ
+// ставить isImage/isAudio/isText и textContent — иначе UI нарисует заглушку
+// («имя файла») вместо картинки, которая уже скачана. Это регрессия a6204d6,
+// и до переноса она была НЕ покрыта тестом вовсе: attachments-smoke проверяет
+// загрузку и кэш DoD, но не распознавание. Перенос закрыл дыру.
+const att = (o) => JSON.stringify(Object.assign({ vault_attachment: 1 }, o));
+const dec = (b64) => Buffer.from(b64, 'base64').toString('binary');
+
+// Обычная картинка: данных в конверте нет, но она НЕ DoD.
+let p = M.parseMessageContent(att({ name: 'a.png', type: 'image/png', size: 100, data: dec('X') }));
+ok('обычная картинка помечена isImage', p.attachment.isImage === true);
+ok('обычная картинка не DoD', p.attachment.isDod === false && p.attachment.dod === '');
+
+// DoD-картинка: те же mime и данные, но dod задан — ключевой случай a6204d6.
+p = M.parseMessageContent(att({ name: 'b.png', type: 'image/png', size: 2048, dod: '<dod@x>' }));
+ok('DoD-картинка НЕ помечается isImage (иначе UI рисует имя файла)',
+  p.attachment.isImage === false);
+ok('DoD-картинка не isAudio и не isText', !p.attachment.isAudio && !p.attachment.isText);
+ok('textContent у DoD пуст даже для текстового типа',
+  M.parseMessageContent(att({ name: 'c.txt', type: 'text/plain', size: 10, dod: '<d@x>' }))
+    .attachment.textContent === '');
+ok('ссылка на письмо сохранена', p.attachment.dod === '<dod@x>');
+ok('статус загрузки idle на старте', p.attachment.dodStatus === 'idle');
+
+// Явный dod: '' — это НЕ DoD (проверка длины, а не наличия поля).
+p = M.parseMessageContent(att({ name: 'd.png', type: 'image/png', size: 1, data: dec('Y'), dod: '' }));
+ok('пустой dod не считается DoD', p.attachment.isDod === false && p.attachment.isImage === true);
+
+// Текстовый файл: инлайн, с обрезкой по 8000 символов.
+const long = 'A'.repeat(9000);
+p = M.parseMessageContent(att({ name: 'e.txt', type: 'text/plain', size: 9000,
+  data: Buffer.from(long, 'utf8').toString('base64') }));
+ok('текстовый файл распознан как isText', p.attachment.isText === true);
+// Обрезка: slice(0, 8000) + '\n…' — это ДВА добавленных символа, итого 8002.
+// Первый вариант проверял 8001 и падал: арифметика была моя, не код.
+ok('длинный текст обрезан по 8000 + перенос и многоточие',
+  p.attachment.textContent.length === 8002 && p.attachment.textContent.endsWith('\n…'));
+
+// Аудио и метка с размером.
+p = M.parseMessageContent(att({ name: 'v.ogg', type: 'audio/ogg', size: 51200, data: dec('Z') }));
+ok('аудио помечено isAudio', p.attachment.isAudio === true);
+ok('метка аудио с эмодзи 🎙️', p.text.startsWith('🎙️'));
+p = M.parseMessageContent(att({ name: 'big.bin', type: 'application/octet-stream', size: 2048, data: dec('Q') }));
+ok('прочий файл — метка с размером в КБ', p.text.includes('2.0KB'));
+
+// Не-вложение и мусор.
+ok('обычный текст остаётся текстом', M.parseMessageContent('просто текст').attachment === null);
+ok('не-строка проходит насквозь', M.parseMessageContent(null).text === null);
+ok('битый JSON не роняет разбор', M.parseMessageContent('{не json').text === '{не json');
+
 // ── прочее ────────────────────────────────────────────────────────────
 ok('imapCursorsKey собирает ключ', M.imapCursorsKey('fp:aa') === 'vault-imap-cursors-fp:aa');
 const id1 = M.newMessageId();

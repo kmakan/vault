@@ -76,3 +76,42 @@ export function linkify(text) {
   tmp = tmp.replace(/\u0000P(\d+)\u0000/g, (_, i) => `<a href="tel:${phones[+i]}" data-phone="${phones[+i]}" class="msg-link msg-phone">${phones[+i]}</a>`);
   return tmp;
 }
+
+export function parseMessageContent(content) {
+  if (!content || typeof content !== 'string') return { text: content, attachment: null };
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && parsed.vault_attachment) {
+      const isImage = parsed.type && parsed.type.startsWith('image/');
+      const isAudio = parsed.type && parsed.type.startsWith('audio/');
+      // Текстовые файлы (text/*, json, md, csv...) показываем инлайн,
+      // как картинки/аудио, а не только как файл для скачивания.
+      const isText = !isImage && !isAudio && isTextMime(parsed.type, parsed.name);
+      let textContent = '';
+      if (isText) {
+        try {
+          textContent = atob(String(parsed.data || '').replace(/-/g, '+').replace(/_/g, '/'));
+          try { textContent = decodeURIComponent(escape(textContent)); } catch { /* уже utf-8 */ }
+        } catch { textContent = ''; }
+        if (textContent.length > 8000) textContent = textContent.slice(0, 8000) + '\n…';
+      }
+      const label = isAudio
+        ? `🎙️ ${parsed.name}`
+        : (isImage ? `📎 ${parsed.name}` : `📎 ${parsed.name} (${(parsed.size / 1024).toFixed(1)}KB)`);
+      // Download-on-demand: данные НЕ в конверте — во втором письме
+      // (dod = его Message-ID). Карточка рендерится сразу (имя/размер
+      // из меты), содержимое подтягивается по клику — fetchDodAttachment.
+      const isDod = typeof parsed.dod === 'string' && parsed.dod.length > 0;
+      return {
+        text: label,
+        attachment: {
+          name: parsed.name, type: parsed.type, size: parsed.size, data: parsed.data,
+          isImage: isImage && !isDod, isAudio: isAudio && !isDod, isText: isText && !isDod,
+          textContent: isDod ? '' : textContent,
+          isDod, dod: isDod ? parsed.dod : '', dodStatus: 'idle', // idle|loading|ready|error
+        },
+      };
+    }
+  } catch { /* not JSON — plain text message */ }
+  return { text: content, attachment: null };
+}
