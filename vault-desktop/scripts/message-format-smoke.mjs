@@ -138,5 +138,36 @@ const id1 = M.newMessageId();
 ok('newMessageId непустой и строковый', typeof id1 === 'string' && id1.length > 0);
 ok('newMessageId даёт разные значения', M.newMessageId() !== M.newMessageId());
 
+// ── extractPhonesAndUrls: меню сообщения ──────────────────────────────
+// Ключевое: телефон берётся ТОЙ ЖЕ регуляркой, что и linkify. Копии регулярки
+// в App.vue и модуле разъехались бы при правке одной из них, и в меню попадал
+// бы другой набор номеров, чем в тексте сообщения.
+let ex = M.extractPhonesAndUrls('звони +7 (999) 123-45-67 или 8 800 555 35 35');
+ok('телефоны извлечены в порядке появления', ex.phones.length === 2
+   && ex.phones[0] === '+7 (999) 123-45-67' && ex.phones[1] === '8 800 555 35 35');
+
+ex = M.extractPhonesAndUrls('пиши на +7 999 123 45 67 и на 8 800 555 35 35');
+ok('дубликаты номеров убраны', new Set(ex.phones).size === ex.phones.length);
+
+ex = M.extractPhonesAndUrls('ссылка https://ex.com/a?b=1 и вторая https://ex.org/c');
+ok('ссылки извлечены', ex.urls.join(',') === 'https://ex.com/a?b=1,https://ex.org/c');
+ok('телефон в тексте со ссылкой не ловится как URL',
+  M.extractPhonesAndUrls('+7 999 123 45 67 см. https://ex.com').urls.join(',') === 'https://ex.com');
+
+// URL-регулярка для меню ОТЛИЧАЕТСЯ от linkify намеренно: в меню текст не
+// вставляется в HTML, поэтому ']' и ')' не должны обрывать ссылку, а лишние
+// скобки не должны попадать в href. Это зафиксировано, чтобы «случайно исправить
+// и не сломать» не выглядело как равнозначная правка.
+ex = M.extractPhonesAndUrls('см. (https://ex.com/a) и [https://ex.org/b]');
+ok('скобки не входят в ссылку меню',
+  ex.urls.length === 2 && !ex.urls[0].includes(')') && !ex.urls[1].includes(']'));
+
+// Однобуквенный домен отбрасывается: минимум два символа после //.
+ex = M.extractPhonesAndUrls('https://a https://ab');
+ok('слишком короткая ссылка отброшена', ex.urls.join(',') === 'https://ab');
+
+ex = M.extractPhonesAndUrls('');
+ok('пустой текст → пустые списки, без исключения', ex.phones.length === 0 && ex.urls.length === 0);
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

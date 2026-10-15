@@ -936,6 +936,7 @@ import * as PollFeature from './features/poll.js';
 // вынесены из компонента. Ни одного this.* в них не было — они просто жили
 // здесь, потому что компонент был единственным местом, где можно было писать JS.
 import * as MsgFormat from './message-format.js';
+import * as Clipboard from './clipboard.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -4049,16 +4050,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const phoneEl = e.target.closest('a[data-phone]');
       if (phoneEl) { e.preventDefault(); this.copyText(phoneEl.dataset.phone); }
     },
+    // ADR-003 Этап 3: извлечение телефонов и ссылок — в message-format.js.
+    // Регулярка телефона теперь ОДНА на этот метод и linkify: копии в App.vue
+    // и в модуле разъехались бы, и в меню попадал бы другой набор номеров,
+    // чем в тексте сообщения.
     openMessageMenu(event, msg) {
       // меню открывается, шаблон прячет неприменимое по msg.callEvent.
       const content = msg.callEvent ? '' : (msg.content || '');
-      const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
-      const phones = [...content.matchAll(PHONE_RE)]
-        .map(m => m[0].trim())
-        .filter((v, i, a) => a.indexOf(v) === i);
-      const urls = [...content.matchAll(/https?:\/\/[^\s\]\)"']{2,}/g)]
-        .map(m => m[0])
-        .filter((v, i, a) => a.indexOf(v) === i);
+      const { phones, urls } = MsgFormat.extractPhonesAndUrls(content);
       // Android WebView при долгом нажатии иногда присылает clientX/Y=0
       // (как в openChatMenu) — берём координаты пузыря, иначе меню в углу.
       let x = event.clientX, y = event.clientY;
@@ -4095,25 +4094,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     openAppSite() { return ExtLinks.openAppSite(); },
     // Копирование с fallback для WebKitGTK (clipboard API может быть
     // недоступен без фокуса — тогда через временный textarea).
+    // ADR-003 Этап 3: сама попытка копирования — в clipboard.js, алерты здесь.
+    // Так фолбэк через execCommand проверяется тестом, а не подделкой UI.
     async copyText(text) {
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(text);
-          alert(this.t('copied') || 'Скопировано');
-          return;
-        }
-      } catch (e) { /* fallback ниже */ }
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+      if (await Clipboard.copyTextToClipboard(text)) {
         alert(this.t('copied') || 'Скопировано');
-      } catch (e) {
+      } else {
         alert(this.t('copy_failed') || 'Не удалось скопировать');
       }
     },

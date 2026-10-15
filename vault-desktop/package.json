@@ -17,6 +17,7 @@
     "smoke:groups-clone": "node scripts/groups-clone-smoke.mjs",
     "smoke:groups-create": "node scripts/groups-create-smoke.mjs",
     "smoke:migrations": "node scripts/migrations-smoke.mjs",
+    "smoke:clipboard": "node scripts/clipboard-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "smoke:adr002-e2e": "node scripts/adr002-e2e.mjs"

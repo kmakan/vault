@@ -62,6 +62,28 @@ export function senderEmail(raw) {
   return (m ? m[1] : raw).trim().toLowerCase();
 }
 
+// Регулярка телефона ОДНА на linkify и меню сообщения. Копии в App.vue и здесь
+// разъехались бы при правке одной из них: в меню попадал бы другой набор
+// номеров, чем в тексте, и пользователь увидел бы разное в двух местах одного
+// сообщения.
+const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
+// URL для МЕНЮ — своя регулярка, не путать с регуляркой linkify: здесь
+// отбрасываются ']' и ')' (текст вставляется в меню, а не в HTML), и требуется
+// минимум два символа. Расхождение с linkify намеренное и зафиксировано тестом.
+const MENU_URL_RE = /https?:\/\/[^\s\])"']{2,}/g;
+
+// Телефоны и ссылки из текста сообщения — для контекстного меню. Дубликаты
+// убираются по первому вхождению (порядок появления в тексте).
+export function extractPhonesAndUrls(content) {
+  const phones = [...content.matchAll(PHONE_RE)]
+    .map(m => m[0].trim())
+    .filter((v, i, a) => a.indexOf(v) === i);
+  const urls = [...content.matchAll(MENU_URL_RE)]
+    .map(m => m[0])
+    .filter((v, i, a) => a.indexOf(v) === i);
+  return { phones, urls };
+}
+
 export function linkify(text) {
   // Безопасная автолинковка: текст → экранированный HTML → ссылки/телефоны.
   // Телефоны заменяются через плейсхолдеры ДО URL, чтобы не пересекаться.
@@ -70,7 +92,6 @@ export function linkify(text) {
   // Телефон: код (+7/8/международный до 3 цифр) опционален, разделители
   // (пробел/скобки/дефисы) — в любом количестве и любом месте между
   // группами: 8(999)123-45-67, +7 (999) 123 45 67, +380 67 123 45 67.
-  const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
   let tmp = esc.replace(PHONE_RE, (m) => { phones.push(m.trim()); return `\u0000P${phones.length - 1}\u0000`; });
   tmp = tmp.replace(/(https?:\/\/[^\s<"']+)/g, '<a href="$1" data-url="$1" class="msg-link">$1</a>');
   tmp = tmp.replace(/\u0000P(\d+)\u0000/g, (_, i) => `<a href="tel:${phones[+i]}" data-phone="${phones[+i]}" class="msg-link msg-phone">${phones[+i]}</a>`);
