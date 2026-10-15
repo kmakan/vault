@@ -290,10 +290,10 @@ export function showHistoryFirst(ctx, chatKey, isStale) {
       hist.sort((a, b) => msgTs(a) - msgTs(b));
       // Звонки (M3): вычищаем call_* конверты, попавшие в историю как
       // сырые сообщения — сигналы не рендерятся ни в истории, ни в чате.
-      ctx.messages = hist.filter(m => {
+      ctx.chat.set(hist.filter(m => {
         const c = (m && m.content) || '';
         return !(typeof c === 'string' && (c.indexOf('"type":"call_') !== -1 || c.indexOf('"type":"profile"') !== -1));
-      });
+      }));
     }
   });
 }
@@ -302,7 +302,7 @@ export function saveCurrentHistory(ctx, chatKey) {
   // SQLite (db.history_save) — единственный источник истории. Сбои
   // sqlite не критичны: чат пересоберётся из писем IMAP при поллинге.
   try {
-    saveHistory(ctx.email, chatKey, ctx.messages);
+    saveHistory(ctx.email, chatKey, ctx.chat.state.messages);
   } catch (e) {
     console.warn('saveHistory (sqlite) failed:', e);
   }

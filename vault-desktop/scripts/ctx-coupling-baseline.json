@@ -1,7 +1,7 @@
 {
   "totalCtxRefs": 1222,
-  "totalFunctions": 234,
-  "functionsWithCtx": 153,
+  "totalFunctions": 242,
+  "functionsWithCtx": 152,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 127,
@@ -35,7 +35,7 @@
       ],
       "functions": 6,
       "functionsWithCtx": 4,
-      "biggestCtxFn": "fetchDodAttachment"
+      "biggestCtxFn": "handleFileSelect"
     },
     "src/features/autoclean.js": {
       "ctxRefs": 0,
@@ -196,6 +196,13 @@
       "functions": 1,
       "functionsWithCtx": 1,
       "biggestCtxFn": "loadEmails"
+    },
+    "src/features/envelope-id.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 4,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/folders/state.js": {
       "ctxRefs": 0,
@@ -366,6 +373,7 @@
       "fields": [
         "bodyCacheOrder",
         "bodyCacheSaveTimer",
+        "chat",
         "email",
         "emailBodyCache",
         "filterDeleted",
@@ -375,7 +383,7 @@
         "pendingOutgoing"
       ],
       "functions": 15,
-      "functionsWithCtx": 14,
+      "functionsWithCtx": 13,
       "biggestCtxFn": "loadLocalHistory"
     },
     "src/features/incoming.js": {
@@ -537,12 +545,12 @@
       "fields": [
         "activeChat",
         "activeChatType",
+        "chat",
         "cryptoReady",
         "currentGroup",
         "displayName",
         "email",
         "groupKeys",
-        "messages",
         "newMessageId",
         "peerKeys",
         "peerPqKeys",
@@ -729,6 +737,13 @@
       "ctxRefs": 0,
       "fields": [],
       "functions": 3,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
+    "src/features/restore-failure.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 4,
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },

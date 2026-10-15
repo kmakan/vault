@@ -2,6 +2,7 @@
 // исходящих без Vue/Tauri (паттерн incoming-smoke.mjs).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { createChatStore } from '../src/chat-store.js';
 
 const ROOT = import.meta.dirname;
 
@@ -66,6 +67,9 @@ function makeCtx(over = {}) {
     filterDeleted: (list) => (list || []).filter(m => m && !m.deleted && !tombstones.has(m.id)),
     // msgTs — реальный H.msgTs (совпадает с контрактом App)
     msgTs: H.msgTs,
+    // Модуль-владелец переписки (ADR-004). history.js теперь пишет через
+    // ctx.chat.set(), а не напрямую в ctx.messages.
+    chat: createChatStore(),
   }, over);
 }
 const tombstones = new Set();
@@ -256,15 +260,17 @@ console.log('5. История (loadLocalHistory/normalize/merge/showFirst/save)
   ];
   const sctx = makeCtx();
   await H.showHistoryFirst(sctx, 'peer@x.ru', () => false);
-  check('showHistoryFirst: отсортировано + call_/profile отфильтрованы', sctx.messages.map(m => m.id).join(',') === 's1,s2');
+  check('showHistoryFirst: отсортировано + call_/profile отфильтрованы',
+    sctx.chat.state.messages.map(m => m.id).join(',') === 's1,s2');
   // stale: не трогает messages
   const sctx2 = makeCtx();
-  sctx2.messages = [{ id: 'keep' }];
+  sctx2.chat.state.messages = [{ id: 'keep' }];
   await H.showHistoryFirst(sctx2, 'peer@x.ru', () => true);
-  check('showHistoryFirst: stale — messages не тронуты', sctx2.messages.length === 1 && sctx2.messages[0].id === 'keep');
+  check('showHistoryFirst: stale — messages не тронуты',
+    sctx2.chat.state.messages.length === 1 && sctx2.chat.state.messages[0].id === 'keep');
   // saveCurrentHistory
   const wctx = makeCtx();
-  wctx.messages = [{ id: 'w1', content: 'запись', ts: 1 }];
+  wctx.chat.state.messages = [{ id: 'w1', content: 'запись', ts: 1 }];
   H.saveCurrentHistory(wctx, 'peer@x.ru');
   await new Promise(r => setTimeout(r, 10));
   check('saveCurrentHistory пишет в sqlite-историю', histMock.store['peer@x.ru'] && histMock.store['peer@x.ru'][0].id === 'w1');

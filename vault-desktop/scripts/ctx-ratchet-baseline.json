@@ -333,7 +333,6 @@
     "poll.js": [
       "activeChat",
       "activeChatType",
-      "chat",
       "cryptoReady",
       "currentGroup",
       "displayName",
@@ -524,7 +523,6 @@
       "attachments.js",
       "calls.js",
       "groups.js",
-      "history.js",
       "messages.js",
       "reactions.js",
       "send.js"
@@ -818,7 +816,7 @@
     ]
   },
   "totals": {
-    "ctxFields": 442,
+    "ctxFields": 441,
     "ctxRefSites": 1225,
     "sharedWriteFields": 13
   }

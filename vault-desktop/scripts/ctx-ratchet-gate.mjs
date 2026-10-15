@@ -42,6 +42,13 @@ for (const f of readdirSync(path.join(ROOT, 'src', 'features'))) {
 }
 SCAN.push('api.js');
 
+// ПОЛЯ-ВЛАДЕЛЬЦЫ. Эти поля исключены из подсчёта общих полей, потому что
+// они и есть цель миграции (ADR-004). Запись через владельца — это не нарушение,
+// а планомерный перенос. Без этого исключения храповик блокировал бы каждый
+// переведённый модуль: модуль начинает брать новое поле `chat`, и храповик
+// видит рост связности.
+const OWNER_FIELDS = new Set(['chat']);
+
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;
 // Присваивание или мутация после имени поля.
 // ЗАПИСЬ — присваивание или мутация. Чтение по индексу `ctx.peerKeys[email]`
@@ -67,10 +74,12 @@ for (const spec of SCAN) {
   const mod = moduleOf(spec);
   const seen = new Set();
   for (const m of src.matchAll(CTX_READ)) {
+    if (OWNER_FIELDS.has(m[1])) continue;
     seen.add(m[1]);
     (fieldReaders[m[1]] ||= new Set()).add(mod);
   }
   for (const m of src.matchAll(CTX_WRITE)) {
+    if (OWNER_FIELDS.has(m[1])) continue;
     (fieldWriters[m[1]] ||= new Set()).add(mod.replace(/^features\//, ''));
   }
 
@@ -94,6 +103,7 @@ for (const spec of SCAN) {
   for (const m of src.matchAll(ALIAS)) {
     const varName = m[1];
     const field = m[2];
+    if (OWNER_FIELDS.has(field)) continue;
     // Ищем мутацию этой переменной в остатке файла. Граница — следующая
     // декларация с тем же именем или 400 символов (функция обычно короче).
     const rest = src.slice(m.index, m.index + 1200);
