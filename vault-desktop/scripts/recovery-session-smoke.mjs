@@ -382,6 +382,13 @@ function makeFlow(cfg) {
     imapServer: '', imapPort: '', smtpServer: '', smtpPort: '',
     recoveryFileJson: cfg.fileJson || '',
     loginLoading: false, loginError: '', isLoggedIn: false, userId: null,
+    // A12: session-store owner stubs (в тесте — data; в App.vue — session-store proxy).
+    login() { this.isLoggedIn = true; return true; },
+    logout() { this.isLoggedIn = false; return false; },
+    setEmails(list) { this.emails = list; return this.emails; },
+    clearEmails() { this.emails = []; return this.emails; },
+    emailCount() { return (this.emails || []).length; },
+    emails: [],
     ecoMode: false, relayEnabled: false,
     initCalls: [],
     initCrypto: async (opts) => {

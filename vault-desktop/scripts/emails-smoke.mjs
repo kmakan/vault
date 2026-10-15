@@ -58,7 +58,7 @@ function check(name, cond, extra) {
 }
 function makeCtx(over = {}) {
   const calls = { incoming: [], invites: 0, avatars: 0, receipts: 0 };
-  return Object.assign({
+  const ctx = Object.assign({
     email: 'me@x.ru',
     emails: [],
     emailsLoading: false,
@@ -71,6 +71,12 @@ function makeCtx(over = {}) {
     sendDeliveredReceipts: async (batch) => { calls.receipts += (batch || []).length; },
     _calls: calls,
   }, over);
+  // A12: session-store owner stub — пишем в data для чтения в тестах.
+  // В реальном App.vue — методы-прокси на this.sessionStore.state.emails.
+  ctx.setEmails = (list) => { ctx.emails = list || []; return ctx.emails; };
+  ctx.clearEmails = () => { ctx.emails = []; return ctx.emails; };
+  ctx.emailCount = () => ctx.emails.length;
+  return ctx;
 }
 const mail = (uid, folder, mid, date) => ({ uid, id: uid, folder: folder || 'INBOX', message_id: mid || '', date: date || '2026-01-01T00:00:00Z' });
 

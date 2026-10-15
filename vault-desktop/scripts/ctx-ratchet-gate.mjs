@@ -76,6 +76,15 @@ const OWNER_FIELDS = new Set([
   'clearAllUnread',
   'unreadOf',
   'setUnread',
+  // A12: session-store.js (isLoggedIn + emails). State + API.
+  'sessionStore',
+  'isLoggedIn',
+  'emails',
+  'login',
+  'logout',
+  'setEmails',
+  'clearEmails',
+  'emailCount',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

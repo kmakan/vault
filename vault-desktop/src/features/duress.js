@@ -115,7 +115,7 @@ export async function onLockPanic(ctx) {
   try {
     await api.logout();
   } catch (e) { /* ignore */ }
-  ctx.isLoggedIn = false;
+  ctx.logout();
   ctx.email = null;
   ctx.showToast(ctx.t('panic_done') || 'Данные стёрты', 4000);
 }

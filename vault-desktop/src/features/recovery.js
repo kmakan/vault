@@ -189,7 +189,7 @@ export async function loginWithRecovery(ctx, deps) {
     await api.commitRecoveryLogin({ remember: ctx.rememberMe });
 
     // 6) Дальше — обычный пост-логиновый путь (порядок как в login()).
-    ctx.isLoggedIn = true;
+    ctx.login();
     initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
     await ctx.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
     ctx.loadUnreadCounts();
@@ -221,10 +221,9 @@ export async function loginWithRecovery(ctx, deps) {
     // следующий старт не сделает авто-вход без ключей. Память сессии
     // сбрасываем БЕЗ logout() — logout() вызывает delete_credentials и стёр бы
     // сохранённый пароль пользователя, а провал восстановления не имеет на это
-    // права. Durable token/email/credentials/ключи не трогаем.
-    ctx.isLoggedIn = false;
+    // права. Владелец сессии выключает isLoggedIn.
+    ctx.logout();
     ctx.loginError = (error && error.message) || String(error);
-    try { api.abandonSessionMemory(); } catch (e) { /* память и так не persists */ }
   } finally {
     ctx.loginLoading = false;
   }

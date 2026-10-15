@@ -32,7 +32,7 @@ export async function loadEmails(ctx, silent = false) {
       try {
         const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (ctx.email || 'anon'));
         if (Array.isArray(stored) && stored.length) {
-          ctx.emails = stored.map(e => ({
+          ctx.setEmails(stored.map(e => ({
             uid: e.uid,
             id: e.uid,
             from: e.from,
@@ -42,7 +42,7 @@ export async function loadEmails(ctx, silent = false) {
             is_read: e.is_read,
             folder: e.folder,
             message_id: e.message_id || '',
-          }));
+          })));
         }
       } catch (e) {
         console.warn('loadEmails: sqlite restore failed:', e);
@@ -105,7 +105,7 @@ export async function loadEmails(ctx, silent = false) {
     }
     merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     if (merged.length > 2000) merged.length = 2000;
-    ctx.emails = merged;
+    ctx.setEmails(merged);
     // Источник метаданных для fetchAllHandshake (в памяти: без гонки
     // на fire-and-forget emailsSave ниже).
     api.setEmailsSource(ctx.emails);

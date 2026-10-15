@@ -896,6 +896,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
+import { createSessionStore } from './features/session-store.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1043,7 +1044,10 @@ export default {
     // data()-свойства, а живут во владельце. 14 писатц → ctx.setSending/
     // ctx.setPendingOutgoing/mergePendingOutgoing.
     const sendingStore = reactive(createSendingStore());
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore };
+    // Модуль-владелец сессионного состояния (ADR-004, Этап A12).
+    // isLoggedIn/emails больше не data()-свойства, а proxy на session-store.
+    const sessionStore = reactive(createSessionStore());
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore };
   },
   data() {
     return {
@@ -1174,7 +1178,6 @@ export default {
       editingMessage: null,
       showSettings: false,
       showMembers: false,
-      isLoggedIn: false,
       restoringSession: false,
       email: '',
       password: '',
@@ -1191,7 +1194,6 @@ export default {
       // Выбранный провайдер почты (каталог IMAP/SMTP в mailProviders.js).
       // '' = ещё не выбран; 'custom' = ручные поля.
       mailProvider: '',
-      emails: [],
       emailsLoading: false,
       emailError: '',
       // Оптимистичные исходящие, ещё не подтверждённые письмом из ящика:
@@ -1383,6 +1385,17 @@ export default {
     unreadCounts: {
       get() { return this.chat.state.unreadCounts; },
       set(v) { this.chat.setUnread(v); },
+    },
+    // Прокси во владельца сессии (ADR-004 Этап A12).
+    // isLoggedIn/emails больше не data()-свойства, а proxy на session-store.
+    // Геттер сохраняет обратную совместимость для чтения; запись — через API.
+    isLoggedIn: {
+      get() { return this.sessionStore.state.isLoggedIn; },
+      set(v) { v ? this.sessionStore.login() : this.sessionStore.logout(); },
+    },
+    emails: {
+      get() { return this.sessionStore.state.emails; },
+      set(v) { this.sessionStore.setEmails(v); },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -3391,6 +3404,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     removePendingOutgoing(chatId, msgId) { return this.sendingStore.removePendingOutgoing(chatId, msgId); },
     clearPendingOutgoing() { return this.sendingStore.clearPendingOutgoing(); },
     dropBucket(chatId) { return this.sendingStore.dropBucket(chatId); },
+    // Тонкие прокси во владельца сессии (ADR-004 Этап A12).
+    // features/* вызывают ctx.login/logout/setEmails — адресуем во владельца.
+    login() { return this.sessionStore.login(); },
+    logout() { return this.sessionStore.logout(); },
+    setEmails(list) { return this.sessionStore.setEmails(list); },
+    clearEmails() { return this.sessionStore.clearEmails(); },
+    emailCount() { return this.sessionStore.emailCount(); },
     // Тонкие прокси во владельца непрочитанных (ADR-004 Этап A11).
     // unreadOf уже определён ниже (читает через this.unreadCounts proxy).
     incUnread(chatKey) { return this.chat.incUnread(chatKey); },
