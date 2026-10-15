@@ -941,6 +941,7 @@ import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
 import * as ContactsLoad from './features/contacts-load.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
+import * as GroupsLoad from './features/groups-load.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -2626,45 +2627,21 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         console.warn('[identity] migrateChatHistory failed:', e);
       }
     },
+    // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
+    // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke
+    // отработал: иначе поле осталось бы прежним, как и в оригинале.
     async loadGroups() {
-      try {
-        // groups.json — общий файл на машину для всех аккаунтов. Показываем
-        // только свои группы. Фильтр — Rust-команда groups_load_own:
-        // идентичность = fingerprint (не меняется при смене почты), адрес и
-        // алиасы — fallback. Логика и тесты — groups::filter_own_groups.
-        let aliases = [];
-        try { aliases = this.aliasesOf(this.email) || []; }
-        catch (e) { /* алиасы недоступны — фильтр сработает по email+fp */ }
-        this.groups = await invoke('groups_load_own', {
-          email: this.email || '',
-          fingerprint: String(this.fingerprint || ''),
-          aliases,
-        });
-        // Участники групп — тоже контакты (кроме себя): так под приглашённым
-        // аккаунтом виден отправитель инвайта (A → B и наоборот).
-        const seen = new Set(this.contacts.map(c => c.email));
-        for (const g of this.groups) {
-          // Аватар/иконка группы: sqlite kv_store — аватар устанавливает
-          // админ, участникам он приходит письмами (см. конверт).
-          const av = await db.kvGet('anon', 'group-avatar:' + g.id);
-          if (av) this.groupAvatars[g.id] = av;
-          // Устройство без аватарки запрашивает его у участников (hav,
-          // rate-limit 24ч внутри метода) — самовосстановление после
-          // сброса/смены устройства. Не блокируем загрузку списка.
-          else this.requestGroupAvatarHeal(g.id).catch(() => {});
-          const ic = await db.kvGet('anon', 'group-icon:' + g.id);
-          if (ic) this.groupIconMap[g.id] = ic;
-          for (const m of g.members || []) {
-            if (m.email === this.email || seen.has(m.email)) continue;
-            // Модель почтовый мессенджер: удаление контакта НЕ трогает группы —
-            // участник остаётся полноценным контактом в списке.
-            seen.add(m.email);
-            this.contacts.push({ id: m.email, email: m.email, name: m.email, online: false });
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load groups:', error);
-      }
+      const r = await GroupsLoad.loadGroups({
+        email: this.email,
+        fingerprint: this.fingerprint,
+        aliasesOf: this.aliasesOf,
+        contacts: this.contacts,
+        requestGroupAvatarHeal: this.requestGroupAvatarHeal,
+      });
+      if (r.groups) this.groups = r.groups;
+      Object.assign(this.groupAvatars, r.avatars);
+      Object.assign(this.groupIconMap, r.icons);
+      for (const c of r.newContacts) this.contacts.push(c);
     },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
     channelPostsToMessages(ch) {
