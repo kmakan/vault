@@ -23,6 +23,7 @@ import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
 import { relayState } from './relay-idle.js';
+import { sessionStore } from './session-store.js';
 import { useSession } from './call-session.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
@@ -31,13 +32,13 @@ import { useSession } from './call-session.js';
 // from приходит от отправителя (поле from) — дальше обычная расшифровка
 // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
 export async function relayConsume(ctx) {
-  const list = await relay.relayPoll(ctx.email);
+  const list = await relay.relayPoll(sessionStore.getCurrentEmail());
   // Каналы (M2 channels-3): подписчики пуллят общую очередь каждого канала
   // его read-токеном (fan-out, серверный peek+курсор). Конверты-посты идут
   // в тот же конвейер виртуальных писем — роутер классифицирует по ключу.
   const chanEnvelopes = [];
   for (const ch of (ctx.channels || [])) {
-    const posts = await relay.relayChannelPoll(ch, ctx.email).catch(() => []);
+    const posts = await relay.relayChannelPoll(ch, sessionStore.getCurrentEmail()).catch(() => []);
     for (const env of posts) {
       // from = канал: владельческий эхо-фильтр и классификация в роутере
       // идут по ключу, адрес отправителя здесь не нужен (privacy-модель).
@@ -58,7 +59,7 @@ export async function relayConsume(ctx) {
       uid,
       folder: 'RELAY',
       from: (env.from || '').toLowerCase(),
-      to: ctx.email,
+      to: sessionStore.getCurrentEmail(),
       date: new Date((env.ts || 0) * 1000).toISOString(),
       subject: '',
       message_id: 'relay-' + env.id,
@@ -128,7 +129,7 @@ export function startRelayTicker(ctx) {
   relayState.state.relayFails = 0;
   relayState.state.lastRelayHealth = Date.now();
   relayTicker.start(async () => {
-    if (!ctx.isLoggedIn) {
+    if (!(sessionStore.state.isLoggedIn)) {
       relayTicker.stop();
       return;
     }
@@ -137,7 +138,7 @@ export function startRelayTicker(ctx) {
     if (Date.now() - relayState.state.lastRelayHealth >= 60000) {
       relayState.state.lastRelayHealth = Date.now();
       let healthy = false;
-      try { healthy = await relay.relayHealth(ctx.email); } catch (e) { healthy = false; }
+      try { healthy = await relay.relayHealth(sessionStore.getCurrentEmail()); } catch (e) { healthy = false; }
       if (healthy) {
         relayState.state.relayFails = 0;
         if (relayState.state.relayOfflineSince) {
@@ -166,7 +167,7 @@ export function startRelayTicker(ctx) {
   });
   // M2.3-c: мгновенный первый consume — ntfy-пуш будит холодный старт,
   // call_request уже в очереди; без этого звонок загремел бы через 5с.
-  if (ctx.isLoggedIn) relayConsume(ctx).catch(() => {});
+  if ((sessionStore.state.isLoggedIn)) relayConsume(ctx).catch(() => {});
 }
 
 // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
@@ -214,7 +215,7 @@ function startFastFetchTimer(ctx) {
   if (fastFetchCycle.timer) return;
   fastFetchCycle.start(async () => {
     // Вышли из сессии или эко погасило IDLE — таймер больше не нужен.
-    if (!ctx.isLoggedIn || idleState.idleStop) { fastFetchCycle.stop(); return; }
+    if (!(sessionStore.state.isLoggedIn) || idleState.idleStop) { fastFetchCycle.stop(); return; }
     // Анти-наложение loadEmailsFast (до 30с в Rust) — busy-флаг владельца
     // fastFetchCycle.guard пропускает тик, пока предыдущий идёт.
     try { await loadEmailsFast(ctx, true); } catch (e) { /* тихо */ }
@@ -241,7 +242,7 @@ export function stopFastFetchTimer(ctx) {
 //     подтвердил, что монитор не запущен. Параллельно они не работают
 //     никогда — это и есть «один владелец».
 export async function idleLoop(ctx) {
-  if (!ctx.isLoggedIn) return;
+  if (!(sessionStore.state.isLoggedIn)) return;
   // Монитор уже поднят: НЕ перезапускаем его. api.idleStart останавливает
   // прежний таск и создаёт НОВЫЙ EmailClient — то есть новое TCP+TLS. Без
   // этой проверки каждый сигнал звонка (startFastPolling → idleLoop) поднимал
@@ -259,7 +260,7 @@ export async function idleLoop(ctx) {
   // fetch не тянул старые письма.
   let monitorUp = false;
   try {
-    await api.idleStart(ctx.loadCursors(ctx.email) || {});
+    await api.idleStart(ctx.loadCursors(sessionStore.getCurrentEmail()) || {});
     monitorUp = true;
   } catch (e) {
     console.warn('[idle-monitor] start failed, JS-резерв IDLE:', e && e.message || e);
@@ -274,7 +275,7 @@ export async function idleLoop(ctx) {
   let lastSafety = Date.now();
   let idleFailed = false;
   try {
-    while (ctx.isLoggedIn && !idleState.idleStop) {
+    while ((sessionStore.state.isLoggedIn) && !idleState.idleStop) {
       let changed = false;
       try {
         const r = await api.idleWait(2000, 'INBOX');
@@ -301,14 +302,14 @@ export async function idleLoop(ctx) {
   }
   // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
   // (hangup сам вернёт обычный 30с-поллинг).
-  if (ctx.isLoggedIn && ctx.callState !== 'idle') startPolling(ctx, 3000);
+  if ((sessionStore.state.isLoggedIn) && ctx.callState !== 'idle') startPolling(ctx, 3000);
   // Резервный IDLE умер (провайдер/сеть): обычный поллинг продолжает
   // работать; через 60с пробуем снова — и снова СНАЧАЛА Rust-монитор
   // (idleLoop), то есть при его успехе владение возвращается монитору,
   // а JS-цикл выключается.
-  if (ctx.isLoggedIn && idleFailed) {
+  if ((sessionStore.state.isLoggedIn) && idleFailed) {
     // Авто-восстановление IDLE через 60с: владелец — relay-idle.js/idleFallback.
-    idleFallback.arm(() => { if (ctx.isLoggedIn) idleLoop(ctx); });
+    idleFallback.arm(() => { if ((sessionStore.state.isLoggedIn)) idleLoop(ctx); });
   }
 }
 
@@ -316,7 +317,7 @@ export function startPolling(ctx, intervalMs = 30000) {
   // ADR-004 H+: владелец таймера — relay-idle.js/pollingCycle (busy-гвард).
   if (pollingCycle.timer) return;
   pollingCycle.start(async () => {
-    if (!ctx.isLoggedIn || idleState.idleStop) return;
+    if (!(sessionStore.state.isLoggedIn) || idleState.idleStop) return;
     try {
       // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
       // мержим в ctx.emails как виртуальные письма (uid: rl-<id>) —
@@ -385,9 +386,9 @@ export function stopPolling(ctx) {
 // Ручное выключение тумблером выставляет kv 'eco-user-disabled' и
 // автопереключение больше не дёргает режим («не выключен пользователем»).
 export async function syncEcoWithRelay(ctx, silent = false) {
-  if (!ctx.isLoggedIn) return;
+  if (!(sessionStore.state.isLoggedIn)) return;
   let healthy = false;
-  try { healthy = await relay.relayHealth(ctx.email); } catch (e) { healthy = false; }
+  try { healthy = await relay.relayHealth(sessionStore.getCurrentEmail()); } catch (e) { healthy = false; }
   let userDisabled = false;
   try { userDisabled = (await db.kvGet('anon', 'eco-user-disabled')) === '1'; } catch (e) {}
   const wantEco = !!(relayState.isRelayEnabled()) && healthy && !userDisabled;
@@ -411,7 +412,7 @@ export async function onEcoMode(ctx, on, silent = false) {
   relayState.state.ecoAutonomous = false;
   relayState.state.relayOfflineSince = null;
   try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
-  if (!ctx.isLoggedIn) return;
+  if (!(sessionStore.state.isLoggedIn)) return;
   if ((relayState.isEcoMode())) {
     // стоп JS IDLE-цикла и таймера быстрого фетча
     idleState.setIdleStop(true);

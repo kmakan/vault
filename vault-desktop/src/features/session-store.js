@@ -19,6 +19,7 @@
 export function createSessionStore() {
   const state = {
     isLoggedIn: false,
+    currentEmail: '',    // J.2: account identity (бывш. data this.email)
     emails: [],
   };
 
@@ -38,6 +39,10 @@ export function createSessionStore() {
       return state.isLoggedIn;
     },
 
+    // ── currentEmail ────────────────────────────────────────────────────
+    setCurrentEmail(e) { state.currentEmail = e || ''; return state.currentEmail; },
+    getCurrentEmail() { return state.currentEmail; },
+
     // ── emails ────────────────────────────────────────────────────────────
     setEmails(list) {
       state.emails = list || [];
@@ -52,3 +57,8 @@ export function createSessionStore() {
     },
   };
 }
+
+// ADR-004 J.1: singleton sessionStore. relay.js (state-machine) импортирует его
+// напрямую — читает isLoggedIn/emails через sessionStore.state, без ctx.
+export const sessionStore = createSessionStore();
+export function useSessionStore() { return sessionStore; }

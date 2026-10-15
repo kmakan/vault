@@ -901,7 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
-import { createSessionStore } from './features/session-store.js';
+import { sessionStore as sessionState } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1053,7 +1053,7 @@ export default {
     const sendingStore = reactive(createSendingStore());
     // Модуль-владелец сессионного состояния (ADR-004, Этап A12).
     // isLoggedIn/emails больше не data()-свойства, а proxy на session-store.
-    const sessionStore = reactive(createSessionStore());
+    const sessionStore = reactive(sessionState);
     // Модуль-владелец relay-состояния (ADR-004, Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
     // relay-состояние: singleton relayState (relay-idle.js), владелец для
