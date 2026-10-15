@@ -937,6 +937,8 @@ import * as PollFeature from './features/poll.js';
 // здесь, потому что компонент был единственным местом, где можно было писать JS.
 import * as MsgFormat from './message-format.js';
 import * as Clipboard from './clipboard.js';
+import * as GroupMetaBroadcast from './features/group-meta-broadcast.js';
+import * as LocalDbInit from './features/local-db-init.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -3569,19 +3571,24 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const g = this.groups.find(x => x.id === groupId);
       if (g) g.name = name;
       if (this.currentGroup && this.currentGroup.id === groupId) this.currentGroup.name = name;
+      // Локальное имя применено ДО рассылки и не откатывается при её отказе —
+      // так было и раньше, поведение сохранено. Читать av и слать — в
+      // features/group-meta-broadcast.js (ADR-003 Этап 3, партия 11).
       try {
-        const groupKey = this.groupKeys[groupId];
-        if (!groupKey) return;
-        // meta-письмо rename несёт ИМЯ + текущий аватар (непустой) —
-        // получатели обновляют полный профиль группы. Пустой avatar в
-        // письмо НИКОГДА не кладём (не затирает чужой kv).
-        const curAv = await db.kvGet('anon', 'group-avatar:' + groupId);
-        const renamePayload = JSON.stringify(curAv
-          ? { meta: 1, name, avatar: curAv, ts: Date.now() }
-          : { meta: 1, name, ts: Date.now() });
-        const content = await crypto.encryptWithGroupKey(renamePayload, groupKey);
-        await api.sendGroupMeta(groupId, content);
-        console.log('[group] renamed', groupId, '→', name);
+        const curAv = await GroupMetaBroadcast.loadGroupAvatar(groupId);
+        const fields = GroupMetaBroadcast.buildRenameMetaFields(name, curAv);
+        const r = await GroupMetaBroadcast.broadcastGroupMeta(groupId, fields,
+          { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady });
+        if (r.sent) console.log('[group] renamed', groupId, '→', name);
+        else if (r.reason === 'no-group-key') {
+          // Раньше здесь был молчаливый return, и это стоило дефекта: ключ не
+          // загружен, пока группу не открыли в чате, поэтому ПЕРЕИМЕНОВАНИЕ из
+          // настроек без открытия чата не рассылалось вообще. Тот же баг был
+          // исправлен рядом, в onGroupAvatarUpdate, — теперь правило одно.
+          console.warn('[group] rename broadcast skipped, no group key:', groupId);
+        } else {
+          console.warn('[group] rename broadcast failed:', r.error);
+        }
       } catch (e) {
         console.warn('[group] rename broadcast failed:', e);
       }
@@ -3594,25 +3601,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // тогда `if (!groupKey) return` выше МОЛЧА пропускал рассылку и у
       // участников аватар не появлялся никогда. Догружаем ключ (как в
       // selectGroup) и шлём meta-письма в любом случае.
-      let groupKey = this.groupKeys[groupId];
-      if (!groupKey && this.cryptoReady) {
-        try {
-          const kd = await api.getMyGroupKey(groupId);
-          if (kd && kd.group_key) {
-            this.groupKeys[groupId] = kd.group_key;
-            groupKey = kd.group_key;
-          }
-        } catch (e) {
-          console.warn('Could not load group key for avatar broadcast:', e);
-        }
-      }
-      if (!groupKey) return;
-      try {
-        const payload = JSON.stringify({ meta: 1, avatar });
-        const content = await crypto.encryptWithGroupKey(payload, groupKey);
-        await api.sendGroupMeta(groupId, content);
-      } catch (e) {
-        console.error('Failed to broadcast group avatar:', e);
+      // Правило догрузки ключа — в features/group-meta-broadcast.js (ADR-003
+      // Этап 3, партия 11): оно было продублировано здесь и в onGroupRename, и
+      // именно из-за копии в переименовании баг дожил.
+      const r = await GroupMetaBroadcast.broadcastGroupMeta(groupId, { avatar },
+        { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady });
+      if (!r.sent) {
+        console.error('Failed to broadcast group avatar:', r.error || r.reason);
       }
     },
     // ── Heal аватарки группы — ВСЯ логика в features/group-avatars.js ──────
@@ -4022,25 +4017,18 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
+    // ADR-003 Этап 3, партия 11: загрузка и разбиение тумбстоунов — в
+    // features/local-db-init.js.
+    //
+    // Присваиваем ТОЛЬКО ненулевое. Модуль отдаёт null там, где загрузка не
+    // удалась, и пустой массив там, где загрузилось и там правда пусто. Спутать
+    // эти состояния — значит при одном отказе Rust стереть то, что было
+    // загружено раньше: удалённые письма перестали бы помечаться навсегда.
     async initLocalDb() {
-      // tombstones/body-cache: account = identity namespace (fp:<fingerprint>,
-      // см. accountNamespace). До загрузки ключа резолвер отдаёт legacy-емейл —
-      // это нормально: перенос на fp делает ensureAccountNamespace из
-      // initCrypto сразу после, строки лежат в той же базе.
-      const accEmail = this.email ? await accountNamespace(this.email) : 'anon';
-      const accLocal = 'local';               // cursors/emails: account = 'local' (getEmailAccounts → id='local')
-      try {
-        const tombs = await db.tombstonesLoad(accEmail);
-        this.tombstonesCache = tombs.filter(t => t[0]).map(t => t[0]);
-        this.midTombstonesCache = tombs.filter(t => t[1]).map(t => t[1]);
-      } catch (e) {
-        console.warn('initLocalDb tombstones failed:', e);
-      }
-      try {
-        this.cursorsCache = await db.cursorsLoad(accLocal);
-      } catch (e) {
-        console.warn('initLocalDb cursors failed:', e);
-      }
+      const r = await LocalDbInit.loadLocalCaches(this.email);
+      if (r.tombstones) this.tombstonesCache = r.tombstones;
+      if (r.midTombstones) this.midTombstonesCache = r.midTombstones;
+      if (r.cursors) this.cursorsCache = r.cursors;
     },
     // --- Копирование сообщений ---
     linkify(text) { return MsgFormat.linkify(text); },
