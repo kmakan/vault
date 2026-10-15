@@ -62,26 +62,26 @@ export function createSessionStore() {
 export function createMailboxStore() {
   const state = {
     emails: [],
-    channels: [],         // J.3c: broadcast channels (features/channels.js)
-    emailBodyCache: {},   // J.3c: body cache (folder:uid -> body), relay envelopes include
+    channels: [],
+    emailBodyCache: {},
   };
   return {
     state,
     setEmails(list) { state.emails = list || []; return state.emails; },
     mergeEmails(list) {
-      const m = new Map(state.emails.map((m) => [m.uid + '|' + (m.folder || 'INBOX'), m]));
-      for (const e of (list || [])) m.set(e.uid + '|' + (e.folder || 'INBOX'), e);
+      const m = new Map(state.emails.map((m) => [m.uid + "|" + (m.folder || "INBOX"), m]));
+      for (const e of (list || [])) m.set(e.uid + "|" + (e.folder || "INBOX"), e);
       state.emails = [...m.values()].sort((a, b) =>
         new Date(b.date || 0) - new Date(a.date || 0));
       return state.emails;
     },
     clearEmails() { state.emails = []; return state.emails; },
-    // J.3c: body cache (in-mem; HistoryFeature persist отдельно в SQLite).
     cacheBody(key, body) { state.emailBodyCache[key] = body; },
     getEmailBody(key) { return state.emailBodyCache[key] ?? null; },
     clearBodyCache() { state.emailBodyCache = {}; },
   };
 }
+export const mailboxStore = createMailboxStore();
 
 // ADR-004 J.3b: owner для UI-утилит (i18n t + showToast — часто-используемые
 // delegates в relay.js/calls.js). Вынос из ctx.* в singleton, чтобы state-machine
@@ -117,6 +117,5 @@ export function createChatStore() {
   };
 }
 export const chatStore = createChatStore();
-export const mailboxStore = createMailboxStore();
 export const sessionStore = createSessionStore();
 export function useSessionStore() { return sessionStore; }
