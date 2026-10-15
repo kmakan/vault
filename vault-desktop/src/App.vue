@@ -937,6 +937,8 @@ import * as PollFeature from './features/poll.js';
 // здесь, потому что компонент был единственным местом, где можно было писать JS.
 import * as MsgFormat from './message-format.js';
 import * as MsgStore from './message-store.js';
+import * as ExtLinks from './external-links.js';
+import * as Migrations from './migrations.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -975,11 +977,6 @@ import * as RecoveryFeature from './features/recovery.js';
 // блокирует авто-вход/обычный логин/генерацию ключей, пока восстановление не
 // закоммичено. Pure-модуль без импортов api/crypto.
 import * as RecoverySession from './features/recovery-session.js';
-
-// Сайт приложения (лендинг, веха M4). Пока сайта нет — пустая строка:
-// когда появится, подставить адрес (vault-msg.ru / vault-msg.tech),
-// и клик по логотипу в шапке откроет его во внешнем браузере.
-const APP_SITE_URL = '';
 // Черновики: очередь сериализации kv-RMW переехала в features/drafts.js.
 
 export default {
@@ -2146,28 +2143,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Открыть ссылку из меню сообщения внешним браузером (через tauri
     // opener-плагин; модульный импорт недоступен шаблону Options API,
     // поэтому тонкая обёртка-метод — шаблон зовёт openUrl).
-    openUrl(url) {
-      openExternal(String(url)).catch(() => {});
-    },
+    openUrl(url) { return ExtLinks.openUrl(url); },
     // Внешняя ссылка/mailto: Android — НАТИВНАЯ команда android_open_url
     // (плагин-opener на Android не доходил до системного обработчика),
     // desktop — plugin-shell open (xdg-open, mailto открывает почтовый
     // клиент). Тот же механизм, что openExternalLink в SettingsPage.
-    async openExternalUrl(url) {
-      if (/android/i.test(navigator.userAgent)) {
-        try {
-          await invoke('android_open_url', { url });
-          return;
-        } catch (e) {
-          console.warn('[open] android_open_url failed:', e);
-        }
-      }
-      try {
-        await openExternal(String(url));
-      } catch (e) {
-        console.warn('[open] openExternal failed:', e);
-      }
-    },
+    async openExternalUrl(url) { return ExtLinks.openExternalUrl(url); },
     // §8.3 UGC (модерация RuStore): «Пожаловаться» из меню сообщения —
     // письмо на support@vault-msg.ru с предзаполненной темой и телом
     // (тип жалобы, email отправителя, время, id). Серверной жалоб-
@@ -2578,45 +2559,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Теперь перенос делает Rust одной транзакцией по ВСЕМ таблицам с
     // колонкой account (db_account_migrate), а email → лишь транспорт:
     // identity = fingerprint публичного ключа.
-    async migrateAccountData(oldEmail, newEmail) {
-      try {
-        if (!oldEmail || !newEmail) return;
-        // ns = fp:<fingerprint> (ключ стабилен при смене почты) либо legacy-емейл.
-        const ns = await accountNamespace(newEmail);
-        if (!ns || ns === oldEmail) {
-          console.log('[identity] namespace unchanged, nothing to migrate');
-          return;
-        }
-        const report = await invoke('db_account_migrate', { fromAccount: oldEmail, toAccount: ns });
-        const moved = report && typeof report.total === 'number' ? report.total : 0;
-        console.log(`[identity] account data migrated: ${oldEmail} → ${ns} (moved ${moved})`);
-      } catch (e) {
-        console.warn('[identity] migrateAccountData failed:', e);
-      }
-    },
+    async migrateAccountData(oldEmail, newEmail) { return Migrations.migrateAccountData(oldEmail, newEmail); },
     // Смена СВОЕЙ почты: переименовать старый адрес в группах, где мы участник
     // или создатель. Без этого groups.json остаётся со старым адресом, и после
     // смены все группы исчезают из UI (фильтр loadGroups сравнивает по email).
     // Для ПИРОВ этот путь не нужен — у них он срабатывает автоматически при
     // входящем письме (tryMigrateGroupMember → groups_rename_member).
-    async migrateOwnGroups(oldEmail, newEmail) {
-      if (!oldEmail || !newEmail || oldEmail === newEmail) return;
-      try {
-        const all = await api.getGroups();
-        const old = String(oldEmail).toLowerCase();
-        for (const g of all || []) {
-          const mine = String(g.created_by || '').toLowerCase() === old
-            || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);
-          if (!mine) continue;
-          await invoke('groups_rename_member', {
-            groupId: g.id, oldEmail, newEmail,
-          });
-        }
-        console.log('[identity] own groups renamed:', oldEmail, '→', newEmail);
-      } catch (e) {
-        console.warn('[identity] migrateOwnGroups failed:', e);
-      }
-    },
+    async migrateOwnGroups(oldEmail, newEmail) { return Migrations.migrateOwnGroups(oldEmail, newEmail); },
     // Смена СВОЕЙ почты: переносим email-ключевые localStorage-хранилища
     // (заметки/квитанции чтения/реакции/правки/томбстоуны) со старого
     // адреса на новый. Ключи писались по raw this.email — регистр не
@@ -4263,14 +4212,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
-    openAppSite() {
-      if (!APP_SITE_URL) return;
-      try {
-        openExternal(APP_SITE_URL);
-      } catch (e) {
-        window.open(APP_SITE_URL, '_blank');
-      }
-    },
+    openAppSite() { return ExtLinks.openAppSite(); },
     // Копирование с fallback для WebKitGTK (clipboard API может быть
     // недоступен без фокуса — тогда через временный textarea).
     async copyText(text) {
