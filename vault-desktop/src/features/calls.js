@@ -22,6 +22,7 @@ import { saveHistory, loadHistory } from '../history.js';
 // Re-export для backward-compat (App.vue / smoke ссылаются через C.SIGNAL_RESEND_DELAYS_MS).
 export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
 import { createMediaWatchdog } from './call-watchdog.js';
+import { createRingTimer } from './call-ring.js';
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
 // Инцидент 12.10.2026. Раньше call_request повторялся каждые 15с все 5 минут
@@ -97,6 +98,8 @@ async function fetchRingDurationMs() {
   }
 }
 
+const ringTimer = createRingTimer();
+
 // Ставит таймер таймаута гудка. fallbackMs используется немедленно,
 // затем (асинхронно) уточняется реальной настройкой. Гонка учтена:
 // если за это время звонок уже снят/принят (callRingTimer !== null
@@ -104,8 +107,7 @@ async function fetchRingDurationMs() {
 function armRingTimer(ctx, fallbackMs = DEFAULT_RING_MS) {
   const start = (ms) => {
     if (!ctx.session.currentCall || ctx.session.callState !== 'incoming_ringing') return;
-    if (ctx.session.callRingTimer) clearTimeout(ctx.session.callRingTimer);
-    ctx.session.setCallRingTimer(setTimeout(() => cancelCall(ctx, 'timeout'), ms));
+    ctx.session.setCallRingTimer(ringTimer.start(ms, () => cancelCall(ctx, 'timeout')));
   };
   start(fallbackMs);
   fetchRingDurationMs().then((ms) => {
@@ -387,7 +389,7 @@ export async function handleCallSignal(ctx, sig, from) {
       if (ctx.session.currentCall && ctx.session.currentCall.call_id === call_id
           && ctx.session.callState === 'outgoing_ringing') {
         // Собеседник принял — таймер отмены больше не нужен.
-        clearTimeout(ctx.session.callRingTimer);
+        ringTimer.stop();
         ctx.session.setCallRingTimer(null);
         // Гудки кончились — затухающие повторы call_request больше не нужны.
         // Таймер — ctx.callRequestResender (createCallResender, call-resend.js).
@@ -500,7 +502,7 @@ export async function startCall(ctx) {
   startFastPolling(() => ctx.idleLoop());
   // для call_accept может превысить 180с, и звонок сгорал до ответа;
   // окончательно решает call_reject/call_cancel от собеседника).
-  ctx.session.setCallRingTimer(setTimeout(() => cancelCall(ctx, 'timeout'), 300000));
+  ctx.session.setCallRingTimer(ringTimer.start(300000, () => cancelCall(ctx, 'timeout')));
   // ВАЖНО: сигнал call_request отправляем ДО гудков. cpal-гудок
   // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
   // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
@@ -576,7 +578,7 @@ export async function acceptCall(ctx) {
   if (!c || ctx.session.callState !== 'incoming_ringing') return;
   // Ответили — рингтон и таймер отмены в сторону, чайм соединения.
   // stop не нужен: play сам останавливает предыдущий звук.
-  clearTimeout(ctx.session.callRingTimer);
+  ringTimer.stop();
   ctx.session.setCallRingTimer(null);
   playCallSound(ctx, 'connect', false);
   // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
@@ -688,7 +690,7 @@ export async function hangup(ctx, reason) {
     }
     if (kind) recordCallEvent(ctx, c.peer, kind, Date.now(), dur, callId);
   }
-  clearTimeout(ctx.session.callRingTimer);
+  ringTimer.stop();
   ctx.session.setCallRingTimer(null);
   // Ретрансляция call_request — тоже останавливаем (ctx.callRequestResender).
   ctx.callRequestResender.stop();
