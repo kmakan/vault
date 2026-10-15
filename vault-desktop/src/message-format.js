@@ -1,0 +1,78 @@
+export function isTextMime(type, name) {
+  if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
+  const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (ext) {
+    const textExts = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'sh', 'bash', 'zsh', 'py', 'js', 'ts', 'vue', 'html', 'css', 'rs', 'go', 'c', 'h', 'cpp', 'hpp', 'java', 'kt', 'swift', 'sql', 'env', 'gitignore', 'editorconfig'];
+    if (textExts.includes(ext[1])) return true;
+  }
+  return false;
+}
+
+export function newMessageId() {
+  try {
+    // ВАЖНО: window.crypto — НЕ импортированный модуль crypto.js!
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+  } catch (e) { /* fallback below */ }
+  return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+export function parseEnvelope(decrypted) {
+  if (!decrypted || typeof decrypted !== 'string') return null;
+  try {
+    const obj = JSON.parse(decrypted);
+    if (obj && obj.vault === 1 && typeof obj.text === 'string') {
+      const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined, tok: typeof obj.tok === 'string' ? obj.tok : '', gavatar: typeof obj.gavatar === 'string' ? obj.gavatar : '' };
+      // Голосование: poll-подконверт (валидация в features/poll.js).
+      if (obj.poll && typeof obj.poll === 'object') {
+        env.poll = {
+          id: String(obj.poll.id || obj.id || ''),
+          question: typeof obj.poll.question === 'string' ? obj.poll.question : '',
+          options: Array.isArray(obj.poll.options) ? obj.poll.options.map(o => String(o)) : [],
+        };
+      }
+      return env;
+    }
+  } catch { /* not an envelope — legacy plaintext */ }
+  return null;
+}
+
+export function splitReply(content) {
+  if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
+    return { quote: '', body: content || '' };
+  }
+  const lines = content.split('\n');
+  const quoteLines = [];
+  let i = 0;
+  for (; i < lines.length; i++) {
+    if (lines[i].indexOf('>') === 0) quoteLines.push(lines[i].slice(1).trim());
+    else break;
+  }
+  // Skip blank separator lines between the quote and the new body.
+  while (i < lines.length && !lines[i].trim()) i++;
+  return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
+}
+
+export function imapCursorsKey(accountId) {
+  return 'vault-imap-cursors-' + accountId;
+}
+
+export function senderEmail(raw) {
+  if (!raw) return '';
+  const m = String(raw).match(/<([^>]+)>/);
+  return (m ? m[1] : raw).trim().toLowerCase();
+}
+
+export function linkify(text) {
+  // Безопасная автолинковка: текст → экранированный HTML → ссылки/телефоны.
+  // Телефоны заменяются через плейсхолдеры ДО URL, чтобы не пересекаться.
+  const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const phones = [];
+  // Телефон: код (+7/8/международный до 3 цифр) опционален, разделители
+  // (пробел/скобки/дефисы) — в любом количестве и любом месте между
+  // группами: 8(999)123-45-67, +7 (999) 123 45 67, +380 67 123 45 67.
+  const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
+  let tmp = esc.replace(PHONE_RE, (m) => { phones.push(m.trim()); return `\u0000P${phones.length - 1}\u0000`; });
+  tmp = tmp.replace(/(https?:\/\/[^\s<"']+)/g, '<a href="$1" data-url="$1" class="msg-link">$1</a>');
+  tmp = tmp.replace(/\u0000P(\d+)\u0000/g, (_, i) => `<a href="tel:${phones[+i]}" data-phone="${phones[+i]}" class="msg-link msg-phone">${phones[+i]}</a>`);
+  return tmp;
+}

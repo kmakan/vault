@@ -932,6 +932,11 @@ import MessageList from './components/MessageList.vue';
 import MessageItem from './components/MessageItem.vue';
 import * as relay from './relay-client.js';
 import * as PollFeature from './features/poll.js';
+// ADR-003 Этап 3: чистые функции формата/разбора сообщений и настройки чата
+// вынесены из компонента. Ни одного this.* в них не было — они просто жили
+// здесь, потому что компонент был единственным местом, где можно было писать JS.
+import * as MsgFormat from './message-format.js';
+import * as MsgStore from './message-store.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -3027,14 +3032,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // meta-аватар) + бродкастится письмом {pin:1, msg_id, action, preview}
     // под групповым ключом (stealth, пустая тема — единый проход
     // loadGroupMessages классифицирует по содержимому).
-    async readPinned(groupId) {
-      try {
-        const raw = await db.kvGet('anon', 'pinned:' + groupId);
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) {
-        return null;
-      }
-    },
+    async readPinned(groupId) { return MsgStore.readPinned(groupId); },
     async setPinnedState(groupId, pin) {
       if (pin && pin.msg_id) {
         await db.kvSet('anon', 'pinned:' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
@@ -3218,15 +3216,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (this.saveNotes(list)) this.messages = list;
     },
     // Parse message content — detect vault_attachment JSON and extract preview
-    isTextMime(type, name) {
-      if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
-      const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
-      if (ext) {
-        const textExts = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg', 'sh', 'bash', 'zsh', 'py', 'js', 'ts', 'vue', 'html', 'css', 'rs', 'go', 'c', 'h', 'cpp', 'hpp', 'java', 'kt', 'swift', 'sql', 'env', 'gitignore', 'editorconfig'];
-        if (textExts.includes(ext[1])) return true;
-      }
-      return false;
-    },
+    isTextMime(type, name) { return MsgFormat.isTextMime(type, name); },
     parseMessageContent(content) {
       if (!content || typeof content !== 'string') return { text: content, attachment: null };
       try {
@@ -3269,13 +3259,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Формат: {"vault":1,"id":"<uuid>","text":"...","name":"...","avatar":"dataURL"}
     // Всё под E2E — провайдер видит только base64. Обратная совместимость:
     // не-JSON или vault!==1 = старый формат (простой текст).
-    newMessageId() {
-      try {
-        // ВАЖНО: window.crypto — НЕ импортированный модуль crypto.js!
-        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
-      } catch (e) { /* fallback below */ }
-      return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-    },
+    newMessageId() { return MsgFormat.newMessageId(); },
     // Уменьшить аватар до 64x64 JPEG, если dataURL слишком большой (чтобы не
     // раздувать каждое письмо). НИКОГДА не возвращает '' для валидного аватара:
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
@@ -3338,25 +3322,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       return JSON.stringify(env);
     },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
-    parseEnvelope(decrypted) {
-      if (!decrypted || typeof decrypted !== 'string') return null;
-      try {
-        const obj = JSON.parse(decrypted);
-        if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-          const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined, tok: typeof obj.tok === 'string' ? obj.tok : '', gavatar: typeof obj.gavatar === 'string' ? obj.gavatar : '' };
-          // Голосование: poll-подконверт (валидация в features/poll.js).
-          if (obj.poll && typeof obj.poll === 'object') {
-            env.poll = {
-              id: String(obj.poll.id || obj.id || ''),
-              question: typeof obj.poll.question === 'string' ? obj.poll.question : '',
-              options: Array.isArray(obj.poll.options) ? obj.poll.options.map(o => String(o)) : [],
-            };
-          }
-          return env;
-        }
-      } catch { /* not an envelope — legacy plaintext */ }
-      return null;
-    },
+    parseEnvelope(decrypted) { return MsgFormat.parseEnvelope(decrypted); },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
     // получателей через linkify; никакой специфики конверта не нужно).
@@ -3386,21 +3352,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
     // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
     // Split a message into its reply-quote portion (leading "> " lines) and body.
-    splitReply(content) {
-      if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
-        return { quote: '', body: content || '' };
-      }
-      const lines = content.split('\n');
-      const quoteLines = [];
-      let i = 0;
-      for (; i < lines.length; i++) {
-        if (lines[i].indexOf('>') === 0) quoteLines.push(lines[i].slice(1).trim());
-        else break;
-      }
-      // Skip blank separator lines between the quote and the new body.
-      while (i < lines.length && !lines[i].trim()) i++;
-      return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
-    },
+    splitReply(content) { return MsgFormat.splitReply(content); },
     hasReplyQuote(content) {
       return this.splitReply(content).quote !== '';
     },
@@ -3620,9 +3572,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       });
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
-    async mediaQuality() {
-      try { return (await db.kvGet('anon', 'media-quality')) || 'high'; } catch { return 'high'; }
-    },
+    async mediaQuality() { return MsgStore.mediaQuality(); },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
     async onExperimentsCalls(on) {
       this.expCalls = !!on;
@@ -3657,12 +3607,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           : 'Исчезающие сообщения выключены',
       );
     },
-    async ephemeralTtlOf(chatId) {
-      try {
-        const v = await db.kvGet('anon', 'ephemeral:' + chatId);
-        return Number(v) || 0;
-      } catch { return 0; }
-    },
+    async ephemeralTtlOf(chatId) { return MsgStore.ephemeralTtlOf(chatId); },
     async setEphemeralTtl(chatId, seconds) {
       await db.kvSet('anon', 'ephemeral:' + chatId, String(seconds || 0));
       this.ephemeralTick += 1; // перерисовать индикатор в шапке
@@ -3937,9 +3882,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
     // (initLocalDb загружает их в cursorsCache при входе) — localStorage
-    imapCursorsKey(accountId) {
-      return 'vault-imap-cursors-' + accountId;
-    },
+    imapCursorsKey(accountId) { return MsgFormat.imapCursorsKey(accountId); },
     loadCursors(accountId) {
       return this.cursorsCache || {};
     },
@@ -4168,11 +4111,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Нормализация сырого заголовка From («Имя <email>») до чистого email.
     // avatarOf/nameOf ищут профили по email — без этого аватар/имя
     // отправителя в группе не рендерились («аватарки не добавились»).
-    senderEmail(raw) {
-      if (!raw) return '';
-      const m = String(raw).match(/<([^>]+)>/);
-      return (m ? m[1] : raw).trim().toLowerCase();
-    },
+    senderEmail(raw) { return MsgFormat.senderEmail(raw); },
     // Адаптер для MessageItem: карточка зовёт senderOf(msg-объект), а
     // senderEmail ждёт строку адреса. Письмо группы несёт sender_id
     // (email автора) — достаём его; для локальных записей без sender_id
@@ -4274,20 +4213,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     // --- Копирование сообщений ---
-    linkify(text) {
-      // Безопасная автолинковка: текст → экранированный HTML → ссылки/телефоны.
-      // Телефоны заменяются через плейсхолдеры ДО URL, чтобы не пересекаться.
-      const esc = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-      const phones = [];
-      // Телефон: код (+7/8/международный до 3 цифр) опционален, разделители
-      // (пробел/скобки/дефисы) — в любом количестве и любом месте между
-      // группами: 8(999)123-45-67, +7 (999) 123 45 67, +380 67 123 45 67.
-      const PHONE_RE = /(?<![\d])(?:\+?\d{1,3}[\s()-]*)?\(?\d{2,3}\)?[\s()-]*\d{3}[\s()-]*\d{2}[\s()-]*\d{2}/g;
-      let tmp = esc.replace(PHONE_RE, (m) => { phones.push(m.trim()); return `\u0000P${phones.length - 1}\u0000`; });
-      tmp = tmp.replace(/(https?:\/\/[^\s<"']+)/g, '<a href="$1" data-url="$1" class="msg-link">$1</a>');
-      tmp = tmp.replace(/\u0000P(\d+)\u0000/g, (_, i) => `<a href="tel:${phones[+i]}" data-phone="${phones[+i]}" class="msg-link msg-phone">${phones[+i]}</a>`);
-      return tmp;
-    },
+    linkify(text) { return MsgFormat.linkify(text); },
     onMessageTextClick(e) {
       const urlEl = e.target.closest('a[data-url]');
       if (urlEl) { e.preventDefault(); openExternal(urlEl.dataset.url).catch(() => {}); return; }
