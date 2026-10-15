@@ -192,7 +192,7 @@ export async function enterRelayOfflineRescue(ctx) {
   // ПОРЯДОК ВАЖЕН: сначала stopPolling/startPolling (они сбрасывают флаг
   // владельца IDLE и гасят таймер быстрого фетча), затем idleLoop — чтобы
   // он поднял монитор последним и его флаги не затёрлись.
-  ctx._idleStop = false;
+  idleState.setIdleStop(false);
   stopPolling(ctx);
   startPolling(ctx);
   idleLoop(ctx);
@@ -213,7 +213,7 @@ function startFastFetchTimer(ctx) {
   if (fastFetchCycle.timer) return;
   fastFetchCycle.start(async () => {
     // Вышли из сессии или эко погасило IDLE — таймер больше не нужен.
-    if (!ctx.isLoggedIn || ctx._idleStop) { fastFetchCycle.stop(); return; }
+    if (!ctx.isLoggedIn || idleState.idleStop) { fastFetchCycle.stop(); return; }
     // Анти-наложение loadEmailsFast (до 30с в Rust) — busy-флаг владельца
     // fastFetchCycle.guard пропускает тик, пока предыдущий идёт.
     try { await loadEmailsFast(ctx, true); } catch (e) { /* тихо */ }
@@ -246,11 +246,11 @@ export async function idleLoop(ctx) {
   // этой проверки каждый сигнал звонка (startFastPolling → idleLoop) поднимал
   // бы свежее соединение. Идемпотентность — на стороне владельца.
   if (useSession().callIdleMonitorUp) { startFastFetchTimer(ctx); return; }
-  if (ctx._idleActive) return;
-  ctx._idleActive = true;
+  if (idleState.idleActive) return;
+  idleState.setIdleActive(true);
   // Вызывающий явно просит включить IDLE — снимаем прошлый стоп (эко гасит
   // его флагом, а off-путь зовёт idleLoop снова).
-  ctx._idleStop = false;
+  idleState.setIdleStop(false);
   // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
   // но relay-очередь иначе ждала бы 30с тика поллинга).
   startRelayTicker(ctx);
@@ -267,14 +267,13 @@ export async function idleLoop(ctx) {
     // Владелец IDLE — Rust. JS-цикла больше нет; нужен только таймер
     // страховочного фетча (СПАМ + сигналы звонков).
     useSession().setCallIdleMonitorUp(true);
-    useSession().setCallIdleActive?.(false); // relay.js owns _idleActive
     return;
   }
   // ── Резервный путь: монитор не поднялся, ведём IDLE из JS ──────────
   let lastSafety = Date.now();
   let idleFailed = false;
   try {
-    while (ctx.isLoggedIn && !ctx._idleStop) {
+    while (ctx.isLoggedIn && !idleState.idleStop) {
       let changed = false;
       try {
         const r = await api.idleWait(2000, 'INBOX');
@@ -296,8 +295,8 @@ export async function idleLoop(ctx) {
       }
     }
   } finally {
-    ctx._idleActive = false;
-    ctx._idleStop = false;
+    idleState.setIdleActive(false);
+    idleState.setIdleStop(false);
   }
   // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
   // (hangup сам вернёт обычный 30с-поллинг).
@@ -316,7 +315,7 @@ export function startPolling(ctx, intervalMs = 30000) {
   // ADR-004 H+: владелец таймера — relay-idle.js/pollingCycle (busy-гвард).
   if (pollingCycle.timer) return;
   pollingCycle.start(async () => {
-    if (!ctx.isLoggedIn || ctx._idleStop) return;
+    if (!ctx.isLoggedIn || idleState.idleStop) return;
     try {
       // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
       // мержим в ctx.emails как виртуальные письма (uid: rl-<id>) —
@@ -414,7 +413,7 @@ export async function onEcoMode(ctx, on, silent = false) {
   if (!ctx.isLoggedIn) return;
   if (ctx.ecoMode) {
     // стоп JS IDLE-цикла и таймера быстрого фетча
-    ctx._idleStop = true;
+    idleState.setIdleStop(true);
     stopFastFetchTimer(ctx);
     // Эко означает «постоянного фонового соединения нет»: сбрасываем флаг
     // владельца, иначе последующий idleLoop (выключение эко / сигнал звонка)

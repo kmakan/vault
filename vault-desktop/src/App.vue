@@ -1104,10 +1104,9 @@ export default {
       // (call-resend.js) — ADR-004 I.2. calls.js импортирует singletonы
       // callResender/callRequestResender напрямую (как fastFetcher/connLostGuard),
       // поэтому data() больше не создаёт их.
-      // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
-      _idleActive: false,
+      // IMAP IDLE state (idleActive/idleStop) — вынесено в relay-idle.js
+      // singleton idleState (ADR-004 I.3); relay.js пишет через idleState напрямую.
       // ecoMode — теперь proxy на relay-store (ADR-004 A13).
-      _idleStop: false,
       // Владелец IDLE — Rust-монитор (email_start_idle_monitor). Флаг
       // поднимается после успешного api.idleStart и сбрасывается в
       // stopPolling/эко: повторный idleLoop при поднятом мониторе обязан

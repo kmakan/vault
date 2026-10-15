@@ -90,3 +90,18 @@ export const relayTicker = createRelayTicker();
 export const fastFetchCycle = createFastFetchCycle();
 export const pollingCycle = createPollingCycle();
 export const idleFallback = createIdleFallback();
+
+// ADR-004 I.3: IMAP IDLE state — singleton-владелец для idleActive/idleStop
+// (relay.js раньше держал их в App.data и писал через ctx). Теперь relay.js
+// оперирует idleState напрямую — без ctx._idle* props.
+export function createIdleState() {
+  let idleActive = false, idleStop = false;
+  return {
+    get idleActive() { return idleActive; },
+    get idleStop() { return idleStop; },
+    setIdleActive(v) { idleActive = !!v; },
+    setIdleStop(v) { idleStop = !!v; },
+    reset() { idleActive = false; idleStop = false; },
+  };
+}
+export const idleState = createIdleState();
