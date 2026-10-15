@@ -16,6 +16,7 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CALLS = path.join(ROOT, 'src/features/calls.js');
 const CALL_RESEND = path.join(ROOT, 'src/features/call-resend.js');
+const CALL_WATCHDOG = path.join(ROOT, 'src/features/call-watchdog.js');
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -42,6 +43,7 @@ await stub('identity.js', 'export const accountNamespace = async (e) => "anon:" 
 await stub('relay-client.js', 'export const getSettings = async () => ({ enabled: false });\nexport const publish = async () => ({});\n');
 await stub('crypto.js', 'export default {};\n');
 await stub('history.js', 'export const saveHistory = async () => {};\nexport const loadHistory = async () => [];\n');
+writeFileSync(`${MOCKS}/features/call-watchdog.js`, readFileSync(CALL_WATCHDOG, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-resend.js`, readFileSync(CALL_RESEND, 'utf8'));
 writeFileSync(`${MOCKS}/features/calls.js`, readFileSync(CALLS, 'utf8'));
 const C = await import(MOCKS + '/features/calls.js');

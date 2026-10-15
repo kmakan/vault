@@ -19,9 +19,9 @@ import { accountNamespace } from '../identity.js';
 import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
-
 // Re-export для backward-compat (App.vue / smoke ссылаются через C.SIGNAL_RESEND_DELAYS_MS).
 export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
+import { createMediaWatchdog } from './call-watchdog.js';
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
 // Инцидент 12.10.2026. Раньше call_request повторялся каждые 15с все 5 минут
@@ -694,8 +694,8 @@ export async function hangup(ctx, reason) {
   ctx.callRequestResender.stop();
   // Ретрансляция call_accept/answer (ctx.callResender).
   stopSignalResend(ctx);
-  // Предохранитель «Соединение…».
-  clearTimeout(ctx.session.mediaFallbackTimer);
+  // Предохранитель «Соединение…» (watchdog 90с — owner mediaWatchdog).
+  mediaWatchdog.stop();
   // Grace-таймер ICE disconnected.
   if (ctx.session.connLostTimer) { clearTimeout(ctx.session.connLostTimer); ctx.session.setConnLostTimer(null); }
   ctx.session.stopCallClock();
@@ -974,19 +974,23 @@ export function sendTerminalRepeat(ctx, peer, type, call_id) {
 // не соединилось (событие call-media-connected не пришло) — звонок не
 // состоялся: accept/answer потерялись в почте или собеседник уже ушёл.
 // красной кнопкой висел вечно. Теперь кладём трубку сами.
+// Watchdog 90с на media-connect (owner mediaWatchdog). Timer id кладётся в
+// ctx.session.mediaFallbackTimer — штатное завершение (hangup) гасит его
+// через mediaWatchdog.stop() (см. hangup выше).
+const mediaWatchdog = createMediaWatchdog();
+
 export function armMediaFallback(ctx) {
-  clearTimeout(ctx.session.mediaFallbackTimer);
-  ctx.session.setMediaFallbackTimer(setTimeout(() => {
-    if (ctx.session.callState === 'active' && !ctx.session.callMediaConnected) {
-      console.warn('[call] media not connected in 90s — auto hangup');
-      ctx.showToast(ctx.t('call_connect_failed'), 4000);
-      // Сообщаем собеседнику, чтобы у него тоже легла трубка
-      // (он может висеть в таком же «Соединение…»).
-      const c = ctx.session.currentCall;
-      if (c) sendTerminalRepeat(ctx, c.peer, 'call_end', c.call_id);
-      hangup(ctx, 'connect_timeout');
-    }
-  }, 90000));
+  const onTimeout = () => {
+    if (ctx.session.callState !== 'active' || ctx.session.callMediaConnected) return;
+    console.warn('[call] media not connected in 90s — auto hangup');
+    ctx.showToast(ctx.t('call_connect_failed'), 4000);
+    // Сообщаем собеседнику, чтобы у него тоже легла трубка
+    // (он может висеть в таком же «Соединение…»).
+    const c = ctx.session.currentCall;
+    if (c) sendTerminalRepeat(ctx, c.peer, 'call_end', c.call_id);
+    hangup(ctx, 'connect_timeout');
+  };
+  ctx.session.setMediaFallbackTimer(mediaWatchdog.start(onTimeout));
 }
 
 // Быстрый путь сигнализации (Фаза 1.5): IDLE постоянный — его владеет
