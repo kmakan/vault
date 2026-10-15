@@ -17,15 +17,22 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-migrate-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-const state = { diskKeys: [], fps: {}, renamed: [] };
+const state = { diskKeys: [], fps: {}, renamed: [], failRename: false, failDisk: false, diskKeysNotArray: false };
 globalThis.__state = state;
 globalThis.__invoke = async (cmd, args) => {
-  if (cmd === 'load_peer_keys') return state.diskKeys;
+  if (cmd === 'load_peer_keys') {
+    if (state.failDisk) throw new Error('load_peer_keys недоступен');
+    if (state.diskKeysNotArray) return 'НЕ-МАССИВ';
+    return state.diskKeys;
+  }
   if (cmd === 'get_fingerprint') {
     if (state.fps[args.publicKey] === undefined) throw new Error('ключ неизвестен');
     return state.fps[args.publicKey];
   }
-  if (cmd === 'groups_rename_member') { state.renamed.push(args); return null; }
+  if (cmd === 'groups_rename_member') {
+    if (state.failRename) throw new Error('groups_rename_member отказал');
+    state.renamed.push(args); return null;
+  }
   return null;
 };
 writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__invoke(...a);');
@@ -37,7 +44,7 @@ const GM = await import(MOCKS + '/groups-migrate.mjs');
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } else { fail++; console.log('  ✗ ПРОВАЛ:', name); } };
-const reset = () => { state.diskKeys = []; state.fps = {}; state.renamed = []; };
+const reset = () => { state.diskKeys = []; state.fps = {}; state.renamed = []; state.failRename = false; state.failDisk = false; state.diskKeysNotArray = false; };
 
 console.log('\nADR-003 Этап 3, партия 4 · переезд участника группы по ключу');
 
@@ -106,12 +113,70 @@ ok('после переезда у участника проставлены ema
   r === true && members[0].email === 'new@x' && members[0].key_shared === true
   && members[0].fingerprint === NEWFP);
 
-// ── 7. Сбой invoke не роняет вызывающий код ────────────────────────────
+// ── 7. Операционные отказы остаются «мягкими» ──────────────────────────
 reset();
 state.fps[NEWKEY] = undefined; // get_fingerprint бросит
 r = await GM.tryMigrateGroupMember(
   { 'new@x': NEWKEY }, grp([{ email: 'old@x', fingerprint: 'FP-ANY' }]), 'new@x');
 ok('недоступный get_fingerprint → false, не исключение', r === false);
+
+reset();
+state.fps[NEWKEY] = NEWFP;
+state.failRename = true;
+const members7 = [{ email: 'old@x' }];
+r = await GM.tryMigrateGroupMember(
+  { 'old@x': NEWKEY, 'new@x': NEWKEY }, grp(members7), 'new@x');
+ok('отказ groups_rename_member → false, не исключение', r === false);
+ok('при отказе записи локальный объект НЕ тронут (key_shared не выдуман)',
+  members7[0].email === 'old@x' && members7[0].key_shared === undefined);
+
+// ── 8. Ошибка ПРОГРАММИРОВАНИЯ ПРОБРАСЫВАЕТСЯ (ADR-003 §5.2) ───────────
+// Это и есть смысл правки. Раньше blanket-catch глотал всё и возвращал false:
+// опечатка в рефакторинге выглядела как «переезжать нечего», группа оставалась
+// с двумя участниками на один отпечаток, и это было не видно нигде, кроме
+// строчки console.warn, которую никто не читает.
+reset();
+state.fps[NEWKEY] = NEWFP;
+// Ломаем ВХОД: peerKeys = null. Раньше это давало TypeError, проглоченный catch.
+let threw = false, msg = '';
+try {
+  await GM.tryMigrateGroupMember(null, grp([{ email: 'old@x' }]), 'new@x');
+} catch (e) { threw = true; msg = String((e && e.message) || e); }
+ok('битый вход ПРОБРАСЫВАЕТ исключение, а не возвращает false', threw === true);
+ok('и это именно TypeError, а не «группа не найдена»', /null|undefined|is not/i.test(msg));
+
+// Ловится РОВНО отказ записи. Всё, что не поймано локально, обязано дойти до
+// вызывающего: load_peer_keys ниже защищён своим catch, поэтому чтобы доказать
+// «остальное пробрасывается», ломаем не бросок invoke, а его результат —
+// не-массив. Тогда .find упадёт TypeError'ом ВНЕ локального catch.
+reset();
+state.fps[NEWKEY] = NEWFP;
+state.diskKeysNotArray = true;
+threw = false;
+try {
+  // В кэше ТОЛЬКО новый адрес. Иначе поиск совпадёт на источнике 1 и выйдет
+  // раньше, не дойдя до .find — и проверка ничего не сказала бы (так и вышло
+  // в первой версии теста: кейс проходил, потому что кода не касался).
+  await GM.tryMigrateGroupMember(
+    { 'new@x': NEWKEY }, grp([{ email: 'old@x' }]), 'new@x');
+} catch (e) { threw = true; }
+ok('TypeError в середине поиска пробрасывается, а не глотается', threw === true);
+
+// Для контраста: БРОСОК из load_peer_keys ловится локально и поиск идёт дальше.
+reset();
+state.fps[NEWKEY] = NEWFP;
+state.failDisk = true;
+state.diskKeys = [{ email: 'old@x', public_key: NEWKEY }];
+threw = false;
+let r8 = false;
+try {
+  r8 = await GM.tryMigrateGroupMember(
+    { 'new@x': NEWKEY }, grp([{ email: 'old@x' }]), 'new@x');
+} catch (e) { threw = true; }
+ok('а бросок load_peer_keys ловится локально: поиск идёт по третьему источнику',
+  threw === false);
+// источник 3 не сработал бы (нет fingerprint), поэтому переезда нет — важно, что
+ok('и при этом БЕЗ исключения', r8 === false);
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

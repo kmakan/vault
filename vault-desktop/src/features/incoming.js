@@ -336,7 +336,20 @@ async function classify(ctx, m, from) {
     for (const g of ctx.groups) {
       let members = (g.members || []).map(x => String(x.email || '').toLowerCase());
       if (!members.includes(from)) {
-        const migrated = await ctx.tryMigrateGroupMember(g, from);
+        // Ошибку ПРОГРАММИРОВАНИЯ в tryMigrateGroupMember ловим здесь, а не
+        // пропускаем: выше нет защиты, и необработанный бросок оборвал бы весь
+        // батч входящих писом. Но ловим ГРОМКО и с маркером — этот catch не
+        // должен выглядеть как обычный путь «переезжать нечего» (ADR-003 §5.2).
+        // Группы продолжаем обходить: сломанная одна не должна блокировать
+        // переезд в остальных.
+        let migrated;
+        try {
+          migrated = await ctx.tryMigrateGroupMember(g, from);
+        } catch (err) {
+          migrated = false;
+          console.error('[groups] tryMigrateGroupMember упал — группа', g.id,
+            'оставлена как есть, возможен дубль участника:', err && err.message || err);
+        }
         if (!migrated) continue;
         members = (g.members || []).map(x => String(x.email || '').toLowerCase());
       }
