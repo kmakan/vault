@@ -262,8 +262,10 @@ export async function loadMessages(ctx, email) {
                     // tryMigrateGroupMember срабатывает только на входящем
                     // письме и ищет по peerKeys — который ренейм уже почистил.
                     await ctx.migratePeerGroups(oldEmail, sender);
-                    // Переносим историю чата со старого адреса на новый (kv).
-                    await ctx.migrateChatHistory(oldEmail, sender);
+                    // Переносим историю чата по ВСЕЙ цепочке алиасов: пир мог
+                    // менять почту несколько раз, и одного переноса не хватит —
+                    // осиротевший ключ означает исчезнувую переписку (ADR-003 §5.1).
+                    await ctx.migrateChatHistoryChain(sender, ctx.email, ctx.contactAliases);
                     // Копируем профиль старого адреса на новый (имя/аватар).
                     const oldProf = ctx.profiles[oldEmail];
                     if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);

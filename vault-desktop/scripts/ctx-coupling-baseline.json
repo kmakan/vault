@@ -1,6 +1,6 @@
 {
-  "totalCtxRefs": 1217,
-  "totalFunctions": 208,
+  "totalCtxRefs": 1221,
+  "totalFunctions": 212,
   "functionsWithCtx": 151,
   "modules": {
     "src/features/attachments.js": {
@@ -98,9 +98,16 @@
         "noteChannelHello",
         "noteChannelPost"
       ],
-      "functions": 17,
-      "functionsWithCtx": 4,
-      "biggestCtxFn": "sendChannelMeta"
+      "functions": 16,
+      "functionsWithCtx": 3,
+      "biggestCtxFn": "sendChannelPost"
+    },
+    "src/features/contacts-load.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/drafts.js": {
       "ctxRefs": 9,
@@ -112,7 +119,7 @@
         "newMessage"
       ],
       "functions": 3,
-      "functionsWithCtx": 3,
+      "functionsWithCtx": 2,
       "biggestCtxFn": "draftRun"
     },
     "src/features/duress/state.js": {
@@ -258,6 +265,34 @@
       "functionsWithCtx": 1,
       "biggestCtxFn": "syncGroupAvatarsFromMeta"
     },
+    "src/features/groups-clone.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
+    "src/features/groups-create.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
+    "src/features/groups-load.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
+    "src/features/groups-migrate.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
     "src/features/groups.js": {
       "ctxRefs": 46,
       "fields": [
@@ -312,16 +347,17 @@
         "pendingOutgoing"
       ],
       "functions": 15,
-      "functionsWithCtx": 13,
+      "functionsWithCtx": 14,
       "biggestCtxFn": "loadLocalHistory"
     },
     "src/features/incoming.js": {
-      "ctxRefs": 67,
+      "ctxRefs": 69,
       "fields": [
         "cacheBody",
         "canonicalOf",
         "channels",
         "chatVisible",
+        "contactAliases",
         "cryptoReady",
         "email",
         "emailBodyCache",
@@ -332,7 +368,7 @@
         "isIgnored",
         "isMuted",
         "localProfileOf",
-        "migrateChatHistory",
+        "migrateChatHistoryChain",
         "migratePeerGroups",
         "nameOf",
         "onMailBounce",
@@ -400,7 +436,7 @@
       "biggestCtxFn": "inviteSelectedMembers"
     },
     "src/features/messages.js": {
-      "ctxRefs": 86,
+      "ctxRefs": 88,
       "fields": [
         "activeChat",
         "aliasesOf",
@@ -408,6 +444,7 @@
         "applyPollVotes",
         "applyReactions",
         "cacheBody",
+        "contactAliases",
         "cryptoReady",
         "email",
         "emailBodyCache",
@@ -420,7 +457,7 @@
         "mergeHistory",
         "mergePending",
         "messages",
-        "migrateChatHistory",
+        "migrateChatHistoryChain",
         "migratePeerGroups",
         "noteSeen",
         "parseCallSignal",
@@ -521,8 +558,8 @@
         "t"
       ],
       "functions": 23,
-      "functionsWithCtx": 22,
-      "biggestCtxFn": "openContactCard"
+      "functionsWithCtx": 23,
+      "biggestCtxFn": "nameOf"
     },
     "src/features/reactions.js": {
       "ctxRefs": 28,

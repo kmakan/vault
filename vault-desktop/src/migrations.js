@@ -144,3 +144,68 @@ export async function migratePeerGroups(oldEmail, newEmail, onRenamed) {
   }
   return n;
 }
+
+// ── Потребитель contactAliases: перенос истории по ВСЕЙ цепочке ─────────
+//
+// ЗАЧЕМ. migrateChatHistory переносит РОВНО ОДИН ключ: chat-cache:<старый> →
+// chat-cache:<новый>. Этого хватает, пока адрес менялся один раз. Если пир менял
+// почту дважды (a → b → c), а приложение не работало в момент первого перехода,
+// то при обнаружении c мы перенесём chat-cache:c (пусто) и вернём false, а
+// chat-cache:a останется осиротевшим. Человек останется в списке контактов, но
+// вся переписка с ним исчезнет из кэша — молча, без единого признака.
+//
+// ИМЕННО ДЛЯ ЭТОГО и считаются алиасы в contacts-load. Форма там ЦЕПОЧКА
+// ({b: [a], c: [b]}), и это не дефект: чтобы найти все прежние адреса, цепочку
+// надо обойти. Плоский список дал бы то же самое, но требовал бы хранить
+// дубликаты при каждом переименовании.
+//
+// ПОРЯДОК — В ШИРИНУ, БЛИЖАЙШИЙ ПЕРВЫМ. Если цепочка a → b → c, обход даёт сначала
+// b, потом a. Перенос b → c первым оставляет историю последнего адреса, а
+// перенос a → c не затирает её (migrateChatHistory не перезаписывает занятый
+// ключ). Более старый ключ при этом НЕ удаляется — он остаётся осиротевшим, то
+// ест данные не уничтожаются молча, а остаются видимыми в возврате.
+//
+// КЛЮЧИ АЛИАСОВ НЕ НОРМАЛИЗОВАНЫ. contacts-load пишет c.email как есть, то есть
+// регистр может быть любой. Поэтому индекс строится в нижнем регистре, иначе
+// перенос молча не нашёл бы алиас при адресе вида Ann@bk.ru.
+
+export async function migrateChatHistoryChain(newEmail, myEmail, contactAliases) {
+  const want = String(newEmail || '').toLowerCase();
+  // Индекс алиасов в нижнем регистре: сырые ключи не нормализованы.
+  const idx = new Map();
+  for (const [k, v] of Object.entries(contactAliases || {})) {
+    idx.set(String(k).toLowerCase(), (v || []).map(x => String(x)));
+  }
+  // Обход в ширину: ближайший предшественник идёт первым.
+  const order = [];
+  const seen = new Set([want]);
+  const queue = [want];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const old of idx.get(cur) || []) {
+      const k = String(old).toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      order.push(old);
+      queue.push(k);
+    }
+  }
+  const moved = [];
+  const orphans = [];
+  for (const old of order) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await migrateChatHistory(old, newEmail, myEmail)) moved.push(old);
+    else orphans.push(old);
+  }
+  if (moved.length) {
+    console.log('[identity] chat history migrated along alias chain:',
+      moved.join(', '), '→', newEmail);
+  }
+  if (orphans.length) {
+    // Не ошибка: ключа не было или он уже занят. Но адреса названы, чтобы потеря
+    // переписки была видна в логе, а не обнаруживалась по отсутствию сообщений.
+    console.log('[identity] alias-chain addresses without cache (kept, not deleted):',
+      orphans.join(', '));
+  }
+  return { moved, orphans, order };
+}

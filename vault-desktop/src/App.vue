@@ -2583,8 +2583,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Вызывается при fingerprint-матчинге у ПОЛУЧАТЕЛЯ (поллинг/loadMessages).
     // ADR-003 Этап 3: переезд истории чата — в migrations.js. Ключ чата
     // принадлежит ПИРУ, поэтому account идёт через резолвер, а пир остаётся почтой.
-    async migrateChatHistory(oldEmail, newEmail) {
-      return Migrations.migrateChatHistory(oldEmail, newEmail, this.email);
+    // ADR-003 §5.1: перенос по цепочке алиасов. Одиночный migrateChatHistory
+    // остался в модуле и вызывается изнутри цепочки — он переносит один ключ,
+    // и его полезность отдельная.
+    async migrateChatHistoryChain(newEmail, myEmail, contactAliases) {
+      return Migrations.migrateChatHistoryChain(newEmail, myEmail, contactAliases);
     },
     // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
     // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke

@@ -127,5 +127,46 @@ ok('упавший onRenamed не ломает перенос', await (async () 
   return await M.migratePeerGroups('old@bk.ru', 'new@bk.ru', async () => { throw new Error('список не прочитался'); }) === 1;
 })());
 
+// ── migrateChatHistoryChain: потребитель contactAliases ───────────────
+// Сценарий, ради которого всё затевалось: пир менял почту ДВАЖДЫ (a → b → c),
+// приложение не работало в первый раз. Одиночный перенос взял бы
+// chat-cache:c (пусто) и вернул false, а chat-cache:a осиротел бы — и вся
+// переписка исчезла бы молча.
+reset();
+st.kv['fp:me@bk.ru'] = { 'chat-cache:a@x': 'CACHE-A' };
+let ch = await M.migrateChatHistoryChain('c@x', 'me@bk.ru', { 'c@x': ['b@x'], 'b@x': ['a@x'] });
+ok('цепочка a → b → c развёрнута обходом в ширину', ch.order.join(',') === 'b@x,a@x');
+ok('история ПЕРВОГО адреса перенесена в текущий', st.kv['fp:me@bk.ru']['chat-cache:c@x'] === 'CACHE-A');
+ok('осиротевший ключ удалён', st.kv['fp:me@bk.ru']['chat-cache:a@x'] === undefined);
+ok('в отчёте — что перенесено', ch.moved.join(',') === 'a@x');
+
+// Ближайший адрес приоритетнее: если переписка есть и под b, и под a, побеждает
+// более свежая, а старая НЕ удаляется — данные не уничтожаются молча.
+reset();
+st.kv['fp:me@bk.ru'] = { 'chat-cache:b@x': 'CACHE-B', 'chat-cache:a@x': 'CACHE-A' };
+ch = await M.migrateChatHistoryChain('c@x', 'me@bk.ru', { 'c@x': ['b@x'], 'b@x': ['a@x'] });
+ok('приоритет у ближайшего адреса', st.kv['fp:me@bk.ru']['chat-cache:c@x'] === 'CACHE-B');
+ok('старый ключ сохранён, а не затёрт и не удалён',
+  st.kv['fp:me@bk.ru']['chat-cache:a@x'] === 'CACHE-A' && ch.orphans.join(',') === 'a@x');
+
+// Цикл в алиасах не должен вешать обход.
+reset();
+ch = await M.migrateChatHistoryChain('c@x', 'me@bk.ru', { 'c@x': ['b@x'], 'b@x': ['c@x'] });
+ok('цикл в алиасах не вешает обход', ch.order.join(',') === 'b@x');
+
+// КЛЮЧИ НЕ НОРМАЛИЗОВАНЫ: contacts-load пишет c.email как есть. Без
+// приведения к нижнему регистру перенос молча не нашёл бы алиас.
+reset();
+st.kv['fp:me@bk.ru'] = { 'chat-cache:OLD@x': 'CACHE-OLD' };
+ch = await M.migrateChatHistoryChain('New@x', 'me@bk.ru', { 'New@x': ['OLD@x'] });
+ok('алиасы находятся при разном регистре', st.kv['fp:me@bk.ru']['chat-cache:New@x'] === 'CACHE-OLD');
+
+// Без алиасов поведение прежнее: молча ничего, без исключения.
+reset();
+st.kv['fp:me@bk.ru'] = { 'chat-cache:a@x': 'CACHE-A' };
+ch = await M.migrateChatHistoryChain('c@x', 'me@bk.ru', null);
+ok('без карты алиасов — пустой обход, не исключение', ch.order.length === 0 && ch.moved.length === 0);
+ok('и ничего не перенесено', st.kv['fp:me@bk.ru']['chat-cache:a@x'] === 'CACHE-A');
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

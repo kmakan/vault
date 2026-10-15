@@ -268,8 +268,11 @@ async function classify(ctx, m, from) {
         await api.renamePeerIdentity(matched.knownEmail, from);
         // Группы: переименовать адрес участника во всех, где он числится.
         await ctx.migratePeerGroups(matched.knownEmail, from);
-        // Переносим историю чата со старого адреса на новый.
-        await ctx.migrateChatHistory(matched.knownEmail, from);
+        // Переносим историю чата по ВСЕЙ цепочке алиасов, а не только со
+        // старого адреса. Если пир менял почту дважды и приложение не работало
+        // в первый раз, одного переноса мало: chat-cache самого первого адреса
+        // осиротел бы, и переписка исчезла бы молча (ADR-003 §5.1).
+        await ctx.migrateChatHistoryChain(from, ctx.email, ctx.contactAliases);
         // СТАРЫЙ адрес убираем из всех хранилищ — иначе второй контакт
         // с тем же ключом (порядок: до setPeerKey, как в App.vue).
         if (String(matched.knownEmail).toLowerCase() !== String(from).toLowerCase()) {
