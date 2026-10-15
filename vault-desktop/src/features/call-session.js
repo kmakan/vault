@@ -88,6 +88,27 @@ export function createCallSession(initial = {}) {
       if (remote !== undefined) this.state.remoteOffer = remote;
       _notify();
     },
+    // ── Часы звонка: тик живёт владельце (ADR-004 E). ──────────────
+    // App.vue больше не мутирует this.callClockSec/callClockTimer напрямую:
+    // сброс, интервал и инкремент — внутри owner; onTick — для сторож.
+    startCallClock(onTick) {
+      this.state.callClockSec = 0;
+      _notify();
+      const h = setInterval(() => {
+        this.state.callClockSec += 1;
+        _notify();
+        if (onTick) onTick();
+      }, 1000);
+      this.state.callClockTimer = h;
+      _notify();
+      return h;
+    },
+    stopCallClock() {
+      if (this.state.callClockTimer) clearInterval(this.state.callClockTimer);
+      this.state.callClockTimer = null;
+      _notify();
+      return null;
+    },
     reset() {
       Object.assign(this.state, {
         currentCall: null, callState: 'idle', callClockSec: 0, callClockTimer: null,

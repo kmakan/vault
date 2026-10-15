@@ -88,6 +88,19 @@ ok('C7 unsubscribe stops notify', m === 1);
 // C8: _all snapshot (test helper)
 ok('C8 _all deep clone', JSON.stringify(s._all()).includes('callState'));
 
+// C9: часы — тик владельца (ADR-004 E)
+let ticks = 0;
+const h = s.startCallClock(() => ticks++);
+ok('C9 startCallClock возвращает хендл', !!h);
+ok('C9 startCallClock сбрасывает callClockSec 0', s.callClockSec === 0);
+ok('C9 startCallClock запоминает callClockTimer', s.callClockTimer === h);
+// реальный node setInterval (в этом smoke нет мока) → 1 tick за ~1.2с
+await new Promise((r) => setTimeout(r, 1200));
+ok('C9 тик инкрементит callClockSec', s.callClockSec === 1);
+ok('C9 onTick вызван', ticks === 1);
+s.stopCallClock();
+ok('C9 stopCallClock очищает callClockTimer', s.callClockTimer === null);
+
 const passed = checks.filter((c) => c.pass).length;
 const failed = checks.filter((c) => !c.pass);
 console.log(`call-session-smoke: ${passed}/${checks.length} checks passed`);

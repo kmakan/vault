@@ -467,15 +467,15 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   C.armMediaFallback(wd);
   await fireTimer(wd.session.mediaFallbackTimer);
   check('watchdog 90с → hangup(connect_timeout) + call_end собеседнику', wd.session.callState === 'idle' && apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
-  // часы — ADR-001: фича возвращает хендл, тик приходит от App.vue.
+  // часы — владелец session.startCallClock/stopCallClock (ADR-004 E).
+  // setInterval-хендл попадает в управляемую карту timers → fireTimer тикует.
   const ck = makeCtx();
-  ck.callClockSec = 0;
-  ck.callClockTimer = C.startCallClock(() => { ck.callClockSec++; });
-  await fireTimer(ck.callClockTimer);
-  await fireTimer(ck.callClockTimer);
-  check('часы тикают (2с)', ck.callClockSec === 2);
-  ck.callClockTimer = C.stopCallClock(ck.callClockTimer);
-  check('stopCallClock', ck.callClockTimer === null);
+  const id = ck.session.startCallClock();
+  await fireTimer(id);
+  await fireTimer(id);
+  check('часы тикают (2с)', ck.session.callClockSec === 2);
+  ck.session.stopCallClock();
+  check('stopCallClock', ck.session.callClockTimer === null);
   // fastPolling — делегирует idleLoop (зависимость передаётся функцией)
   let idleCalled = 0;
   C.startFastPolling(() => idleCalled++);

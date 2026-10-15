@@ -110,7 +110,7 @@ const C = await import(MOCKS + '/features/calls.js');
     return null;
   };
   const converted = ['isCallSeen', 'rememberCallSeen', 'callEventLabel', 'canCallBack',
-    'startCallClock', 'stopCallClock', 'startFastPolling', 'stopFastPolling',
+    'startFastPolling', 'stopFastPolling',
     'toggleCallMute', 'toggleSpeaker'];
   for (const fn of converted) {
     const body = bodyOf(fn);
@@ -164,14 +164,7 @@ const C = await import(MOCKS + '/features/calls.js');
   check('toggleSpeaker(true) → false',
     C.toggleSpeaker({ callSpeaker: true, currentCall: null }) === false);
 
-  // Часы: тик обязан приходить СНАРУЖИ. Регресс, который я почти внёс:
-  // пустой setInterval крутился бы вхолостую, и счётчик стоял бы на нуле,
-  // а все проверки времени звонка проходили бы.
-  let ticks = 0;
-  const timer = C.startCallClock(() => { ticks++; });
-  check('startCallClock возвращает хендл таймера', !!timer, typeof timer);
-  check('startCallClock НЕ тикает сам (тик — снаружи)', ticks === 0, ticks);
-  check('stopCallClock(хендл) → null', C.stopCallClock(timer) === null);
+  // Часы теперь — владелец call-session.startCallClock/stopCallClock (ADR-004 E).
 
   let idle = 0;
   C.startFastPolling(() => idle++);

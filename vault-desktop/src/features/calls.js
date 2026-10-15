@@ -697,7 +697,7 @@ export async function hangup(ctx, reason) {
   clearTimeout(ctx.session.mediaFallbackTimer);
   // Grace-таймер ICE disconnected.
   if (ctx.session.connLostTimer) { clearTimeout(ctx.session.connLostTimer); ctx.session.setConnLostTimer(null); }
-  stopCallClock(ctx.session.callClockTimer);
+  ctx.session.stopCallClock();
   // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
   // headless-логика не ставила missed поверх реального решения.
   if (callId) {
@@ -1015,21 +1015,6 @@ export function armMediaFallback(ctx) {
       hangup(ctx, 'connect_timeout');
     }
   }, 90000));
-}
-
-// ADR-001: часы звонка больше не мутируют ctx. Функция возвращает id нового
-// интервала; счётчик секунд и сам хендл присваивает вызывающий (App.vue).
-// Тик передаётся явно: раньше он инкрементил ctx.session.callClockSec изнутри
-// замыкания — если это забыть, таймер молча крутится вхолостую.
-export function startCallClock(onTick) {
-  return setInterval(onTick, 1000);
-}
-
-// Гасит интервал часов. Принимает ХЕНДЛ, а не контекст: чистить нечего,
-// кроме переданного id. Возвращает null — вызывающий присваивает.
-export function stopCallClock(timer) {
-  clearInterval(timer);
-  return null;
 }
 
 // Быстрый путь сигнализации (Фаза 1.5): IDLE постоянный — его владеет
