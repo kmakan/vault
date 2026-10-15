@@ -130,7 +130,7 @@ export async function sendPoll(ctx, question, options) {
       poll: parsePollEnvelope(pollEnv),
     };
     if (pendingMsg.poll) pendingMsg.poll.myVote = null;
-    ctx.messages.push(pendingMsg);
+    ctx.chat.append(pendingMsg);
     ctx.scrollToBottom(true);
     if (ctx.activeChatType === 'group') {
       await api.sendGroupMessage(ctx.currentGroup.id, content, { id: pollEnv.id, text: pollEnv.text });

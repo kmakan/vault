@@ -333,12 +333,12 @@
     "poll.js": [
       "activeChat",
       "activeChatType",
+      "chat",
       "cryptoReady",
       "currentGroup",
       "displayName",
       "email",
       "groupKeys",
-      "messages",
       "newMessageId",
       "peerKeys",
       "peerPqKeys",
@@ -526,7 +526,6 @@
       "groups.js",
       "history.js",
       "messages.js",
-      "poll.js",
       "reactions.js",
       "send.js"
     ],

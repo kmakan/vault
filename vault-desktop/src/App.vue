@@ -889,9 +889,11 @@
 </template>
 
 <script>
+import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
+import { createChatStore } from './chat-store.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1026,7 +1028,12 @@ export default {
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
-    return { t, setLocale, availableLocales, currentLocale };
+    // Модуль-владелец переписки (ADR-004, Этап A1).
+    // reactive() оборачивает стор: методы мутируют this.state через прокси,
+    // поэтому Vue видит изменения. Без обёртки мутации шли бы мимо прокси
+    // и интерфейс не обновлялся бы — тихо.
+    const chat = reactive(createChatStore());
+    return { t, setLocale, availableLocales, currentLocale, chat };
   },
   data() {
     return {
@@ -1115,7 +1122,6 @@ export default {
       contacts: [],
       contactAliases: {},
       activeChat: null,
-      messages: [],
       newMessage: '',
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
       // слать копию письма.
@@ -1338,6 +1344,13 @@ export default {
     }
   },
   computed: {
+    // Прокси во владельца переписки (ADR-004, Этап A1).
+    // Все существующие this.messages = ... и this.messages в шаблоне продолжают
+    // работать без изменений, но запись идёт через владельца.
+    messages: {
+      get() { return this.chat.state.messages; },
+      set(v) { this.chat.set(v); },
+    },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
       return ForwardFeature.forwardTargets(this);
