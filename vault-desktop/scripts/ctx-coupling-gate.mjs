@@ -49,6 +49,17 @@ function walk(dir, out = []) {
 const STRIP_STRINGS = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
 const STRIP_LINES = /^\s*\/\/.*$/gm;
 const STRIP_BLOCKS = /\/\*[\s\S]*?\*\//g;
+// Поля-владельцы (ADR-004). Исключаются из подсчёта coupling: запись через
+// владельца — планомерный перенос состояния, а не рост связности.
+// Симметрично с ctx-ratchet-gate.js OWNER_FIELDS.
+const OWNER_FIELDS = new Set([
+  'chat',
+  'setGroupKey', 'setGroupAvatar', 'mergeGroupKeys', 'mergeGroupAvatars',
+
+  'setSending', 'getSending', 'setPendingOutgoing', 'getPendingOutgoingBucket',
+  'mergePendingOutgoing', 'removePendingOutgoing', 'clearPendingOutgoing', 'dropBucket',
+]);
+
 
 function functionBodies(src) {
   const clean = src.replace(STRIP_BLOCKS, '').replace(STRIP_LINES, '')
@@ -86,19 +97,24 @@ for (const f of walk(FEATURES)) {
   const rel = path.relative(ROOT, f);
   const src = readFileSync(f, 'utf8');
   const fns = functionBodies(src);
-  const refs = src.match(/\bctx\.([A-Za-z_]\w*)/g) || [];
-  if (!refs.length && !fns.length) continue;
+  // refs — ТОЛЬКО из кода (не комментариев): строковый regex на raw src
+  // ловит ctx.* в комментариях (ложные срабатывания у owner-модулей).
+  const code = src.replace(STRIP_BLOCKS, "").replace(STRIP_LINES, "").replace(STRIP_STRINGS, "");
+  const refs = code.match(/\bctx\.([A-Za-z_]\w*)/g) || [];
+  // Владельцы ADR-004 (setSending/setPendingOutgoing и пр.) не считаются coupling.
+  const ownRefs = refs.filter(r => !OWNER_FIELDS.has(r.slice(4)));
+  if (!ownRefs.length && !fns.length && !refs.length) continue;
   const withCtx = fns
     .filter(fn => /\bctx\b/.test(fn.body))
     .sort((a, b) => b.body.length - a.body.length);
   measured[rel] = {
-    ctxRefs: refs.length,
-    fields: [...new Set(refs.map(r => r.slice(4)))].sort(),
+    ctxRefs: ownRefs.length,
+    fields: [...new Set(ownRefs.map(r => r.slice(4)))].sort(),
     functions: fns.length,
     functionsWithCtx: withCtx.length,
     biggestCtxFn: withCtx[0]?.name || null,
   };
-  totalRefs += refs.length;
+  totalRefs += ownRefs.length;
   totalFns += fns.length;
   ctxFns += withCtx.length;
 }

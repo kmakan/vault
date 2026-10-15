@@ -1,0 +1,89 @@
+// Smoke-тест для sending-store.js (ADR-004, Этап A10).
+// Проверяет: создание, изоляция, get/set/get-back, bulk merge, remove, clear,
+// null-guard, zero-import gate, no-ctx gate. Без Vue/Tauri.
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+// Испортируем настоящий модуль из src — он framework-agnostic.
+const MODULE_PATH = path.resolve(import.meta.dirname, '..', 'src', 'features', 'sending-store.js');
+const src = readFileSync(MODULE_PATH, 'utf8');
+
+let pass = 0, fail = 0;
+function check(name, cond, extra) {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
+}
+
+console.log('\nADR-004 Этап A10 · модуль-владелец состояния отправки');
+
+// 1. Zero-import gate: модуль не импортирует ничего.
+check('нет НИ ОДНОГО импорта — модуль не зависит ни от чего, включая фреймворк',
+  !/^\s*import\s/m.test(src) && !/^\s*require\s*\(/m.test(src));
+
+// 2. No-ctx gate: модуль не упоминает `ctx` в коде (только в комментариях допустимо, но мы проверим body).
+// Строго: в коде (не комментариях) нет `ctx`.
+const bodyNoCtx = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+check('нет доступа к ctx', !/\bctx\b/.test(bodyNoCtx));
+
+// 3. State начинается пустым
+const { createSendingStore } = await import('file://' + MODULE_PATH);
+const s1 = createSendingStore();
+check('состояние начинается sending=false', s1.state.sending === false);
+check('состояние начинается pendingOutgoing={}', JSON.stringify(s1.state.pendingOutgoing) === '{}');
+
+// 4. Изоляция: второй стор не видит первый
+const s2 = createSendingStore();
+s1.setPendingOutgoing('chat1', { id: 'm1', text: 'hello' });
+check('изоляция — второй стор не видит первый', !s2.state.pendingOutgoing['chat1']);
+
+// 5. setSending / getSending round-trip
+s1.setSending(true);
+check('setSending(true) → getSending() === true', s1.getSending() === true);
+s1.setSending(false);
+check('setSending(false) → getSending() === false', s1.getSending() === false);
+// setSending coerce
+s1.setSending(1);
+check('setSending(1) → getSending() === true', s1.getSending() === true);
+
+// 6. setPendingOutgoing с id → пишет по ключу
+const store = createSendingStore();
+const msg = { id: 'm1', text: 'hello', status: 'sending' };
+const bucket = store.setPendingOutgoing('chat:1', msg);
+check('setPendingOutgoing(id) записывает по ключу', bucket['m1'] === msg && store.state.pendingOutgoing['chat:1']['m1'] === msg);
+
+// 7. getBucket для несуществующего чата создаёт fresh
+const b2 = store.getBucket('chat:2');
+check('getBucket несуществующего создаёт fresh {}', JSON.stringify(b2) === '{}');
+
+// 8. mergePendingOutgoing — full bucket replace (not deep-merge)
+store.mergePendingOutgoing('chat:1', { m1: { ...msg, status: 'sent' } });
+check('mergePendingOutgoing обновил запись', store.state.pendingOutgoing['chat:1']['m1'].status === 'sent');
+
+// 9. setPendingOutgoing без id → merge-mode
+store.setPendingOutgoing('chat:1', { extra: 'field' });
+check('setPendingOutgoing без id merge-ит в бакет', store.state.pendingOutgoing['chat:1'].extra === 'field');
+
+// 10. removePendingOutgoing удаляет msg
+store.setPendingOutgoing('chat:1', { id: 'm2', text: 'second' });
+store.removePendingOutgoing('chat:1', 'm2');
+check('removePendingOutgoing удаляет msg по id', !store.state.pendingOutgoing['chat:1']['m2']);
+check('removePendingOutgoing сохраняет остальные', !!store.state.pendingOutgoing['chat:1']['m1']);
+
+// 11. removePendingOutgoing для несуществующего не падает
+check('removePendingOutgoing несуществующего не падает', store.removePendingOutgoing('chat:nope', 'x') === null);
+
+// 12. clearPendingOutgoing сбрасывает всё
+store.setSending(true);
+store.clearPendingOutgoing();
+check('clearPendingOutgoing сбрасывает pendingOutgoing', JSON.stringify(store.state.pendingOutgoing) === '{}');
+check('clearPendingOutgoing не трогает sending (осталось true)', store.getSending() === true);
+
+// 13. setSending возвращает значение для цепочки
+const returned = s1.setSending(false);
+check('setSending возвращает установленное значение', returned === false);
+
+// 14. setPendingOutgoing возвращает bucket
+const retBucket = store.setPendingOutgoing('c3', { id: 'm3', text: 'x' });
+check('setPendingOutgoing возвращает bucket', retBucket === store.state.pendingOutgoing['c3']);
+
+console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
+process.exit(fail ? 1 : 0);

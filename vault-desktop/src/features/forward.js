@@ -44,7 +44,7 @@ export async function doForward(ctx, key) {
     : (ctx.nameOf(ctx.activeChat) || ctx.activeChat);
   const fwdText = (ctx.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
   try {
-    ctx.sending = true;
+    ctx.setSending(true);
     const ttl = await ctx.ephemeralTtlOf(key);
     const envelope = await ctx.buildEnvelope(fwdText, ttl);
     const envelopeId = EnvelopeId.envelopeIdOf(envelope);
@@ -78,6 +78,6 @@ export async function doForward(ctx, key) {
     console.error('[forward] failed:', e);
     alert(ctx.t('forward_err') || 'Forward failed');
   } finally {
-    ctx.sending = false;
+    ctx.setSending(false);
   }
 }

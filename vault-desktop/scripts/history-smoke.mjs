@@ -55,7 +55,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     email: 'me@x.ru',
     emailBodyCache: {},
     bodyCacheOrder: [],
@@ -71,6 +71,23 @@ function makeCtx(over = {}) {
     // ctx.chat.set(), а не напрямую в ctx.messages.
     chat: createChatStore(),
   }, over);
+  // Методы-обёртки над состоянием отправки (ADR-004 Этап A10).
+  // history.js теперь пишет через ctx.setPendingOutgoing/mergePendingOutgoing/
+  // dropBucket, а читает через ctx.pendingOutgoing (computed proxy в App.vue).
+  ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
+  ctx.getSending = () => ctx.sending;
+  ctx.setPendingOutgoing = (chatId, msg) => {
+    const b = ctx.pendingOutgoing[chatId] || {};
+    if (msg && msg.id) b[msg.id] = msg; else Object.assign(b, msg || {});
+    ctx.pendingOutgoing[chatId] = b;
+    return b;
+  };
+  ctx.getPendingOutgoingBucket = (chatId) => ctx.pendingOutgoing[chatId] || (ctx.pendingOutgoing[chatId] = {});
+  ctx.mergePendingOutgoing = (chatId, partial) => { ctx.pendingOutgoing[chatId] = partial; return partial; };
+  ctx.removePendingOutgoing = (chatId, msgId) => { const b = ctx.pendingOutgoing[chatId]; if (b && Object.prototype.hasOwnProperty.call(b, msgId)) { delete b[msgId]; } return b; };
+  ctx.clearPendingOutgoing = () => { ctx.pendingOutgoing = {}; return ctx.pendingOutgoing; };
+  ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
+  return ctx;
 }
 const tombstones = new Set();
 

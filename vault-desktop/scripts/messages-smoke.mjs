@@ -43,7 +43,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     loadSeq: 1, activeChat: 'peer@x.ru', activeChatType: 'peer', currentGroup: null,
     emails: [], cryptoReady: true, peerKeys: { 'peer@x.ru': 'PUB' }, peerPqKeys: {},
     groupKeys: {}, messages: [], pendingOutgoing: {},
@@ -62,6 +62,15 @@ function makeCtx(over = {}) {
     healGroupAvatarFromMessage: () => {}, t: (k) => k, showToast: () => {},
     parsePollEnvelope: () => null,
   }, over);
+  // sending-store stubs (ADR-004 Этап A10) — для backward-compat, если
+  // features/ начнут писать через ctx.setPendingOutgoing.
+  ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
+  ctx.getSending = () => ctx.sending;
+  ctx.setPendingOutgoing = (chatId, msg) => { const b = ctx.pendingOutgoing[chatId] || {}; if (msg && msg.id) b[msg.id] = msg; else Object.assign(b, msg || {}); ctx.pendingOutgoing[chatId] = b; return b; };
+  ctx.getPendingOutgoingBucket = (chatId) => ctx.pendingOutgoing[chatId] || (ctx.pendingOutgoing[chatId] = {});
+  ctx.mergePendingOutgoing = (chatId, bucket) => { ctx.pendingOutgoing[chatId] = bucket || {}; return ctx.pendingOutgoing[chatId]; };
+  ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
+  return ctx;
 }
 const mail = (content, fromAddr, mid, uid) => ({ content, from: fromAddr, to: 'me@x.ru', message_id: mid || '<m@x>', uid: uid || 1, folder: 'INBOX', date: '2026-01-01T00:00:00Z' });
 

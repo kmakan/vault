@@ -24,7 +24,7 @@ export async function sendMessage(ctx) {
       // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
       // игнорируем — иначе уходит 2+ письма с разными id и получатели видят
       // «одно сообщение несколько раз».
-      if (ctx.sending) return;
+      if (ctx.getSending()) return;
       // Анти-дубль ПОСЛЕ отправки: двойной Enter с паузой (первая отправка
       // уже завершилась) — тот же текст в тот же чат в течение 30 секунд
       // один раз»).
@@ -62,11 +62,11 @@ export async function sendMessage(ctx) {
       }
 
       try {
-        ctx.sending = true;
+        ctx.setSending(true);
         // таймаут, JS-ошибка вне try), sending должен разблокироваться —
         // иначе кнопка/Enter навсегда блокируются, сообщение «висит» в поле.
         clearTimeout(ctx._sendingWatchdog);
-        ctx._sendingWatchdog = setTimeout(() => { ctx.sending = false; }, 60000);
+        ctx._sendingWatchdog = setTimeout(() => { ctx.setSending(false); }, 60000);
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
         let payload = ctx.newMessage;
@@ -183,10 +183,9 @@ export async function sendMessage(ctx) {
           // Персистим обновлённый статус в pendingOutgoing (иначе поллинг
           // подмешивал бы запись со старым 'sending'). И в историю — иначе
           // у групп нет самокопии письма, которая заменила бы pending).
-          const bucket = ctx.pendingOutgoing['group:' + ctx.currentGroup.id];
-          if (bucket && bucket[pendingMsg.id]) {
-            bucket[pendingMsg.id] = pendingMsg;
-            ctx.pendingOutgoing = { ...ctx.pendingOutgoing, ['group:' + ctx.currentGroup.id]: bucket };
+          const gChat = 'group:' + ctx.currentGroup.id;
+          if (ctx.getPendingOutgoingBucket(gChat)[pendingMsg.id]) {
+            ctx.setPendingOutgoing(gChat, pendingMsg);
           }
           ctx.saveCurrentHistory('group:' + ctx.currentGroup.id);
         } else {
@@ -259,10 +258,8 @@ export async function sendMessage(ctx) {
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
             api.sendMessage(ctx.activeChat, content).then(() => {
               pendingMsg.status = 'sent';
-              const b = ctx.pendingOutgoing[ctx.activeChat];
-              if (b && b[pendingMsg.id]) {
-                b[pendingMsg.id] = pendingMsg;
-                ctx.pendingOutgoing = { ...ctx.pendingOutgoing, [ctx.activeChat]: b };
+              if (ctx.getPendingOutgoingBucket(ctx.activeChat)[pendingMsg.id]) {
+                ctx.setPendingOutgoing(ctx.activeChat, pendingMsg);
               }
               ctx.saveCurrentHistory(ctx.activeChat);
             }).catch(e => {
@@ -276,10 +273,8 @@ export async function sendMessage(ctx) {
             pendingMsg.failedTo = [e && e.message || String(e)];
             console.error('Failed to send message:', e);
           }
-          const bucket = ctx.pendingOutgoing[ctx.activeChat];
-          if (bucket && bucket[pendingMsg.id]) {
-            bucket[pendingMsg.id] = pendingMsg;
-            ctx.pendingOutgoing = { ...ctx.pendingOutgoing, [ctx.activeChat]: bucket };
+          if (ctx.getPendingOutgoingBucket(ctx.activeChat)[pendingMsg.id]) {
+            ctx.setPendingOutgoing(ctx.activeChat, pendingMsg);
           }
           // Персистим финальный статус в историю (иначе после перезапуска
           ctx.saveCurrentHistory(ctx.activeChat);
@@ -290,6 +285,6 @@ export async function sendMessage(ctx) {
       } catch (error) {
         alert('Failed to send message: ' + error.message);
       } finally {
-        ctx.sending = false;
+        ctx.setSending(false);
       }
 }

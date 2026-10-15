@@ -110,7 +110,7 @@ export async function sendPoll(ctx, question, options) {
     ts: Date.now(),
   };
   try {
-    ctx.sending = true;
+    ctx.setSending(true);
     const envelope = JSON.stringify(pollEnv);
     let content = envelope;
     if (ctx.activeChatType === 'group') {
@@ -143,7 +143,7 @@ export async function sendPoll(ctx, question, options) {
     console.error('[poll] send failed:', e);
     alert(ctx.t('poll_err') || 'Poll failed');
   } finally {
-    ctx.sending = false;
+    ctx.setSending(false);
   }
 }
 

@@ -71,5 +71,17 @@ export function createGroupsStore() {
       Object.assign(this.state.groupAvatars, map);
       return this.state.groupAvatars;
     },
+
+    // Полный сброс (logout/reset). Используется в App.vue resetState,
+    // где раньше был прямой `this.groupKeys = {}` — теперь поле в computed
+    // getter, set игнорируется, поэтому нужен метод владельца.
+    clearGroupKeys() {
+      this.state.groupKeys = {};
+      return this.state.groupKeys;
+    },
+    clearGroupAvatars() {
+      this.state.groupAvatars = {};
+      return this.state.groupAvatars;
+    },
   };
 }

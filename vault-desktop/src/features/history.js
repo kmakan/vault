@@ -123,10 +123,7 @@ export async function saveChatCache(ctx, chat, list) {
 //    подтверждённые записи (их нет в IMAP-списке), а подтверждённые
 //    (id уже отрисован из письма) — удаляем из реестра.
 export function markPending(ctx, chatKey, msg) {
-  if (!msg || !msg.id) return;
-  const bucket = ctx.pendingOutgoing[chatKey] || {};
-  bucket[msg.id] = msg;
-  ctx.pendingOutgoing = { ...ctx.pendingOutgoing, [chatKey]: bucket };
+  ctx.setPendingOutgoing(chatKey, msg);
 }
 
 export function mergePending(ctx, chatKey, list) {
@@ -164,11 +161,9 @@ export function mergePending(ctx, chatKey, list) {
     out.push(msg);
   }
   if (Object.keys(remaining).length) {
-    ctx.pendingOutgoing = { ...ctx.pendingOutgoing, [chatKey]: remaining };
+    ctx.mergePendingOutgoing(chatKey, remaining);
   } else {
-    const copy = { ...ctx.pendingOutgoing };
-    delete copy[chatKey];
-    ctx.pendingOutgoing = copy;
+    ctx.dropBucket(chatKey);
   }
   // msgTs учитывает ts / email.date / created_at / _pendingAt — у групповых
   // сообщений и вложений нет email-объекта, сортировка по email.date давала

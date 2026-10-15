@@ -48,11 +48,27 @@ SCAN.push('api.js');
 // переведённый модуль: модуль начинает брать новое поле `chat`, и храповик
 // видит рост связности.
 const OWNER_FIELDS = new Set([
-  'chat',                   // A1: чат-история (chat-store.js)
-  'setGroupKey',            // A9: groupKeys (groups-store.js)
-  'setGroupAvatar',         // A9: groupAvatars (groups-store.js)
-  'mergeGroupKeys',         // A9: groupKeys bulk-load (groups-store.js)
-  'mergeGroupAvatars',      // A9: groupAvatars bulk-load (groups-store.js)
+  // A1: чат-история (chat-store.js)
+  'chat',
+  // A9: groupKeys/groupAvatars (groups-store.js)
+  'setGroupKey',
+  'setGroupAvatar',
+  'mergeGroupKeys',
+  'mergeGroupAvatars',
+  // A10: sending/pendingOutgoing (sending-store.js).
+  // Состояние — sending (boolean), pendingOutgoing (bucket map).
+  // API — set/get/merge/remove/clear/drop. Запись через владельца — планомерный
+  // перенос, а не нарушение связности: modules перестают писать чужие поля.
+  'sending',
+  'pendingOutgoing',
+  'setSending',
+  'getSending',
+  'setPendingOutgoing',
+  'getPendingOutgoingBucket',
+  'mergePendingOutgoing',
+  'removePendingOutgoing',
+  'clearPendingOutgoing',
+  'dropBucket',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

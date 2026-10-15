@@ -83,6 +83,19 @@ function makeCtx(over = {}) {
   ctx.setGroupAvatar = (id, avatar) => { ctx.groupAvatars[id] = avatar; return avatar; };
   ctx.mergeGroupKeys = (map) => Object.assign(ctx.groupKeys, map);
   ctx.mergeGroupAvatars = (map) => Object.assign(ctx.groupAvatars, map);
+  // sending-store stubs (ADR-004 Этап A10) — для backward-compat с features,
+  // которые используют ctx.sending/ctx.pendingOutgoing в makeCtx.
+  ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
+  ctx.getSending = () => ctx.sending;
+  ctx.setPendingOutgoing = (chatId, msg) => {
+    const b = ctx.pendingOutgoing[chatId] || {};
+    if (msg && msg.id) b[msg.id] = msg; else Object.assign(b, msg || {});
+    ctx.pendingOutgoing[chatId] = b;
+    return b;
+  };
+  ctx.getPendingOutgoingBucket = (chatId) => ctx.pendingOutgoing[chatId] || (ctx.pendingOutgoing[chatId] = {});
+  ctx.mergePendingOutgoing = (chatId, bucket) => { ctx.pendingOutgoing[chatId] = bucket || {}; return ctx.pendingOutgoing[chatId]; };
+  ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
   return ctx;
 }
 const gmail = (content, senderId, mid, createdAt) => ({ content, sender_id: senderId, message_id: mid || '<m@x>', created_at: createdAt || '2026-01-01T00:00:00Z', is_read: false, is_sent: false });

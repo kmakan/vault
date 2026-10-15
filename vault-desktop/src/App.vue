@@ -895,6 +895,7 @@ import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
+import { createSendingStore } from './features/sending-store.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1037,7 +1038,12 @@ export default {
     // Модуль-владелец состояния групп (ADR-004, Этап A9). Аналогично чат-хранилищу:
     // groupKeys и groupAvatars больше не data()-свойства, а живут в владельце.
     const groups = reactive(createGroupsStore());
-    return { t, setLocale, availableLocales, currentLocale, chat, groups };
+    // Модуль-владелец состояния отправки (ADR-004, Этап A10). Аналогично
+    // чат- и групповым хранилищам: sending и pendingOutgoing больше не
+    // data()-свойства, а живут во владельце. 14 писатц → ctx.setSending/
+    // ctx.setPendingOutgoing/mergePendingOutgoing.
+    const sendingStore = reactive(createSendingStore());
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore };
   },
   data() {
     return {
@@ -1128,8 +1134,7 @@ export default {
       activeChat: null,
       newMessage: '',
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
-      // слать копию письма.
-      sending: false,
+      // слать копию письма. Теперь во владельце sending-store (ADR-004, A10).
       // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
       // чат секунды назад (двойной Enter с паузой), повторную отправку
       // игнорируем — иначе получатели видят «одно сообщение дважды».
@@ -1195,7 +1200,7 @@ export default {
       // стирал ещё не доставленное сообщение (оно «появлялось и исчезало»);
       // теперь mergePending подмешивает их обратно, пока копия письма не
       // придёт из Sent/All Mail — тогда реальное письмо заменяет запись.
-      pendingOutgoing: {},
+      // Теперь во владельце sending-store (ADR-004, A10).
       cryptoReady: false,
       publicKey: null,
       fingerprint: null,
@@ -1363,6 +1368,15 @@ export default {
     },
     groupAvatars: {
       get() { return this.groups.state.groupAvatars; },
+    },
+    // Прокси во владельца состояния отправки (ADR-004, Этап A10).
+    // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.
+    // Геттеры сохраняют обратную совместимость для чтения; запись — через API.
+    sending: {
+      get() { return this.sendingStore.state.sending; },
+    },
+    pendingOutgoing: {
+      get() { return this.sendingStore.state.pendingOutgoing; },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -2463,7 +2477,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.email = '';
       this.password = '';
       this.groups = [];
-      this.groupKeys = {};
+      this.clearGroupKeys();
       this.currentGroup = null;
       this.activeChatType = 'chat';
       this.contacts = [];
@@ -3359,6 +3373,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // features/* вызывают ctx.setGroupKey — адресуем во владельца.
     setGroupKey(id, key) { return this.groups.setGroupKey(id, key); },
     setGroupAvatar(id, avatar) { return this.groups.setGroupAvatar(id, avatar); },
+    clearGroupKeys() { return this.groups.clearGroupKeys(); },
+    clearGroupAvatars() { return this.groups.clearGroupAvatars(); },
+    // Тонкие прокси во владельца состояния отправки (ADR-004 Этап A10).
+    // features/* вызывают ctx.setSending/ctx.setPendingOutgoing — адресуем во владельца.
+    setSending(val) { return this.sendingStore.setSending(val); },
+    setPendingOutgoing(chatId, msg) { return this.sendingStore.setPendingOutgoing(chatId, msg); },
+    getPendingOutgoingBucket(chatId) { return this.sendingStore.getBucket(chatId); },
+    mergePendingOutgoing(chatId, partial) { return this.sendingStore.mergePendingOutgoing(chatId, partial); },
+    removePendingOutgoing(chatId, msgId) { return this.sendingStore.removePendingOutgoing(chatId, msgId); },
+    clearPendingOutgoing() { return this.sendingStore.clearPendingOutgoing(); },
+    dropBucket(chatId) { return this.sendingStore.dropBucket(chatId); },
     async onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
       // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
