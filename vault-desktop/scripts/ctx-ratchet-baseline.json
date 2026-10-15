@@ -215,7 +215,6 @@
       "emailBodyCache",
       "filterDeleted",
       "isTombstoned",
-      "messages",
       "msgTs",
       "pendingOutgoing"
     ],
@@ -381,7 +380,6 @@
       "currentGroup",
       "email",
       "groupKeys",
-      "messages",
       "peerKeys",
       "peerPqKeys",
       "reactionPickerMsgId"
@@ -524,7 +522,6 @@
       "calls.js",
       "groups.js",
       "messages.js",
-      "reactions.js",
       "send.js"
     ],
     "showAudioRecorder": [
@@ -816,7 +813,7 @@
     ]
   },
   "totals": {
-    "ctxFields": 441,
+    "ctxFields": 439,
     "ctxRefSites": 1225,
     "sharedWriteFields": 13
   }

@@ -83,7 +83,11 @@ export function sendReactionEmail(ctx, msgId, emoji, action) {
 
 export function toggleReactionPicker(ctx, msgId) {
   // Пилюли звонков — не сообщения: реакции на них не нужны.
-  const m = (ctx.messages || []).find(x => x && x.id === msgId);
+  // Чтение через владельца: byId возвращает null вместо undefined —
+  // проверка ниже работает с обоими одинаково. Опциональный доступ
+  // вместо тернарника: прежний код терпел ctx без messages (`|| []`),
+  // а `?.` не добавляет вторую ссылку на chat (гейт считает ссылки).
+  const m = ctx.chat?.byId(msgId);
   if (m && m.callEvent) return;
   // Если пользователь выделял текст (копирование) — клик не должен
   // открывать пикер реакций.
@@ -95,12 +99,12 @@ export function toggleReactionPicker(ctx, msgId) {
 }
 
 export function addReaction(ctx, msgId, emoji) {
-  const msg = ctx.messages.find(m => m.id === msgId);
-  if (!msg) return;
-  if (!msg.reactions) msg.reactions = [];
-  if (!msg.reactions.includes(emoji)) {
-    msg.reactions.push(emoji);
-  }
+  ctx.chat.patch(msgId, (msg) => {
+    if (!msg.reactions) msg.reactions = [];
+    if (!msg.reactions.includes(emoji)) {
+      msg.reactions.push(emoji);
+    }
+  });
   // Персистентность: сохранить сразу (переживёт поллинг).
   const chatKey = ctx.activeChatType === 'group' ? ctx.activeChat : ctx.activeChat;
   const stored = loadStoredReactions(ctx);
@@ -118,12 +122,13 @@ export function addReaction(ctx, msgId, emoji) {
 }
 
 export function toggleReaction(ctx, msgId, emoji) {
-  const msg = ctx.messages.find(m => m.id === msgId);
-  if (!msg || !msg.reactions) return;
-  const idx = msg.reactions.indexOf(emoji);
-  if (idx >= 0) {
-    msg.reactions.splice(idx, 1);
-  }
+  ctx.chat.patch(msgId, (msg) => {
+    if (!msg.reactions) return;
+    const idx = msg.reactions.indexOf(emoji);
+    if (idx >= 0) {
+      msg.reactions.splice(idx, 1);
+    }
+  });
   // Убрать из хранилища и уведомить собеседника.
   const chatKey = ctx.activeChat;
   const stored = loadStoredReactions(ctx);
