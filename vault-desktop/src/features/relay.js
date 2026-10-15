@@ -21,6 +21,7 @@
 
 import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
+import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
 // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
@@ -120,13 +121,13 @@ export async function loadEmailsFast(ctx, silent = true) {
 // приложение работает как классика, единственная разница — иконка в
 // шторке. При оживании релея — тихо возвращаемся в эко.
 export function startRelayTicker(ctx) {
-  if (ctx._relayTicker) return;
+  // ADR-004 H+: владелец таймера — relay-idle.js/relayTicker (singleton).
+  if (relayTicker.timer) return;
   ctx._relayFails = 0;
   ctx._lastRelayHealth = Date.now();
-  ctx._relayTicker = setInterval(async () => {
+  relayTicker.start(async () => {
     if (!ctx.isLoggedIn) {
-      clearInterval(ctx._relayTicker);
-      ctx._relayTicker = null;
+      relayTicker.stop();
       return;
     }
     try { await relayConsume(ctx); } catch (e) { /* релей опционален */ }
@@ -160,7 +161,7 @@ export function startRelayTicker(ctx) {
         syncEcoWithRelay(ctx, true).catch(() => {});
       }
     }
-  }, 5000);
+  });
   // M2.3-c: мгновенный первый consume — ntfy-пуш будит холодный старт,
   // call_request уже в очереди; без этого звонок загремел бы через 5с.
   if (ctx.isLoggedIn) relayConsume(ctx).catch(() => {});
@@ -206,26 +207,20 @@ const FAST_FETCH_TICK_MS = 7000;
 // Быстрый фетч звонков по таймеру (независим от того, кто владеет IDLE).
 // Идемпотентен: повторный вызов при живом таймере — no-op, второй таймер
 // не заводим (иначе на повторном входе тики наложились бы вдвое).
+// Владелец таймера — relay-idle.js/fastFetchCycle (busy-гвард анти-наложения).
 function startFastFetchTimer(ctx) {
-  if (ctx._fastFetchTimer) return;
-  ctx._fastFetchTimer = setInterval(async () => {
+  if (fastFetchCycle.timer) return;
+  fastFetchCycle.start(async () => {
     // Вышли из сессии или эко погасило IDLE — таймер больше не нужен.
-    if (!ctx.isLoggedIn || ctx._idleStop) { stopFastFetchTimer(ctx); return; }
-    // Анти-наложение: loadEmailsFast ходит в IMAP (до 30с в Rust) — следующий
-    // тик не должен стартовать поверх незавершённого.
-    if (ctx._fastFetchBusy) return;
-    ctx._fastFetchBusy = true;
+    if (!ctx.isLoggedIn || ctx._idleStop) { fastFetchCycle.stop(); return; }
+    // Анти-наложение loadEmailsFast (до 30с в Rust) — busy-флаг владельца
+    // fastFetchCycle.guard пропускает тик, пока предыдущий идёт.
     try { await loadEmailsFast(ctx, true); } catch (e) { /* тихо */ }
-    finally { ctx._fastFetchBusy = false; }
-  }, FAST_FETCH_TICK_MS);
+  });
 }
 
 export function stopFastFetchTimer(ctx) {
-  if (ctx._fastFetchTimer) {
-    clearInterval(ctx._fastFetchTimer);
-    ctx._fastFetchTimer = null;
-  }
-  ctx._fastFetchBusy = false;
+  fastFetchCycle.stop();
 }
 
 // ЕДИН владелец IDLE. Внешний контракт прежний (зовут из App.vue и relay.js
@@ -312,29 +307,22 @@ export async function idleLoop(ctx) {
   // (idleLoop), то есть при его успехе владение возвращается монитору,
   // а JS-цикл выключается.
   if (ctx.isLoggedIn && idleFailed) {
-    setTimeout(() => { if (ctx.isLoggedIn) idleLoop(ctx); }, 60000);
+    // Авто-восстановление IDLE через 60с: владелец — relay-idle.js/idleFallback.
+    idleFallback.arm(() => { if (ctx.isLoggedIn) idleLoop(ctx); });
   }
 }
 
 export function startPolling(ctx, intervalMs = 30000) {
-  if (ctx.pollTimer) return;
-  ctx.pollTimer = setInterval(async () => {
-    // Анти-наложение: setInterval запускает новый тик каждые 30с
-    // НЕ дожидаясь завершения предыдущего. Если IMAP завис (троттлинг
-    // Gmail), предыдущий тик держит Rust-lock клиента до 35с — следующий
-    // стартует поверх, lock занят почти всегда, и открытие чата падает с
-    // «Timed out waiting for email client lock» (чаты пустые). Пропускаем
-    // тик, пока предыдущий ещё выполняется.
-    if (!ctx.isLoggedIn || ctx._pollingActive) return;
-    ctx._pollingActive = true;
+  // ADR-004 H+: владелец таймера — relay-idle.js/pollingCycle (busy-гвард).
+  if (pollingCycle.timer) return;
+  pollingCycle.start(async () => {
+    if (!ctx.isLoggedIn || ctx._idleStop) return;
     try {
       // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
       // мержим в ctx.emails как виртуальные письма (uid: rl-<id>) —
       // дальше их разберёт штатный processIncoming (дедуп по env.id
       // в mergeHistory не даст дубликату email-письма задвоиться).
-      try {
-        await relayConsume(ctx);
-      } catch (e) { /* релей недоступен — почта продолжит доставку */ }
+      try { await relayConsume(ctx); } catch (e) { /* релей недоступен — почта продолжит доставку */ }
       // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
       // контактов (модель почтовый мессенджер — группа тоже источник контактов).
       try { await ctx.loadGroups(); } catch (e) { /* тихо */ }
@@ -371,17 +359,12 @@ export function startPolling(ctx, intervalMs = 30000) {
       } else {
         console.error('Polling loadEmails failed:', e);
       }
-    } finally {
-      ctx._pollingActive = false;
     }
   }, intervalMs);
 }
 
 export function stopPolling(ctx) {
-  if (ctx.pollTimer) {
-    clearInterval(ctx.pollTimer);
-    ctx.pollTimer = null;
-  }
+  pollingCycle.stop();
   // Страховочный быстрый фетч — часть режима IDLE, а не поллинга: гасим
   // его здесь, чтобы на выходе/смене почты/размонтировании не осталось
   // висящего IMAP-таймера. Восстанавливает его idleLoop (в т.ч. через
