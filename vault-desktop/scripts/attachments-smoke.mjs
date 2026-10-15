@@ -5,6 +5,7 @@
 // лимиты провайдера, заметки) после декомпозиции.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { createChatStore } from '../src/chat-store.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -87,7 +88,6 @@ function makeCtx(over = {}) {
     dodCache: {},
     voicePlayingId: '',
     viewingImage: null,
-    messages: [],
     showAudioRecorder: true,
     showToast: () => {},
     $forceUpdate: () => {},
@@ -99,6 +99,9 @@ function makeCtx(over = {}) {
     loadNotes: () => [],
     markPending: () => {},
     scrollToBottom: () => {},
+    // Модуль-владелец переписки (ADR-004, Этап A1). attachments.js пишет через
+    // ctx.chat.set/append, а не напрямую в ctx.messages.
+    chat: createChatStore(),
     mediaQuality: async () => 'original',
     compressImage: async () => '',
     isTextMime: () => false,
@@ -196,14 +199,14 @@ console.log('4. downloadDodAttachment');
 // ── 5. sendAudioMessage: заметки (локально, без почты) ─────────
 console.log('5. sendAudioMessage — «Заметки для себя»');
 {
-  const ctx = makeCtx({ activeChat: '__notes__', messages: [] });
+  const ctx = makeCtx({ activeChat: '__notes__' });
   let saved = null;
   ctx.saveNotes = (list) => { saved = list; return true; };
   ctx.loadNotes = () => [];
   apiMock.sendCalls.length = 0;
   await A.sendAudioMessage(ctx, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' });
   check('заметка: сообщение в messages (audio), почта НЕ трогалась',
-    ctx.messages.length === 1 && ctx.messages[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
+    ctx.chat.list().length === 1 && ctx.chat.list()[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
   check('showAudioRecorder выключен', ctx.showAudioRecorder === false);
 }
 

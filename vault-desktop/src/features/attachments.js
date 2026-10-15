@@ -155,12 +155,12 @@ export async function sendAudioMessage(ctx, audioData) {
     list.push(msg);
     if (!ctx.saveNotes(list)) {
       list.pop();
-      ctx.messages = [...list];
+      ctx.chat.set([...list]);
       alert(ctx.t('err_notes_full_voice'));
       ctx.showAudioRecorder = false;
       return;
     }
-    ctx.messages = [...list];
+    ctx.chat.set([...list]);
     ctx.showAudioRecorder = false;
     ctx.scrollToBottom(true);
     return;
@@ -214,7 +214,7 @@ export async function sendAudioMessage(ctx, audioData) {
       isAudio: true,
     },
   };
-  ctx.messages.push(msg);
+  ctx.chat.append(msg);
   const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
     ? 'group:' + ctx.currentGroup.id
     : ctx.activeChat;
@@ -362,11 +362,11 @@ export async function handleFileSelect(ctx, event) {
           noteList.push(noteMsg);
           if (!ctx.saveNotes(noteList)) {
             noteList.pop();
-            ctx.messages = [...noteList];
+            ctx.chat.set([...noteList]);
             alert(ctx.t('err_notes_full_file'));
             return;
           }
-          ctx.messages = [...noteList];
+          ctx.chat.set([...noteList]);
           ctx.scrollToBottom(true);
           return;
         }
@@ -413,7 +413,7 @@ export async function handleFileSelect(ctx, event) {
             textContent: textContent,
           },
         };
-        ctx.messages.push(msg);
+        ctx.chat.append(msg);
         const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
           ? 'group:' + ctx.currentGroup.id
           : ctx.activeChat;
