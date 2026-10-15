@@ -26,7 +26,8 @@ import { createRingTimer } from './call-ring.js';
 import { createTerminalSender } from './call-terminal.js';
 // fire-and-forget задержки (delay/later/cancel) — убирают bare setTimeout/
 // clearTimeout из state-machine (timing.js; см. ADR-004 G).
-import { delay, later, cancel } from './timing.js';
+import { delay, later } from './timing.js';
+import { fastFetcher, connLostGuard } from './call-idle.js';
 const terminalSender = createTerminalSender();
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
@@ -369,7 +370,7 @@ export async function handleCallSignal(ctx, sig, from) {
       if (!(ctx.isAndroid && document.visibilityState === 'visible')) {
         api.mediaShowIncomingCall(ctx.callPeerName || from);
       }
-      startFastPolling(() => ctx.idleLoop());
+      startFastPolling(() => ctx.idleLoop(), ctx._idleMonitorUp);
       // Таймер гудка: длительность из настроек (SettingsPage → kv
       // 'call-ring-duration', секунды). Читаем АСИНХРОННО и НЕ блокируем
       // state machine: если kv не ответил — дефолт 180с (было хардкодом).
@@ -504,7 +505,7 @@ export async function startCall(ctx) {
   ctx.session.setLastCallId(call_id);
   ctx.session.setCallState('outgoing_ringing');
   ctx.session.setMuted(false);
-  startFastPolling(() => ctx.idleLoop());
+  startFastPolling(() => ctx.idleLoop(), ctx._idleMonitorUp);
   // для call_accept может превысить 180с, и звонок сгорал до ответа;
   // окончательно решает call_reject/call_cancel от собеседника).
   ctx.session.setCallRingTimer(ringTimer.start(300000, () => cancelCall(ctx, 'timeout')));
@@ -707,7 +708,7 @@ export async function hangup(ctx, reason) {
   // Предохранитель «Соединение…» (watchdog 90с — owner mediaWatchdog).
   mediaWatchdog.stop();
   // Grace-таймер ICE disconnected (fire-and-forget из timing.js).
-  if (ctx.session.connLostTimer) { cancel(ctx.session.connLostTimer); ctx.session.setConnLostTimer(null); }
+  if (ctx.session.connLostTimer) { connLostGuard.clear(); ctx.session.setConnLostTimer(null); }
   ctx.session.stopCallClock();
   // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
   // headless-логика не ставила missed поверх реального решения.
@@ -1008,12 +1009,17 @@ export function armMediaFallback(ctx) {
 // idleLoop. Здесь только гарантия, что режим приёма включён: при
 // поднятом мониторе idleLoop — no-op (без нового TCP+TLS), при
 // погашенном эко — поднимет заново.
-export function startFastPolling(idleLoop) {
-  idleLoop();
+export function startFastPolling(idleLoop, monitorUp = false) {
+  // ADR-004 H: владелец fast-fetch — call-idle.js/fastFetcher (singleton).
+  // Rust-монитор (_idleMonitorUp) держит постоянный IDLE — если вниз,
+  // страховочный фетч каждые 7с (СПАМ + сигналы звонков); busy-флаг
+  // защищает от наложения (аналог бывшего _fastFetchBusy).
+  if (monitorUp) { idleLoop(); return; }
+  fastFetcher.start(idleLoop);
 }
 
 export function stopFastPolling() {
-  // IDLE-цикл постоянный — не останавливаем.
+  fastFetcher.stop();
 }
 
 // ── Звук ───────────────────────────────────────────────────────

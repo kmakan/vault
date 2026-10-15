@@ -903,6 +903,7 @@ import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
 import { createSessionStore } from './features/session-store.js';
 import { createRelayStore } from './features/relay-store.js';
+import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1113,10 +1114,9 @@ export default {
       // поднимается после успешного api.idleStart и сбрасывается в
       // stopPolling/эко: повторный idleLoop при поднятом мониторе обязан
       // быть no-op, иначе каждый сигнал звонка создавал бы новое TCP+TLS.
+      // Rust-монитор IDLE (_idleMonitorUp): если погашен — владелец fastFetcher
+      // (call-idle.js) поднимает страховочный фетч 7с; timer id больше не живёт в App.data.
       _idleMonitorUp: false,
-      // Таймер страховочного быстрого фетча (СПАМ + сигналы звонков, 7с).
-      _fastFetchTimer: null,
-      _fastFetchBusy: false,
       // Звонковые таймеры/звук/рингтоны (callSoundEl/callRingtone*) — App-only timer ids
       // и rineload; callState/currentCall/etc. вынесены в callSession (ADR-004 C).
       // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
@@ -1773,19 +1773,21 @@ export default {
       if (!cid || !this.currentCall || this.currentCall.call_id !== cid) return;
       console.log('[call] connection state:', st);
       if (st === 'connected') {
-        if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
+        connLostGuard.clear();
+        this._connLostTimer = null;
       } else if (st === 'disconnected') {
         if (!this._connLostTimer) {
-          this._connLostTimer = setTimeout(() => {
+          this._connLostTimer = connLostGuard.arm(() => {
             this._connLostTimer = null;
             if (this.currentCall && this.currentCall.call_id === cid) {
               console.log('[call] ICE disconnected grace expired — hanging up');
               this.hangup('remote');
             }
-          }, 10000);
+          });
         }
       } else if (st === 'failed' || st === 'closed') {
-        if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
+        connLostGuard.clear();
+        this._connLostTimer = null;
         this.hangup('remote');
       }
     }).catch(e => console.warn('[call] listen connection-state failed:', e));
@@ -2154,7 +2156,7 @@ export default {
     armMediaFallback() { return CallsFeature.armMediaFallback(this); },
     startCallClock() { this.callSession.startCallClock(); },
     stopCallClock() { this.callSession.stopCallClock(); },
-    startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop()); },
+    startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop(), this._idleMonitorUp); },
     stopFastPolling() { return CallsFeature.stopFastPolling(); },
     playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
     stopCallSound() { return CallsFeature.stopCallSound(this); },
