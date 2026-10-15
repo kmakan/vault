@@ -520,49 +520,6 @@
     "dodCache": [
       "attachments.js"
     ],
-    "groupKeys": [
-      "attachments.js",
-      "edits.js",
-      "forward.js",
-      "group-avatars.js",
-      "group-meta.js",
-      "groups.js",
-      "incoming.js",
-      "poll.js",
-      "reactions.js",
-      "send.js"
-    ],
-    "peerKeys": [
-      "attachments.js",
-      "calls.js",
-      "duress.js",
-      "edits.js",
-      "forward.js",
-      "incoming.js",
-      "members.js",
-      "messages.js",
-      "poll.js",
-      "presence.js",
-      "profiles.js",
-      "reactions.js",
-      "receipts.js",
-      "send.js"
-    ],
-    "peerPqKeys": [
-      "attachments.js",
-      "calls.js",
-      "duress.js",
-      "edits.js",
-      "forward.js",
-      "incoming.js",
-      "messages.js",
-      "poll.js",
-      "presence.js",
-      "profiles.js",
-      "reactions.js",
-      "receipts.js",
-      "send.js"
-    ],
     "messages": [
       "attachments.js",
       "calls.js",
@@ -641,6 +598,12 @@
     "email": [
       "duress.js"
     ],
+    "peerPqKeys": [
+      "duress.js"
+    ],
+    "peerKeys": [
+      "duress.js"
+    ],
     "emailsLoading": [
       "emails.js"
     ],
@@ -671,6 +634,13 @@
       "poll.js",
       "send.js"
     ],
+    "groupKeys": [
+      "group-avatars.js",
+      "group-meta.js",
+      "groups.js",
+      "incoming.js",
+      "send.js"
+    ],
     "groupAvatars": [
       "group-avatars.js",
       "group-meta.js",
@@ -682,17 +652,8 @@
     "pinnedPreview": [
       "groups.js"
     ],
-    "pendingOutgoing": [
-      "groups.js",
-      "history.js",
-      "messages.js",
-      "send.js"
-    ],
     "emailBodyCache": [
-      "history.js",
-      "incoming.js",
-      "messages.js",
-      "receipts.js"
+      "history.js"
     ],
     "bodyCacheOrder": [
       "history.js"
@@ -700,10 +661,9 @@
     "bodyCacheSaveTimer": [
       "history.js"
     ],
-    "profiles": [
-      "incoming.js",
-      "messages.js",
-      "profiles.js"
+    "pendingOutgoing": [
+      "history.js",
+      "send.js"
     ],
     "processedUnreadIds": [
       "incoming.js"
@@ -735,17 +695,13 @@
     "addMemberQuery": [
       "members.js"
     ],
-    "peerKeysLoaded": [
-      "messages.js"
-    ],
     "_presenceSending": [
       "presence.js"
     ],
-    "lastSeenMap": [
-      "presence.js",
+    "localProfiles": [
       "profiles.js"
     ],
-    "localProfiles": [
+    "profiles": [
       "profiles.js"
     ],
     "myBio": [
@@ -767,6 +723,9 @@
       "profiles.js"
     ],
     "showContactEdit": [
+      "profiles.js"
+    ],
+    "lastSeenMap": [
       "profiles.js"
     ],
     "reactionPickerMsgId": [
@@ -839,6 +798,6 @@
   "totals": {
     "ctxFields": 442,
     "ctxRefSites": 1225,
-    "sharedWriteFields": 17
+    "sharedWriteFields": 12
   }
 }
