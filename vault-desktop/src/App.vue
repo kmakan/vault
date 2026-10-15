@@ -943,6 +943,7 @@ import * as ContactsLoad from './features/contacts-load.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
 import * as GroupsClone from './features/groups-clone.js';
+import * as GroupsCreate from './features/groups-create.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -4213,40 +4214,24 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.showExportMenu = false
     },
     // Group management
+    // ADR-003 Этап 3: оркестрация — в features/groups-create.js, UI здесь.
+    // Порядок сохранён: группа применяется ДО генерации ключа, иначе при сбое
+    // ключа группа существовала бы на Rust-стороне, но не появилась бы в UI —
+    // и пользователь увидел бы «не удалось создать» для существующей группы.
     async createGroup() {
       if (!this.newGroupName.trim()) return;
       try {
-        const group = await api.createGroup(this.newGroupName.trim(), '');
-        group.members = group.members || [];
-        group.blocked = group.blocked || [];
-        // Аватар группы (если загружен в диалоге создания): sqlite kv_store,
-        // тот же ключ, что использует GroupSettings/рассылка meta-письма.
-        if (this.newGroupAvatar) {
-          await db.kvSet('anon', 'group-avatar:' + group.id, this.newGroupAvatar);
-          this.groupAvatars[group.id] = this.newGroupAvatar;
-        }
-        this.groups.push(group);
-        this.currentGroup = group;
-
-        // Generate and store a group encryption key
-        if (this.cryptoReady) {
-          const groupKey = await crypto.generateGroupKey();
-          this.groupKeys[group.id] = groupKey;
-          // Аватар, заданный при создании, сразу уходит участникам (meta-письмо),
-          // как если бы админ поменял его в настройках группы.
-          if (this.newGroupAvatar) {
-            try {
-              const payload = JSON.stringify({ meta: 1, avatar: this.newGroupAvatar });
-              const content = await crypto.encryptWithGroupKey(payload, groupKey);
-              await api.sendGroupMeta(group.id, content);
-            } catch (e) {
-              console.warn('Group avatar broadcast failed:', e);
-            }
-          }
-        }
+        const { group, groupKey } = await GroupsCreate.createGroup({
+          name: this.newGroupName, avatar: this.newGroupAvatar, cryptoReady: this.cryptoReady,
+          onCreated: ({ group: g, avatar: av }) => {
+            if (av) this.groupAvatars[g.id] = av;
+            this.groups.push(g);
+            this.currentGroup = g;
+          },
+        });
+        if (groupKey) this.groupKeys[group.id] = groupKey;
         // Одноразовый аватар диалога больше не нужен.
         this.newGroupAvatar = '';
-
         this.showGroupSettings = true;
         this.newGroupName = '';
       } catch (error) {
