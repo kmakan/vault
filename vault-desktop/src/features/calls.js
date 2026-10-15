@@ -1012,7 +1012,7 @@ export function armMediaFallback(ctx) {
 // погашенном эко — поднимет заново.
 export function startFastPolling(idleLoop, monitorUp = false) {
   // ADR-004 H: владелец fast-fetch — call-idle.js/fastFetcher (singleton).
-  // Rust-монитор (_idleMonitorUp) держит постоянный IDLE — если вниз,
+  // Rust-монитор (callIdleMonitorUp) держит постоянный IDLE — если вниз,
   // страховочный фетч каждые 7с (СПАМ + сигналы звонков); busy-флаг
   // защищает от наложения (аналог бывшего _fastFetchBusy).
   if (monitorUp) { idleLoop(); return; }

@@ -417,8 +417,8 @@ export async function onEcoMode(ctx, on, silent = false) {
     stopFastFetchTimer(ctx);
     // Эко означает «постоянного фонового соединения нет»: сбрасываем флаг
     // владельца, иначе последующий idleLoop (выключение эко / сигнал звонка)
-    // увидел бы _idleMonitorUp и НЕ поднял бы монитор заново.
-    ctx._idleMonitorUp = false;
+    // увидел бы callIdleMonitorUp и НЕ поднял бы монитор заново.
+    useSession().setCallIdleMonitorUp(false);
     try { await api.idleStop(); } catch (e) { /* монитор мог не работать */ }
     // M2.3-b ФИНАЛ: пуши при закрытом приложении несёт ntfy-клиент
     // (UnifiedPush, отдельное приложение). Сервис здесь не нужен —
