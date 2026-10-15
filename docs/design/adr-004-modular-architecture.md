@@ -13,22 +13,23 @@
 |---|---|
 | ctx-ссылок | **1225** в 442 местах |
 | модулей | 44 |
-| **полей, которые пишут НЕСКОЛЬКО модулей** | **12** |
+| **полей, которые пишут НЕСКОЛЬКО модулей** | **13** |
 
 И главное — не первая строка:
 
 | поле | сколько модулей его пишет | где |
 |---|---|---|
-| `messages` | **7** | `attachments`(6), `messages`(5), `groups`(3), `send`(3), `history`, `calls`, `poll` |
+| `messages` | **8** | `attachments`(6), `messages`(5), `groups`(3), `send`(3), `history`, `calls`, `poll`, `reactions` |
 | `groupKeys` | **5** | `groups`, `send`, `incoming`, `group-avatars`, `group-meta` |
 | `sending` | **3** | `send`, `forward`, `poll` |
 | `groupAvatars` | **3** | `groups`, `group-avatars`, `group-meta` |
 | `pendingOutgoing` | 2 | `send`, `history` |
+| `loadNotes` | 2 | `attachments`, `send` |
 | `unreadCounts` | 2 | `incoming`, `calls` |
 | `newMessage` | 2 | `drafts`, `send` |
 | `isLoggedIn`, `emails`, `ecoMode`, `relayEnabled`, `relayDeliveryMode` | по 2 | — |
 
-**`messages` пишут семь модулей.** Это не «зависимость от компонента» и не
+**`messages` пишут восемь модулей.** Это не «зависимость от компонента» и не
 «много `ctx`». Это **невидимый канал записи друг в друга**: правка
 `attachments.js` может испортить переписку и сломать `send`, `poll`, `groups`,
 `history`, `calls`, `messages` — а они об этом не узнают, потому что о
@@ -142,7 +143,7 @@ baseline, а рост можно «осознанно принять». Это b
 
 ### Этап A — развязать три поля-конфликта (главное)
 
-Это **12 полей и около 40 мест записи**. После этого исчезает невидимый канал
+Это **13 полей и около 45 мест записи**. После этого исчезает невидимый канал
 между фичами, и всё остальное становится обычным рефакторингом.
 
 | поле | владелец | писателей сейчас |
