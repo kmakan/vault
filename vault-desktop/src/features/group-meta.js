@@ -43,7 +43,7 @@ export async function syncGroupAvatarsFromMeta(ctx) {
             try {
               const kd = await api.getMyGroupKey(g.id);
               if (kd && kd.group_key) {
-                ctx.groupKeys[g.id] = kd.group_key;
+                ctx.setGroupKey(g.id, kd.group_key);
                 groupKey = kd.group_key;
               }
             } catch (e) { /* ключ не загрузился — группу пропускаем */ }
@@ -75,7 +75,7 @@ export async function syncGroupAvatarsFromMeta(ctx) {
               // Аватар группы — отдельный kv.
               if (obj.avatar && (await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
                 await db.kvSet('anon', 'group-avatar:' + g.id, obj.avatar);
-                ctx.groupAvatars[g.id] = obj.avatar;
+                ctx.setGroupAvatar(g.id, obj.avatar);
               }
               // Имя группы: применяем если пришло.
               if (obj.name && g.name !== obj.name) {

@@ -31,7 +31,7 @@ async function groupKeyOf(ctx, groupId) {
   if (!groupKey && ctx.cryptoReady) {
     try {
       const kd = await api.getMyGroupKey(groupId);
-      if (kd && kd.group_key) { ctx.groupKeys[groupId] = kd.group_key; groupKey = kd.group_key; }
+      if (kd && kd.group_key) { ctx.setGroupKey(groupId, kd.group_key); groupKey = kd.group_key; }
     } catch (e) { console.log('[group] avatar-heal keyload failed:', groupId, String(e)); }
   }
   return groupKey || null;
@@ -44,7 +44,7 @@ export async function healFromMessage(ctx, groupId, gavatar) {
   const cur = await db.kvGet('anon', AVATAR_P + groupId);
   if (cur !== gavatar) {
     await db.kvSet('anon', AVATAR_P + groupId, gavatar);
-    ctx.groupAvatars[groupId] = gavatar;
+    ctx.setGroupAvatar(groupId, gavatar);
     console.log('[group] avatar healed from message:', groupId);
   }
 }

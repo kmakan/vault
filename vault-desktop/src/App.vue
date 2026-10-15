@@ -894,6 +894,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
+import { createGroupsStore } from './features/groups-store.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1033,7 +1034,10 @@ export default {
     // поэтому Vue видит изменения. Без обёртки мутации шли бы мимо прокси
     // и интерфейс не обновлялся бы — тихо.
     const chat = reactive(createChatStore());
-    return { t, setLocale, availableLocales, currentLocale, chat };
+    // Модуль-владелец состояния групп (ADR-004, Этап A9). Аналогично чат-хранилищу:
+    // groupKeys и groupAvatars больше не data()-свойства, а живут в владельце.
+    const groups = reactive(createGroupsStore());
+    return { t, setLocale, availableLocales, currentLocale, chat, groups };
   },
   data() {
     return {
@@ -1350,6 +1354,15 @@ export default {
     messages: {
       get() { return this.chat.state.messages; },
       set(v) { this.chat.set(v); },
+    },
+    // Прокси во владельца группового состояния (ADR-004, Этап A9).
+    // groupKeys/groupAvatars больше не data()-свойства, а proxy на groups-store.
+    // Геттер сохраняет обратную совместимость для чтения; запись — через API.
+    groupKeys: {
+      get() { return this.groups.state.groupKeys; },
+    },
+    groupAvatars: {
+      get() { return this.groups.state.groupAvatars; },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -2613,7 +2626,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         requestGroupAvatarHeal: this.requestGroupAvatarHeal,
       });
       if (r.groups) this.groups = r.groups;
-      Object.assign(this.groupAvatars, r.avatars);
+      this.groups.mergeGroupKeys(r.keys || {});
+      this.groups.mergeGroupAvatars(r.avatars || {});
       Object.assign(this.groupIconMap, r.icons);
       for (const c of r.newContacts) this.contacts.push(c);
     },
@@ -2999,7 +3013,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           if (keyData && keyData.group_key) {
             // Serverless: group key is stored locally in ~/.vault/groups.json
             // (the same file the CLI reads) — no per-user encryption needed.
-            this.groupKeys[group.id] = keyData.group_key;
+            this.groups.setGroupKey(group.id, keyData.group_key);
           } else if (keyData && keyData.encrypted_key) {
             // Decrypt the group key with our private key
             // The encrypted_key was encrypted with our public key by the group creator
@@ -3011,7 +3025,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
                 keyData.encrypted_key,
                 this.peerKeys[creatorEmail]
               );
-              this.groupKeys[group.id] = groupKeyHex;
+              this.groups.setGroupKey(group.id, groupKeyHex);
             }
           }
         } catch (e) {
@@ -3341,6 +3355,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // чтобы не перечитывать одно и то же письмо на каждом поллинге.
     // ── Meta-сканирование групп (логика в features/group-meta.js) ──
     async syncGroupAvatarsFromMeta() { return GroupMetaFeature.syncGroupAvatarsFromMeta(this); },
+    // Тонкие прокси во владельца группового состояния (ADR-004 Этап A9).
+    // features/* вызывают ctx.setGroupKey — адресуем во владельца.
+    setGroupKey(id, key) { return this.groups.setGroupKey(id, key); },
+    setGroupAvatar(id, avatar) { return this.groups.setGroupAvatar(id, avatar); },
     async onAvatarUpdate(dataUrl) {
       this.userAvatarUrl = dataUrl
       // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
@@ -3585,7 +3603,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     async onGroupAvatarUpdate({ groupId, avatar }) {
-      this.groupAvatars[groupId] = avatar;
+      this.groups.setGroupAvatar(groupId, avatar);
       await db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');
       if (!avatar) return;
       // Ключ группы мог быть ещё не загружен (настройки открыты без чата) —
@@ -4112,12 +4130,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const { group, groupKey } = await GroupsCreate.createGroup({
           name: this.newGroupName, avatar: this.newGroupAvatar, cryptoReady: this.cryptoReady,
           onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groupAvatars[g.id] = av;
+            if (av) this.groups.setGroupAvatar(g.id, av);
             this.groups.push(g);
             this.currentGroup = g;
           },
         });
-        if (groupKey) this.groupKeys[group.id] = groupKey;
+        if (groupKey) this.groups.setGroupKey(group.id, groupKey);
         // Одноразовый аватар диалога больше не нужен.
         this.newGroupAvatar = '';
         this.showGroupSettings = true;
@@ -4153,10 +4171,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const { invited, skipped } = await GroupsClone.cloneGroup({
           src, name, email: this.email, peerKeys: this.peerKeys, publicKey: this.publicKey,
           onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groupAvatars[g.id] = av;
+            if (av) this.groups.setGroupAvatar(g.id, av);
             this.groups.push(g);
             this.currentGroup = g;
-            if (g.group_key) this.groupKeys[g.id] = g.group_key;
+            if (g.group_key) this.groups.setGroupKey(g.id, g.group_key);
           },
         });
         const msg = (this.t('group_clone_done') || 'Клон создан')
@@ -4316,7 +4334,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // Аватар группы из инвайта — сохраняем в kv_store.
         if (inv.group_avatar) {
           await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
-          this.groupAvatars[inv.group_id] = inv.group_avatar;
+          this.groups.setGroupAvatar(inv.group_id, inv.group_avatar);
         }
         await this.loadGroups();
           try { await this.loadChannels(); } catch (e) { /* не критично */ }

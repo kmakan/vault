@@ -50,16 +50,21 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     isLoggedIn: true,
     groups: [],
     emails: [],
     groupKeys: {},
     groupAvatars: {},
     cryptoReady: true,
-    healGroupAvatarFromMessage: async () => {},
     replyGroupAvatarHeal: async () => true,
   }, over);
+  // Методы-обёртки над groupKeys/groupAvatars (ADR-004 Этап A9).
+  // Замыкание на ctx — единственный надёжный способ в Object.assign
+  // контексте: method shorthand внутри литерала терял бы this.
+  ctx.setGroupKey = (id, key) => { ctx.groupKeys[id] = key; return key; };
+  ctx.setGroupAvatar = (id, avatar) => { ctx.groupAvatars[id] = avatar; return avatar; };
+  return ctx;
 }
 
 // 1. Не залогинен / нет групп → no-op

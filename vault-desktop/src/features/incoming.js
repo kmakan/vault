@@ -358,7 +358,7 @@ async function classify(ctx, m, from) {
       if (!gk && ctx.cryptoReady) {
         try {
           const kd = await api.getMyGroupKey(g.id);
-          if (kd && kd.group_key) { ctx.groupKeys[g.id] = kd.group_key; gk = kd.group_key; }
+          if (kd && kd.group_key) { ctx.setGroupKey(g.id, kd.group_key); gk = kd.group_key; }
         } catch (e) { /* ключ недоступен */ }
       }
       if (!gk) continue;

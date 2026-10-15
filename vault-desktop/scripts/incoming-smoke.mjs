@@ -133,6 +133,8 @@ function makeCtx(over = {}) {
     saveUnreadSeen: async () => {},
     saveUnreadCounts: async () => {},
     callSignals: 0,
+    // Методы-обёртки над groupKeys (ADR-004 Этап A9).
+    setGroupKey(id, key) { this.groupKeys[id] = key; return key; },
     // DSN-ветка (features/bounce.js): сюда пишем вызовы, тесты читают.
     bounceCalls: [],
     onMailBounce: async function (recipients, reason) {
@@ -297,7 +299,7 @@ console.log('13. группа: расшифровка групповым клю�
 {
   const ctx = makeCtx();
   ctx.groups = [{ id: 'g1', name: 'Группа', members: [{ email: 'peer@x.ru' }] }];
-  ctx.groupKeys = { g1: 'GK' };
+   ctx.setGroupKey('g1', 'GK'); // через владельца (ADR-004 Этап A9)
   ctx.peerKeys = {}; // 1:1-пути нет
   cryptoMock.decryptWithGroupKey = async () => ({ __env: { id: 'ge1', key: 'GK', text: 'gm' } });
   withBody(ctx, msg(), 'ENC:1');

@@ -1,6 +1,6 @@
 {
   "totalCtxRefs": 1221,
-  "totalFunctions": 242,
+  "totalFunctions": 243,
   "functionsWithCtx": 152,
   "modules": {
     "src/features/attachments.js": {
@@ -263,8 +263,9 @@
       "ctxRefs": 4,
       "fields": [
         "cryptoReady",
-        "groupAvatars",
-        "groupKeys"
+        "groupKeys",
+        "setGroupAvatar",
+        "setGroupKey"
       ],
       "functions": 5,
       "functionsWithCtx": 5,
@@ -282,12 +283,13 @@
       "fields": [
         "cryptoReady",
         "emails",
-        "groupAvatars",
         "groupKeys",
         "groups",
         "healGroupAvatarFromMessage",
         "isLoggedIn",
-        "replyGroupAvatarHeal"
+        "replyGroupAvatarHeal",
+        "setGroupAvatar",
+        "setGroupKey"
       ],
       "functions": 1,
       "functionsWithCtx": 1,
@@ -328,6 +330,13 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
+    "src/features/groups-store.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
     "src/features/groups.js": {
       "ctxRefs": 45,
       "fields": [
@@ -340,7 +349,6 @@
         "cryptoReady",
         "emails",
         "filterDeleted",
-        "groupAvatars",
         "groupKeys",
         "healGroupAvatarFromMessage",
         "isIgnored",
@@ -362,6 +370,8 @@
         "saveCurrentHistory",
         "scheduleEphemeral",
         "sendReadReceipts",
+        "setGroupAvatar",
+        "setGroupKey",
         "showHistoryFirst"
       ],
       "functions": 1,
@@ -418,6 +428,7 @@
         "saveUnreadCounts",
         "saveUnreadSeen",
         "senderEmail",
+        "setGroupKey",
         "setPeerKey",
         "t",
         "tryMigrateGroupMember",
@@ -784,6 +795,7 @@
         "sendChannelPost",
         "sendEditEmail",
         "sending",
+        "setGroupKey",
         "showToast",
         "t"
       ],

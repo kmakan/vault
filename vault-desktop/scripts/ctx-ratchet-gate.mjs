@@ -47,7 +47,13 @@ SCAN.push('api.js');
 // а планомерный перенос. Без этого исключения храповик блокировал бы каждый
 // переведённый модуль: модуль начинает брать новое поле `chat`, и храповик
 // видит рост связности.
-const OWNER_FIELDS = new Set(['chat']);
+const OWNER_FIELDS = new Set([
+  'chat',                   // A1: чат-история (chat-store.js)
+  'setGroupKey',            // A9: groupKeys (groups-store.js)
+  'setGroupAvatar',         // A9: groupAvatars (groups-store.js)
+  'mergeGroupKeys',         // A9: groupKeys bulk-load (groups-store.js)
+  'mergeGroupAvatars',      // A9: groupAvatars bulk-load (groups-store.js)
+]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;
 // Присваивание или мутация после имени поля.

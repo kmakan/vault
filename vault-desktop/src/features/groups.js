@@ -43,7 +43,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           try {
             const kd = await api.getMyGroupKey(groupId);
             if (kd && kd.group_key) {
-              ctx.groupKeys[groupId] = kd.group_key;
+              ctx.setGroupKey(groupId, kd.group_key);
               groupKey = kd.group_key;
             }
           } catch (e) {
@@ -211,7 +211,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           // Мета-обновления группы (аватар): последнее по дате — авторитетно.
           if (metaLatest && metaLatest.avatar !== (await db.kvGet('anon', 'group-avatar:' + groupId))) {
             await db.kvSet('anon', 'group-avatar:' + groupId, metaLatest.avatar);
-            ctx.groupAvatars[groupId] = metaLatest.avatar;
+            ctx.setGroupAvatar(groupId, metaLatest.avatar);
           }
           ctx.loadProfiles();
           // Дедупликация по id конверта: sendGroupMessage шлёт каждому

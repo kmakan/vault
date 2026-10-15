@@ -53,7 +53,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     loadSeq: 1, activeChat: 'group:G1', emails: [], cryptoReady: true,
     groupKeys: {}, groupAvatars: {}, pendingOutgoing: {},
     // Модуль-владелец переписки (ADR-004, Этап A1). groups.js пишет через
@@ -76,6 +76,14 @@ function makeCtx(over = {}) {
     noteSeen: () => {}, healGroupAvatarFromMessage: () => {},
     replyGroupAvatarHeal: async () => {}, loadProfiles: () => {},
   }, over);
+  // Методы-обёртки над groupKeys/groupAvatars (ADR-004 Этап A9).
+  // Замыкание на ctx — единственный надёжный способ в Object.assign
+  // контексте: method shorthand внутри литерала терял бы this.
+  ctx.setGroupKey = (id, key) => { ctx.groupKeys[id] = key; return key; };
+  ctx.setGroupAvatar = (id, avatar) => { ctx.groupAvatars[id] = avatar; return avatar; };
+  ctx.mergeGroupKeys = (map) => Object.assign(ctx.groupKeys, map);
+  ctx.mergeGroupAvatars = (map) => Object.assign(ctx.groupAvatars, map);
+  return ctx;
 }
 const gmail = (content, senderId, mid, createdAt) => ({ content, sender_id: senderId, message_id: mid || '<m@x>', created_at: createdAt || '2026-01-01T00:00:00Z', is_read: false, is_sent: false });
 

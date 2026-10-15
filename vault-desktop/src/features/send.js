@@ -127,7 +127,7 @@ export async function sendMessage(ctx) {
             try {
               const kd = await api.getMyGroupKey(ctx.currentGroup.id);
               if (kd && kd.group_key) {
-                ctx.groupKeys[ctx.currentGroup.id] = kd.group_key;
+                ctx.setGroupKey(ctx.currentGroup.id, kd.group_key);
                 groupKey = kd.group_key;
               }
             } catch (e) { /* не удалось — alert ниже */ }
