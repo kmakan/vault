@@ -612,14 +612,13 @@
         "currentGroup",
         "email",
         "groupKeys",
-        "messages",
         "peerKeys",
         "peerPqKeys",
         "reactionPickerMsgId"
       ],
       "functions": 8,
       "functionsWithCtx": 8,
-      "biggestCtxFn": "applyReactions"
+      "biggestCtxFn": "addReaction"
     },
     "src/features/receipts.js": {
       "ctxRefs": 17,
@@ -756,6 +755,7 @@
         "buildEnvelope",
         "cancelEdit",
         "cancelReply",
+        "chat",
         "cryptoReady",
         "currentGroup",
         "editingMessage",
@@ -766,7 +766,6 @@
         "lastSend",
         "loadNotes",
         "markPending",
-        "messages",
         "newMessage",
         "peerKeys",
         "peerPqKeys",

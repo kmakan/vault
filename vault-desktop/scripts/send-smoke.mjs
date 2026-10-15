@@ -5,6 +5,7 @@
 // persist. Поведение 1:1 с inline-методом App.vue.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { createChatStore } from '../src/chat-store.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -58,12 +59,15 @@ function makeCtx(over = {}) {
     newMessage: 'привет', activeChat: 'peer@x.ru', activeChatType: 'peer',
     currentGroup: null, sending: false, cryptoReady: true,
     peerKeys: { 'peer@x.ru': 'PUB' }, peerPqKeys: {}, groupKeys: {},
-    email: 'me@x.ru', messages: [], pendingOutgoing: {}, replyTo: null, editingMsgId: null, editingMessage: null,
+    email: 'me@x.ru', pendingOutgoing: {}, replyTo: null, editingMsgId: null, editingMessage: null,
     lastSend: null, _sendingWatchdog: null,
     isIgnored: () => false, t: (k) => k, showToast: () => {},
     buildEnvelope: async (payload, ttl) => JSON.stringify({ vault: 1, id: 'env' + Math.random().toString(36).slice(2, 6), text: payload }),
     ephemeralTtlOf: async () => 0,
     markPending: () => {}, saveCurrentHistory: () => {}, scrollToBottom: () => {},
+    // Модуль-владелец переписки (ADR-004, Этап A1). send.js теперь пишет
+    // через ctx.chat.set/append, а не напрямую в ctx.messages.
+    chat: createChatStore(),
     cancelReply: () => {}, replyPreview: () => '', saveDraft: () => {},
     cancelEdit: () => {}, replyBody: (c) => c || '', replyQuote: () => '',
     recordLocalEdit: () => {}, sendEditEmail: async () => {},
@@ -103,12 +107,12 @@ console.log('3. 1:1: конверт→шифр→api.sendMessage→статус 
   const ctx = makeCtx({ newMessage: 'тест' });
   await S.sendMessage(ctx);
   // оптимистичный предпросмотр должен появиться СРАЗУ (до await api.sendMessage)
-  check('оптимистичный предпросмотр добавлен в messages', ctx.messages.length === 1 && ctx.messages[0].from === 'me');
+  check('оптимистичный предпросмотр добавлен в messages', ctx.chat.list().length === 1 && ctx.chat.list()[0].from === 'me');
   check('поле ввода очищено сразу', ctx.newMessage === '');
   await tick(); // даём fire-and-forget api.sendMessage разрешиться
   check('api.sendMessage вызван с шифротекстом (ENC(...))',
     apiMock.sent.length === 1 && apiMock.sent[0][0] === 'msg' && String(apiMock.sent[0][2]).startsWith('ENC('));
-  check('статус предпросмотра → sent', ctx.messages[0].status === 'sent');
+  check('статус предпросмотра → sent', ctx.chat.list()[0].status === 'sent');
 }
 
 // ── 4. групповая отправка: групповой ключ ──────────────────────
@@ -120,7 +124,7 @@ console.log('4. группа: шифрование групповым ключо
   await tick();
   check('api.sendGroupMessage вызван с групповым шифром (GENC(...))',
     apiMock.sent.length === 1 && apiMock.sent[0][0] === 'grp' && String(apiMock.sent[0][2]).startsWith('GENC('));
-  check('статус → sent', ctx.messages[0] && ctx.messages[0].status === 'sent');
+  check('статус → sent', ctx.chat.list()[0] && ctx.chat.list()[0].status === 'sent');
 }
 
 // ── 5. ошибка доставки → статус failed ─────────────────────────
@@ -131,7 +135,7 @@ console.log('5. сбой api.sendMessage → статус failed');
   const ctx = makeCtx({ newMessage: 'упс' });
   await S.sendMessage(ctx);
   await tick();
-  check('предпросмотр статус failed при сбое', ctx.messages[0] && ctx.messages[0].status === 'failed');
+  check('предпросмотр статус failed при сбое', ctx.chat.list()[0] && ctx.chat.list()[0].status === 'failed');
   // restore
   apiMock.sendMessage = async (to, content) => { apiMock.sent.push(['msg', to, content]); };
 }

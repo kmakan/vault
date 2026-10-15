@@ -98,11 +98,11 @@ export async function sendMessage(ctx) {
           list.push(note);
           if (!ctx.saveNotes(list)) {
             list.pop();
-            ctx.messages = [...list];
+            ctx.chat.set([...list]);
             alert(ctx.t('err_notes_full'));
             return;
           }
-          ctx.messages = [...list];
+          ctx.chat.set([...list]);
           ctx.scrollToBottom(true);
           return;
         }
@@ -154,7 +154,7 @@ export async function sendMessage(ctx) {
             status: 'sending',
             _pendingAt: Date.now(),
           };
-          ctx.messages.push(pendingMsg);
+          ctx.chat.append(pendingMsg);
           ctx.markPending('group:' + ctx.currentGroup.id, pendingMsg);
           // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
@@ -214,7 +214,7 @@ export async function sendMessage(ctx) {
             ttl: ttl || 0,
             expireAt: ttl ? Date.now() + ttl * 1000 : 0,
           };
-          ctx.messages.push(pendingMsg);
+          ctx.chat.append(pendingMsg);
           ctx.markPending(ctx.activeChat, pendingMsg);
           if (ttl) ctx.scheduleEphemeral(pendingMsg, ctx.activeChat);
           // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
