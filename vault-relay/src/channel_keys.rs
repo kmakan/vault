@@ -89,10 +89,13 @@ pub enum RegisterDecision {
     Reject { status: u16, error: &'static str },
 }
 
-/// owner_scope: 'r' | 'w' — личный токен владельца; owner_expired — протух;
-/// chan_scope: 'c' — read-токен канала, 'C' — write (отказ: право publish —
-///
-/// не адрес очереди); chan_bad — токен канала не разобрался.
+/// Параметры:
+/// - owner_scope: 'r' | 'w' — личный токен владельца; None — токен не
+///   разобран или это канальный токен (не доказательство владения).
+/// - owner_expired — личный токен протух (parse его отдаёт, а не отбрасывает).
+/// - chan_scope: 'c' — read-токен канала (адрес очереди), 'C' — write.
+///   Write отвергаем: это право publish, а не адрес очереди.
+/// - chan_kid: key_id канала из токена; None — токен не разобрался.
 pub fn decide_registration(
     owner_scope: Option<char>,
     owner_expired: bool,

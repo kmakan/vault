@@ -3,9 +3,9 @@
 // против ЖИВОГО relay-сервера. Криптография здесь непрозрачна (body —
 // opaque), фокус — контракт транспорта: авторизация канала, fan-out,
 // курсор since, изоляция каналов. Запуск:
-//   cd relay-server && cargo build && ./target/debug/vault-relay &
+//   cd vault-relay && cargo build && ./target/debug/vault-relay &
 //   RELAY_E2E_URL=http://127.0.0.1:PORT node scripts/channels-relay-e2e.mjs
-// без RELAY_E2E_URL скрипт сам поднимает ./relay-server/target/debug/vault-relay
+// без RELAY_E2E_URL скрипт сам поднимает ../vault-relay/target/debug/vault-relay
 // на случайном порту (CI-режим) и убирает его в конце.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -56,8 +56,8 @@ const ok = (name, cond) => { if (cond) { pass++; console.log('  ok:', name); } e
 let srv = null, base = process.env.RELAY_E2E_URL;
 if (!base) {
   const port = await new Promise(res => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { res(s.address().port); s.close(); }); });
-  srv = spawn(path.join(ROOT, '..', 'relay-server', 'target', 'debug', 'vault-relay'), [], {
-    env: { ...process.env, VAULT_RELAY_KEY: 'aa'.repeat(32), VAULT_RELAY_ADDR: `127.0.0.1:${port}`, VAULT_RELAY_ANON_PUB: '1', VAULT_RELAY_NTFY_URL: '' },
+  srv = spawn(path.resolve(ROOT, '..', 'vault-relay', 'target', 'debug', 'vault-relay'), [], {
+    env: { ...process.env, VAULT_RELAY_KEY: 'aa'.repeat(32), VAULT_RELAY_ADDR: `127.0.0.1:${port}`, VAULT_RELAY_ANON_PUB: '1', VAULT_RELAY_STATE: 'off', VAULT_RELAY_NTFY_URL: '' },
     stdio: 'ignore',
   });
   base = `http://127.0.0.1:${port}`;

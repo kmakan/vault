@@ -774,7 +774,22 @@ export async function relayChannelPublish(ch, envelopeObj, encryptedBody, accoun
         }),
         connectTimeout: PUB_TIMEOUT_MS,
       });
-      if (!res.ok) { console.log('[relay-chan] publish http', res.status); return { ok: false, why: 'http-' + res.status }; }
+      if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 200); } catch (e) { /* тело недоступно — не критично */ }
+        console.log('[relay-chan] publish http', res.status, detail);
+        if (res.status === 403) {
+          // Отказ именно по подписи — наш ключ на релее больше не тот
+          // (состояние релея сбросили, канал вернулся в v1) либо канал занял
+          // другой claimant (§7 ADR-002). В обоих случаях наша пометка
+          // «зарегистрирован» протухла. Сбрасываем её: иначе клиент больше
+          // никогда не попробует зарегистрироваться и канал навсегда остался
+          // бы в v1 — дыра открылась бы молча, без единого признака.
+          _chanKeyRegistered.delete(relay.url + '::' + kidHexOfToken(read));
+          return { ok: false, why: 'signature-rejected' };
+        }
+        return { ok: false, why: 'http-' + res.status };
+      }
       console.log('[relay-chan] published to', ch.id);
       return { ok: true };
     } catch (e) {

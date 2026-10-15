@@ -128,7 +128,7 @@ export function buildHelloPayload(channelId) {
 
 // ── Relay channel tokens (M2 channels-3, design §4.1) ─────────
 // The pair is derived from the 32-byte broadcast key, byte-for-byte like
-// relay-server/src/tokens.rs::channel_tokens (the server never sees the
+// vault-relay/src/tokens.rs::channel_tokens (the server never sees the
 // key; possession of the value IS the authorization):
 //   read  = base64url( kid(8) ‖ 'c' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-read") )
 //   write = base64url( kid(8) ‖ 'C' ‖ 0xFFFFFFFF ‖ HMAC-SHA256(bcast, "vault-relay-channel-write") )

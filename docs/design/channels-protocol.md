@@ -122,7 +122,7 @@ QR рендерится из ссылки (тот же qrcode-генератор
 
 1. Владелец публикует post-конверт в relay одним `pub` с `to = channel_token`
    (read-токен канала, общий для всех подписчиков — broadcast-секрет и есть
-   авторизация). Реализация (channels-6, relay-server/src/tokens.rs): токены
+   авторизация). Реализация (channels-6, vault-relay/src/tokens.rs): токены
    детерминированно выводятся КЛИЕНТОМ из broadcast-ключа (серверного
    HMAC(server_key,...) клиент вычислить не может — server_key не покидает
    релей): `read = base64url(kid8 ‖ 'c' ‖ 0xFFFFFFFF ‖ HMAC(bcast, "vault-relay-channel-read"))`,

@@ -1204,6 +1204,24 @@ struct ChannelKeyReq {
 /// компромисс (ADR-002 §7); выход владельцу — ротация ключа канала
 /// (channels-protocol.md §3.3), она даёт новый kid. Повтор с тем же ключом —
 /// идемпотентный OK: адрес канала не должен меняться от перезапуска клиента.
+/// Тип ТОКЕНА ВЛАДЕЛЬЦА в терминах политики `decide_registration`.
+///
+/// ТОТАЛЬНОЕ отображение: None означает только «токен не разобрался». Раньше
+/// канальные scope схлопывались в None, и подписчик, подставивший свой
+/// канальный токен как личный, получал 401 «bad token» вместо 403
+/// «personal token required» — а ветка 403 в политике становилась
+/// НЕДОСТИЖИМОЙ, оставаясь «покрытой» тестом, который зовёт чистую функцию
+/// напрямую и никогда не проходит через этот маппинг. Ровно то расхождение
+/// между хендлером и политикой, из-за которого политика вынесена в функцию.
+fn owner_scope_of(scope: vault_relay::Scope) -> Option<char> {
+    Some(match scope {
+        vault_relay::Scope::Read => 'r',
+        vault_relay::Scope::Write => 'w',
+        vault_relay::Scope::ChannelRead => 'c',
+        vault_relay::Scope::ChannelWrite => 'C',
+    })
+}
+
 async fn relay_channel_key(
     State(app): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1219,11 +1237,7 @@ async fn relay_channel_key(
     // только вызывает: дублировать проверки здесь запрещено (как уже было
     // с kid/token — две копии тихо разошлись).
     let chan = vault_relay::parse(&app.keys, &req.token);
-    let owner_scope = match t.scope {
-        vault_relay::Scope::Read => Some('r'),
-        vault_relay::Scope::Write => Some('w'),
-        _ => None,
-    };
+    let owner_scope = owner_scope_of(t.scope);
     let (chan_scope, chan_kid) = match chan {
         Some(c) => (
             Some(match c.scope {
@@ -2377,5 +2391,45 @@ mod tests {
         assert_eq!(ok_n, sum, "разбивка сходится с pub_ok");
         assert_eq!(m.pub_tok.load(Ordering::Relaxed), 1, "только успешная");
         assert_eq!(m.pub_anon.load(Ordering::Relaxed), 0, "анонимных нет");
+    }
+
+    // ── ADR-002: маппинг токена владельца в политику регистрации ───────
+    //
+    // Тест не про саму политику (её тесты живут в channel_keys.rs) и не про
+    // HTTP, а про МАППИНГ между ними. Именно он молча разошёлся: канальные
+    // scope схлопывались в None, ветка 403 становилась недостижимой, а тест
+    // политики оставался зелёным, потому что звал чистую функцию напрямую.
+    // Тест, проходящий оба слоя сразу, — единственный, который такое ловит.
+
+    #[test]
+    fn owner_scope_mapping_is_total() {
+        use vault_relay::Scope;
+        // None здесь означал бы «токен не разобрался» — это другое состояние,
+        // и смешивать его с «токен канальный» нельзя.
+        assert_eq!(super::owner_scope_of(Scope::Read), Some('r'));
+        assert_eq!(super::owner_scope_of(Scope::Write), Some('w'));
+        assert_eq!(super::owner_scope_of(Scope::ChannelRead), Some('c'));
+        assert_eq!(super::owner_scope_of(Scope::ChannelWrite), Some('C'));
+    }
+
+    #[test]
+    fn channel_token_as_owner_is_forbidden_not_unauthorized() {
+        use vault_relay::Scope;
+        const PUB: &str = "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c";
+        for scope in [Scope::ChannelRead, Scope::ChannelWrite] {
+            let decision = channel_keys::decide_registration(
+                super::owner_scope_of(scope), // ровно то, что делает хендлер
+                false,
+                Some('c'),
+                Some(0x0102_0304_0506_0708),
+                PUB,
+            );
+            assert_eq!(
+                decision,
+                channel_keys::RegisterDecision::Reject { status: 403, error: "personal token required" },
+                "канальный токен как личный → 403 «personal token required», а не 401 «bad token»: \
+                 токен исправен, он просто не доказывает владение"
+            );
+        }
     }
 }

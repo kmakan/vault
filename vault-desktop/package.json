@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/check-template.cjs && node scripts/ctx-coupling-gate.mjs && vite build",
+    "smoke:channels-signing": "node scripts/channels-signing-smoke.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "smoke:adr002-e2e": "node scripts/adr002-e2e.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

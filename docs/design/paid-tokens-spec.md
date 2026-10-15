@@ -15,14 +15,14 @@
 
 | Что | Где | Как устроено |
 |---|---|---|
-| Токен v1 | `relay-server/src/tokens.rs:3` | `base64url(key_id(8) ‖ scope(1) ‖ expiry(4) ‖ mac(32))` — **45 байт, бинарный**. Никакого JSON-payload: `ttl`/`msgs`/`plan` в токене **нет** |
+| Токен v1 | `vault-relay/src/tokens.rs:3` | `base64url(key_id(8) ‖ scope(1) ‖ expiry(4) ‖ mac(32))` — **45 байт, бинарный**. Никакого JSON-payload: `ttl`/`msgs`/`plan` в токене **нет** |
 | Scope | `tokens.rs:14-47` | `Read='r'`, `Write='w'`, `ChannelRead='c'`, `ChannelWrite='C'` |
 | Выдача | `tokens.rs:108` `issue(keys, scope, expiry)` | key_id = первые 8 байт server_key; `ServerKeys` (`tokens.rs:51`) — ротация через key_id |
-| CLI | `relay-server/src/bin/gen_token.rs` | `vault-relay-gen <key_hex(64)> read\|write <days> [count]` |
+| CLI | `vault-relay/src/bin/gen_token.rs` | `vault-relay-gen <key_hex(64)> read\|write <days> [count]` |
 | Self-register | `main.rs:621` `relay_register` | `POST /relay/register {fp, promo?}` → `{token, topic, exp, unlimited}`. Free = 30 дней, promo = 3650 дней. Rate-limit **3/день/IP** (`main.rs:636-649`) |
 | Суточный лимит | `main.rs:216-241`, `publisher_key` `main.rs:479` | `VAULT_RELAY_FREE_DAILY_LIMIT` (по умолч. **100**). Premium-признак сейчас — **хак**: `expiry > now + 365д` (`main.rs:505-507`) |
 | Анти-шаринг | `check_token_binding` `main.rs:469` | `token_bindings: HashMap<token_hash, fp>` — первый fp владеет, чужой → 403 |
-| Хранилище | `relay-server/src/store.rs` | **In-memory** `HashMap` (sled/БД **нет**). `Envelope{id, body, exp, ts, from, tok}` |
+| Хранилище | `vault-relay/src/store.rs` | **In-memory** `HashMap` (sled/БД **нет**). `Envelope{id, body, exp, ts, from, tok}` |
 | Очереди релея | `main.rs:41-61` | `daily_pub`, `token_bindings`, `last_seen`, `registrations` — **все in-memory** |
 | Wake-up | `main.rs:267-282` | ntfy-мост, шлём только если получатель молчал ≥ 90 c (`last_seen`) |
 | Клиент | `vault-desktop/src/relay-client.js` | `DEFAULT_RELAY_URL='https://vault-msg.ru/relay'`; KV `relay-list` `[{url, myToken, label}]`, `relay-peer-tokens`; `myFingerprint()` → `crypto.default.fingerprint()` |
@@ -406,7 +406,7 @@ pro_buy, pro_renew, pro_offline_badge, pro_daily_left, pro_devices
 **Шаг 9. Тесты.**
 - Rust unit: `parse` v1/v2, MAC-подделка `plan`-байта → None, лимиты тарифа,
   идемпотентность checkout, device_limit, revoked_sub.
-- Интеграционный `relay-server/tests/` (сейчас только `integration.sh`):
+- Интеграционный `vault-relay/tests/` (сейчас только `integration.sh`):
   чекаут → verify → activate → pub сверх Free-лимита проходит на Pro.
 - Клиентский дымовой тест рядом с `scripts/calls-smoke.mjs`: мок `/purchase/verify`
   + `fetchTokenInfo` + грейс при недоступном релее.
@@ -437,7 +437,7 @@ pro_buy, pro_renew, pro_offline_badge, pro_daily_left, pro_devices
 ---
 
 *Документ создан 25.09.2026 на основе ручного аудита кода:
-`relay-server/src/{tokens.rs, main.rs, store.rs, bin/gen_token.rs}`,
+`vault-relay/src/{tokens.rs, main.rs, store.rs, bin/gen_token.rs}`,
 `vault-desktop/src/{relay-client.js, components/SettingsPage.vue, locales/ru.js}`,
 `docs/design/relay-protocol.md`, `docs/ROADMAP-2026-08-16.md`,
 `docs/promotion/monetization-plan.md`.*
