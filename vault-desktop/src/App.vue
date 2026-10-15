@@ -901,7 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
-import { sessionStore as sessionState } from './features/session-store.js';
+import { sessionStore as sessionState, mailboxStore as mailboxState } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1059,9 +1059,11 @@ export default {
     // relay-состояние: singleton relayState (relay-idle.js), владелец для
     // relay.js state-machine. App.vue оборачивает reactive() для шаблона.
     const relayStore = reactive(relayState)
+    // J.2b: singleton mailboxStore — relay.js пишет через него, шаблон читает.
+    const mailboxStore = reactive(mailboxState)
     // Владелец состояния звонка (ADR-004, Этап C): вынесено из data().
     const callSession = useSession();
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, callSession }; // relayStore=reactive(relayState.state);
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, callSession };
   },
   data() {
     return {
@@ -1386,16 +1388,17 @@ export default {
       get() { return this.chat.state.unreadCounts; },
       set(v) { this.chat.setUnread(v); },
     },
-    // Прокси во владельца сессии (ADR-004 Этап A12).
-    // isLoggedIn/emails больше не data()-свойства, а proxy на session-store.
-    // Геттер сохраняет обратную совместимость для чтения; запись — через API.
+    // Прокси во владельца сессии (ADR-004 A12).
     isLoggedIn: {
       get() { return this.sessionStore.state.isLoggedIn; },
       set(v) { v ? this.sessionStore.login() : this.sessionStore.logout(); },
     },
+    // Прокси во владельца mailbox (ADR-004 J.2b).
+    // emails = загруженные сообщения (быв data this.emails); relay.js пишет
+    // через mailboxStore.state.emails — App.vue читает тот же объект через proxy.
     emails: {
-      get() { return this.sessionStore.state.emails; },
-      set(v) { this.sessionStore.setEmails(v); },
+      get() { return mailboxState.state.emails; },
+      set(v) { mailboxState.setEmails(v); },
     },
     // Прокси во владельца relay-состояния (ADR-004 Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
@@ -1691,6 +1694,8 @@ export default {
       if (this.mailProvider) return; // уже выбран вручную — не переопределяем
       const id = detectProviderByEmail(val);
       if (id) this.applyMailProvider(id);
+      // J.2: синхронизация форма-логина → sessionStore.currentEmail
+      sessionStore.setCurrentEmail(val);
     }
   },
   async mounted() {

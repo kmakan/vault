@@ -23,7 +23,7 @@ import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
 import { relayState } from './relay-idle.js';
-import { sessionStore } from './session-store.js';
+import { sessionStore, mailboxStore } from './session-store.js';
 import { useSession } from './call-session.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
@@ -48,7 +48,7 @@ export async function relayConsume(ctx) {
   }
   const all = [...list, ...chanEnvelopes];
   if (!all.length) return;
-  const merged = [...ctx.emails];
+  const merged = [...mailboxStore.state.emails];
   const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
   const fresh = [];
   for (const env of all) {
@@ -71,7 +71,7 @@ export async function relayConsume(ctx) {
   merged.push(...fresh);
   merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
   if (merged.length > 2000) merged.length = 2000;
-  ctx.emails = merged;
+  mailboxStore.state.emails = merged;
   // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
   for (const f of fresh) {
     ctx.cacheBody('RELAY:' + f.uid, f.body);
@@ -99,7 +99,7 @@ export async function loadEmailsFast(ctx, silent = true) {
       }
     }
     if (!fetched.length) return;
-    const merged = [...ctx.emails];
+    const merged = [...mailboxStore.state.emails];
     const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
     for (const m of fetched) {
       const k = m.uid + '|' + (m.folder || 'INBOX');
@@ -107,8 +107,8 @@ export async function loadEmailsFast(ctx, silent = true) {
     }
     merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     if (merged.length > 2000) merged.length = 2000;
-    ctx.emails = merged;
-    console.log(`[Emails] fast loaded ${ctx.emails.length} messages (${fetched.length} new)`);
+    mailboxStore.state.emails = merged;
+    console.log(`[Emails] fast loaded ${mailboxStore.state.emails.length} messages (${fetched.length} new)`);
     // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
     await ctx.processIncoming(fetched, { notify: silent });
   } catch (e) {
@@ -320,7 +320,7 @@ export function startPolling(ctx, intervalMs = 30000) {
     if (!(sessionStore.state.isLoggedIn) || idleState.idleStop) return;
     try {
       // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
-      // мержим в ctx.emails как виртуальные письма (uid: rl-<id>) —
+      // мержим в mailboxStore.state.emails как виртуальные письма (uid: rl-<id>) —
       // дальше их разберёт штатный processIncoming (дедуп по env.id
       // в mergeHistory не даст дубликату email-письма задвоиться).
       try { await relayConsume(ctx); } catch (e) { /* релей недоступен — почта продолжит доставку */ }

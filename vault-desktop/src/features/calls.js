@@ -30,6 +30,7 @@ import { delay, later } from './timing.js';
 import { fastFetcher, connLostGuard } from './call-idle.js';
 import { useSession } from './call-session.js';
 import { callResender, callRequestResender } from './call-resend.js';
+import { sessionStore } from './session-store.js';
 const terminalSender = createTerminalSender();
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
@@ -164,7 +165,7 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   // выключенный релей у одного из собеседников навсегда ломает
   // обмен токенами (он не узнает наш адрес → мы не узнаём его).
   try {
-    const { relays, active } = await relay.getSettings(ctx.email);
+    const { relays, active } = await relay.getSettings(sessionStore.getCurrentEmail());
     const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
     if (myTok) body.tok = myTok;
   } catch (e) { /* релей опционален */ }
@@ -199,12 +200,12 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
         // If fingerprint resolution fails, continue with legacy email-only relay
         peerFp = null;
       }
-      const known = await relay.hasPeerToken(ctx.email, peer, peerFp);
+      const known = await relay.hasPeerToken(sessionStore.getCurrentEmail(), peer, peerFp);
       if (!known) console.log('[relay] call: peer token unknown for', peer, '→ email-only');
       // urgent для call_request: сервер обходит last_seen-гейт, чтобы
       // будить только что закрытое приложение (гейт 90с не знал, что
       // «поллил 5с назад» = его убили). Дедуп на клиенте по env.id.
-      relay.relayPublish(ctx.email, peer, { id: body.id }, content, { wake, urgent: wake, peerFp })
+      relay.relayPublish(sessionStore.getCurrentEmail(), peer, { id: body.id }, content, { wake, urgent: wake, peerFp })
         .then(r => {
           // Причина пропуска публикации ВИДНА в логе: relayPublish возвращает
           // {ok:false, why}, но вызывающий код его игнорировал — на стенде
@@ -263,7 +264,7 @@ export async function handleCallSignal(ctx, sig, from) {
   if (sig.tok) {
     (async () => {
       try {
-        const rs = await relay.getSettings(ctx.email);
+        const rs = await relay.getSettings(sessionStore.getCurrentEmail());
         const r = rs.relays[rs.active] || rs.relays[0];
         if (r) {
           relay.memLearn(r.url, from, sig.tok); // 0.1.186: синхронный mirror для relayPublish
@@ -281,7 +282,7 @@ export async function handleCallSignal(ctx, sig, from) {
             peerFp = null;
           }
           
-          if (known !== sig.tok) await relay.setPeerToken(ctx.email, r.url, from, sig.tok, peerFp);
+          if (known !== sig.tok) await relay.setPeerToken(sessionStore.getCurrentEmail(), r.url, from, sig.tok, peerFp);
         }
       } catch (e) { /* релей опционален */ }
     })();
@@ -297,8 +298,8 @@ export async function handleCallSignal(ctx, sig, from) {
   // минут неактуальны — игнорируем (и запоминаем call_id).
   if (sig.ts && Date.now() - sig.ts > 600000) {
     console.log('[call] stale envelope ignored', call_id, type, 'age_ms=' + (Date.now() - sig.ts));
-    const alreadySeen = await isCallSeen(ctx.email, call_id);
-    await rememberCallSeen(ctx.email, call_id);
+    const alreadySeen = await isCallSeen(sessionStore.getCurrentEmail(), call_id);
+    await rememberCallSeen(sessionStore.getCurrentEmail(), call_id);
     // Пропущенные вызовы: звонок пришёл, пока нас не было
     // (офлайн/перезапуск) — записываем «Пропущенный звонок» в историю
     // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
@@ -317,8 +318,8 @@ export async function handleCallSignal(ctx, sig, from) {
   // Зомби-гвард: терминальные cancel/end/reject запоминаются
   // request, приехавший ПОЗЖЕ своего cancel, гасится здесь.
   if (type === 'call_request' && !(useSession().currentCall && useSession().currentCall.call_id === call_id)) {
-    if (await isCallSeen(ctx.email, call_id)) return;
-    await rememberCallSeen(ctx.email, call_id);
+    if (await isCallSeen(sessionStore.getCurrentEmail(), call_id)) return;
+    await rememberCallSeen(sessionStore.getCurrentEmail(), call_id);
   }
   // Чужой звонок во время активного — отвечаем занято (call_reject).
   if (useSession().callState !== 'idle' && useSession().currentCall
@@ -463,7 +464,7 @@ export async function handleCallSignal(ctx, sig, from) {
       // которого уже нет (запомненные терминалы гасят его в guard
       // isCallSeen ниже). Свежие cancel не попадали в stale-ветку —
       // потому и не запоминались.
-      await rememberCallSeen(ctx.email, call_id);
+      await rememberCallSeen(sessionStore.getCurrentEmail(), call_id);
       if (useSession().lastCallId !== call_id) useSession().setLastCallId(call_id);
       break;
     }
@@ -855,11 +856,11 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
       // Нулевая история (чат ещё не открывали) — тоже валидный случай:
       // раньше Array.isArray(null)===false молча глотал ПЕРВУЮ пилюлю
       // «Пропущенный звонок» свежего чата.
-      const hist = (await loadHistory(ctx.email, chatKey)) || [];
+      const hist = (await loadHistory(sessionStore.getCurrentEmail(), chatKey)) || [];
       if (!hist.some(m => m && m.id === msg.id)) {
         hist.push(msg);
         hist.sort((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
-        await saveHistory(ctx.email, chatKey, hist);
+        await saveHistory(sessionStore.getCurrentEmail(), chatKey, hist);
       }
     } catch (e) { /* sqlite недоступен — не критично */ }
   }

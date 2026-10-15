@@ -58,7 +58,29 @@ export function createSessionStore() {
   };
 }
 
-// ADR-004 J.1: singleton sessionStore. relay.js (state-machine) импортирует его
-// напрямую — читает isLoggedIn/emails через sessionStore.state, без ctx.
+// ADR-004 J.2b: owner для загруженных сообщений (быв. data this.emails +
+// emailBodyCache). relay.js пишет через singleton; App.vue читает через
+// reactive proxy тот же объект.
+export function createMailboxStore() {
+  const state = {
+    emails: [],
+    emailBodyCache: {},
+  };
+  return {
+    state,
+    setEmails(list) { state.emails = list || []; return state.emails; },
+    mergeEmails(list) {
+      const m = new Map(state.emails.map((m) => [m.uid + '|' + (m.folder || 'INBOX'), m]));
+      for (const e of (list || [])) m.set(e.uid + '|' + (e.folder || 'INBOX'), e);
+      state.emails = [...m.values()].sort((a, b) =>
+        new Date(b.date || 0) - new Date(a.date || 0));
+      return state.emails;
+    },
+    clearEmails() { state.emails = []; return state.emails; },
+    cacheBody(key, body) { state.emailBodyCache[key] = body; },
+    getEmailBody(key) { return state.emailBodyCache[key] ?? null; },
+  };
+}
+export const mailboxStore = createMailboxStore();
 export const sessionStore = createSessionStore();
 export function useSessionStore() { return sessionStore; }
