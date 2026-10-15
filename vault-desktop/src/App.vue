@@ -1146,11 +1146,9 @@ export default {
       // чат секунды назад (двойной Enter с паузой), повторную отправку
       // игнорируем — иначе получатели видят «одно сообщение дважды».
       lastSend: null,
+      // emailBodyCache — proxy на mailboxStore.state.emailBodyCache (J.3c).
+      // bodyCacheOrder/bodyCacheSaveTimer — persist-таймеры body-cache (owner B2).
       // Кэш тел писем (folder:uid -> body) — поллинг перерисовывает чат,
-      // не перефетчивая и не расшифровывая повторно. Персистится в
-      // localStorage (loadBodyCache/persistBodyCache) — после перезапуска
-      // чат открывается без повторного фетча тел из IMAP.
-      emailBodyCache: {},
       bodyCacheOrder: [],       // ключи кэша, старые первые (для trimming'а)
       bodyCacheSaveTimer: null, // debounce записи в localStorage
       // Download-on-demand: кэш скачанных data-писем (Message-ID -> base64)
@@ -1233,7 +1231,7 @@ export default {
       searchQuery: '',
       // Groups
       groups: [],
-      channels: [],            // M2 broadcast-каналы (features/channels.js)
+      // channels — proxy на mailboxStore.state.channels (J.3c).
       channelPosts: {},        // channelId -> [{ts, body, images, sender}]
       channelUnread: {},        // channelId -> count
       channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
@@ -1410,6 +1408,12 @@ export default {
     activeChatType: {
       get() { return chatStore.state.activeChatType; },
       set(v) { chatStore.state.activeChatType = v; },
+    },
+    // Прокси во владельца mailbox (J.3c): channels + body cache.
+    channels: { get() { return mailboxStore.state.channels; }, set(v) { mailboxStore.state.channels = v || []; } },
+    emailBodyCache: {
+      get() { return mailboxStore.state.emailBodyCache; },
+      set(v) { mailboxStore.state.emailBodyCache = v || {}; },
     },
     // Прокси во владельца relay-состояния (ADR-004 Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.

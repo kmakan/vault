@@ -37,7 +37,7 @@ export async function relayConsume(ctx) {
   // его read-токеном (fan-out, серверный peek+курсор). Конверты-посты идут
   // в тот же конвейер виртуальных писем — роутер классифицирует по ключу.
   const chanEnvelopes = [];
-  for (const ch of (ctx.channels || [])) {
+  for (const ch of (mailboxStore.state.channels || [])) {
     const posts = await relay.relayChannelPoll(ch, sessionStore.getCurrentEmail()).catch(() => []);
     for (const env of posts) {
       // from = канал: владельческий эхо-фильтр и классификация в роутере
@@ -74,7 +74,7 @@ export async function relayConsume(ctx) {
   mailboxStore.state.emails = merged;
   // Тело кладём в кэш сразу (fetchEmailBodies по папке RELAY не сработает).
   for (const f of fresh) {
-    ctx.cacheBody('RELAY:' + f.uid, f.body);
+    mailboxStore.cacheBody('RELAY:' + f.uid, f.body);
   }
   await ctx.processIncoming(fresh, { notify: true });
   console.log('[relay] consumed envelopes: ' + fresh.length);
@@ -302,7 +302,7 @@ export async function idleLoop(ctx) {
   }
   // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
   // (hangup сам вернёт обычный 30с-поллинг).
-  if ((sessionStore.state.isLoggedIn) && ctx.callState !== 'idle') startPolling(ctx, 3000);
+  if ((sessionStore.state.isLoggedIn) && callSession.state.callState !== 'idle') startPolling(ctx, 3000);
   // Резервный IDLE умер (провайдер/сеть): обычный поллинг продолжает
   // работать; через 60с пробуем снова — и снова СНАЧАЛА Rust-монитор
   // (idleLoop), то есть при его успехе владение возвращается монитору,

@@ -60,7 +60,11 @@ export function createSessionStore() {
 
 // ADR-004 J.2b: owner для загруженных сообщений (быв. data this.emails).
 export function createMailboxStore() {
-  const state = { emails: [], };
+  const state = {
+    emails: [],
+    channels: [],         // J.3c: broadcast channels (features/channels.js)
+    emailBodyCache: {},   // J.3c: body cache (folder:uid -> body), relay envelopes include
+  };
   return {
     state,
     setEmails(list) { state.emails = list || []; return state.emails; },
@@ -72,6 +76,10 @@ export function createMailboxStore() {
       return state.emails;
     },
     clearEmails() { state.emails = []; return state.emails; },
+    // J.3c: body cache (in-mem; HistoryFeature persist отдельно в SQLite).
+    cacheBody(key, body) { state.emailBodyCache[key] = body; },
+    getEmailBody(key) { return state.emailBodyCache[key] ?? null; },
+    clearBodyCache() { state.emailBodyCache = {}; },
   };
 }
 
