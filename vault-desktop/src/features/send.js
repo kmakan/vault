@@ -242,7 +242,7 @@ export async function sendMessage(ctx) {
               // §1: обновляем индикатор доставки по результату pub.
               pub.then(r => {
                 if (r && r.why === 'daily-limit') {
-                  ctx.relayDeliveryMode = 'email';
+                  ctx.setRelayMode('email');
                   // Баннер один раз за день (kv-флаг) — не спамим тостами.
                   invoke('db_kv_get', { account: ctx.email, key: 'relay-limit-banner' }).then(v => {
                     const today = String(Math.floor(Date.now() / 86400000));
@@ -252,7 +252,7 @@ export async function sendMessage(ctx) {
                     }
                   }).catch(() => {});
                 } else if (r && r.ok) {
-                  ctx.relayDeliveryMode = 'relay';
+                  ctx.setRelayMode('relay');
                 }
               }).catch(() => {});
             } catch (e) { /* envelope не JSON — релей пропускаем */ }

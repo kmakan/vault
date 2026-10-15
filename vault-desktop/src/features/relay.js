@@ -172,7 +172,7 @@ export function startRelayTicker(ctx) {
 export async function enterRelayOfflineRescue(ctx) {
   ctx.ecoAutonomous = true;
   ctx.relayOfflineSince = Date.now();
-  ctx.relayDeliveryMode = 'email';
+  ctx.setRelayMode('email');
   try {
     // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
     // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
@@ -422,7 +422,7 @@ export async function syncEcoWithRelay(ctx, silent = false) {
 }
 
 export async function onEcoMode(ctx, on, silent = false) {
-  ctx.ecoMode = !!on;
+  ctx.enableEco(!!on);
   // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
   // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
   ctx.ecoAutonomous = false;
@@ -466,7 +466,7 @@ export async function onEcoMode(ctx, on, silent = false) {
 }
 
 export function onRelayEnabled(ctx, on) {
-  ctx.relayEnabled = !!on;
+  ctx.enableRelay(!!on);
   // 0.1.180: живое применение тумблера ИЗ настроек. Раньше только
   // health-тик релей-тикера (60с) заметил изменение — а в классическом
   // (не-eco) режиме тикер не запущен, и выключенный релей НЕ поднимал

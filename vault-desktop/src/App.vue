@@ -897,6 +897,7 @@ import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
 import { createSessionStore } from './features/session-store.js';
+import { createRelayStore } from './features/relay-store.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
@@ -1047,7 +1048,10 @@ export default {
     // Модуль-владелец сессионного состояния (ADR-004, Этап A12).
     // isLoggedIn/emails больше не data()-свойства, а proxy на session-store.
     const sessionStore = reactive(createSessionStore());
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore };
+    // Модуль-владелец relay-состояния (ADR-004, Этап A13).
+    // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
+    const relayStore = reactive(createRelayStore());
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore };
   },
   data() {
     return {
@@ -1101,7 +1105,7 @@ export default {
       callResendTimer: null,
       // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
-      ecoMode: false,
+      // ecoMode — теперь proxy на relay-store (ADR-004 A13).
       _idleStop: false,
       // Владелец IDLE — Rust-монитор (email_start_idle_monitor). Флаг
       // поднимается после успешного api.idleStart и сбрасывается в
@@ -1208,13 +1212,13 @@ export default {
       // §1 company.md: индикатор канала доставки в шапке чата.
       // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
       // или суточный лимит исчерпан — показываем конверт).
-      relayDeliveryMode: 'relay',
+      // relayDeliveryMode — теперь proxy на relay-store (ADR-004 A13).
       // M2.4: релей включён (кэш relay-enabled kv; обновляется при логине
       // и из настроек). Раньше этот флаг забыли объявить в data() —
       // this.relayEnabled был undefined, автообмен токенами не работал:
       // конверты не несли tok и входящие tok не сохранялись (телефон
       // не знал токен собеседника → исходящие шли только почтой).
-      relayEnabled: false,
+      // relayEnabled — теперь proxy на relay-store (ADR-004 A13).
       // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
       ecoAutonomous: false,
       relayOfflineSince: null,
@@ -1396,6 +1400,20 @@ export default {
     emails: {
       get() { return this.sessionStore.state.emails; },
       set(v) { this.sessionStore.setEmails(v); },
+    },
+    // Прокси во владельца relay-состояния (ADR-004 Этап A13).
+    // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
+    ecoMode: {
+      get() { return this.relayStore.state.ecoMode; },
+      set(v) { this.relayStore.enableEco(v); },
+    },
+    relayEnabled: {
+      get() { return this.relayStore.state.relayEnabled; },
+      set(v) { this.relayStore.enableRelay(v); },
+    },
+    relayDeliveryMode: {
+      get() { return this.relayStore.state.relayDeliveryMode; },
+      set(v) { this.relayStore.setRelayMode(v); },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -3411,6 +3429,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     setEmails(list) { return this.sessionStore.setEmails(list); },
     clearEmails() { return this.sessionStore.clearEmails(); },
     emailCount() { return this.sessionStore.emailCount(); },
+    // Тонкие прокси во владельца relay-состояния (ADR-004 Этап A13).
+    enableEco(on) { return this.relayStore.enableEco(on); },
+    isEcoMode() { return this.relayStore.isEcoMode(); },
+    enableRelay(on) { return this.relayStore.enableRelay(on); },
+    isRelayEnabled() { return this.relayStore.isRelayEnabled(); },
+    setRelayMode(mode) { return this.relayStore.setRelayMode(mode); },
+    deliveryMode() { return this.relayStore.deliveryMode(); },
     // Тонкие прокси во владельца непрочитанных (ADR-004 Этап A11).
     // unreadOf уже определён ниже (читает через this.unreadCounts proxy).
     incUnread(chatKey) { return this.chat.incUnread(chatKey); },

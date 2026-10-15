@@ -385,6 +385,13 @@ function makeFlow(cfg) {
     // A12: session-store owner stubs (в тесте — data; в App.vue — session-store proxy).
     login() { this.isLoggedIn = true; return true; },
     logout() { this.isLoggedIn = false; return false; },
+    // A13: relay-store owner stubs (в тесте — data; в App.vue — relay-store proxy).
+    enableEco(on) { this.ecoMode = !!on; return this.ecoMode; },
+    isEcoMode() { return this.ecoMode; },
+    enableRelay(on) { this.relayEnabled = !!on; return this.relayEnabled; },
+    isRelayEnabled() { return this.relayEnabled; },
+    setRelayMode(mode) { this.relayDeliveryMode = mode; return this.relayDeliveryMode; },
+    deliveryMode() { return this.relayDeliveryMode; },
     setEmails(list) { this.emails = list; return this.emails; },
     clearEmails() { this.emails = []; return this.emails; },
     emailCount() { return (this.emails || []).length; },

@@ -62,6 +62,8 @@ const OWNER_FIELDS = new Set([
   'incUnread', 'clearUnread', 'clearAllUnread', 'unreadOf', 'setUnread',
   // A12: session-store.js owner API (isLoggedIn + emails)
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
+  // A13: relay-store.js owner API (ecoMode/relayEnabled/relayDeliveryMode)
+  'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
 ]);
 
 

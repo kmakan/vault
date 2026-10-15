@@ -85,6 +85,16 @@ const OWNER_FIELDS = new Set([
   'setEmails',
   'clearEmails',
   'emailCount',
+  // A13: relay-store.js owner для ecoMode/relayEnabled/relayDeliveryMode.
+  'ecoMode',
+  'relayEnabled',
+  'relayDeliveryMode',
+  'enableEco',
+  'isEcoMode',
+  'enableRelay',
+  'isRelayEnabled',
+  'setRelayMode',
+  'deliveryMode',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

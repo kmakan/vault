@@ -77,7 +77,7 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
 }
 function makeCtx(over = {}) {
-  return Object.assign({
+  const ctx = Object.assign({
     email: 'me@x.ru',
     isLoggedIn: true,
     emails: [],
@@ -114,6 +114,15 @@ function makeCtx(over = {}) {
     t: (k) => 'T:' + k,
     onEcoMode: async () => {},
   }, over);
+  // A13: relay-store owner API stubs — пишем в data для READS ctx.ecoMode и т. д.
+  // В реальном App.vue — методы-прокси на this.relayStore.state.
+  ctx.enableEco = (on) => { ctx.ecoMode = !!on; return ctx.ecoMode; };
+  ctx.isEcoMode = () => ctx.ecoMode;
+  ctx.enableRelay = (on) => { ctx.relayEnabled = !!on; return ctx.relayEnabled; };
+  ctx.isRelayEnabled = () => ctx.relayEnabled;
+  ctx.setRelayMode = (mode) => { ctx.relayDeliveryMode = mode; return ctx.relayDeliveryMode; };
+  ctx.deliveryMode = () => ctx.relayDeliveryMode;
+  return ctx;
 }
 const ctxBodies = {};
 const ctxProcessed = [];

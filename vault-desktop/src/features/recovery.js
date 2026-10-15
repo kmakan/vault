@@ -197,13 +197,13 @@ export async function loginWithRecovery(ctx, deps) {
     // 0.1.180: инициализация релей/eco (зеркало login/auto-login): дефолт —
     // релей ВКЛ (free-100/день) → eco, foreground-служба не поднимается.
     // Явный выбор юзера (KV '0') уважается навсегда.
-    ctx.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+    ctx.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
     try {
       const rs = await relay.getSettings(ctx.email);
-      ctx.relayEnabled = rs.enabled;
+      ctx.enableRelay(rs.enabled);
       if (ctx.relayEnabled) {
         await RelayFeature.syncEcoWithRelay(ctx, true).catch(() => {});
-        ctx.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
+        ctx.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
       }
     } catch (e) { /* релей опционален */ }
     await ctx.loadBodyCache();
