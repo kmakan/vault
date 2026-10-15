@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/check-template.cjs && node scripts/ctx-coupling-gate.mjs && vite build",
+    "audit:arch": "node scripts/audit-arch.mjs",
     "smoke:channels-signing": "node scripts/channels-signing-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
