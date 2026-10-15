@@ -73,6 +73,36 @@ for (const spec of SCAN) {
   for (const m of src.matchAll(CTX_WRITE)) {
     (fieldWriters[m[1]] ||= new Set()).add(mod.replace(/^features\//, ''));
   }
+
+  // ── ЗАПИСЬ ЧЕРЕЗ ССЫЛКУ. Главная дыра прямого детектора ──────────────
+  //
+  // Наиболее тихий способ писать в чужое состояние — получить элемент ссылкой и
+  // изменить его:
+  //     const msg = ctx.messages.find(m => m.id === msgId);
+  //     if (!msg.reactions) msg.reactions = [];     ← запись
+  //     msg.reactions.push(emoji);                   ← запись
+  //
+  // Ни одна из этих строк не содержит присваивания сразу после `ctx.messages`,
+  // поэтому прямой шаблон их не видит, а писатель в списке не появляется. Проверено
+  // на reactions.js::addReaction — это ТИХАЯ запись в чужое состояние, то есть
+  // ровно тот класс, ради которого гейт и написан.
+  //
+  // Детектор приближённый: ищет `const V = ctx.F...` и ищет мутацию V дальше по
+  // функции. Ложные срабатывания возможны и допустимы — гейт с ложными
+  // срабатываниями можно обойти (явная пометка), а дыра в защите не обходится.
+  const ALIAS = /(?:const|let)\s+(\w+)\s*=\s*ctx\.([A-Za-z_$][\w$]*)/g;
+  for (const m of src.matchAll(ALIAS)) {
+    const varName = m[1];
+    const field = m[2];
+    // Ищем мутацию этой переменной в остатке файла. Граница — следующая
+    // декларация с тем же именем или 400 символов (функция обычно короче).
+    const rest = src.slice(m.index, m.index + 1200);
+    const mutated = new RegExp(
+      '\\b' + varName + '\\s*(?:\\.[A-Za-z_$][\\w$]*\\s*=(?!=)|\\.(?:push|splice|sort|reverse|pop|shift|unshift|add|set)\\()');
+    if (mutated.test(rest)) {
+      (fieldWriters[field] ||= new Set()).add(mod.replace(/^features\//, ''));
+    }
+  }
   moduleFields[mod.replace(/^features\//, '')] = [...seen].sort();
 }
 

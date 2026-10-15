@@ -527,10 +527,15 @@
       "history.js",
       "messages.js",
       "poll.js",
+      "reactions.js",
       "send.js"
     ],
     "showAudioRecorder": [
       "attachments.js"
+    ],
+    "loadNotes": [
+      "attachments.js",
+      "send.js"
     ],
     "currentCall": [
       "calls.js"
@@ -575,6 +580,9 @@
     "callSoundEl": [
       "calls.js"
     ],
+    "channelById": [
+      "channels.js"
+    ],
     "newMessage": [
       "drafts.js",
       "send.js"
@@ -603,6 +611,12 @@
     ],
     "peerKeys": [
       "duress.js"
+    ],
+    "tombstonesCache": [
+      "edits.js"
+    ],
+    "midTombstonesCache": [
+      "edits.js"
     ],
     "emailsLoading": [
       "emails.js"
@@ -695,6 +709,9 @@
     "addMemberQuery": [
       "members.js"
     ],
+    "currentGroup": [
+      "members.js"
+    ],
     "_presenceSending": [
       "presence.js"
     ],
@@ -726,6 +743,9 @@
       "profiles.js"
     ],
     "lastSeenMap": [
+      "profiles.js"
+    ],
+    "contacts": [
       "profiles.js"
     ],
     "reactionPickerMsgId": [
@@ -793,11 +813,14 @@
     ],
     "_sendingWatchdog": [
       "send.js"
+    ],
+    "editingMessage": [
+      "send.js"
     ]
   },
   "totals": {
     "ctxFields": 442,
     "ctxRefSites": 1225,
-    "sharedWriteFields": 12
+    "sharedWriteFields": 13
   }
 }
