@@ -1100,10 +1100,8 @@ export default {
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
       processedUnreadIds: new Set(),
       // ── Звонки (M3, feature/calls): состояние вынесено в callSession (ADR-004 C).
-      // Эти поля — не data(), а computed-прокси на this.callSession.*: calls.js и
-      // шаблон пишут this.X, а запись идёт через session.setX() → Vue Proxy.
-      // callVideoOn/callStartedAt — App-only, остаются в data().
-      callVideoOn: false,
+      // calls.js и шаблон пишут this.X, а запись идёт через session.setX() → Vue Proxy.
+      // callVideoOn/callStartedAt — proxy на call-session (J.4).
       // signal-resend: таймер/попытки вынесены в owner createCallResender
       // (call-resend.js) — ADR-004 I.2. calls.js импортирует singletonы
       // callResender/callRequestResender напрямую (как fastFetcher/connLostGuard),
@@ -1120,9 +1118,7 @@ export default {
       // this.callSession.setCallIdleMonitorUp(true/false).
       // Звонковые таймеры/звук/рингтоны — App-only timer ids
       // и rineload; callState/currentCall/etc. вынесены в callSession (ADR-004 C).
-      // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
-      // зависшего в ringing дольше разумного; см. handleCallSignal).
-      callStartedAt: 0,
+      // Момент начала текущего звонка — теперь callStartedAt в callSession.
       // Ширина окна — для определения мобильного режима (<768px).
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1280,
       windowHeight: typeof window !== 'undefined' ? window.innerHeight : 800,
@@ -1387,6 +1383,9 @@ export default {
       get() { return this.chat.state.unreadCounts; },
       set(v) { this.chat.setUnread(v); },
     },
+    // Прокси во владельца звонка (ADR-004 J.4).
+    callVideoOn: { get() { return this.callSession.state.callVideoOn; }, set(v) { this.callSession.state.callVideoOn = v; } },
+    callStartedAt: { get() { return this.callSession.state.callStartedAt; }, set(v) { this.callSession.state.callStartedAt = v; } },
     // Прокси во владельца сессии (ADR-004 A12).
     isLoggedIn: {
       get() { return this.sessionStore.state.isLoggedIn; },

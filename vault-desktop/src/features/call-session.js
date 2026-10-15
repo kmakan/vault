@@ -41,6 +41,9 @@ export function createCallSession(initial = {}) {
     // IDLE-флаги: relay.js владелец (call-session state-owner для ctx-coupling).
     callIdleMonitorUp: false,
     callIdleActive: false,
+    // J.4: видеосессия (быв. data App.vue).
+    callVideoOn: false,
+    callStartedAt: 0,
     ...initial,
   };
   const listeners = new Set();
