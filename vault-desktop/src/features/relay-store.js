@@ -17,15 +17,41 @@
 // ПОЧЕМУ ЗДЕСЬ НЕТ ИМПОРТА VUE — см. chat-store.js (ADR-004 A1): framework-agnostic.
 //
 // Создаётся один раз на приложение (в композиционном корне App.vue).
+// Для state-machine relay.js (не Vue) используется singleton relayState,
+// создаваемый один раз через createRelayStore() — App.vue оборачивает его
+// reactive() для шаблона, а relay.js пишет напрямую (ADR-004 I.4).
 export function createRelayStore() {
   const state = {
     ecoMode: false,
     relayEnabled: false,
     relayDeliveryMode: 'relay',
+    // relay-resilience: автономный fallback + health. Владелец — relay.js,
+    // но state лежит здесь (ADR-004 I.4): до этого live в App.data как
+    // ecoAutonomous/relayOfflineSince/_relayFails/_lastRelayHealth.
+    ecoAutonomous: false,
+    relayOfflineSince: null,
+    relayFails: 0,
+    lastRelayHealth: null,
   };
 
   return {
     state,
+
+    // ── ecoAutonomous (auto fallback) ───────────────────────────────
+    setEcoAutonomous(v) { state.ecoAutonomous = !!v; return state.ecoAutonomous; },
+    isEcoAutonomous() { return state.ecoAutonomous; },
+
+    // ── relayOfflineSince (epoch ms или null) ───────────────────────
+    setRelayOfflineSince(v) { state.relayOfflineSince = v; return state.relayOfflineSince; },
+    getRelayOfflineSince() { return state.relayOfflineSince; },
+
+    // ── relayFails / lastRelayHealth (resilience) ───────────────────
+    setRelayFails(n) { state.relayFails = n; return state.relayFails; },
+    bumpRelayFails() { state.relayFails += 1; return state.relayFails; },
+    resetRelayFails() { state.relayFails = 0; return state.relayFails; },
+
+    setLastRelayHealth(v) { state.lastRelayHealth = v; return state.lastRelayHealth; },
+    getLastRelayHealth() { return state.lastRelayHealth; },
 
     // ── ecoMode ────────────────────────────────────────────────────────────
     enableEco(on = true) {

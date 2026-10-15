@@ -902,7 +902,7 @@ import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
 import { createSessionStore } from './features/session-store.js';
-import { createRelayStore } from './features/relay-store.js';
+import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
@@ -1056,10 +1056,12 @@ export default {
     const sessionStore = reactive(createSessionStore());
     // Модуль-владелец relay-состояния (ADR-004, Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
-    const relayStore = reactive(createRelayStore());
+    // relay-состояние: singleton relayState (relay-idle.js), владелец для
+    // relay.js state-machine. App.vue оборачивает reactive() для шаблона.
+    const relayStore = reactive(relayState)
     // Владелец состояния звонка (ADR-004, Этап C): вынесено из data().
     const callSession = useSession();
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, callSession }; // relayStore=reactive(relayState.state);
   },
   data() {
     return {

@@ -105,3 +105,9 @@ export function createIdleState() {
   };
 }
 export const idleState = createIdleState();
+
+// ADR-004 I.4: relay-domain state (ecoMode/relayEnabled/ecoAutonomous/режим).
+// relay.js читает/пишет через него напрямую вместо ctx.*props. App.vue
+// Oборачивает через reactive(createRelayStore()) для Vue-реактивности.
+import { createRelayStore } from './relay-store.js';
+export const relayState = createRelayStore();

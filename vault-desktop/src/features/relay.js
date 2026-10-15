@@ -22,6 +22,7 @@
 import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
+import { relayState } from './relay-idle.js';
 import { useSession } from './call-session.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
@@ -124,8 +125,8 @@ export async function loadEmailsFast(ctx, silent = true) {
 export function startRelayTicker(ctx) {
   // ADR-004 H+: владелец таймера — relay-idle.js/relayTicker (singleton).
   if (relayTicker.timer) return;
-  ctx._relayFails = 0;
-  ctx._lastRelayHealth = Date.now();
+  relayState.state.relayFails = 0;
+  relayState.state.lastRelayHealth = Date.now();
   relayTicker.start(async () => {
     if (!ctx.isLoggedIn) {
       relayTicker.stop();
@@ -133,16 +134,16 @@ export function startRelayTicker(ctx) {
     }
     try { await relayConsume(ctx); } catch (e) { /* релей опционален */ }
     // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
-    if (Date.now() - ctx._lastRelayHealth >= 60000) {
-      ctx._lastRelayHealth = Date.now();
+    if (Date.now() - relayState.state.lastRelayHealth >= 60000) {
+      relayState.state.lastRelayHealth = Date.now();
       let healthy = false;
       try { healthy = await relay.relayHealth(ctx.email); } catch (e) { healthy = false; }
       if (healthy) {
-        ctx._relayFails = 0;
-        if (ctx.relayOfflineSince) {
+        relayState.state.relayFails = 0;
+        if (relayState.state.relayOfflineSince) {
           console.log('[relay] healthy again → leaving offline mode');
-          ctx.relayOfflineSince = null;
-          if (ctx.ecoMode && !ctx.ecoAutonomous) {
+          relayState.state.relayOfflineSince = null;
+          if ((relayState.isEcoMode()) && !relayState.state.ecoAutonomous) {
             // релей ожил в эко — возвращаемся в чистое эко (служба глушится)
             ctx.onEcoMode(true, true).catch(() => {});
           }
@@ -150,10 +151,10 @@ export function startRelayTicker(ctx) {
         // Авто-eco: релей жив и не был отключён пользователем → eco ON.
         syncEcoWithRelay(ctx, true).catch(() => {});
       } else {
-        ctx._relayFails++;
-        console.warn(`[relay] health fail #${ctx._relayFails}`);
+        relayState.state.relayFails++;
+        console.warn(`[relay] health fail #${relayState.state.relayFails}`);
         // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
-        if (ctx._relayFails >= 3 && ctx.ecoMode && !ctx.ecoAutonomous) {
+        if (relayState.state.relayFails >= 3 && (relayState.isEcoMode()) && !relayState.state.ecoAutonomous) {
           console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
           enterRelayOfflineRescue(ctx);
         }
@@ -172,9 +173,9 @@ export function startRelayTicker(ctx) {
 // уведомления локальные — работа мессенджера НЕ отличается от классики.
 // Отличия только: иконка в шторке есть, скорость = почтовая.
 export async function enterRelayOfflineRescue(ctx) {
-  ctx.ecoAutonomous = true;
-  ctx.relayOfflineSince = Date.now();
-  ctx.setRelayMode('email');
+  relayState.state.ecoAutonomous = true;
+  relayState.state.relayOfflineSince = Date.now();
+  relayState.setRelayMode('email');
   try {
     // Поднимаем foreground-службу (pushSet(false) затем ecoSet(false)
     // вернёт STICKY-режим с иконкой; права уведомлений уже просили при старте).
@@ -389,8 +390,8 @@ export async function syncEcoWithRelay(ctx, silent = false) {
   try { healthy = await relay.relayHealth(ctx.email); } catch (e) { healthy = false; }
   let userDisabled = false;
   try { userDisabled = (await db.kvGet('anon', 'eco-user-disabled')) === '1'; } catch (e) {}
-  const wantEco = !!ctx.relayEnabled && healthy && !userDisabled;
-  if (wantEco === ctx.ecoMode) return; // уже в нужном режиме
+  const wantEco = !!(relayState.isRelayEnabled()) && healthy && !userDisabled;
+  if (wantEco === (relayState.isEcoMode())) return; // уже в нужном режиме
   if (wantEco) {
     console.log('[eco] relay alive → auto eco ON');
     await onEcoMode(ctx, true, silent);
@@ -404,14 +405,14 @@ export async function syncEcoWithRelay(ctx, silent = false) {
 }
 
 export async function onEcoMode(ctx, on, silent = false) {
-  ctx.enableEco(!!on);
+  relayState.enableEco(!!on);
   // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
   // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
-  ctx.ecoAutonomous = false;
-  ctx.relayOfflineSince = null;
+  relayState.state.ecoAutonomous = false;
+  relayState.state.relayOfflineSince = null;
   try { await db.kvSet('anon', 'eco-mode', on ? '1' : '0'); } catch (e) {}
   if (!ctx.isLoggedIn) return;
-  if (ctx.ecoMode) {
+  if ((relayState.isEcoMode())) {
     // стоп JS IDLE-цикла и таймера быстрого фетча
     idleState.setIdleStop(true);
     stopFastFetchTimer(ctx);
@@ -448,7 +449,7 @@ export async function onEcoMode(ctx, on, silent = false) {
 }
 
 export function onRelayEnabled(ctx, on) {
-  ctx.enableRelay(!!on);
+  relayState.enableRelay(!!on);
   // 0.1.180: живое применение тумблера ИЗ настроек. Раньше только
   // health-тик релей-тикера (60с) заметил изменение — а в классическом
   // (не-eco) режиме тикер не запущен, и выключенный релей НЕ поднимал
