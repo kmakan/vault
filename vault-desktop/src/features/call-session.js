@@ -12,6 +12,10 @@
 //
 // subscribe: для non-Vue тестов. Vue использует reactive автоматически.
 // п 5.3 ADR-003: state — plain object, reactivity добавит composition root.
+import { createCallClock } from './call-clock.js';
+
+const callClock = createCallClock();
+
 export function createCallSession(initial = {}) {
   const state = {
     currentCall: null,
@@ -88,23 +92,24 @@ export function createCallSession(initial = {}) {
       if (remote !== undefined) this.state.remoteOffer = remote;
       _notify();
     },
-    // ── Часы звонка: тик живёт владельце (ADR-004 E). ──────────────
+    // ── Часы звонка: интервал/очистка владельцем call-clock.js (ADR-004 G4).
     // App.vue больше не мутирует this.callClockSec/callClockTimer напрямую:
-    // сброс, интервал и инкремент — внутри owner; onTick — для сторож.
+    // сброс — внутри owner; onTick — для сторож. timer id (store-id для smoke C9)
+    // возвращается через .timer и кладётся в ctx.session.callClockTimer.
     startCallClock(onTick) {
       this.state.callClockSec = 0;
       _notify();
-      const h = setInterval(() => {
+      const h = callClock.start(() => {
         this.state.callClockSec += 1;
         _notify();
         if (onTick) onTick();
-      }, 1000);
+      });
       this.state.callClockTimer = h;
       _notify();
       return h;
     },
     stopCallClock() {
-      if (this.state.callClockTimer) clearInterval(this.state.callClockTimer);
+      callClock.stop();
       this.state.callClockTimer = null;
       _notify();
       return null;

@@ -23,6 +23,11 @@ import { saveHistory, loadHistory } from '../history.js';
 export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
 import { createMediaWatchdog } from './call-watchdog.js';
 import { createRingTimer } from './call-ring.js';
+import { createTerminalSender } from './call-terminal.js';
+// fire-and-forget задержки (delay/later/cancel) — убирают bare setTimeout/
+// clearTimeout из state-machine (timing.js; см. ADR-004 G).
+import { delay, later, cancel } from './timing.js';
+const terminalSender = createTerminalSender();
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
 // Инцидент 12.10.2026. Раньше call_request повторялся каждые 15с все 5 минут
@@ -79,7 +84,7 @@ export async function rememberCallSeen(email, callId) {
 
 // ── Длительность гудка (настройка «Звонки») ────────────────────
 // Значение в kv_store — СЕКУНДЫ (60/120/180/300, дефолт 180). Здесь
-// переводим в мс. Читаем асинхронно ДО старта setTimeout, state machine
+// переводим в мс. Читаем асинхронно ДО старта ring-таймера, state machine
 // не ждёт: гудок стартует с дефолтом, а если kv ответит позже — таймер
 // ПЕРЕСТАРАИВАЕТСЯ на реальное значение (см. armRingTimer).
 // Дублирует нативную сторону: при СМАХНУТОМ приложении JS мёртв и таймаут
@@ -232,7 +237,7 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
       } catch (e) {
         lastErr = e;
         console.warn(`[call] envelope send attempt ${i + 1}/3 failed:`, e && e.message || e);
-        await new Promise(r => setTimeout(r, 3000));
+        await delay(3000);
       }
     }
     console.error('[call] SMTP envelope failed after retries:', lastErr && lastErr.message);
@@ -582,7 +587,10 @@ export async function acceptCall(ctx) {
   ctx.session.setCallRingTimer(null);
   playCallSound(ctx, 'connect', false);
   // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
-  setTimeout(() => {
+  // Задержка 1.2с перед запуском исходящего гудка — даёт время установиться
+  // media-каналу (иначе гудок зациклен 3с и слышен артефакт). Fire-and-forget
+  // через timing.js → в calls.js нет bare setTimeout (ADR-004 G).
+  later(() => {
     if (ctx.session.callState === 'active' && !ctx.session.callMediaConnected) {
       playCallSound(ctx, 'outgoing', true);
     }
@@ -698,8 +706,8 @@ export async function hangup(ctx, reason) {
   stopSignalResend(ctx);
   // Предохранитель «Соединение…» (watchdog 90с — owner mediaWatchdog).
   mediaWatchdog.stop();
-  // Grace-таймер ICE disconnected.
-  if (ctx.session.connLostTimer) { clearTimeout(ctx.session.connLostTimer); ctx.session.setConnLostTimer(null); }
+  // Grace-таймер ICE disconnected (fire-and-forget из timing.js).
+  if (ctx.session.connLostTimer) { cancel(ctx.session.connLostTimer); ctx.session.setConnLostTimer(null); }
   ctx.session.stopCallClock();
   // Фаза 3: сообщаем монитору-владельцу исход звонка, чтобы
   // headless-логика не ставила missed поверх реального решения.
@@ -967,8 +975,8 @@ export function sendTerminalRepeat(ctx, peer, type, call_id) {
   sendCallEnvelope(ctx, peer, { type, call_id }).catch(() => {});
   // Повторы — только почтой: релей-копия уже лежит в очереди получателя,
   // повтор на релей жёг бы суточный лимит издателя.
-  setTimeout(() => { sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 3000);
-  setTimeout(() => { sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}); }, 7000);
+  terminalSender.repeat(3000, () => sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
+  terminalSender.repeat(7000, () => sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
 }
 
 // ── Watchdog + часы ────────────────────────────────────────────

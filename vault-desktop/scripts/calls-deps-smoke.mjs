@@ -18,6 +18,8 @@ const CALLS = path.join(ROOT, 'src/features/calls.js');
 const CALL_RESEND = path.join(ROOT, 'src/features/call-resend.js');
 const CALL_WATCHDOG = path.join(ROOT, 'src/features/call-watchdog.js');
 const CALL_RING = path.join(ROOT, 'src/features/call-ring.js');
+const CALL_TERMINAL = path.join(ROOT, 'src/features/call-terminal.js');
+const TIMING = path.join(ROOT, 'src/features/timing.js');
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -46,6 +48,8 @@ await stub('crypto.js', 'export default {};\n');
 await stub('history.js', 'export const saveHistory = async () => {};\nexport const loadHistory = async () => [];\n');
 writeFileSync(`${MOCKS}/features/call-watchdog.js`, readFileSync(CALL_WATCHDOG, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-ring.js`, readFileSync(CALL_RING, 'utf8'));
+writeFileSync(`${MOCKS}/features/call-terminal.js`, readFileSync(CALL_TERMINAL, 'utf8'));
+writeFileSync(`${MOCKS}/features/timing.js`, readFileSync(TIMING, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-resend.js`, readFileSync(CALL_RESEND, 'utf8'));
 writeFileSync(`${MOCKS}/features/calls.js`, readFileSync(CALLS, 'utf8'));
 const C = await import(MOCKS + '/features/calls.js');
