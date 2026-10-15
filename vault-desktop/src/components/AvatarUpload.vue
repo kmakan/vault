@@ -35,6 +35,7 @@ import UserAvatar from './UserAvatar.vue'
 import Icon from './Icon.vue'
 import { useI18n } from '../i18n.js'
 import api from '../api.js'
+import * as AvatarImage from '../avatar-image.js'
 
 const { t } = useI18n()
 
@@ -57,8 +58,8 @@ async function onFileSelected(e) {
   const file = e.target.files?.[0]
   if (!file) return
 
-  // Validate size (max 500KB)
-  if (file.size > 500 * 1024) {
+  // Предел 500КБ — тот же, что у аватара группы (ADR-003 партия 12).
+  if (AvatarImage.avatarTooBig(file.size)) {
     alert(t('avatar_too_large') || 'Image must be under 500KB')
     return
   }
@@ -66,41 +67,34 @@ async function onFileSelected(e) {
   uploading.value = true
   uploaded.value = false
 
-  const reader = new FileReader()
-  reader.onload = () => {
-    // Resize to 256x256
-    const img = new Image()
-    img.onload = async () => {
-      const canvas = document.createElement('canvas')
-      canvas.width = 256
-      canvas.height = 256
-      const ctx = canvas.getContext('2d')
-      // Center crop
-      const size = Math.min(img.width, img.height)
-      const sx = (img.width - size) / 2
-      const sy = (img.height - size) / 2
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, 256, 256)
-      const dataUrl = canvas.toDataURL('image/png')
-      
-      // Save to sqlite kv_store (данные Vault — не localStorage)
-      await api.setAvatar(props.email, dataUrl)
-      
-      // Sync to backend
-      try {
-        await api.uploadAvatar(props.email, dataUrl)
-      } catch (err) {
-        console.warn('Avatar sync to server failed:', err)
-      }
-      
-      uploading.value = false
-      uploaded.value = true
-      emit('update', dataUrl)
-      
-      setTimeout(() => { uploaded.value = false }, 2000)
+  try {
+    // Пресет другой намеренно: профиль 256×256 PNG (резче и без артефактов на
+    // JPEG), группа 128×128 JPEG (рассылается в конвертах).
+    const dataUrl = await AvatarImage.fileToAvatarDataUrl(file, AvatarImage.PROFILE_AVATAR)
+
+    // Save to sqlite kv_store (данные Vault — не localStorage)
+    await api.setAvatar(props.email, dataUrl)
+
+    // Sync to backend
+    try {
+      await api.uploadAvatar(props.email, dataUrl)
+    } catch (err) {
+      console.warn('Avatar sync to server failed:', err)
     }
-    img.src = reader.result
+
+    uploaded.value = true
+    emit('update', dataUrl)
+
+    setTimeout(() => { uploaded.value = false }, 2000)
+  } catch (err) {
+    // Раньше промес зависал навсегда: img.onload при битом файле не наступает,
+    // а обработчика отказа не было — колёсико «загрузка» крутилось бы вечно и
+    // никто об этом не узнал бы.
+    console.warn('Avatar image failed:', err && err.message || err)
+    alert(t('err_image_decode') || 'Could not read the image')
+  } finally {
+    uploading.value = false
   }
-  reader.readAsDataURL(file)
 }
 
 async function removeAvatar() {

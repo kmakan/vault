@@ -624,6 +624,7 @@ export default {
   change_email_note: '更换后，请向联系人发送一条消息或个人资料更新。',
   email_keys_local_hint: 'E2E 密钥存储在本地。更换邮箱不影响密钥。',
   err_file_too_big_500: '文件过大（最大 500KB）',
+  err_image_decode: '无法读取图片',
   err_file_too_big_2m: '文件过大（最大 2MB）',
   err_notes_full: '本地笔记存储已满——笔记未保存。',
   err_group_key: '群组密钥未加载——请重新打开群组',

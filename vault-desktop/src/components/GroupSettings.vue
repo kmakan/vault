@@ -151,6 +151,7 @@ import UserAvatar from './UserAvatar.vue'
 import Icon from './Icon.vue'
 import { invoke } from '@tauri-apps/api/core'
 import api, { db } from '../api.js'
+import * as AvatarImage from '../avatar-image.js'
 
 const { t } = useI18n()
 
@@ -239,38 +240,29 @@ function triggerGroupAvatar() {
 async function onGroupAvatarSelected(e) {
   const file = e.target.files?.[0]
   if (!file) return
-  if (file.size > 500 * 1024) {
+  if (AvatarImage.avatarTooBig(file.size)) {
     alert(t('avatar_too_large') || 'Image must be under 500KB')
     return
   }
-  const reader = new FileReader()
-  reader.onload = () => {
-    const img = new Image()
-    img.onload = async () => {
-      // Аватар группы рассылается участникам письмами (под шифром), поэтому
-      // сжимаем до 128×128 JPEG — достаточно для UI и мало весит в конверте.
-      const canvas = document.createElement('canvas')
-      canvas.width = 128
-      canvas.height = 128
-      const ctx = canvas.getContext('2d')
-      const size = Math.min(img.width, img.height)
-      const sx = (img.width - size) / 2
-      const sy = (img.height - size) / 2
-      ctx.drawImage(img, sx, sy, size, size, 0, 0, 128, 128)
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
-      await db.kvSet('anon', 'group-avatar:' + props.group.id, dataUrl)
-      groupAvatarUrl.value = dataUrl
-      // Sync to backend
-      try {
-        await api.uploadGroupAvatar(props.group.id, dataUrl)
-      } catch (err) {
-        console.warn('Group avatar sync to server failed:', err)
-      }
-      emit('avatar-update', { groupId: props.group.id, avatar: dataUrl })
+  try {
+    // Пресет GROUP_AVATAR общий с черновиком в App.vue — и именно поэтому он
+    // общий: превью обязано совпадать с тем, что сохранится (ADR-003 партия 12).
+    const dataUrl = await AvatarImage.fileToAvatarDataUrl(file, AvatarImage.GROUP_AVATAR)
+    await db.kvSet('anon', 'group-avatar:' + props.group.id, dataUrl)
+    groupAvatarUrl.value = dataUrl
+    // Sync to backend
+    try {
+      await api.uploadGroupAvatar(props.group.id, dataUrl)
+    } catch (err) {
+      console.warn('Group avatar sync to server failed:', err)
     }
-    img.src = reader.result
+    emit('avatar-update', { groupId: props.group.id, avatar: dataUrl })
+  } catch (err) {
+    // Отказ декодирования теперь доходит сюда: раньше обработчиков не было, и
+    // битый файл просто оставлял превью пустым без единого сообщения.
+    console.warn('Group avatar image failed:', err && err.message || err)
+    alert(t('err_image_decode') || 'Could not read the image')
   }
-  reader.readAsDataURL(file)
 }
 </script>
 

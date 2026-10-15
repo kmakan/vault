@@ -939,6 +939,8 @@ import * as MsgFormat from './message-format.js';
 import * as Clipboard from './clipboard.js';
 import * as GroupMetaBroadcast from './features/group-meta-broadcast.js';
 import * as LocalDbInit from './features/local-db-init.js';
+import * as AvatarImage from './avatar-image.js';
+import * as ReportContent from './features/report-content.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -2162,6 +2164,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (тип жалобы, email отправителя, время, id). Серверной жалоб-
     // инфраструктуры у Vault нет (serverless, email-транспорт) —
     // механизм mailto, как у «Сообщить об ошибке» в настройках.
+    // ADR-003 Этап 3, партия 12: сборка текста жалобы — в features/report-content.js.
+    // Диалог ввода и открытие ссылки остаются здесь: это UI, а текст письма
+    // уходит с устройства и потому тоже контракт, а не черновик.
     async reportMessageContent(msg) {
       const type = await prompt(
         this.t('report_content_prompt') || 'Тип жалобы (спам / оскорбления / другое):',
@@ -2170,16 +2175,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const sender = this.msgSenderEmail(msg)
         || (this.activeChatType === 'chat' ? this.activeChat : '')
         || '-';
-      const time = msg.time || msg.created_at || msg.date || '-';
-      const lines = [
-        (this.t('report_content_type') || 'Тип') + ': ' + (String(type).trim() || '-'),
-        (this.t('report_content_sender') || 'Email отправителя') + ': ' + sender,
-        (this.t('report_content_time') || 'Время') + ': ' + time,
-        (this.t('report_content_msg_id') || 'ID сообщения') + ': ' + (msg.id || '-'),
-      ];
-      const url = 'mailto:support@vault-msg.ru?subject='
-        + encodeURIComponent(this.t('report_content_subject') || 'Жалоба на контент — Vault')
-        + '&body=' + encodeURIComponent(lines.join('\n'));
+      const tr = (k) => this.t(k);
+      const lines = ReportContent.buildReportLines({ type, msg, sender }, tr);
+      const url = ReportContent.buildReportMailto(
+        this.t('report_content_subject') || 'Жалоба на контент — Vault', lines);
       await this.openExternalUrl(url);
     },
     closeImageViewer() {
@@ -3359,30 +3358,28 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // и не рендерит как сообщение (см. processIncoming).
     // Выбор аватара в диалоге «Новая группа»: центр-кроп 128×128 JPEG
     // (те же параметры, что у аватара группы в GroupSettings).
-    onNewGroupAvatarSelected(e) {
+    // ADR-003 Этап 3, партия 12: обрезка и кодирование — в avatar-image.js.
+    // Пресет GROUP_AVATAR общий с GroupSettings.vue, и это не украшение:
+    // черновик обязан совпадать с тем, что сохранится. Пока копии были
+    // написаны вручную, совпадение держалось на удачу.
+    async onNewGroupAvatarSelected(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      if (file.size > 500 * 1024) {
+      if (AvatarImage.avatarTooBig(file.size)) {
         alert(this.t('err_file_too_big_500'));
         e.target.value = '';
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = 128;
-          canvas.height = 128;
-          const ctx = canvas.getContext('2d');
-          const size = Math.min(img.width, img.height);
-          ctx.drawImage(img, (img.width - size) / 2, (img.height - size) / 2, size, size, 0, 0, 128, 128);
-          this.newGroupAvatar = canvas.toDataURL('image/jpeg', 0.8);
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
       e.target.value = '';
+      try {
+        this.newGroupAvatar = await AvatarImage.fileToAvatarDataUrl(
+          file, AvatarImage.GROUP_AVATAR);
+      } catch (err) {
+        // Раньше обработчиков отказа не было вовсе: битый файл оставлял
+        // промес навечно, и сообщения об этом не было нигде.
+        console.warn('[avatar] draft image failed:', err && err.message || err);
+        alert(this.t('err_image_decode') || 'Не удалось прочитать изображение');
+      }
     },
     // Файл резервной копии выбран — держим его в памяти до нажатия «Восстановить».
     async onRecoveryFilePicked(e) {

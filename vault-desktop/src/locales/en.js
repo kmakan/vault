@@ -628,6 +628,7 @@ export default {
   profile_title_of: 'Profile {name}',
   email_keys_local_hint: 'E2E keys are stored locally. Changing email does not affect keys.',
   err_file_too_big_500: 'File too large (max 500KB)',
+  err_image_decode: 'Could not read the image',
   err_file_too_big_2m: 'File too large (max 2MB)',
   err_notes_full: 'Local notes storage is full — the note was not saved.',
   err_group_key: 'Group key not loaded — reopen the group',
