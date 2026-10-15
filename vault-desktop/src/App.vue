@@ -920,7 +920,7 @@ import { applyFont, loadSavedFont } from './fonts.js';
 import { exportChatJSON, exportChatTXT, downloadFile } from './chatExport.js';
 import { saveHistory, loadHistory } from './history.js';
 import { detectProvider, checkFileSize, formatBytes } from './providerLimits.js';
-import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByServer, detectProviderByEmail } from './mailProviders.js';
+import { MAIL_PROVIDERS, CUSTOM_PROVIDER_ID, findProvider, detectProviderByEmail } from './mailProviders.js';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import LockScreen from './components/LockScreen.vue';
 import PollDialog from './components/PollDialog.vue';
@@ -946,6 +946,7 @@ import * as Geo from './geo.js';
 import * as Autoclean from './features/autoclean.js';
 import * as ContactsDelete from './features/contacts-delete.js';
 import * as RecoveryEscrow from './features/recovery-escrow.js';
+import * as RestoreFailure from './features/restore-failure.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
@@ -2309,28 +2310,19 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // IMAP/SMTP — пользователь может исправить их в «Настройках сервера»).
     showRestoreFailure() {
       this.email = api.email || this.email;
-      const reason = api.lastRestoreError;
-      if (reason === 'auth') {
-        this.loginError = this.t('restore_failed_auth') ||
-          'Пара email/пароль не сработала: пароль был изменён или отозван. Введите пароль заново.';
-      } else if (reason === 'network') {
-        this.loginError = this.t('restore_failed_network') ||
-          'Не удалось подключиться к почте: сервер недоступен или настройки IMAP/SMTP изменились. Проверьте интернет или откройте «Настройки сервера».';
-      } else {
-        this.loginError = this.t('restore_failed_generic') ||
-          'Автоматический вход не удался. Войдите заново.';
-      }
-      // Предзаполняем сохранённые серверные настройки, чтобы их можно было
-      // исправить прямо в форме входа.
-      const c = api.savedConfig || {};
-      this.imapServer = c.imap_server || '';
-      this.imapPort = c.imap_port ? String(c.imap_port) : '';
-      this.smtpServer = c.smtp_server || '';
-      this.smtpPort = c.smtp_port ? String(c.smtp_port) : '';
-      if (this.imapServer || this.smtpServer) this.showServerSettings = true;
-      // Восстанавливаем селект провайдера по сохранённому IMAP-хосту,
-      // чтобы пользователь видел, какой провайдер был выбран.
-      this.mailProvider = detectProviderByServer(this.imapServer);
+      // Раскладка причины отказа и сохранённой конфигурации — в
+      // features/restore-failure.js (ADR-003 Этап 3, партия 16). Там же правило
+      // про порты-строки и про то, что секцию настроек показывают только если
+      // есть что показывать.
+      const st = RestoreFailure.buildRestoreFailureState(
+        api.lastRestoreError, api.savedConfig, (k) => this.t(k));
+      this.loginError = st.loginError;
+      this.imapServer = st.imapServer;
+      this.imapPort = st.imapPort;
+      this.smtpServer = st.smtpServer;
+      this.smtpPort = st.smtpPort;
+      this.showServerSettings = st.showServerSettings;
+      this.mailProvider = st.mailProvider;
     },
     // Заполнить поля IMAP/SMTP из каталога провайдеров. Вызывается при выборе
     // провайдера в селекте и при автоподборе по домену email (watch: email).
