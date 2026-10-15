@@ -41,7 +41,7 @@ const emails = (list) => list.map(c => c.email).sort();
 
 console.log('\nADR-003 Этап 3, партия 3 · склейка контактов по ключу');
 
-// 1. Один ключ — два адреса, новый втор��м по списку.
+// 1. Один ключ — два адреса, новый вторым по списку.
 globalThis.__contacts = [
   { email: 'old@bk.ru', public_key: 'K1', added_at: '2026-01-01' },
   { email: 'new@bk.ru', public_key: 'K1', added_at: '2026-09-01' },
