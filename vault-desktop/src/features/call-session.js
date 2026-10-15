@@ -13,6 +13,7 @@
 // subscribe: для non-Vue тестов. Vue использует reactive автоматически.
 // п 5.3 ADR-003: state — plain object, reactivity добавит composition root.
 import { createCallClock } from './call-clock.js';
+import { reactive } from 'vue';
 
 const callClock = createCallClock();
 
@@ -37,6 +38,9 @@ export function createCallSession(initial = {}) {
     sendSeen: false,
     localOffer: null,
     remoteOffer: null,
+    // IDLE-флаги: relay.js владелец (call-session state-owner для ctx-coupling).
+    callIdleMonitorUp: false,
+    callIdleActive: false,
     ...initial,
   };
   const listeners = new Set();
@@ -58,6 +62,8 @@ export function createCallSession(initial = {}) {
     get pendingKemct() { return this.state.pendingKemct; },
     get pendingSenderEk() { return this.state.pendingSenderEk; },
     get callMediaConnected() { return this.state.callMediaConnected; },
+    get callIdleMonitorUp() { return this.state.callIdleMonitorUp; },
+    get callIdleActive() { return this.state.callIdleActive; },
     get mediaFallbackTimer() { return this.state.mediaFallbackTimer; },
     get connLostTimer() { return this.state.connLostTimer; },
     get sendSeen() { return this.state.sendSeen; },
@@ -84,6 +90,8 @@ export function createCallSession(initial = {}) {
     setPendingKemct(v) { this.state.pendingKemct = v; _notify(); },
     setPendingSenderEk(v) { this.state.pendingSenderEk = v; _notify(); },
     setCallMediaConnected(v) { this.state.callMediaConnected = !!v; _notify(); },
+    setCallIdleMonitorUp(v) { this.state.callIdleMonitorUp = !!v; _notify(); },
+    setCallIdleActive(v) { this.state.callIdleActive = !!v; _notify(); },
     setMediaFallbackTimer(v) { this.state.mediaFallbackTimer = v; _notify(); },
     setConnLostTimer(v) { this.state.connLostTimer = v; _notify(); },
     setSendSeen(v) { this.state.sendSeen = !!v; _notify(); },
@@ -131,3 +139,10 @@ export function createCallSession(initial = {}) {
   };
   return api;
 }
+
+// ADR-004 I.1: singleton callSession + useSession() accessor — лишает
+// calls.js необходимости принимать ctx.session (store-id). Vue reactivity
+// через reactive(): мутаторы пишут this.state.* через прокси, а useSession()
+// возвращает тот же экземпляр, который App.vue раньше создавал в setup().
+export const callSession = reactive(createCallSession());
+export function useSession() { return callSession; }

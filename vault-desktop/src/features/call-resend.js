@@ -7,9 +7,8 @@
 // не дошло) — 4 попытки её покрывают. Лавину — нет.
 //
 // Владелец: createCallResender() — таймер/попытки локализованы здесь,
-// а не в App.data/call-state. calls.js делегирует через ctx.callResender /
-// ctx.callRequestResender (App provide). shouldContinue()/send() — зависят
-// от фичи и передаются в start() на месте вызова.
+// а не в App.data/call-state. calls.js делегирует через singleton-ресендеры
+// (createCallSession), либо передаёт needed fields через ctx на месте вызова.
 export const SIGNAL_RESEND_DELAYS_MS = [5000, 15000, 45000, 120000];
 
 // Планировщик повторов ОДНОГО сигнала с затухающей паузой: одна попытка =
@@ -59,3 +58,9 @@ export function createCallResender() {
     stop,
   };
 }
+
+// ADR-004 I.2: singleton-ресендеры для call_request и call_accept/answer.
+// App.vue раньше создавал их в data() и передавал через ctx; теперь owner —
+// call-resend.js, calls.js импортирует напрямую (как fastFetcher/connLostGuard).
+export const callResender = createCallResender();
+export const callRequestResender = createCallResender();

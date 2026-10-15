@@ -78,6 +78,7 @@ const OWNER_FIELDS = new Set([
   'setUnread',
   // A12: session-store.js (isLoggedIn + emails). State + API.
   'sessionStore',
+  'session',   // A12: call-session.js — state-owner. Поле, а не модуль.
   'isLoggedIn',
   'emails',
   'login',

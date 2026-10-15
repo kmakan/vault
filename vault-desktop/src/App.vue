@@ -893,7 +893,7 @@
 // reactive(createCallSession()): мутаторы пишут this.state.* через Vue Proxy,
 // поэтому Vue видит изменения. calls.js мутирует состояние через ctx.X,
 // а App.vue роутит это в computed-прокси → callSession.setX().
-import { createCallSession } from './features/call-session.js';
+import { useSession } from './features/call-session.js';
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
@@ -983,7 +983,6 @@ import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
 import * as RelayFeature from './features/relay.js';
-import { createCallResender } from './features/call-resend.js';
 import * as CallsFeature from './features/calls.js';
 // S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
 // не был готов — очередь применяется к следующему call_request.
@@ -1059,7 +1058,7 @@ export default {
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
     const relayStore = reactive(createRelayStore());
     // Владелец состояния звонка (ADR-004, Этап C): вынесено из data().
-    const callSession = reactive(createCallSession());
+    const callSession = useSession();
     return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, callSession };
   },
   data() {
@@ -1102,10 +1101,9 @@ export default {
       // callVideoOn/callStartedAt — App-only, остаются в data().
       callVideoOn: false,
       // signal-resend: таймер/попытки вынесены в owner createCallResender
-      // (call-resend.js) — ADR-004 F. calls.js делегирует через ctx.callResender
-      // (ресенд call_accept/answer) и ctx.callRequestResender (call_request).
-      callResender: createCallResender(),
-      callRequestResender: createCallResender(),
+      // (call-resend.js) — ADR-004 I.2. calls.js импортирует singletonы
+      // callResender/callRequestResender напрямую (как fastFetcher/connLostGuard),
+      // поэтому data() больше не создаёт их.
       // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
       // ecoMode — теперь proxy на relay-store (ADR-004 A13).
@@ -1114,10 +1112,10 @@ export default {
       // поднимается после успешного api.idleStart и сбрасывается в
       // stopPolling/эко: повторный idleLoop при поднятом мониторе обязан
       // быть no-op, иначе каждый сигнал звонка создавал бы новое TCP+TLS.
-      // Rust-монитор IDLE (_idleMonitorUp): если погашен — владелец fastFetcher
-      // (call-idle.js) поднимает страховочный фетч 7с; timer id больше не живёт в App.data.
-      _idleMonitorUp: false,
-      // Звонковые таймеры/звук/рингтоны (callSoundEl/callRingtone*) — App-only timer ids
+      // Rust-монитор IDLE: флаг callIdleMonitorUp теперь — состояние
+      // call-session.js (callSession proxy). App.vue пишет через
+      // this.callSession.setCallIdleMonitorUp(true/false).
+      // Звонковые таймеры/звук/рингтоны — App-only timer ids
       // и rineload; callState/currentCall/etc. вынесены в callSession (ADR-004 C).
       // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
       // зависшего в ringing дольше разумного; см. handleCallSignal).
@@ -2156,7 +2154,7 @@ export default {
     armMediaFallback() { return CallsFeature.armMediaFallback(this); },
     startCallClock() { this.callSession.startCallClock(); },
     stopCallClock() { this.callSession.stopCallClock(); },
-    startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop(), this._idleMonitorUp); },
+    startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop(), this.callSession.callIdleMonitorUp); },
     stopFastPolling() { return CallsFeature.stopFastPolling(); },
     playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
     stopCallSound() { return CallsFeature.stopCallSound(this); },

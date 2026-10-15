@@ -22,6 +22,7 @@
 import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
+import { useSession } from './call-session.js';
 
 // M2.1: забрать конверты с релея и влить их в почтовый конвейер как
 // виртуальные письма. uid 'rl-<envId>' (стабильный — повторный поллинг
@@ -244,7 +245,7 @@ export async function idleLoop(ctx) {
   // прежний таск и создаёт НОВЫЙ EmailClient — то есть новое TCP+TLS. Без
   // этой проверки каждый сигнал звонка (startFastPolling → idleLoop) поднимал
   // бы свежее соединение. Идемпотентность — на стороне владельца.
-  if (ctx._idleMonitorUp) { startFastFetchTimer(ctx); return; }
+  if (useSession().callIdleMonitorUp) { startFastFetchTimer(ctx); return; }
   if (ctx._idleActive) return;
   ctx._idleActive = true;
   // Вызывающий явно просит включить IDLE — снимаем прошлый стоп (эко гасит
@@ -265,9 +266,8 @@ export async function idleLoop(ctx) {
   if (monitorUp) {
     // Владелец IDLE — Rust. JS-цикла больше нет; нужен только таймер
     // страховочного фетча (СПАМ + сигналы звонков).
-    ctx._idleMonitorUp = true;
-    ctx._idleActive = false;
-    startFastFetchTimer(ctx);
+    useSession().setCallIdleMonitorUp(true);
+    useSession().setCallIdleActive?.(false); // relay.js owns _idleActive
     return;
   }
   // ── Резервный путь: монитор не поднялся, ведём IDLE из JS ──────────
@@ -374,7 +374,7 @@ export function stopPolling(ctx) {
   // нативная сессия разрывается (email_disconnect гасит монитор), поэтому
   // флаг сбрасываем — иначе следующий вход увидел бы «монитор поднят» и не
   // поднял его заново (доставка писем/звонков молча пропала бы).
-  ctx._idleMonitorUp = false;
+  useSession().setCallIdleMonitorUp(false);
 }
 
 // M2.3: экономный режим — постоянный IMAP IDLE останавливается

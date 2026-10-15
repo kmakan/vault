@@ -16,6 +16,8 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CALLS = path.join(ROOT, 'src/features/calls.js');
 const CALL_RESEND = path.join(ROOT, 'src/features/call-resend.js');
+const CALL_SESSION = path.join(ROOT, 'src/features/call-session.js');
+const CALL_CLOCK = path.join(ROOT, 'src/features/call-clock.js');
 const CALL_WATCHDOG = path.join(ROOT, 'src/features/call-watchdog.js');
 const CALL_RING = path.join(ROOT, 'src/features/call-ring.js');
 const CALL_TERMINAL = path.join(ROOT, 'src/features/call-terminal.js');
@@ -53,6 +55,8 @@ writeFileSync(`${MOCKS}/features/call-terminal.js`, readFileSync(CALL_TERMINAL, 
 writeFileSync(`${MOCKS}/features/timing.js`, readFileSync(TIMING, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-idle.js`, readFileSync(CALL_IDLE, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-resend.js`, readFileSync(CALL_RESEND, 'utf8'));
+writeFileSync(`${MOCKS}/features/call-session.js`, readFileSync(CALL_SESSION, 'utf8'));
+writeFileSync(`${MOCKS}/features/call-clock.js`, readFileSync(CALL_CLOCK, 'utf8'));
 writeFileSync(`${MOCKS}/features/calls.js`, readFileSync(CALLS, 'utf8'));
 const C = await import(MOCKS + '/features/calls.js');
 
