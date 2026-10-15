@@ -942,6 +942,7 @@ import * as Migrations from './migrations.js';
 import * as ContactsLoad from './features/contacts-load.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
+import * as GroupsClone from './features/groups-clone.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -4262,6 +4263,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // «Работа — проект X»). Инвайты уходят автоматически: ключ новой
     // группы шифруется на публичный ключ каждого участника (тот же путь,
     // что inviteSelectedMembers). Только создатель оригинала.
+    // ADR-003 Этап 3: оркестрация клона — в features/groups-clone.js.
+    // UI (prompt/alert/переводы) остаётся здесь намеренно: переносить его в
+    // модуль значило бы тащить переводы в слой, который о них не знает.
+    // Порядок сохранён: состояние клона применяется ДО рассылки приглашений,
+    // как в оригинале — иначе клон появлялся бы в списке с задержкой.
     async cloneGroup() {
       const src = this.currentGroup;
       if (!src || src.created_by !== this.email) return;
@@ -4270,42 +4276,19 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (!name || !name.trim()) return;
       this.showGroupSettings = false;
       try {
-        const group = await api.createGroup(name.trim(), '');
-        group.members = [{ email: this.email, role: 'Admin' }];
-        group.blocked = [];
-        const avatar = (await db.kvGet('anon', 'group-avatar:' + src.id)) || '';
-        if (avatar) {
-          await db.kvSet('anon', 'group-avatar:' + group.id, avatar);
-          this.groupAvatars[group.id] = avatar;
-        }
-        this.groups.push(group);
-        this.currentGroup = group;
-        // Ключ группы: groups_create уже вернул group_key — кладём в память
-        // (без этого шифрование инвайтов и отправка в клон невозможны).
-        if (group.group_key) this.groupKeys[group.id] = group.group_key;
-        // Инвайт всем участникам оригинала (кроме нас) — с проверкой ключа,
-        // без peerKey безопасный инвайт невозможен.
-        const invited = [];
-        const skipped = [];
-        for (const m of (src.members || [])) {
-          const email = (m.email || '').toLowerCase();
-          if (!email || email === (this.email || '').toLowerCase()) continue;
-          const peerPub = this.peerKeys[m.email] || this.peerKeys[email] || null;
-          if (!peerPub) { skipped.push(m.email); continue; }
-          try {
-            const enc = await crypto.encryptGroupKeyForUser(group.group_key, peerPub);
-            await api.inviteGroupMember(group.id, m.email, enc, this.publicKey);
-            group.members.push({ email: m.email, role: m.role || 'Member', invited: true });
-            invited.push(m.email);
-          } catch (e) {
-            skipped.push(m.email);
-          }
-        }
-        // Группы персистятся на Rust-стороне (groups_create уже сохранил);
-        // локальный members-массив — только для отображения invited-статуса.
-        const msg = (this.t('group_clone_done') || 'Клон создан') +
-          (invited.length ? ': ' + this.t('group_clone_invited') + ' ' + invited.join(', ') : '') +
-          (skipped.length ? '\n' + (this.t('group_clone_skipped') || 'пропущены (нет ключа)') + ': ' + skipped.join(', ') : '');
+        // group и avatar не деструктурируем: они уже применены в onCreated.
+        const { invited, skipped } = await GroupsClone.cloneGroup({
+          src, name, email: this.email, peerKeys: this.peerKeys, publicKey: this.publicKey,
+          onCreated: ({ group: g, avatar: av }) => {
+            if (av) this.groupAvatars[g.id] = av;
+            this.groups.push(g);
+            this.currentGroup = g;
+            if (g.group_key) this.groupKeys[g.id] = g.group_key;
+          },
+        });
+        const msg = (this.t('group_clone_done') || 'Клон создан')
+          + (invited.length ? ': ' + this.t('group_clone_invited') + ' ' + invited.join(', ') : '')
+          + (skipped.length ? '\n' + (this.t('group_clone_skipped') || 'пропущены (нет ключа)') + ': ' + skipped.join(', ') : '');
         alert(msg);
       } catch (e) {
         console.error('cloneGroup failed:', e);
