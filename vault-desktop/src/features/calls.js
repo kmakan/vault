@@ -828,12 +828,12 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
     callEvent: { kind, duration: Number(durationSec) || 0, call_id: callId },
   };
   // Дедуп: один call_id — одна пилюля (повторный фетч/ретрансляция).
-  const exists = (ctx.messages || []).some(m => m && m.id === msg.id);
+  const exists = ctx.chat.state.messages.some(m => m && m.id === msg.id);
   if (!exists && ctx.activeChat === chatKey && ctx.activeChatType === 'chat') {
-    ctx.messages.push(msg);
-    ctx.messages.sort((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
+    ctx.chat.append(msg);
+    ctx.chat.sortBy((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
     ctx.saveCurrentHistory(chatKey);
-    ctx.saveChatCache(chatKey, ctx.messages);
+    ctx.saveChatCache(chatKey, ctx.chat.state.messages);
     ctx.scrollToBottom(true);
   } else if (!exists) {
     // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,

@@ -2,6 +2,7 @@
 // Vue/Tauri (паттерн incoming-smoke.mjs). Таймеры/Audio — управляемые моки.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { createChatStore } from '../src/chat-store.js';
 
 const ROOT = import.meta.dirname;
 
@@ -140,7 +141,9 @@ function makeCtx(over = {}) {
     activeChatType: 'chat',
     peerKeys: { 'peer@x.ru': 'PUB' },
     peerPqKeys: {},
-    messages: [],
+    // Модуль-владелец переписки (ADR-004, Этап A1). calls.js пишет через
+    // ctx.chat.set/append/sortBy/clear, а читает через ctx.chat.state.messages.
+    chat: createChatStore(),
     unreadCounts: {},
     expCalls: true,
     // методы-контракты
@@ -257,11 +260,11 @@ console.log('4. handleCallSignal (роутер входящих)');
   await C.handleCallSignal(ctx, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
   check('stale: звонок не поднят', ctx.callState === 'idle');
   check('stale: call_id запомнен', (await C.isCallSeen(seenEmail(ctx), 'stale1')) === true);
-  check('stale call_request → missed-пилюля в messages', ctx.messages.some(m => m.id === 'call-stale1' && m.callEvent.kind === 'missed'));
+  check('stale call_request → missed-пилюля в messages', ctx.chat.state.messages.some(m => m.id === 'call-stale1' && m.callEvent.kind === 'missed'));
   histMock.store = {};
   // повторный stale того же call_id — НЕ дублирует пилюлю
   await C.handleCallSignal(ctx, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
-  check('повторный stale — пилюля не задвоена', ctx.messages.filter(m => m.id === 'call-stale1').length === 1);
+  check('повторный stale — пилюля не задвоена', ctx.chat.state.messages.filter(m => m.id === 'call-stale1').length === 1);
   // 4b. игнор-лист
   const ig = makeCtx({ isIgnored: () => true });
   await C.handleCallSignal(ig, { vault: 1, type: 'call_request', call_id: 'ig1', ts: Date.now() }, 'peer@x.ru');
@@ -288,7 +291,7 @@ console.log('4. handleCallSignal (роутер входящих)');
   cryptoMock.encVault.length = 0;
   await C.handleCallSignal(busy, { vault: 1, type: 'call_request', call_id: 'other', ts: Date.now() }, 'peer@x.ru');
   const rejBody = cryptoMock.encVault.map(p => { try { return JSON.parse(p); } catch (e) { return null; } }).filter(b => b && b.type === 'call_reject');
-  check('чужой звонок в active → call_reject + missed-пилюля', rejBody.length === 1 && rejBody[0].call_id === 'other' && busy.messages.some(m => m.id === 'call-other'));
+  check('чужой звонок в active → call_reject + missed-пилюля', rejBody.length === 1 && rejBody[0].call_id === 'other' && busy.chat.state.messages.some(m => m.id === 'call-other'));
   histMock.store = {};
   // 4f. call_accept при исходящем (hasLocalOffer) — mediaSetRemote
   const out = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'o1', peer: 'peer@x.ru', hasLocalOffer: true } });
@@ -303,7 +306,7 @@ console.log('4. handleCallSignal (роутер входящих)');
   // 4h. терминальный call_end: трубка кладётся
   const act = makeCtx({ callState: 'active', currentCall: { call_id: 'a1', peer: 'peer@x.ru' } });
   await C.handleCallSignal(act, { vault: 1, type: 'call_end', call_id: 'a1', ts: Date.now() }, 'peer@x.ru');
-  check('call_end → hangup(remote) → idle + ended-пилюля', act.callState === 'idle' && act.messages.some(m => m.callEvent && m.callEvent.kind === 'ended'));
+  check('call_end → hangup(remote) → idle + ended-пилюля', act.callState === 'idle' && act.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'ended'));
   check('терминал запомнен', (await C.isCallSeen(seenEmail(act), 'a1')) === true);
   histMock.store = {};
 }
@@ -328,7 +331,7 @@ console.log('5. lifecycle');
   check('ретрансляция call_request — только почтой', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length >= 1 && relayMock.pubs.length === 0);
   // таймаут гудков
   await fireTimer(ctx.callRingTimer);
-  check('таймаут гудков → cancel → idle + no_answer-пилюля', ctx.callState === 'idle' && ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'no_answer'));
+  check('таймаут гудков → cancel → idle + no_answer-пилюля', ctx.callState === 'idle' && ctx.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'no_answer'));
   histMock.store = {};
   // startCall без ключа пира — no-op
   const nokey = makeCtx({ peerKeys: {} });
@@ -343,7 +346,7 @@ console.log('5. lifecycle');
   const hu = makeCtx({ callState: 'active', currentCall: { call_id: 'h1', peer: 'peer@x.ru' }, callClockSec: 204, _connLostTimer: setTimeout(() => {}, 9999) });
   await C.hangup(hu, 'end');
   check('hangup: полный сброс состояния', hu.callState === 'idle' && hu.currentCall === null && hu.callMuted === false && hu._connLostTimer === null);
-  check('hangup: ended-пилюля с длительностью 03:24', hu.messages.some(m => m.callEvent && m.callEvent.kind === 'ended' && m.callEvent.duration === 204));
+  check('hangup: ended-пилюля с длительностью 03:24', hu.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'ended' && m.callEvent.duration === 204));
   check('hangup: mediaClose + звук конца', apiMock.calls.some(c => c[0] === 'close' && c[1] === 'h1') && apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'end'));
   histMock.store = {};
 }
@@ -358,12 +361,13 @@ console.log('6. Пилюли пропущенных');
   check('чат закрыт → пилюля в sqlite-истории', histMock.store['peer@x.ru'] && histMock.store['peer@x.ru'].length === 1);
   check('missed + чат невидим → unread-бейдж', ctx.unreadCounts['peer@x.ru'] === 1);
   // чат открыт → в messages + сортировка
-  const open = makeCtx({ activeChat: 'peer@x.ru', messages: [{ id: 'old', ts: 1 }] });
+  const open = makeCtx({ activeChat: 'peer@x.ru' });
+  open.chat.state.messages = [{ id: 'old', ts: 1 }];
   await C.recordCallEvent(open, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
-  check('чат открыт → messages (отсортировано)', open.messages.length === 2 && open.messages[0].id === 'old' && open.messages[1].id === 'call-m2');
+  check('чат открыт → messages (отсортировано)', open.chat.state.messages.length === 2 && open.chat.state.messages[0].id === 'old' && open.chat.state.messages[1].id === 'call-m2');
   // дедуп пилюли
   await C.recordCallEvent(open, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
-  check('повторный call_id — пилюля не задвоена', open.messages.length === 2);
+  check('повторный call_id — пилюля не задвоена', open.chat.state.messages.length === 2);
   // лейблы
   check('лейбл ended с длительностью 01:05', C.callEventLabel(labelFn(open), { callEvent: { kind: 'ended', duration: 65 } }) === 'T:call_ended · 01:05');
   check('лейбл missed', C.callEventLabel(labelFn(open), { callEvent: { kind: 'missed', duration: 0 } }) === 'T:call_missed');
@@ -499,7 +503,7 @@ console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
   const hit = await C.onMailBounce(ctx, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
   check('баунс про собеседника → вызов отменён', hit === true && ctx.callState === 'idle', { state: ctx.callState });
   check('тост с причиной показан', toasts.length === 1, toasts);
-  check('пилюля undeliverable (не «нет ответа»)', ctx.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.messages.map(m => m.callEvent));
+  check('пилюля undeliverable (не «нет ответа»)', ctx.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.chat.state.messages.map(m => m.callEvent));
   check('иконка лейбла — phone-off', C.callPillIcon({ callEvent: { kind: 'undeliverable' } }) === 'phone-off');
   check('лейбл undeliverable', C.callEventLabel(labelFn(ctx), { callEvent: { kind: 'undeliverable', duration: 0 } }) === 'T:call_undeliverable');
 
