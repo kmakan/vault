@@ -2559,38 +2559,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // local_name} в kv-профили (namespace 'anon', ключ 'profiles', ключи
     // lowercase — см. api.js saveProfile/getProfilesAll). Старый ключ НЕ
     // удаляем: аватар может лежать под старым адресом как алиас.
+    // ADR-003 Этап 3: перенос профиля — в migrations.js. Модуль возвращает
+    // ключ и профиль, шапку обновляем здесь: логика и отображение слипаться не должны.
     async migrateOwnProfile(oldEmail, newEmail) {
-      try {
-        const profiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-        const old = String(oldEmail).toLowerCase();
-        const neu = String(newEmail).toLowerCase();
-        if (!profiles[old] || old === neu) return;
-        if (!profiles[neu]) {
-          profiles[neu] = Object.assign({}, profiles[old]); // копия целиком
-        } else {
-          // Цель есть — заполняем только пустые/отсутствующие поля из
-          // старого (пустой avatar не затирает новый).
-          const dst = profiles[neu];
-          const src = profiles[old];
-          for (const k of Object.keys(src || {})) {
-            const cur = dst[k];
-            const val = src[k];
-            if ((cur === undefined || cur === null || cur === '')
-              && val !== undefined && val !== null && val !== '') {
-              dst[k] = val;
-            }
-          }
-        }
-        await db.kvSet('anon', 'profiles', JSON.stringify(profiles));
-        // In-memory: профиль в шапке/контактах сразу после смены почты.
-        if (this.profiles && typeof this.profiles === 'object') {
-          this.profiles[neu] = profiles[neu];
-        }
-        this.userAvatarUrl = (profiles[neu] || {}).avatar || this.userAvatarUrl;
-        console.log('[identity] own profile migrated:', old, '→', neu);
-      } catch (e) {
-        console.warn('[identity] migrateOwnProfile failed:', e);
-      }
+      const r = await Migrations.migrateOwnProfile(oldEmail, newEmail);
+      if (!r) return;
+      if (this.profiles && typeof this.profiles === 'object') this.profiles[r.key] = r.profile;
+      this.userAvatarUrl = (r.profile || {}).avatar || this.userAvatarUrl;
     },
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
@@ -2606,28 +2581,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // Смена почты: переносим историю чата со старого адреса на новый.
     // Вызывается при fingerprint-матчинге у ПОЛУЧАТЕЛЯ (поллинг/loadMessages).
+    // ADR-003 Этап 3: переезд истории чата — в migrations.js. Ключ чата
+    // принадлежит ПИРУ, поэтому account идёт через резолвер, а пир остаётся почтой.
     async migrateChatHistory(oldEmail, newEmail) {
-      try {
-        // ВАЖНО: здесь переименовывается ключ ЧАТА С СОБЕСЕДНИКОМ
-        // (chat-cache:<email пира>), когда пир сменил почту, а не наш
-        // account-namespace. Поэтому account идёт через резолвер
-        // (identity = fp:<fingerprint>), а пир остаётся почтой — она
-        // транспорт и в ключе чата.
-        const ns = this.email ? await accountNamespace(this.email) : 'anon';
-        const oldKey = 'chat-cache:' + oldEmail;
-        const newKey = 'chat-cache:' + newEmail;
-        const oldCache = await db.kvGet(ns, oldKey);
-        if (oldCache) {
-          const existing = await db.kvGet(ns, newKey);
-          if (!existing) {
-            await db.kvSet(ns, newKey, oldCache);
-            await db.kvDelete(ns, oldKey);
-            console.log('[identity] chat history migrated:', oldEmail, '→', newEmail);
-          }
-        }
-      } catch (e) {
-        console.warn('[identity] migrateChatHistory failed:', e);
-      }
+      return Migrations.migrateChatHistory(oldEmail, newEmail, this.email);
     },
     // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
     // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke
@@ -4323,29 +4280,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // он участник или создатель. tryMigrateGroupMember вызывается только при
     // разборе ВХОДЯЩЕГО письма; если письма нет (или оно уже разобрано) —
     // группы остаются со старым адресом. Этот проход идемпотентен.
+    // ADR-003 Этап 3: перебор групп — в migrations.js. Перечитываем список
+    // через колбэк, иначе на экране остались бы старые адреса.
     async migratePeerGroups(oldEmail, newEmail) {
-      if (!oldEmail || !newEmail) return 0;
-      const oldLc = String(oldEmail).toLowerCase();
-      let n = 0;
-      try {
-        const all = await api.getGroups();
-        for (const g of all || []) {
-          const has = String(g.created_by || '').toLowerCase() === oldLc
-            || (g.members || []).some(m => String(m.email || '').toLowerCase() === oldLc);
-          if (!has) continue;
-          await invoke('groups_rename_member', {
-            groupId: g.id, oldEmail, newEmail,
-          });
-          n++;
-        }
-        if (n) {
-          console.log('[identity] peer groups renamed:', oldEmail, '→', newEmail, '(' + n + ')');
-          try { await this.loadGroups(); } catch (e) { /* перечитаем позже */ }
-        }
-      } catch (e) {
-        console.warn('[identity] migratePeerGroups failed:', e);
-      }
-      return n;
+      return Migrations.migratePeerGroups(oldEmail, newEmail, () => this.loadGroups());
     },
     // Ленивое заполнение fingerprint участников группы из peer_keys.
     // Старые groups.json без поля fingerprint: при открытии группы проставляем

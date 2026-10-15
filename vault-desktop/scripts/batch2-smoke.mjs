@@ -43,8 +43,16 @@ writeFileSync(MOCKS + '/shell.js',
 writeFileSync(MOCKS + '/identity.js',
   "export const accountNamespace = async (e) =>\n" +
   "  globalThis.__nsFallback ? String(e).toLowerCase() : 'fp:' + String(e).toLowerCase();");
-writeFileSync(MOCKS + '/api.js',
-  'export default { getGroups: async () => globalThis.__groups };');
+// db нужен, потому что migrations.js импортирует его рядом с default. В этом
+// смоуке db не используется (проверяются migrateAccountData/migrateOwnGroups),
+// но мок обязан повторять форму модуля — иначе падает на резолве, и падение
+// выглядит как «сломан продукт», а не «неполный мок».
+writeFileSync(MOCKS + '/api.js', `
+export default { getGroups: async () => globalThis.__groups };
+export const db = {
+  kvGet: async () => null, kvSet: async () => {}, kvDelete: async () => {},
+};
+`);
 
 const rewrite = (file, out, subs) => {
   let s = readFileSync(path.join(ROOT, 'src', file), 'utf8');
