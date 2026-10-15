@@ -5,6 +5,7 @@
 
 import api from '../api.js';
 import crypto from '../crypto.js';
+import * as EnvelopeId from './envelope-id.js';
 
 // Состояние фичи — в ./forward/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...forwardState()`).
@@ -46,9 +47,9 @@ export async function doForward(ctx, key) {
     ctx.sending = true;
     const ttl = await ctx.ephemeralTtlOf(key);
     const envelope = await ctx.buildEnvelope(fwdText, ttl);
-    const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
+    const envelopeId = EnvelopeId.envelopeIdOf(envelope);
     const pendingMsg = {
-      id: envelopeId || ('local-' + Date.now()),
+      id: envelopeId || EnvelopeId.pendingIdOf(),
       content: fwdText,
       from: 'me',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

@@ -15,6 +15,7 @@
 import { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import { saveHistory, loadHistory } from '../history.js';
+import * as EnvelopeId from './envelope-id.js';
 
 // ── Ключи ──────────────────────────────────────────────────────
 export function bodyCacheKey(ctx) {
@@ -137,6 +138,21 @@ export function mergePending(ctx, chatKey, list) {
   const remaining = {};
   for (const [id, msg] of Object.entries(bucket)) {
     if (seen.has(id)) continue; // письмо уже в списке — реальное заменило оптимистичное
+    // ЗАГОЛУШКА ПОД МЕНЯЕТСЯ С НИМ ЧЕРЕЗ СОДЕРЖАНИЕ И ВРЕМЯ (ADR-003 партия 17).
+    //
+    // Раньше заглушка отбрасывалась ТОЛЬКО по совпадению id — то есть никогда:
+    // у заглушки нет настоящего id по построению, и настоящее письмо приходит с
+    // другим. Оптимистичная запись оставалась в списке до страховки в 10 минут,
+    // и человек видел своё сообщение дважды.
+    //
+    // Эпоха здесь безопасна. Список — это то, что пришло из IMAP СЕЙЧАС, а
+    // заглушка поставлена секунды назад, и «списком давно» здесь невозможно:
+    // если бы запись провисела дольше окна, она бы попала в СЛЕДУЮЩИЙ список,
+    // где timestamp свежий, и epoch сдвинулся бы вместе с ней.
+    if (EnvelopeId.isPendingId(id)) {
+      const real = list.find((m) => EnvelopeId.matchesPending(msg, m, now));
+      if (real) continue; // настоящее письмо нашлось — заглушка свою работу сделала
+    }
     // Удалённое сообщение не возвращается из pending (tombstone).
     if (ctx.isTombstoned(id)) continue;
     // Страховка: не держим запись дольше 10 минут (если SMTP молча не

@@ -143,6 +143,35 @@ console.log('4. pendingOutgoing (markPending/mergePending)');
   check('подтверждённое заменено реальным (p1 once)', out.filter(m => m.id === 'p1').length === 1 && out.find(m => m.id === 'p1').content === 'real');
   check('неподтверждённое p2 подмешано', out.some(m => m.id === 'p2'));
   check('реестр p1 очищен, p2 остался', ctx.pendingOutgoing['peer@x.ru'] && !!ctx.pendingOutgoing['peer@x.ru'].p2 && !ctx.pendingOutgoing['peer@x.ru'].p1);
+  // ── ЗАГЛУШКА ПОДТВЕРЖДАЕТСЯ НАСТОЯЩИМ ПИСЬМОМ (ADR-003 партия 17) ──────
+  // Сценарий, который раньше давал двойное сообщение: конверт не разобрался,
+  // оптимистичная запись получила заглушку, настоящее письмо пришло с ДРУГИМ id.
+  // Совпадения по id не было никогда, и заглушка висела в чате до 10 минут.
+  const ctxP = makeCtx();
+  H.markPending(ctxP, 'peer@x.ru', {
+    id: 'pending-stub', content: 'Привет, как дела', from: 'me', ts: 100, _pendingAt: Date.now() - 3000,
+  });
+  const realArrived = H.mergePending(ctxP, 'peer@x.ru', [
+    { id: 'real-abc', content: 'Привет, как дела', from: 'me', ts: 100 },
+  ]);
+  check('заглушка убрана, когда настоящее письмо пришло',
+    !realArrived.some(m => m.id === 'pending-stub'));
+  check('и в списке ОДНА запись, а не две (пользователь не видит дубль)',
+    realArrived.filter(m => m.content === 'Привет, как дела').length === 1);
+  check('в реестре заглушки тоже не осталось',
+    !(ctxP.pendingOutgoing['peer@x.ru'] && ctxP.pendingOutgoing['peer@x.ru']['pending-stub']));
+
+  // Текст другой — это не то же сообщение, заглушка обязана остаться.
+  const ctxP2 = makeCtx();
+  H.markPending(ctxP2, 'peer@x.ru', {
+    id: 'pending-stub2', content: 'Привет, как дела', from: 'me', ts: 100, _pendingAt: Date.now() - 3000,
+  });
+  const otherArrived = H.mergePending(ctxP2, 'peer@x.ru', [
+    { id: 'real-xyz', content: 'Совсем другое письмо', from: 'them', ts: 90 },
+  ]);
+  check('чужая переписка НЕ подтверждает заглушку',
+    otherArrived.some(m => m.id === 'pending-stub2'));
+
   // 10-минутный TTL: старое pending не возвращается (но failed остаётся)
   const now = Date.now();
   const ctx2 = makeCtx();

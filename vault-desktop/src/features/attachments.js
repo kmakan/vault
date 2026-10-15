@@ -21,6 +21,7 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import { downloadBase64 } from '../chatExport.js';
 import { getAttachmentLimitMb } from '../mailProviders.js';
+import * as EnvelopeId from './envelope-id.js';
 
 // ── Отдача / просмотр ──────────────────────────────────────────
 export function downloadAttachment(ctx, attachment) {
@@ -184,19 +185,19 @@ export async function sendAudioMessage(ctx, audioData) {
     const groupKey = ctx.groupKeys[ctx.currentGroup.id];
     if (groupKey) {
       const envelope = await ctx.buildEnvelope(attachmentPayload);
-      try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+      envelopeId = EnvelopeId.envelopeIdOf(envelope);
       wire = await crypto.encryptWithGroupKey(envelope, groupKey);
     }
   } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
     crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
     const envelope = await ctx.buildEnvelope(attachmentPayload);
-    try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+    envelopeId = EnvelopeId.envelopeIdOf(envelope);
     wire = await crypto.encryptVault(envelope);
   }
 
   // Оптимистичный предпросмотр у отправителя.
   const msg = {
-    id: envelopeId || ('local-' + Date.now()),
+    id: envelopeId || EnvelopeId.pendingIdOf(),
     content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
     from: 'me',
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -381,19 +382,19 @@ export async function handleFileSelect(ctx, event) {
           const groupKey = ctx.groupKeys[ctx.currentGroup.id];
           if (groupKey) {
             const envelope = await ctx.buildEnvelope(attachmentPayload);
-            try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+            envelopeId = EnvelopeId.envelopeIdOf(envelope);
             wire = await crypto.encryptWithGroupKey(envelope, groupKey);
           }
         } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
           crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
           const envelope = await ctx.buildEnvelope(attachmentPayload);
-          try { envelopeId = JSON.parse(envelope).id; } catch (e) { /* ignore */ }
+          envelopeId = EnvelopeId.envelopeIdOf(envelope);
           wire = await crypto.encryptVault(envelope);
         }
 
         // Create preview message
         const msg = {
-          id: envelopeId || ('local-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5)),
+          id: envelopeId || EnvelopeId.pendingIdOf(),
           content: displayContent,
           from: 'me',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

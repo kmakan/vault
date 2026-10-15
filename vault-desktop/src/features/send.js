@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
+import * as EnvelopeId from './envelope-id.js';
 
 export async function sendMessage(ctx) {
       if (!ctx.newMessage.trim()) return;
@@ -116,7 +117,7 @@ export async function sendMessage(ctx) {
         const ttl = await ctx.ephemeralTtlOf(chatId);
         if (ttl) console.log('[sendMessage] ephemeral ttl=' + ttl + ' chat=' + chatId);
         const envelope = await ctx.buildEnvelope(payload, ttl);
-        const envelopeId = (() => { try { return JSON.parse(envelope).id; } catch (e) { return ''; } })();
+        const envelopeId = EnvelopeId.envelopeIdOf(envelope);
 
         if (ctx.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
@@ -142,7 +143,7 @@ export async function sendMessage(ctx) {
           // Запись регистрируется в pendingOutgoing: поллинг подмешивает её
           // обратно, пока письмо не сделает круг через ящик (mergePending).
           const pendingMsg = {
-            id: envelopeId || ('local-' + Date.now()),
+            id: envelopeId || EnvelopeId.pendingIdOf(),
             content: payload,
             from: 'me',
             sender_id: ctx.email,
@@ -201,7 +202,7 @@ export async function sendMessage(ctx) {
           // регистрируется в pendingOutgoing: поллинг подмешивает её обратно,
           // пока письмо не сделает круг через ящик (mergePending).
           const pendingMsg = {
-            id: envelopeId || ('local-' + Date.now()),
+            id: envelopeId || EnvelopeId.pendingIdOf(),
             content: payload,
             from: 'me',
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
