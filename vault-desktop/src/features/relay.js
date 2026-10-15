@@ -198,7 +198,7 @@ export async function enterRelayOfflineRescue(ctx) {
   stopPolling(ctx);
   startPolling(ctx);
   idleLoop(ctx);
-  ctx.showToast(ctx.t('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
+  uiStore.toast(uiStore.tr('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
 }
 
 // Период страховочного быстрого фетча. Раньше условие «changed || прошло
@@ -437,7 +437,7 @@ export async function onEcoMode(ctx, on, silent = false) {
     // редкий поллинг-тик страхует (релей — основной канал)
     stopPolling(ctx);
     startPolling(ctx, 60000);
-    if (!silent) ctx.showToast(ctx.t('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
+    if (!silent) uiStore.toast(uiStore.tr('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
   } else {
     // классика: постоянный IDLE + обычный поллинг
     try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
@@ -445,7 +445,7 @@ export async function onEcoMode(ctx, on, silent = false) {
     stopPolling(ctx);
     idleLoop(ctx);
     startPolling(ctx);
-    ctx.showToast(ctx.t('eco_off_toast') || 'Классический режим: постоянное соединение включено');
+    uiStore.toast(uiStore.tr('eco_off_toast') || 'Классический режим: постоянное соединение включено');
   }
 }
 

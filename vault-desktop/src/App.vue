@@ -901,7 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
-import { sessionStore as sessionState, mailboxStore as mailboxState, chatStore as chatState } from './features/session-store.js';
+import { sessionStore as sessionState, mailboxStore as mailboxState, chatStore as chatState, uiStore } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1063,6 +1063,12 @@ export default {
     // J.3a: singleton chatStore — state activeChat/currentGroup/activeChatType.
     const chatStore = reactive(chatState)
     const callSession = useSession();
+    // J.3b: init uiStore (t/showToast) через proxy на this.* (i18n plugin + method).
+    // Vue options this.* доступен после монтирования — lazy proxy.
+    const uiT = computed(() => this?.t ?? ((k) => k));
+    const uiToast = computed(() => this?.showToast ?? (() => {}));
+    watch(uiT, (fn) => uiStore.setT(fn), { immediate: true });
+    watch(uiToast, (fn) => uiStore.setShowToast(fn), { immediate: true });
     return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, callSession };
   },
   data() {

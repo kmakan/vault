@@ -75,6 +75,24 @@ export function createMailboxStore() {
   };
 }
 
+// ADR-004 J.3b: owner для UI-утилит (i18n t + showToast — часто-используемые
+// delegates в relay.js/calls.js). Вынос из ctx.* в singleton, чтобы state-machine
+// не зависел от App.vue data-methods (ctx-coupling: 3× t, 3× showToast в relay.js).
+export function createUiStore() {
+  let t = (k) => k;
+  let showToast = () => {};
+  return {
+    setT(fn) { t = fn; },
+    getT() { return t; },
+    setShowToast(fn) { showToast = fn; },
+    getToast() { return showToast; },
+    // удобный прокси для шаблонов/модулей без App-ctx
+    tr(key) { return t(key); },
+    toast(msg, ms) { showToast(msg, ms); },
+  };
+}
+export const uiStore = createUiStore();
+
 // ADR-004 J.3a: owner для UI-чата (быв. data this.activeChat/currentGroup/
 // activeChatType в App.vue). relay.js/calls.js читают через singleton.
 export function createChatStore() {
