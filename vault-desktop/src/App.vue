@@ -889,6 +889,11 @@
 </template>
 
 <script>
+// M3: владелец состояния звонка (ADR-004, Этап C). callSession =
+// reactive(createCallSession()): мутаторы пишут this.state.* через Vue Proxy,
+// поэтому Vue видит изменения. calls.js мутирует состояние через ctx.X,
+// а App.vue роутит это в computed-прокси → callSession.setX().
+import { createCallSession } from './features/call-session.js';
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
@@ -1051,7 +1056,9 @@ export default {
     // Модуль-владелец relay-состояния (ADR-004, Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
     const relayStore = reactive(createRelayStore());
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore };
+    // Владелец состояния звонка (ADR-004, Этап C): вынесено из data().
+    const callSession = reactive(createCallSession());
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, callSession };
   },
   data() {
     return {
@@ -1087,21 +1094,11 @@ export default {
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
       processedUnreadIds: new Set(),
-      // ── Звонки (M3, feature/calls): сигнализация конвертами call_* ──
-      // callState: idle | outgoing_ringing | incoming_ringing | active
-      callState: 'idle',
-      currentCall: null,
-      lastCallId: null,   // { call_id, peer }
-      callMuted: false,
-      callSpeaker: false,
-      // M3: видео — камера + remote-декодер активны.
+      // ── Звонки (M3, feature/calls): состояние вынесено в callSession (ADR-004 C).
+      // Эти поля — не data(), а computed-прокси на this.callSession.*: calls.js и
+      // шаблон пишут this.X, а запись идёт через session.setX() → Vue Proxy.
+      // callVideoOn/callResendTimer/callStartedAt — App-only, остаются в data().
       callVideoOn: false,
-      // Реально ли пошёл звук.
-      // До этого оверлей показывает «Соединение…» вместо таймера.
-      callMediaConnected: false,
-      callClockSec: 0,
-      callClockTimer: null,
-      callRingTimer: null,
       callResendTimer: null,
       // IMAP IDLE (Фаза 1.5): активность/флаг остановки.
       _idleActive: false,
@@ -1115,13 +1112,8 @@ export default {
       // Таймер страховочного быстрого фетча (СПАМ + сигналы звонков, 7с).
       _fastFetchTimer: null,
       _fastFetchBusy: false,
-      // ЗВУКИ ЗВОНКА: WAV-ассеты. Desktop — cpal в Rust
-      // (media_sound_play), Android — HTML5 Audio (элемент держим здесь).
-      callSoundEl: null,
-      // Настройки рингтонов: имена WAV-вариантов
-      // Загружаются из kv_store.
-      callRingtoneIncoming: 'incoming',
-      callRingtoneOutgoing: 'outgoing',
+      // Звонковые таймеры/звук/рингтоны (callSoundEl/callRingtone*) — App-only timer ids
+      // и rineload; callState/currentCall/etc. вынесены в callSession (ADR-004 C).
       // Момент начала текущего звонка — для авто-сброса «зомби» (звонка,
       // зависшего в ringing дольше разумного; см. handleCallSignal).
       callStartedAt: 0,
@@ -1420,6 +1412,77 @@ export default {
     newMessage: {
       get() { return this.chat.state.newMessage; },
       set(v) { this.chat.setDraft(v); },
+    },
+    // ── Прокси состоянию звонка (ADR-004 Этап C) ──
+    // callState/currentCall/… больше не data()-свойства, а proxy на
+    // callSession (reactive(createCallSession())). calls.js и шаблон пишут
+    // this.X — запись идёт через session.setX() → Vue Proxy. Имена совпадают
+    // с именами calls.js (ctx._pendingKemct т.д.) — refactor calls.js НЕ нужен.
+    callState: {
+      get() { return this.callSession.callState; },
+      set(v) { this.callSession.setCallState(v); },
+    },
+    currentCall: {
+      get() { return this.callSession.currentCall; },
+      set(v) { this.callSession.setCurrentCall(v); },
+    },
+    lastCallId: {
+      get() { return this.callSession.lastCallId; },
+      set(v) { this.callSession.setLastCallId(v); },
+    },
+    callMuted: {
+      get() { return this.callSession.callMuted; },
+      set(v) { this.callSession.setMuted(v); },
+    },
+    callSpeaker: {
+      get() { return this.callSession.callSpeaker; },
+      set(v) { this.callSession.setSpeaker(v); },
+    },
+    callMediaConnected: {
+      get() { return this.callSession.callMediaConnected; },
+      set(v) { this.callSession.setCallMediaConnected(v); },
+    },
+    callClockSec: {
+      get() { return this.callSession.callClockSec; },
+      set(v) { this.callSession.setCallClockSec(v); },
+    },
+    callClockTimer: {
+      get() { return this.callSession.callClockTimer; },
+      set(v) { this.callSession.setCallClockTimer(v); },
+    },
+    callRingTimer: {
+      get() { return this.callSession.callRingTimer; },
+      set(v) { this.callSession.setCallRingTimer(v); },
+    },
+    callSoundEl: {
+      get() { return this.callSession.callSoundEl; },
+      set(v) { this.callSession.setSoundEl(v); },
+    },
+    callRingtoneIncoming: {
+      get() { return this.callSession.callRingtoneIncoming; },
+      set(v) { this.callSession.setRingtone('incoming', v); },
+    },
+    callRingtoneOutgoing: {
+      get() { return this.callSession.callRingtoneOutgoing; },
+      set(v) { this.callSession.setRingtone('outgoing', v); },
+    },
+    // legacy underscore-имена: calls.js пишет ctx._pendingKemct/_pendingSenderEk
+    // (владелец скрывает internal — без underscore в session API).
+    _pendingKemct: {
+      get() { return this.callSession.pendingKemct; },
+      set(v) { this.callSession.setPendingKemct(v); },
+    },
+    _pendingSenderEk: {
+      get() { return this.callSession.pendingSenderEk; },
+      set(v) { this.callSession.setPendingSenderEk(v); },
+    },
+    _connLostTimer: {
+      get() { return this.callSession.connLostTimer; },
+      set(v) { this.callSession.setConnLostTimer(v); },
+    },
+    _mediaFallbackTimer: {
+      get() { return this.callSession.mediaFallbackTimer; },
+      set(v) { this.callSession.setMediaFallbackTimer(v); },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
