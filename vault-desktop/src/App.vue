@@ -939,6 +939,7 @@ import * as MsgFormat from './message-format.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
+import * as ContactsLoad from './features/contacts-load.js';
 import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
@@ -2518,37 +2519,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         this.changeEmailLoading = false;
       }
     },
+    // ADR-003 Этап 3: логика склейки адресов — в features/contacts-load.js.
+    // contactAliases при ошибке НЕ затирается (там привязка истории чата):
+    // ради этого функция возвращает null, а не пустой объект.
     async loadContacts() {
-      try {
-        const all = await api.getContacts();
-        // Контакты — общий peer-key store на машину; себя не показываем.
-        let list = (all || []).filter(c => c.email !== this.email);
-        // Смена почты: один ключ может быть привязан к НЕСКОЛЬКИМ
-        // адресам (старый + новый). Показываем только ПОСЛЕДНИЙ адрес —
-        // старый становится псевдонимом (история чата переносится на новый).
-        // Алиасы запоминаем для переноса истории (chat-cache).
-        const byKey = new Map(); // key -> {contact, added_at}
-        const aliasOf = {};      // newEmail -> [oldEmails]
-        for (const c of list) {
-          const k = c.public_key;
-          if (!k) { byKey.set(c.email, { contact: c, added_at: c.added_at || '' }); continue; }
-          const prev = byKey.get(k);
-          if (!prev) { byKey.set(k, { contact: c, added_at: c.added_at || '' }); continue; }
-          // Тот же ключ — выбираем более новый адрес (по added_at), старый — алиас.
-          if ((c.added_at || '') >= (prev.added_at || '')) {
-            (aliasOf[c.email] = aliasOf[c.email] || []).push(prev.contact.email);
-            byKey.set(k, { contact: c, added_at: c.added_at || '' });
-          } else {
-            (aliasOf[prev.contact.email] = aliasOf[prev.contact.email] || []).push(c.email);
-          }
-        }
-        list = [...byKey.values()].map(x => x.contact);
-        this.contactAliases = aliasOf;
-        this.contacts = list;
-      } catch (error) {
-        // /api/contacts may not exist yet
-        this.contacts = [];
-      }
+      const { contacts, contactAliases } = await ContactsLoad.loadContacts(this.email);
+      this.contacts = contacts;
+      if (contactAliases) this.contactAliases = contactAliases;
     },
     // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
     // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по
