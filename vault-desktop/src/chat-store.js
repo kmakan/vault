@@ -46,6 +46,25 @@ export function createChatStore() {
     state: {
       messages: [],
       unreadCounts: {},
+      // Текущий черновик composer (ADR-004 A14). Писателей 2: drafts.js
+      // (restore draft) + send.js (clear после отправки). Остальные — READ.
+      newMessage: '',
+    },
+
+    // ── newMessage / draft (ADR-004 A14) ────────────────────────────────
+    // Текст сообщения, которое пользователь набирает в composer. Владелец
+    // гарантирует: drafts.js и send.js пишут через setDraft/clearDraft, а не
+    // напрямую. READ в template/send.js/drafts.js — через computed proxy.
+    setDraft(text) {
+      this.state.newMessage = text == null ? '' : String(text);
+      return this.state.newMessage;
+    },
+    getDraft() {
+      return this.state.newMessage;
+    },
+    clearDraft() {
+      this.state.newMessage = '';
+      return this.state.newMessage;
     },
 
     // ── unreadCounts (ADR-004 A11) ────────────────────────────────────────────

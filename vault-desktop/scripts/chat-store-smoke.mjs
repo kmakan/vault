@@ -114,6 +114,14 @@ ok('setUnread заменяет бакет целиком', (u.setUnread({ a: 1, 
 ok('clearAllUnread сбрасывает всё', (u.clearAllUnread(), JSON.stringify(u.state.unreadCounts) === '{}'));
 ok('incUnread атомарен: 3-кратный вызов даёт 3', (u.incUnread('c'), u.incUnread('c'), u.incUnread('c'), u.unreadOf('c') === 3));
 
+// ── newMessage / draft (ADR-004 A14) ──
+const d = createChatStore();
+ok('newMessage стартует пустым', d.state.newMessage === '');
+ok('getDraft пустой → ""', d.getDraft() === '');
+ok('setDraft пишет', d.setDraft('привет') === 'привет' && d.getDraft() === 'привет');
+ok('setDraft(null) → "" (не краш)', d.setDraft(null) === '' && d.getDraft() === '');
+ok('clearDraft сбрасывает', (d.setDraft('x'), d.clearDraft(), d.getDraft() === ''));
+
 console.log('── гейт: владелец ни от чего снаружи не зависит ──');
 const body = readFileSync(path.join(ROOT, 'src', 'chat-store.js'), 'utf8');
 const imports = [...body.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);

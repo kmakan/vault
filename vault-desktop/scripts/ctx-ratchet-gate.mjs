@@ -95,6 +95,11 @@ const OWNER_FIELDS = new Set([
   'isRelayEnabled',
   'setRelayMode',
   'deliveryMode',
+  // A14: newMessage draft owner API (chat-store.js)
+  'newMessage',
+  'setDraft',
+  'getDraft',
+  'clearDraft',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

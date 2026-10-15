@@ -1139,7 +1139,7 @@ export default {
       contacts: [],
       contactAliases: {},
       activeChat: null,
-      newMessage: '',
+      // newMessage — черновик composer, теперь proxy на chat-store (A14).
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
       // слать копию письма. Теперь во владельце sending-store (ADR-004, A10).
       // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
@@ -1414,6 +1414,12 @@ export default {
     relayDeliveryMode: {
       get() { return this.relayStore.state.relayDeliveryMode; },
       set(v) { this.relayStore.setRelayMode(v); },
+    },
+    // Прокси черновику composer (ADR-004 Этап A14). newMessage больше не
+    // data()-свойство, а proxy на chat-store.state.newMessage.
+    newMessage: {
+      get() { return this.chat.state.newMessage; },
+      set(v) { this.chat.setDraft(v); },
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
@@ -3436,6 +3442,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     isRelayEnabled() { return this.relayStore.isRelayEnabled(); },
     setRelayMode(mode) { return this.relayStore.setRelayMode(mode); },
     deliveryMode() { return this.relayStore.deliveryMode(); },
+    // Прокси черновику composer (ADR-004 Этап A14). features/* читают proxy
+    // this.newMessage; writers — через ctx.setDraft/clearDraft.
+    setDraft(text) { return this.chat.setDraft(text); },
+    getDraft() { return this.chat.getDraft(); },
+    clearDraft() { return this.chat.clearDraft(); },
     // Тонкие прокси во владельца непрочитанных (ADR-004 Этап A11).
     // unreadOf уже определён ниже (читает через this.unreadCounts proxy).
     incUnread(chatKey) { return this.chat.incUnread(chatKey); },

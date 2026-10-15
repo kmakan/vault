@@ -89,6 +89,10 @@ function makeCtx(over = {}) {
   ctx.removePendingOutgoing = (chatId, msgId) => { const b = ctx.pendingOutgoing[chatId]; if (b && Object.prototype.hasOwnProperty.call(b, msgId)) { delete b[msgId]; } return b; };
   ctx.clearPendingOutgoing = () => { ctx.pendingOutgoing = {}; return ctx.pendingOutgoing; };
   ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
+  // A14: newMessage draft owner stubs — пишем в data для чтения в тестах.
+  ctx.setDraft = (text) => { ctx.newMessage = text == null ? '' : String(text); return ctx.newMessage; };
+  ctx.getDraft = () => ctx.newMessage;
+  ctx.clearDraft = () => { ctx.newMessage = ''; return ctx.newMessage; };
   return ctx;
 }
 

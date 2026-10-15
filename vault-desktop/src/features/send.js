@@ -76,7 +76,7 @@ export async function sendMessage(ctx) {
         }
         // Очищаем поле и ответ СРАЗУ — SMTP медленный (30–60 с), UI не должен
         // ждать завершения отправки, чтобы поле опустело.
-        ctx.newMessage = '';
+        ctx.clearDraft();
         ctx.cancelReply();
         ctx.saveDraft(); // поле пусто — черновик этого чата стираем
 

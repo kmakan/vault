@@ -45,7 +45,7 @@ export async function restoreDraft(ctx, chatKey) {
     try {
       const raw = await db.kvGet(await accountNamespace(ctx.email), 'drafts');
       const drafts = raw ? JSON.parse(raw) : {};
-      ctx.newMessage = drafts[chatKey] || '';
+      ctx.setDraft(drafts[chatKey] || '');
     } catch (e) { /* ignore */ }
   });
 }

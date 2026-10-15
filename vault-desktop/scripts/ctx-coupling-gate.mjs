@@ -64,6 +64,8 @@ const OWNER_FIELDS = new Set([
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
   // A13: relay-store.js owner API (ecoMode/relayEnabled/relayDeliveryMode)
   'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
+  // A14: newMessage draft owner API (chat-store.js)
+  'newMessage', 'setDraft', 'getDraft', 'clearDraft',
 ]);
 
 
