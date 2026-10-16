@@ -1223,9 +1223,8 @@ export default {
       // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
       ecoAutonomous: false,
       relayOfflineSince: null,
-      showKeyManager: false,
-      showQRCode: false,
-      showCipher: false,
+      // UI toggle flags (showKeyManager/showQRCode/showCipher) inj
+      // uiStore.modalFlags (J.5b/J.7 proxy).
       // searchQueryinj в uiStore (J.5b).
       // Groups
       groups: [],
@@ -1402,6 +1401,9 @@ export default {
     showCreateChannel: { get() { return uiStore.getModal('showCreateChannel'); }, set(v) { uiStore.setModal('showCreateChannel', v); } },
     showJoinChannel: { get() { return uiStore.getModal('showJoinChannel'); }, set(v) { uiStore.setModal('showJoinChannel', v); } },
     postingChannel: { get() { return uiStore.getModal('postingChannel'); }, set(v) { uiStore.setModal('postingChannel', v); } },
+    showKeyManager: { get() { return uiStore.getModal('showKeyManager'); }, set(v) { uiStore.setModal('showKeyManager', v); } },
+    showQRCode: { get() { return uiStore.getModal('showQRCode'); }, set(v) { uiStore.setModal('showQRCode', v); } },
+    showCipher: { get() { return uiStore.getModal('showCipher'); }, set(v) { uiStore.setModal('showCipher', v); } },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.
     // Геттеры сохраняют обратную совместимость для чтения; запись — через API.
