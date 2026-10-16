@@ -21,6 +21,8 @@ android_logger = "0.14"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# M1.9: vault-client crate (reusable message core: MessageStore, attachments, classify)
+vault-client = { path = "../../vault-client" }
 
 # Encryption
 chacha20poly1305 = "0.10"

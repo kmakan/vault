@@ -23,6 +23,24 @@ pub enum ClassifyKind {
     Unknown,
 }
 
+impl std::fmt::Display for ClassifyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ClassifyKind::Message => "message",
+                ClassifyKind::Profile => "profile",
+                ClassifyKind::Presence => "presence",
+                ClassifyKind::Call => "call",
+                ClassifyKind::KeyExchange => "keyexchange",
+                ClassifyKind::Receipt => "receipt",
+                ClassifyKind::Unknown => "unknown",
+            }
+        )
+    }
+}
+
 /// Result of classifying an incoming envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifyResult {

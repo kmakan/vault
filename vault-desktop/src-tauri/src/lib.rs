@@ -146,6 +146,9 @@ pub(crate) fn service_monitor_ensure_ctx(env: &mut jni::JNIEnv, context: &jni::o
     service_monitor::ensure_ndk_context(env, context);
 }
 
+/// M1.9: Bridge — vault-client reusable core (MessageStore, attachments, classify).
+mod vault_bridge;
+
 pub mod voicenote;
 
 use credential_store::StoredCredentials;
@@ -2067,6 +2070,8 @@ pub fn run() {
         .manage(EmailState::default())
         .manage(IdleMonitor::default())
         .manage(tokio::sync::Mutex::new(media::CallMediaManager::new()))
+        // M1.9: vault-client core singleton state.
+        .manage(vault_bridge::VaultBridgeState::default())
         .invoke_handler(tauri::generate_handler![
             generate_keypair,
             encrypt_message,
@@ -2206,6 +2211,9 @@ pub fn run() {
             push_set,
             voicenote::voicenote_play,
             voicenote::voicenote_stop,
+            // M1.9: vault-client core bridge (MessageStore classify + store).
+            vault_bridge::vault_classify_incoming,
+            vault_bridge::vault_store_incoming_message,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a
