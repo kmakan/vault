@@ -1476,6 +1476,35 @@ fn db_body_cache_set(account: String, cache_key: String, body: String) -> Result
 }
 
 #[tauri::command]
+fn call_seen_is(email: String, call_id: String) -> Result<bool, String> {
+    open_db()?
+        .kv_get(&email, "call-seen")
+        .map(|opt| {
+            opt.and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+                .map(|set| set.iter().any(|id| id == &call_id))
+                .unwrap_or(false)
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn call_seen_remember(email: String, call_id: String) -> Result<(), String> {
+    let mut set: Vec<String> = open_db()?
+        .kv_get(&email, "call-seen")
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default();
+    if !set.contains(&call_id) {
+        set.push(call_id);
+        if set.len() > 100 { set = set[set.len() - 100..].to_vec(); }
+    }
+    open_db()?
+        .kv_set(&email, "call-seen", &serde_json::to_string(&set).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn db_body_cache_get(account: String, cache_key: String) -> Result<Option<String>, String> {
     open_db()?
         .body_cache_get(&account, &cache_key)

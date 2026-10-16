@@ -65,6 +65,14 @@ const db = {
     invoke('db_kv_get', { account, key }),
   kvDelete: (account, key) =>
     invoke('db_kv_delete', { account, key }),
+
+  // Call deduplication: persist last 100 call_id per account (KV "call-seen").
+  // Backend owner: Tauri cmd `call_seen_is`/`call_seen_remember` (src-tauri/src/lib.rs).
+  callSeenIs: (email, callId) =>
+    invoke('call_seen_is', { email, callId }),
+  callSeenRemember: (email, callId) =>
+    invoke('call_seen_remember', { email, callId }),
+
   emailsSave: (account, emailsJson) =>
     invoke('db_emails_save', { account, emailsJson }),
   emailsLoad: (account) =>

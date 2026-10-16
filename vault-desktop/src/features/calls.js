@@ -62,27 +62,11 @@ export function setPendingNativeCallDecision(action) {
 // call_id обработанного звонка (request/accept/end/reject). После
 // перезапуска не даёт старым конвертам снова дёргать state machine.
 export async function isCallSeen(email, callId) {
-  try {
-    const raw = await db.kvGet(await accountNamespace(email), 'call-seen');
-    const set = raw ? new Set(JSON.parse(raw)) : new Set();
-    return set.has(callId);
-  } catch (e) { return false; }
+  return await api.callSeenIs(email, callId);
 }
 
 export async function rememberCallSeen(email, callId) {
-  try {
-    const raw = await db.kvGet(await accountNamespace(email), 'call-seen');
-    const set = raw ? new Set(JSON.parse(raw)) : new Set();
-    set.add(callId);
-    // Храним последние 100 call_id (старые не нужны)
-    if (set.size > 100) {
-      const arr = Array.from(set);
-      arr.splice(0, arr.length - 100);
-      await db.kvSet(await accountNamespace(email), 'call-seen', JSON.stringify(arr));
-    } else {
-      await db.kvSet(await accountNamespace(email), 'call-seen', JSON.stringify(Array.from(set)));
-    }
-  } catch (e) { /* тихо */ }
+  await api.callSeenRemember(email, callId);
 }
 
 // ── Длительность гудка (настройка «Звонки») ────────────────────

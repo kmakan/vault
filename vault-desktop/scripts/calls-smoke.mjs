@@ -58,6 +58,10 @@ const apiMock = {
   mediaSetSpeaker: async (id, v) => { apiMock.calls.push(['setSpeaker', id, v]); },
   mediaSoundPlay: (name, loop) => { apiMock.calls.push(['soundPlay', name, loop]); },
   mediaSoundStop: async () => { apiMock.calls.push(['soundStop']); },
+  // call-seen dedup — Tauri cmd owner (call_seen_is/call_seen_remember)
+  seen: new Set(),
+  callSeenIs: async (email, callId) => apiMock.seen.has(`${email}:${callId}`),
+  callSeenRemember: async (email, callId) => { apiMock.seen.add(`${email}:${callId}`); apiMock.calls.push(['callSeenRemember', email, callId]); },
 };
 const dbMock = {
   kv: new Map(),
@@ -196,21 +200,22 @@ const toasts = [];
 // ── 1. Дедуп call-seen ─────────────────────────────────────────
 console.log('1. Дедуп звонков (kv call-seen)');
 {
-  dbMock.kv.clear();
+  apiMock.seen = new Set();
   const ctx = makeCtx();
   check('isCallSeen несуществующего → false', (await C.isCallSeen(seenEmail(ctx), 'c1')) === false);
   await C.rememberCallSeen(seenEmail(ctx), 'c1');
   check('remember→isCallSeen roundtrip', (await C.isCallSeen(seenEmail(ctx), 'c1')) === true);
-  // лимит 100: старые вытесняются
+  // лимит 100: старые вытесняются (Tauri cmd truncates to last 100 internally)
+  apiMock.seen = new Set();
   for (let i = 0; i < 120; i++) await C.rememberCallSeen(seenEmail(ctx), 'x' + i);
-  const raw = JSON.parse(dbMock.kv.get('call-seen'));
-  check('лимит 100 call_id', raw.length === 100 && !raw.includes('c1'));
-  // сбой kv — тихо
-  const origGet = dbMock.kvGet;
-  dbMock.kvGet = async () => { throw new Error('kv down'); };
-  check('сбой kv → isCallSeen false', (await C.isCallSeen(seenEmail(ctx), 'zz')) === false);
+  const stored = Array.from(apiMock.seen).map(k => k.split(':')[1]);
+  check('лимит 100 call_id (Tauri truncate)', stored.length === 100 && !stored.includes('c1'));
+  // сбой api — тихо
+  const orig = apiMock.callSeenIs;
+  apiMock.callSeenIs = async () => { throw new Error('api down'); };
+  check('сбой api → isCallSeen false', (await C.isCallSeen(seenEmail(ctx), 'zz')) === false);
   await C.rememberCallSeen(seenEmail(ctx), 'zz'); // не бросается
-  dbMock.kvGet = origGet;
+  apiMock.callSeenIs = orig;
 }
 
 // ── 2. parseCallSignal ─────────────────────────────────────────

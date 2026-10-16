@@ -962,9 +962,9 @@ import * as RestoreFailure from './features/restore-failure.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
-// ADR-004 J.3c: mailbox-store owner для emailsLoading/emailError.
+// ADR-004 J.3c: mailbox-loading owner для emailsLoading/emailError.
+import { mailboxState as mailboxLoading } from './features/mailbox-store.js';
 import { contactsStore } from './features/contacts-store.js';
-import { mailboxState } from './features/mailbox-store.js';
 // ADR-004 J.6: identity-store owner для peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded.
 import { identityStore } from './features/identity-store.js';
 // ADR-004 J.5d: channels-store owner для channelPosts/channelUnread.
@@ -1068,6 +1068,7 @@ export default {
     // relay.js state-machine. App.vue оборачивает reactive() для шаблона.
     const relayStore = reactive(relayState)
     const mailboxStore = reactive(mailboxState)
+    const mailboxLoading = reactive(mailboxState)  // J.7: reactive wrapper для emailsLoading/emailError (loading-флаги, шаблон v-if)
     // J.3a: singleton chatStore — state activeChat/currentGroup/activeChatType.
     const chatStore = reactive(chatState)
     // J.7: messages-store (ephemeral state) — reactive wrapper для re-render в шапке.
@@ -1185,8 +1186,6 @@ export default {
       pinnedPreview: '',
       // Стрелка «вниз к последним сообщениям» в длинных чатах.
       // showJumpToBottominj в uiStore.modalFlags (J.7):
-      // Сообщение, которое сейчас редактируется (только своё).
-      editingMessage: null,
       // showSettings/showMembersinj в uiStore.modalFlags (J.7):
       // showMembersinj в uiStore.modalFlags (J.7):
       // restoringSessioninj в session-store.state (J.3a).
@@ -1276,8 +1275,7 @@ export default {
       // add-member form inj в uiStore.formState (J.5b).
       // Список участников группы (модалка по клику на счётчик)
       // showMembersListinj в uiStore.modalFlags (J.7):
-      // Полноэкранный просмотр изображения-вложения
-      viewingImage: null,
+      // Полноэкранный просмотр изображения-вложения inj в messages-store.state (J.7).
       // Profile cache (имя/аватар из настроек)
       profiles: {},
       // Emoji
@@ -1349,12 +1347,22 @@ export default {
       set(v) { Object.assign(contactsStore.state.lastSeenMap, v || {}); },
     },
     // emails-loadinginj в mailbox-store.state (J.3c):
-    emailsLoading: { get() { return this.mailboxStore.state.emailsLoading; }, set(v) { this.mailboxStore.state.emailsLoading = v; } },
-    emailError: { get() { return this.mailboxStore.state.emailError; }, set(v) { this.mailboxStore.state.emailError = v; } },
+    emailsLoading: { get() { return mailboxLoading.state.emailsLoading; }, set(v) { mailboxLoading.state.emailsLoading = v; } },
+    emailError: { get() { return mailboxLoading.state.emailError; }, set(v) { mailboxLoading.state.emailError = v; } },
     // Прокси во владельца ephemeral state (ADR-004 J.7):
     ephemeralTimers: { get() { return this.messagesStore.state.ephemeralTimers; }, set(v) { Object.assign(this.messagesStore.state.ephemeralTimers, v || {}); } },
     ephemeralTick: { get() { return this.messagesStore.state.ephemeralTick; }, set(v) { this.messagesStore.state.ephemeralTick = v; } },
     currentEphemeralTtl: { get() { return this.messagesStore.state.currentEphemeralTtl; }, set(v) { this.messagesStore.setCurrentTtl(v); } },
+    // Прокси во владелец редактора/просмотра (ADR-004 J.7):
+    // send.js читает ctx.editingMessage = this.editingMessage = proxy → owner.state.
+    editingMessage: {
+      get() { return this.messagesStore.state.editingMessage; },
+      set(v) { this.messagesStore.setEditingMessage(v); },
+    },
+    viewingImage: {
+      get() { return this.messagesStore.state.viewingImage; },
+      set(v) { this.messagesStore.setViewingImage(v); },
+    },
     // Прокси во владельца переписки (ADR-004, Этап A1).
     // Все существующие this.messages = ... и this.messages в шаблоне продолжают
     // работать без изменений, но запись идёт через владельца.
@@ -1469,8 +1477,8 @@ export default {
     // emails = загруженные сообщения (быв data this.emails); relay.js пишет
     // через mailboxStore.state.emails — App.vue читает тот же объект через proxy.
     emails: {
-      get() { return mailboxState.state.emails; },
-      set(v) { mailboxState.setEmails(v); },
+      get() { return this.mailboxStore.state.emails; },
+      set(v) { this.mailboxStore.setEmails(v); },
     },
     // Прокси во владельца каналов (ADR-004 J.5d):
     // J.5d/J.7: channels-store owner для channelPosts/channelUnread/channelAvatars.

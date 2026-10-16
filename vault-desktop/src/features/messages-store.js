@@ -8,10 +8,14 @@ export function createMessagesStore() {
     ephemeralTimers: {},   // { msgKey: timeoutId }, msgKey = chatId + ':' + msgId
     ephemeralTick: 0,      // re-render trigger для индикатора TTL в шапке
     currentEphemeralTtl: 0,// выбранный TTL для 1-на-1 / группы (сек)
+    editingMessage: null,  // ADR-004 J.7: msg, редактируемый в данный момент (send.js читает ctx.editingMessage)
+    viewingImage: null,    // ADR-004 J.7: вложение, показываемое на весь экран (openImageViewer/closeImageViewer)
   };
   return {
     state,
     tick() { state.ephemeralTick += 1; },
+    setEditingMessage(v) { state.editingMessage = v; },
+    setViewingImage(v) { state.viewingImage = v; },
     hasTimer(key) { return !!state.ephemeralTimers[key]; },
     setTimer(key, fn, ms) { state.ephemeralTimers[key] = setTimeout(fn, ms); },
     clearTimer(key) {

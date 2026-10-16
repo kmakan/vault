@@ -84,6 +84,8 @@ const OWNER_FIELDS = new Set([
   'setLastSeen', 'getLastSeen', 'lastSeenMap',
   // J.7: messages-store.js owner API (ephemeral state)
   'tick', 'setTimer', 'hasTimer', 'clearTimer', 'clearAllTimers', 'setCurrentTtl', 'getCurrentTtl',
+    // J.7: editingMessage/viewingImage owner API (messages-store.js)
+    'setEditingMessage', 'setViewingImage',
   // J.3c: mailbox-store.js state fields (emails.js ctx.* через computed proxy)
   'emailsLoading', 'emailError',
 ]);
