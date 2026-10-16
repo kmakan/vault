@@ -1263,9 +1263,7 @@ export default {
       ],
       // Восстановление аккаунта на экране входа (Key Recovery)
       // showRecoveryinj в uiStore.modalFlags (J.7):
-      recoveryWordsInput: '',
-      recoveryFileJson: '',
-      recoveryFileName: '',
+      // recovery-form fields inj в uiStore.formState (J.5b).
       // Group Settings
       // showGroupSettingsinj в uiStore.modalFlags (J.7):
       // Invite popup (приглашение в группу с согласием)
@@ -1281,8 +1279,7 @@ export default {
       handledContactKeys: [],
       // Add-member popup (выбор контактов, мульти-выбор)
       // showAddMemberPopupinj в uiStore.modalFlags (J.7):
-      addMemberQuery: '',
-      addMemberSelected: [],
+      // add-member form inj в uiStore.formState (J.5b).
       // Список участников группы (модалка по клику на счётчик)
       // showMembersListinj в uiStore.modalFlags (J.7):
       // Полноэкранный просмотр изображения-вложения
@@ -1404,6 +1401,12 @@ export default {
       get() { return uiStore.getFormField('newGroupAvatar'); },
       set(v) { uiStore.setFormField('newGroupAvatar', v); },
     },
+    // form-stateinj в uiStore.formState (J.5b): recovery-form + add-member:
+    recoveryWordsInput: { get() { return uiStore.getFormField('recoveryWordsInput'); }, set(v) { uiStore.setFormField('recoveryWordsInput', v); } },
+    recoveryFileJson: { get() { return uiStore.getFormField('recoveryFileJson'); }, set(v) { uiStore.setFormField('recoveryFileJson', v); } },
+    recoveryFileName: { get() { return uiStore.getFormField('recoveryFileName'); }, set(v) { uiStore.setFormField('recoveryFileName', v); } },
+    addMemberQuery: { get() { return uiStore.getFormField('addMemberQuery'); }, set(v) { uiStore.setFormField('addMemberQuery', v); } },
+    addMemberSelected: { get() { return uiStore.getFormField('addMemberSelected'); }, set(v) { uiStore.setFormField('addMemberSelected', v); } },
     // UI toggle flagsinj в uiStore.modalFlags (J.5b):
     showChannelPanel: { get() { return uiStore.getModal('showChannelPanel'); }, set(v) { uiStore.setModal('showChannelPanel', v); } },
     showCreateChannel: { get() { return uiStore.getModal('showCreateChannel'); }, set(v) { uiStore.setModal('showCreateChannel', v); } },

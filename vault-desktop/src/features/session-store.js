@@ -102,6 +102,12 @@ export function createUiStore() {
     joinChannelLink: '',
     newGroupName: '',
     newGroupAvatar: '',
+    // J.7: recovery-form + add-member-form fields inj форм-владельцу uiStore.
+    recoveryWordsInput: '',
+    recoveryFileJson: '',
+    recoveryFileName: '',
+    addMemberQuery: '',
+    addMemberSelected: [],
   };
   // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
   const modalFlags = {
