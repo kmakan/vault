@@ -114,6 +114,8 @@ export function createUiStore() {
     addMemberSelected: [],
     invitePopupIndex: 0,
     contactPopupIndex: 0,
+    // J.7: chat-search-form inj uiStore.formState.
+    chatSearchQuery: '',
     // J.7: login/server-form fields inj форм-владельцу uiStore.formState.
     rememberMe: true,
     imapServer: '',
@@ -144,6 +146,7 @@ export function createUiStore() {
     showEmojiPicker: false,
     showSettings: false,
     showMembers: false,
+    showChatSearch: false,
   };
   let toastMessage = '';
   let toastTimer = null;

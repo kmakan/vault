@@ -1286,8 +1286,8 @@ export default {
       reactionPickerMsgId: null,
       quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
       // Search in chat
-      chatSearchQuery: '',
-      showChatSearch: false,
+      // chatSearchQueryinj в uiStore.formState (J.5b).
+      // showChatSearchinj в uiStore.modalFlags (J.7):
       // Create group modal
       // showCreateGroupinj в uiStore.modalFlags (J.7):
       inviteEmail: '',
@@ -1406,6 +1406,7 @@ export default {
     addMemberSelected: { get() { return uiStore.getFormField('addMemberSelected'); }, set(v) { uiStore.setFormField('addMemberSelected', v); } },
     invitePopupIndex: { get() { return uiStore.getFormField('invitePopupIndex'); }, set(v) { uiStore.setFormField('invitePopupIndex', v); } },
     contactPopupIndex: { get() { return uiStore.getFormField('contactPopupIndex'); }, set(v) { uiStore.setFormField('contactPopupIndex', v); } },
+    chatSearchQuery: { get() { return uiStore.getFormField('chatSearchQuery'); }, set(v) { uiStore.setFormField('chatSearchQuery', v); } },
     // login/server-form fieldsinj в uiStore.formState (J.5b):
     rememberMe: { get() { return uiStore.getFormField('rememberMe'); }, set(v) { uiStore.setFormField('rememberMe', v); } },
     imapServer: { get() { return uiStore.getFormField('imapServer'); }, set(v) { uiStore.setFormField('imapServer', v); } },
@@ -1435,6 +1436,7 @@ export default {
     showEmojiPicker: { get() { return uiStore.getModal('showEmojiPicker'); }, set(v) { uiStore.setModal('showEmojiPicker', v); } },
     showSettings: { get() { return uiStore.getModal('showSettings'); }, set(v) { uiStore.setModal('showSettings', v); } },
     showMembers: { get() { return uiStore.getModal('showMembers'); }, set(v) { uiStore.setModal('showMembers', v); } },
+    showChatSearch: { get() { return uiStore.getModal('showChatSearch'); }, set(v) { uiStore.setModal('showChatSearch', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },
