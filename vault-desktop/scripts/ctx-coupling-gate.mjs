@@ -79,6 +79,8 @@ const OWNER_FIELDS = new Set([
   'setChannelPosts', 'addChannelPosts', 'getChannelPosts',
   'setUnread', 'clearUnread', 'setChannelAvatar', 'getChannelAvatar',
   'setCurrentChannel',
+  // J.5a: contacts-store.js owner API (contacts/contactAliases/lastSeenMap)
+  'setLastSeen', 'getLastSeen', 'lastSeenMap',
 ]);
 
 

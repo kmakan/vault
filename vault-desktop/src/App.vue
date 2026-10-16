@@ -1250,7 +1250,7 @@ export default {
       // myBioinj в session-store (J.3a).
       // Зелёная точка: email → ts последней активности контакта
       // (входящее письмо/квитанция). Не онлайн-статус: «видели за 10 мин».
-      lastSeenMap: {},
+      // lastSeenMapinj в contacts-store (J.5a).
       // Экспериментальные функции: флаг звонков
       expCalls: false,
       ephemeralOptions: [
@@ -1350,6 +1350,11 @@ export default {
     contactAliases: {
       get() { return contactsStore.state.contactAliases; },
       set(v) { contactsStore.state.contactAliases = v; },
+    },
+    // J.5a: lastSeenMap (green-dot presence) в contacts-store.state.
+    lastSeenMap: {
+      get() { return contactsStore.state.lastSeenMap; },
+      set(v) { Object.assign(contactsStore.state.lastSeenMap, v || {}); },
     },
     // Прокси во владельца переписки (ADR-004, Этап A1).
     // Все существующие this.messages = ... и this.messages в шаблоне продолжают
@@ -1453,6 +1458,9 @@ export default {
     currentChannel: {
       get() { return channelsStore.state.currentChannel; },
     },
+    // Прокси во владельца контактов (ADR-004 J.5a):
+    // contacts/contactAliases вынесены inject data() в contacts-store.
+    // presence.js/profiles.js читают через ctx.lastSeenMap (computed proxy).
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
     // identity-store. calls.js/forward.js читают через ctx.peerKeys (computed).
