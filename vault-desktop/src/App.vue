@@ -962,7 +962,7 @@ import * as RestoreFailure from './features/restore-failure.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
-import * as ContactsLoad from './features/contacts-load.js';
+import { contactsStore } from './features/contacts-store.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
 import * as GroupsClone from './features/groups-clone.js';
@@ -1136,10 +1136,9 @@ export default {
       newPassword: '',
       changeEmailLoading: false,
       changeEmailError: '',
-      contacts: [],
-      contactAliases: {},
-      // activeChat/currentGroup/activeChatType — proxy на chat-store (J.3a).
-      // newMessage — черновик composer (A14).
+      // ADR-004 J.5a: contacts/contactAliases владеются contactsStore; proxy через computed.
+      // contactAliases при ошибке НЕ затирается (история чата привязана к каноническому email).
+
       // Анти-дубль отправки: SMTP медленный, повторный Enter/клик не должен
       // слать копию письма. Теперь во владельце sending-store (ADR-004, A10).
       // Анти-дубль ПОСЛЕ завершения отправки: если тот же текст ушёл в этот
@@ -1355,6 +1354,15 @@ export default {
     }
   },
   computed: {
+    // ADR-004 J.5a: proxy на contactsStore (быв. this.contacts в data).
+    contacts: {
+      get() { return contactsStore.state.contacts; },
+      set(v) { contactsStore.state.contacts = v; },
+    },
+    contactAliases: {
+      get() { return contactsStore.state.contactAliases; },
+      set(v) { contactsStore.state.contactAliases = v; },
+    },
     // Прокси во владельца переписки (ADR-004, Этап A1).
     // Все существующие this.messages = ... и this.messages в шаблоне продолжают
     // работать без изменений, но запись идёт через владельца.
@@ -2704,9 +2712,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // contactAliases при ошибке НЕ затирается (там привязка истории чата):
     // ради этого функция возвращает null, а не пустой объект.
     async loadContacts() {
-      const { contacts, contactAliases } = await ContactsLoad.loadContacts(this.email);
-      this.contacts = contacts;
-      if (contactAliases) this.contactAliases = contactAliases;
+      // ADR-004 J.5a: proxy на contactsStore singleton owner.
+      await contactsStore.loadContacts(this.email);
+      this.contacts = contactsStore.state.contacts;
+      this.contactAliases = contactsStore.state.contactAliases;
     },
     // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
     // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по

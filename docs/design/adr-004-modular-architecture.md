@@ -194,6 +194,41 @@ DOM-ручки, и в `data()` им не место.
 Запрет на импорт фичи из фичи, кроме явного списка примитивов. Сейчас таких
 случаев 7.
 
+## Этап J — вынос transport/состояний в singleton-owner'ы (capability-интерфейсы in practice)
+
+ADR-004 требует: зависимость объявлять явно (узкий список), а не весь `ctx`/App.
+Этот этап реализует Этап B ADR-004 на живых feature-модулях — состояния,
+которыми владеет транспорт/контекст, выносятся в singleton-owner'ы.
+
+### J.4 — mailbox-api (mailbox singleton owner)
+- **Новый файл** `features/mailbox-api.js`: владелец `ctx.*`-method-delegates
+  (`processIncoming`/`loadCursors`/`saveCursors`/`loadMessages`/`loadGroups`/`loadEmails`/
+  `loadGroupMessages`/`scrollToBottom`/`cacheBody`/`saveCursors`).
+- relay.js импортирует `mailboxApi.*` directly → state-machine **отвязана от App.ctx**.
+- Lazy `import()` feature-модулей разрывает цикл
+  `mailbox-api → incoming/emails/groups/messages → relay → mailbox-api`.
+- `mailboxApi.makeCtx()` передаёт minimal projection (store-derived + delegate closures).
+
+**Результат**: relay.js — 0 `ctx.*` method refs; ctx-coupling **885** (−336 от 1221);
+ctx-ratchet **986** (потолок 1225); ctx-cycles **0**; smoke **90/90**.
+
+### J.5a — contacts-store (contacts singleton owner)
+- **Новый файл** `features/contacts-store.js`: owner полей `contacts`, `contactAliases`
+  (быв. `App.data`).
+- App.vue: `this.contacts`/`this.contactAliases` → `computed` proxy на `contactsStore.state`;
+  `this.loadContacts()` → `contactsStore.loadContacts()` (6 refs).
+- `contactAliases` при ошибке НЕ затирается (история чата привязана к каноническому email) —
+  гарантировано `null`-check в store.
+
+**Результат**: build OK (506ms); smoke **12/12** contacts-load, **141/141** recovery-session;
+ctx-coupling **885** (без regression); cycles **0**.
+
+### J.5b — uiStore (t/toast/scroll state)
+- Следующий шаг: вынести `this.t(76 refs)`, `this.showToast(33)`, `this.scrollToBottom(6)`
+  из App.vue в `features/ui-store.js`. App.vue `this.t/toast/scrollToBottom` → proxy
+  через computed. Цель: ctx-ratchet ≤ 920.
+
+
 ## Критерий готовности
 
 Модуль считается независимым, если выполняются все четыре:
