@@ -1184,7 +1184,7 @@ export default {
       pinnedMsgId: null,
       pinnedPreview: '',
       // Стрелка «вниз к последним сообщениям» в длинных чатах.
-      showJumpToBottom: false,
+      // showJumpToBottominj в uiStore.modalFlags (J.7):
       // Сообщение, которое сейчас редактируется (только своё).
       editingMessage: null,
       // showSettings/showMembersinj в uiStore.modalFlags (J.7):
@@ -1284,7 +1284,7 @@ export default {
       // showEmojiPickerinj в uiStore.modalFlags (J.7):
       // Reactions
       reactionPickerMsgId: null,
-      quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
+      // quickReactionsinj в session-store.state (J.7):
       // Search in chat
       // chatSearchQueryinj в uiStore.formState (J.5b).
       // showChatSearchinj в uiStore.modalFlags (J.7):
@@ -1437,6 +1437,7 @@ export default {
     showSettings: { get() { return uiStore.getModal('showSettings'); }, set(v) { uiStore.setModal('showSettings', v); } },
     showMembers: { get() { return uiStore.getModal('showMembers'); }, set(v) { uiStore.setModal('showMembers', v); } },
     showChatSearch: { get() { return uiStore.getModal('showChatSearch'); }, set(v) { uiStore.setModal('showChatSearch', v); } },
+    showJumpToBottom: { get() { return uiStore.getModal('showJumpToBottom'); }, set(v) { uiStore.setModal('showJumpToBottom', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },
@@ -1519,6 +1520,8 @@ export default {
     restoringSession: { get() { return this.sessionStore.state.restoringSession; }, set(v) { this.sessionStore.state.restoringSession = v; } },
     loginLoading: { get() { return this.sessionStore.state.loginLoading; }, set(v) { this.sessionStore.state.loginLoading = v; } },
     loginError: { get() { return this.sessionStore.state.loginError; }, set(v) { this.sessionStore.state.loginError = v; } },
+    // J.7: UI constants inj session-store.state:
+    quickReactions: { get() { return this.sessionStore.state.quickReactions; } },
     activeChatType: {
       get() { return chatStore.state.activeChatType; },
       set(v) { chatStore.state.activeChatType = v; },

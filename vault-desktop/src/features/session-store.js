@@ -27,6 +27,8 @@ export function createSessionStore() {
     restoringSession: false,
     loginLoading: false,
     loginError: '',
+    // J.7: UI constants (быв. App.data quickReactions).
+    quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
   };
 
   return {
@@ -147,6 +149,7 @@ export function createUiStore() {
     showSettings: false,
     showMembers: false,
     showChatSearch: false,
+    showJumpToBottom: false,
   };
   let toastMessage = '';
   let toastTimer = null;

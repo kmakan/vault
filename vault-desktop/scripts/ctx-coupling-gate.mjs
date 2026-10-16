@@ -64,7 +64,7 @@ const OWNER_FIELDS = new Set([
   // A12: session-store.js owner API (isLoggedIn + emails + ui: searchQuery/modalFlags)
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
   'setBio', 'getBio',
-  'restoringSession', 'loginLoading', 'loginError',
+  'restoringSession', 'loginLoading', 'loginError', 'quickReactions',
   'setSearchQuery', 'getSearchQuery',
   'setFormField', 'getFormField', 'resetForm',
   'setModal', 'getModal', 'resetModals',
