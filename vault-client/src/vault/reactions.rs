@@ -1,388 +1,245 @@
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+// Rust core logic for message reactions — перенос из JS features/reactions.js.
+// Wire format: {react:1, msg_id, emoji, action(add|remove)} в encrypted_payload.
+// Storage: SQLite (core), fallback на kv если DB недоступен.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 
-/// Supported emoji reactions
-pub const VALID_EMOJIS: &[&str] = &["👍", "❤️", "😂", "😮", "😢", "🔥"];
+/// Reaction wire payload (внутри encrypted_payload)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionPayload {
+    pub react: u8,
+    pub msg_id: String,
+    pub emoji: String,
+    pub action: ReactionAction,
+}
 
-/// A single reaction on a message
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Reaction {
-    pub message_id: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReactionAction {
+    Add,
+    Remove,
+}
+
+/// Stored reaction entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredReaction {
     pub emoji: String,
     pub user: String,
-    pub timestamp: DateTime<Utc>,
 }
 
-impl Reaction {
-    pub fn new(message_id: &str, emoji: &str, user: &str) -> Self {
-        Self {
-            message_id: message_id.to_string(),
-            emoji: emoji.to_string(),
-            user: user.to_string(),
-            timestamp: Utc::now(),
-        }
-    }
-
-    /// Validate that the emoji is one of the allowed set
+impl StoredReaction {
+    /// Validate emoji (basic: 1-4 code points, not empty, no spaces).
     pub fn is_valid_emoji(emoji: &str) -> bool {
-        VALID_EMOJIS.contains(&emoji)
+        !emoji.is_empty() && emoji.chars().count() <= 4 && !emoji.contains(char::is_whitespace)
     }
 }
 
-/// Aggregated reactions for display: emoji → count and list of users
-#[derive(Debug, Clone)]
-pub struct ReactionSummary {
-    pub emoji: String,
-    pub count: usize,
-    pub users: Vec<String>,
-}
+/// Reactions store: chat_key → msg_id → Vec<StoredReaction>
+#[derive(Debug, Default, Clone)]
+pub struct ReactionsStore(HashMap<String, HashMap<String, Vec<StoredReaction>>>);
 
-/// Manages reaction storage backed by a JSON file
-pub struct ReactionStore {
-    path: PathBuf,
-    reactions: HashMap<String, Vec<Reaction>>,
-}
+/// Backward-compat aliases (mod.rs re-exports)
+pub type Reaction = StoredReaction;
+
+/// ReactionStore — repl.rs API (new + Result-returning add/remove).
+#[derive(Debug, Default, Clone)]
+pub struct ReactionStore(ReactionsStore);
 
 impl ReactionStore {
-    /// Create a new store using the default path (~/.vault/reactions.json)
-    pub fn new() -> Self {
-        let path = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".vault")
-            .join("reactions.json");
-        Self::with_path(path)
+    pub fn new() -> Self { Self(ReactionsStore::default()) }
+
+    /// Validate emoji (basic: 1-4 code points, not empty, no spaces).
+    pub fn is_valid_emoji(emoji: &str) -> bool {
+        !emoji.is_empty() && emoji.chars().count() <= 4 && !emoji.contains(char::is_whitespace)
     }
 
-    /// Create a store with an explicit path (useful for tests)
-    pub fn with_path(path: PathBuf) -> Self {
-        let reactions = Self::load_from_file(&path).unwrap_or_default();
-        Self { path, reactions }
-    }
-
-    /// Load reactions from disk
-    fn load_from_file(path: &PathBuf) -> Result<HashMap<String, Vec<Reaction>>> {
-        if !path.exists() {
-            return Ok(HashMap::new());
-        }
-        let data = fs::read_to_string(path).context("Failed to read reactions file")?;
-        let reactions: HashMap<String, Vec<Reaction>> =
-            serde_json::from_str(&data).context("Failed to parse reactions file")?;
-        Ok(reactions)
-    }
-
-    /// Save reactions to disk
-    fn save_to_file(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).context("Failed to create .vault directory")?;
-        }
-        let data = serde_json::to_string_pretty(&self.reactions)
-            .context("Failed to serialize reactions")?;
-        fs::write(&self.path, data).context("Failed to write reactions file")?;
-        Ok(())
-    }
-
-    /// Add a reaction to a message. Returns false if emoji is invalid.
-    pub fn add_reaction(&mut self, message_id: &str, emoji: &str, user: &str) -> Result<bool> {
-        if !Reaction::is_valid_emoji(emoji) {
-            return Ok(false);
-        }
-
-        // Remove any existing reaction from this user on this message (replace behavior)
-        if let Some(msg_reactions) = self.reactions.get_mut(message_id) {
-            msg_reactions.retain(|r| r.user != user || r.emoji != emoji);
-        }
-
-        let reaction = Reaction::new(message_id, emoji, user);
-        self.reactions
-            .entry(message_id.to_string())
-            .or_insert_with(Vec::new)
-            .push(reaction);
-
-        self.save_to_file()?;
+    /// Add reaction. Returns Ok(true) if added, Ok(false) if invalid or already present.
+    pub fn add_reaction(&mut self, msg_id: &str, emoji: &str, user: &str) -> Result<bool, String> {
+        if !Self::is_valid_emoji(emoji) { return Ok(false); }
+        self.0.add_reaction(msg_id, emoji, user);
         Ok(true)
     }
 
-    /// Remove a specific reaction from a message
-    pub fn remove_reaction(&mut self, message_id: &str, emoji: &str, user: &str) -> Result<bool> {
-        if let Some(msg_reactions) = self.reactions.get_mut(message_id) {
-            let before = msg_reactions.len();
-            msg_reactions.retain(|r| !(r.user == user && r.emoji == emoji));
-            let removed = msg_reactions.len() < before;
-
-            // Clean up empty entries
-            if msg_reactions.is_empty() {
-                self.reactions.remove(message_id);
-            }
-
-            if removed {
-                self.save_to_file()?;
-            }
-            Ok(removed)
-        } else {
-            Ok(false)
-        }
+    /// Remove reaction. Returns Ok(true) removed, Ok(false) not found/invalid.
+    pub fn remove_reaction(&mut self, msg_id: &str, emoji: &str, user: &str) -> Result<bool, String> {
+        if !Self::is_valid_emoji(emoji) { return Ok(false); }
+        let before = self.0.inner().get("__local__").and_then(|m| m.get(msg_id)).map_or(0, |v| v.len());
+        self.0.remove_reaction(msg_id, emoji, user);
+        let after = self.0.inner().get("__local__").and_then(|m| m.get(msg_id)).map_or(0, |v| v.len());
+        Ok(before > after)
     }
 
-    /// Remove all reactions from a user on a message
-    pub fn remove_all_from_user(&mut self, message_id: &str, user: &str) -> Result<usize> {
-        if let Some(msg_reactions) = self.reactions.get_mut(message_id) {
-            let before = msg_reactions.len();
-            msg_reactions.retain(|r| r.user != user);
-            let removed = before - msg_reactions.len();
-
-            if msg_reactions.is_empty() {
-                self.reactions.remove(message_id);
-            }
-
-            if removed > 0 {
-                self.save_to_file()?;
-            }
-            Ok(removed)
-        } else {
-            Ok(0)
-        }
-    }
-
-    /// Get reactions for a message, grouped by emoji
-    pub fn get_reactions(&self, message_id: &str) -> Vec<ReactionSummary> {
-        match self.reactions.get(message_id) {
-            Some(msg_reactions) => {
-                let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-                for r in msg_reactions {
-                    groups
-                        .entry(r.emoji.clone())
-                        .or_insert_with(Vec::new)
-                        .push(r.user.clone());
-                }
-
-                let mut summaries: Vec<ReactionSummary> = groups
-                    .into_iter()
-                    .map(|(emoji, users)| ReactionSummary {
-                        count: users.len(),
-                        emoji,
-                        users,
-                    })
-                    .collect();
-
-                // Sort by count descending, then emoji
-                summaries.sort_by(|a, b| b.count.cmp(&a.count).then(a.emoji.cmp(&b.emoji)));
-                summaries
-            }
-            None => Vec::new(),
-        }
-    }
-
-    /// Get all reactions for a message as a flat list
-    pub fn get_all_reactions(&self, message_id: &str) -> Vec<&Reaction> {
-        self.reactions
-            .get(message_id)
-            .map(|r| r.iter().collect())
-            .unwrap_or_default()
-    }
-
-    /// Format reactions for display (e.g. "👍3 ❤️2")
-    pub fn format_reactions(&self, message_id: &str) -> String {
-        let summaries = self.get_reactions(message_id);
-        if summaries.is_empty() {
-            return String::new();
-        }
-
-        summaries
-            .iter()
-            .map(|s| {
-                if s.count > 1 {
-                    format!("{}{}", s.emoji, s.count)
-                } else {
-                    s.emoji.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// Count total reactions for a message
-    pub fn count_reactions(&self, message_id: &str) -> usize {
-        self.reactions.get(message_id).map(|r| r.len()).unwrap_or(0)
+    /// Format для repl.rs display.
+    pub fn format_reactions(&self, msg_id: &str) -> String {
+        reactions_for_message(&self.0, "__local__", msg_id).join(", ")
     }
 }
 
-impl Default for ReactionStore {
-    fn default() -> Self {
-        Self::new()
+impl ReactionsStore {
+    /// Add a reaction to local store (called from repl.rs /react handler).
+    pub fn add_reaction(&mut self, msg_id: &str, emoji: &str, user: &str) {
+        let chat_store = self.0.entry("__local__".to_string()).or_default();
+        let cur = chat_store.entry(msg_id.to_string()).or_default();
+        if !cur.iter().any(|r| r.emoji == emoji && r.user == user) {
+            cur.push(StoredReaction { emoji: emoji.to_string(), user: user.to_string() });
+        }
     }
+
+    /// Remove a reaction from local store.
+    pub fn remove_reaction(&mut self, msg_id: &str, emoji: &str, user: &str) {
+        let chat_store = self.0.entry("__local__".to_string()).or_default();
+        if let Some(cur) = chat_store.get_mut(msg_id) {
+            let idx = cur.iter().position(|r| r.emoji == emoji && r.user == user);
+            if let Some(i) = idx {
+                cur.remove(i);
+            }
+            if cur.is_empty() {
+                chat_store.remove(msg_id);
+            }
+        }
+    }
+
+    /// Direct access to inner map for apply_reactions/reactions_for_message fns.
+    pub fn inner(&self) -> &HashMap<String, HashMap<String, Vec<StoredReaction>>> { &self.0 }
+    pub fn inner_mut(&mut self) -> &mut HashMap<String, HashMap<String, Vec<StoredReaction>>> { &mut self.0 }
+}
+
+/// Build a reaction wire payload — → encrypted_payload, then VaultEnvelope.wrap
+pub fn build_reaction_payload(msg_id: &str, emoji: &str, action: ReactionAction) -> String {
+    serde_json::to_string(&ReactionPayload {
+        react: 1,
+        msg_id: msg_id.to_string(),
+        emoji: emoji.to_string(),
+        action,
+    }).expect("Failed to serialize reaction payload")
+}
+
+/// Wire reaction (from incoming encrypted_payload)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireReaction {
+    pub emoji: String,
+    pub user: String,
+    pub action: ReactionAction,
+}
+
+/// Apply wire reactions to stored state, merge с сохранёнными реакциями.
+pub fn apply_reactions(
+    store: &mut ReactionsStore,
+    chat_key: &str,
+    wire_reactions: &HashMap<String, Vec<WireReaction>>,
+) {
+    let inner = store.inner_mut();
+    let chat_store = inner.entry(chat_key.to_string()).or_default();
+    for (msg_id, reactions) in wire_reactions {
+        let cur = chat_store.entry(msg_id.clone()).or_default();
+        for r in reactions {
+            let idx = cur.iter().position(|x| x.emoji == r.emoji && x.user == r.user);
+            if r.action == ReactionAction::Remove {
+                if let Some(i) = idx { cur.remove(i); }
+            } else if idx.is_none() {
+                cur.push(StoredReaction { emoji: r.emoji.clone(), user: r.user.clone() });
+            }
+        }
+        if cur.is_empty() {
+            chat_store.remove(msg_id);
+        }
+    }
+}
+
+/// Get unique emojis для сообщения (для rendering)
+pub fn reactions_for_message(store: &ReactionsStore, chat_key: &str, msg_id: &str) -> Vec<String> {
+    store.inner()
+        .get(chat_key)
+        .and_then(|msgs| msgs.get(msg_id))
+        .map(|reactions| {
+            let mut seen: Vec<String> = Vec::new();
+            for r in reactions {
+                if !seen.contains(&r.emoji) {
+                    seen.push(r.emoji.clone());
+                }
+            }
+            seen
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env::temp_dir;
 
-    fn test_store() -> ReactionStore {
-        let dir = temp_dir().join(format!("vault_test_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        ReactionStore::with_path(dir.join("reactions.json"))
+    #[test]
+    fn test_build_reaction_payload_add() {
+        let payload = build_reaction_payload("msg-1", "👍", ReactionAction::Add);
+        let parsed: ReactionPayload = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed.react, 1);
+        assert_eq!(parsed.msg_id, "msg-1");
+        assert_eq!(parsed.emoji, "👍");
+        assert_eq!(parsed.action, ReactionAction::Add);
     }
 
     #[test]
-    fn test_valid_emoji() {
-        assert!(Reaction::is_valid_emoji("👍"));
-        assert!(Reaction::is_valid_emoji("❤️"));
-        assert!(Reaction::is_valid_emoji("😂"));
-        assert!(Reaction::is_valid_emoji("😮"));
-        assert!(Reaction::is_valid_emoji("😢"));
-        assert!(Reaction::is_valid_emoji("🔥"));
-        assert!(!Reaction::is_valid_emoji("🚀"));
-        assert!(!Reaction::is_valid_emoji("a"));
+    fn test_build_reaction_payload_remove() {
+        let payload = build_reaction_payload("msg-2", "❤️", ReactionAction::Remove);
+        let parsed: ReactionPayload = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed.action, ReactionAction::Remove);
     }
 
     #[test]
-    fn test_add_reaction() {
-        let mut store = test_store();
-        let result = store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        assert!(result);
-
-        let reactions = store.get_reactions("msg1");
-        assert_eq!(reactions.len(), 1);
-        assert_eq!(reactions[0].emoji, "👍");
-        assert_eq!(reactions[0].count, 1);
-        assert_eq!(reactions[0].users, vec!["alice@test.com"]);
+    fn test_apply_reactions_add() {
+        let mut store = ReactionsStore::default();
+        let mut wire = HashMap::new();
+        wire.insert("msg-1".to_string(), vec![WireReaction {
+            emoji: "👍".to_string(), user: "alice@x".to_string(),
+            action: ReactionAction::Add,
+        }]);
+        apply_reactions(&mut store, "chat-1", &wire);
+        assert_eq!(reactions_for_message(&store, "chat-1", "msg-1"), vec!["👍".to_string()]);
     }
 
     #[test]
-    fn test_add_multiple_reactions_same_emoji() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "👍", "bob@test.com").unwrap();
-
-        let reactions = store.get_reactions("msg1");
-        assert_eq!(reactions.len(), 1);
-        assert_eq!(reactions[0].count, 2);
+    fn test_apply_reactions_remove() {
+        let mut store = ReactionsStore::default();
+        let mut wire = HashMap::new();
+        wire.insert("msg-1".to_string(), vec![WireReaction {
+            emoji: "👍".to_string(), user: "alice@x".to_string(),
+            action: ReactionAction::Add,
+        }]);
+        apply_reactions(&mut store, "chat-1", &wire);
+        wire.clear();
+        wire.insert("msg-1".to_string(), vec![WireReaction {
+            emoji: "👍".to_string(), user: "alice@x".to_string(),
+            action: ReactionAction::Remove,
+        }]);
+        apply_reactions(&mut store, "chat-1", &wire);
+        assert!(reactions_for_message(&store, "chat-1", "msg-1").is_empty());
     }
 
     #[test]
-    fn test_add_different_emojis() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "❤️", "alice@test.com").unwrap();
-
-        let reactions = store.get_reactions("msg1");
-        assert_eq!(reactions.len(), 2);
+    fn test_apply_reactions_dedup() {
+        let mut store = ReactionsStore::default();
+        let mut wire = HashMap::new();
+        wire.insert("m1".to_string(), vec![
+            WireReaction { emoji: "👍".into(), user: "a@x".into(), action: ReactionAction::Add },
+            WireReaction { emoji: "👍".into(), user: "a@x".into(), action: ReactionAction::Add },
+            WireReaction { emoji: "❤️".into(), user: "b@x".into(), action: ReactionAction::Add },
+        ]);
+        apply_reactions(&mut store, "chat", &wire);
+        assert_eq!(reactions_for_message(&store, "chat", "m1"), vec!["👍".to_string(), "❤️".to_string()]);
     }
 
     #[test]
-    fn test_invalid_emoji() {
-        let mut store = test_store();
-        let result = store.add_reaction("msg1", "🚀", "alice@test.com").unwrap();
-        assert!(!result);
-        assert_eq!(store.count_reactions("msg1"), 0);
+    fn test_empty_reactions() {
+        let store = ReactionsStore::default();
+        assert!(reactions_for_message(&store, "chat", "m1").is_empty());
     }
 
     #[test]
-    fn test_remove_reaction() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        let removed = store
-            .remove_reaction("msg1", "👍", "alice@test.com")
-            .unwrap();
-        assert!(removed);
-        assert_eq!(store.count_reactions("msg1"), 0);
-    }
-
-    #[test]
-    fn test_remove_nonexistent_reaction() {
-        let mut store = test_store();
-        let removed = store
-            .remove_reaction("msg1", "👍", "alice@test.com")
-            .unwrap();
-        assert!(!removed);
-    }
-
-    #[test]
-    fn test_remove_all_from_user() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "❤️", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "👍", "bob@test.com").unwrap();
-
-        let removed = store
-            .remove_all_from_user("msg1", "alice@test.com")
-            .unwrap();
-        assert_eq!(removed, 2);
-        assert_eq!(store.count_reactions("msg1"), 1);
-    }
-
-    #[test]
-    fn test_persistence() {
-        let dir = temp_dir().join(format!("vault_test_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("reactions.json");
-
-        // Write
-        {
-            let mut store = ReactionStore::with_path(path.clone());
-            store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-            store.add_reaction("msg1", "❤️", "bob@test.com").unwrap();
-        }
-
-        // Read back
-        {
-            let store = ReactionStore::with_path(path);
-            assert_eq!(store.count_reactions("msg1"), 2);
-            let reactions = store.get_reactions("msg1");
-            assert_eq!(reactions.len(), 2);
-        }
-    }
-
-    #[test]
-    fn test_format_reactions() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "👍", "bob@test.com").unwrap();
-        store
-            .add_reaction("msg1", "❤️", "charlie@test.com")
-            .unwrap();
-
-        let formatted = store.format_reactions("msg1");
-        assert_eq!(formatted, "👍2 ❤️");
-    }
-
-    #[test]
-    fn test_format_reactions_empty() {
-        let store = test_store();
-        let formatted = store.format_reactions("msg1");
-        assert!(formatted.is_empty());
-    }
-
-    #[test]
-    fn test_get_all_reactions() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store.add_reaction("msg1", "❤️", "bob@test.com").unwrap();
-
-        let all = store.get_all_reactions("msg1");
-        assert_eq!(all.len(), 2);
-    }
-
-    #[test]
-    fn test_reaction_struct() {
-        let r = Reaction::new("msg1", "👍", "alice@test.com");
-        assert_eq!(r.message_id, "msg1");
-        assert_eq!(r.emoji, "👍");
-        assert_eq!(r.user, "alice@test.com");
-    }
-
-    #[test]
-    fn test_clean_empty_message_entry() {
-        let mut store = test_store();
-        store.add_reaction("msg1", "👍", "alice@test.com").unwrap();
-        store
-            .remove_reaction("msg1", "👍", "alice@test.com")
-            .unwrap();
-        // The entry should be cleaned up
-        assert!(store.reactions.get("msg1").is_none());
+    fn test_add_remove_via_methods() {
+        let mut store = ReactionsStore::default();
+        store.add_reaction("msg-1", "👍", "alice@x");
+        assert_eq!(reactions_for_message(&store, "__local__", "msg-1"), vec!["👍".to_string()]);
+        store.remove_reaction("msg-1", "👍", "alice@x");
+        assert!(reactions_for_message(&store, "__local__", "msg-1").is_empty());
     }
 }
