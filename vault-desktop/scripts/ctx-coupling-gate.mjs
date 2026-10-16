@@ -69,9 +69,9 @@ const OWNER_FIELDS = new Set([
   // J.6: identity-store.js owner API (peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded)
   'getPeerKey', 'getPeerPqKey', 'setPeerKey', 'setPeerKeyInput',
   'markLoaded', 'hasPeerKey', 'clearPeerKeys', 'loadPeerKeys',
-  // J.5d: channels-store.js owner API (channelPosts/channelUnread)
+  // J.5d: channels-store.js owner API (channelPosts/channelUnread/channelAvatars)
   'setChannelPosts', 'addChannelPosts', 'getChannelPosts',
-  'setUnread', 'clearUnread',
+  'setUnread', 'clearUnread', 'setChannelAvatar', 'getChannelAvatar',
 ]);
 
 

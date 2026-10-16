@@ -1230,7 +1230,7 @@ export default {
       // Groups
       groups: [],
       // channels — proxy на mailboxStore.state.channels (J.3c).
-      channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
+      // channelAvatarsinj в channels-store (J.7 proxy).
       // UI (t_a14ac823): активный канал + модалки создания/подписки
       currentChannel: null,
       showChannelPanel: false,
@@ -1408,7 +1408,7 @@ export default {
       set(v) { mailboxState.setEmails(v); },
     },
     // Прокси во владельца каналов (ADR-004 J.5d):
-    // channelPosts/channelUnread вынесены из data() в channels-store.
+    // J.5d/J.7: channels-store owner для channelPosts/channelUnread/channelAvatars.
     channelPosts: {
       get() { return channelsStore.state.channelPosts; },
       set(v) { Object.assign(channelsStore.state.channelPosts, v || {}); },
@@ -1416,6 +1416,10 @@ export default {
     channelUnread: {
       get() { return channelsStore.state.channelUnread; },
       set(chId, count) { channelsStore.setUnread(chId, count); },
+    },
+    channelAvatars: {
+      get() { return channelsStore.state.channelAvatars; },
+      set(v) { Object.assign(channelsStore.state.channelAvatars, v || {}); },
     },
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
@@ -2952,7 +2956,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           const posts = JSON.parse((await db.kvGet(await accountNamespace(this.email), 'channel-posts:' + ch.id)) || '[]');
           this.channelPosts[ch.id] = posts;
           this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
-          this.channelAvatars[ch.id] = (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '';
+          this.channelsStore.setChannelAvatar(ch.id, (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '');
         }
       } catch (e) { console.error('Failed to load channels:', e); }
     },
