@@ -1226,7 +1226,7 @@ export default {
       showKeyManager: false,
       showQRCode: false,
       showCipher: false,
-      searchQuery: '',
+      // searchQueryinj в uiStore (J.5b).
       // Groups
       groups: [],
       // channels — proxy на mailboxStore.state.channels (J.3c).
@@ -1378,9 +1378,10 @@ export default {
       get() { return this.groups.state.groupAvatars; },
     },
     // groupIconMapinj в groups-store (J.7 proxy).
-    groupIconMap: {
-      get() { return this.groups.state.groupIcons; },
-      set(v) { Object.assign(this.groups.state.groupIcons, v || {}); },
+    // searchQueryinj в uiStore (J.5b).
+    searchQuery: {
+      get() { return uiStore.getSearchQuery(); },
+      set(v) { uiStore.setSearchQuery(v); },
     },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.

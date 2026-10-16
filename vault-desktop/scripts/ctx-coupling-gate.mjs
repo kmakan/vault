@@ -61,8 +61,9 @@ const OWNER_FIELDS = new Set([
   'mergePendingOutgoing', 'removePendingOutgoing', 'clearPendingOutgoing', 'dropBucket',
   // A11: unreadCounts owner API (chat-store.js)
   'incUnread', 'clearUnread', 'clearAllUnread', 'unreadOf', 'setUnread',
-  // A12: session-store.js owner API (isLoggedIn + emails)
+  // A12: session-store.js owner API (isLoggedIn + emails + ui: searchQuery)
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
+  'setSearchQuery', 'getSearchQuery',
   // A13: relay-store.js owner API (ecoMode/relayEnabled/relayDeliveryMode)
   'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
   // A14: newMessage draft owner API (chat-store.js)
