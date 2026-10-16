@@ -962,7 +962,9 @@ import * as RestoreFailure from './features/restore-failure.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
+// ADR-004 J.3c: mailbox-store owner для emailsLoading/emailError.
 import { contactsStore } from './features/contacts-store.js';
+import { mailboxState } from './features/mailbox-store.js';
 // ADR-004 J.6: identity-store owner для peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded.
 import { identityStore } from './features/identity-store.js';
 // ADR-004 J.5d: channels-store owner для channelPosts/channelUnread.
@@ -1197,8 +1199,7 @@ export default {
       // Настройки серверов почты в форме входа (провайдер может сменить
       // IMAP/SMTP — пользователь должен мочь исправить их вручную).
       // showServerSettingsinj в uiStore.modalFlags (J.7):
-      emailsLoading: false,
-      emailError: '',
+      // emailsLoading/emailErrorinj в mailbox-store.state (J.3c).
       // Оптимистичные исходящие, ещё не подтверждённые письмом из ящика:
       // chatKey → { msgId: msg }. Поллинг перестраивает messages из IMAP и
       // стирал ещё не доставленное сообщение (оно «появлялось и исчезало»);
@@ -1348,6 +1349,9 @@ export default {
       get() { return contactsStore.state.lastSeenMap; },
       set(v) { Object.assign(contactsStore.state.lastSeenMap, v || {}); },
     },
+    // emails-loadinginj в mailbox-store.state (J.3c):
+    emailsLoading: { get() { return this.mailboxStore.state.emailsLoading; }, set(v) { this.mailboxStore.state.emailsLoading = v; } },
+    emailError: { get() { return this.mailboxStore.state.emailError; }, set(v) { this.mailboxStore.state.emailError = v; } },
     // Прокси во владельца ephemeral state (ADR-004 J.7):
     ephemeralTimers: { get() { return this.messagesStore.state.ephemeralTimers; }, set(v) { Object.assign(this.messagesStore.state.ephemeralTimers, v || {}); } },
     ephemeralTick: { get() { return this.messagesStore.state.ephemeralTick; }, set(v) { this.messagesStore.state.ephemeralTick = v; } },
