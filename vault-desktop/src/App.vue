@@ -1245,7 +1245,7 @@ export default {
       // { msgKey: timeoutId }, msgKey = chatId + ':' + msgId
       ephemeralTimers: {},
       ephemeralTick: 0,
-      showEphemeralMenu: false,
+      // showEphemeralMenuinj в uiStore.modalFlags (J.7):
       currentEphemeralTtl: 0,
       // myBioinj в session-store (J.3a).
       // Зелёная точка: email → ts последней активности контакта
@@ -1407,6 +1407,7 @@ export default {
     showKeyManager: { get() { return uiStore.getModal('showKeyManager'); }, set(v) { uiStore.setModal('showKeyManager', v); } },
     showQRCode: { get() { return uiStore.getModal('showQRCode'); }, set(v) { uiStore.setModal('showQRCode', v); } },
     showCipher: { get() { return uiStore.getModal('showCipher'); }, set(v) { uiStore.setModal('showCipher', v); } },
+    showEphemeralMenu: { get() { return uiStore.getModal('showEphemeralMenu'); }, set(v) { uiStore.setModal('showEphemeralMenu', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },

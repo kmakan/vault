@@ -112,6 +112,7 @@ export function createUiStore() {
     showKeyManager: false,
     showQRCode: false,
     showCipher: false,
+    showEphemeralMenu: false,
   };
   let toastMessage = '';
   let toastTimer = null;
