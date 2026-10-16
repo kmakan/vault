@@ -23,6 +23,10 @@ export function createSessionStore() {
     emails: [],
     // J.3a: профиль bio (быв. data this.myBio). SettingsPage :bio.
     myBio: '',
+    // J.3a: auth state (быв. App.data restoringSession/loginLoading/loginError).
+    restoringSession: false,
+    loginLoading: false,
+    loginError: '',
   };
 
   return {

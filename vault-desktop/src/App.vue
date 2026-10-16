@@ -1187,13 +1187,13 @@ export default {
       editingMessage: null,
       showSettings: false,
       showMembers: false,
-      restoringSession: false,
+      // showMembersinj в uiStore.modalFlags (J.7):
+      // restoringSessioninj в session-store.state (J.3a).
       email: '',
       password: '',
       // rememberMe/imapServer/imapPort/smtpServer/smtpPort/mailProvider
       // inj в uiStore.formState (J.5b).
-      loginLoading: false,
-      loginError: '',
+      // loginLoading/loginErrorinj в session-store.state (J.3a).
       // Настройки серверов почты в форме входа (провайдер может сменить
       // IMAP/SMTP — пользователь должен мочь исправить их вручную).
       // showServerSettingsinj в uiStore.modalFlags (J.7):
@@ -1508,6 +1508,10 @@ export default {
     currentGroup: { get() { return chatStore.state.currentGroup; }, set(v) { chatStore.state.currentGroup = v ?? null; } },
     // myBioinj в session-store (J.3a):
     myBio: { get() { return this.sessionStore.state.myBio; }, set(v) { this.sessionStore.setBio(v); } },
+    // J.3a: auth state inj session-store.state:
+    restoringSession: { get() { return this.sessionStore.state.restoringSession; }, set(v) { this.sessionStore.state.restoringSession = v; } },
+    loginLoading: { get() { return this.sessionStore.state.loginLoading; }, set(v) { this.sessionStore.state.loginLoading = v; } },
+    loginError: { get() { return this.sessionStore.state.loginError; }, set(v) { this.sessionStore.state.loginError = v; } },
     activeChatType: {
       get() { return chatStore.state.activeChatType; },
       set(v) { chatStore.state.activeChatType = v; },
