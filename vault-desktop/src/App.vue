@@ -1240,9 +1240,7 @@ export default {
       groupAvatars: {},  // group_id → dataUrl (J.5c owner: groups-store)
 
       // currentGroup/activeChatType — proxy на chat-store (J.3a).
-      // Тост-уведомление внизу экрана (Key Recovery и пр.)
-      toastMessage: '',
-      toastTimer: null,
+      // Тост-уведомление внизу экрана inj uiStore (J.3b).
       // Исчезающие сообщения: активные таймеры удаления
       // { msgKey: timeoutId }, msgKey = chatId + ':' + msgId
       ephemeralTimers: {},
@@ -1404,6 +1402,9 @@ export default {
     showKeyManager: { get() { return uiStore.getModal('showKeyManager'); }, set(v) { uiStore.setModal('showKeyManager', v); } },
     showQRCode: { get() { return uiStore.getModal('showQRCode'); }, set(v) { uiStore.setModal('showQRCode', v); } },
     showCipher: { get() { return uiStore.getModal('showCipher'); }, set(v) { uiStore.setModal('showCipher', v); } },
+    // toast-stateinj в uiStore (J.3b):
+    toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
+    toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.
     // Геттеры сохраняют обратную совместимость для чтения; запись — через API.
@@ -3745,9 +3746,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ── Duress-замок ────────────────────────────────────────
     // (логика в features/duress.js; обёртки см. в блоке feature-обёрток выше)
     showToast(message, ms = 5000) {
-      this.toastMessage = message;
-      if (this.toastTimer) clearTimeout(this.toastTimer);
-      this.toastTimer = setTimeout(() => { this.toastMessage = ''; }, ms);
+      this.uiStore.setToastMessage(message);
+      const t = this.uiStore.getToastTimer();
+      if (t) clearTimeout(t);
+      this.uiStore.setToastTimer(setTimeout(() => { this.uiStore.clearToast(); }, ms));
     },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
     async onRecoveryCreated({ mnemonic }) {

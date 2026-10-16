@@ -66,6 +66,7 @@ const OWNER_FIELDS = new Set([
   'setSearchQuery', 'getSearchQuery',
   'setFormField', 'getFormField', 'resetForm',
   'setModal', 'getModal', 'resetModals',
+  'setToastMessage', 'getToastMessage', 'setToastTimer', 'getToastTimer', 'clearToast',
   // A13: relay-store.js owner API (ecoMode/relayEnabled/relayDeliveryMode)
   'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
   // A14: newMessage draft owner API (chat-store.js)

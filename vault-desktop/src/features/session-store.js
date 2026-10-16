@@ -108,6 +108,8 @@ export function createUiStore() {
     showQRCode: false,
     showCipher: false,
   };
+  let toastMessage = '';
+  let toastTimer = null;
   return {
     setT(fn) { t = fn; },
     getT() { return t; },
@@ -122,6 +124,11 @@ export function createUiStore() {
     setModal(name, v) { modalFlags[name] = !!v; return modalFlags[name]; },
     getModal(name) { return !!modalFlags[name]; },
     resetModals() { for (const k of Object.keys(modalFlags)) modalFlags[k] = false; },
+    setToastMessage(v) { toastMessage = v ?? ''; },
+    getToastMessage() { return toastMessage; },
+    setToastTimer(t) { toastTimer = t; },
+    getToastTimer() { return toastTimer; },
+    clearToast() { toastMessage = ''; if (toastTimer) clearTimeout(toastTimer); toastTimer = null; },
     // удобный прокси для шаблонов/модулей без App-ctx
     tr(key) { return t(key); },
     toast(msg, ms) { showToast(msg, ms); },
