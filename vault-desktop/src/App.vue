@@ -2149,7 +2149,7 @@ export default {
         const ok = await Video.startRemoteVideo(cid, canvasEl);
         if (!ok) {
           this.callVideoOn = false;
-          this.showToast(this.t('video_unavailable') || 'Видео недоступно в этом WebView', 3000);
+          uiStore.toast(this.t('video_unavailable') || 'Видео недоступно в этом WebView', 3000);
           return;
         }
         await api.mediaVideoStart(cid);
@@ -2157,7 +2157,7 @@ export default {
         console.error('[video] remote start failed:', e);
         this.callVideoOn = false;
         Video.stopRemoteVideo();
-        this.showToast(this.t('video_start_failed') || 'Не удалось включить видео', 3000);
+        uiStore.toast(this.t('video_start_failed') || 'Не удалось включить видео', 3000);
         return;
       }
       // Локальная камера: кадры → Rust → собеседник (превью нет — air).
@@ -2167,7 +2167,7 @@ export default {
         // Камера недоступна/отказала — remote-видео собеседника всё равно
         // работает; переключатель остается «вкл», звонок не роняем.
         console.warn('[video] camera unavailable, remote-only:', e && e.message || e);
-        this.showToast(this.t('video_camera_off') || 'Камера недоступна — видно только собеседника', 3000);
+        uiStore.toast(this.t('video_camera_off') || 'Камера недоступна — видно только собеседника', 3000);
       }
     },
     stopCallVideo() {
@@ -2302,7 +2302,7 @@ export default {
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {
-        this.showToast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
+        uiStore.toast(this.t('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
       }
     },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
@@ -2333,7 +2333,7 @@ export default {
 async toggleVoiceNote(msg, attachment) {
       this.voicePlayingId = await AttachmentsFeature.toggleVoiceNote({
         isAndroidClient: this.isAndroidClient, voicePlayingId: this.voicePlayingId,
-        showToast: (m, ms) => this.showToast(m, ms), t: this.t,
+        showToast: (m, ms) => uiStore.toast(m, ms), t: this.t,
       }, msg, attachment);
     },
     async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment); },
@@ -2840,16 +2840,16 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         this.newChannelAbout = '';
         const fresh = this.channels.find(c => c.id === ch.id) || ch;
         await this.selectChannel(fresh);
-        this.showToast(this.t('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
+        uiStore.toast(this.t('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
       } catch (e) {
         console.error('[channels] create:', e);
-        this.showToast(this.t('channel_create_failed') || 'Не удалось создать канал', 3000);
+        uiStore.toast(this.t('channel_create_failed') || 'Не удалось создать канал', 3000);
       } finally { this.postingChannel = false; }
     },
     async joinChannelAndClose() {
       const parsed = ChannelsFeature.parseJoinLink(this.joinChannelLink.trim());
       if (!parsed) {
-        this.showToast(this.t('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
+        uiStore.toast(this.t('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
         return;
       }
       try {
@@ -2861,21 +2861,21 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         if (ch) await this.selectChannel(ch);
       } catch (e) {
         console.error('[channels] join:', e);
-        this.showToast(this.t('channel_join_failed') || 'Не удалось подписаться', 3000);
+        uiStore.toast(this.t('channel_join_failed') || 'Не удалось подписаться', 3000);
       }
     },
     copyChannelLink() {
       const ch = this.currentChannel;
       if (!ch) return;
       const link = ChannelsFeature.buildJoinLink(ch);
-      try { navigator.clipboard.writeText(link); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      try { navigator.clipboard.writeText(link); uiStore.toast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
       catch (e) { console.warn('[channels] clipboard:', e); }
     },
     copyChannelLinkById(id) {
       const ch = this.channelById(id);
       this.closeChatMenu();
       if (!ch) return;
-      try { navigator.clipboard.writeText(ChannelsFeature.buildJoinLink(ch)); this.showToast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
+      try { navigator.clipboard.writeText(ChannelsFeature.buildJoinLink(ch)); uiStore.toast(this.t('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
       catch (e) { console.warn('[channels] clipboard:', e); }
     },
     // Отправка поста владельцем (composer → post-конверт). Тело шифруется
@@ -2899,11 +2899,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const res = await ChannelsFeature.sendChannelPost(ch, content, env, this.email);
         ChannelsFeature.updateChannel(ch.id, { last_ts: env.ts }).catch(() => {});
         if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
-          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+          uiStore.toast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
         }
       } catch (e) {
         console.error('[channels] post:', e);
-        this.showToast(this.t('channel_post_failed') || 'Пост не отправлен', 3000);
+        uiStore.toast(this.t('channel_post_failed') || 'Пост не отправлен', 3000);
       } finally { this.postingChannel = false; }
     },
     async deleteChannelConfirmed() {
@@ -2947,7 +2947,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         await ChannelsFeature.updateChannel(id, { name: ch.name });
         const res = await ChannelsFeature.sendChannelMeta(ch, this.email);
         if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
-          this.showToast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+          uiStore.toast(this.t('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
         }
       } catch (e) { console.error('[channels] rename:', e); }
     },
@@ -3349,7 +3349,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async sendGeoMessage() {
       const coords = await Geo.resolveCurrentCoords();
       if (!coords) {
-        this.showToast(this.t('geo_err') || 'Геолокация недоступна', 3000);
+        uiStore.toast(this.t('geo_err') || 'Геолокация недоступна', 3000);
         return;
       }
       this.newMessage = Geo.buildGeoMessage(this.t('geo_im_here') || 'Я здесь:', coords);
@@ -3646,7 +3646,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         console.error('[ephemeral] save failed:', e);
       }
       this.currentEphemeralTtl = Number(seconds) || 0;
-      this.showToast(
+      uiStore.toast(
         seconds > 0
           ? 'Исчезающие сообщения: ' + this.ephemeralLabel(seconds) + ' (новые сообщения в этом чате)'
           : 'Исчезающие сообщения выключены',
@@ -3704,12 +3704,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const r = await RecoveryEscrow.sendEscrowEmail(this.email, mnemonic, 'recovery_spam_toast');
         // Провайдеры кладут служебные письма в Спам, а Gmail удаляет спам
         // через ~30 дней — тогда эскроу пропадёт.
-        this.showToast(this.t(r.spamToastKey), 10000);
+        uiStore.toast(this.t(r.spamToastKey), 10000);
         // Фоново определяем фактическую папку письма и предупреждаем точечно.
         this.locateEscrow(r.wrappedJson);
       } catch (e) {
         console.error('escrow send failed:', e);
-        this.showToast((this.t('recovery_escrow_failed') || 'Не удалось отправить эскроу-письмо: ') + (e.message || e));
+        uiStore.toast((this.t('recovery_escrow_failed') || 'Не удалось отправить эскроу-письмо: ') + (e.message || e));
       }
     },
     // Ищем только что отправленное эскроу-письмо (совпадение salt+nonce+wrapped)
@@ -3742,13 +3742,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
                 // предупреждаем, что письмо удалять нельзя.
                 try {
                   await invoke('email_copy_to_inbox', { uid: String(m.uid), folder });
-                  this.showToast(t('recovery_moved_toast'), 12000);
+                  uiStore.toast(t('recovery_moved_toast'), 12000);
                 } catch (e) {
                   console.warn('escrow copy to inbox failed:', e);
-                  this.showToast(t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
+                  uiStore.toast(t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
                 }
               } else {
-                this.showToast(t('recovery_keep'), 8000);
+                uiStore.toast(t('recovery_keep'), 8000);
               }
               return;
             }
@@ -4077,7 +4077,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const wasIgnored = this.isIgnored(email);
       if (wasIgnored) {
         await this.unignoreUser(email);
-        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+        uiStore.toast(this.t('ignore_off_toast') || 'Разблокирован');
       } else {
         await this.ignoreUser(email);
         // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
@@ -4085,7 +4085,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         if (this.activeChatType === 'chat' && this.activeChat === email) {
           await this.loadMessages(this.activeChat);
         }
-        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
+        uiStore.toast(this.t('ignore_on_toast') || 'Заблокирован');
       }
       this.closeChatMenu();
     },
@@ -4093,7 +4093,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async unblockActiveChat() {
       if (this.activeChatType !== 'chat' || !this.activeChat) return;
       await this.unignoreUser(this.activeChat);
-      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      uiStore.toast(this.t('ignore_off_toast') || 'Разблокирован');
       // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
       // истории (фильтр до расшифровки), возвращать их нечем. Просто
       // перерисовываем: баннер уходит, новые сообщения начинают приходить.
@@ -4108,14 +4108,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (!sender) return;
       if (this.isIgnored(sender)) {
         await this.unignoreUser(sender);
-        this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+        uiStore.toast(this.t('ignore_off_toast') || 'Разблокирован');
       } else {
         await this.ignoreUser(sender);
         // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
         if (this.activeChatType === 'chat' && this.activeChat === sender) {
           await this.loadMessages(this.activeChat);
         }
-        this.showToast(this.t('ignore_on_toast') || 'Заблокирован');
+        uiStore.toast(this.t('ignore_on_toast') || 'Заблокирован');
       }
     },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
@@ -4515,7 +4515,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // Дубль-инвайт: группа уже есть локально (приглашение принято ранее).
         // Это НЕ ошибка — тихо сообщаем (ключ уже помечен обработанным выше).
         if (this.groups.some(g => g.id === inv.group_id)) {
-          this.showToast((this.t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
+          uiStore.toast((this.t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
           this.showNextInvite();
           return;
         }
@@ -4600,7 +4600,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         }
         if (exists) {
           await api.markAcceptedContact(key);
-          this.showToast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + c.sender, 3000);
+          uiStore.toast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + c.sender, 3000);
           this.showNextContact();
           return;
         }
@@ -4677,17 +4677,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         } catch (e) { /* диск недоступен — считаем новым */ }
       }
       if (exists) {
-        this.showToast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + id, 3000);
+        uiStore.toast((this.t('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + id, 3000);
         return;
       }
       try {
         await api.sendContactInvite(id, this.publicKey);
-        this.showToast((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id, 3000);
+        uiStore.toast((this.t('invite_sent') || 'Приглашение отправлено') + ': ' + id, 3000);
       } catch (e) {
         // Tauri-команды отклоняют СТРОКОЙ (Rust Err(e.to_string())), не
         // Error-объектом: e.message может быть undefined — нормализуем.
         const emsg = (e && e.message) ? e.message : String(e);
-        this.showToast((this.t('invite_send_failed') || 'Не удалось отправить приглашение: ') + emsg, 5000);
+        uiStore.toast((this.t('invite_send_failed') || 'Не удалось отправить приглашение: ') + emsg, 5000);
       }
     },
     async deleteContact(email) {
@@ -4719,12 +4719,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async blockUser(email) {
       if (!this.currentGroup || !email) return;
       await this.ignoreUser(email);
-      this.showToast(this.t('ignore_on_toast') || 'Заблокирован: новые сообщения и звонки скрыты');
+      uiStore.toast(this.t('ignore_on_toast') || 'Заблокирован: новые сообщения и звонки скрыты');
     },
     async unblockUser(email) {
       if (!email) return;
       await this.unignoreUser(email);
-      this.showToast(this.t('ignore_off_toast') || 'Разблокирован');
+      uiStore.toast(this.t('ignore_off_toast') || 'Разблокирован');
     },
     async leaveGroup() {
       if (!this.currentGroup) return;
