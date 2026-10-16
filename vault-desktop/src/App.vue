@@ -965,6 +965,8 @@ import * as Migrations from './migrations.js';
 import { contactsStore } from './features/contacts-store.js';
 // ADR-004 J.6: identity-store owner для peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded.
 import { identityStore } from './features/identity-store.js';
+// ADR-004 J.5d: channels-store owner для channelPosts/channelUnread.
+import { channelsStore } from './features/channels-store.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
 import * as GroupsClone from './features/groups-clone.js';
@@ -1228,8 +1230,6 @@ export default {
       // Groups
       groups: [],
       // channels — proxy на mailboxStore.state.channels (J.3c).
-      channelPosts: {},        // channelId -> [{ts, body, images, sender}]
-      channelUnread: {},        // channelId -> count
       channelAvatars: {},       // channelId -> dataUrl (из meta-конвертов)
       // UI (t_a14ac823): активный канал + модалки создания/подписки
       currentChannel: null,
@@ -1406,6 +1406,16 @@ export default {
     emails: {
       get() { return mailboxState.state.emails; },
       set(v) { mailboxState.setEmails(v); },
+    },
+    // Прокси во владельца каналов (ADR-004 J.5d):
+    // channelPosts/channelUnread вынесены из data() в channels-store.
+    channelPosts: {
+      get() { return channelsStore.state.channelPosts; },
+      set(v) { Object.assign(channelsStore.state.channelPosts, v || {}); },
+    },
+    channelUnread: {
+      get() { return channelsStore.state.channelUnread; },
+      set(chId, count) { channelsStore.setUnread(chId, count); },
     },
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
