@@ -21,6 +21,8 @@ export function createSessionStore() {
     isLoggedIn: false,
     currentEmail: '',    // J.2: account identity (бывш. data this.email)
     emails: [],
+    // J.3a: профиль bio (быв. data this.myBio). SettingsPage :bio.
+    myBio: '',
   };
 
   return {
@@ -42,6 +44,9 @@ export function createSessionStore() {
     // ── currentEmail ────────────────────────────────────────────────────
     setCurrentEmail(e) { state.currentEmail = e || ''; return state.currentEmail; },
     getCurrentEmail() { return state.currentEmail; },
+    // ── myBio ───────────────────────────────────────────────────────────
+    setBio(bio) { state.myBio = bio || ''; return state.myBio; },
+    getBio() { return state.myBio; },
 
     // ── emails ────────────────────────────────────────────────────────────
     setEmails(list) {

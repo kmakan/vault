@@ -63,6 +63,7 @@ const OWNER_FIELDS = new Set([
   'incUnread', 'clearUnread', 'clearAllUnread', 'unreadOf', 'setUnread',
   // A12: session-store.js owner API (isLoggedIn + emails + ui: searchQuery/modalFlags)
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
+  'setBio', 'getBio',
   'setSearchQuery', 'getSearchQuery',
   'setFormField', 'getFormField', 'resetForm',
   'setModal', 'getModal', 'resetModals',

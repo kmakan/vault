@@ -1247,7 +1247,7 @@ export default {
       ephemeralTick: 0,
       showEphemeralMenu: false,
       currentEphemeralTtl: 0,
-      myBio: '',
+      // myBioinj в session-store (J.3a).
       // Зелёная точка: email → ts последней активности контакта
       // (входящее письмо/квитанция). Не онлайн-статус: «видели за 10 мин».
       lastSeenMap: {},
@@ -1475,6 +1475,8 @@ export default {
     // Прокси во владельца чата (ADR-004 J.3a).
     activeChat: { get() { return chatStore.state.activeChat; }, set(v) { chatStore.state.activeChat = v ?? null; } },
     currentGroup: { get() { return chatStore.state.currentGroup; }, set(v) { chatStore.state.currentGroup = v ?? null; } },
+    // myBioinj в session-store (J.3a):
+    myBio: { get() { return this.sessionStore.state.myBio; }, set(v) { this.sessionStore.setBio(v); } },
     activeChatType: {
       get() { return chatStore.state.activeChatType; },
       set(v) { chatStore.state.activeChatType = v; },
