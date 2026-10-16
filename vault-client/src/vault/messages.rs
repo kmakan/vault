@@ -3,7 +3,7 @@
 // Contract: docs/M0-WIRE-FORMAT-PARITY.md (VaultEnvelope ↔ parseEnvelope).
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use super::protocol::{VaultEnvelope, VaultMsgType};
 use super::reactions::ReactionsStore;
+use super::attachments::{AttachmentStore, AttachmentMeta};
 
 /// A decoded Vault message (post-decryption, in app state).
 /// Соответствует JS `ctx.messages[i]` объекту.
@@ -45,6 +46,8 @@ pub struct MessageStore {
     messages: HashMap<String, Vec<VaultMessage>>,
     /// message_id → reactions (global, чаты маппятся на inbox).
     reactions: ReactionsStore,
+    /// attachment metadata store.
+    attachments: AttachmentStore,
 }
 
 impl MessageStore {
@@ -63,7 +66,7 @@ impl MessageStore {
         } else {
             HashMap::new()
         };
-        Ok(Self { path, messages, reactions: ReactionsStore::default() })
+        Ok(Self { path, messages, reactions: ReactionsStore::default(), attachments: AttachmentStore::default() })
     }
 
     /// Save store to disk.
@@ -173,6 +176,17 @@ impl MessageStore {
             msg.text = new_content.to_string();
             msg.edited = true;
         })
+    }
+
+    /// Get all attachments for a message (proxy to AttachmentStore).
+    pub fn attachments_for(&self, msg_id: &str) -> &[AttachmentMeta] {
+        self.attachments.attachments_for(msg_id)
+    }
+
+    /// Register attachment metadata for a message.
+    pub fn add_attachment(&mut self, msg_id: &str, idx: usize, filename: &str, size: u64, mime: &str) {
+        let meta = AttachmentMeta::new(msg_id, idx, filename, size, mime);
+        self.attachments.add(meta);
     }
 }
 
