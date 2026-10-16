@@ -2,7 +2,7 @@
 // relay.js импортирует singleton напрямую — state-machine не зависит от App.ctx.
 // Feature-modules получают в makeCtx() минимум, а не whole this. Lazy import
 // через функции разрывает циклы (mailbox-api -> feature -> relay -> mailbox-api).
-import { sessionStore, chatStore, mailboxStore } from './session-store.js';
+import { sessionStore, chatStore, mailboxStore, uiStore } from './session-store.js';
 import api, { db } from '../api.js';
 
 function IncomingFeature() { return import('./incoming.js'); }
@@ -24,6 +24,10 @@ function makeCtx() {
     emailBodyCache: mailboxStore.state.emailBodyCache,
     cacheBody(key, body) { mailboxStore.cacheBody(key, body); },
     scrollToBottom(force = false) { return null; },
+    // J.5b: inj через uiStore singleton (как relay.js делает напрямую).
+    // Feature-модули читают uiStore.toast/uiStore.tr, а не App.ctx.this.*.
+    showToast(message, ms) { uiStore.toast(message, ms); },
+    t(key) { return uiStore.tr(key); },
     loadCursors: (id) => mailboxApi.loadCursors(id),
     saveCursors: (id, c) => mailboxApi.saveCursors(id, c),
   };
