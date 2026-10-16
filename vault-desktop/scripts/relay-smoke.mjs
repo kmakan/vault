@@ -1,3 +1,12 @@
+// __VAULT_LOCALSTORAGE_MOCK__
+const __ls = { _d: {} };
+globalThis.localStorage ||= {
+  getItem: (k) => (k in __ls._d ? __ls._d[k] : null),
+  setItem: (k, v) => { __ls._d[k] = String(v); },
+  removeItem: (k) => { delete __ls._d[k]; },
+  clear: () => { for (const k in __ls._d) delete __ls._d[k]; },
+};
+
 // Node-смоук features/relay.js — семантика релей-приёма/режимов без
 // Vue/Tauri (паттерн incoming-smoke.mjs). setInterval/setTimeout —
 // управляемые моки (без реального ожидания).

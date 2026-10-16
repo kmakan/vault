@@ -26,7 +26,7 @@ import { channelTokens } from './channels-tokens.js';
 //   VITE_RELAY_URL=http://192.168.1.4:36639/relay npm run build
 //
 // Пустое/пропущенное значение → прод (защита от «переменная set, но пустая»).
-const BUILD_RELAY_URL = (import.meta.env.VITE_RELAY_URL || '').trim();
+const BUILD_RELAY_URL = ((import.meta && import.meta.env && import.meta.env.VITE_RELAY_URL) || '').trim();
 export const DEFAULT_RELAY_URL = BUILD_RELAY_URL || 'https://vault-msg.ru/relay';
 const PUB_TIMEOUT_MS = 8000;
 const POLL_TIMEOUT_MS = 10000;
