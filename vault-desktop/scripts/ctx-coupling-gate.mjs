@@ -81,6 +81,8 @@ const OWNER_FIELDS = new Set([
   'setCurrentChannel',
   // J.5a: contacts-store.js owner API (contacts/contactAliases/lastSeenMap)
   'setLastSeen', 'getLastSeen', 'lastSeenMap',
+  // J.7: messages-store.js owner API (ephemeral state)
+  'tick', 'setTimer', 'hasTimer', 'clearTimer', 'clearAllTimers', 'setCurrentTtl', 'getCurrentTtl',
 ]);
 
 

@@ -967,6 +967,8 @@ import { contactsStore } from './features/contacts-store.js';
 import { identityStore } from './features/identity-store.js';
 // ADR-004 J.5d: channels-store owner для channelPosts/channelUnread.
 import { channelsStore } from './features/channels-store.js';
+// ADR-004 J.7: messages-store owner для состояния ephemeral.
+import { messagesStore } from './features/messages-store.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
 import * as GroupsClone from './features/groups-clone.js';
@@ -1066,6 +1068,8 @@ export default {
     const mailboxStore = reactive(mailboxState)
     // J.3a: singleton chatStore — state activeChat/currentGroup/activeChatType.
     const chatStore = reactive(chatState)
+    // J.7: messages-store (ephemeral state) — reactive wrapper для re-render в шапке.
+    const messagesStoreReact = reactive(messagesStore);
     const callSession = useSession();
     // J.3b: init uiStore (t/showToast) через proxy на this.* (i18n plugin + method).
     // Vue options this.* доступен после монтирования — lazy proxy.
@@ -1073,7 +1077,7 @@ export default {
     const uiToast = computed(() => this?.showToast ?? (() => {}));
     watch(uiT, (fn) => uiStore.setT(fn), { immediate: true });
     watch(uiToast, (fn) => uiStore.setShowToast(fn), { immediate: true });
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, callSession };
   },
   data() {
     return {
@@ -1096,7 +1100,7 @@ export default {
       // историю (после разблокировки не появляется), старое — остаётся.
       // Персист в sqlite kv 'ignored-users'.
       ignoredUsers: {},
-      showArchived: false,
+      // showArchivedinj в uiStore.modalFlags (J.7):
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
       chatMenu: { show: false, target: null },
       // Избранное: помеченные сообщения чата.
@@ -1191,7 +1195,7 @@ export default {
       loginError: '',
       // Настройки серверов почты в форме входа (провайдер может сменить
       // IMAP/SMTP — пользователь должен мочь исправить их вручную).
-      showServerSettings: false,
+      // showServerSettingsinj в uiStore.modalFlags (J.7):
       imapServer: '',
       imapPort: '',
       smtpServer: '',
@@ -1241,12 +1245,9 @@ export default {
 
       // currentGroup/activeChatType — proxy на chat-store (J.3a).
       // Тост-уведомление внизу экрана inj uiStore (J.3b).
-      // Исчезающие сообщения: активные таймеры удаления
-      // { msgKey: timeoutId }, msgKey = chatId + ':' + msgId
-      ephemeralTimers: {},
-      ephemeralTick: 0,
       // showEphemeralMenuinj в uiStore.modalFlags (J.7):
-      currentEphemeralTtl: 0,
+      // Исчезающие сообщения inj messages-store (J.7):
+      // ephemeralTimers/ephemeralTick/currentEphemeralTtl — state в owner.
       // myBioinj в session-store (J.3a).
       // Зелёная точка: email → ts последней активности контакта
       // (входящее письмо/квитанция). Не онлайн-статус: «видели за 10 мин».
@@ -1261,29 +1262,29 @@ export default {
         { v: 604800, label: '1 неделя' },
       ],
       // Восстановление аккаунта на экране входа (Key Recovery)
-      showRecovery: false,
+      // showRecoveryinj в uiStore.modalFlags (J.7):
       recoveryWordsInput: '',
       recoveryFileJson: '',
       recoveryFileName: '',
       // Group Settings
-      showGroupSettings: false,
+      // showGroupSettingsinj в uiStore.modalFlags (J.7):
       // Invite popup (приглашение в группу с согласием)
       pendingInvites: [],
-      showInvitePopup: false,
+      // showInvitePopupinj в uiStore.modalFlags (J.7):
       invitePopupIndex: 0,
       pendingContacts: [],
-      showContactPopup: false,
+      // showContactPopupinj в uiStore.modalFlags (J.7):
       contactPopupIndex: 0,
       // Инвайты/запросы в обработке: пока идёт медленный SMTP, поллинг не
       // должен показать их повторно (ключи «group_id|uid» / «sender|uid»).
       handledInviteKeys: [],
       handledContactKeys: [],
       // Add-member popup (выбор контактов, мульти-выбор)
-      showAddMemberPopup: false,
+      // showAddMemberPopupinj в uiStore.modalFlags (J.7):
       addMemberQuery: '',
       addMemberSelected: [],
       // Список участников группы (модалка по клику на счётчик)
-      showMembersList: false,
+      // showMembersListinj в uiStore.modalFlags (J.7):
       // Полноэкранный просмотр изображения-вложения
       viewingImage: null,
       // Profile cache (имя/аватар из настроек)
@@ -1297,7 +1298,7 @@ export default {
       chatSearchQuery: '',
       showChatSearch: false,
       // Create group modal
-      showCreateGroup: false,
+      // showCreateGroupinj в uiStore.modalFlags (J.7):
       inviteEmail: '',
       // Audio
       showAudioRecorder: false,
@@ -1356,6 +1357,10 @@ export default {
       get() { return contactsStore.state.lastSeenMap; },
       set(v) { Object.assign(contactsStore.state.lastSeenMap, v || {}); },
     },
+    // Прокси во владельца ephemeral state (ADR-004 J.7):
+    ephemeralTimers: { get() { return this.messagesStore.state.ephemeralTimers; }, set(v) { Object.assign(this.messagesStore.state.ephemeralTimers, v || {}); } },
+    ephemeralTick: { get() { return this.messagesStore.state.ephemeralTick; }, set(v) { this.messagesStore.state.ephemeralTick = v; } },
+    currentEphemeralTtl: { get() { return this.messagesStore.state.currentEphemeralTtl; }, set(v) { this.messagesStore.setCurrentTtl(v); } },
     // Прокси во владельца переписки (ADR-004, Этап A1).
     // Все существующие this.messages = ... и this.messages в шаблоне продолжают
     // работать без изменений, но запись идёт через владельца.
@@ -1408,6 +1413,16 @@ export default {
     showQRCode: { get() { return uiStore.getModal('showQRCode'); }, set(v) { uiStore.setModal('showQRCode', v); } },
     showCipher: { get() { return uiStore.getModal('showCipher'); }, set(v) { uiStore.setModal('showCipher', v); } },
     showEphemeralMenu: { get() { return uiStore.getModal('showEphemeralMenu'); }, set(v) { uiStore.setModal('showEphemeralMenu', v); } },
+    // 9 UI toggle flagsinj в uiStore.modalFlags (J.7):
+    showArchived: { get() { return uiStore.getModal('showArchived'); }, set(v) { uiStore.setModal('showArchived', v); } },
+    showServerSettings: { get() { return uiStore.getModal('showServerSettings'); }, set(v) { uiStore.setModal('showServerSettings', v); } },
+    showRecovery: { get() { return uiStore.getModal('showRecovery'); }, set(v) { uiStore.setModal('showRecovery', v); } },
+    showGroupSettings: { get() { return uiStore.getModal('showGroupSettings'); }, set(v) { uiStore.setModal('showGroupSettings', v); } },
+    showInvitePopup: { get() { return uiStore.getModal('showInvitePopup'); }, set(v) { uiStore.setModal('showInvitePopup', v); } },
+    showContactPopup: { get() { return uiStore.getModal('showContactPopup'); }, set(v) { uiStore.setModal('showContactPopup', v); } },
+    showAddMemberPopup: { get() { return uiStore.getModal('showAddMemberPopup'); }, set(v) { uiStore.setModal('showAddMemberPopup', v); } },
+    showMembersList: { get() { return uiStore.getModal('showMembersList'); }, set(v) { uiStore.setModal('showMembersList', v); } },
+    showCreateGroup: { get() { return uiStore.getModal('showCreateGroup'); }, set(v) { uiStore.setModal('showCreateGroup', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },
@@ -2697,6 +2712,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.contacts = [];
       this.activeChat = null;
       this.messages = [];
+      this.messagesStore.reset();
       this.clearAllUnread();
       this.emails = [];
       this.emailError = '';
@@ -3724,21 +3740,21 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async ephemeralTtlOf(chatId) { return MsgStore.ephemeralTtlOf(chatId); },
     async setEphemeralTtl(chatId, seconds) {
       await db.kvSet('anon', 'ephemeral:' + chatId, String(seconds || 0));
-      this.ephemeralTick += 1; // перерисовать индикатор в шапке
+      this.messagesStore.tick(); // перерисовать индикатор в шапке
     },
     scheduleEphemeral(msg, chatId) {
       if (!msg || !msg.expireAt) return;
       const key = chatId + ':' + msg.id;
-      if (this.ephemeralTimers[key]) return;
+      if (this.messagesStore.hasTimer(key)) return;
       console.log('[ephemeral] arm timer id=' + msg.id + ' chat=' + chatId + ' in ' + Math.round((msg.expireAt - Date.now()) / 1000) + 's');
       // Истёкшие пока приложение было закрыто: удаляем сразу.
       if (Date.now() >= msg.expireAt) {
         this.expireEphemeral(chatId, msg.id, msg.mid);
         return;
       }
-      this.ephemeralTimers[key] = setTimeout(() => {
+      this.messagesStore.setTimer(key, () => {
         this.expireEphemeral(chatId, msg.id, msg.mid);
-        delete this.ephemeralTimers[key];
+        this.messagesStore.clearTimer(key);
       }, msg.expireAt - Date.now());
     },
     expireEphemeral(chatId, msgId, mid) {

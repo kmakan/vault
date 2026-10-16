@@ -113,6 +113,15 @@ export function createUiStore() {
     showQRCode: false,
     showCipher: false,
     showEphemeralMenu: false,
+    showArchived: false,
+    showServerSettings: false,
+    showRecovery: false,
+    showGroupSettings: false,
+    showInvitePopup: false,
+    showContactPopup: false,
+    showAddMemberPopup: false,
+    showMembersList: false,
+    showCreateGroup: false,
   };
   let toastMessage = '';
   let toastTimer = null;
