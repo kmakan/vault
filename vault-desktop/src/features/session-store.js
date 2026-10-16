@@ -110,6 +110,13 @@ export function createUiStore() {
     addMemberSelected: [],
     invitePopupIndex: 0,
     contactPopupIndex: 0,
+    // J.7: login/server-form fields inj форм-владельцу uiStore.formState.
+    rememberMe: true,
+    imapServer: '',
+    imapPort: '',
+    smtpServer: '',
+    smtpPort: '',
+    mailProvider: '',
   };
   // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
   const modalFlags = {

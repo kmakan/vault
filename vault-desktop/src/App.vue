@@ -1190,19 +1190,13 @@ export default {
       restoringSession: false,
       email: '',
       password: '',
-      rememberMe: true,
+      // rememberMe/imapServer/imapPort/smtpServer/smtpPort/mailProvider
+      // inj в uiStore.formState (J.5b).
       loginLoading: false,
       loginError: '',
       // Настройки серверов почты в форме входа (провайдер может сменить
       // IMAP/SMTP — пользователь должен мочь исправить их вручную).
       // showServerSettingsinj в uiStore.modalFlags (J.7):
-      imapServer: '',
-      imapPort: '',
-      smtpServer: '',
-      smtpPort: '',
-      // Выбранный провайдер почты (каталог IMAP/SMTP в mailProviders.js).
-      // '' = ещё не выбран; 'custom' = ручные поля.
-      mailProvider: '',
       emailsLoading: false,
       emailError: '',
       // Оптимистичные исходящие, ещё не подтверждённые письмом из ящика:
@@ -1409,6 +1403,13 @@ export default {
     addMemberSelected: { get() { return uiStore.getFormField('addMemberSelected'); }, set(v) { uiStore.setFormField('addMemberSelected', v); } },
     invitePopupIndex: { get() { return uiStore.getFormField('invitePopupIndex'); }, set(v) { uiStore.setFormField('invitePopupIndex', v); } },
     contactPopupIndex: { get() { return uiStore.getFormField('contactPopupIndex'); }, set(v) { uiStore.setFormField('contactPopupIndex', v); } },
+    // login/server-form fieldsinj в uiStore.formState (J.5b):
+    rememberMe: { get() { return uiStore.getFormField('rememberMe'); }, set(v) { uiStore.setFormField('rememberMe', v); } },
+    imapServer: { get() { return uiStore.getFormField('imapServer'); }, set(v) { uiStore.setFormField('imapServer', v); } },
+    imapPort: { get() { return uiStore.getFormField('imapPort'); }, set(v) { uiStore.setFormField('imapPort', v); } },
+    smtpServer: { get() { return uiStore.getFormField('smtpServer'); }, set(v) { uiStore.setFormField('smtpServer', v); } },
+    smtpPort: { get() { return uiStore.getFormField('smtpPort'); }, set(v) { uiStore.setFormField('smtpPort', v); } },
+    mailProvider: { get() { return uiStore.getFormField('mailProvider'); }, set(v) { uiStore.setFormField('mailProvider', v); } },
     // UI toggle flagsinj в uiStore.modalFlags (J.5b):
     showChannelPanel: { get() { return uiStore.getModal('showChannelPanel'); }, set(v) { uiStore.setModal('showChannelPanel', v); } },
     showCreateChannel: { get() { return uiStore.getModal('showCreateChannel'); }, set(v) { uiStore.setModal('showCreateChannel', v); } },
