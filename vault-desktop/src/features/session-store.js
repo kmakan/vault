@@ -108,6 +108,8 @@ export function createUiStore() {
     recoveryFileName: '',
     addMemberQuery: '',
     addMemberSelected: [],
+    invitePopupIndex: 0,
+    contactPopupIndex: 0,
   };
   // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
   const modalFlags = {
@@ -128,6 +130,7 @@ export function createUiStore() {
     showAddMemberPopup: false,
     showMembersList: false,
     showCreateGroup: false,
+    showEmojiPicker: false,
   };
   let toastMessage = '';
   let toastTimer = null;

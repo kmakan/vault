@@ -1269,10 +1269,10 @@ export default {
       // Invite popup (приглашение в группу с согласием)
       pendingInvites: [],
       // showInvitePopupinj в uiStore.modalFlags (J.7):
-      invitePopupIndex: 0,
+      // invitePopupIndexinj в uiStore.formState (J.5b):
       pendingContacts: [],
       // showContactPopupinj в uiStore.modalFlags (J.7):
-      contactPopupIndex: 0,
+      // contactPopupIndexinj в uiStore.formState (J.5b):
       // Инвайты/запросы в обработке: пока идёт медленный SMTP, поллинг не
       // должен показать их повторно (ключи «group_id|uid» / «sender|uid»).
       handledInviteKeys: [],
@@ -1287,7 +1287,7 @@ export default {
       // Profile cache (имя/аватар из настроек)
       profiles: {},
       // Emoji
-      showEmojiPicker: false,
+      // showEmojiPickerinj в uiStore.modalFlags (J.7):
       // Reactions
       reactionPickerMsgId: null,
       quickReactions: ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👀'],
@@ -1407,6 +1407,8 @@ export default {
     recoveryFileName: { get() { return uiStore.getFormField('recoveryFileName'); }, set(v) { uiStore.setFormField('recoveryFileName', v); } },
     addMemberQuery: { get() { return uiStore.getFormField('addMemberQuery'); }, set(v) { uiStore.setFormField('addMemberQuery', v); } },
     addMemberSelected: { get() { return uiStore.getFormField('addMemberSelected'); }, set(v) { uiStore.setFormField('addMemberSelected', v); } },
+    invitePopupIndex: { get() { return uiStore.getFormField('invitePopupIndex'); }, set(v) { uiStore.setFormField('invitePopupIndex', v); } },
+    contactPopupIndex: { get() { return uiStore.getFormField('contactPopupIndex'); }, set(v) { uiStore.setFormField('contactPopupIndex', v); } },
     // UI toggle flagsinj в uiStore.modalFlags (J.5b):
     showChannelPanel: { get() { return uiStore.getModal('showChannelPanel'); }, set(v) { uiStore.setModal('showChannelPanel', v); } },
     showCreateChannel: { get() { return uiStore.getModal('showCreateChannel'); }, set(v) { uiStore.setModal('showCreateChannel', v); } },
@@ -1426,6 +1428,7 @@ export default {
     showAddMemberPopup: { get() { return uiStore.getModal('showAddMemberPopup'); }, set(v) { uiStore.setModal('showAddMemberPopup', v); } },
     showMembersList: { get() { return uiStore.getModal('showMembersList'); }, set(v) { uiStore.setModal('showMembersList', v); } },
     showCreateGroup: { get() { return uiStore.getModal('showCreateGroup'); }, set(v) { uiStore.setModal('showCreateGroup', v); } },
+    showEmojiPicker: { get() { return uiStore.getModal('showEmojiPicker'); }, set(v) { uiStore.setModal('showEmojiPicker', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },
