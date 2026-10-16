@@ -1187,8 +1187,7 @@ export default {
       showJumpToBottom: false,
       // Сообщение, которое сейчас редактируется (только своё).
       editingMessage: null,
-      showSettings: false,
-      showMembers: false,
+      // showSettings/showMembersinj в uiStore.modalFlags (J.7):
       // showMembersinj в uiStore.modalFlags (J.7):
       // restoringSessioninj в session-store.state (J.3a).
       email: '',
@@ -1434,6 +1433,8 @@ export default {
     showMembersList: { get() { return uiStore.getModal('showMembersList'); }, set(v) { uiStore.setModal('showMembersList', v); } },
     showCreateGroup: { get() { return uiStore.getModal('showCreateGroup'); }, set(v) { uiStore.setModal('showCreateGroup', v); } },
     showEmojiPicker: { get() { return uiStore.getModal('showEmojiPicker'); }, set(v) { uiStore.setModal('showEmojiPicker', v); } },
+    showSettings: { get() { return uiStore.getModal('showSettings'); }, set(v) { uiStore.setModal('showSettings', v); } },
+    showMembers: { get() { return uiStore.getModal('showMembers'); }, set(v) { uiStore.setModal('showMembers', v); } },
     // toast-stateinj в uiStore (J.3b):
     toastMessage: { get() { return uiStore.getToastMessage(); }, set(v) { uiStore.setToastMessage(v); } },
     toastTimer: { get() { return uiStore.getToastTimer(); }, set(v) { uiStore.setToastTimer(v); } },

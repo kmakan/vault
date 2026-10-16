@@ -142,6 +142,8 @@ export function createUiStore() {
     showMembersList: false,
     showCreateGroup: false,
     showEmojiPicker: false,
+    showSettings: false,
+    showMembers: false,
   };
   let toastMessage = '';
   let toastTimer = null;
