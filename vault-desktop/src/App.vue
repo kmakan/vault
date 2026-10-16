@@ -1230,10 +1230,9 @@ export default {
       // Groups
       groups: [],
       // channels — proxy на mailboxStore.state.channels (J.3c).
-      // channelAvatarsinj в channels-store (J.7 proxy).
+      // channelAvatars/currentChannelinj в channels-store (J.7 proxy).
       // groupIconMapinj в groups-store (J.7 proxy).
       // UI (t_a14ac823): активный канал + модалки создания/подписки
-      currentChannel: null,
       showChannelPanel: false,
       showCreateChannel: false,
       showJoinChannel: false,
@@ -1444,6 +1443,9 @@ export default {
     channelAvatars: {
       get() { return channelsStore.state.channelAvatars; },
       set(v) { Object.assign(channelsStore.state.channelAvatars, v || {}); },
+    },
+    currentChannel: {
+      get() { return channelsStore.state.currentChannel; },
     },
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
@@ -2864,7 +2866,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.cancelReply();
       this.activeChat = 'channel:' + ch.id;
       this.activeChatType = 'channel';
-      this.currentChannel = ch;
+      this.channelsStore.setCurrentChannel(ch);
       this.currentGroup = null;
       this.showStarredOnly = false;
       this.loadSeq++;

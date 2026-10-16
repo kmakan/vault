@@ -6,6 +6,7 @@ export function createChannelsStore() {
     channelPosts: {},    // channelId -> [{ts, body, images, sender}]
     channelUnread: {},   // channelId -> count
     channelAvatars: {},  // channelId -> dataUrl (из meta-конвертов)
+    currentChannel: null, // активный канал в UI (null = чат/группа)
   };
   return {
     state,
@@ -20,7 +21,8 @@ export function createChannelsStore() {
     clearUnread(chId) { state.channelUnread[chId] = 0; },
     setChannelAvatar(chId, dataUrl) { state.channelAvatars[chId] = dataUrl || ''; return state.channelAvatars[chId]; },
     getChannelAvatar(chId) { return state.channelAvatars[chId] || ''; },
-    reset() { state.channelPosts = {}; state.channelUnread = {}; state.channelAvatars = {}; },
+    setCurrentChannel(ch) { state.currentChannel = ch ?? null; return state.currentChannel; },
+    reset() { state.channelPosts = {}; state.channelUnread = {}; state.channelAvatars = {}; state.currentChannel = null; },
   };
 }
 export const channelsStore = createChannelsStore();
