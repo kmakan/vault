@@ -963,6 +963,8 @@ import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
 import { contactsStore } from './features/contacts-store.js';
+// ADR-004 J.6: identity-store owner для peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded.
+import { identityStore } from './features/identity-store.js';
 import * as GroupsMigrate from './features/groups-migrate.js';
 import * as GroupsLoad from './features/groups-load.js';
 import * as GroupsClone from './features/groups-clone.js';
@@ -1219,14 +1221,9 @@ export default {
       // relay-resilience: эко + мёртвый релей → автономный режим (служба+IDLE).
       ecoAutonomous: false,
       relayOfflineSince: null,
-      peerKeys: {},
-      // PQ: ML-KEM ek контактов {email: b64}
-      peerPqKeys: {},
-      peerKeyInput: '',
       showKeyManager: false,
       showQRCode: false,
       showCipher: false,
-      peerKeysLoaded: {},
       searchQuery: '',
       // Groups
       groups: [],
@@ -1409,6 +1406,25 @@ export default {
     emails: {
       get() { return mailboxState.state.emails; },
       set(v) { mailboxState.setEmails(v); },
+    },
+    // Прокси во владельца идентичности (ADR-004 J.6):
+    // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
+    // identity-store. calls.js/forward.js читают через ctx.peerKeys (computed).
+    peerKeys: {
+      get() { return identityStore.state.peerKeys; },
+      set(v) { Object.assign(identityStore.state.peerKeys, v || {}); },
+    },
+    peerPqKeys: {
+      get() { return identityStore.state.peerPqKeys; },
+      set(v) { Object.assign(identityStore.state.peerPqKeys, v || {}); },
+    },
+    peerKeyInput: {
+      get() { return identityStore.state.peerKeyInput; },
+      set(v) { identityStore.setPeerKeyInput(v); },
+    },
+    peerKeysLoaded: {
+      get() { return identityStore.state.peerKeysLoaded; },
+      set(v) { identityStore.state.peerKeysLoaded = v || {}; },
     },
     // Прокси во владельца чата (ADR-004 J.3a).
     activeChat: { get() { return chatStore.state.activeChat; }, set(v) { chatStore.state.activeChat = v ?? null; } },
@@ -2447,11 +2463,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       try {
         // Сбрасываем перед загрузкой: удалённые в Rust ключи должны
         // пропасть из памяти.
-        this.peerKeys = {};
-        this.peerKeysLoaded = {};
-        // PQ: ek ML-KEM-768 контактов (b64). Параллельная Map
-        // peerKeys остаётся X25519-строками (30+ использований не трогаем).
-        this.peerPqKeys = {};
+        identityStore.clearPeerKeys();
         const stored = await crypto.loadPeerKeys();
         for (const pk of stored) {
           this.peerKeys[pk.email] = pk.public_key;
@@ -2986,7 +2998,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     setPeerKeyFromInput() {
       if (!this.peerKeyInput || !this.activeChat) return;
       this.setPeerKey(this.activeChat, this.peerKeyInput);
-      this.peerKeyInput = '';
+      identityStore.setPeerKeyInput('');
     },
     async selectChat(email) {
       // Vault chat requires a peer key — without it there is nothing (and nothing
