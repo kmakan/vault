@@ -149,6 +149,28 @@ impl MessageStore {
         added
     }
 
+    /// Classify an incoming decrypted plaintext and route to store.
+    ///
+    /// Parity с JS incoming.js classify(): определяем тип конверта (Message/Profile/
+    /// Presence/Call) и роутим в store ТОЛЬКО сообщения (Message). Presence/Profile/
+    /// Call/Poll — domain-events, I/O (saveProfile/handleCallSignal/notify) остаётся
+    /// в Tauri cmd (как send.js → api.sendMessage).
+    ///
+    /// Возвращает ClassifyResult с чат-ключом для дальнейшей обработки наружными слоями.
+    pub fn classify_incoming(
+        &self,
+        from: &str,
+        decrypted_plaintext: &str,
+    ) -> Option<super::incoming::ClassifyResult> {
+        super::incoming::classify(decrypted_plaintext, from)
+    }
+
+    /// Store an incoming message (after classify confirmed kind=Message).
+    /// Используется Tauri cmd для роутинга classified events.
+    pub fn store_incoming(&mut self, email: &str, group_id: Option<&str>, msg: VaultMessage) -> bool {
+        self.append_message(email, group_id, msg)
+    }
+
     /// Parse VaultEnvelope → VaultMessage (app-layer, как JS parseEnvelope).
     /// envelope = core (version/msg_type/from/to/message_id/in_reply_to/timestamp)
     /// payload  = encrypted_payload JSON {id, text, name, avatar, ts, ...}
@@ -227,6 +249,41 @@ mod tests {
         assert_eq!(msg.ts, 1700000000);
         assert_eq!(msg.in_reply_to, None);
         assert_eq!(msg.ttl, Some(0));
+    }
+
+    #[test]
+    fn test_classify_incoming_message() {
+        let store = MessageStore::with_path(std::path::PathBuf::from("/tmp/__nonexistent_vault_messages.json")).unwrap();
+        let plain = r#"{"vault":1,"id":"m1","text":"hi","name":"A"}"#;
+        let r = store.classify_incoming("alice@x", plain).unwrap();
+        assert_eq!(r.kind, crate::vault::ClassifyKind::Message);
+        assert_eq!(r.env_id.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn test_classify_incoming_presence() {
+        let store = MessageStore::with_path(std::path::PathBuf::from("/tmp/__nonexistent_vault_messages2.json")).unwrap();
+        let plain = r#"{"presence":1,"ts":123}"#;
+        let r = store.classify_incoming("alice@x", plain).unwrap();
+        assert_eq!(r.kind, crate::vault::ClassifyKind::Presence);
+    }
+
+    #[test]
+    fn test_classify_incoming_profile() {
+        let store = MessageStore::with_path(std::path::PathBuf::from("/tmp/__nonexistent_vault_messages3.json")).unwrap();
+        let plain = r#"{"vault":1,"name":"Bob","avatar":"x"}"#;
+        let r = store.classify_incoming("bob@x", plain).unwrap();
+        assert_eq!(r.kind, crate::vault::ClassifyKind::Profile);
+    }
+
+    #[test]
+    fn test_storage_incoming_message() {
+        let mut store = MessageStore::with_path(std::path::PathBuf::from("/tmp/__nonexistent_vault_messages4.json")).unwrap();
+        let env = sample_envelope();
+        let payload = r#"{"id":"msg-2","text":"hello"}"#;
+        let msg = MessageStore::parse_envelope(&env, payload).unwrap();
+        assert!(store.store_incoming("bob@x", None, msg));
+        assert_eq!(store.messages_for("bob@x", None).len(), 1);
     }
 
     #[test]
