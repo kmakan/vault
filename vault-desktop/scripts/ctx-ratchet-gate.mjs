@@ -124,7 +124,11 @@ const fieldReaders = {};   // поле → множество модулей
 for (const spec of SCAN) {
   const full = path.resolve(ROOT, 'src', spec);
   if (!existsSync(full)) continue;
-  const src = readFileSync(full, 'utf8');
+  let src = readFileSync(full, 'utf8');
+  // Strip comments: строковый литерал важен, если `ctx.` встречается в шаблонах.
+  // // line и /* block */ комментарии не должны влиять на связность (false-positive
+  // например, `// ctx.channelPosts` в doc-комментариях новых owner-модулей).
+  src = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   const mod = moduleOf(spec);
   const seen = new Set();
   for (const m of src.matchAll(CTX_READ)) {
@@ -181,7 +185,8 @@ const current = {
     ctxRefSites: SCAN.reduce((s, sp) => {
       const f = path.resolve(ROOT, 'src', sp);
       if (!existsSync(f)) return s;
-      return s + (readFileSync(f, 'utf8').match(CTX_READ) || []).length;
+      const raw = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      return s + (raw.match(CTX_READ) || []).length;
     }, 0),
     // У Set есть .size, а НЕ .length: v.length === undefined, условие
     // undefined > 1 всегда ложно, и метрика молча читалась нулём.

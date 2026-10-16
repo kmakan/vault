@@ -901,7 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
-import { sessionStore as sessionState, mailboxStore as mailboxState, chatStore as chatState, uiStore } from './features/session-store.js';
+import { sessionStore as sessionState, chatStore as chatState, uiStore } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1371,7 +1371,11 @@ export default {
     groupAvatars: {
       get() { return this.groups.state.groupAvatars; },
     },
-    // groupIconMapinj в groups-store (J.7 proxy).
+    // ADR-004 J.7: groupIconMap — пока что пустая карта (иконки групп не в MVP).
+    // Прокся на groupAvatars: если понадобится иконка — добавим в groups-store.
+    groupIconMap: {
+      get() { return this.groups.state.groupIcons || {}; },
+    },
     // searchQueryinj в uiStore (J.5b).
     searchQuery: {
       get() { return uiStore.getSearchQuery(); },
