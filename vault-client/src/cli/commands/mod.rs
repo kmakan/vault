@@ -1,4 +1,5 @@
 pub mod attachments;
+pub mod convert;
 pub mod decrypt;
 pub mod encrypt;
 
@@ -114,6 +115,11 @@ pub enum Command {
         text: String,
     },
     Decrypt {
+        text: String,
+    },
+    /// Convert between vault envelope formats (Desktop↔CLI ↔ send.js).
+    /// Args: "<envelope_text>" — auto-detect format, output parsed JSON.
+    Convert {
         text: String,
     },
 
@@ -754,6 +760,15 @@ impl Command {
                         }
                     }
                 }
+                "convert" | "cv" => {
+                    if args.is_empty() {
+                        Command::Unknown("/convert requires envelope text".into())
+                    } else {
+                        Command::Convert {
+                            text: args.to_string(),
+                        }
+                    }
+                }
 
                 // Files
                 "attach" => {
@@ -932,6 +947,7 @@ impl fmt::Display for Command {
             }
             Command::Encrypt { .. } => write!(f, "encrypt ..."),
             Command::Decrypt { .. } => write!(f, "decrypt ..."),
+            Command::Convert { .. } => write!(f, "convert ..."),
             Command::Attach { path } => write!(f, "attach {}", path),
             Command::SendFile { path } => write!(f, "sendfile {}", path),
             Command::CreateGroup { name } => write!(f, "creategroup {}", name),
@@ -1052,6 +1068,16 @@ mod tests {
             Command::Send { message } => assert_eq!(message, "hello world"),
             _ => panic!("Expected Send"),
         }
+    }
+
+    #[test]
+    fn test_parse_convert() {
+        let cmd = Command::parse("/convert ---BEGIN VAULT---");
+        assert!(matches!(cmd, Command::Convert { .. }));
+        let cmd = Command::parse("/cv some-envelope-data");
+        assert!(matches!(cmd, Command::Convert { .. }));
+        // empty → Unknown
+        assert!(matches!(Command::parse("/convert"), Command::Unknown(_)));
     }
 
     #[test]

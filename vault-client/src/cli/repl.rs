@@ -1581,6 +1581,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                 Output::error("Decryption failed. Wrong key or corrupted data.");
             }
         },
+        // ── Convert: cross-format envelope converter (CLI↔Desktop↔send.js) ──
+        Command::Convert { text } => {
+            crate::cli::commands::convert::convert_envelope(&text)
+        },
         // ── Files ────────────────────────────────────────────
         Command::Attach { path } => {
             match crate::cli::commands::attachments::FileInfo::from_path(&path) {
