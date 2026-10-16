@@ -1231,6 +1231,7 @@ export default {
       groups: [],
       // channels — proxy на mailboxStore.state.channels (J.3c).
       // channelAvatarsinj в channels-store (J.7 proxy).
+      // groupIconMapinj в groups-store (J.7 proxy).
       // UI (t_a14ac823): активный канал + модалки создания/подписки
       currentChannel: null,
       showChannelPanel: false,
@@ -1242,7 +1243,7 @@ export default {
       postingChannel: false,
       groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
       groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
-      groupIconMap: {},
+
       // currentGroup/activeChatType — proxy на chat-store (J.3a).
       newGroupName: '',
       // фото вместо эмодзи-иконок.
@@ -1375,6 +1376,11 @@ export default {
     },
     groupAvatars: {
       get() { return this.groups.state.groupAvatars; },
+    },
+    // groupIconMapinj в groups-store (J.7 proxy).
+    groupIconMap: {
+      get() { return this.groups.state.groupIcons; },
+      set(v) { Object.assign(this.groups.state.groupIcons, v || {}); },
     },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.
@@ -2815,7 +2821,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (r.groups) this.groups = r.groups;
       this.groups.mergeGroupKeys(r.keys || {});
       this.groups.mergeGroupAvatars(r.avatars || {});
-      Object.assign(this.groupIconMap, r.icons);
+      this.groups.mergeGroupIcons(r.icons);
       for (const c of r.newContacts) this.contacts.push(c);
     },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).

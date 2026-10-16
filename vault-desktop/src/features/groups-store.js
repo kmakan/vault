@@ -37,6 +37,7 @@ export function createGroupsStore() {
       groupKeys: {},
       // group_id → dataUrl/avatar объект
       groupAvatars: {},
+      groupIcons: {},  // group_id → iconSet (из meta-broadcast)
     },
 
     // ── groupKeys ──────────────────────────────────────────────────
@@ -82,6 +83,26 @@ export function createGroupsStore() {
     clearGroupAvatars() {
       this.state.groupAvatars = {};
       return this.state.groupAvatars;
+    },
+
+    // groupIcons ───────────────────────────────────────────────────
+    getGroupIcon(id) {
+      return this.state.groupIcons[id];
+    },
+
+    setGroupIcon(id, icon) {
+      this.state.groupIcons[id] = icon;
+      return icon;
+    },
+
+    mergeGroupIcons(map) {
+      Object.assign(this.state.groupIcons, map);
+      return this.state.groupIcons;
+    },
+
+    clearGroupIcons() {
+      this.state.groupIcons = {};
+      return this.state.groupIcons;
     },
   };
 }

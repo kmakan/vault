@@ -55,6 +55,7 @@ const STRIP_BLOCKS = /\/\*[\s\S]*?\*\//g;
 const OWNER_FIELDS = new Set([
   'chat',
   'setGroupKey', 'setGroupAvatar', 'mergeGroupKeys', 'mergeGroupAvatars',
+  'setGroupIcon', 'getGroupIcon', 'mergeGroupIcons', 'clearGroupIcons',
 
   'setSending', 'getSending', 'setPendingOutgoing', 'getPendingOutgoingBucket',
   'mergePendingOutgoing', 'removePendingOutgoing', 'clearPendingOutgoing', 'dropBucket',
