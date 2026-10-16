@@ -1237,17 +1237,13 @@ export default {
       showChannelPanel: false,
       showCreateChannel: false,
       showJoinChannel: false,
-      newChannelName: '',
-      newChannelAbout: '',
-      joinChannelLink: '',
       postingChannel: false,
-      groupKeys: {},  // group_id → groupKeyHex (shared symmetric key)
-      groupAvatars: {},  // group_id → dataUrl (загруженный аватар группы)
+      // form-state inj uiStore.formState (J.5b): newChannelName/newChannelAbout/
+      // joinChannelLink/newGroupName/newGroupAvatar.
+      groupKeys: {},  // group_id → groupKeyHex (J.5c owner: groups-store)
+      groupAvatars: {},  // group_id → dataUrl (J.5c owner: groups-store)
 
       // currentGroup/activeChatType — proxy на chat-store (J.3a).
-      newGroupName: '',
-      // фото вместо эмодзи-иконок.
-      newGroupAvatar: '',
       // Тост-уведомление внизу экрана (Key Recovery и пр.)
       toastMessage: '',
       toastTimer: null,
@@ -1382,6 +1378,27 @@ export default {
     searchQuery: {
       get() { return uiStore.getSearchQuery(); },
       set(v) { uiStore.setSearchQuery(v); },
+    },
+    // form-stateinj в uiStore.formState (J.5b):
+    newChannelName: {
+      get() { return uiStore.getFormField('newChannelName'); },
+      set(v) { uiStore.setFormField('newChannelName', v); },
+    },
+    newChannelAbout: {
+      get() { return uiStore.getFormField('newChannelAbout'); },
+      set(v) { uiStore.setFormField('newChannelAbout', v); },
+    },
+    joinChannelLink: {
+      get() { return uiStore.getFormField('joinChannelLink'); },
+      set(v) { uiStore.setFormField('joinChannelLink', v); },
+    },
+    newGroupName: {
+      get() { return uiStore.getFormField('newGroupName'); },
+      set(v) { uiStore.setFormField('newGroupName', v); },
+    },
+    newGroupAvatar: {
+      get() { return uiStore.getFormField('newGroupAvatar'); },
+      set(v) { uiStore.setFormField('newGroupAvatar', v); },
     },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.

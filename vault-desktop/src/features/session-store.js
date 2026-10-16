@@ -88,7 +88,16 @@ export const mailboxStore = createMailboxStore();
 // не зависел от App.vue data-methods (ctx-coupling: 3× t, 3× showToast в relay.js).
 export function createUiStore() {
   let t = (k) => k;
+  let showToast = () => {};
   let searchQuery = '';
+  // J.5b: form-state (newChannel*/newGroup*) вынесен из App.data в uiStore.
+  const formState = {
+    newChannelName: '',
+    newChannelAbout: '',
+    joinChannelLink: '',
+    newGroupName: '',
+    newGroupAvatar: '',
+  };
   return {
     setT(fn) { t = fn; },
     getT() { return t; },
@@ -97,6 +106,9 @@ export function createUiStore() {
     // J.5b: searchQuery-form state вынесен из App.data в uiStore.
     setSearchQuery(v) { searchQuery = v ?? ''; },
     getSearchQuery() { return searchQuery; },
+    setFormField(k, v) { formState[k] = v ?? ''; return formState[k]; },
+    getFormField(k) { return formState[k]; },
+    resetForm() { for (const k of Object.keys(formState)) formState[k] = ''; },
     // удобный прокси для шаблонов/модулей без App-ctx
     tr(key) { return t(key); },
     toast(msg, ms) { showToast(msg, ms); },

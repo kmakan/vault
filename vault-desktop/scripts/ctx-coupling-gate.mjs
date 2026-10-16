@@ -64,6 +64,7 @@ const OWNER_FIELDS = new Set([
   // A12: session-store.js owner API (isLoggedIn + emails + ui: searchQuery)
   'login', 'logout', 'setEmails', 'clearEmails', 'emailCount',
   'setSearchQuery', 'getSearchQuery',
+  'setFormField', 'getFormField', 'resetForm',
   // A13: relay-store.js owner API (ecoMode/relayEnabled/relayDeliveryMode)
   'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
   // A14: newMessage draft owner API (chat-store.js)
