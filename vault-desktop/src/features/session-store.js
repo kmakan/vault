@@ -98,6 +98,16 @@ export function createUiStore() {
     newGroupName: '',
     newGroupAvatar: '',
   };
+  // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
+  const modalFlags = {
+    showChannelPanel: false,
+    showCreateChannel: false,
+    showJoinChannel: false,
+    postingChannel: false,
+    showKeyManager: false,
+    showQRCode: false,
+    showCipher: false,
+  };
   return {
     setT(fn) { t = fn; },
     getT() { return t; },
@@ -109,6 +119,9 @@ export function createUiStore() {
     setFormField(k, v) { formState[k] = v ?? ''; return formState[k]; },
     getFormField(k) { return formState[k]; },
     resetForm() { for (const k of Object.keys(formState)) formState[k] = ''; },
+    setModal(name, v) { modalFlags[name] = !!v; return modalFlags[name]; },
+    getModal(name) { return !!modalFlags[name]; },
+    resetModals() { for (const k of Object.keys(modalFlags)) modalFlags[k] = false; },
     // удобный прокси для шаблонов/модулей без App-ctx
     tr(key) { return t(key); },
     toast(msg, ms) { showToast(msg, ms); },

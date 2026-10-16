@@ -1233,10 +1233,8 @@ export default {
       // channelAvatars/currentChannelinj в channels-store (J.7 proxy).
       // groupIconMapinj в groups-store (J.7 proxy).
       // UI (t_a14ac823): активный канал + модалки создания/подписки
-      showChannelPanel: false,
-      showCreateChannel: false,
-      showJoinChannel: false,
-      postingChannel: false,
+      // UI toggle flags inj uiStore.modalFlags (J.5b): showChannelPanel/
+      // showCreateChannel/showJoinChannel/postingChannel.
       // form-state inj uiStore.formState (J.5b): newChannelName/newChannelAbout/
       // joinChannelLink/newGroupName/newGroupAvatar.
       groupKeys: {},  // group_id → groupKeyHex (J.5c owner: groups-store)
@@ -1399,6 +1397,11 @@ export default {
       get() { return uiStore.getFormField('newGroupAvatar'); },
       set(v) { uiStore.setFormField('newGroupAvatar', v); },
     },
+    // UI toggle flagsinj в uiStore.modalFlags (J.5b):
+    showChannelPanel: { get() { return uiStore.getModal('showChannelPanel'); }, set(v) { uiStore.setModal('showChannelPanel', v); } },
+    showCreateChannel: { get() { return uiStore.getModal('showCreateChannel'); }, set(v) { uiStore.setModal('showCreateChannel', v); } },
+    showJoinChannel: { get() { return uiStore.getModal('showJoinChannel'); }, set(v) { uiStore.setModal('showJoinChannel', v); } },
+    postingChannel: { get() { return uiStore.getModal('postingChannel'); }, set(v) { uiStore.setModal('postingChannel', v); } },
     // Прокси во владельца состояния отправки (ADR-004, Этап A10).
     // sending/pendingOutgoing больше не data()-свойства, а proxy на sending-store.
     // Геттеры сохраняют обратную совместимость для чтения; запись — через API.
