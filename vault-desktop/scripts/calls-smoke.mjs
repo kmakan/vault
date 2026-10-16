@@ -61,7 +61,17 @@ const apiMock = {
   // call-seen dedup — Tauri cmd owner (call_seen_is/call_seen_remember)
   seen: new Set(),
   callSeenIs: async (email, callId) => apiMock.seen.has(`${email}:${callId}`),
-  callSeenRemember: async (email, callId) => { apiMock.seen.add(`${email}:${callId}`); apiMock.calls.push(['callSeenRemember', email, callId]); },
+  callSeenRemember: async (email, callId) => {
+    const key = `${email}:${callId}`;
+    apiMock.seen.add(key);
+    // Tauri cmd truncates to last 100 — mock: keep last 100
+    const all = Array.from(apiMock.seen);
+    if (all.length > 100) {
+      all.splice(0, all.length - 100);
+      apiMock.seen = new Set(all);
+    }
+    apiMock.calls.push(['callSeenRemember', email, callId]);
+  },
 };
 const dbMock = {
   kv: new Map(),

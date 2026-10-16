@@ -62,11 +62,13 @@ export function setPendingNativeCallDecision(action) {
 // call_id обработанного звонка (request/accept/end/reject). После
 // перезапуска не даёт старым конвертам снова дёргать state machine.
 export async function isCallSeen(email, callId) {
-  return await api.callSeenIs(email, callId);
+  try {
+    return await api.callSeenIs(email, callId);
+  } catch (e) { return false; }
 }
 
 export async function rememberCallSeen(email, callId) {
-  await api.callSeenRemember(email, callId);
+  try { await api.callSeenRemember(email, callId); } catch (e) { /* тихо */ }
 }
 
 // ── Длительность гудка (настройка «Звонки») ────────────────────
