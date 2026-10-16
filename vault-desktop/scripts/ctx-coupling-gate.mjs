@@ -66,6 +66,12 @@ const OWNER_FIELDS = new Set([
   'enableEco', 'isEcoMode', 'enableRelay', 'isRelayEnabled', 'setRelayMode', 'deliveryMode',
   // A14: newMessage draft owner API (chat-store.js)
   'newMessage', 'setDraft', 'getDraft', 'clearDraft',
+  // J.6: identity-store.js owner API (peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded)
+  'getPeerKey', 'getPeerPqKey', 'setPeerKey', 'setPeerKeyInput',
+  'markLoaded', 'hasPeerKey', 'clearPeerKeys', 'loadPeerKeys',
+  // J.5d: channels-store.js owner API (channelPosts/channelUnread)
+  'setChannelPosts', 'addChannelPosts', 'getChannelPosts',
+  'setUnread', 'clearUnread',
 ]);
 
 
