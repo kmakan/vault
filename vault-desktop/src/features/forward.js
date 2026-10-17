@@ -1,52 +1,52 @@
-// Feature module: forward (пересылка сообщений). Stage 1 of the App.vue
-// decomposition — pure functions receive the component instance as `ctx`
-// instead of `this`, so every dependency is explicit and testable in
-// isolation. Stage 2 will move the template + dialog into ForwardDialog.vue.
-
+// Feature module: forward (пересылка сообщений). Stage 1 → explicit-deps.
+// Чистые функции получают зависимости в сигнатуре, а не this/ctx целиком.
+// ADR-001: business-logic в Rust core, JS = только state/ui-flow.
 import api from '../api.js';
 import crypto from '../crypto.js';
 import * as EnvelopeId from './envelope-id.js';
 
-// Состояние фичи — в ./forward/state.js (чистый модуль без импортов: его
-// поднимает check-template.cjs для резолва спреда `...forwardState()`).
 export { forwardState } from './forward/state.js';
 
 // Targets for forwarding: contacts + groups, excluding the current chat.
-export function forwardTargets(ctx) {
+// Чистая: читает contacts/groups + resolver-функции.
+export function forwardTargets({ contacts, groups, activeChat, activeChatType, currentGroup, nameOf, t }) {
   const list = [];
-  for (const c of ctx.contacts || []) {
-    if (c.email && c.email !== '__notes__' && c.email !== ctx.activeChat) {
-      list.push({ key: c.email, label: ctx.nameOf(c.email) || c.email });
+  for (const c of contacts || []) {
+    if (c.email && c.email !== '__notes__' && c.email !== activeChat) {
+      list.push({ key: c.email, label: (nameOf ? nameOf(c.email) : null) || c.email });
     }
   }
-  for (const g of ctx.groups || []) {
-    if (!(ctx.activeChatType === 'group' && ctx.currentGroup && g.id === ctx.currentGroup.id)) {
-      list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + ctx.t('group') });
+  for (const g of groups || []) {
+    if (!(activeChatType === 'group' && currentGroup && g.id === currentGroup.id)) {
+      list.push({ key: 'group:' + g.id, label: (g.name || '') + ' · ' + (t ? t('group') : '') });
     }
   }
   return list;
 }
 
-// Open the forward dialog: remember the source message.
-export function startForward(ctx, msg) {
+// Open the forward dialog: запоминает источник через setter (реактивность держится в App.vue).
+export function startForward({ setForwardTo }, msg) {
   if (!msg) return;
-  ctx.forwardTo = msg;
+  setForwardTo(msg);
 }
 
-// Forward: re-encrypt the text for the chosen chat with a "forwarded from"
-// prefix (FWD marks survive as plain text in the new envelope).
-export async function doForward(ctx, key) {
-  const msg = ctx.forwardTo;
-  ctx.forwardTo = null;
-  if (!msg || !key) return;
+// Forward: re-encrypt the text for the chosen chat with a "forwarded from" prefix.
+export async function doForward({
+  forwardTo, displayName, email, nameOf, activeChat, activeChatType,
+  currentGroup, groupKeys, peerKeys, peerPqKeys, ephemeralTtlOf,
+  buildEnvelope, setSending, setForwardTo, markPending, showToast, t,
+}, key) {
+  if (!forwardTo || !key) return;
+  const msg = forwardTo;
+  if (typeof setForwardTo === 'function') setForwardTo(null);
   const fromName = msg.from === 'me'
-    ? (ctx.displayName || ctx.email)
-    : (ctx.nameOf(ctx.activeChat) || ctx.activeChat);
-  const fwdText = (ctx.t('forwarded_from') || 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
+    ? (displayName || email)
+    : (nameOf ? nameOf(activeChat) : null) || activeChat;
+  const fwdText = (t ? (t('forwarded_from') || 'Переслано от') : 'Переслано от') + ' ' + fromName + '\n' + (msg.content || '');
   try {
-    ctx.setSending(true);
-    const ttl = await ctx.ephemeralTtlOf(key);
-    const envelope = await ctx.buildEnvelope(fwdText, ttl);
+    if (typeof setSending === 'function') setSending(true);
+    const ttl = await ephemeralTtlOf(key);
+    const envelope = await buildEnvelope(fwdText, ttl);
     const envelopeId = EnvelopeId.envelopeIdOf(envelope);
     const pendingMsg = {
       id: envelopeId || EnvelopeId.pendingIdOf(),
@@ -57,27 +57,27 @@ export async function doForward(ctx, key) {
     };
     if (key.startsWith('group:')) {
       const gid = key.slice(6);
-      const groupKey = ctx.groupKeys[gid];
-      if (!groupKey) { alert(ctx.t('err_group_key')); return; }
+      const groupKey = (groupKeys || {})[gid];
+      if (!groupKey) { if (t) alert(t('err_group_key')); return; }
       const content = await crypto.encryptWithGroupKey(envelope, groupKey);
       // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
       const envObj = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
       await api.sendGroupMessage(gid, content, envObj);
       pendingMsg.status = 'sent';
-      ctx.markPending(key, pendingMsg);
+      if (typeof markPending === 'function') markPending(key, pendingMsg);
     } else {
-      if (!ctx.peerKeys[key]) { alert(ctx.t('poll_err')); return; }
-      crypto.setPeerPublicKey(ctx.peerKeys[key], ctx.peerPqKeys && ctx.peerPqKeys[key]);
+      if (!(peerKeys || {})[key]) { if (t) alert(t('poll_err')); return; }
+      crypto.setPeerPublicKey((peerKeys || {})[key], peerPqKeys && (peerPqKeys || {})[key]);
       const content = await crypto.encryptVault(envelope);
       await api.sendMessage(key, content);
       pendingMsg.status = 'sent';
-      ctx.markPending(key, pendingMsg);
+      if (typeof markPending === 'function') markPending(key, pendingMsg);
     }
-    ctx.showToast(ctx.t('forward_done') || 'Переслано', 2500);
+    if (typeof showToast === 'function') showToast(t ? (t('forward_done') || 'Переслано') : 'Переслано', 2500);
   } catch (e) {
     console.error('[forward] failed:', e);
-    alert(ctx.t('forward_err') || 'Forward failed');
+    if (t) alert(t('forward_err') || 'Forward failed');
   } finally {
-    ctx.setSending(false);
+    if (typeof setSending === 'function') setSending(false);
   }
 }

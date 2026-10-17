@@ -1634,7 +1634,11 @@ export default {
     },
     // Пересылка: список чатов-целей (логика в features/forward.js).
     forwardTargets() {
-      return ForwardFeature.forwardTargets(this);
+      return ForwardFeature.forwardTargets({
+        contacts: this.contacts, groups: this.groups,
+        activeChat: this.activeChat, activeChatType: this.activeChatType,
+        currentGroup: this.currentGroup, nameOf: this.nameOf, t: this.t,
+      });
     },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
     editingContactBio() {
@@ -2334,8 +2338,22 @@ export default {
     },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
-    startForward(msg) { return ForwardFeature.startForward(this, msg); },
-    doForward(key) { return ForwardFeature.doForward(this, key); },
+    startForward(msg) { return ForwardFeature.startForward({ setForwardTo: v => this.forwardTo = v }, msg); },
+    doForward(key) { return ForwardFeature.doForward(this.forwardDeps(), key); },
+    // ADR-001: явный депс для doForward (без this целиком).
+    forwardDeps() {
+      return {
+        forwardTo: this.forwardTo, displayName: this.displayName, email: this.email,
+        nameOf: this.nameOf, activeChat: this.activeChat,
+        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
+        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
+        ephemeralTtlOf: this.ephemeralTtlOf, buildEnvelope: this.buildEnvelope,
+        setSending: v => this.setSending(v),
+        setForwardTo: v => this.forwardTo = v,
+        markPending: (k, m) => this.markPending(k, m),
+        showToast: (m, d) => this.showToast(m, d), t: this.t,
+      };
+    },
     // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
     // грузит единый kv-блоб (flags + folder names), архив/mute меняются
     // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
