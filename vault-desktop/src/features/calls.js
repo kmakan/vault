@@ -148,6 +148,12 @@ export async function parseCallSignalRust(decrypted) {
   catch (e) { console.warn('[call] parse_signal bridge failed:', e && e.message || e); return null; }
 }
 
+// M2.8: Rust bridge parity — media_call_state (group-call roster state).
+export async function mediaCallStateBridge(callId) {
+  try { return await invoke('media::media_call_state', { callId }); }
+  catch (e) { console.warn('[call] media_call_state bridge failed:', e && e.message || e); return 'Idle'; }
+}
+
 // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
 export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   const body = {

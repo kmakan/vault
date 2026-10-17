@@ -1132,6 +1132,53 @@ impl CallMediaManager {
 }
 
 // ---------------------------------------------------------------------------
+// M2.8: Group call roster state (ADR-001 media.rs isolation).
+// ---------------------------------------------------------------------------
+
+/// Current call-state machine value.
+/// Group calls share one WebRTC M-line per participant on the SFU-less mesh
+/// (P2P fan-out); for MVP the roster is tracked here so the UI can render
+/// participant tiles without crossing into groups.rs business logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum MediaCallState {
+    Idle,
+    Incoming,
+    Outgoing,
+    InCall,
+    /// M2.8: active group-call session (roster = participants + self).
+    Group,
+}
+
+impl Default for MediaCallState {
+    fn default() -> Self {
+        MediaCallState::Idle
+    }
+}
+
+impl CallMediaManager {
+    /// M2.8: current MediaCallState for a call_id (or Idle if none).
+    pub fn call_state(&self, call_id: &str) -> MediaCallState {
+        if self.calls.contains_key(&call_id.to_string()) {
+            MediaCallState::InCall
+        } else {
+            MediaCallState::Idle
+        }
+    }
+}
+
+/// M2.8: Tauri command — query current call state for a call_id.
+/// Bridge parity с `calls.js media_call_state` (Phase 2 roster UI).
+#[tauri::command]
+pub async fn media_call_state(
+    call_id: String,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<MediaCallState, String> {
+    let mgr = state.lock().await;
+    let st = mgr.call_state(&call_id);
+    Ok(st)
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 

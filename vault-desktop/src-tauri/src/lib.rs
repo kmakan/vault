@@ -2160,6 +2160,8 @@ pub fn run() {
             presence_last_seen,
             // M2.3: call-signal parsing bridge.
             call_parse_signal,
+            // M2.8: group-call roster state bridge.
+            media::media_call_state,
             channel_signing_key,
             channel_sign_post,
             channels_tokens,
