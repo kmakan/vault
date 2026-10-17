@@ -990,6 +990,7 @@ import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as HistoryFeature from './features/history.js';
+import * as ContactsFeature from './features/contacts.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
 // S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
@@ -2441,17 +2442,9 @@ export default {
     },
     // Заблокирован ли отправитель для НАС (смена почты не помогает:
     // проверяем и сам email, и все алиасы того же peer-ключа).
+    // ADR-001: контактовые утилиты вынесены в features/contacts.js (чистые fn).
     isIgnored(email) {
-      const key = String(email || '').toLowerCase();
-      if (!key || !this.ignoredUsers) return false;
-      if (this.ignoredUsers[key]) return true;
-      // Алиасы: отправитель сменил адрес, ключ тот же — блок следует за ним.
-      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
-      if (!pk) return false;
-      for (const k of Object.keys(this.ignoredUsers)) {
-        if (this.peerKeys[k] === pk) return true;
-      }
-      return false;
+      return ContactsFeature.isIgnored(this.ignoredUsers, this.peerKeys, email);
     },
     // Заблокировать отправителя: с этого момента его новые сообщения,
     // звонки и уведомления скрыты у получателя. Возвращает false, если
@@ -4323,11 +4316,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // в serverless он всегда null, поэтому сравниваем по своему email
     // (тот же приём, что isOut в 1-на-1 пути loadMessages).
     isOwnSender(senderId) {
-      if (!senderId || !this.email) return false;
-      const s = String(senderId).toLowerCase();
-      // Свои письма могли прийти и со СТАРОГО адреса (смена почты) —
-      // проверяем все свои алиасы (aliasesOf: один pubkey → все адреса).
-      return this.aliasesOf(this.email).some(a => s.includes(a));
+      return ContactsFeature.isOwnSender(senderId, this.email, (e) => this.aliasesOf(e));
     },
     // Нормализация сырого заголовка From («Имя <email>») до чистого email.
     // avatarOf/nameOf ищут профили по email — без этого аватар/имя
@@ -4338,9 +4327,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (email автора) — достаём его; для локальных записей без sender_id
     // (заметки/служебные) возвращаем пустую строку.
     msgSenderEmail(msg) {
-      if (msg == null) return '';
-      const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
-      return this.senderEmail(raw);
+      return ContactsFeature.msgSenderEmail(msg, (raw) => this.senderEmail(raw));
     },
     // --- Квитанции чтения («просмотрено») ---
     // Получатель при открытии чата шлёт отправителю квитанцию {read:1,
