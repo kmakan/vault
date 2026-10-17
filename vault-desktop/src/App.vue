@@ -1112,13 +1112,13 @@ export default {
       // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
       // непрочитанных остаётся). Персист в sqlite kv 'chat-flags'.
       // J.7: владелец — foldersStore (ADR-004), читается через proxy.
+      // ignoredUsers: J.7 — владелец contactsStore (ADR-004), читается через proxy.
       // Глобальный ignore-лист (E2E-честная блокировка): объект
       // { email: tsБлокировки }. Сообщения/звонки/уведомления от этих
       // отправителей скрываются у НАШЕГО получателя (сервер в serverless
       // блокировать не может — контент ему не виден). Новое НЕ попадает в
       // историю (после разблокировки не появляется), старое — остаётся.
       // Персист в sqlite kv 'ignored-users'.
-      ignoredUsers: {},
       // showArchivedinj в uiStore.modalFlags (J.7):
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
       chatMenu: { show: false, target: null },
@@ -1364,6 +1364,11 @@ export default {
     lastSeenMap: {
       get() { return contactsStore.state.lastSeenMap; },
       set(v) { Object.assign(contactsStore.state.lastSeenMap, v || {}); },
+    },
+    // J.7: ignoredUsers — владелец contactsStore (ADR-004), читается через proxy.
+    ignoredUsers: {
+      get() { return contactsStore.state.ignoredUsers; },
+      set(v) { contactsStore.state.ignoredUsers = v || {}; },
     },
     // emails-loadinginj в mailbox-store.state (J.3c):
     emailsLoading: { get() { return this.mailboxStore.state.emailsLoading; }, set(v) { this.mailboxStore.state.emailsLoading = v; } },
@@ -2462,19 +2467,19 @@ export default {
     async loadIgnoredUsers() {
       try {
         const raw = await db.kvGet(await accountNamespace(this.email), 'ignored-users');
-        this.ignoredUsers = raw ? (JSON.parse(raw) || {}) : {};
-      } catch (e) { this.ignoredUsers = {}; }
+        contactsStore.setIgnored(raw ? (JSON.parse(raw) || {}) : {});
+      } catch (e) { contactsStore.clearIgnored(); }
     },
     async saveIgnoredUsers() {
       try {
-        await db.kvSet(await accountNamespace(this.email), 'ignored-users', JSON.stringify(this.ignoredUsers));
+        await db.kvSet(await accountNamespace(this.email), 'ignored-users', JSON.stringify(contactsStore.state.ignoredUsers));
       } catch (e) { /* kv недоступен — список живёт в памяти до перезапуска */ }
     },
     // Заблокирован ли отправитель для НАС (смена почты не помогает:
     // проверяем и сам email, и все алиасы того же peer-ключа).
     // ADR-001: контактовые утилиты вынесены в features/contacts.js (чистые fn).
     isIgnored(email) {
-      return ContactsFeature.isIgnored(this.ignoredUsers, this.peerKeys, email);
+      return ContactsFeature.isIgnored(contactsStore.state.ignoredUsers, this.peerKeys, email);
     },
     // Заблокировать отправителя: с этого момента его новые сообщения,
     // звонки и уведомления скрыты у получателя. Возвращает false, если
@@ -2483,7 +2488,8 @@ export default {
       const key = String(email || '').toLowerCase().trim();
       if (!key || key === (this.email || '').toLowerCase()) return false;
       if (!this.isIgnored(key)) {
-        this.ignoredUsers[key] = Date.now();
+        map[key] = Date.now();
+        contactsStore.setIgnored(map);
         await this.saveIgnoredUsers();
       }
       return true;
@@ -2495,11 +2501,11 @@ export default {
       const key = String(email || '').toLowerCase().trim();
       if (!key) return;
       const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
-      for (const k of Object.keys(this.ignoredUsers)) {
-        if (k === key || (pk && this.peerKeys[k] === pk)) {
-          delete this.ignoredUsers[k];
-        }
+      const map = { ...contactsStore.state.ignoredUsers };
+      for (const k of Object.keys(map)) {
+        if (k === key || (pk && this.peerKeys[k] === pk)) delete map[k];
       }
+      contactsStore.setIgnored(map);
       await this.saveIgnoredUsers();
     },
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации

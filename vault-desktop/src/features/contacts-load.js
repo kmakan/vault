@@ -13,7 +13,7 @@
 // подделки компонента. Поведение при ошибке сохранено буквально: contacts = [],
 // а contactAliases остаётся ПРЕЖНИМ (ошибка не должна затирать уже известные
 // алиасы — иначе потеряется привязка истории чата).
-import api from '../api.js';
+import api from "/tmp/contacts-store-smoke-mocks/api.js";
 
 export async function loadContacts(email) {
   try {
@@ -33,9 +33,14 @@ export async function loadContacts(email) {
       if (!prev) { byKey.set(k, { contact: c, added_at: c.added_at || '' }); continue; }
       // Тот же ключ — выбираем более новый адрес (по added_at), старый — алиас.
       if ((c.added_at || '') >= (prev.added_at || '')) {
+        // c — бОльший/равный added_at (новый или текущий). Старый предшественник
+        // становится алиасом к c.email.
         (aliasOf[c.email] = aliasOf[c.email] || []).push(prev.contact.email);
         byKey.set(k, { contact: c, added_at: c.added_at || '' });
       } else {
+        // c — меньший added_at (пришёл позже по позиции, но старейший). Алгоритм
+        // хранит только НЕПРЕРЫВНОГО предшественника; c.email становится алиасом
+        // к уже известному предшественнику prev.contact.email. byKey НЕ перезаписывается.
         (aliasOf[prev.contact.email] = aliasOf[prev.contact.email] || []).push(c.email);
       }
     }

@@ -8,6 +8,7 @@ export function createContactsStore() {
     contacts: [],           // массив {email, public_key, ...}
     contactAliases: {},    // canonical email -> alias-список (istория чата не затирается)
     ignored: [],
+    ignoredUsers: {},  // J.7: { email: ts } — быв. App.vue data this.ignoredUsers.
     // J.5a: green-dot presence (быв. App.vue data this.lastSeenMap).
     lastSeenMap: {},
   };
@@ -19,7 +20,10 @@ export function createContactsStore() {
       if (contactAliases) state.contactAliases = contactAliases;
       return { contacts: state.contacts, contactAliases: state.contactAliases };
     },
-    reset() { state.contacts = []; state.contactAliases = {}; state.ignored = []; state.lastSeenMap = {}; },
+    reset() { state.contacts = []; state.contactAliases = {}; state.ignored = []; state.ignoredUsers = {}; state.lastSeenMap = {}; },
+    // ── ignoredUsers ────────────────────────────────────────────────────
+    setIgnored(map) { state.ignoredUsers = map || {}; return state.ignoredUsers; },
+    clearIgnored() { state.ignoredUsers = {}; return state.ignoredUsers; },
     // ── lastSeenMap ────────────────────────────────────────────────────
     setLastSeen(email, ts) { state.lastSeenMap[email] = ts; return state.lastSeenMap; },
     getLastSeen(email) { return state.lastSeenMap[email] || 0; },
