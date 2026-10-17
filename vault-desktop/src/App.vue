@@ -962,6 +962,8 @@ import * as RestoreFailure from './features/restore-failure.js';
 import * as MsgStore from './message-store.js';
 import * as ExtLinks from './external-links.js';
 import * as Migrations from './migrations.js';
+// ADR-004 A15: notes-store — единственный владелец заметок для себя.
+import { createNotesStore } from './features/notes-store.js';
 // ADR-004 J.3c: mailbox-store owner для emailsLoading/emailError.
 import { contactsStore } from './features/contacts-store.js';
 import { mailboxState } from './features/mailbox-store.js';
@@ -1074,13 +1076,17 @@ export default {
     // J.7: messages-store (ephemeral state) — reactive wrapper для re-render в шапке.
     const messagesStoreReact = reactive(messagesStore);
     const callSession = useSession();
+    // ADR-004 A15: notes-store — единственный владелец заметок для себя.
+    // reactive не обёрнуто: заметки читаются по запросу, не рендерятся в реальном
+    // времени. Методы load/save работают напрямую с localStorage через keyFor(email).
+    const notes = createNotesStore();
     // J.3b: init uiStore (t/showToast) через proxy на this.* (i18n plugin + method).
     // Vue options this.* доступен после монтирования — lazy proxy.
     const uiT = computed(() => this?.t ?? ((k) => k));
     const uiToast = computed(() => this?.showToast ?? (() => {}));
     watch(uiT, (fn) => uiStore.setT(fn), { immediate: true });
     watch(uiToast, (fn) => uiStore.setShowToast(fn), { immediate: true });
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession };
   },
   data() {
     return {
@@ -3383,25 +3389,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.scrollToBottom(true);
     },
     // --- Заметки для себя
-    // Хранятся ТОЛЬКО в localStorage (vault-notes-<email>), не шифруются,
+    // notes-store.js — ЕДИНСТВОЕ место, знающее про хранилище (vault-notes-<email>).
+    // Методы ниже — тонкие делегаты: они зовутся шаблоном и другими местами,
+    // но сами ничего не знают о формате ключа и localStorage.
     notesStoreKey() {
-      return 'vault-notes-' + (this.email || 'anon');
+      return this.notes.keyFor(this.email);
     },
     loadNotes() {
-      try {
-        return JSON.parse(localStorage.getItem(this.notesStoreKey()) || '[]');
-      } catch (e) {
-        return [];
-      }
+      return this.notes.load(this.email);
     },
     saveNotes(list) {
-      try {
-        localStorage.setItem(this.notesStoreKey(), JSON.stringify(list));
-        return true;
-      } catch (e) {
-        console.error('Failed to save notes:', e);
-        return false;
-      }
+      return this.notes.save(this.email, list);
     },
     selectNotes() {
       this.chat.set(this.loadNotes());
@@ -3593,9 +3591,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       if (this.activeChat === '__notes__') {
         const ok = await confirm(uiStore.tr('delete_message_confirm') || 'Удалить заметку?');
         if (!ok) return;
-        const list = this.loadNotes().filter(n => n.id !== msg.id);
-        this.saveNotes(list);
-        this.chat.set(list);
+        this.notes.removeById(this.email, msg.id);
+        this.chat.set(this.notes.load(this.email));
         return;
       }
       const ok = await confirm(uiStore.tr('delete_message_confirm') || 'Удалить сообщение у всех?');

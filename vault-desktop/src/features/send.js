@@ -87,15 +87,14 @@ export async function sendMessage(ctx) {
         if (ctx.activeChat === '__notes__') {
           const now = Date.now();
           const note = ChatFeature.buildNoteMessage(payload, { now, timeStr: MsgFormat.formatTimeLabel(now) });
-          const list = ctx.loadNotes();
-          list.push(note);
-          if (!ctx.saveNotes(list)) {
-            list.pop();
-            ctx.chat.set([...list]);
+          // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
+          // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
+          if (!ctx.notes.add(ctx.email, note)) {
+            ctx.chat.set(ctx.notes.load(ctx.email));
             alert(ctx.t('err_notes_full'));
             return;
           }
-          ctx.chat.set([...list]);
+          ctx.chat.set(ctx.notes.load(ctx.email));
           ctx.scrollToBottom(true);
           return;
         }

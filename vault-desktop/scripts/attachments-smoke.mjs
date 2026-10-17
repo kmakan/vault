@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
+import { createNotesStore } from '../src/features/notes-store.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -53,6 +54,18 @@ const apiMock = {
 };
 globalThis.__apiMock = apiMock;
 
+// ADR-004 A15: notes-store.js работает с глобальным localStorage.
+// В Node его может не быть — подменяем in-memory хранилищем.
+const _ls = {};
+globalThis.localStorage ||= {
+  getItem: (k) => (_ls[k] !== undefined ? _ls[k] : null),
+  setItem: (k, v) => { _ls[k] = String(v); },
+  removeItem: (k) => { delete _ls[k]; },
+  clear: () => { for (const k in _ls) delete _ls[k]; },
+  key: (i) => Object.keys(_ls)[i] || null,
+  get length() { return Object.keys(_ls).length; },
+};
+
 prepareModuleCopy(
   ROOT + '/src/features/attachments.js',
   MOCKS + '/attachments.mjs',
@@ -95,8 +108,8 @@ function makeCtx(over = {}) {
     parseEnvelope: (txt) => { try { return JSON.parse(txt); } catch (e) { return null; } },
     buildEnvelope: async (payload) => JSON.stringify({ id: 'env1', text: payload }),
     saveCurrentHistory: () => {},
-    saveNotes: () => true,
-    loadNotes: () => [],
+    // ADR-004 A15: notes-store — mock localStorage для чтения/записи заметок.
+    notes: createNotesStore(),
     markPending: () => {},
     scrollToBottom: () => {},
     // Модуль-владелец переписки (ADR-004, Этап A1). attachments.js пишет через
@@ -200,13 +213,14 @@ console.log('4. downloadDodAttachment');
 console.log('5. sendAudioMessage — «Заметки для себя»');
 {
   const ctx = makeCtx({ activeChat: '__notes__' });
-  let saved = null;
-  ctx.saveNotes = (list) => { saved = list; return true; };
-  ctx.loadNotes = () => [];
+  // notes-store использует localStorage (мок globalThis.localStorage).
+  // Чистим перед тестом: состояние изолировано per-email через keyFor(email).
+  ctx.notes.clear(ctx.email);
   apiMock.sendCalls.length = 0;
   await A.sendAudioMessage(ctx, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' });
   check('заметка: сообщение в messages (audio), почта НЕ трогалась',
     ctx.chat.list().length === 1 && ctx.chat.list()[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
+  check('заметка сохранена в notes-store', ctx.notes.load(ctx.email).length === 1);
   check('showAudioRecorder выключен', ctx.showAudioRecorder === false);
 }
 

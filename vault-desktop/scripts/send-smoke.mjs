@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
+import { createNotesStore } from '../src/features/notes-store.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -28,6 +29,17 @@ writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
 writeFileSync(MOCKS + '/relay-client.js',
   'export const fingerprintOf = async () => null; export const relayPublish = () => Promise.resolve({ ok: true });');
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock;
+
+// ADR-004 A15: notes-store.js работает с глобальным localStorage.
+const _ls = {};
+globalThis.localStorage ||= {
+  getItem: (k) => (_ls[k] !== undefined ? _ls[k] : null),
+  setItem: (k, v) => { _ls[k] = String(v); },
+  removeItem: (k) => { delete _ls[k]; },
+  clear: () => { for (const k in _ls) delete _ls[k]; },
+  key: (i) => Object.keys(_ls)[i] || null,
+  get length() { return Object.keys(_ls).length; },
+};
 
 prepareModuleCopy(
   ROOT + '/src/features/send.js',
@@ -71,10 +83,12 @@ function makeCtx(over = {}) {
     // Модуль-владелец переписки (ADR-004, Этап A1). send.js теперь пишет
     // через ctx.chat.set/append, а не напрямую в ctx.messages.
     chat: createChatStore(),
+    // ADR-004 A15: notes-store — единственный владелец заметок для себя.
+    notes: createNotesStore(),
     cancelReply: () => {}, replyPreview: () => '', saveDraft: () => {},
     cancelEdit: () => {}, replyBody: (c) => c || '', replyQuote: () => '',
     recordLocalEdit: () => {}, sendEditEmail: async () => {},
-    saveNotes: () => true, loadNotes: () => [], sendChannelPost: () => {},
+    sendChannelPost: () => {},
   }, over);
   ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
   ctx.getSending = () => ctx.sending;
@@ -115,9 +129,11 @@ console.log('2. «Заметки для себя» — локально, поч�
 {
   apiMock.sent.length = 0;
   const ctx = makeCtx({ activeChat: '__notes__', newMessage: 'заметка' });
-  let saved = null; ctx.saveNotes = (l) => { saved = l; return true; }; ctx.loadNotes = () => [];
+  // notes-store использует localStorage (мок globalThis.localStorage).
+  ctx.notes.clear(ctx.email);
   await S.sendMessage(ctx);
-  check('заметка сохранена локально, почта НЕ трогалась', saved && saved.length === 1 && apiMock.sent.length === 0);
+  check('заметка сохранена локально, почта НЕ трогалась',
+    ctx.notes.load(ctx.email).length === 1 && apiMock.sent.length === 0);
   check('поле ввода очищено', ctx.newMessage === '');
 }
 

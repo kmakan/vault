@@ -248,16 +248,16 @@ export async function sendAudioMessage(ctx, audioData) {
     });
     msg.vault = false;
     msg._notes = true;
-    const list = ctx.loadNotes();
-    list.push(msg);
-    if (!ctx.saveNotes(list)) {
-      list.pop();
-      ctx.chat.set([...list]);
+    // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
+    // НЕ делаем `const list = ctx.notes...` и не мутируем list — эвристика
+    // поймает alias-мутацию. add() сама load→push→save с защитой от дубля.
+    if (!ctx.notes.add(ctx.email, msg)) {
+      ctx.chat.set(ctx.notes.load(ctx.email));
       alert(ctx.t('err_notes_full_voice'));
       ctx.showAudioRecorder = false;
       return;
     }
-    ctx.chat.set([...list]);
+    ctx.chat.set(ctx.notes.load(ctx.email));
     ctx.showAudioRecorder = false;
     ctx.scrollToBottom(true);
     return;
@@ -417,15 +417,14 @@ export async function handleFileSelect(ctx, event) {
             displayContent, base64, isImage, isAudio, isText, textContent,
             timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           });
-          const noteList = ctx.loadNotes();
-          noteList.push(noteMsg);
-          if (!ctx.saveNotes(noteList)) {
-            noteList.pop();
-            ctx.chat.set([...noteList]);
+          // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
+          // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
+          if (!ctx.notes.add(ctx.email, noteMsg)) {
+            ctx.chat.set(ctx.notes.load(ctx.email));
             alert(ctx.t('err_notes_full_file'));
             return;
           }
-          ctx.chat.set([...noteList]);
+          ctx.chat.set(ctx.notes.load(ctx.email));
           ctx.scrollToBottom(true);
           return;
         }
