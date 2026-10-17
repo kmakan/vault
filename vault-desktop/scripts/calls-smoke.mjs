@@ -85,6 +85,7 @@ const histMock = {
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => null; export const hasPeerToken = async () => false;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
+writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
@@ -92,6 +93,7 @@ globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowe
 globalThis.__relayMock = relayMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__histMock = histMock;
+globalThis.__invokeMock = async () => null;
 
 prepareModuleCopy(
   ROOT + '/../src/features/calls.js',
@@ -101,6 +103,7 @@ prepareModuleCopy(
     '../relay-client.js': 'relay-client.js',
     '../crypto.js': 'crypto.js',
     '../history.js': 'history.js',
+    '@tauri-apps/api/core': 'tauri-core.js',
   },
   MOCKS,
 );

@@ -23,149 +23,150 @@ import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
 
 // ── Резолв имён/аватаров ───────────────────────────────────────
-export function profileOf(ctx, email) {
-  return ctx.profiles[email] || null;
+// ADR-001: зависимости в сигнатуре (деструктуризация = жёсткая граница).
+export function profileOf(profiles, email) {
+  return (profiles || {})[email] || null;
 }
 
 // Локальные переопределения (per-account): пользователь сам решает, как
 // называть контакт и какой аватар ему ставить. Приоритет выше, чем у
 // синхронизированного профиля собеседника.
-export function localProfileOf(ctx, email) {
-  return ctx.localProfiles[email] || null;
+export function localProfileOf(localProfiles, email) {
+  return (localProfiles || {})[email] || null;
 }
 
 // Все адреса с тем же peer-ключом (смена почты): профиль может лежать
 // под СТАРЫМ адресом — алиасы дадут имя/аватар.
-export function aliasesOf(ctx, email) {
-  const key = ctx.peerKeys[email || ''] || ctx.peerKeys[String(email || '').toLowerCase()];
+export function aliasesOf(peerKeys, email) {
+  const keys = peerKeys || {};
+  const key = keys[email || ''] || keys[String(email || '').toLowerCase()];
   if (!key) return [String(email || '').toLowerCase()];
   const out = new Set([String(email || '').toLowerCase()]);
-  for (const [k, v] of Object.entries(ctx.peerKeys)) {
+  for (const [k, v] of Object.entries(keys)) {
     if (v === key) out.add(String(k).toLowerCase());
   }
   return [...out];
 }
 
-export function nameOf(ctx, email) {
-  const lp = localProfileOf(ctx, email);
+export function nameOf({ profiles, localProfiles, peerKeys }, email) {
+  const lp = localProfileOf(localProfiles, email);
   if (lp && lp.name) return lp.name;
-  const p = profileOf(ctx, email);
+  const p = profileOf(profiles, email);
   // name == email — это НЕ имя, а fallback старых клиентов (они слали
   // email как name). Не показываем его как имя.
   if (p && p.name && p.name !== email) return p.name;
   // Регистр email может отличаться (заголовки From: «Имя <Mail@X>» vs
   // ключ в kv_store lowercase). Ищем по нижнему регистру.
   const e = String(email || '').toLowerCase();
-  for (const [k, v] of Object.entries(ctx.profiles || {})) {
+  for (const [k, v] of Object.entries(profiles || {})) {
     if (String(k).toLowerCase() === e && v && v.name && v.name !== email) return v.name;
   }
   // Смена почты: профиль может лежать под СТАРЫМ адресом
   // все алиасы (один pubkey → несколько адресов) дадут имя.
-  for (const alias of aliasesOf(ctx, email)) {
+  for (const alias of aliasesOf(peerKeys, email)) {
     if (alias === e) continue;
-    const ap = profileOf(ctx, alias) || (ctx.profiles || {})[alias];
+    const ap = profileOf(profiles, alias) || (profiles || {})[alias];
     if (ap && ap.name && ap.name !== alias) return ap.name;
   }
   return email;
 }
 
-export function avatarOf(ctx, email) {
-  const lp = localProfileOf(ctx, email);
+export function avatarOf({ profiles, localProfiles, peerKeys }, email) {
+  const lp = localProfileOf(localProfiles, email);
   if (lp && lp.avatar) return lp.avatar;
-  const p = profileOf(ctx, email);
+  const p = profileOf(profiles, email);
   if (p && p.avatar) return p.avatar;
   const e = String(email || '').toLowerCase();
-  for (const [k, v] of Object.entries(ctx.profiles || {})) {
+  for (const [k, v] of Object.entries(profiles || {})) {
     if (String(k).toLowerCase() === e && v && v.avatar) return v.avatar;
   }
   // Смена почты: аватар может лежать под СТАРЫМ адресом (алиасом).
-  for (const alias of aliasesOf(ctx, email)) {
+  for (const alias of aliasesOf(peerKeys, email)) {
     if (alias === e) continue;
-    const ap = profileOf(ctx, alias) || (ctx.profiles || {})[alias];
+    const ap = profileOf(profiles, alias) || (profiles || {})[alias];
     if (ap && ap.avatar) return ap.avatar;
   }
   return null;
 }
 
 // ── Хранилище ──────────────────────────────────────────────────
-// Асинхронные: namespace аккаунта резолвится через accountNamespace
-// (идентичность = fingerprint). Вызывающие не ждут результат — как раньше.
-export async function loadLocalProfiles(ctx) {
+// ADR-001: мутируемое состояние передаётся setter'ом — сама фича не
+// пишет в компонент напрямую (иначе правка ломает App.vue из-под него).
+export async function loadLocalProfiles({ email, setLocalProfiles }) {
   try {
     // SQLite kv_store.
-    db.kvGet(await accountNamespace(ctx.email), 'local-profiles').then(v => {
-      if (v) ctx.localProfiles = JSON.parse(v);
-    }).catch(() => {});
-    ctx.localProfiles = ctx.localProfiles || {};
+    const v = await db.kvGet(await accountNamespace(email), 'local-profiles');
+    setLocalProfiles(v ? JSON.parse(v) : {});
   } catch (e) {
-    ctx.localProfiles = {};
+    setLocalProfiles({});
   }
 }
 
-export async function saveLocalProfiles(ctx) {
+export async function saveLocalProfiles({ email, localProfiles }) {
   try {
-    db.kvSet(await accountNamespace(ctx.email), 'local-profiles', JSON.stringify(ctx.localProfiles)).catch(() => {});
+    await db.kvSet(await accountNamespace(email), 'local-profiles', JSON.stringify(localProfiles || {})).catch(() => {});
   } catch (e) {
     console.error('Failed to save local profiles:', e);
   }
 }
 
-export async function loadProfiles(ctx) {
+export async function loadProfiles({ setProfiles }) {
   try {
-    ctx.profiles = await api.getProfilesAll();
+    setProfiles(await api.getProfilesAll());
   } catch (e) {
-    ctx.profiles = {};
+    setProfiles({});
   }
 }
 
 // --- Статус «О себе»: свой bio в kv_store, уходит в profile-конверте
-export async function getBio(ctx) {
-  try { return (await db.kvGet(await accountNamespace(ctx.email), 'bio')) || ''; } catch { return ''; }
+export async function getBio({ email }) {
+  try { return (await db.kvGet(await accountNamespace(email), 'bio')) || ''; } catch { return ''; }
 }
 
-export async function setBio(ctx, text) {
+export async function setBio({ email, text }) {
   const v = String(text || '').slice(0, 200);
-  await db.kvSet(await accountNamespace(ctx.email), 'bio', v);
-  ctx.myBio = v;
+  await db.kvSet(await accountNamespace(email), 'bio', v);
   return v;
 }
 
-export async function onBioSave(ctx, text) {
-  await setBio(ctx, text);
+export async function onBioSave({ email, showToast, t }, text) {
+  await setBio({ email, text });
   // Текст был зашит по-русски, хотя ключ settings_profile_saved есть во всех
   // трёх локалях и означает ровно то же. Англоязычные и китайские пользователи
   // видели подтверждение сохранения на русском (ADR-003 партия 15).
-  ctx.showToast(ctx.t('settings_profile_saved'));
+  showToast(t('settings_profile_saved'));
 }
 
 // «Сохранить профиль»: ОДНО письмо с именем+аватаром+статусом и
 // одним ts — на приёме более позднее письмо с неполным набором
 // перетирало _ts и блокировало/возвращало старые значения
 // (чехарда имени/аватара).
-export async function onProfileSave(ctx) {
+export async function onProfileSave({ showToast, t, broadcastProfile: doBroadcast }) {
   try {
-    await broadcastProfile(ctx);
-    ctx.showToast(ctx.t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
+    await doBroadcast();
+    showToast(t('settings_profile_saved') || 'Профиль сохранён — контакты обновят его');
   } catch (e) {
     console.error('[profile] broadcast on save failed:', e);
-    ctx.showToast(ctx.t('settings_profile_saved') || 'Профиль сохранён');
+    showToast(t('settings_profile_saved') || 'Профиль сохранён');
   }
 }
 
 // ── Wire: broadcast профиля ────────────────────────────────────
-export async function broadcastProfile(ctx) {
-  const peers = Object.keys(ctx.peerKeys || {});
+// ADR-001: все зависимости в сигнатуре — крипто-пайплайн читает только
+// перечисленное, правка фичи не касается соседних доменов.
+export async function broadcastProfile({ email, displayName, profiles, peerKeys, peerPqKeys }) {
+  const peers = Object.keys(peerKeys || {});
   if (!peers.length) return;
-  const name = ctx.displayName || ctx.email || '';
+  const name = displayName || email || '';
   // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,
-  // ctx.profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
-  let avatar = (ctx.profiles[ctx.email] || {}).avatar || '';
+  // profiles в памяти мог устареть (гонка loadProfiles ↔ редактирование).
+  let avatar = ((profiles || {})[email] || {}).avatar || '';
   try {
     const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-    const kp = kvProfiles[String(ctx.email).toLowerCase()];
+    const kp = kvProfiles[String(email).toLowerCase()];
     if (kp && kp.avatar) avatar = kp.avatar;
   } catch (e) { /* ignore */ }
-  const bio = await getBio(ctx);
+  const bio = await getBio({ email });
   const body = {
     vault: 1,
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
@@ -183,9 +184,9 @@ export async function broadcastProfile(ctx) {
   // получают «AAD auth failed». Это была причина нестабильности: «с третьего
   // раза сработало» — потому что последний открытый чат менялся случайно.
   for (const peer of peers) {
-    const peerKey = ctx.peerKeys[peer];
+    const peerKey = (peerKeys || {})[peer];
     if (!peerKey) continue;
-    crypto.setPeerPublicKey(peerKey, ctx.peerPqKeys && ctx.peerPqKeys[peer]);
+    crypto.setPeerPublicKey(peerKey, peerPqKeys && peerPqKeys[peer]);
     const content = await crypto.encryptVault(JSON.stringify(body));
     try { await api.sendReadReceipt(peer, content); } catch (e) { /* тихо */ }
   }
@@ -193,12 +194,15 @@ export async function broadcastProfile(ctx) {
 }
 
 // ── UI-flow: карточка и локальная правка ────────────────────────
+// ADR-001 граница: UI-flow мутирует состояние модалок компонента
+// (contactCardEmail/showContactCard/editingContact/...) — остаётся на ctx
+// как «тяжёлый оркестратор». Модалки — чисто вью-состояние, не бизнес-логика.
 // Модалка редактирования контакта (локальные имя/аватар).
 // Карточка контакта: тап по аватару в шапке чата.
 export async function openContactCard(ctx, email) {
   if (!email || email === '__notes__') return;
-  // вью-данные (bio мог прийти поллингом, но ctx.profiles не обновился).
-  await loadProfiles(ctx).catch(() => {});
+  // вью-данные (bio мог прийти поллингом, но profiles не обновился).
+  await loadProfiles({ setProfiles: (v) => { ctx.profiles = v; } }).catch(() => {});
   ctx.contactCardEmail = email;
   ctx.showContactCard = true;
 }
@@ -213,7 +217,7 @@ export function startEditFromCard(ctx) {
 export function openContactEdit(ctx, email) {
   if (!email) return;
   ctx.editingContact = email;
-  const lp = localProfileOf(ctx, email);
+  const lp = localProfileOf(ctx.localProfiles, email);
   ctx.editContactName = (lp && lp.name) || '';
   ctx.editContactAvatar = (lp && lp.avatar) || '';
   ctx.showContactEdit = true;
@@ -242,11 +246,11 @@ export function saveContactEdit(ctx) {
   } else {
     ctx.localProfiles[email] = { name, avatar };
   }
-  saveLocalProfiles(ctx);
+  saveLocalProfiles({ email: ctx.email, localProfiles: ctx.localProfiles });
   // Обновляем отображение в списке контактов (contact.name берётся из
   // peer-key label — подменяем на локальное имя, если задано).
   const c = ctx.contacts.find(x => x.email === email);
-  if (c) c.name = name || nameOf(ctx, email);
+  if (c) c.name = name || nameOf({ profiles: ctx.profiles, localProfiles: ctx.localProfiles, peerKeys: ctx.peerKeys }, email);
   ctx.showContactEdit = false;
   ctx.editingContact = null;
 }
@@ -254,9 +258,9 @@ export function saveContactEdit(ctx) {
 export function resetContactEdit(ctx) {
   if (ctx.editingContact) {
     delete ctx.localProfiles[ctx.editingContact];
-    saveLocalProfiles(ctx);
+    saveLocalProfiles({ email: ctx.email, localProfiles: ctx.localProfiles });
     const c = ctx.contacts.find(x => x.email === ctx.editingContact);
-    if (c) c.name = nameOf(ctx, ctx.editingContact);
+    if (c) c.name = nameOf({ profiles: ctx.profiles, localProfiles: ctx.localProfiles, peerKeys: ctx.peerKeys }, ctx.editingContact);
   }
   ctx.showContactEdit = false;
   ctx.editingContact = null;
@@ -302,17 +306,19 @@ export function compressImage(dataUrl, maxSide, quality) {
 }
 
 // ── Presence: зелёная точка ────────────────────────────────────
-// Отмечаем активность контакта: входящее письмо от него.
-export function noteSeen(ctx, email, ts) {
-  if (!email || typeof email !== 'string' || !email.includes('@')) return;
+// ADR-001: чистые функции — возвращают новое значение map/boolean,
+// состояние принадлежит компоненту.
+export function noteSeen(lastSeenMap, email, ts) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return lastSeenMap;
   const t = Number(ts) || Date.now();
-  if ((ctx.lastSeenMap[email] || 0) < t) {
-    ctx.lastSeenMap = { ...ctx.lastSeenMap, [email]: t };
+  if (((lastSeenMap || {})[email] || 0) < t) {
+    return { ...lastSeenMap, [email]: t };
   }
+  return lastSeenMap;
 }
 
-export function isRecentlySeen(ctx, email) {
-  const t = ctx.lastSeenMap[email];
+export function isRecentlySeen(lastSeenMap, email) {
+  const t = (lastSeenMap || {})[email];
   if (!t) return false;
   return Date.now() - t < 10 * 60 * 1000; // 10 минут
 }

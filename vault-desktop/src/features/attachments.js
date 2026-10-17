@@ -24,7 +24,8 @@ import { getAttachmentLimitMb } from '../mailProviders.js';
 import * as EnvelopeId from './envelope-id.js';
 
 // ── Отдача / просмотр ──────────────────────────────────────────
-export function downloadAttachment(ctx, attachment) {
+// ADR-001: зависимостей нет — файл просто отдаётся на скачивание.
+export function downloadAttachment(attachment) {
   if (!attachment || !attachment.data) return;
   downloadBase64(attachment.data, attachment.name, attachment.type);
 }

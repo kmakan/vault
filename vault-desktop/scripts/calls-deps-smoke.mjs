@@ -55,9 +55,28 @@ writeFileSync(`${MOCKS}/features/call-terminal.js`, readFileSync(CALL_TERMINAL, 
 writeFileSync(`${MOCKS}/features/timing.js`, readFileSync(TIMING, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-idle.js`, readFileSync(CALL_IDLE, 'utf8'));
 writeFileSync(`${MOCKS}/features/call-resend.js`, readFileSync(CALL_RESEND, 'utf8'));
-writeFileSync(`${MOCKS}/features/call-session.js`, readFileSync(CALL_SESSION, 'utf8'));
+// ADR-001: call-session.js тянет reactive из 'vue' — в смоуке Vue не нужен
+// (reactive от мока = identity, state работает как plain object).
+writeFileSync(
+  `${MOCKS}/features/call-session.js`,
+  readFileSync(CALL_SESSION, 'utf8').replaceAll(
+    "from 'vue'",
+    "from '../vue-stub.js'",
+  ),
+);
+writeFileSync(`${MOCKS}/vue-stub.js`, 'export const reactive = (o) => o;\n');
+await stub('features/session-store.js', 'export const sessionStore = { getCurrentEmail: () => "me@x.ru", state: { isLoggedIn: true } };\n');
 writeFileSync(`${MOCKS}/features/call-clock.js`, readFileSync(CALL_CLOCK, 'utf8'));
-writeFileSync(`${MOCKS}/features/calls.js`, readFileSync(CALLS, 'utf8'));
+// ADR-001: calls.js тянет invoke из @tauri-apps/api/core (M2.3 bridge) —
+// подменяем на stub, иначе Node не резолвит пакет в /tmp-копии.
+writeFileSync(
+  `${MOCKS}/features/calls.js`,
+  readFileSync(CALLS, 'utf8').replaceAll(
+    "from '@tauri-apps/api/core'",
+    "from '../tauri-core.js'",
+  ),
+);
+writeFileSync(`${MOCKS}/tauri-core.js`, 'export const invoke = async () => null;\n');
 const C = await import(MOCKS + '/features/calls.js');
 
 // ── 1. canCallBack: объявлено 5 полей, читать можно только их ───────

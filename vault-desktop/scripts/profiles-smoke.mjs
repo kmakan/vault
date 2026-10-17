@@ -100,8 +100,8 @@ console.log('1. Резолв имён/аватаров');
     peerKeys: { 'a@x.ru': 'K1', 'A2@x.ru': 'K1', 'b@x.ru': 'K2' },
     profiles: { 'a@x.ru': { name: 'Анна', avatar: 'AVA' }, 'b@x.ru': { name: 'b@x.ru' } },
   });
-  check('aliasesOf: ключ → все адреса', P.aliasesOf(ctx, 'a@x.ru').sort().join(',') === 'a2@x.ru,a@x.ru');
-  check('aliasesOf без ключа → [email lowercase]', P.aliasesOf(ctx, 'zzz@X.ru').join(',') === 'zzz@x.ru');
+  check('aliasesOf: ключ → все адреса', P.aliasesOf(ctx.peerKeys, 'a@x.ru').sort().join(',') === 'a2@x.ru,a@x.ru');
+  check('aliasesOf без ключа → [email lowercase]', P.aliasesOf(ctx.peerKeys, 'zzz@X.ru').join(',') === 'zzz@x.ru');
   check('nameOf: wire-профиль', P.nameOf(ctx, 'a@x.ru') === 'Анна');
   check('nameOf: name==email — НЕ имя → email', P.nameOf(ctx, 'b@x.ru') === 'b@x.ru');
   // регистронезависимость
@@ -124,7 +124,7 @@ console.log('1. Резолв имён/аватаров');
   // fallback
   check('nameOf: нет нигде → email', P.nameOf(makeCtx(), 'nope@x.ru') === 'nope@x.ru');
   check('avatarOf: нет нигде → null', P.avatarOf(makeCtx(), 'nope@x.ru') === null);
-  check('profileOf/localProfileOf', P.profileOf(ctx4, 'a@x.ru').name === 'Wire' && P.localProfileOf(ctx4, 'a@x.ru').name === 'Локально');
+  check('profileOf/localProfileOf', P.profileOf(ctx4.profiles, 'a@x.ru').name === 'Wire' && P.localProfileOf(ctx4.localProfiles, 'a@x.ru').name === 'Локально');
 }
 
 // ── 2. Хранилище: localProfiles/bio ────────────────────────────
@@ -134,33 +134,31 @@ console.log('2. Хранилище (kv)');
   // loadProfiles
   apiMock.profilesStore = { 'a@x.ru': { name: 'A' } };
   const ctx = makeCtx();
-  await P.loadProfiles(ctx);
+  await P.loadProfiles({ setProfiles: (v) => { ctx.profiles = v; } });
   check('loadProfiles из api', ctx.profiles['a@x.ru'].name === 'A');
   // сбой api → пустой объект
   const orig = apiMock.getProfilesAll;
   apiMock.getProfilesAll = async () => { throw new Error('db'); };
   const ctx2 = makeCtx({ profiles: { stale: 1 } });
-  await P.loadProfiles(ctx2);
+  await P.loadProfiles({ setProfiles: (v) => { ctx2.profiles = v; } });
   check('сбой loadProfiles → {}', Object.keys(ctx2.profiles).length === 0);
   apiMock.getProfilesAll = orig;
   // loadLocalProfiles: kv → состояние
   dbMock.kv.set('local-profiles', JSON.stringify({ 'a@x.ru': { name: 'L1' } }));
   const ctx3 = makeCtx();
-  P.loadLocalProfiles(ctx3);
-  await new Promise(r => setTimeout(r, 5));
+  await P.loadLocalProfiles({ email: ctx3.email, setLocalProfiles: (v) => { ctx3.localProfiles = v; } });
   check('loadLocalProfiles: kv → localProfiles', ctx3.localProfiles['a@x.ru'].name === 'L1');
   // saveLocalProfiles
   const ctx4 = makeCtx({ localProfiles: { 'b@x.ru': { name: 'B' } } });
-  P.saveLocalProfiles(ctx4);
-  await new Promise(r => setTimeout(r, 5));
+  await P.saveLocalProfiles({ email: ctx4.email, localProfiles: ctx4.localProfiles });
   check('saveLocalProfiles: → kv', JSON.parse(dbMock.kv.get('local-profiles'))['b@x.ru'].name === 'B');
   // bio
   const ctx5 = makeCtx();
-  check('getBio пустой', (await P.getBio(ctx5)) === '');
-  await P.setBio(ctx5, 'Мой статус');
-  check('setBio: kv + myBio, слайс 200', dbMock.kv.get('bio') === 'Мой статус' && ctx5.myBio === 'Мой статус');
-  await P.setBio(ctx5, 'x'.repeat(300));
-  check('setBio: обрезка 200', (await P.getBio(ctx5)).length === 200);
+  check('getBio пустой', (await P.getBio({ email: ctx5.email })) === '');
+  ctx5.myBio = await P.setBio({ email: ctx5.email, text: 'Мой статус' });
+  check('setBio: kv + возврат, слайс 200', dbMock.kv.get('bio') === 'Мой статус' && ctx5.myBio === 'Мой статус');
+  await P.setBio({ email: ctx5.email, text: 'x'.repeat(300) });
+  check('setBio: обрезка 200', (await P.getBio({ email: ctx5.email })).length === 200);
 }
 
 // ── 3. broadcastProfile ────────────────────────────────────────
@@ -190,14 +188,15 @@ console.log('3. broadcastProfile (wire)');
   toasts.length = 0;
   const origSend = apiMock.sendReadReceipt;
   apiMock.sendReadReceipt = async () => { throw new Error('SMTP'); };
-  await P.onProfileSave(makeCtx({ peerKeys: { 'a@x.ru': 'K' } }));
+  const psCtx = makeCtx({ peerKeys: { 'a@x.ru': 'K' } });
+  await P.onProfileSave({ showToast: psCtx.showToast, t: psCtx.t, broadcastProfile: () => P.broadcastProfile(psCtx) });
   check('onProfileSave: тост даже при SMTP-фейле (тихо)', toasts.length === 1);
   apiMock.sendReadReceipt = origSend;
   // onBioSave
   toasts.length = 0;
   const bctx = makeCtx();
-  await P.onBioSave(bctx, 'Новый статус');
-  check('onBioSave: setBio + тост', bctx.myBio === 'Новый статус' && toasts.length === 1);
+  await P.onBioSave({ email: bctx.email, showToast: bctx.showToast, t: bctx.t }, 'Новый статус');
+  check('onBioSave: тост + kv persisted', toasts.length === 1 && dbMock.kv.get('bio') === 'Новый статус');
 }
 
 // ── 4. UI-flow: карточка/правка ────────────────────────────────
@@ -273,22 +272,22 @@ console.log('5. shrinkAvatar/compressImage');
 // ── 6. Presence ────────────────────────────────────────────────
 console.log('6. Зелёная точка');
 {
-  const ctx = makeCtx();
-  P.noteSeen(ctx, 'a@x.ru', 1000);
-  check('noteSeen: фиксирует ts', ctx.lastSeenMap['a@x.ru'] === 1000);
-  P.noteSeen(ctx, 'a@x.ru', 500); // старее — не откатывает
-  check('noteSeen: старый ts не откатывает', ctx.lastSeenMap['a@x.ru'] === 1000);
-  P.noteSeen(ctx, 'no-at-sign', 9999);
-  check('noteSeen: не-email — игнор', ctx.lastSeenMap['no-at-sign'] === undefined);
-  const nctx = makeCtx({ lastSeenMap: {} });
-  P.noteSeen(nctx, 'b@x.ru');
-  check('noteSeen: без ts → Date.now', typeof nctx.lastSeenMap['b@x.ru'] === 'number' && Math.abs(Date.now() - nctx.lastSeenMap['b@x.ru']) < 5000);
+  // ADR-001: noteSeen/isRecentlySeen — чистые (возвращают значение).
+  let map = {};
+  map = P.noteSeen(map, 'a@x.ru', 1000);
+  check('noteSeen: фиксирует ts', map['a@x.ru'] === 1000);
+  map = P.noteSeen(map, 'a@x.ru', 500); // старее — не откатывает
+  check('noteSeen: старый ts не откатывает', map['a@x.ru'] === 1000);
+  map = P.noteSeen(map, 'no-at-sign', 9999);
+  check('noteSeen: не-email — игнор', map['no-at-sign'] === undefined);
+  let map2 = P.noteSeen({}, 'b@x.ru');
+  check('noteSeen: без ts → Date.now', typeof map2['b@x.ru'] === 'number' && Math.abs(Date.now() - map2['b@x.ru']) < 5000);
   // isRecentlySeen
-  const fresh = makeCtx({ lastSeenMap: { 'a@x.ru': Date.now() - 60 * 1000 } });
-  const stale = makeCtx({ lastSeenMap: { 'a@x.ru': Date.now() - 11 * 60 * 1000 } });
+  const fresh = { 'a@x.ru': Date.now() - 60 * 1000 };
+  const stale = { 'a@x.ru': Date.now() - 11 * 60 * 1000 };
   check('isRecentlySeen: 1 мин назад → true', P.isRecentlySeen(fresh, 'a@x.ru') === true);
   check('isRecentlySeen: 11 мин назад → false (окно 10 мин)', P.isRecentlySeen(stale, 'a@x.ru') === false);
-  check('isRecentlySeen: нет записи → false', P.isRecentlySeen(makeCtx(), 'zz@x.ru') === false);
+  check('isRecentlySeen: нет записи → false', P.isRecentlySeen({}, 'zz@x.ru') === false);
 }
 
 console.log('');

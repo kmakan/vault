@@ -117,11 +117,11 @@ const dodEnvelope = (ref, data) => JSON.stringify({ vault: 1, id: 'e1', text: JS
 console.log('1. downloadAttachment');
 {
   dl.hits.length = 0;
-  A.downloadAttachment(makeCtx(), att0());
+  A.downloadAttachment(att0());
   check('скачивание через downloadBase64 с data/name/type',
     dl.hits.length === 1 && dl.hits[0][0] === 'DATA' && dl.hits[0][1] === 'a.png');
-  A.downloadAttachment(makeCtx(), null);
-  A.downloadAttachment(makeCtx(), { name: 'x' });
+  A.downloadAttachment(null);
+  A.downloadAttachment({ name: 'x' });
   check('нет data / нет attachment — тихий no-op', dl.hits.length === 1);
   // openImageViewer удалён (ADR-001): обёртка без логики, App.vue
   // присваивает viewingImage сам. Проверяем, что и правда удалён —

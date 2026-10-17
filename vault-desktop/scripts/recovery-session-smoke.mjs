@@ -767,7 +767,7 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     /RecoverySession\.isRecoveryPending\(\)/.test(compiled.content));
   check('App.vue mounted: при маркере showRecovery=true, перевод ошибки',
     /this\.showRecovery = true/.test(compiled.content) &&
-    /this\.t\('recovery_interrupted'\)/.test(compiled.content));
+    /(?:this\.t|uiStore\.tr)\('recovery_interrupted'\)/.test(compiled.content));
   check('App.vue: обычный login вызывает initCrypto({ allowCreate: true })',
     /initCrypto\(\{ allowCreate: true \}\)/.test(compiled.content));
   check('App.vue: mounted/auto-login/recovery initCrypto({ allowCreate: false })',

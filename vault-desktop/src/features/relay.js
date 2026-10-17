@@ -22,8 +22,8 @@
 import api, { db } from '../api.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
-import { relayState } from './relay-idle.js';
-import { sessionStore, mailboxStore, chatStore } from './session-store.js';
+import { relayState, idleState } from './relay-idle.js';
+import { sessionStore, mailboxStore, chatStore, uiStore } from './session-store.js';
 import { useSession } from './call-session.js';
 import { mailboxApi } from './mailbox-api.js';
 
