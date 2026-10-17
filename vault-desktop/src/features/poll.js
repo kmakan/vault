@@ -58,67 +58,74 @@ export function pollLeadLabel(poll) {
 }
 
 // Cast a vote: optimistic (myVote + счётчик сразу), signal email, rollback on failure.
-export function castPollVote(ctx, msg, option) {
+// ADR-001: зависимости в сигнатуре — email/релей/api/crypto/saveCurrentHistory явно.
+export function castPollVote({ email, activeChat, activeChatType, currentGroup, groupKeys, peerKeys, peerPqKeys, saveCurrentHistory }, msg, option) {
   const poll = msg.poll;
   if (!poll || poll.myVote !== null) return;
   const prev = poll.myVote;
-  const prevSelfVote = poll.votes[ctx.email];
+  const prevSelfVote = poll.votes[email];
   poll.myVote = option;
-  // ОПТИМИСТИЧНЫЙ счётчик: раньше poll.votes[email] присваивался только
-  // ПОСЛЕ отправки письма (1-3с SMTP) — у голосующего цифра «запаздывала»,
-  // выглядя нереактивной. Ставим голос сразу, откатываем оба при ошибке.
-  poll.votes[ctx.email] = option;
+  poll.votes[email] = option;
   const payload = JSON.stringify({ poll: 1, poll_id: poll.id, option });
   (async () => {
     try {
-      if (ctx.activeChatType === 'group' && ctx.currentGroup) {
-        const groupKey = ctx.groupKeys[ctx.currentGroup.id];
+      if (activeChatType === 'group' && currentGroup) {
+        const groupKey = (groupKeys || {})[currentGroup.id];
         if (!groupKey) throw new Error('no group key');
         const content = await crypto.encryptWithGroupKey(payload, groupKey);
-        await api.sendGroupReact(ctx.currentGroup.id, content);
-      } else if (ctx.activeChat && ctx.peerKeys[ctx.activeChat]) {
-        crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+        await api.sendGroupReact(currentGroup.id, content);
+      } else if (activeChat && (peerKeys || {})[activeChat]) {
+        crypto.setPeerPublicKey((peerKeys || {})[activeChat], peerPqKeys && (peerPqKeys || {})[activeChat]);
         const content = await crypto.encryptVault(payload);
-        await api.sendReaction(ctx.activeChat, content);
+        await api.sendReaction(activeChat, content);
       } else {
         throw new Error('no peer key');
       }
-      ctx.saveCurrentHistory(ctx.activeChatType === 'group' ? 'group:' + ctx.currentGroup.id : ctx.activeChat);
+      const chatKey = activeChatType === 'group'
+        ? 'group:' + (currentGroup ? currentGroup.id : '')
+        : activeChat;
+      if (typeof saveCurrentHistory === 'function') saveCurrentHistory(chatKey);
     } catch (e) {
       console.error('[poll] vote failed:', e);
       poll.myVote = prev;
-      if (prevSelfVote === undefined) delete poll.votes[ctx.email];
-      else poll.votes[ctx.email] = prevSelfVote;
+      if (prevSelfVote === undefined) delete poll.votes[email];
+      else poll.votes[email] = prevSelfVote;
     }
   })();
 }
 
 // Send a poll envelope (type:'poll' card for receivers).
-export async function sendPoll(ctx, question, options) {
+// ADR-001: зависимости в сигнатуре вместо ctx (newMessageId/displayName/cryptoReady/
+// groupKeys/peerKeys/{set,peerKeys}/chat.scrollToBottom/saveCurrentHistory/t).
+export async function sendPoll({
+  newMessageId, displayName, cryptoReady, peerKeys, peerPqKeys,
+  groupKeys, activeChat, activeChatType, currentGroup,
+  setSending, chat, scrollToBottom, saveCurrentHistory, t,
+}, question, options) {
   const opts = (options || []).map(o => String(o).trim()).filter(Boolean).slice(0, 10);
   question = String(question || '').trim();
   if (!question || opts.length < 2) return;
-  const pollId = ctx.newMessageId();
+  const pollId = newMessageId();
   const pollEnv = {
     vault: 1,
-    id: ctx.newMessageId(),
+    id: newMessageId(),
     type: 'poll',
     text: question, // fallback-текст для legacy-клиентов/истории
     poll: { id: pollId, question, options: opts },
-    name: ctx.displayName || '',
+    name: displayName || '',
     key: crypto.publicKey || '',
     ts: Date.now(),
   };
   try {
-    ctx.setSending(true);
+    if (typeof setSending === 'function') setSending(true);
     const envelope = JSON.stringify(pollEnv);
     let content = envelope;
-    if (ctx.activeChatType === 'group') {
-      const groupKey = ctx.groupKeys[ctx.currentGroup.id];
-      if (!groupKey) { alert(ctx.t('err_group_key')); return; }
+    if (activeChatType === 'group') {
+      const groupKey = (groupKeys || {})[currentGroup.id];
+      if (!groupKey) { if (t) alert(t('err_group_key')); return; }
       content = await crypto.encryptWithGroupKey(envelope, groupKey);
-    } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
-      crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+    } else if (cryptoReady && (peerKeys || {})[activeChat]) {
+      crypto.setPeerPublicKey((peerKeys || {})[activeChat], peerPqKeys && (peerPqKeys || {})[activeChat]);
       content = await crypto.encryptVault(envelope);
     }
     const pendingMsg = {
@@ -130,20 +137,23 @@ export async function sendPoll(ctx, question, options) {
       poll: parsePollEnvelope(pollEnv),
     };
     if (pendingMsg.poll) pendingMsg.poll.myVote = null;
-    ctx.chat.append(pendingMsg);
-    ctx.scrollToBottom(true);
-    if (ctx.activeChatType === 'group') {
-      await api.sendGroupMessage(ctx.currentGroup.id, content, { id: pollEnv.id, text: pollEnv.text });
+    if (chat && typeof chat.append === 'function') chat.append(pendingMsg);
+    if (typeof scrollToBottom === 'function') scrollToBottom(true);
+    if (activeChatType === 'group') {
+      await api.sendGroupMessage(currentGroup.id, content, { id: pollEnv.id, text: pollEnv.text });
     } else {
-      await api.sendMessage(ctx.activeChat, content);
+      await api.sendMessage(activeChat, content);
     }
     pendingMsg.status = 'sent';
-    ctx.saveCurrentHistory(ctx.activeChatType === 'group' ? 'group:' + ctx.currentGroup.id : ctx.activeChat);
+    const chatKey = activeChatType === 'group'
+      ? 'group:' + (currentGroup ? currentGroup.id : '')
+      : activeChat;
+    if (typeof saveCurrentHistory === 'function') saveCurrentHistory(chatKey);
   } catch (e) {
     console.error('[poll] send failed:', e);
-    alert(ctx.t('poll_err') || 'Poll failed');
+    if (t) alert(t('poll_err') || 'Poll failed');
   } finally {
-    ctx.setSending(false);
+    if (typeof setSending === 'function') setSending(false);
   }
 }
 
