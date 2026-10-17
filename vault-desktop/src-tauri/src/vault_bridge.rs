@@ -104,7 +104,13 @@ pub async fn vault_store_incoming_message(
     };
     let mut store = state.messages();
     let from = vm.from.clone();
-    Ok(store.store_incoming(&from, chat_key.as_deref(), vm))
+    let stored = store.store_incoming(&from, chat_key.as_deref(), vm);
+    if stored {
+        if let Err(e) = store.save() {
+            log::warn!("[vault_bridge] MessageStore save failed: {}", e);
+        }
+    }
+    Ok(stored)
 }
 
 #[cfg(test)]
@@ -142,6 +148,34 @@ mod tests {
             let _g = state.messages();
         }
         let _ = state.attachments();
+    }
+
+    #[test]
+    fn test_store_incoming_persists() {
+        let tmp = std::env::temp_dir().join("m19_test_store_incoming.json");
+        let _ = std::fs::remove_file(&tmp);
+        let mut store = vault_client::vault::MessageStore::with_path(tmp.clone()).unwrap();
+        let vm = vault_client::vault::VaultMessage {
+            id: "m1".to_string(),
+            from: "alice@x".to_string(),
+            to: "me@x".to_string(),
+            ts: 1700000000,
+            text: "hello".to_string(),
+            name: "Alice".to_string(),
+            avatar: "".to_string(),
+            reactions: vec![],
+            edited: false,
+            replies: vec![],
+            in_reply_to: None,
+            ttl: Some(0),
+        };
+        let from = vm.from.clone();
+        assert!(store.store_incoming(&from, None, vm));
+        assert!(store.save().is_ok());
+        // persisted → reload
+        let loaded = vault_client::vault::MessageStore::with_path(tmp).unwrap();
+        assert_eq!(loaded.messages_for("alice@x", None).len(), 1);
+        let _ = std::fs::remove_file(std::env::temp_dir().join("m19_test_store_incoming.json"));
     }
 }
 
