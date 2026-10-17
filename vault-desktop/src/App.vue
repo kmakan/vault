@@ -1207,7 +1207,7 @@ export default {
       // showSettings/showMembersinj в uiStore.modalFlags (J.7):
       // showMembersinj в uiStore.modalFlags (J.7):
       // restoringSessioninj в session-store.state (J.3a).
-      email: '',
+      // email вынесен из data() в sessionStore (J.7, proxy ниже).
       // password вынесен из data() в sessionStore (J.7, proxy ниже).
       // rememberMe/imapServer/imapPort/smtpServer/smtpPort/mailProvider
       // inj в uiStore.formState (J.5b).
@@ -1560,6 +1560,9 @@ export default {
     // J.7: account password вынесен из data() → sessionStore. recovery.js читает
     // ctx.password → теперь это proxy на sessionStore.state.password (owner).
     // v-model login form / changeEmail / handleLogout пишут через setter.
+    // J.7: email вынесен из data() → proxy на sessionStore.currentEmail
+    // (быв. this.email); recovery.js читает ctx.email → теперь proxy → sessionStore.
+    email: { get() { return this.sessionStore.getCurrentEmail(); }, set(v) { this.sessionStore.setCurrentEmail(v); } },
     password: { get() { return this.sessionStore.getPassword(); }, set(v) { this.sessionStore.setPassword(v); } },
     // J.7: UI constants inj session-store.state:
     quickReactions: { get() { return this.sessionStore.state.quickReactions; } },
@@ -1871,8 +1874,9 @@ export default {
       if (this.mailProvider) return; // уже выбран вручную — не переопределяем
       const id = detectProviderByEmail(val);
       if (id) this.applyMailProvider(id);
-      // J.2: синхронизация форма-логина → sessionStore.currentEmail
-      sessionStore.setCurrentEmail(val);
+      // J.2: синхронизация форма-логина → sessionStore.currentEmail —
+      // теперь через computed-proxy setter email(val) (J.7); здесь
+      // setCurrentEmail избыточен (setter вызовит его при this.email = val).
     }
   },
   async mounted() {
