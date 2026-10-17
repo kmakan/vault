@@ -260,7 +260,7 @@ console.log('7. MessageItem: порядок ветвей вложений');
 // buildVoiceOptimisticMsg: чистый factory (ADR-001 вынос duplicate msg).
 {
   const audioData = { duration: 3, size: 204800, base64: 'AAAA', mimeType: 'audio/webm' };
-  const msg = AttachmentsFeature.buildVoiceOptimisticMsg(audioData, {
+  const msg = A.buildVoiceOptimisticMsg(audioData, {
     id: 'voice-1', timeStr: '12:00', name: 'voice-1.webm',
     status: 'sending', encrypted: true, _pendingAt: 1,
   });
