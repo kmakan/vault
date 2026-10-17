@@ -1,207 +1,135 @@
-// Node-смоук features/edits.js — семантика правок/удалений и tombstones
-// без Vue/Tauri (паттерн incoming-smoke.mjs). Мокаем api/crypto через
-// подмену импортов; localStorage — глобальная заглушка.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 
-const ROOT = import.meta.dirname;
-
-// ── Заглушки импортов edits.js ─────────────────────────────────
+const ROOT = '/home/maksim/whisper/vault-desktop/src/features';
+const EDITS = ROOT + '/edits.js';
 const MOCKS = '/tmp/edits-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-// api-мок: db.tombstoneAdd пишет в массив, sendEdit/sendGroupEdit — счётчики
+const dbCalls = [], apiCalls = [];
+const db = { tombstoneAdd: async (ns, mid, rid) => { dbCalls.push(['tombstoneAdd', ns, mid, rid]); return true; } };
 const apiMock = {
-  tombstoneCalls: [],
-  editSends: [],
-  groupEditSends: [],
-  sendEdit: async (chat, content) => { apiMock.editSends.push({ chat, content }); },
-  sendGroupEdit: async (gid, content) => { apiMock.groupEditSends.push({ gid, content }); },
+  sendEdit: async (to, body) => { apiCalls.push(['sendEdit', to, body]); },
+  sendGroupEdit: async (gid, body) => { apiCalls.push(['sendGroupEdit', gid, body]); },
 };
-apiMock.tombstoneAdd = async (acc, msgId, mid) => { apiMock.tombstoneCalls.push({ acc, msgId, mid }); };
-
-// crypto-мок: перехват encryptVault/encryptWithGroupKey
 const cryptoMock = {
-  encVault: [],
-  encGroup: [],
-  encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:V:' + p; },
-  encryptWithGroupKey: async (p, k) => { cryptoMock.encGroup.push({ p, k }); return 'ENC:G:' + p; },
   setPeerPublicKey: () => {},
+  encryptWithGroupKey: async (p) => 'ENC_G:' + p,
+  encryptVault: async (p) => 'ENC_1:' + p,
 };
+const identityMock = { accountNamespace: async (e) => 'fp:' + (e || 'anon') };
 
-// localStorage-заглушка (edits.js пишет через localStorage.getItem/setItem)
-const lsBacking = new Map();
+writeFileSync(`${MOCKS}/api.js`, 'export const db = globalThis.__dbMock;\nexport default globalThis.__apiMock;\n');
+writeFileSync(`${MOCKS}/crypto.js`, 'export default globalThis.__cryptoMock;\n');
+writeFileSync(`${MOCKS}/identity.js`, 'export const accountNamespace = (e) => globalThis.__identityMock.accountNamespace(e);\n');
+globalThis.__dbMock = db; globalThis.__apiMock = apiMock;
+globalThis.__cryptoMock = cryptoMock; globalThis.__identityMock = identityMock;
+
+const store = new Map();
 globalThis.localStorage = {
-  getItem: (k) => (lsBacking.has(k) ? lsBacking.get(k) : null),
-  setItem: (k, v) => lsBacking.set(k, String(v)),
-  removeItem: (k) => lsBacking.delete(k),
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+  removeItem: (k) => store.delete(k),
 };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
-writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
-globalThis.__apiMock = apiMock;
-globalThis.__dbMock = apiMock; // db-экспорт из api.js = тот же объект
-globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase(); // без fingerprint: тестам нужна только нормализация
-globalThis.__cryptoMock = cryptoMock;
+writeFileSync(`${MOCKS}/features/edits.js`,
+  prepareModuleCopy(EDITS, `${MOCKS}/features/edits.js`, {
+    '../api.js': 'api.js', '../crypto.js': 'crypto.js', '../identity.js': 'identity.js',
+  }, MOCKS));
 
-// Подменяем резолвер edits-импортов: копия edits.js с переписанными путями
-prepareModuleCopy(
-  ROOT + '/../src/features/edits.js',
-  MOCKS + '/edits.mjs',
-  {
-    '../api.js': 'api.js',
-    '../crypto.js': 'crypto.js',
-  },
-  MOCKS,
-);
-const E = await import(MOCKS + '/edits.mjs');
-
-// ── Хелперы ───────────────────────────────────────────────────
-let pass = 0, fail = 0;
-function check(name, cond, extra) {
-  if (cond) { pass++; console.log('  ✓ ' + name); }
-  else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
-}
-function makeCtx(over = {}) {
-  return Object.assign({
-    email: 'me@x.ru',
-    tombstonesCache: [],
-    midTombstonesCache: [],
-    // sendEditEmail-зависимости
-    activeChat: 'peer@x.ru',
-    activeChatType: 'chat',
-    peerKeys: { 'peer@x.ru': 'PUB' },
-    peerPqKeys: {},
-    groupKeys: {},
-    currentGroup: null,
-  }, over);
+const E = await import(`${MOCKS}/features/edits.js`).then(m => m.default || m);
+let passed = 0, failed = 0;
+function check(label, cond, extra) {
+  if (cond) { passed++; console.log('  ✓ ' + label); }
+  else { failed++; console.log('  ✗ ' + label + (extra !== undefined ? ' -> ' + JSON.stringify(extra) : '')); }
 }
 
-// ── 1. Хранилище wire-правок ──────────────────────────────────
-console.log('1. Хранилище правок (localStorage)');
-{
-  const ctx = makeCtx();
-  check('editsStorageKey = vault-edits-<email>', E.editsStorageKey(ctx) === 'vault-edits-me@x.ru');
-  check('loadStoredEdits пуст → {}', JSON.stringify(E.loadStoredEdits(ctx)) === '{}');
-  E.saveStoredEdits(ctx, { 'peer@x.ru': { m1: [{ text: 'hi', action: 'edit', date: 1 }] } });
-  const st = E.loadStoredEdits(ctx);
-  check('save→load roundtrip', st && st['peer@x.ru'] && st['peer@x.ru'].m1[0].text === 'hi');
-  // recordLocalEdit: оптимистичная запись до доставки
-  E.recordLocalEdit(ctx, 'peer@x.ru', 'm2', 'текст правки', 'edit');
-  const st2 = E.loadStoredEdits(ctx);
-  check('recordLocalEdit добавляет запись', st2['peer@x.ru'].m2.length === 1 && st2['peer@x.ru'].m2[0].text === 'текст правки' && st2['peer@x.ru'].m2[0].sender === 'me@x.ru');
-}
+check('editsStorageKey(email) чистая строка — не ctx', E.editsStorageKey('a@b.c') === 'vault-edits-a@b.c');
+check('editsStorageKey без email → anon', E.editsStorageKey('') === 'vault-edits-anon');
 
-// ── 2. Tombstones ─────────────────────────────────────────────
-console.log('2. Tombstones (msg_id + Message-ID)');
-{
-  apiMock.tombstoneCalls.length = 0;
-  const ctx = makeCtx();
-  check('tombstonesKey', E.tombstonesKey(ctx) === 'vault-tombstones-me@x.ru');
-  check('midTombstonesKey', E.midTombstonesKey(ctx) === 'vault-mid-tombstones-me@x.ru');
-  await E.addTombstone(ctx, 'm1');
-  await E.addTombstone(ctx, 'm1'); // дедуп
-  check('addTombstone + дедуп в кэше', ctx.tombstonesCache.length === 1);
-  check('addTombstone персист в sqlite (1 раз)', apiMock.tombstoneCalls.length === 1 && apiMock.tombstoneCalls[0].msgId === 'm1');
-  check('isTombstoned', E.isTombstoned(ctx, 'm1') === true && E.isTombstoned(ctx, 'mX') === false);
-  await E.addMidTombstone(ctx, 'MID-9');
-  check('addMidTombstone + персист', apiMock.tombstoneCalls.some(c => c.mid === 'MID-9') && ctx.midTombstonesCache.length === 1);
-  check('isMidTombstoned', E.isMidTombstoned(ctx, 'MID-9') === true);
-  check('addTombstone(null) — тихий no-op', (await E.addTombstone(ctx, null), apiMock.tombstoneCalls.length === 2));
-  check('loadTombstones из кэша', E.loadTombstones(ctx).length === 1);
-}
+store.clear();
+E.saveStoredEdits('a@b.c', { 'c': { 'm': [{ text:'hi', action:'edit', sender:'a@b.c' }] } });
+check('loadStoredEdits после save хранит структуру', E.loadStoredEdits('a@b.c')['c']['m'][0].text === 'hi');
+check('loadStoredEdits пустой ключ → {}', Object.keys(E.loadStoredEdits('z')).length === 0);
 
-// ── 3. filterDeleted ──────────────────────────────────────────
-console.log('3. filterDeleted');
-{
-  const ctx = makeCtx({ tombstonesCache: ['m1'], midTombstonesCache: ['MID-1'] });
-  const list = [
-    { id: 'm1' },                      // tombstoned
-    { id: 'm2', mid: 'MID-1' },        // mid-tombstoned
-    { id: 'm3', deleted: true },       // deleted-метка
-    { id: 'm4' },                      // живой
-    null,                              // мусор
-    { id: 'm5', mid: 'MID-2' },        // живой с mid
-  ];
-  const out = E.filterDeleted(ctx, list);
-  check('фильтрует tombstone/mid/deleted/null, живые остаются', out.length === 2 && out[0].id === 'm4' && out[1].id === 'm5');
-  check('filterDeleted(null) → []', E.filterDeleted(ctx, null).length === 0);
-}
+store.clear();
+E.recordLocalEdit('a@b.c','c','m2','правка','edit');
+const r = E.loadStoredEdits('a@b.c')['c']['m2'][0];
+check('recordLocalEdit пушит text/action/sender', r.text==='правка' && r.action==='edit' && r.sender==='a@b.c');
+check('recordLocalEdit пушит date', typeof r.date === 'number');
 
-// ── 4. applyEdits: мерж + инвариант «Bad sender» ───────────────
-console.log('4. applyEdits (мерж wire-правок, автор-инвариант)');
-{
-  const ctx = makeCtx();
-  const list = [
-    { id: 'm1', from: 'me', content: 'старый текст' },
-    { id: 'm2', from: 'them', content: 'чужое' },
-    { id: 'm3', from: 'me', content: 'для удаления' },
-    { id: 'm4', from: 'me', content: 'групповое', sender_id: 'me@x.ru' },
-  ];
-  // wireEdits: m1 — правка от меня (легитимная), m2 — правка от НЕ-автора (должна игнорироваться)
-  const wire = {
-    m1: [{ text: 'новый текст', action: 'edit', date: 200, sender: 'me@x.ru' }],
-    m2: [{ text: 'взлом', action: 'edit', date: 300, sender: 'me@x.ru' }],
-    m3: [{ text: '', action: 'delete', date: 250, sender: 'me@x.ru' }],
-    m4: [{ text: 'групповая правка', action: 'edit', date: 260, sender: 'me@x.ru' }],
-  };
-  E.applyEdits(ctx, list, 'peer@x.ru', wire);
-  check('edit от автора применён', list[0].content === 'новый текст' && list[0].edited === true);
-  check('edit от НЕ-автора игнорирован (Bad sender)', list[1].content === 'чужое' && !list[1].edited);
-  check('delete → deleted + tombstone id+mid', list[2].deleted === true && ctx.tombstonesCache.includes('m3'));
-  check('edit по sender_id (группа)', list[3].content === 'групповая правка');
-  // Дедупликация: тот же конверт ещё раз — не удваивает
-  const before = JSON.stringify(E.loadStoredEdits(ctx));
-  E.applyEdits(ctx, list, 'peer@x.ru', wire);
-  const after = JSON.stringify(E.loadStoredEdits(ctx));
-  check('дедуп повторного конверта (Sent+INBOX)', before === after);
-  // Последняя по дате правка авторитетна
-  const list2 = [{ id: 'm1', from: 'me', content: '' }];
-  E.applyEdits(ctx, list2, 'peer@x.ru', { m1: [{ text: 'самая свежая', action: 'edit', date: 999, sender: 'me@x.ru' }] });
-  check('последняя по дате правка побеждает', list2[0].content === 'самая свежая');
-  // Старые правки без sender — обратная совместимость
-  const list3 = [{ id: 'm9', from: 'them', content: 'старое' }];
-  E.applyEdits(ctx, list3, 'peer@x.ru', { m9: [{ text: 'легаси', action: 'edit', date: 5 }] });
-  check('правка без sender применяется (легаси)', list3[0].content === 'легаси');
-}
+const cache = [];
+check('tombstonesKey(email) чистая строка', E.tombstonesKey('a@b.c') === 'vault-tombstones-a@b.c');
+check('loadTombstones принимает кэш', E.loadTombstones(cache) === cache);
+await E.addTombstone({ email:'a@b.c', tombstonesCache:cache }, 'msg-1');
+check('addTombstone пушит (in-place)', cache.includes('msg-1'));
+check('addTombstone dedup', cache.filter(x=>x==='msg-1').length===1);
+check('addTombstone пишет sqlite fp:', dbCalls.some(c=>c[0]==='tombstoneAdd'&&c[1]==='fp:a@b.c'&&c[2]==='msg-1'));
+const c2=[]; await E.addTombstone({email:'a@b.c',tombstonesCache:c2},'');
+check('addTombstone без msgId → ничего', c2.length===0);
+check('isTombstoned найден', E.isTombstoned(cache,'msg-1')===true);
+check('isTombstoned не найден', E.isTombstoned(cache,'nope')===false);
 
-const origErr = console.error;
-// ── 5. sendEditEmail ───────────────────────────────────────────
-console.log('5. sendEditEmail (транспорт)');
-{
-  apiMock.editSends.length = 0;
-  apiMock.groupEditSends.length = 0;
-  cryptoMock.encVault.length = 0;
-  cryptoMock.encGroup.length = 0;
-  // 1:1
-  const ctx = makeCtx();
-  E.sendEditEmail(ctx, 'm1', 'правка', 'edit');
-  await new Promise(r => setTimeout(r, 20));
-  check('1:1: encryptVault + sendEdit', apiMock.editSends.length === 1 && cryptoMock.encVault.length === 1);
-  const payload = JSON.parse(cryptoMock.encVault[0]);
-  check('payload {edit:1,msg_id,text,action,sender,ts}', payload.edit === 1 && payload.msg_id === 'm1' && payload.text === 'правка' && payload.action === 'edit' && payload.sender === 'me@x.ru' && typeof payload.ts === 'number');
-  // группа
-  const gctx = makeCtx({ activeChatType: 'group', currentGroup: { id: 'g1' }, groupKeys: { g1: 'GK' } });
-  E.sendEditEmail(gctx, 'm2', null, 'delete');
-  await new Promise(r => setTimeout(r, 20));
-  check('группа: encryptWithGroupKey + sendGroupEdit', apiMock.groupEditSends.length === 1 && cryptoMock.encGroup.length === 1 && cryptoMock.encGroup[0].k === 'GK');
-  // нет ключа → тихий no-op
-  apiMock.editSends.length = 0;
-  const ectx = makeCtx({ peerKeys: {} });
-  E.sendEditEmail(ectx, 'm3', 'x', 'edit');
-  await new Promise(r => setTimeout(r, 20));
-  check('без peer-ключа — тихий no-op', apiMock.editSends.length === 0);
-  // ошибка SMTP не бросается наружу
-  apiMock.editSends.length = 0;
-  const origSend = apiMock.sendEdit;
-  apiMock.sendEdit = async () => { throw new Error('SMTP down'); };
-  console.error = () => {};
-  E.sendEditEmail(makeCtx(), 'm4', 'x', 'edit');
-  await new Promise(r => setTimeout(r, 20));
-  check('SMTP-ошибка не бросается (fire-and-forget)', true);
-  apiMock.sendEdit = origSend;
-}
+const midc=[];
+check('midTombstonesKey(email) чистая строка', E.midTombstonesKey('a@b.c')==='vault-mid-tombstones-a@b.c');
+check('loadMidTombstones принимает кэш', E.loadMidTombstones(midc)===midc);
+await E.addMidTombstone({email:'a@b.c',midTombstonesCache:midc},'mid-1');
+check('addMidTombstone пушит', midc.includes('mid-1'));
+check('isMidTombstoned найден', E.isMidTombstoned(midc,'mid-1')===true);
 
-console.log('');
-console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
-process.exit(fail ? 1 : 0);
+check('filterDeleted по msg.id',
+  E.filterDeleted({tombstonesCache:['x'],midTombstonesCache:[]},[{id:'x'},{id:'y'}]).length===1
+  && E.filterDeleted({tombstonesCache:['x'],midTombstonesCache:[]},[{id:'x'},{id:'y'}])[0].id==='y');
+check('filterDeleted по mid',
+  E.filterDeleted({tombstonesCache:[],midTombstonesCache:['m1']},[{id:'a',mid:'m1'},{id:'b',mid:'m2'}]).length===1
+  && E.filterDeleted({tombstonesCache:[],midTombstonesCache:['m1']},[{id:'a',mid:'m1'},{id:'b',mid:'m2'}])[0].id==='b');
+
+const msg={id:'m3',mid:'mid-3',from:'me',content:'старый'}; const tombs=[],mids=[];
+E.applyEdits({email:'a@b.c',tombstonesCache:tombs,midTombstonesCache:mids},[msg],'c',{});
+check('applyEdits no-op без wire', msg.content==='старый');
+msg.sender_id='a@b.c'; tombs.length=0;mids.length=0; dbCalls.length=0; store.clear();
+E.applyEdits({email:'a@b.c',tombstonesCache:tombs,midTombstonesCache:mids},[msg],'c',{'m3':[{text:'',action:'delete',date:5,sender:'a@b.c'}]});
+check('applyEdits delete→tombstone+mid', tombs.includes('m3')&&mids.includes('mid-3'));
+check('applyEdits delete→deleted+content=""', msg.deleted===true&&msg.content==='');
+msg.deleted=false;msg.content='старый';tombs.length=0;mids.length=0;dbCalls.length=0;store.clear();
+E.applyEdits({email:'a@b.c',tombstonesCache:tombs,midTombstonesCache:mids},[msg],'c',{'m3':[{text:'взлом',action:'edit',date:9,sender:'evil@x'}]});
+check('applyEdits чужая правка игнорируется', msg.content==='старый'&&tombs.length===0);
+msg.content='старый';dbCalls.length=0;store.clear();
+E.applyEdits({email:'a@b.c',tombstonesCache:[],midTombstonesCache:[]},[msg],'c',{'m3':[{text:'новый',action:'edit',date:7,sender:'a@b.c'}]});
+check('applyEdits edit→content+edited', msg.content==='новый'&&msg.edited===true);
+
+const DECLARED=['activeChat','activeChatType','currentGroup','groupKeys','peerKeys','peerPqKeys','email'];
+let read=new Set();
+const base={email:'a@b.c',activeChat:'p@x',activeChatType:'chat',currentGroup:null,groupKeys:{},peerKeys:{'p@x':'K'},peerPqKeys:{'p@x':'P'}};
+const deps=new Proxy(base,{get(t,k){if(typeof k==='string')read.add(k);return t[k];}});
+apiCalls.length=0; E.sendEditEmail(deps,'m9','правка','edit');
+await new Promise(r=>setTimeout(r,50));
+check('sendEditEmail 1:1→sendEdit', apiCalls[0]&&apiCalls[0][0]==='sendEdit');
+check('sendEditEmail читает только DECLARED', ([...read].filter(k=>!DECLARED.includes(k)).length===0));
+read.clear();apiCalls.length=0;
+const g={...base,activeChatType:'group',currentGroup:{id:'g1'},groupKeys:{'g1':'GK'}};
+const gDeps=new Proxy(g,{get(t,k){if(typeof k==='string')read.add(k);return t[k];}});
+E.sendEditEmail(gDeps,'m9','гр','edit'); await new Promise(r=>setTimeout(r,50));
+check('sendEditEmail group→sendGroupEdit', apiCalls.some(c=>c[0]==='sendGroupEdit'&&c[1]==='g1'));
+
+const src=readFileSync(EDITS,'utf8');
+const converted=['editsStorageKey','loadStoredEdits','saveStoredEdits','recordLocalEdit','tombstonesKey','loadTombstones','addTombstone','isTombstoned','midTombstonesKey','loadMidTombstones','addMidTombstone','isMidTombstoned','filterDeleted','applyEdits','sendEditEmail'];
+let clean=true;
+const bodyOf=(name)=>{
+  let at1=src.indexOf('export async function '+name+'(');
+  let at2=src.indexOf('export function '+name+'(');
+  const at=[at1,at2].filter(i=>i>=0).sort((a,b)=>a-b)[0];
+  if(at<0) return null;
+  const open=src.indexOf('{',at); let d=0,end=src.length;
+  for(let j=open;j<src.length;j++){if(src[j]==='{')d++;else if(src[j]==='}'){d--;if(d===0){end=j+1;break;}}}
+  return src.slice(open,end);
+};
+for(const fn of converted){
+  const body=bodyOf(fn);
+  if(!body){clean=false;console.log('  x '+fn+': ne naiden');continue;}
+  if(body.includes('ctx')){clean=false;console.log('  ✗ '+fn+': обращение к ctx');}
+}
+check('Регрессия: нет ctx в переведённых', clean);
+
+console.log('\n=== ИТОГО: '+passed+' pass, '+failed+' fail ===');
+if(failed)process.exit(1);

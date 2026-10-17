@@ -62,6 +62,9 @@ export function prepareModuleCopy(realFile, outFile, mocks, mocksDir, extra) {
     src = src.split(from).join(to);
   }
   src = absolutizeImports(src, path.dirname(realFile));
+  mkdirSync(path.dirname(outFile), { recursive: true });
   writeFileSync(outFile, src);
-  return outFile;
+  // Возвращаем ТРАНСФОРМИРОВАННЫЙ src (а не путь), чтобы вызывающие, оборачивающие
+  // результат внешним writeFileSync, записали именно код, а не путь к файлу.
+  return src;
 }
