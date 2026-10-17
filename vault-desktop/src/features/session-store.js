@@ -21,7 +21,7 @@ export function createSessionStore() {
     isLoggedIn: false,
     currentEmail: '',    // J.2: account identity (бывш. data this.email)
     password: '',        // J.7: account password (бывш. data this.password). recovery.js читает через proxy → sessionStore.
-    emails: [],
+    // emails/channels/emailBodyCache/setEmails/mergeEmails/cacheBody — в mailbox-store.js (J.2b+J.3c).
     // J.3a: профиль bio (быв. data this.myBio). SettingsPage :bio.
     myBio: '',
     // J.3a: auth state (быв. App.data restoringSession/loginLoading/loginError).
@@ -61,45 +61,17 @@ export function createSessionStore() {
     setBio(bio) { state.myBio = bio || ''; return state.myBio; },
     getBio() { return state.myBio; },
 
-    // ── emails ────────────────────────────────────────────────────────────
-    setEmails(list) {
-      state.emails = list || [];
-      return state.emails;
-    },
-    clearEmails() {
-      state.emails = [];
-      return state.emails;
-    },
-    emailCount() {
-      return (state.emails || []).length;
-    },
   };
 }
 
-// ADR-004 J.2b: owner для загруженных сообщений (быв. data this.emails).
-export function createMailboxStore() {
-  const state = {
-    emails: [],
-    channels: [],
-    emailBodyCache: {},
-  };
-  return {
-    state,
-    setEmails(list) { state.emails = list || []; return state.emails; },
-    mergeEmails(list) {
-      const m = new Map(state.emails.map((m) => [m.uid + "|" + (m.folder || "INBOX"), m]));
-      for (const e of (list || [])) { if (!e) continue; m.set(e.uid + "|" + (e.folder || "INBOX"), e); }
-      state.emails = [...m.values()].sort((a, b) =>
-        new Date(b.date || 0) - new Date(a.date || 0));
-      return state.emails;
-    },
-    clearEmails() { state.emails = []; return state.emails; },
-    cacheBody(key, body) { state.emailBodyCache[key] = body; },
-    getEmailBody(key) { return state.emailBodyCache[key] ?? null; },
-    clearBodyCache() { state.emailBodyCache = {}; },
-  };
-}
-export const mailboxStore = createMailboxStore();
+// ADR-004 J.2b+J.3c: mailbox owner (state.emails/channels/emailBodyCache
+// + emailsLoading/emailError + setEmails/mergeEmails/cacheBody) живёт в
+// mailbox-store.js (zero-import, как J.3c требовал). session-store.js
+// ре-экспортирует singleton как mailboxStore — relay.js/mailbox-api.js
+// (import { mailboxStore } from './features/session-store.js') читают и пишут
+// в один и тот же объект, синхронно с reactive(mailboxState) в App.vue
+// (App.vue:969 import { mailboxState } из mailbox-store.js).
+export { createMailboxStore, mailboxState as mailboxStore } from './mailbox-store.js';
 
 // ADR-004 J.3b: owner для UI-утилит (i18n t + showToast — часто-используемые
 // delegates в relay.js/calls.js). Вынос из ctx.* в singleton, чтобы state-machine

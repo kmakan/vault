@@ -3729,9 +3729,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // features/* вызывают ctx.login/logout/setEmails — адресуем во владельца.
     login() { return this.sessionStore.login(); },
     logout() { return this.sessionStore.logout(); },
-    setEmails(list) { return this.sessionStore.setEmails(list); },
-    clearEmails() { return this.sessionStore.clearEmails(); },
-    emailCount() { return this.sessionStore.emailCount(); },
+    setEmails(list) { return this.mailboxStore.setEmails(list); },
+    clearEmails() { return this.mailboxStore.clearEmails(); },
+    emailCount() { return this.mailboxStore.emailCount(); },
     // Тонкие прокси во владельца relay-состояния (ADR-004 Этап A13).
     enableEco(on) { return this.relayStore.enableEco(on); },
     isEcoMode() { return this.relayStore.isEcoMode(); },

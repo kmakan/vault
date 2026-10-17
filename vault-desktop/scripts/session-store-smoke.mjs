@@ -3,6 +3,7 @@
 // setEmails/clearEmails/emailCount. Без Vue/Tauri.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createMailboxStore } from '../src/features/mailbox-store.js';
 const MODULE_PATH = path.resolve(import.meta.dirname, '..', 'src', 'features', 'session-store.js');
 const src = readFileSync(MODULE_PATH, 'utf8');
 
@@ -22,8 +23,9 @@ check('нет доступа к ctx', !/\bctx\b/.test(body));
 // 3. State starts clean
 const { createSessionStore } = await import('file://' + MODULE_PATH);
 const s1 = createSessionStore();
+const mb = createMailboxStore();
 check('isLoggedIn стартует false', s1.state.isLoggedIn === false);
-check('emails стартует пустым', JSON.stringify(s1.state.emails) === '[]');
+check('emails (mailboxStore) стартует пустым', JSON.stringify(mb.state.emails) === '[]');
 
 // 4. Isolation
 const s2 = createSessionStore();
@@ -38,17 +40,17 @@ check('login → isLoggedIn=true', s1.is() === true);
 check('login возвращает true', s1.login() === true);
 check('logout возвращает false', s1.logout() === false);
 
-// 6. setEmails/clearEmails
-s1.setEmails(['a@b', 'c@d']);
-check('setEmails пишет список', s1.state.emails.length === 2 && s1.emailCount() === 2);
-check('setEmails(null) косячит в []', s1.emailCount() === 2 && s1.setEmails(null).length === 0 && s1.emailCount() === 0);
-s1.setEmails(['x@y']);
-check('emailCount считает', s1.emailCount() === 1);
-s1.clearEmails();
-check('clearEmails опустошает', JSON.stringify(s1.state.emails) === '[]' && s1.emailCount() === 0);
+// 6. setEmails/clearEmails (owner — mailbox-store.js, J.2b+J.3c merge)
+mb.setEmails(['a@b', 'c@d']);
+check('setEmails пишет список', mb.state.emails.length === 2 && mb.emailCount() === 2);
+check('setEmails(null) косячит в []', mb.emailCount() === 2 && mb.setEmails(null).length === 0 && mb.emailCount() === 0);
+mb.setEmails(['x@y']);
+check('emailCount считает', mb.emailCount() === 1);
+mb.clearEmails();
+check('clearEmails опустошает', JSON.stringify(mb.state.emails) === '[]' && mb.emailCount() === 0);
 
 // 7. setEmails возвращает массив
-check('setEmails возвращает state.emails', s1.setEmails(['m@n']) === s1.state.emails);
+check('setEmails возвращает state.emails', mb.setEmails(['m@n']) === mb.state.emails);
 
 // 8. J.7: account password через владельца (быв. App.vue data this.password)
 // recovery.js читает через ctx.password → теперь proxy → sessionStore.getPassword()
