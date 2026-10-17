@@ -2173,14 +2173,35 @@ export default {
       };
     },
     // ── Реакции (логика в features/reactions.js) ──
-    reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this); },
-    loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this); },
-    saveStoredReactions(data) { return ReactionsFeature.saveStoredReactions(this, data); },
-    applyReactions(list, chatKey, wireReactions) { return ReactionsFeature.applyReactions(this, list, chatKey, wireReactions); },
-    sendReactionEmail(msgId, emoji, action) { return ReactionsFeature.sendReactionEmail(this, msgId, emoji, action); },
-    toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this, msgId); },
-    addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this, msgId, emoji); },
-    toggleReaction(msgId, emoji) { return ReactionsFeature.toggleReaction(this, msgId, emoji); },
+    // ── Reactions (features/reactions.js → explicit deps) ──
+    reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this.email); },
+    loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this.email); },
+    saveStoredReactions(data) { return ReactionsFeature.saveStoredReactions(this.email, data); },
+    applyReactions(list, chatKey, wireReactions) { return ReactionsFeature.applyReactions({ email: this.email }, list, chatKey, wireReactions); },
+    sendReactionEmail(msgId, emoji, action) {
+      return ReactionsFeature.sendReactionEmail({
+        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
+        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
+        activeChat: this.activeChat,
+      }, msgId, emoji, action);
+    },
+    toggleReactionPicker(msgId) {
+      this.reactionPickerMsgId = ReactionsFeature.toggleReactionPicker({ chat: this.chat, reactionPickerMsgId: this.reactionPickerMsgId }, msgId);
+      return this.reactionPickerMsgId;
+    },
+    addReaction(msgId, emoji) {
+      return ReactionsFeature.addReaction({
+        email: this.email, chat: this.chat, activeChat: this.activeChat,
+        sendReactionEmail: (m,e,a) => this.sendReactionEmail(m,e,a),
+        setReactionPickerMsgId: v => { this.reactionPickerMsgId = v; },
+      }, msgId, emoji);
+    },
+    toggleReaction(msgId, emoji) {
+      return ReactionsFeature.toggleReaction({
+        email: this.email, chat: this.chat, activeChat: this.activeChat,
+        sendReactionEmail: (m,e,a) => this.sendReactionEmail(m,e,a),
+      }, msgId, emoji);
+    },
     // ── Правки/удаления + tombstones (логика в features/edits.js) ──
     // ADR-001: функции принимают конкретные зависимости, а не this целиком.
     editsStorageKey() { return EditsFeature.editsStorageKey(this.email); },
