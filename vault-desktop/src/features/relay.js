@@ -77,7 +77,7 @@ export async function relayConsume(ctx) {
   for (const f of fresh) {
     mailboxStore.cacheBody('RELAY:' + f.uid, f.body);
   }
-  await mailboxApi.processIncoming(fresh, { notify: true });
+  await mailboxApi.processIncoming(fresh, { notify: true }, ctx);
   console.log('[relay] consumed envelopes: ' + fresh.length);
 }
 
@@ -91,10 +91,13 @@ export async function loadEmailsFast(ctx, silent = true) {
     const fetched = [];
     for (const account of accounts) {
       try {
-        const cursors = mailboxApi.loadCursors(account.id);
+        // J.4-фикс: мост асинхронный (api.loadCursors → Rust), а App-версия
+        // была синхронной (cursorsCache). Без await в курсоры уходил Promise
+        // → инкрементальный fast-fetch стартовал с нуля и тянул старое.
+        const cursors = await mailboxApi.loadCursors(account.id);
         const res = await api.fetchEmailsIncrementalFast(account.id, cursors);
         fetched.push(...(res.messages || []));
-        mailboxApi.saveCursors(account.id, res.cursors);
+        await mailboxApi.saveCursors(account.id, res.cursors);
       } catch (e) {
         console.warn('[calls] fast fetch failed:', e);
       }
@@ -111,7 +114,7 @@ export async function loadEmailsFast(ctx, silent = true) {
     mailboxStore.state.emails = merged;
     console.log(`[Emails] fast loaded ${mailboxStore.state.emails.length} messages (${fetched.length} new)`);
     // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
-    await mailboxApi.processIncoming(fetched, { notify: silent });
+    await mailboxApi.processIncoming(fetched, { notify: silent }, ctx);
   } catch (e) {
     console.warn('[calls] fast load failed:', e);
   }
@@ -261,7 +264,9 @@ export async function idleLoop(ctx) {
   // fetch не тянул старые письма.
   let monitorUp = false;
   try {
-    await api.idleStart(mailboxApi.loadCursors(sessionStore.getCurrentEmail()) || {});
+    // J.4-фикс: без await в idleStart уходил Promise вместо курсоров
+    // («флаг "Promise || {}" всегда истинен») — монитор тянул старые письма.
+    await api.idleStart(await mailboxApi.loadCursors(sessionStore.getCurrentEmail()) || {});
     monitorUp = true;
   } catch (e) {
     console.warn('[idle-monitor] start failed, JS-резерв IDLE:', e && e.message || e);
@@ -318,7 +323,11 @@ export function startPolling(ctx, intervalMs = 30000) {
   // ADR-004 H+: владелец таймера — relay-idle.js/pollingCycle (busy-гвард).
   if (pollingCycle.timer) return;
   pollingCycle.start(async () => {
-    if (!(sessionStore.state.isLoggedIn) || idleState.idleStop) return;
+    // Условие исходное (baseline 2f248d1): только логин. Busy-гвард теперь
+    // живёт в владельце pollingCycle (эквивалент старого ctx._pollingActive).
+    // Добавленный H+ гейт по idleStop глушил поллинг ровно там, где он и
+    // есть штатный fallback — при мёртвом релее в эко/автономном режиме.
+    if (!(sessionStore.state.isLoggedIn)) return;
     try {
       // M2.1: приём с push-релея (быстрый HTTP, до IMAP). Конверты
       // мержим в mailboxStore.state.emails как виртуальные письма (uid: rl-<id>) —
@@ -327,24 +336,24 @@ export function startPolling(ctx, intervalMs = 30000) {
       try { await relayConsume(ctx); } catch (e) { /* релей недоступен — почта продолжит доставку */ }
       // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
       // контактов (модель почтовый мессенджер — группа тоже источник контактов).
-      try { await mailboxApi.loadGroups(); } catch (e) { /* тихо */ }
+      try { await mailboxApi.loadGroups(ctx); } catch (e) { /* тихо */ }
       // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
       // инвайты (попап согласия) и обновляет список писем.
-      await mailboxApi.loadEmails(true);
+      await mailboxApi.loadEmails(true, ctx);
       // Новые письма могли прийти в любой момент — перерисовываем
       // открытый чат, чтобы не приходилось переоткрывать его вручную.
       if (chatStore.state.activeChat === '__notes__') {
         // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
         // перезаписал бы пустым списком из IMAP).
       } else if (chatStore.state.activeChat && chatStore.state.activeChatType === 'chat') {
-        await mailboxApi.loadMessages(chatStore.state.activeChat);
+        await mailboxApi.loadMessages(chatStore.state.activeChat, ctx);
         // Не выдёргиваем из чтения истории: прокручиваем только если
         // пользователь уже у низа чата.
         mailboxApi.scrollToBottom(false);
       } else if (chatStore.state.activeChatType === 'group' && chatStore.state.currentGroup) {
         // Группы тоже обновляем поллингом: новые сообщения и реакции
         // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-        await mailboxApi.loadGroupMessages(chatStore.state.currentGroup.id);
+        await mailboxApi.loadGroupMessages(chatStore.state.currentGroup.id, false, ctx);
         mailboxApi.scrollToBottom(false);
       }
     } catch (e) {

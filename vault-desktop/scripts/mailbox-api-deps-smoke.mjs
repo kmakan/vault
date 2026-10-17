@@ -12,7 +12,7 @@
 // что они вызывают модули напрямую, минуя мост. Этот смоук закрывает именно
 // этот слепой сектор: он зовёт через мост и проверяет, что deps доехали.
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { prepareModuleCopy } from './smoke-imports.mjs';
+import { prepareModuleCopy, readModuleSource } from './smoke-imports.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -47,9 +47,14 @@ export async function loadMessages(ctx, email, deps) {
   return 'messages-result';
 }
 `);
-// Остальные lazy-цели моста: смоуку не нужны, но спецификатор должен резолвиться.
-writeFileSync(MOCKS + '/emails.js', 'export const loadEmails = async () => "noop";');
-writeFileSync(MOCKS + '/groups.js', 'export const loadGroups = async () => "noop";\nexport const loadGroupMessages = async () => "noop";');
+// Остальные lazy-цели моста: смоуку нужны как шпионы ctx-контракта.
+writeFileSync(MOCKS + '/emails.js', `export const calls = [];
+export async function loadEmails(ctx, silent) { calls.push({ ctx, silent }); return "noop"; }
+`);
+writeFileSync(MOCKS + '/groups.js', `export const calls = [];
+export async function loadGroups(ctx) { calls.push({ ctx }); return "noop"; }
+export async function loadGroupMessages(ctx, id, force) { calls.push({ ctx, id, force }); return "noop"; }
+`);
 writeFileSync(MOCKS + '/history.js', 'export const cacheBody = () => {};');
 writeFileSync(MOCKS + '/session-store.js', `const state = { isLoggedIn: true, emails: [], channels: [], emailBodyCache: {}, activeChat: 'a@x.ru', currentGroup: null, activeChatType: 'peer' };
 export const sessionStore = { getCurrentEmail: () => 'me@x.ru', state };
@@ -90,6 +95,8 @@ prepareModuleCopy(
 const { mailboxApi } = await import(COPY);
 const incomingSpy = await import(MOCKS + '/incoming.js');
 const messagesSpy = await import(MOCKS + '/messages.js');
+const emailsSpy = await import(MOCKS + '/emails.js');
+const groupsSpy = await import(MOCKS + '/groups.js');
 const realBounce = await import(ROOT + '/src/features/bounce.js');
 const realChannels = await import(ROOT + '/src/features/channels.js');
 const realContacts = await import(ROOT + '/src/features/contacts.js');
@@ -142,6 +149,46 @@ console.log('\n2. mailboxApi.loadMessages → deps не потеряны');
 console.log('\n3. Анти-рот: смоук не вырожден');
 check('шпионы реально вызывались', incomingSpy.calls.length > 0 && messagesSpy.calls.length > 0,
   'incoming=' + incomingSpy.calls.length + ' messages=' + messagesSpy.calls.length);
+
+// ── 4. J.4-фикс: ctx ВЫЗЫВАЮЩЕГО доезжает до фичи (а не подменяется проекцией) ──
+// Регрессия 18c1eb7: мост подсовывал makeCtx() и фоновые циклы relay.js (эко,
+// релей-тикер, поллинг, IDLE-резерв) работали МОЛЧА вхолостую — incoming.js:39
+// делает early-return по !ctx.cryptoReady, которого в проекции нет.
+console.log('\n4. ctx вызывающего доезжает (J.4-фикс)');
+{
+  const appCtx = { cryptoReady: true, email: 'me@x.ru', marker: 'caller-ctx' };
+  await mailboxApi.processIncoming(['m2'], { notify: false }, appCtx);
+  check('processIncoming: ctx передан как есть (identity)', incomingSpy.calls.at(-1).ctx === appCtx,
+    'получено ключей: ' + Object.keys(incomingSpy.calls.at(-1).ctx || {}).length);
+  await mailboxApi.loadMessages('peer@x.ru', appCtx);
+  check('loadMessages: ctx передан как есть (identity)', messagesSpy.calls.at(-1).ctx === appCtx);
+  await mailboxApi.loadGroups(appCtx);
+  await mailboxApi.loadEmails(false, appCtx);
+  await mailboxApi.loadGroupMessages('g1', false, appCtx);
+  check('loadGroups: ctx доехал как есть', groupsSpy.calls.at(-1).ctx === appCtx);
+  check('loadGroupMessages: ctx доехал как есть + аргументы на месте',
+    groupsSpy.calls.at(-1).ctx === appCtx && groupsSpy.calls.at(-1).id === 'g1' && groupsSpy.calls.at(-1).force === false);
+  check('loadEmails: ctx доехал как есть + silent на месте',
+    emailsSpy.calls.at(-1).ctx === appCtx && emailsSpy.calls.at(-1).silent === false);
+  // Без ctx — fallback-проекция (контракт сохранён, не падает).
+  await mailboxApi.processIncoming(['m3'], {});
+  const fallback = incomingSpy.calls.at(-1).ctx;
+  check('без ctx работает fallback-проекция', fallback !== appCtx && typeof fallback.email === 'string');
+}
+
+// ── 5. Анти-рот по КЛАССУ: каждый вызов моста в relay.js обязан передавать ctx ──
+// Именно этого не хватило 18c1eb7: подпись сменилась, а вызывающий — нет.
+console.log('\n5. Анти-рот: вызовы моста в relay.js');
+{
+  // Исходник (не копия): статическая проверка вызовов моста в relay.js.
+  const relaySrc = readModuleSource('src/features/relay.js');
+  const re = /mailboxApi\.(processIncoming|loadMessages|loadGroups|loadEmails|loadGroupMessages)\(([^;]*?)\)/g;
+  const calls = [...relaySrc.matchAll(re)];
+  check('вызовы моста найдены (проверка не вырождена)', calls.length >= 5, 'найдено: ' + calls.length);
+  const without = calls.filter(m => !/\bctx\b/.test(m[2]));
+  check('каждый вызов моста в relay.js передаёт ctx', without.length === 0,
+    without.map(m => m[1]).join(', '));
+}
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

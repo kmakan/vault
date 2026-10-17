@@ -50,10 +50,16 @@ export const mailboxApi = {
     if (api && typeof api.saveCursors === 'function') return api.saveCursors(accountId, cursors);
   },
   // ── incoming ──
+  // ctx вызывающего ПРИОРИТЕТНЕЕ минимальной проекции: relay.js зовёт мост из
+  // фоновых циклов (эко/релей/поллинг/IDLE-резерв) и уже держит живой ctx в
+  // сигнатуре. Проекция makeCtx() неполна (62 из 72 ctx-полей, которые дёргают
+  // фичи под мостом, в неё не входят) — с ней путь не падал, а МОЛЧА ничего не
+  // делал (incoming.js:39 early-return по !ctx.cryptoReady). makeCtx() остаётся
+  // fallback для вызова вовсе без ctx.
   // dep-сборка та же, что в App.vue (единственный владелец knows-how фич).
-  async processIncoming(fetched, opts) {
+  async processIncoming(fetched, opts, ctx) {
     const [mod, bounce, channels] = await Promise.all([IncomingFeature(), BounceFeature(), ChannelsFeature()]);
-    return mod.processIncoming(makeCtx(), fetched, opts, {
+    return mod.processIncoming(ctx || makeCtx(), fetched, opts, {
       isBounceMessage: bounce.isBounceMessage,
       bounceRecipients: bounce.bounceRecipients,
       bounceReason: bounce.bounceReason,
@@ -62,20 +68,20 @@ export const mailboxApi = {
     });
   },
   // ── loaders ──
-  async loadMessages(email) {
+  async loadMessages(email, ctx) {
     const [mod, contacts] = await Promise.all([MessagesFeature(), ContactsFeature()]);
-    return mod.loadMessages(makeCtx(), email, {
+    return mod.loadMessages(ctx || makeCtx(), email, {
       isOutboundLetter: contacts.isOutboundLetter,
       resolvePeerSender: contacts.resolvePeerSender,
       resolveEventSender: contacts.resolveEventSender,
       findKnownPeerByKey: contacts.findKnownPeerByKey,
     });
   },
-  async loadGroups() { const mod = await GroupsFeature(); return mod.loadGroups(makeCtx()); },
-  async loadEmails(silent = false) { const mod = await EmailsFeature(); return mod.loadEmails(makeCtx(), silent); },
-  async loadGroupMessages(groupId, forceRescan = false) {
+  async loadGroups(ctx) { const mod = await GroupsFeature(); return mod.loadGroups(ctx || makeCtx()); },
+  async loadEmails(silent = false, ctx) { const mod = await EmailsFeature(); return mod.loadEmails(ctx || makeCtx(), silent); },
+  async loadGroupMessages(groupId, forceRescan = false, ctx) {
     const mod = await GroupsFeature();
-    return mod.loadGroupMessages(makeCtx(), groupId, forceRescan);
+    return mod.loadGroupMessages(ctx || makeCtx(), groupId, forceRescan);
   },
   // ── body cache (lazy HistoryFeature persist in SQLite) ──
   cacheBody(key, body) {

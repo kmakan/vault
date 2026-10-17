@@ -3,6 +3,11 @@
 export function createRelayTicker({ tickMs = 5000 } = {}) {
   // Тик релейного health-consume 5с. asyncCb — fire-and-forget (unhandled
   // rejections ловятся внутри relay.js, здесь — сторожевой catch).
+  //
+  // ПЕРВЫЙ ТИК — ЧЕРЕЗ ИНТЕРВАЛ, не немедленно (восстановлено по bcc2ac21).
+  // Немедленный тик давал ДВОЙНОЙ мгновенный consume: relay.js сразу после
+  // start сам зовёт relayConsume(ctx) («мгновенный первый consume» — чтобы
+  // ntfy-пуш разбудил холодный старт и call_request не ждал 5с).
   let timer = null;
   return {
     start(asyncCb) {
@@ -12,7 +17,6 @@ export function createRelayTicker({ tickMs = 5000 } = {}) {
           console.warn('[relay] ticker err:', e && e.message || e)
         );
       };
-      tick();
       timer = setInterval(tick, tickMs);
       return true;
     },
@@ -24,6 +28,9 @@ export function createRelayTicker({ tickMs = 5000 } = {}) {
 export function createFastFetchCycle({ tickMs = 7000 } = {}) {
   // Страховочный фетч email 7с (СПАМ + сигналы звонков) — аналог fastFetcher
   // из call-idle.js, но async-загрузка (loadEmailsFast). busy-флаг = анти-налож.
+  //
+  // Первый тик — через интервал (восстановлено по bcc2ac21): немедленный фетч
+  // на старте конкурировал за IMAP-lock с идущей загрузкой почты.
   let timer = null, busy = false;
   return {
     start(asyncCb) {
@@ -35,7 +42,6 @@ export function createFastFetchCycle({ tickMs = 7000 } = {}) {
         catch (e) { console.warn('[relay] fastFetch err:', e && e.message || e); }
         finally { busy = false; }
       };
-      void tick();
       timer = setInterval(() => { void tick(); }, tickMs);
       return true;
     },
@@ -48,6 +54,10 @@ export function createFastFetchCycle({ tickMs = 7000 } = {}) {
 export function createPollingCycle({ intervalMs = 30000 } = {}) {
   // Поллинг 30с (fallback при мёртвом релее). busy-флаг: anti-наложение
   // IMAP lock (Gmail троттлит → 35с удерживает lock, следующий тик skip).
+  //
+  // Первый тик — через интервал (восстановлено по bcc2ac21): немедленный
+  // полный поллинг на старте дрался за IMAP-lock с первичной загрузкой
+  // почты — «Timed out waiting for email client lock», чаты пустые.
   let timer = null, busy = false;
   return {
     start(asyncCb, ms = intervalMs) {
@@ -59,7 +69,6 @@ export function createPollingCycle({ intervalMs = 30000 } = {}) {
         catch (e) { console.warn('[relay] poll err:', e && e.message || e); }
         finally { busy = false; }
       };
-      void tick();
       timer = setInterval(() => { void tick(); }, ms);
       return true;
     },

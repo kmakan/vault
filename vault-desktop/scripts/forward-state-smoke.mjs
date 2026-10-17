@@ -42,7 +42,21 @@ const fsrc = readFileSync(path.join(ROOT, 'src/features/forward.js'), 'utf8');
 check('forward.js реэкспортирует forwardState', /export\s*\{\s*forwardState\s*\}/.test(fsrc));
 const app = readFileSync(path.join(ROOT, 'src/App.vue'), 'utf8');
 check('App.vue разворачивает ...forwardState()', /\.\.\.forwardState\(\)/.test(app));
-check('в App.vue не осталось ручного forwardTo:', !/^\s+forwardTo:\s/m.test(app));
+// Точная форма проверки: ищем `forwardTo:`-ЗАПИСЬ в объект, которая НЕ читает
+// владельца (`this.forwardTo`). ПРЕЖНЯЯ регулярка (`/^\s+forwardTo:\s/m`) ловила
+// АРГУМЕНТ вызова в forwardDeps() — `forwardTo: this.forwardTo, displayName: ...`
+// — и краснела на здоровом коде: состояние уже в forwardState(), а App.vue лишь
+// передаёт его в фичу. Ложное срабатывание, не дефект продукта (17.10).
+const MANUAL_RE = /^[ \t]+forwardTo:[ \t]*([^\n]*)/gm;
+const manualForwardTo = [...app.matchAll(MANUAL_RE)]
+  .filter(m => !/this\.forwardTo/.test(m[1]));
+check('в App.vue нет ручного владельца forwardTo (только чтение this.forwardTo)',
+  manualForwardTo.length === 0, manualForwardTo.map(m => m[0].trim()).join(' | '));
+// Анти-рот: детектор обязан ловить НАСТОЯЩЕЕ объявление поля (иначе проверка
+// вырождена и пропустит возврат ручного владельца).
+const fakeApp = 'data() {\n  return {\n    forwardTo: null,\n  };\n}';
+check('анти-рот: детектор ручного forwardTo не вырожден',
+  [...fakeApp.matchAll(MANUAL_RE)].filter(m => !/this\.forwardTo/.test(m[1])).length === 1);
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
