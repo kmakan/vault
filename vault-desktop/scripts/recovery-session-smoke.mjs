@@ -332,7 +332,9 @@ const VALID_BACKUP = JSON.stringify({ version: 1, keys: { keypair: {
   await RF.loginWithRecovery(ctx, deps);
   localStorage.setItem = original;
   check('сбой marker: видимая ошибка и 0 connect/import',
-    ctx.loginError === 'T:recovery_state_unavailable' && order.length === 0 && !ctx.isLoggedIn);
+    ctx.loginError === 'T:recovery_state_unavailable' && !ctx.isLoggedIn &&
+    !order.includes('fetchEmails') && !order.some((o) => o.startsWith('invoke:')) &&
+    order.includes('abandonSessionMemory'));
 }
 
 function makeFlow(cfg) {
@@ -360,6 +362,13 @@ function makeFlow(cfg) {
       order.push('fetchEmails');
       if (cfg.fetch === 'THROW') throw new Error('fetch down');
       return cfg.msgs || [{ folder: 'INBOX', uid: '1', subject: '' }];
+    },
+    // Сброс ТОЛЬКО RAM-памяти сессии (api.js: email/password/token/connected).
+    // Durable token/email/credentials/ключи он не трогает — поэтому именно он,
+    // а НЕ destructive logout, обязан вызываться на провале восстановления.
+    abandonSessionMemory() {
+      order.push('abandonSessionMemory');
+      return true;
     },
   };
   const invokeMock = async (cmd, args) => {
@@ -505,6 +514,16 @@ async function expectFailure(label, cfg, expectError) {
   check(label + ': 0 save_credentials', (calls.counters.save_credentials || 0) === 0);
   check(label + ': 0 генерации новой пары', !order.includes('GENERATE'));
   check(label + ': 0 initLocalDb (пост-вход не начат)', !order.includes('initLocalDb'));
+  // A12-регрессия (найдена аудитом переходов 17.10): refactor заменил
+  // `isLoggedIn=false` на ctx.logout() и ЗАОДНО потерял сброс RAM-памяти
+  // сессии (api.abandonSessionMemory). Без него после провала в памяти
+  // остаются email/password/token, а api.connected — true, т.е. приложение
+  // считает себя подключённым к IMAP с устаревшими кредами. Durable
+  // creds при этом трогать НЕЛЬЗЯ (delete_credentials стёр бы пароль).
+  check(label + ': RAM-память сессии сброшена (abandonSessionMemory вызван)',
+    order.includes('abandonSessionMemory'));
+  check(label + ': durable creds не тронуты (0 delete_credentials)',
+    (calls.counters.delete_credentials || 0) === 0);
   // marker уцелел → новый ApiClient видит его и restoreSession = false.
   check(label + ': marker уцелел', localStorage.getItem('vault-recovery-pending') === '1');
   const api2 = new mod.ApiClient();

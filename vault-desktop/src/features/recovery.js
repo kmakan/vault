@@ -218,12 +218,18 @@ export async function loginWithRecovery(ctx, deps) {
     ctx.showToast(tr('recovery_ok', 'recovery_ok'));
   } catch (error) {
     // Провал: маркер ОСТАЁТСЯ (его снимает только commitRecoveryLogin), поэтому
-    // следующий старт не сделает авто-вход без ключей. Память сессии
-    // сбрасываем БЕЗ logout() — logout() вызывает delete_credentials и стёр бы
-    // сохранённый пароль пользователя, а провал восстановления не имеет на это
-    // права. Владелец сессии выключает isLoggedIn.
+    // следующий старт не сделает авто-вход без ключей. isLoggedIn выключает
+    // владелец сессии (ctx.logout() — session-store, delete_credentials НЕ
+    // вызывает, см. session-store.js), а RAM-память ApiClient (email/password/
+    // token/connected) чистит abandonSessionMemory: без него после провала
+    // api.connected остаётся true — приложение считает себя подключённым к
+    // IMAP с устаревшими кредами (регрессия A12, аудит переходов 17.10).
+    // Полный api.logout() здесь ЗАПРЕЩЁН — он вызывает delete_credentials и
+    // стёр бы сохранённый пароль пользователя, а провал восстановления не
+    // имеет на это права.
     ctx.logout();
     ctx.loginError = (error && error.message) || String(error);
+    try { api.abandonSessionMemory(); } catch (e) { /* память и так не persists */ }
   } finally {
     ctx.loginLoading = false;
   }
