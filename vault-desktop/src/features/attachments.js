@@ -129,29 +129,41 @@ export async function downloadDodAttachment(ctx, msg, attachment) {
 }
 
 // ── Голосовое сообщение (вложение audio/webm или локальная заметка) ──
+// buildVoiceOptimisticMsg: чистый factory оптимистичного предпросмотра.
+// Совпадает в ветках notes/local и send/peer — вынесен чтобы не дублировать.
+export function buildVoiceOptimisticMsg(audioData, { id, timeStr, name, status, encrypted, _pendingAt }) {
+  return {
+    id,
+    content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
+    from: 'me',
+    time: timeStr,
+    encrypted,
+    status,
+    _pendingAt: _pendingAt ?? Date.now(),
+    attachment: {
+      name,
+      type: audioData.mimeType || 'audio/webm',
+      size: audioData.size,
+      data: audioData.base64,
+      isImage: false,
+      isAudio: true,
+    },
+  };
+}
+
 export async function sendAudioMessage(ctx, audioData) {
+  const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
   // шифрования и почты — так же, как текст заметок.
   if (ctx.activeChat === '__notes__') {
-    const name = `voice-${Date.now()}.webm`;
-    const msg = {
-      id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
-      content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
-      from: 'me',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      encrypted: false,
-      vault: false,
-      status: 'sent',
-      _notes: true,
-      attachment: {
-        name,
-        type: audioData.mimeType || 'audio/webm',
-        size: audioData.size,
-        data: audioData.base64,
-        isImage: false,
-        isAudio: true,
-      },
-    };
+    const now = Date.now();
+    const name = `voice-${now}.webm`;
+    const msg = buildVoiceOptimisticMsg(audioData, {
+      id: 'note-' + now.toString(36) + Math.random().toString(36).substr(2, 5),
+      timeStr, name, status: 'sent', encrypted: false,
+    });
+    msg.vault = false;
+    msg._notes = true;
     const list = ctx.loadNotes();
     list.push(msg);
     if (!ctx.saveNotes(list)) {
@@ -197,24 +209,12 @@ export async function sendAudioMessage(ctx, audioData) {
   }
 
   // Оптимистичный предпросмотр у отправителя.
-  const msg = {
+  const now = Date.now();
+  const msg = buildVoiceOptimisticMsg(audioData, {
     id: envelopeId || EnvelopeId.pendingIdOf(),
-    content: `🎙️ [Voice ${audioData.duration}s — ${Math.round(audioData.size / 1024)}KB]`,
-    from: 'me',
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    ts: Date.now(),
-    encrypted: ctx.cryptoReady,
-    status: 'sending',
-    _pendingAt: Date.now(),
-    attachment: {
-      name,
-      type: audioData.mimeType || 'audio/webm',
-      size: audioData.size,
-      data: audioData.base64,
-      isImage: false,
-      isAudio: true,
-    },
-  };
+    timeStr, name, status: 'sending', encrypted: ctx.cryptoReady, _pendingAt: now,
+  });
+  msg.ts = now;
   ctx.chat.append(msg);
   const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
     ? 'group:' + ctx.currentGroup.id

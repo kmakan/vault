@@ -257,5 +257,17 @@ console.log('7. MessageItem: порядок ветвей вложений');
     appSrc.includes('image-viewer-overlay') && /v-if="viewingImage"/.test(appSrc));
 }
 
+// buildVoiceOptimisticMsg: чистый factory (ADR-001 вынос duplicate msg).
+{
+  const audioData = { duration: 3, size: 204800, base64: 'AAAA', mimeType: 'audio/webm' };
+  const msg = AttachmentsFeature.buildVoiceOptimisticMsg(audioData, {
+    id: 'voice-1', timeStr: '12:00', name: 'voice-1.webm',
+    status: 'sending', encrypted: true, _pendingAt: 1,
+  });
+  check('buildVoiceOptimisticMsg контент — 🎙️ + Voice', /🎙️ \[Voice 3s/.test(msg.content));
+  check('buildVoiceOptimisticMsg attachment.isAudio', msg.attachment.isAudio === true);
+  check('buildVoiceOptimisticMsg id/timeStr переданы', msg.id === 'voice-1' && msg.time === '12:00');
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
