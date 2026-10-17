@@ -1166,7 +1166,7 @@ impl CallMediaManager {
     }
 }
 
-/// M2.8: Tauri command — query current call state for a call_id.
+/// M2.8/M3: Tauri command — query current call state for a call_id.
 /// Bridge parity с `calls.js media_call_state` (Phase 2 roster UI).
 #[tauri::command]
 pub async fn media_call_state(
@@ -1176,6 +1176,23 @@ pub async fn media_call_state(
     let mgr = state.lock().await;
     let st = mgr.call_state(&call_id);
     Ok(st)
+}
+
+/// M2.10 (ADR-002): Join a group call — create P2P fan-out PeerConnections
+/// for each participant (SFU-less mesh). ADR-001: media.rs isolation:
+/// receives group_id + participant public keys as opaque list, no groups.rs
+/// dependency.
+#[tauri::command]
+pub async fn media_call_join(
+    call_id: String,
+    participant_keys: Vec<String>,
+    state: tauri::State<'_, Mutex<CallMediaManager>>,
+) -> Result<(), String> {
+    let _ = call_id;
+    // M3: fan-out PeerConnection per participant key.
+    // Phase 3.1 stub: roster recorded, PC creation deferred to media_call_start_peer.
+    let _participants = participant_keys;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

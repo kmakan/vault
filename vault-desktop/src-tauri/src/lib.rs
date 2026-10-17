@@ -2162,6 +2162,8 @@ pub fn run() {
             call_parse_signal,
             // M2.8: group-call roster state bridge.
             media::media_call_state,
+            // M2.10 (ADR-002): group call fan-out bridge cmd.
+            media::media_call_join,
             channel_signing_key,
             channel_sign_post,
             channels_tokens,

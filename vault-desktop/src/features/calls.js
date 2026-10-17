@@ -154,6 +154,12 @@ export async function mediaCallStateBridge(callId) {
   catch (e) { console.warn('[call] media_call_state bridge failed:', e && e.message || e); return 'Idle'; }
 }
 
+// M2.10 (ADR-002): Rust bridge parity — media_call_join (group fan-out).
+export async function mediaCallJoinBridge(callId, participantKeys) {
+  try { return await invoke('media::media_call_join', { callId, participantKeys }); }
+  catch (e) { console.warn('[call] media_call_join bridge failed:', e && e.message || e); }
+}
+
 // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
 export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
   const body = {
