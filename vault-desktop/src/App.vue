@@ -3389,7 +3389,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.scrollToBottom(true);
     },
     // --- Заметки для себя
-    // notes-store.js — ЕДИНСТВОЕ место, знающее про хранилище (vault-notes-<email>).
+    // notes-store.js — ЕДИНСТВЕННОЕ место, знающее про хранилище (vault-notes-<email>).
     // Методы ниже — тонкие делегаты: они зовутся шаблоном и другими местами,
     // но сами ничего не знают о формате ключа и localStorage.
     notesStoreKey() {
