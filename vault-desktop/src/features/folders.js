@@ -10,11 +10,14 @@
 
 import { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
+import { foldersStore } from './folders-store.js';
 
 // Состояние фичи — в ./folders/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...foldersState()`).
 // Логика папок, использующая это состояние, — здесь.
-
+// J.7: владелец chatFlags/chatFoldersNames — foldersStore (ADR-004).
+// folders.js больше не пишет ctx напрямую — читает/пишет через owner,
+// App.vue читает через reactive proxy (computed).
 export { foldersState } from './folders/state.js';
 
 // Список имён папок для панели — по алфавиту (чистая функция, App.vue
@@ -25,32 +28,34 @@ export function sortedFolderNames(names) {
 
 // Flag-key of a chat target: group chats by 'group:<id>', DMs by lowercased email.
 export function flagKey(target) {
-  if (target.type === 'group') return 'group:' + target.id;
-  if (target.type === 'channel') return 'channel:' + target.id;
-  return target.email.toLowerCase();
+  return foldersStore.flagKey(target);
 }
 
 // Flags object of a chat key (always an object, may be empty).
 export function chatFlagOf(ctx, key) {
-  return ctx.chatFlags[key] || {};
+  return foldersStore.flagOf(key);
 }
 
 // Load chat flags + folder names from sqlite kv (chat-flags, chat-folders).
+// J.7: пишем в owner, не в ctx.
 export async function loadChatFlags(ctx) {
   try {
     const raw = await db.kvGet(await accountNamespace(ctx.email), 'chat-flags');
-    ctx.chatFlags = raw ? JSON.parse(raw) : {};
-  } catch (e) { ctx.chatFlags = {}; }
+    const flags = raw ? JSON.parse(raw) : {};
+    foldersStore.loadFromRaw(flags, foldersStore.state.chatFoldersNames);
+  } catch (e) { foldersStore.loadFromRaw({}, foldersStore.state.chatFoldersNames); }
   try {
     const fr = await db.kvGet(await accountNamespace(ctx.email), 'chat-folders');
-    ctx.chatFoldersNames = fr ? JSON.parse(fr) : [];
-  } catch (e) { ctx.chatFoldersNames = []; }
+    const names = fr ? JSON.parse(fr) : [];
+    foldersStore.loadFromRaw(foldersStore.state.chatFlags, names);
+  } catch (e) { /* блоб пуст — имена остаются */ }
 }
 
 // Persist chat flags to sqlite kv (folder/archive/mute of all chats).
 export async function saveChatFlags(ctx) {
   try {
-    await db.kvSet(await accountNamespace(ctx.email), 'chat-flags', JSON.stringify(ctx.chatFlags));
+    await db.kvSet(await accountNamespace(ctx.email), 'chat-flags',
+      JSON.stringify(foldersStore.state.chatFlags));
   } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
 }
 
@@ -59,12 +64,11 @@ export async function setChatFolder(ctx, name) {
   // Guard: меню могло быть уже закрыто (двойной вызов из шаблона/таймера) —
   // бесшумный no-op вместо падения на target=null.
   if (!ctx.chatMenu || !ctx.chatMenu.target) return;
-  const key = flagKey(ctx.chatMenu.target);
-  const f = { ...(ctx.chatFlags[key] || {}) };
+  const key = foldersStore.flagKey(ctx.chatMenu.target);
+  const f = { ...foldersStore.flagOf(key) };
   if (name) f.folder = name.slice(0, 24);
   else delete f.folder;
-  if (!f.archived && !f.muted && !f.folder) delete ctx.chatFlags[key];
-  else ctx.chatFlags[key] = f;
+  foldersStore.setFlag(key, f);
   ctx.closeChatMenu();
   await saveChatFlags(ctx);
 }
@@ -73,10 +77,9 @@ export async function setChatFolder(ctx, name) {
 export async function createChatFolder(ctx) {
   const name = (ctx.chatFolderNewName || '').trim().slice(0, 24);
   if (!name) return;
-  if (!ctx.chatFoldersNames.includes(name)) {
-    ctx.chatFoldersNames = [...ctx.chatFoldersNames, name];
-    await db.kvSet(await accountNamespace(ctx.email), 'chat-folders', JSON.stringify(ctx.chatFoldersNames));
-  }
+  foldersStore.addFolderName(name);
+  await db.kvSet(await accountNamespace(ctx.email), 'chat-folders',
+    JSON.stringify(foldersStore.state.chatFoldersNames));
   await setChatFolder(ctx, name);
   ctx.folderDialogOpen = false;
   ctx.chatFolderNewName = '';

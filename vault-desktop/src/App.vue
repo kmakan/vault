@@ -982,6 +982,7 @@ import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
 // check-template.cjs, чтобы разрезолвить спреды в data()).
 import { foldersState } from './features/folders/state.js';
+import { foldersStore } from './features/folders-store.js';
 import { duressState } from './features/duress/state.js';
 import { pollState } from './features/poll/state.js';
 import { forwardState } from './features/forward/state.js';
@@ -1110,7 +1111,7 @@ export default {
       // { archived, muted }. Архив скрыт из основного списка (переключатель
       // «Показать архив»), mute — без звука/без пуш-уведомления (счётчик
       // непрочитанных остаётся). Персист в sqlite kv 'chat-flags'.
-      chatFlags: {},
+      // J.7: владелец — foldersStore (ADR-004), читается через proxy.
       // Глобальный ignore-лист (E2E-честная блокировка): объект
       // { email: tsБлокировки }. Сообщения/звонки/уведомления от этих
       // отправителей скрываются у НАШЕГО получателя (сервер в serverless
@@ -1380,6 +1381,17 @@ export default {
     },
     // Прокси во владельца группового состояния (ADR-004, Этап A9).
     // groupKeys/groupAvatars больше не data()-свойства, а proxy на groups-store.
+    // Прокси во владера флагов чатов (ADR-004 J.7):
+    // chatFlags/chatFoldersNames больше не data()-свойства, а proxy на folders-store.
+    // Геттер сохраняет обратную совместимость для чтения; запись — через API.
+    chatFlags: {
+      get() { return foldersStore.state.chatFlags; },
+      set(v) { foldersStore.state.chatFlags = v || {}; },
+    },
+    chatFoldersNames: {
+      get() { return foldersStore.state.chatFoldersNames; },
+      set(v) { foldersStore.state.chatFoldersNames = v || []; },
+    },
     // Геттер сохраняет обратную совместимость для чтения; запись — через API.
     groupKeys: {
       get() { return this.groups.state.groupKeys; },
@@ -4225,19 +4237,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     async toggleArchive() {
       const key = this.flagKey(this.chatMenu.target);
-      const f = { ...(this.chatFlags[key] || {}) };
+      const f = { ...foldersStore.flagOf(key) };
       f.archived = !f.archived;
-      if (!f.archived && !f.muted) delete this.chatFlags[key];
-      else this.chatFlags[key] = f;
+      foldersStore.setFlag(key, f);
       this.closeChatMenu();
       await this.saveChatFlags();
     },
     async toggleMute() {
       const key = this.flagKey(this.chatMenu.target);
-      const f = { ...(this.chatFlags[key] || {}) };
+      const f = { ...foldersStore.flagOf(key) };
       f.muted = !f.muted;
-      if (!f.archived && !f.muted && !f.folder) delete this.chatFlags[key];
-      else this.chatFlags[key] = f;
+      foldersStore.setFlag(key, f);
       this.closeChatMenu();
       await this.saveChatFlags();
     },
