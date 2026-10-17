@@ -11,6 +11,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
+// ADR-004 J.6: владелец peer-ключей — прямой импорт singleton, БЕЗ ctx
+// (ctx исключаем — независимость от фрагментов). identity-store чистый
+// (без vue), поэтому смоуки его поднимают без моков.
+import { identityStore } from './identity-store.js';
 
 // Состояние фичи — в ./duress/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...duressState()`).
@@ -152,13 +156,14 @@ export async function sendDuressSos(ctx) {
     // получателя — иначе шифрование падает и SOS молча теряется.
     // При холодном старте (duress сразу после открытия) peerKeys могли
     // ещё не загрузиться — читаем прямо из key_store.
+    // Запись — через владельца identity (ADR-004 J.6): прямой импорт
+    // singleton, БЕЗ ctx (ctx исключаем — независимость от фрагментов).
     if (!ctx.peerKeys || !Object.keys(ctx.peerKeys).length) {
       try {
         const stored = await crypto.loadPeerKeys();
-        ctx.peerPqKeys = ctx.peerPqKeys || {};
         for (const pk of stored) {
-          ctx.peerKeys[pk.email] = pk.public_key;
-          if (pk.pq_public_key) ctx.peerPqKeys[pk.email] = pk.pq_public_key;
+          identityStore.setPeerKey(pk.email, pk.public_key, pk.pq_public_key || null);
+          identityStore.markLoaded(pk.email);
         }
       } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
     }

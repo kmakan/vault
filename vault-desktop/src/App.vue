@@ -2645,11 +2645,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // пропасть из памяти.
         identityStore.clearPeerKeys();
         const stored = await crypto.loadPeerKeys();
-        for (const pk of stored) {
-          this.peerKeys[pk.email] = pk.public_key;
-          this.peerKeysLoaded[pk.email] = true;
-          if (pk.pq_public_key) this.peerPqKeys[pk.email] = pk.pq_public_key;
-        }
+        identityStore.loadPeerKeys(stored);
         // M2.4: отложенные ntfy-клики (холодный старт) — ключи загружены,
         // можно открывать чаты. Drain также доступен глобально (__vaultOpenChat).
         try {
@@ -3167,10 +3163,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       console.log('[channel] hello from', senderEmail, '→ chan', chId);
     },
     setPeerKey(email, key, pq = null) {
-      this.peerKeys[email] = key;
-      // PQ: pq может прийти из конверта (env.pq) — сохраняем в
-      // peerPqKeys и в peer_keys.json; null не трогает существующий.
-      if (pq) this.peerPqKeys[email] = pq;
+      // Запись — через владельца identity (ADR-004 J.6).
+      identityStore.setPeerKey(email, key, pq);
       crypto.setPeerPublicKey(key, this.peerPqKeys && this.peerPqKeys[email]);
       crypto.savePeerKey(email, key, null, pq || undefined).catch(err => {
         console.error('Failed to save peer key:', err);
@@ -4058,14 +4052,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           k => String(k).toLowerCase() !== normalized && this.peerKeys[k] === publicKeyHex
         );
         if (oldSame) {
-          delete this.peerKeys[oldSame];
-          delete this.peerPqKeys[oldSame];
-          delete this.peerKeysLoaded[oldSame];
+          // Удаление — через владельца identity (ADR-004 J.6).
+          identityStore.removePeerKey(oldSame);
           try { await crypto.removePeerKey(oldSame); } catch {}
           api.removeContact(oldSame);
         }
-        this.peerKeys[normalized] = publicKeyHex;
-        this.peerKeysLoaded[normalized] = true;
+        // Запись — через владельца identity (ADR-004 J.6).
+        identityStore.setPeerKey(normalized, publicKeyHex);
+        identityStore.markLoaded(normalized);
         // ВЗАИМНОСТЬ: после QR-сканирования/вставки ключа отправляем
         // приглашение обратно — иначе у собеседника контакт не появится
         // (мы сохранили его ключ, а он наш — нет).
@@ -4772,15 +4766,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         }
         // PQ: pq-ключ приглашающего (если прислал) — контакт сразу
         // гибридный. pq отсутствует → legacy X25519-контакт.
-        if (c.pq_public_key) this.peerPqKeys[c.sender] = c.pq_public_key;
+        // Запись — через владельца identity (ADR-004 J.6).
+        if (c.pq_public_key) identityStore.setPeerKey(c.sender, c.public_key, c.pq_public_key);
         await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);
         // Вечная пометка «инвайт обработан» — иначе после удаления контакта
         // старое письмо-инвайт снова покажет попап приглашения.
         await api.markAcceptedContact(key);
         // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
         // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
-        this.peerKeys[c.sender] = c.public_key;
-        this.peerKeysLoaded[c.sender] = true;
+        // Запись — через владельца identity (ADR-004 J.6).
+        identityStore.setPeerKey(c.sender, c.public_key);
+        identityStore.markLoaded(c.sender);
         await api.addContact(c.sender);
         api.saveProfile(c.sender, c.sender_name, c.sender_avatar,
           Date.parse(c.date) || Date.now());
@@ -4865,8 +4861,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // приглашение, убрать stub. Отказ любого шага останавливает остальные —
         // полуудалённый контакт хуже неудалённого.
         await ContactsDelete.deleteContactLocally(email);
-        delete this.peerKeys[email];
-        delete this.peerKeysLoaded[email];
+        // Удаление — через владельца identity (ADR-004 J.6).
+        identityStore.removePeerKey(email);
         const st = ContactsDelete.contactRemovalState(email, this);
         if (st.closeChat) {
           this.activeChat = null;

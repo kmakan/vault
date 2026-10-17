@@ -14,6 +14,8 @@ import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
+// ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ ctx.
+import { identityStore } from './identity-store.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -291,9 +293,8 @@ async function classify(ctx, m, from, deps) {
         // с тем же ключом (порядок: до setPeerKey, как в App.vue).
         if (String(matched.knownEmail).toLowerCase() !== String(from).toLowerCase()) {
           try { await crypto.removePeerKey(matched.knownEmail); } catch (e) { /* ignore */ }
-          delete ctx.peerKeys[matched.knownEmail];
-          delete (ctx.peerKeysLoaded || {})[matched.knownEmail];
-          delete (ctx.peerPqKeys || {})[matched.knownEmail];
+          // Удаление — через владельца identity (ADR-004 J.6), БЕЗ ctx.
+          identityStore.removePeerKey(matched.knownEmail);
           api.removeContact(matched.knownEmail);
           api.deleteProfile(matched.knownEmail);
         }

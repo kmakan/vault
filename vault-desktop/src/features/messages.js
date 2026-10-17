@@ -9,6 +9,8 @@ import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
 import * as MsgFormat from '../message-format.js';
+// ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ ctx.
+import { identityStore } from './identity-store.js';
 
 export async function loadMessages(ctx, email, deps) {
   const { isOutboundLetter, resolvePeerSender, resolveEventSender, findKnownPeerByKey } = deps;
@@ -274,9 +276,8 @@ export async function loadMessages(ctx, email, deps) {
                     // переименования/добавления новой.
                     if (String(oldEmail).toLowerCase() !== senderNorm) {
                       try { await crypto.removePeerKey(oldEmail); } catch (e) {}
-                      delete ctx.peerKeys[oldEmail];
-                      delete ctx.peerKeysLoaded[oldEmail];
-                      delete ctx.peerPqKeys[oldEmail];
+                      // Удаление — через владельца identity (ADR-004 J.6), БЕЗ ctx.
+                      identityStore.removePeerKey(oldEmail);
                       api.removeContact(oldEmail);
                       api.deleteProfile(oldEmail);
                       console.log('[identity] peer renamed: '+oldEmail+' → '+sender);

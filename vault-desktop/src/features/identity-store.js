@@ -58,6 +58,20 @@ export function createIdentityStore() {
       peerKeys[norm] = key;
       if (pq != null) peerPqKeys[norm] = pq;
     },
+    // Удаление пира из всех хранилищ (смена почты: старый адрес убираем,
+    // иначе второй контакт с тем же ключом). Порядок у вызывающего:
+    // crypto.removePeerKey → removePeerKey → setPeerKey(new).
+    removePeerKey(email) {
+      const norm = _normalizeKey(email);
+      const had = (norm in peerKeys) || ((email || '') in peerKeys);
+      delete peerKeys[norm];
+      delete peerKeys[email || ''];
+      delete peerPqKeys[norm];
+      delete peerPqKeys[email || ''];
+      delete peerKeysLoaded[norm];
+      delete peerKeysLoaded[email || ''];
+      return had;
+    },
     setPeerKeyInput(v) { peerKeyInput.value = v ?? ''; },
     markLoaded(email) { peerKeysLoaded[_normalizeKey(email)] = true; },
     // 2995/3030/3184 read-through (dedup)
