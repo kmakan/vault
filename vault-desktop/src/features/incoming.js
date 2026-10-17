@@ -59,6 +59,19 @@ export async function processIncoming(ctx, fetched, { notify = false } = {}) {
     const cls = await classify(ctx, m, from);
     if (cls === null) continue;
     if (cls.kind === 'message') {
+      // M1.10: persist classified message via Rust MessageStore bridge
+      if (cls.msg) {
+        try {
+          await invoke('vault_store_incoming_message', {
+            chatKey: cls.chatKey || null,
+            from: cls.msg.from,
+            envId: cls.msg.id || cls.envId || null,
+            plain: JSON.stringify(cls.msg),
+          });
+        } catch (e) {
+          console.warn('[vault_bridge] store_incoming failed:', e && e.message || e);
+        }
+      }
       await countAndNotify(ctx, m, cls, { notify });
     }
   }
@@ -393,7 +406,24 @@ async function classify(ctx, m, from) {
 
   // Квитанции/инвайты/meta/legacy — не сообщения, не считаем и не шлём.
   if (!chatKey) return null;
-  return { kind: 'message', chatKey, title, envId };
+  // M1.10: минимум для Rust MessageStore bridge (dedup по envId).
+  // plain (payload) недоступен здесь — const в try-scope; полную
+  // персист получает db_history_save. bridge = parity с CLI M1.8.1.
+  let msg = {
+    id: envId || m.message_id || (m.uid + "|" + (m.folder || "INBOX")),
+    from,
+    to: ctx.email || "",
+    ts: m.date ? Math.floor(new Date(m.date).getTime()) : 0,
+    text: "",
+    name: "",
+    avatar: "",
+    reactions: [],
+    edited: false,
+    replies: [],
+    in_reply_to: null,
+    ttl: null,
+  };
+  return { kind: 'message', chatKey, title, envId, msg };
 }
 
 // ── Хвост: дедуп + счётчик + уведомление ─────────────────────────────────

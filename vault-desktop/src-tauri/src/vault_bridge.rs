@@ -66,21 +66,44 @@ pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serd
     }
 }
 
-/// Store an incoming VaultMessage (after classify confirmed kind=Message).
+/// Store an incoming message (after classify confirmed kind=Message).
 ///
-/// JS передаёт распарсенный VaultMessage JSON. Мы десериализуем в `VaultMessage`
-/// и вызываем `MessageStore::store_incoming`. `chat_key` = `msg.chat_key` (опц.),
-/// если нет — выводится из from/to (store default).
+/// JS передаёт `from`, `envId`, `plain` (decrypted payload JSON) + `chatKey`.
+/// Rust парсит payload и создаёт VaultMessage via store logic. Это parity
+/// с CLI `messages.rs:store_incoming`.
 #[tauri::command]
 pub async fn vault_store_incoming_message(
     state: tauri::State<'_, VaultBridgeState>,
+    from: String,
     chat_key: Option<String>,
-    msg: serde_json::Value,
+    env_id: Option<String>,
+    plain: String,
 ) -> Result<bool, String> {
-    let vm: vault_client::vault::VaultMessage =
-        serde_json::from_value(msg).map_err(|e| format!("VaultMessage parse: {}", e))?;
-    let from = vm.from.clone();
+    let p: serde_json::Value =
+        serde_json::from_str(&plain).map_err(|e| format!("payload parse: {}", e))?;
+    let id = env_id.as_deref().or_else(|| p.get("id").and_then(|v| v.as_str()))
+        .or_else(|| p.get("message_id").and_then(|v| v.as_str()))
+        .unwrap_or("").to_string();
+    let vm = vault_client::vault::VaultMessage {
+        id,
+        from,
+        to: std::env::var("VAULT_EMAIL").unwrap_or_default(),
+        ts: p.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
+        text: p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        name: p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        avatar: p.get("avatar").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        reactions: p.get("reactions").and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default(),
+        edited: p.get("edited").and_then(|v| v.as_bool()).unwrap_or(false),
+        replies: p.get("replies").and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default(),
+        in_reply_to: p.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        ttl: p.get("ttl").and_then(|v| v.as_u64()),
+    };
     let mut store = state.messages();
+    let from = vm.from.clone();
     Ok(store.store_incoming(&from, chat_key.as_deref(), vm))
 }
 
