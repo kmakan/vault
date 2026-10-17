@@ -16,6 +16,7 @@
 // Инвариант: контент шифруется как обычное сообщение (AAD="VAULT") —
 // БЕЗ шифрования получатель не расшифрует и письмо молча отбросится.
 
+import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -112,7 +113,7 @@ export async function fetchDodAttachment(ctx, msg, attachment, deps) {
       return;
     }
     const target = findDodLetter(ctx.emails, attachment.dod);
-    if (!target) throw new Error(ctx.t('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
+    if (!target) throw new Error(uiStore.tr('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
     const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
     if (!body) throw new Error('empty body');
     const senderEmail = ctx.activeChatType === 'group'
@@ -135,11 +136,11 @@ export async function fetchDodAttachment(ctx, msg, attachment, deps) {
     attachment.isImage = !!(attachment.type && attachment.type.startsWith('image/'));
     attachment.isAudio = !!(attachment.type && attachment.type.startsWith('audio/'));
     attachment.isText = false;
-    ctx.showToast((ctx.t('dod_ready') || 'Файл загружен:') + ' ' + attachment.name, 4000);
+    uiStore.toast((uiStore.tr('dod_ready') || 'Файл загружен:') + ' ' + attachment.name, 4000);
   } catch (e) {
     console.warn('[dod] fetch failed:', e);
     attachment.dodStatus = 'error';
-    ctx.showToast((ctx.t('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
+    uiStore.toast((uiStore.tr('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
   }
   ctx.$forceUpdate();
   try { ctx.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
@@ -252,13 +253,13 @@ export async function sendAudioMessage(ctx, audioData, deps) {
     // поймает alias-мутацию. add() сама load→push→save с защитой от дубля.
     if (!ctx.notes.add(ctx.email, msg)) {
       ctx.chat.set(ctx.notes.load(ctx.email));
-      alert(ctx.t('err_notes_full_voice'));
+      alert(uiStore.tr('err_notes_full_voice'));
       ctx.showAudioRecorder = false;
       return;
     }
     ctx.chat.set(ctx.notes.load(ctx.email));
     ctx.showAudioRecorder = false;
-    ctx.scrollToBottom(true);
+    uiStore.scrollToBottom(true);
     return;
   }
   // Голосовое = вложение audio/webm, зашифрованное как обычное сообщение
@@ -294,7 +295,7 @@ export async function sendAudioMessage(ctx, audioData, deps) {
   });
   ctx.markPending(chatKey, msg);
   ctx.showAudioRecorder = false;
-  ctx.scrollToBottom(true);
+  uiStore.scrollToBottom(true);
 
   if (ctx.activeChat) {
     try {
@@ -337,9 +338,9 @@ export async function handleFileSelect(ctx, event, deps) {
       const limitBytes = Math.floor(limitMb * 1024 * 1024 * 0.7);
       if (file.size > limitBytes) {
         alert(
-          (ctx.t('file_too_large') || 'Файл не пройдёт через почту: лимит вложений вашего провайдера') +
+          (uiStore.tr('file_too_large') || 'Файл не пройдёт через почту: лимит вложений вашего провайдера') +
           ` ~${limitMb} МБ, а «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ.` +
-          (ctx.t('file_too_large_hint') || ' Файл не отправлен.')
+          (uiStore.tr('file_too_large_hint') || ' Файл не отправлен.')
         );
         continue; // пропускаем файл, остальные отправляем
       }
@@ -420,11 +421,11 @@ export async function handleFileSelect(ctx, event, deps) {
           // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
           if (!ctx.notes.add(ctx.email, noteMsg)) {
             ctx.chat.set(ctx.notes.load(ctx.email));
-            alert(ctx.t('err_notes_full_file'));
+            alert(uiStore.tr('err_notes_full_file'));
             return;
           }
           ctx.chat.set(ctx.notes.load(ctx.email));
-          ctx.scrollToBottom(true);
+          uiStore.scrollToBottom(true);
           return;
         }
         // Отправка: вложение — это конверт {vault:1,...,text:<JSON вложения>},
@@ -465,7 +466,7 @@ export async function handleFileSelect(ctx, event, deps) {
           activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
         });
         ctx.markPending(chatKey, msg);
-        ctx.scrollToBottom(true);
+        uiStore.scrollToBottom(true);
 
         if (ctx.activeChat) {
           // DoD: data-письмо уходит ПЕРВЫМ. Если мета не уйдёт и её
@@ -488,7 +489,7 @@ export async function handleFileSelect(ctx, event, deps) {
                 }
                 if (failedData.length) {
                   console.warn('DoD data partial fail:', failedData);
-                  ctx.showToast((ctx.t('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
+                  uiStore.toast((uiStore.tr('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
                 }
               } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
                 crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);

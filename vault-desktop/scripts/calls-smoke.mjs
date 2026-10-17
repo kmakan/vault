@@ -5,6 +5,7 @@ import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createCallSession, callSession } from '../src/features/call-session.js';
 import { createCallResender, callResender, callRequestResender } from '../src/features/call-resend.js';
+import { createUiStore, uiStore } from '../src/features/session-store.js';
 // семя callSession из перегруженных полей makeCtx (ADR-004 C/D)
 const CALL_SEED_KEYS = [
   'callState', 'currentCall', 'lastCallId', 'callMuted', 'callSpeaker',
@@ -153,6 +154,11 @@ function makeCtx(over = {}) {
   // его полями из `over` (seed через toSessionSeed).
   callSession.reset();
   Object.assign(callSession.state, toSessionSeed(over));
+  // J.5b: calls.js читает uiStore.tr/toast/scrollToBottom — инициализируем
+  // singleton stub'ами (смоук не имеет Vue-плагина i18n).
+  uiStore.setT((k) => 'T:' + k);
+  uiStore.setShowToast((m, ms) => toasts.push(m));
+  uiStore.setScrollToBottom(() => {});
   const ctx = Object.assign({
     email: 'me@x.ru',
     isAndroid: false,

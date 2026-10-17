@@ -153,6 +153,9 @@ export function createUiStore() {
   };
   let toastMessage = '';
   let toastTimer = null;
+  let scrollToBottom = () => {};
+  let _onMessagesScroll = () => {};
+  let _jumpToBottom = () => {};
   return {
     setT(fn) { t = fn; },
     getT() { return t; },
@@ -172,6 +175,18 @@ export function createUiStore() {
     setToastTimer(t) { toastTimer = t; },
     getToastTimer() { return toastTimer; },
     clearToast() { toastMessage = ''; if (toastTimer) clearTimeout(toastTimer); toastTimer = null; },
+    // J.5b: скролл-callback'и — App.vue передаёт стрелки (refs/DOM неизвестны
+    // модулю), фичи берут через uiStore.scrollToBottom/onMessagesScroll.
+    setScrollToBottom(fn) { scrollToBottom = fn || (() => {}); },
+    getScrollToBottom() { return scrollToBottom; },
+    setScrollCallbacks({ scrollToBottom, onMessagesScroll, jumpToBottom } = {}) {
+      if (scrollToBottom) this.setScrollToBottom(scrollToBottom);
+      if (onMessagesScroll) this._onMessagesScroll = onMessagesScroll;
+      if (jumpToBottom) this._jumpToBottom = jumpToBottom;
+    },
+    scrollToBottom(force = false) { (scrollToBottom || (() => {}))(force); },
+    onMessagesScroll() { (this._onMessagesScroll || (() => {}))(); },
+    jumpToBottom() { (this._jumpToBottom || (() => {}))(); },
     // удобный прокси для шаблонов/модулей без App-ctx
     tr(key) { return t(key); },
     toast(msg, ms) { showToast(msg, ms); },

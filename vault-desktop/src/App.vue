@@ -1088,6 +1088,13 @@ export default {
     const uiToast = computed(() => this?.showToast ?? (() => {}));
     watch(uiT, (fn) => uiStore.setT(fn), { immediate: true });
     watch(uiToast, (fn) => uiStore.setShowToast(fn), { immediate: true });
+    // J.5b: скролл-callback'и (this.scrollToBottom/onMessagesScroll/jumpToBottom
+    // — методы App.vue, refs/DOM неизвестны модулю) — прокидываем через uiStore.
+    uiStore.setScrollCallbacks({
+      scrollToBottom: (v) => this?.scrollToBottom?.(v),
+      onMessagesScroll: () => this?.onMessagesScroll?.(),
+      jumpToBottom: () => this?.jumpToBottom?.(),
+    });
     return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession };
   },
   data() {
@@ -1646,7 +1653,7 @@ export default {
       return ForwardFeature.forwardTargets({
         contacts: this.contacts, groups: this.groups,
         activeChat: this.activeChat, activeChatType: this.activeChatType,
-        currentGroup: this.currentGroup, nameOf: this.nameOf, t: this.t,
+        currentGroup: this.currentGroup, nameOf: this.nameOf, t: uiStore.tr,
       });
     },
     // Статус «О себе» редактируемого контакта (из profile-конверта)
@@ -2177,8 +2184,8 @@ export default {
         groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
         cryptoReady: this.cryptoReady, displayName: this.displayName,
         newMessageId: this.newMessageId, setSending: v => this.setSending(v),
-        chat: this.chat, scrollToBottom: v => this.scrollToBottom(v),
-        saveCurrentHistory: k => this.saveCurrentHistory(k), t: this.t,
+        chat: this.chat, scrollToBottom: uiStore.scrollToBottom,
+        saveCurrentHistory: k => this.saveCurrentHistory(k), t: uiStore.tr,
       };
     },
     // ── Реакции (логика в features/reactions.js) ──
@@ -2385,8 +2392,8 @@ export default {
     async loadProfiles() { return ProfilesFeature.loadProfiles({ setProfiles: (v) => { this.profiles = v; } }); },
     async getBio() { return ProfilesFeature.getBio({ email: this.email }); },
     async setBio(text) { this.myBio = await ProfilesFeature.setBio({ email: this.email, text }); },
-    async onBioSave(text) { return ProfilesFeature.onBioSave({ email: this.email, showToast: (m) => this.showToast(m), t: (k) => this.t(k) }, text); },
-    async onProfileSave() { return ProfilesFeature.onProfileSave({ showToast: (m) => this.showToast(m), t: (k) => this.t(k), broadcastProfile: () => this.broadcastProfile() }); },
+    async onBioSave(text) { return ProfilesFeature.onBioSave({ email: this.email, showToast: (m) => uiStore.toast(m), t: uiStore.tr }, text); },
+    async onProfileSave() { return ProfilesFeature.onProfileSave({ showToast: (m) => uiStore.toast(m), t: uiStore.tr, broadcastProfile: () => this.broadcastProfile() }); },
     async broadcastProfile() { return ProfilesFeature.broadcastProfile({ email: this.email, displayName: this.displayName, profiles: this.profiles, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys }); },
     async openContactCard(email) { return ProfilesFeature.openContactCard(this, email); },
     startEditFromCard() { return ProfilesFeature.startEditFromCard(this); },
@@ -2423,7 +2430,7 @@ export default {
         setSending: v => this.setSending(v),
         setForwardTo: v => this.forwardTo = v,
         markPending: (k, m) => this.markPending(k, m),
-        showToast: (m, d) => this.showToast(m, d), t: this.t,
+        showToast: (m, d) => uiStore.toast(m, d), t: uiStore.tr,
       };
     },
     // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
@@ -2529,7 +2536,7 @@ export default {
 async toggleVoiceNote(msg, attachment) {
       this.voicePlayingId = await AttachmentsFeature.toggleVoiceNote({
         isAndroidClient: this.isAndroidClient, voicePlayingId: this.voicePlayingId,
-        showToast: (m, ms) => uiStore.toast(m, ms), t: this.t,
+        showToast: (m, ms) => uiStore.toast(m, ms), t: uiStore.tr,
       }, msg, attachment);
     },
     async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment, { resolveChatKey: ChatFeature.resolveChatKey }); },
@@ -3778,7 +3785,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // commit и снятие маркера последним.
     async loginWithRecovery() {
       await RecoveryFeature.loginWithRecovery(this, {
-        api, crypto, invoke, db, relay, RelayFeature, initNotifications, t: this.t,
+        api, crypto, invoke, db, relay, RelayFeature, initNotifications, t: uiStore.tr,
       });
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'

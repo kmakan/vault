@@ -31,7 +31,7 @@ import { delay, later } from './timing.js';
 import { fastFetcher, connLostGuard } from './call-idle.js';
 import { useSession } from './call-session.js';
 import { callResender, callRequestResender } from './call-resend.js';
-import { sessionStore } from './session-store.js';
+import { sessionStore, uiStore } from './session-store.js';
 const terminalSender = createTerminalSender();
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
@@ -656,7 +656,7 @@ export async function acceptCall(ctx) {
     // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
     // показываем ошибку в UI — на Android иначе не
     // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
-    ctx.showToast('media start failed: ' + (e && e.message || e), 10000);
+    uiStore.toast('media start failed: ' + (e && e.message || e), 10000);
     try { await sendCallEnvelope(ctx, c.peer, { type: 'call_accept', call_id: c.call_id }); }
     catch (e2) { console.error('call_accept failed:', e2); }
   }
@@ -832,9 +832,9 @@ export async function onMailBounce(ctx, recipients = [], reason = '') {
   }
   console.warn('[call] bounce for', peer, '→ отменяем исходящий вызов:', reason || 'undeliverable');
   try {
-    const msg = ctx.t('call_undeliverable_toast', { reason: reason || peer })
+    const msg = uiStore.tr('call_undeliverable_toast', { reason: reason || peer })
       || ('Письмо не доставлено: ' + (reason || peer));
-    ctx.showToast(msg, 6000);
+    uiStore.toast(msg, 6000);
   } catch (e) { /* тост не критичен */ }
   // cancelCall: шлём собеседнику call_cancel (если он всё-таки получил
   // конверт релеем) и записываем пилюлю 'undeliverable'.
@@ -868,7 +868,7 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
     ctx.chat.sortBy((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
     ctx.saveCurrentHistory(chatKey);
     ctx.saveChatCache(chatKey, ctx.chat.state.messages);
-    ctx.scrollToBottom(true);
+    uiStore.scrollToBottom(true);
   } else if (!exists) {
     // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,
     // чтобы она появилась при следующем открытии чата.
@@ -1016,7 +1016,7 @@ export function armMediaFallback(ctx) {
   const onTimeout = () => {
     if (useSession().callState !== 'active' || useSession().callMediaConnected) return;
     console.warn('[call] media not connected in 90s — auto hangup');
-    ctx.showToast(ctx.t('call_connect_failed'), 4000);
+    uiStore.toast(uiStore.tr('call_connect_failed'), 4000);
     // Сообщаем собеседнику, чтобы у него тоже легла трубка
     // (он может висеть в таком же «Соединение…»).
     const c = useSession().currentCall;

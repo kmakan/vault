@@ -9,6 +9,7 @@
 // Расширение новым типом конверта: добавить ветку в classify() с
 // собственным kind и обработать её там же — драйвер не меняется.
 
+import { uiStore } from "./session-store.js";
 import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
@@ -488,7 +489,7 @@ async function countAndNotify(ctx, m, cls, { notify }) {
     console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
     notifyNewMessage({
       title,
-      body: ctx.t('notif_new_message') || 'New message',
+      body: uiStore.tr('notif_new_message') || 'New message',
       chatKey,
       // Дедуп уведомления — по ГЛОБАЛЬНОМУ Message-ID (dk), а не
       // uid|folder: копия в INBOX и [Gmail]/All Mail не дадут два

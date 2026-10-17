@@ -4,6 +4,7 @@
 // (this.* -> ctx.*), поведение 1:1. Инварианты шифрования (AAD="VAULT"),
 // оптимистичный предпросмотр + мерж по envelopeId, DoD-разбиение, статусы и
 // persist через ctx — сохранены. Downstream/состояние через ctx.
+import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -21,7 +22,7 @@ export async function sendMessage(ctx, deps) {
       // Ignore-гвард: в чате с заблокированным писать нельзя (E2E-модель
       // блокировки получателя: мы решаем, что показывать и кому отвечать).
       if (ctx.activeChatType === 'chat' && ctx.isIgnored(ctx.activeChat)) {
-        ctx.showToast(ctx.t('ignore_cannot_write') || 'Чат заблокирован — сначала разблокируйте');
+        uiStore.toast(uiStore.tr('ignore_cannot_write') || 'Чат заблокирован — сначала разблокируйте');
         return;
       }
       // Анти-дубль: пока идёт отправка (SMTP медленный), повторный Enter/клик
@@ -90,11 +91,11 @@ export async function sendMessage(ctx, deps) {
           // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
           if (!ctx.notes.add(ctx.email, note)) {
             ctx.chat.set(ctx.notes.load(ctx.email));
-            alert(ctx.t('err_notes_full'));
+            alert(uiStore.tr('err_notes_full'));
             return;
           }
           ctx.chat.set(ctx.notes.load(ctx.email));
-          ctx.scrollToBottom(true);
+          uiStore.scrollToBottom(true);
           return;
         }
 
@@ -124,7 +125,7 @@ export async function sendMessage(ctx, deps) {
             } catch (e) { /* не удалось — alert ниже */ }
           }
           if (!groupKey) {
-            alert(ctx.t('err_group_key'));
+            alert(uiStore.tr('err_group_key'));
             return;
           }
           content = await crypto.encryptWithGroupKey(envelope, groupKey);
@@ -229,7 +230,7 @@ export async function sendMessage(ctx, deps) {
                   invoke('db_kv_get', { account: ctx.email, key: 'relay-limit-banner' }).then(v => {
                     const today = String(Math.floor(Date.now() / 86400000));
                     if (v !== today) {
-                      ctx.showToast(ctx.t('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                      uiStore.toast(uiStore.tr('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
                       invoke('db_kv_set', { account: ctx.email, key: 'relay-limit-banner', value: today });
                     }
                   }).catch(() => {});
@@ -263,7 +264,7 @@ export async function sendMessage(ctx, deps) {
         }
 
         // Своё сообщение — всегда прокручиваем вниз.
-        ctx.scrollToBottom(true);
+        uiStore.scrollToBottom(true);
       } catch (error) {
         alert('Failed to send message: ' + error.message);
       } finally {

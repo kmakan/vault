@@ -5,6 +5,7 @@
 // applyReactions/Edits/PollVotes/filterDeleted/mergePending/parseMessageContent/
 // processCallSignal/scheduleEphemeral/sendReadReceipts/isIgnored/isOwnSender/
 // noteSeen/loadProfiles/...) остаются в App.vue и вызываются через ctx.
+import { uiStore } from "./session-store.js";
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
@@ -443,7 +444,7 @@ export async function loadMessages(ctx, email, deps) {
                 const envCheck = msg.content && crypto.isEncrypted(msg.content)
                   ? MsgFormat.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
                 if (envCheck && envCheck.type === 'sos') {
-                  ctx.showToast('🚨 ' + (envCheck.name || ctx.activeChat) + ': ' + envCheck.text, 8000);
+                  uiStore.toast('🚨 ' + (envCheck.name || ctx.activeChat) + ': ' + envCheck.text, 8000);
                   return {
                     ...msg,
                     content: '🚨 SOS: ' + envCheck.text,
@@ -469,7 +470,7 @@ export async function loadMessages(ctx, email, deps) {
                   const env = MsgFormat.parseEnvelope(text);
                   if (env && env.type === 'sos') {
                     // SOS (duress): тоже в чат (см. выше) — тост как дубль-уведомление.
-                    ctx.showToast('🚨 ' + (env.name || ctx.activeChat) + ': ' + env.text, 8000);
+                    uiStore.toast('🚨 ' + (env.name || ctx.activeChat) + ': ' + env.text, 8000);
                     return {
                       ...msg,
                       content: '🚨 SOS: ' + env.text,

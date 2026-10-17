@@ -8,6 +8,7 @@
 // panic-PIN — Rust уже стёр данные, локальный выход на логин.
 // Android-ветка: нативный LockActivity, JS-замок не показывается.
 
+import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -121,7 +122,7 @@ export async function onLockPanic(ctx) {
   } catch (e) { /* ignore */ }
   ctx.logout();
   ctx.email = null;
-  ctx.showToast(ctx.t('panic_done') || 'Данные стёрты', 4000);
+  uiStore.toast(uiStore.tr('panic_done') || 'Данные стёрты', 4000);
 }
 
 // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
@@ -148,7 +149,7 @@ export async function sendDuressSos(ctx) {
         } catch (e) { finish(''); }
       });
     }
-    const rawText = cfg.sos_text || ctx.t('sos_default') || 'Телефон не у меня{coords}';
+    const rawText = cfg.sos_text || uiStore.tr('sos_default') || 'Телефон не у меня{coords}';
     let text = rawText.replace('{coords}', coords);
     // Geo включено, но в тексте нет плейсхолдера — дописываем координаты в конец.
     if (coords && !rawText.includes('{coords}')) text += coords;

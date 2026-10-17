@@ -17,6 +17,7 @@
 // recovery-session.js — pure persisted-маркер прерванного восстановления
 // (не импортирует api/crypto, поэтому цикла нет): маркер запирает
 // durable-авто-вход, пока восстановление не закоммичено.
+import { uiStore } from "./session-store.js";
 import * as RecoverySession from './recovery-session.js';
 
 // Reject an incomplete backup BEFORE import_backup can modify disk stores.
@@ -215,7 +216,7 @@ export async function loginWithRecovery(ctx, deps) {
     if (ctx.ecoMode) { ctx.startPolling(60000); ctx.startRelayTicker(); }
     else ctx.idleLoop();
     ctx.loadEmails().catch(() => {});
-    ctx.showToast(tr('recovery_ok', 'recovery_ok'));
+    uiStore.toast(tr('recovery_ok', 'recovery_ok'));
   } catch (error) {
     // Провал: маркер ОСТАЁТСЯ (его снимает только commitRecoveryLogin), поэтому
     // следующий старт не сделает авто-вход без ключей. isLoggedIn выключает

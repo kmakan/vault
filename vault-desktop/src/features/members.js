@@ -5,6 +5,7 @@
 // (AAD="VAULT") и отправляет api.addGroupMember. loadGroups/loadChannels
 // остаются в App.vue и вызываются через ctx.
 
+import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -25,7 +26,7 @@ export async function inviteSelectedMembers(ctx) {
           // Уже участник ПОД ЭТИМ адресом — явный skip (не тихий continue:
           // «штатный» попап без отправки маскировал недоставленные инвайты).
           if ((ctx.currentGroup.members || []).some(m => m.email === email)) {
-            skipped.push(email + ' — ' + (ctx.t('already_in_group') || 'уже в группе'));
+            skipped.push(email + ' — ' + (uiStore.tr('already_in_group') || 'уже в группе'));
             continue;
           }
           // Участник ПОД ДРУГИМ адресом с тем же fingerprint (смена почты):
@@ -44,7 +45,7 @@ export async function inviteSelectedMembers(ctx) {
           // в группу добавляют только установленные контакты.
           const peerPub = ctx.peerKeys[email] || null;
           if (!peerPub) {
-            failed.push(email + ' — ' + (ctx.t('add_member_no_key') || 'нет ключа: сначала добавьте контакт'));
+            failed.push(email + ' — ' + (uiStore.tr('add_member_no_key') || 'нет ключа: сначала добавьте контакт'));
             continue;
           }
           const groupKeys = await api.getGroupKeys(ctx.currentGroup.id);
@@ -66,8 +67,8 @@ export async function inviteSelectedMembers(ctx) {
       try { await ctx.loadGroups();
           try { await ctx.loadChannels(); } catch (e) { /* не критично */ } } catch (e) { /* не критично */ }
       const parts = [];
-      if (sent.length) parts.push((ctx.t('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
-      if (skipped.length) parts.push((ctx.t('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
-      if (failed.length) parts.push((ctx.t('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
-      alert(parts.join('\n\n') || (ctx.t('add_member_nothing') || 'Приглашения не отправлены'));
+      if (sent.length) parts.push((uiStore.tr('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
+      if (skipped.length) parts.push((uiStore.tr('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
+      if (failed.length) parts.push((uiStore.tr('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
+      alert(parts.join('\n\n') || (uiStore.tr('add_member_nothing') || 'Приглашения не отправлены'));
 }

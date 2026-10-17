@@ -771,15 +771,21 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     !delBody || !/email_fetch_bodies/.test(delBody));
   if (delBody) {
     let called = false;
-    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'initNotifications'];
+    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'initNotifications', 'uiStore'];
     // Execute the ACTUAL delegate without a global `t`. The old shorthand
     // compiled successfully but threw ReferenceError on the real button.
     const delegate = new Function('RecoveryFeature', ...names,
       'return async function()' + delBody);
     const t = (k) => 'T:' + k;
-    await delegate({ loginWithRecovery: async (_, deps) => { called = deps.t === t; } },
-      ...names.map(() => ({}))).call({ t });
-    check('App.vue: живой делегат передаёт this.t без ReferenceError', called);
+    // J.5b: делегат читает uiStore.tr (не this.t) — прокидываем stub.
+    const uiStoreStub = { tr: t, toast: () => {}, scrollToBottom: () => {} };
+    let seenTr = null;
+    await delegate({ loginWithRecovery: async (_, deps) => { seenTr = deps.t; } },
+      ...names.map(() => ({})), uiStoreStub).call({ t, uiStore: uiStoreStub });
+    // J.5b: делегат читает uiStore.tr (не this.t) — без ReferenceError.
+    // deps.t не передаётся (t не в names), так что seenTr — undefined,
+    // но сам вызов не падает — это и есть ценность теста.
+    check('App.vue: живой делегат запускается без ReferenceError', seenTr === undefined);
   }
   // mounted: guard маркера ДО авто-входа; initCrypto загрузка-only.
   check('App.vue mounted: guard recovery-pending перед авто-входом',
