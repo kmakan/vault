@@ -1,14 +1,15 @@
 {
-  "totalCtxRefs": 641,
-  "totalFunctions": 296,
-  "functionsWithCtx": 99,
+  "totalCtxRefs": 1221,
+  "totalFunctions": 243,
+  "functionsWithCtx": 152,
   "modules": {
     "src/features/attachments.js": {
-      "ctxRefs": 109,
+      "ctxRefs": 127,
       "fields": [
         "activeChat",
         "activeChatType",
         "buildEnvelope",
+        "chat",
         "compressImage",
         "cryptoReady",
         "currentGroup",
@@ -17,22 +18,24 @@
         "emails",
         "groupKeys",
         "isTextMime",
+        "loadNotes",
         "markPending",
         "mediaQuality",
-        "notes",
         "parseEnvelope",
         "peerKeys",
         "peerPqKeys",
         "saveCurrentHistory",
+        "saveNotes",
         "scrollToBottom",
         "senderEmail",
         "showAudioRecorder",
         "showToast",
-        "t"
+        "t",
+        "viewingImage"
       ],
-      "functions": 13,
-      "functionsWithCtx": 8,
-      "biggestCtxFn": "toggleVoiceNote"
+      "functions": 6,
+      "functionsWithCtx": 4,
+      "biggestCtxFn": "handleFileSelect"
     },
     "src/features/autoclean.js": {
       "ctxRefs": 0,
@@ -48,105 +51,63 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
-    "src/features/call-clock.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/call-idle.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 2,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createConnLostGuard"
-    },
-    "src/features/call-resend.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createCallResender"
-    },
-    "src/features/call-ring.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/call-session.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 2,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createCallSession"
-    },
-    "src/features/call-terminal.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/call-watchdog.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/calls.js": {
-      "ctxRefs": 40,
+      "ctxRefs": 179,
       "fields": [
+        "_connLostTimer",
+        "_mediaFallbackTimer",
+        "_pendingKemct",
+        "_pendingSenderEk",
         "activeChat",
         "activeChatType",
+        "callClockSec",
+        "callClockTimer",
+        "callMediaConnected",
+        "callMuted",
         "callPeerName",
+        "callRingTimer",
+        "callRingtoneIncoming",
+        "callRingtoneOutgoing",
+        "callSoundEl",
+        "callSpeaker",
         "callStartedAt",
+        "callState",
         "canonicalOf",
+        "chat",
         "chatVisible",
+        "currentCall",
+        "email",
         "idleLoop",
         "isAndroid",
         "isIgnored",
+        "lastCallId",
         "msgTs",
         "peerKeys",
         "peerPqKeys",
+        "relayEnabled",
         "saveChatCache",
         "saveCurrentHistory",
         "saveUnreadCounts",
         "scrollToBottom",
         "showToast",
-        "t"
+        "t",
+        "unreadCounts"
       ],
-      "functions": 33,
-      "functionsWithCtx": 25,
+      "functions": 34,
+      "functionsWithCtx": 29,
       "biggestCtxFn": "startCall"
     },
-    "src/features/channels-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/channels.js": {
-      "ctxRefs": 6,
+      "ctxRefs": 7,
       "fields": [
         "channelById",
+        "channels",
         "noteChannelHello",
         "noteChannelPost"
       ],
       "functions": 16,
       "functionsWithCtx": 3,
       "biggestCtxFn": "sendChannelPost"
-    },
-    "src/features/chat.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 5,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
     },
     "src/features/contacts-delete.js": {
       "ctxRefs": 0,
@@ -162,27 +123,14 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
-    "src/features/contacts-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/contacts.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 8,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/drafts.js": {
-      "ctxRefs": 7,
+      "ctxRefs": 9,
       "fields": [
         "activeChat",
         "activeChatType",
         "currentGroup",
-        "email"
+        "email",
+        "newMessage"
       ],
       "functions": 3,
       "functionsWithCtx": 2,
@@ -196,7 +144,7 @@
       "biggestCtxFn": null
     },
     "src/features/duress.js": {
-      "ctxRefs": 31,
+      "ctxRefs": 32,
       "fields": [
         "_duressVisibilityBound",
         "displayName",
@@ -204,6 +152,7 @@
         "duressPending",
         "duressUnlockedThisSession",
         "email",
+        "isLoggedIn",
         "peerKeys",
         "peerPqKeys",
         "showToast",
@@ -214,17 +163,29 @@
       "biggestCtxFn": "onLockUnlock"
     },
     "src/features/edits.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 29,
+      "fields": [
+        "activeChat",
+        "activeChatType",
+        "currentGroup",
+        "email",
+        "groupKeys",
+        "midTombstonesCache",
+        "peerKeys",
+        "peerPqKeys",
+        "tombstonesCache"
+      ],
       "functions": 15,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
+      "functionsWithCtx": 14,
+      "biggestCtxFn": "applyEdits"
     },
     "src/features/emails.js": {
-      "ctxRefs": 12,
+      "ctxRefs": 22,
       "fields": [
         "email",
+        "emailError",
         "emails",
+        "emailsLoading",
         "loadCursors",
         "processIncoming",
         "processInvites",
@@ -273,17 +234,38 @@
       "biggestCtxFn": null
     },
     "src/features/forward.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 33,
+      "fields": [
+        "activeChat",
+        "activeChatType",
+        "buildEnvelope",
+        "contacts",
+        "currentGroup",
+        "displayName",
+        "email",
+        "ephemeralTtlOf",
+        "forwardTo",
+        "groupKeys",
+        "groups",
+        "markPending",
+        "nameOf",
+        "peerKeys",
+        "peerPqKeys",
+        "sending",
+        "showToast",
+        "t"
+      ],
       "functions": 3,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
+      "functionsWithCtx": 3,
+      "biggestCtxFn": "forwardTargets"
     },
     "src/features/group-avatars.js": {
-      "ctxRefs": 2,
+      "ctxRefs": 4,
       "fields": [
         "cryptoReady",
-        "groupKeys"
+        "groupKeys",
+        "setGroupAvatar",
+        "setGroupKey"
       ],
       "functions": 5,
       "functionsWithCtx": 5,
@@ -297,7 +279,7 @@
       "biggestCtxFn": "buildRenameMetaFields"
     },
     "src/features/group-meta.js": {
-      "ctxRefs": 9,
+      "ctxRefs": 11,
       "fields": [
         "cryptoReady",
         "emails",
@@ -305,7 +287,9 @@
         "groups",
         "healGroupAvatarFromMessage",
         "isLoggedIn",
-        "replyGroupAvatarHeal"
+        "replyGroupAvatarHeal",
+        "setGroupAvatar",
+        "setGroupKey"
       ],
       "functions": 1,
       "functionsWithCtx": 1,
@@ -354,13 +338,14 @@
       "biggestCtxFn": null
     },
     "src/features/groups.js": {
-      "ctxRefs": 36,
+      "ctxRefs": 45,
       "fields": [
         "activeChat",
         "applyEdits",
         "applyPinFromWire",
         "applyPollVotes",
         "applyReactions",
+        "chat",
         "cryptoReady",
         "emails",
         "filterDeleted",
@@ -385,6 +370,8 @@
         "saveCurrentHistory",
         "scheduleEphemeral",
         "sendReadReceipts",
+        "setGroupAvatar",
+        "setGroupKey",
         "showHistoryFirst"
       ],
       "functions": 1,
@@ -392,21 +379,24 @@
       "biggestCtxFn": "loadGroupMessages"
     },
     "src/features/history.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 45,
+      "fields": [
+        "bodyCacheOrder",
+        "bodyCacheSaveTimer",
+        "chat",
+        "email",
+        "emailBodyCache",
+        "filterDeleted",
+        "isTombstoned",
+        "msgTs",
+        "pendingOutgoing"
+      ],
       "functions": 15,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/identity-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 2,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
+      "functionsWithCtx": 13,
+      "biggestCtxFn": "loadLocalHistory"
     },
     "src/features/incoming.js": {
-      "ctxRefs": 66,
+      "ctxRefs": 69,
       "fields": [
         "cacheBody",
         "canonicalOf",
@@ -438,15 +428,18 @@
         "saveUnreadCounts",
         "saveUnreadSeen",
         "senderEmail",
+        "setGroupKey",
+        "setPeerKey",
         "t",
-        "tryMigrateGroupMember"
+        "tryMigrateGroupMember",
+        "unreadCounts"
       ],
       "functions": 5,
-      "functionsWithCtx": 4,
+      "functionsWithCtx": 5,
       "biggestCtxFn": "countAndNotify"
     },
     "src/features/invites.js": {
-      "ctxRefs": 26,
+      "ctxRefs": 27,
       "fields": [
         "contactPopupIndex",
         "currentGroup",
@@ -459,6 +452,7 @@
         "loadGroups",
         "loadProfiles",
         "loadStoredPeerKeys",
+        "peerKeys",
         "pendingContacts",
         "pendingInvites",
         "refreshGroupMembers",
@@ -473,20 +467,6 @@
       "ctxRefs": 0,
       "fields": [],
       "functions": 2,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/mailbox-api.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 6,
-      "functionsWithCtx": 5,
-      "biggestCtxFn": "IncomingFeature"
-    },
-    "src/features/mailbox-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
@@ -508,15 +488,8 @@
       "functionsWithCtx": 1,
       "biggestCtxFn": "inviteSelectedMembers"
     },
-    "src/features/messages-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/messages.js": {
-      "ctxRefs": 62,
+      "ctxRefs": 88,
       "fields": [
         "activeChat",
         "aliasesOf",
@@ -536,10 +509,13 @@
         "loadSeq",
         "mergeHistory",
         "mergePending",
+        "messages",
         "migrateChatHistoryChain",
         "migratePeerGroups",
         "noteSeen",
         "parseCallSignal",
+        "parseEnvelope",
+        "parseMessageContent",
         "parsePollEnvelope",
         "peerKeys",
         "peerKeysLoaded",
@@ -550,6 +526,7 @@
         "saveCurrentHistory",
         "scheduleEphemeral",
         "sendReadReceipts",
+        "setPeerKey",
         "showHistoryFirst",
         "showToast"
       ],
@@ -566,13 +543,6 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
-    "src/features/notes-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/poll/state.js": {
       "ctxRefs": 0,
       "fields": [],
@@ -581,51 +551,85 @@
       "biggestCtxFn": null
     },
     "src/features/poll.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 49,
+      "fields": [
+        "activeChat",
+        "activeChatType",
+        "chat",
+        "cryptoReady",
+        "currentGroup",
+        "displayName",
+        "email",
+        "groupKeys",
+        "newMessageId",
+        "peerKeys",
+        "peerPqKeys",
+        "saveCurrentHistory",
+        "scrollToBottom",
+        "sending",
+        "t"
+      ],
       "functions": 8,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "castPollVote"
+      "functionsWithCtx": 3,
+      "biggestCtxFn": "pollLeadLabel"
     },
     "src/features/presence.js": {
-      "ctxRefs": 12,
+      "ctxRefs": 15,
       "fields": [
         "_presenceSending",
         "cryptoReady",
+        "email",
         "isLoggedIn",
+        "lastSeenMap",
         "noteSeen",
         "peerKeys",
         "peerPqKeys"
       ],
       "functions": 7,
-      "functionsWithCtx": 5,
+      "functionsWithCtx": 7,
       "biggestCtxFn": "isEnabled"
     },
     "src/features/profiles.js": {
-      "ctxRefs": 37,
+      "ctxRefs": 67,
       "fields": [
         "contactCardEmail",
         "contacts",
+        "displayName",
         "editContactAvatar",
         "editContactName",
         "editingContact",
         "email",
+        "lastSeenMap",
         "localProfiles",
+        "myBio",
         "peerKeys",
+        "peerPqKeys",
         "profiles",
         "showContactCard",
-        "showContactEdit"
+        "showContactEdit",
+        "showToast",
+        "t"
       ],
       "functions": 23,
-      "functionsWithCtx": 6,
-      "biggestCtxFn": "openContactCard"
+      "functionsWithCtx": 23,
+      "biggestCtxFn": "nameOf"
     },
     "src/features/reactions.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 28,
+      "fields": [
+        "activeChat",
+        "activeChatType",
+        "chat",
+        "currentGroup",
+        "email",
+        "groupKeys",
+        "peerKeys",
+        "peerPqKeys",
+        "reactionPickerMsgId"
+      ],
       "functions": 8,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
+      "functionsWithCtx": 8,
+      "biggestCtxFn": "addReaction"
     },
     "src/features/receipts.js": {
       "ctxRefs": 17,
@@ -659,7 +663,7 @@
       "biggestCtxFn": null
     },
     "src/features/recovery.js": {
-      "ctxRefs": 36,
+      "ctxRefs": 45,
       "fields": [
         "ecoMode",
         "email",
@@ -668,6 +672,7 @@
         "imapServer",
         "initCrypto",
         "initLocalDb",
+        "isLoggedIn",
         "loadBodyCache",
         "loadChannels",
         "loadContacts",
@@ -675,6 +680,8 @@
         "loadGroups",
         "loadLocalProfiles",
         "loadUnreadCounts",
+        "loginError",
+        "loginLoading",
         "onEcoMode",
         "password",
         "publicKey",
@@ -693,25 +700,47 @@
       "functionsWithCtx": 3,
       "biggestCtxFn": "loginWithRecovery"
     },
-    "src/features/relay-idle.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 5,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createIdleState"
-    },
-    "src/features/relay-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
     "src/features/relay.js": {
-      "ctxRefs": 0,
-      "fields": [],
+      "ctxRefs": 110,
+      "fields": [
+        "_fastFetchBusy",
+        "_fastFetchTimer",
+        "_idleActive",
+        "_idleMonitorUp",
+        "_idleStop",
+        "_lastRelayHealth",
+        "_pollingActive",
+        "_relayFails",
+        "_relayTicker",
+        "activeChat",
+        "activeChatType",
+        "cacheBody",
+        "callState",
+        "channels",
+        "currentGroup",
+        "ecoAutonomous",
+        "ecoMode",
+        "email",
+        "emails",
+        "isLoggedIn",
+        "loadCursors",
+        "loadEmails",
+        "loadGroupMessages",
+        "loadGroups",
+        "loadMessages",
+        "onEcoMode",
+        "pollTimer",
+        "processIncoming",
+        "relayDeliveryMode",
+        "relayEnabled",
+        "relayOfflineSince",
+        "saveCursors",
+        "scrollToBottom",
+        "showToast",
+        "t"
+      ],
       "functions": 12,
-      "functionsWithCtx": 8,
+      "functionsWithCtx": 11,
       "biggestCtxFn": "startFastFetchTimer"
     },
     "src/features/report-content.js": {
@@ -729,7 +758,7 @@
       "biggestCtxFn": null
     },
     "src/features/send.js": {
-      "ctxRefs": 86,
+      "ctxRefs": 116,
       "fields": [
         "_sendingWatchdog",
         "activeChat",
@@ -737,6 +766,7 @@
         "buildEnvelope",
         "cancelEdit",
         "cancelReply",
+        "chat",
         "cryptoReady",
         "currentGroup",
         "editingMessage",
@@ -745,41 +775,33 @@
         "groupKeys",
         "isIgnored",
         "lastSend",
+        "loadNotes",
         "markPending",
-        "notes",
+        "newMessage",
         "peerKeys",
         "peerPqKeys",
+        "pendingOutgoing",
         "recordLocalEdit",
+        "relayDeliveryMode",
         "replyBody",
         "replyPreview",
         "replyQuote",
         "replyTo",
         "saveCurrentHistory",
         "saveDraft",
+        "saveNotes",
         "scheduleEphemeral",
         "scrollToBottom",
         "sendChannelPost",
         "sendEditEmail",
+        "sending",
+        "setGroupKey",
         "showToast",
         "t"
       ],
       "functions": 1,
       "functionsWithCtx": 1,
       "biggestCtxFn": "sendMessage"
-    },
-    "src/features/sending-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 1,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
-    },
-    "src/features/session-store.js": {
-      "ctxRefs": 0,
-      "fields": [],
-      "functions": 5,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createUiStore"
     },
     "src/features/video.js": {
       "ctxRefs": 0,

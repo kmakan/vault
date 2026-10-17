@@ -10,66 +10,81 @@
       "currentGroup",
       "dodCache",
       "email",
+      "emails",
       "groupKeys",
       "isTextMime",
+      "loadNotes",
       "markPending",
       "mediaQuality",
-      "notes",
+      "messages",
       "parseEnvelope",
       "peerKeys",
       "peerPqKeys",
       "saveCurrentHistory",
+      "saveNotes",
       "scrollToBottom",
       "senderEmail",
       "showAudioRecorder",
       "showToast",
-      "t"
+      "t",
+      "viewingImage"
     ],
     "autoclean.js": [],
     "bounce.js": [],
-    "call-clock.js": [],
-    "call-idle.js": [],
-    "call-resend.js": [],
-    "call-ring.js": [],
-    "call-session.js": [],
-    "call-terminal.js": [],
-    "call-watchdog.js": [],
     "calls.js": [
+      "_connLostTimer",
+      "_mediaFallbackTimer",
+      "_pendingKemct",
+      "_pendingSenderEk",
       "activeChat",
       "activeChatType",
+      "callClockSec",
+      "callClockTimer",
+      "callMediaConnected",
+      "callMuted",
       "callPeerName",
+      "callRingTimer",
+      "callRingtoneIncoming",
+      "callRingtoneOutgoing",
+      "callSoundEl",
+      "callSpeaker",
       "callStartedAt",
+      "callState",
       "canonicalOf",
       "chatVisible",
+      "currentCall",
+      "email",
       "idleLoop",
       "isAndroid",
       "isIgnored",
+      "lastCallId",
+      "messages",
       "msgTs",
       "peerKeys",
       "peerPqKeys",
+      "relayEnabled",
       "saveChatCache",
       "saveCurrentHistory",
       "saveUnreadCounts",
       "scrollToBottom",
       "showToast",
-      "t"
+      "t",
+      "unreadCounts"
     ],
-    "channels-store.js": [],
     "channels.js": [
       "channelById",
+      "channels",
       "noteChannelHello",
       "noteChannelPost"
     ],
-    "chat.js": [],
     "contacts-delete.js": [],
     "contacts-load.js": [],
-    "contacts-store.js": [],
-    "contacts.js": [],
     "drafts.js": [
       "activeChat",
       "activeChatType",
       "currentGroup",
-      "email"
+      "email",
+      "newMessage"
     ],
     "duress.js": [
       "$nextTick",
@@ -79,15 +94,27 @@
       "duressPending",
       "duressUnlockedThisSession",
       "email",
+      "isLoggedIn",
       "peerKeys",
       "peerPqKeys",
       "showToast",
       "t"
     ],
-    "edits.js": [],
+    "edits.js": [
+      "activeChat",
+      "activeChatType",
+      "currentGroup",
+      "email",
+      "groupKeys",
+      "midTombstonesCache",
+      "peerKeys",
+      "peerPqKeys",
+      "tombstonesCache"
+    ],
     "emails.js": [
       "email",
       "emailError",
+      "emails",
       "emailsLoading",
       "loadCursors",
       "processIncoming",
@@ -106,17 +133,40 @@
       "email",
       "folderDialogOpen"
     ],
-    "forward.js": [],
+    "forward.js": [
+      "activeChat",
+      "activeChatType",
+      "buildEnvelope",
+      "contacts",
+      "currentGroup",
+      "displayName",
+      "email",
+      "ephemeralTtlOf",
+      "forwardTo",
+      "groupKeys",
+      "groups",
+      "markPending",
+      "nameOf",
+      "peerKeys",
+      "peerPqKeys",
+      "sending",
+      "showToast",
+      "t"
+    ],
     "group-avatars.js": [
       "cryptoReady",
+      "groupAvatars",
       "groupKeys"
     ],
     "group-meta-broadcast.js": [],
     "group-meta.js": [
       "cryptoReady",
+      "emails",
+      "groupAvatars",
       "groupKeys",
       "groups",
       "healGroupAvatarFromMessage",
+      "isLoggedIn",
       "replyGroupAvatarHeal"
     ],
     "group-pin-wire.js": [],
@@ -124,7 +174,6 @@
     "groups-create.js": [],
     "groups-load.js": [],
     "groups-migrate.js": [],
-    "groups-store.js": [],
     "groups.js": [
       "activeChat",
       "applyEdits",
@@ -132,7 +181,9 @@
       "applyPollVotes",
       "applyReactions",
       "cryptoReady",
+      "emails",
       "filterDeleted",
+      "groupAvatars",
       "groupKeys",
       "healGroupAvatarFromMessage",
       "isIgnored",
@@ -141,10 +192,12 @@
       "loadSeq",
       "mergeHistory",
       "mergePending",
+      "messages",
       "noteSeen",
       "parseEnvelope",
       "parseMessageContent",
       "parsePollEnvelope",
+      "pendingOutgoing",
       "pinnedMsgId",
       "pinnedPreview",
       "readPinned",
@@ -155,8 +208,16 @@
       "sendReadReceipts",
       "showHistoryFirst"
     ],
-    "history.js": [],
-    "identity-store.js": [],
+    "history.js": [
+      "bodyCacheOrder",
+      "bodyCacheSaveTimer",
+      "email",
+      "emailBodyCache",
+      "filterDeleted",
+      "isTombstoned",
+      "msgTs",
+      "pendingOutgoing"
+    ],
     "incoming.js": [
       "cacheBody",
       "canonicalOf",
@@ -190,7 +251,8 @@
       "senderEmail",
       "setPeerKey",
       "t",
-      "tryMigrateGroupMember"
+      "tryMigrateGroupMember",
+      "unreadCounts"
     ],
     "invites.js": [
       "contactPopupIndex",
@@ -204,6 +266,7 @@
       "loadGroups",
       "loadProfiles",
       "loadStoredPeerKeys",
+      "peerKeys",
       "pendingContacts",
       "pendingInvites",
       "refreshGroupMembers",
@@ -211,8 +274,6 @@
       "showInvitePopup"
     ],
     "local-db-init.js": [],
-    "mailbox-api.js": [],
-    "mailbox-store.js": [],
     "members.js": [
       "addMemberQuery",
       "addMemberSelected",
@@ -225,7 +286,6 @@
       "showAddMemberPopup",
       "t"
     ],
-    "messages-store.js": [],
     "messages.js": [
       "activeChat",
       "aliasesOf",
@@ -237,6 +297,7 @@
       "cryptoReady",
       "email",
       "emailBodyCache",
+      "emails",
       "filterDeleted",
       "isIgnored",
       "isOwnSender",
@@ -244,14 +305,18 @@
       "loadSeq",
       "mergeHistory",
       "mergePending",
+      "messages",
       "migrateChatHistoryChain",
       "migratePeerGroups",
       "noteSeen",
       "parseCallSignal",
+      "parseEnvelope",
+      "parseMessageContent",
       "parsePollEnvelope",
       "peerKeys",
       "peerKeysLoaded",
       "peerPqKeys",
+      "pendingOutgoing",
       "profiles",
       "saveChatCache",
       "saveCurrentHistory",
@@ -264,11 +329,28 @@
     "migrate.js": [
       "migrateOwnProfile"
     ],
-    "notes-store.js": [],
-    "poll.js": [],
+    "poll.js": [
+      "activeChat",
+      "activeChatType",
+      "cryptoReady",
+      "currentGroup",
+      "displayName",
+      "email",
+      "groupKeys",
+      "newMessageId",
+      "peerKeys",
+      "peerPqKeys",
+      "saveCurrentHistory",
+      "scrollToBottom",
+      "sending",
+      "t"
+    ],
     "presence.js": [
       "_presenceSending",
       "cryptoReady",
+      "email",
+      "isLoggedIn",
+      "lastSeenMap",
       "noteSeen",
       "peerKeys",
       "peerPqKeys"
@@ -276,22 +358,38 @@
     "profiles.js": [
       "contactCardEmail",
       "contacts",
+      "displayName",
       "editContactAvatar",
       "editContactName",
       "editingContact",
       "email",
+      "lastSeenMap",
       "localProfiles",
+      "myBio",
       "peerKeys",
+      "peerPqKeys",
       "profiles",
       "showContactCard",
-      "showContactEdit"
+      "showContactEdit",
+      "showToast",
+      "t"
     ],
-    "reactions.js": [],
+    "reactions.js": [
+      "activeChat",
+      "activeChatType",
+      "currentGroup",
+      "email",
+      "groupKeys",
+      "peerKeys",
+      "peerPqKeys",
+      "reactionPickerMsgId"
+    ],
     "receipts.js": [
       "cacheBody",
       "cryptoReady",
       "email",
       "emailBodyCache",
+      "isLoggedIn",
       "parseEnvelope",
       "peerKeys",
       "peerPqKeys",
@@ -300,12 +398,14 @@
     "recovery-escrow.js": [],
     "recovery-session.js": [],
     "recovery.js": [
+      "ecoMode",
       "email",
       "idleLoop",
       "imapPort",
       "imapServer",
       "initCrypto",
       "initLocalDb",
+      "isLoggedIn",
       "loadBodyCache",
       "loadChannels",
       "loadContacts",
@@ -320,6 +420,7 @@
       "publicKey",
       "recoveryFileJson",
       "recoveryWordsInput",
+      "relayEnabled",
       "rememberMe",
       "showToast",
       "smtpPort",
@@ -328,9 +429,43 @@
       "startRelayTicker",
       "userId"
     ],
-    "relay-idle.js": [],
-    "relay-store.js": [],
-    "relay.js": [],
+    "relay.js": [
+      "_fastFetchBusy",
+      "_fastFetchTimer",
+      "_idleActive",
+      "_idleMonitorUp",
+      "_idleStop",
+      "_lastRelayHealth",
+      "_pollingActive",
+      "_relayFails",
+      "_relayTicker",
+      "activeChat",
+      "activeChatType",
+      "cacheBody",
+      "callState",
+      "channels",
+      "currentGroup",
+      "ecoAutonomous",
+      "ecoMode",
+      "email",
+      "emails",
+      "isLoggedIn",
+      "loadCursors",
+      "loadEmails",
+      "loadGroupMessages",
+      "loadGroups",
+      "loadMessages",
+      "onEcoMode",
+      "pollTimer",
+      "processIncoming",
+      "relayDeliveryMode",
+      "relayEnabled",
+      "relayOfflineSince",
+      "saveCursors",
+      "scrollToBottom",
+      "showToast",
+      "t"
+    ],
     "report-content.js": [],
     "restore-failure.js": [],
     "send.js": [
@@ -348,42 +483,103 @@
       "groupKeys",
       "isIgnored",
       "lastSend",
+      "loadNotes",
       "markPending",
-      "notes",
+      "messages",
+      "newMessage",
       "peerKeys",
       "peerPqKeys",
+      "pendingOutgoing",
       "recordLocalEdit",
+      "relayDeliveryMode",
       "replyBody",
       "replyPreview",
       "replyQuote",
       "replyTo",
       "saveCurrentHistory",
       "saveDraft",
+      "saveNotes",
       "scheduleEphemeral",
       "scrollToBottom",
       "sendChannelPost",
       "sendEditEmail",
+      "sending",
       "showToast",
       "t"
     ],
-    "sending-store.js": [],
-    "session-store.js": [],
-    "timing.js": [],
     "video.js": [],
     "api.js": []
   },
   "fieldWriters": {
+    "viewingImage": [
+      "attachments.js"
+    ],
     "dodCache": [
       "attachments.js"
+    ],
+    "messages": [
+      "attachments.js",
+      "calls.js",
+      "groups.js",
+      "messages.js",
+      "send.js"
     ],
     "showAudioRecorder": [
       "attachments.js"
     ],
+    "loadNotes": [
+      "attachments.js",
+      "send.js"
+    ],
+    "currentCall": [
+      "calls.js"
+    ],
+    "callRingTimer": [
+      "calls.js"
+    ],
+    "lastCallId": [
+      "calls.js"
+    ],
+    "callState": [
+      "calls.js"
+    ],
+    "callMuted": [
+      "calls.js"
+    ],
     "callStartedAt": [
+      "calls.js"
+    ],
+    "callMediaConnected": [
+      "calls.js"
+    ],
+    "_pendingKemct": [
+      "calls.js"
+    ],
+    "_pendingSenderEk": [
+      "calls.js"
+    ],
+    "_connLostTimer": [
+      "calls.js"
+    ],
+    "callSpeaker": [
+      "calls.js"
+    ],
+    "unreadCounts": [
+      "calls.js",
+      "incoming.js"
+    ],
+    "_mediaFallbackTimer": [
+      "calls.js"
+    ],
+    "callSoundEl": [
       "calls.js"
     ],
     "channelById": [
       "channels.js"
+    ],
+    "newMessage": [
+      "drafts.js",
+      "send.js"
     ],
     "duressLocked": [
       "duress.js"
@@ -397,6 +593,10 @@
     "duressPending": [
       "duress.js"
     ],
+    "isLoggedIn": [
+      "duress.js",
+      "recovery.js"
+    ],
     "email": [
       "duress.js"
     ],
@@ -406,11 +606,21 @@
     "peerKeys": [
       "duress.js"
     ],
+    "tombstonesCache": [
+      "edits.js"
+    ],
+    "midTombstonesCache": [
+      "edits.js"
+    ],
     "emailsLoading": [
       "emails.js"
     ],
     "emailError": [
       "emails.js"
+    ],
+    "emails": [
+      "emails.js",
+      "relay.js"
     ],
     "chatFlags": [
       "folders.js"
@@ -424,11 +634,44 @@
     "chatFolderNewName": [
       "folders.js"
     ],
+    "forwardTo": [
+      "forward.js"
+    ],
+    "sending": [
+      "forward.js",
+      "poll.js",
+      "send.js"
+    ],
+    "groupKeys": [
+      "group-avatars.js",
+      "group-meta.js",
+      "groups.js",
+      "incoming.js",
+      "send.js"
+    ],
+    "groupAvatars": [
+      "group-avatars.js",
+      "group-meta.js",
+      "groups.js"
+    ],
     "pinnedMsgId": [
       "groups.js"
     ],
     "pinnedPreview": [
       "groups.js"
+    ],
+    "emailBodyCache": [
+      "history.js"
+    ],
+    "bodyCacheOrder": [
+      "history.js"
+    ],
+    "bodyCacheSaveTimer": [
+      "history.js"
+    ],
+    "pendingOutgoing": [
+      "history.js",
+      "send.js"
     ],
     "processedUnreadIds": [
       "incoming.js"
@@ -466,7 +709,13 @@
     "_presenceSending": [
       "presence.js"
     ],
+    "localProfiles": [
+      "profiles.js"
+    ],
     "profiles": [
+      "profiles.js"
+    ],
+    "myBio": [
       "profiles.js"
     ],
     "contactCardEmail": [
@@ -487,11 +736,14 @@
     "showContactEdit": [
       "profiles.js"
     ],
-    "localProfiles": [
+    "lastSeenMap": [
       "profiles.js"
     ],
     "contacts": [
       "profiles.js"
+    ],
+    "reactionPickerMsgId": [
+      "reactions.js"
     ],
     "loginLoading": [
       "recovery.js"
@@ -501,6 +753,54 @@
     ],
     "userId": [
       "recovery.js"
+    ],
+    "ecoMode": [
+      "recovery.js",
+      "relay.js"
+    ],
+    "relayEnabled": [
+      "recovery.js",
+      "relay.js"
+    ],
+    "_relayFails": [
+      "relay.js"
+    ],
+    "_lastRelayHealth": [
+      "relay.js"
+    ],
+    "_relayTicker": [
+      "relay.js"
+    ],
+    "relayOfflineSince": [
+      "relay.js"
+    ],
+    "ecoAutonomous": [
+      "relay.js"
+    ],
+    "relayDeliveryMode": [
+      "relay.js",
+      "send.js"
+    ],
+    "_idleStop": [
+      "relay.js"
+    ],
+    "_fastFetchTimer": [
+      "relay.js"
+    ],
+    "_fastFetchBusy": [
+      "relay.js"
+    ],
+    "_idleActive": [
+      "relay.js"
+    ],
+    "_idleMonitorUp": [
+      "relay.js"
+    ],
+    "pollTimer": [
+      "relay.js"
+    ],
+    "_pollingActive": [
+      "relay.js"
     ],
     "lastSend": [
       "send.js"
@@ -513,8 +813,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 285,
-    "ctxRefSites": 729,
-    "sharedWriteFields": 0
+    "ctxFields": 439,
+    "ctxRefSites": 1225,
+    "sharedWriteFields": 13
   }
 }

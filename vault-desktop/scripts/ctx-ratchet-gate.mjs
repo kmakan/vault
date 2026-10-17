@@ -101,6 +101,12 @@ const OWNER_FIELDS = new Set([
   'setDraft',
   'getDraft',
   'clearDraft',
+  // A15: notes-store.js — владелец заметок для себя. Симметрично
+  // ctx-coupling-gate.mjs. Регистрация здесь — документированный способ
+  // ввести поле-владельца (как chat/sending/unreadCounts/emails/...):
+  // модуль, начавший читать/писать `notes`, НЕ считается взявшим новое поле,
+  // и baseline переписывать не нужно.
+  'notes',
 ]);
 
 const CTX_READ = /ctx\.([A-Za-z_$][\w$]*)/g;

@@ -86,6 +86,12 @@ const OWNER_FIELDS = new Set([
   'tick', 'setTimer', 'hasTimer', 'clearTimer', 'clearAllTimers', 'setCurrentTtl', 'getCurrentTtl',
   // J.3c: mailbox-store.js state fields (emails.js ctx.* через computed proxy)
   'emailsLoading', 'emailError',
+  // A15: notes-store.js — владелец заметок для себя (key vault-notes-<email>).
+  // Симметрично ctx-ratchet-gate.js: ctx.notes.* — доступ через владельца,
+  // а не «модуль взял новое поле». Ставится ИМЕННО здесь, чтобы не
+  // переписывать baseline (потолок остаётся 1221; затягивать его —
+  // отдельное осознанное действие в конце серии ADR-004).
+  'notes',
 ]);
 
 
