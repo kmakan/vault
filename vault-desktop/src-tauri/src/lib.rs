@@ -22,6 +22,8 @@ mod duress;
 mod file_lock;
 mod email;
 mod groups;
+/// M2.2: Presence ledger core + bridge.
+mod presence;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
 mod backup_import;
@@ -1124,6 +1126,18 @@ fn groups_accept_invite(token: String, invitee_email: String) -> Result<String, 
     groups::accept_invite(&token, &invitee_email).map_err(|e| e.to_string())
 }
 
+/// M2.2: Ingest a presence heartbeat (ledger persist).
+#[tauri::command]
+fn presence_ingest(email: String, ts: i64, source: String) -> Result<(), String> {
+    presence::ingest_heartbeat(&email, ts, &source).map_err(|e| e.to_string())
+}
+
+/// M2.2: Query last-seen timestamp for a peer.
+#[tauri::command]
+fn presence_last_seen(email: String) -> Result<Option<i64>, String> {
+    presence::last_seen(&email).map_err(|e| e.to_string())
+}
+
 /// Смена адреса участника группы (смена почты, тот же fingerprint).
 /// Фронт проверяет, что old/new привязаны к одному ключу (peer_keys).
 #[tauri::command]
@@ -2135,6 +2149,9 @@ pub fn run() {
             // M2.1: group invite/accept bridge (ADR-001 sync).
             groups_invite,
             groups_accept_invite,
+            // M2.2: presence ledger bridge.
+            presence_ingest,
+            presence_last_seen,
             channel_signing_key,
             channel_sign_post,
             channels_tokens,

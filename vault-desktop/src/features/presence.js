@@ -13,6 +13,7 @@
 import api, { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
+import { invoke } from '@tauri-apps/api/core';
 
 export const PRESENCE_INTERVAL_MS = 5 * 60 * 1000;   // отправка heartbeat
 export const PRESENCE_ONLINE_MS = 11 * 60 * 1000;    // окно «онлайн» (2× + буфер)
@@ -85,6 +86,9 @@ export function ingestSignal(ctx, robj, senderEmail, mailTs) {
   // времени письма сервера, но не даём отметке уйти в будущее.
   const t = Math.min(Number(mailTs) || Date.now(), Date.now());
   ctx.noteSeen(senderEmail, t);
+  // M2.2: persist heartbeat ledger via Rust bridge (offline last-seen).
+  try { invoke("presence_ingest", { email: senderEmail, ts: t, source: "hb" }); }
+  catch (e) { /* non-blocking: in-memory lastSeenMap достаточно для UI */ }
   return true;
 }
 
