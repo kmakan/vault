@@ -1110,6 +1110,20 @@ fn groups_add_member(group_id: String, email: String) -> Result<groups::Group, S
         .map_err(|e| e.to_string())?
 }
 
+/// M2.1: Generate an invite token for group sync (ADR-001).
+#[tauri::command]
+fn groups_invite(group_id: String, invitee_email: String) -> Result<groups::InviteToken, String> {
+    groups::group_invite(&group_id, &invitee_email).map_err(|e| e.to_string())
+}
+
+/// M2.1: Accept an invite token — registers invitee as member (idempotent),
+/// returns the resolved group_id so JS can fetch the encrypted key share
+/// via import_group.
+#[tauri::command]
+fn groups_accept_invite(token: String, invitee_email: String) -> Result<String, String> {
+    groups::accept_invite(&token, &invitee_email).map_err(|e| e.to_string())
+}
+
 /// Смена адреса участника группы (смена почты, тот же fingerprint).
 /// Фронт проверяет, что old/new привязаны к одному ключу (peer_keys).
 #[tauri::command]
@@ -2118,6 +2132,9 @@ pub fn run() {
             groups_load,
             groups_create,
             groups_add_member,
+            // M2.1: group invite/accept bridge (ADR-001 sync).
+            groups_invite,
+            groups_accept_invite,
             channel_signing_key,
             channel_sign_post,
             channels_tokens,

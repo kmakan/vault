@@ -1569,6 +1569,15 @@ async mediaSoundStop() {
   async createGroup(name, description) {
     return await invoke('groups_create', { name, creator: this.email || '' });
   }
+  // M2.1: token-based invite (ADR-001 group sync bridge).
+  async inviteGroupToken(groupId, inviteeEmail) {
+    return await invoke('groups_invite', { groupId, inviteeEmail });
+  }
+  async acceptGroupInvite(token, inviteeEmail) {
+    const groupId = await invoke('groups_accept_invite', { token, inviteeEmail });
+    // JS fetch the encrypted key share via existing email/import_group flow.
+    return { groupId };
+  }
   async getGroupMembers(groupId) {
     const g = await invoke('groups_get', { groupId });
     return (g && g.members) || [];

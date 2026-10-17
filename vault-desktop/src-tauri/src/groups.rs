@@ -132,6 +132,82 @@ pub fn create_group(name: &str, creator: &str) -> Result<Group> {
     Ok(group)
 }
 
+/// M2.1: Generate a group invite token for ADR-001 sync (group invite/accept).
+///
+/// Invite token = `inv_<group_id>_<16-hex>`. Creator (admin) generates, sends
+/// token via out-of-band (email relay / QR). Acceptor calls
+/// `groups_accept_invite(token, invitee_email)` → triggers `import_group`
+/// с encrypted key share (done on JS layer via ctx).
+///
+/// Токен не хранит ключ (key передаётся зашифрованным в конверте — parity с
+/// JS inviteSelectedMembers). Токен — лишь ссылка на группу + anti-replay
+/// (один токен = один invite; повторный accept идемпотентен через import_group).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InviteToken {
+    pub token: String,
+    pub group_id: String,
+    pub group_name: String,
+    pub created_by: String,
+    pub created_at: String,
+}
+
+pub fn group_invite(group_id: &str, invitee_email: &str) -> Result<InviteToken> {
+    let mut groups = load_groups()?;
+    let group = groups.get_mut(group_id)
+        .ok_or_else(|| anyhow::anyhow!("group_invite: group not found: {}", group_id))?;
+    let gid = group.id.clone();
+    let gname = group.name.clone();
+    let creator = group.created_by.clone();
+    if group.members.iter().any(|m| m.email == invitee_email) {
+        anyhow::bail!("group_invite: {} already a member of {}", invitee_email, gid);
+    }
+    let mut id_bytes = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut id_bytes);
+    let token = format!("inv_{}_{}", gid, hex::encode(id_bytes));
+    let now = Utc::now().to_rfc3339();
+    Ok(InviteToken {
+        token,
+        group_id: gid,
+        group_name: gname,
+        created_by: creator,
+        created_at: now,
+    })
+}
+
+/// M2.1: Accept an invite token — validates + ensures invitee registered as
+/// member (idempotent). Returns the resolved group_id so JS can fetch the
+/// encrypted key share separately via import_group.
+pub fn accept_invite(token: &str, invitee_email: &str) -> Result<String> {
+    let body = token.strip_prefix("inv_").unwrap_or(token);
+    // body = "<group_id>_<16hex>"; group_id может содержать '_' → split
+    // только по LAST '_' (hex — фиксированная длина, id нет).
+    let parts: Vec<&str> = body.rsplitn(2, "_").collect();
+    if parts.len() < 2 {
+        anyhow::bail!("accept_invite: malformed token");
+    }
+    let group_id = parts[1].to_string();
+    let mut groups = load_groups()?;
+    let group = groups.get_mut(&group_id)
+        .ok_or_else(|| anyhow::anyhow!("accept_invite: group not found: {}", group_id))?;
+    // Ensure invitee registered (idempotent: skip if already member).
+    let needs_push = !group.members.iter().any(|m| m.email == invitee_email);
+    if needs_push {
+        let now = Utc::now().to_rfc3339();
+        group.members.push(GroupMember {
+            email: invitee_email.to_string(),
+            role: GroupRole::Member,
+            joined_at: now,
+            key_shared: false,
+            fingerprint: String::new(),
+        });
+        let gid = group.id.clone();
+        save_groups(&groups)?;
+        Ok(gid)
+    } else {
+        Ok(group.id.clone())
+    }
+}
+
 pub fn add_member(group_id: &str, email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
@@ -980,6 +1056,39 @@ mod tests {
     }
 
     // ─── filter_own_groups: fp-first, адрес как fallback ───
+
+    #[test]
+    fn test_group_invite_generates_token() {
+        with_tmp_groups(|| {
+            let g = create_group("dev", "creator@x").unwrap();
+            let inv = group_invite(&g.id, "invitee@x").unwrap();
+            assert!(inv.token.starts_with("inv_"));
+            assert_eq!(inv.group_id, g.id);
+            assert_eq!(inv.created_by, "creator@x");
+            let mut groups = load_groups().unwrap();
+            groups.get_mut(&g.id).unwrap().members.push(GroupMember {
+                email: "alice@x".to_string(), role: GroupRole::Member,
+                joined_at: String::new(), key_shared: false, fingerprint: String::new(),
+            });
+            save_groups(&groups).unwrap();
+            assert!(group_invite(&g.id, "alice@x").is_err());
+        });
+    }
+
+    #[test]
+    fn test_accept_invite_idempotent() {
+        with_tmp_groups(|| {
+            let g = create_group("team", "creator@x").unwrap();
+            let inv = group_invite(&g.id, "bob@x").unwrap();
+            let gid = accept_invite(&inv.token, "bob@x").unwrap();
+            assert_eq!(gid, g.id);
+            let gid2 = accept_invite(&inv.token, "bob@x").unwrap();
+            assert_eq!(gid2, g.id);
+            let groups = load_groups().unwrap();
+            let gm = groups.get(&g.id).unwrap();
+            assert!(gm.members.iter().any(|m| m.email == "bob@x"));
+        });
+    }
 
     fn mk_group(id: &str, created_by: &str, members: &[(&str, &str)]) -> Group {
         Group {
