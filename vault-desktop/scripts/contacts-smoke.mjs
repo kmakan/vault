@@ -28,4 +28,31 @@ check('msgSenderEmail объект sender_id', C.msgSenderEmail({sender_id:'Name
 check('msgSenderEmail null → ""', C.msgSenderEmail(null, senderEmail)==='');
 check('msgSenderEmail без sender_id → ""', C.msgSenderEmail({content:'x'}, senderEmail)==='');
 
+// findKnownPeerByKey (ADR-001: вынос из messages.js loadMessages knownByKey)
+check('findKnownPeerByKey находит алиас по pubkey',
+  C.findKnownPeerByKey({ 'a@x.y':'PK2','new@x.y':'PK2' }, 'PK2', 'new@x.y') === 'a@x.y');
+check('findKnownPeerByKey self (sender == ключ) → null',
+  C.findKnownPeerByKey({ 'a@x.y':'PK1' }, 'PK1', 'a@x.y') === null);
+check('findKnownPeerByKey без совпадения → null',
+  C.findKnownPeerByKey({ 'a@x.y':'PK1' }, 'PK9', 'new@x.y') === null);
+check('findKnownPeerByKey без peerKeys → null (no throw)',
+  C.findKnownPeerByKey(null, 'PK1', 'a@x.y') === null);
+
+// isOutboundLetter / resolvePeerSender (ADR-001: вынос из messages.js)
+check('isOutboundLetter From в own aliases', C.isOutboundLetter({ from: 'Me <OLD@x.y>' }, ['old@x.y','me@x.y']) === true);
+check('isOutboundLetter чужой From → false', C.isOutboundLetter({ from: 'peer@x.y' }, ['me@x.y']) === false);
+check('isOwnSender без m → false', C.isOutboundLetter(null, ['me@x.y']) === false);
+
+check('resolvePeerSender in → peerEmail', C.resolvePeerSender(true, 'peer@x.y', 'me@x.y') === 'peer@x.y');
+check('resolvePeerSender out → me', C.resolvePeerSender(false, 'peer@x.y', 'me@x.y') === 'me@x.y');
+
+// isPeerEncrypted
+check('isPeerEncrypted true (key present)', C.isPeerEncrypted({a:'k'}, true, 'a') === true);
+check('isPeerEncrypted false (no key)', C.isPeerEncrypted({a:'k'}, true, 'b') === false);
+check('isPeerEncrypted false (!cryptoReady)', C.isPeerEncrypted({a:'k'}, false, 'a') === false);
+
+// resolveEventSender
+check('resolveEventSender out → peerEmail', C.resolveEventSender(true, 'peer@x.y', 'me@x.y') === 'peer@x.y');
+check('resolveEventSender in → fallback', C.resolveEventSender(false, 'peer@x.y', 'from@x.y') === 'from@x.y');
+check('resolveEventSender in empty fallback → ""', C.resolveEventSender(false, 'peer@x.y', '') === '');
 console.log('=== ИТОГО: '+p+' pass, '+f+' fail ==='); if (f) process.exit(1);

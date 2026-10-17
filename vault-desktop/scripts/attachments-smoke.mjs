@@ -269,5 +269,69 @@ console.log('7. MessageItem: порядок ветвей вложений');
   check('buildVoiceOptimisticMsg id/timeStr переданы', msg.id === 'voice-1' && msg.time === '12:00');
 }
 
+// decryptDodBody: чистый decrypt DoD-конверта (групповой/пир-ключ).
+{
+  const body = JSON.stringify({ vault_dod_data: 1, ref: 'd@x', data: 'AAAA' });
+  // Групповой ключ: расшифровка сразу.
+  globalThis.__cryptoMock.decryptWithGroupKey = async () => 'group-plain';
+  check('decryptDodBody group → plain', await A.decryptDodBody(body, {
+    activeChatType: 'group', currentGroup: { id: 'g1' },
+    groupKeys: { g1: 'GK' }, senderEmail: '', peerKeys: {}, peerPqKeys: {}, crypto: globalThis.__cryptoMock,
+  }) === 'group-plain');
+  // 1:1: senderEmail + peerKey → decryptVault.
+  globalThis.__cryptoMock.decryptWithGroupKey = null;
+  globalThis.__cryptoMock.decryptVault = async () => 'peer-plain';
+  check('decryptDodBody peer → plain', await A.decryptDodBody(body, {
+    activeChatType: 'peer', currentGroup: null,
+    groupKeys: {}, senderEmail: 'p@x', peerKeys: { 'p@x': 'PUB' }, peerPqKeys: {}, crypto: globalThis.__cryptoMock,
+  }) === 'peer-plain');
+  // Нет ключа → null (без исключения).
+  globalThis.__cryptoMock.decryptVault = null;
+  check('decryptDodBody no-key → null', await A.decryptDodBody(body, {
+    activeChatType: 'peer', currentGroup: null,
+    groupKeys: {}, senderEmail: 'p@x', peerKeys: {}, peerPqKeys: {}, crypto: globalThis.__cryptoMock,
+  }) === null);
+}
+
+// encryptAttachmentEnvelope: чистый encrypt конверта (group/peer), чистый тест.
+{
+  const be = (p) => JSON.stringify({ vault:1, text:p });
+  const cryptoMock2 = { setPeerPublicKey(){}, encryptWithGroupKey: async(e,_k)=>'GK:'+JSON.parse(e).text, encryptVault: async(e)=>'PV:'+JSON.parse(e).text };
+  const envId = (e) => JSON.parse(e).text.slice(0,4);
+  const base = { buildEnvelope: be, crypto: cryptoMock2, envelopeIdOf: envId };
+  // group
+  let r = await A.encryptAttachmentEnvelope('pl',{ activeChatType:'group', activeChat:'', currentGroup:{id:'g1'}, groupKeys:{g1:'GK'}, peerKeys:{}, peerPqKeys:{}, cryptoReady:true, ...base });
+  check('encryptAttachmentEnvelope group wire', r.wire === 'GK:pl');
+  check('encryptAttachmentEnvelope group envelopeId', r.envelopeId === 'pl');
+  // peer
+  r = await A.encryptAttachmentEnvelope('pl',{ activeChatType:'peer', activeChat:'p@x', currentGroup:null, groupKeys:{}, peerKeys:{'p@x':'PUB'}, peerPqKeys:{}, cryptoReady:true, ...base });
+  check('encryptAttachmentEnvelope peer wire', r.wire === 'PV:pl');
+  // no key (group без groupKey) → wire=payload, envelopeId=''
+  r = await A.encryptAttachmentEnvelope('pl',{ activeChatType:'group', activeChat:'', currentGroup:{id:'gX'}, groupKeys:{}, peerKeys:{}, peerPqKeys:{}, cryptoReady:true, ...base });
+  check('encryptAttachmentEnvelope no-key passthrough', r.wire === 'pl' && r.envelopeId === '');
+}
+
+// findDodLetter (чистый поиск DoD-письма по Message-ID)
+check('findDodLetter находит по message_id (trim/ignore case not applied)',
+  A.findDodLetter([{ message_id: 'dod@x' }], '  dod@x  ') &&
+  A.findDodLetter([{ message_id: 'dod@x' }], '  dod@x  ').message_id === 'dod@x');
+check('findDodLetter нет совпадения → undefined',
+  A.findDodLetter([{ message_id: 'a@x' }], 'b@x') === undefined);
+check('findDodLetter пустой emails → undefined (no throw)',
+  (() => { try { A.findDodLetter(null, 'x'); return true; } catch { return false; } })());
+
+// isDodReady
+check('isDodReady true (ready)', A.isDodReady({ dodStatus: 'ready' }) === true);
+check('isDodReady true (loading)', A.isDodReady({ dodStatus: 'loading' }) === true);
+check('isDodReady false (idle)', A.isDodReady({ dodStatus: 'idle' }) === false);
+check('isDodReady false (null)', A.isDodReady(null) === false);
+
+// buildNoteWithAttachment
+const nmFile = { name: 'v.webm', type: 'audio/webm', size: 100 };
+const nm = A.buildNoteWithAttachment(nmFile, { displayContent: '📎 v.webm', base64: 'AA', isImage: false, isAudio: true, isText: false, textContent: '', timeStr: '11:00' });
+check('buildNoteWithAttachment content+from+notes', nm.content === '📎 v.webm' && nm.from === 'me' && nm._notes === true);
+check('buildNoteWithAttachment attachment passthrough', nm.attachment.name === 'v.webm' && nm.attachment.isAudio === true);
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
+;

@@ -75,6 +75,17 @@ export function statusTitle(msg, tr) {
   return tr('status_sent') || 'Sent';
 }
 
+// parseEnvelopeSafe(str): JSON.parse конверта с catch→null (не падает на муссе).
+export function parseEnvelopeSafe(str) {
+  try { return JSON.parse(str); } catch { return null; }
+}
+
+// formatTimeLabel(ts): «12:00»-формат для времени сообщения/поста.
+// Чистая (no tz/locale side-effects beyond Intl.DateTimeFormat).
+export function formatTimeLabel(ts) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 // imapCursorsKey/account markers
 export function imapCursorsKey(accountId) {
   return 'vault-imap-cursors-' + accountId;

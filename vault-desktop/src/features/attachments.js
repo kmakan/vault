@@ -66,9 +66,40 @@ export async function toggleVoiceNote({ isAndroidClient, voicePlayingId, showToa
 }
 
 // ── Download-on-demand (M1) ────────────────────────────────────
+// decryptDodBody: чистый decrypt DoD-конверта (групповой/пир-ключ).
+// Возвращает plain-text или null (когда ключей нет/расшифровка упала).
+// crypto — объект {decryptWithGroupKey, decryptVault, setPeerPublicKey}
+// (инъецируется, чтобы тестировать без Tauri crypto-бэка).
+export async function decryptDodBody(body, { activeChatType, currentGroup, groupKeys, senderEmail, peerKeys, peerPqKeys, crypto }) {
+  let plain = null;
+  const groupKey = groupKeys[currentGroup && currentGroup.id];
+  if (activeChatType === 'group' && groupKey) {
+    try { plain = await crypto.decryptWithGroupKey(body, groupKey); } catch { plain = null; }
+  }
+  if (plain === null) {
+    if (senderEmail && peerKeys[senderEmail]) {
+      crypto.setPeerPublicKey(peerKeys[senderEmail], peerPqKeys && peerPqKeys[senderEmail]);
+      try { plain = await crypto.decryptVault(body); } catch { plain = null; }
+    }
+  }
+  return plain;
+}
+
+// isDodReady: уже загружено или сейчас грузится — пропуск fetch.
+export function isDodReady(attachment) {
+  return !!attachment && (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading');
+}
+
+// findDodLetter: чистый поиск data-письма по Message-ID в списке входящих.
+// Вынесен из fetchDodAttachment, чтобы сократить ctx.emails refs в orchestration.
+export function findDodLetter(emails, messageId) {
+  const id = String(messageId || '').trim();
+  return (emails || []).find(m => (m.message_id || '').trim() === id);
+}
+
 export async function fetchDodAttachment(ctx, msg, attachment) {
   if (!attachment || !attachment.isDod || !attachment.dod) return;
-  if (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading') return;
+  if (isDodReady(attachment)) return;
   attachment.dodStatus = 'loading';
   const chatKey = ChatFeature.resolveChatKey({
     activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
@@ -81,24 +112,18 @@ export async function fetchDodAttachment(ctx, msg, attachment) {
       ctx.$forceUpdate();
       return;
     }
-    const target = (ctx.emails || []).find(m => (m.message_id || '').trim() === attachment.dod.trim());
+    const target = findDodLetter(ctx.emails, attachment.dod);
     if (!target) throw new Error(ctx.t('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
     const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
     if (!body) throw new Error('empty body');
-    let plain = null;
-    const groupKey = ctx.groupKeys[ctx.currentGroup && ctx.currentGroup.id];
-    if (ctx.activeChatType === 'group' && groupKey) {
-      try { plain = await crypto.decryptWithGroupKey(body, groupKey); } catch (e) { plain = null; }
-    }
-    if (plain === null) {
-      const senderEmail = ctx.activeChatType === 'group'
-        ? (msg && msg.sender_id && ctx.senderEmail(msg.sender_id)) || ''
-        : ctx.activeChat;
-      if (senderEmail && ctx.peerKeys[senderEmail]) {
-        crypto.setPeerPublicKey(ctx.peerKeys[senderEmail], ctx.peerPqKeys && ctx.peerPqKeys[senderEmail]);
-        plain = await crypto.decryptVault(body);
-      }
-    }
+    const senderEmail = ctx.activeChatType === 'group'
+      ? ((msg && msg.sender_id && ctx.senderEmail(msg.sender_id)) || '')
+      : ctx.activeChat;
+    const plain = await decryptDodBody(body, {
+      activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+      groupKeys: ctx.groupKeys, senderEmail,
+      peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, crypto,
+    });
     if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
     const env = ctx.parseEnvelope(plain);
     const raw = env ? env.text : plain;
@@ -152,6 +177,64 @@ export function buildVoiceOptimisticMsg(audioData, { id, timeStr, name, status, 
   };
 }
 
+// buildNoteWithAttachment: чистый optimistic-сообщение-карточка файла в
+// «Заметки для себя» (локально, без шифрования/почты). DRY с send.js notes.
+export function buildNoteWithAttachment(file, { displayContent, base64, isImage, isAudio, isText, textContent, timeStr }) {
+  return {
+    id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+    content: displayContent,
+    from: 'me',
+    time: timeStr,
+    encrypted: false,
+    vault: false,
+    status: 'sent',
+    _notes: true,
+    attachment: {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      data: base64,
+      isImage,
+      isAudio,
+      isText,
+      textContent,
+    },
+  };
+}
+
+// encryptAttachmentEnvelope: чистый encrypt конверта вложения (group/peer).
+// Инъецируем buildEnvelope/crypto/envelopeIdOf — чтобы не дублировать логику
+// шифрования между sendAudioMessage и handleFileSelect.
+export async function encryptAttachmentEnvelope(payload, {
+  activeChatType, activeChat, currentGroup, groupKeys, peerKeys, peerPqKeys, cryptoReady,
+  buildEnvelope, crypto, envelopeIdOf,
+}) {
+  let wire = payload;
+  let envelopeId = '';
+  if (activeChatType === 'group' && currentGroup) {
+    const groupKey = groupKeys[currentGroup.id];
+    if (groupKey) {
+      const envelope = await buildEnvelope(payload);
+      envelopeId = envelopeIdOf(envelope);
+      wire = await crypto.encryptWithGroupKey(envelope, groupKey);
+    }
+  } else if (cryptoReady && peerKeys[activeChat]) {
+    wire = await encryptPeerVaultEnvelope(await buildEnvelope(payload), {
+      activeChat, peerKeys, peerPqKeys, cryptoReady, crypto,
+    });
+    envelopeId = ''; // id будет pending в caller
+  }
+  return { wire, envelopeId };
+}
+
+// encryptPeerVaultEnvelope: peer-encrypt уже построенного envelope
+// (AAD="VAULT"). Чистая, переиспользуется send.js (1:1) и attachments.
+export async function encryptPeerVaultEnvelope(envelope, { activeChat, peerKeys, peerPqKeys, cryptoReady, crypto }) {
+  if (!cryptoReady || !peerKeys || !peerKeys[activeChat]) return envelope;
+  crypto.setPeerPublicKey(peerKeys[activeChat], peerPqKeys && peerPqKeys[activeChat]);
+  return await crypto.encryptVault(envelope);
+}
+
 export async function sendAudioMessage(ctx, audioData) {
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
@@ -193,21 +276,11 @@ export async function sendAudioMessage(ctx, audioData) {
   // Конверт строим ДО оптимистичного показа: его id — ключ слияния с
   // реальным письмом (иначе поллинг не смог бы заменить предпросмотр,
   // и голосовое «появлялось и исчезало»).
-  let wire = attachmentPayload;
-  let envelopeId = '';
-  if (ctx.activeChatType === 'group' && ctx.currentGroup) {
-    const groupKey = ctx.groupKeys[ctx.currentGroup.id];
-    if (groupKey) {
-      const envelope = await ctx.buildEnvelope(attachmentPayload);
-      envelopeId = EnvelopeId.envelopeIdOf(envelope);
-      wire = await crypto.encryptWithGroupKey(envelope, groupKey);
-    }
-  } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
-    crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
-    const envelope = await ctx.buildEnvelope(attachmentPayload);
-    envelopeId = EnvelopeId.envelopeIdOf(envelope);
-    wire = await crypto.encryptVault(envelope);
-  }
+  const { wire, envelopeId } = await encryptAttachmentEnvelope(attachmentPayload, {
+    activeChatType: ctx.activeChatType, activeChat: ctx.activeChat, currentGroup: ctx.currentGroup,
+    groupKeys: ctx.groupKeys, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, cryptoReady: ctx.cryptoReady,
+    buildEnvelope: (p) => ctx.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
+  });
 
   // Оптимистичный предпросмотр у отправителя.
   const now = Date.now();
@@ -340,26 +413,10 @@ export async function handleFileSelect(ctx, event) {
         // Заметки для себя: файл хранится ЛОКАЛЬНО (localStorage), без
         // шифрования и почты — так же, как текст заметок.
         if (ctx.activeChat === '__notes__') {
-          const noteMsg = {
-            id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
-            content: displayContent,
-            from: 'me',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            encrypted: false,
-            vault: false,
-            status: 'sent',
-            _notes: true,
-            attachment: {
-              name: file.name,
-              type: file.type,
-              size: file.size,
-              data: base64,
-              isImage: isImage,
-              isAudio: isAudio,
-              isText: isText,
-              textContent: textContent,
-            },
-          };
+          const noteMsg = buildNoteWithAttachment(file, {
+            displayContent, base64, isImage, isAudio, isText, textContent,
+            timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          });
           const noteList = ctx.loadNotes();
           noteList.push(noteMsg);
           if (!ctx.saveNotes(noteList)) {
@@ -378,21 +435,11 @@ export async function handleFileSelect(ctx, event) {
         // молча отбросится. Конверт строим ДО предпросмотра: его id — ключ
         // слияния с реальным письмом (иначе поллинг не заменит предпросмотр,
         // и файл «появится и исчезнет» у отправителя).
-        let wire = attachmentPayload;
-        let envelopeId = '';
-        if (ctx.activeChatType === 'group' && ctx.currentGroup) {
-          const groupKey = ctx.groupKeys[ctx.currentGroup.id];
-          if (groupKey) {
-            const envelope = await ctx.buildEnvelope(attachmentPayload);
-            envelopeId = EnvelopeId.envelopeIdOf(envelope);
-            wire = await crypto.encryptWithGroupKey(envelope, groupKey);
-          }
-        } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
-          crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
-          const envelope = await ctx.buildEnvelope(attachmentPayload);
-          envelopeId = EnvelopeId.envelopeIdOf(envelope);
-          wire = await crypto.encryptVault(envelope);
-        }
+        const { wire, envelopeId } = await encryptAttachmentEnvelope(attachmentPayload, {
+          activeChatType: ctx.activeChatType, activeChat: ctx.activeChat, currentGroup: ctx.currentGroup,
+          groupKeys: ctx.groupKeys, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, cryptoReady: ctx.cryptoReady,
+          buildEnvelope: (p) => ctx.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
+        });
 
         // Create preview message
         const msg = {

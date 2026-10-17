@@ -8,6 +8,8 @@
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
+import * as ContactsFeature from './contacts.js';
+import * as MsgFormat from '../message-format.js';
 
 export async function loadMessages(ctx, email) {
       // Токен загрузки: если пользователь уже переключился на другой чат,
@@ -116,7 +118,7 @@ export async function loadMessages(ctx, email) {
         // меток статуса наших сообщений (🟢 доставлено / 🔵 просмотрено).
         const wireAcks = {}; // msg_id -> {delivered: bool, read: bool}
         const rendered = await Promise.all(related.map(async (m) => {
-          const isOut = aliases.some(a => (m.from || '').toLowerCase().includes(a));
+          const isOut = ContactsFeature.isOutboundLetter(m, aliases);
           let content = m.subject || '(no subject)';
           let msgId = m.uid || m.id;
           let attachment = null;
@@ -147,7 +149,7 @@ export async function loadMessages(ctx, email) {
                 if (robj && robj.react === 1 && robj.msg_id && robj.emoji) {
                   (wireReactions[robj.msg_id] = wireReactions[robj.msg_id] || []).push({
                     emoji: robj.emoji,
-                    user: isOut ? email : ctx.email,
+                    user: ContactsFeature.resolvePeerSender(isOut, email, ctx.email),
                     action: robj.action === 'remove' ? 'remove' : 'add',
                   });
                   return null; // не сообщение
@@ -159,7 +161,7 @@ export async function loadMessages(ctx, email) {
                     text: robj.text || '',
                     action: robj.action === 'delete' ? 'delete' : 'edit',
                     date: robj.ts || m.date || 0,
-                    sender: robj.sender || (isOut ? email : (m.from || '')),
+                    sender: robj.sender || ContactsFeature.resolveEventSender(isOut, email, m.from || ''),
                   });
                   return null; // не сообщение
                 }
@@ -177,20 +179,20 @@ export async function loadMessages(ctx, email) {
                 //     письмо (как реакция), агрегируется в карточку опроса.
                 if (robj && robj.poll === 1 && robj.poll_id) {
                   (wirePollVotes[robj.poll_id] = wirePollVotes[robj.poll_id] || []).push({
-                    voter: isOut ? email : ctx.email,
+                    voter: ContactsFeature.resolvePeerSender(isOut, email, ctx.email),
                     option: Number(robj.option) || 0,
                   });
                   return null; // не сообщение
                 }
                 // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
                 //     («я онлайн»); отмечаем активность, в чат не показываем.
-                if (PresenceFeature.ingestSignal(ctx, robj, isOut ? email : ctx.email, new Date(m.date || Date.now()).getTime())) {
+                if (PresenceFeature.ingestSignal(ctx, robj, ContactsFeature.resolvePeerSender(isOut, email, ctx.email), new Date(m.date || Date.now()).getTime())) {
                   return null; // не сообщение
                 }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
-              const env = ctx.parseEnvelope(text);
+              const env = MsgFormat.parseEnvelope(text);
               // Download-on-demand: data-письмо — ТРАНСПОРТ, не сообщение.
               // Его содержимое (десятки МБ) подтянется по клику с карточки
               // мета-вложения (fetchDodAttachment по Message-ID из меты).
@@ -214,7 +216,7 @@ export async function loadMessages(ctx, email) {
                 if (env.id) msgId = env.id;
                 // Вложение внутри конверта: text = JSON {vault_attachment,...}
                 // (файлы и голосовые идут этим путём).
-                const pp = ctx.parseMessageContent(env.text);
+                const pp = MsgFormat.parseMessageContent(env.text);
                 if (pp.attachment) {
                   attachment = pp.attachment;
                   content = pp.text;
@@ -223,7 +225,7 @@ export async function loadMessages(ctx, email) {
                 // Аватар/имя в конверте принадлежат отправителю письма:
                 //   входящее (isOut) -> собеседник (email), исходящее -> я (ctx.email).
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
-                const sender = isOut ? email : ctx.email;
+                const sender = ContactsFeature.resolvePeerSender(isOut, email, ctx.email);
                 // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — от меня самого
                 // (старый адрес после смены почты / копия в свой ящик). Не
                 // матчим как «смену почты», не сохраняем профиль — иначе
@@ -237,12 +239,8 @@ export async function loadMessages(ctx, email) {
                 // новый email к тому же контакту (копируем ключ), не требуя
                 // нового приглашения.
                 if (env.key && !isOut) {
-                  const senderNorm = String(sender).toLowerCase();
-                  const knownByKey = Object.entries(ctx.peerKeys).find(
-                    ([k, v]) => v === env.key && String(k).toLowerCase() !== senderNorm
-                  );
-                  if (knownByKey) {
-                    const [oldEmail] = knownByKey;
+                  const oldEmail = ContactsFeature.findKnownPeerByKey(ctx.peerKeys, env.key, sender);
+                  if (oldEmail) {
                     // ANTI-PING-PONG: старое письмо (ts ≤ порога) не должно
                     // переименовывать назад — пропускаем письмо целиком
                     // (его содержимое уже в истории после миграции чата).
@@ -325,7 +323,7 @@ export async function loadMessages(ctx, email) {
                 }
               } else {
                 // 3) Legacy: простой текст (старые письма без конверта).
-                const pp = ctx.parseMessageContent(text);
+                const pp = MsgFormat.parseMessageContent(text);
                 content = pp.text || content;
                 if (pp.attachment) {
                   attachment = pp.attachment;
@@ -442,7 +440,7 @@ export async function loadMessages(ctx, email) {
               // тост был эфемерным (8с) и SOS терялся, если его не увидели.
               {
                 const envCheck = msg.content && crypto.isEncrypted(msg.content)
-                  ? ctx.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
+                  ? MsgFormat.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
                 if (envCheck && envCheck.type === 'sos') {
                   ctx.showToast('🚨 ' + (envCheck.name || ctx.activeChat) + ': ' + envCheck.text, 8000);
                   return {
@@ -455,7 +453,7 @@ export async function loadMessages(ctx, email) {
                   };
                 }
               }
-              const { text, attachment } = ctx.parseMessageContent(msg.content);
+              const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
               const base = {
                 ...msg,
                 content: text,
@@ -467,7 +465,7 @@ export async function loadMessages(ctx, email) {
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const text = await crypto.decryptVault(msg.content);
-                  const env = ctx.parseEnvelope(text);
+                  const env = MsgFormat.parseEnvelope(text);
                   if (env && env.type === 'sos') {
                     // SOS (duress): тоже в чат (см. выше) — тост как дубль-уведомление.
                     ctx.showToast('🚨 ' + (env.name || ctx.activeChat) + ': ' + env.text, 8000);
@@ -485,7 +483,7 @@ export async function loadMessages(ctx, email) {
                     if (!ctx.isOwnSender(msg.sender_id)) {
                       ctx.noteSeen(ctx.activeChat, new Date(msg.created_at).getTime());
                     }
-                    const parsed = ctx.parseMessageContent(env.text);
+                    const parsed = MsgFormat.parseMessageContent(env.text);
                     // Исчезающие: отсчёт у получателя — от момента доставки
                     // (created_at письма). Точный «от просмотра» потребовал бы
                     // read-receipt-синхронизации; доставка — честный компромисс.
@@ -494,7 +492,7 @@ export async function loadMessages(ctx, email) {
                     const expireAt = env.ttl ? mailTs + env.ttl * 1000 : 0;
                     return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expireAt };
                   }
-                  const parsed = ctx.parseMessageContent(text);
+                  const parsed = MsgFormat.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
                 } catch {
                   return { ...base, encrypted: false };
@@ -508,7 +506,7 @@ export async function loadMessages(ctx, email) {
           for (const m of ctx.messages) if (m.expireAt) ctx.scheduleEphemeral(m, ctx.activeChat);
         } else {
           ctx.messages = raw.map(msg => {
-            const { text, attachment } = ctx.parseMessageContent(msg.content);
+            const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
               content: text,

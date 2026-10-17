@@ -184,6 +184,12 @@ ok('statusTitle sent', M.statusTitle({ status: 'sent' }, tr) === 'Read' ? false 
 ok('statusTitle read', M.statusTitle({ status: 'read' }, tr) === 'Read');
 ok('statusTitle sending', M.statusTitle({ status: 'sending' }, tr) === 'Sending');
 ok('statusTitle failed + failedTo', M.statusTitle({ status: 'failed', failedTo: ['a@x','b@y'] }, tr) === 'Not delivered: a@x, b@y');
+ok('parseEnvelopeSafe valid', M.parseEnvelopeSafe('{"a":1}').a === 1);
+ok('parseEnvelopeSafe invalid → null', M.parseEnvelopeSafe('nope') === null);
+
+// formatTimeLabel (чистый «HH:MM»)
+const ts = new Date();
+ok('formatTimeLabel корректный HH:MM', /^\d{2}:\d{2}$/.test(M.formatTimeLabel(ts.getTime())));
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

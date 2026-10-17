@@ -10,6 +10,9 @@ import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import * as EnvelopeId from './envelope-id.js';
 import * as ChatFeature from './chat.js';
+import * as ContactsFeature from './contacts.js';
+import * as AttachmentsFeature from './attachments.js';
+import * as MsgFormat from '../message-format.js';
 
 export async function sendMessage(ctx) {
       if (!ctx.newMessage.trim()) return;
@@ -33,8 +36,7 @@ export async function sendMessage(ctx) {
         activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
       });
       const text = ctx.newMessage.trim();
-      if (ctx.lastSend && ctx.lastSend.chat === chatId && ctx.lastSend.text === text
-          && Date.now() - ctx.lastSend.ts < 30000) {
+      if (ChatFeature.isRecentDuplicate({ lastSend: ctx.lastSend, chatId, text, now: Date.now() })) {
         console.log('[sendMessage] duplicate ignored (same text sent recently)');
         return;
       }
@@ -70,11 +72,9 @@ export async function sendMessage(ctx) {
         ctx._sendingWatchdog = setTimeout(() => { ctx.setSending(false); }, 60000);
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
-        let payload = ctx.newMessage;
-        if (ctx.replyTo) {
-          const quote = ctx.replyPreview(ctx.replyTo);
-          if (quote) payload = `> ${quote}\n\n${ctx.newMessage}`;
-        }
+        const payload = ChatFeature.buildReplyPayload(ctx.newMessage, {
+          replyTo: ctx.replyTo, replyPreview: (m) => ctx.replyPreview(m),
+        });
         // Очищаем поле и ответ СРАЗУ — SMTP медленный (30–60 с), UI не должен
         // ждать завершения отправки, чтобы поле опустело.
         ctx.clearDraft();
@@ -85,16 +85,8 @@ export async function sendMessage(ctx) {
 
         // Заметки для себя: локальная запись без почты и шифрования.
         if (ctx.activeChat === '__notes__') {
-          const note = {
-            id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
-            content: payload,
-            from: 'me',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            encrypted: false,
-            vault: false,
-            status: 'sent',
-            _notes: true,
-          };
+          const now = Date.now();
+          const note = ChatFeature.buildNoteMessage(payload, { now, timeStr: MsgFormat.formatTimeLabel(now) });
           const list = ctx.loadNotes();
           list.push(note);
           if (!ctx.saveNotes(list)) {
@@ -143,18 +135,13 @@ export async function sendMessage(ctx) {
           // сообщение — выглядело как будто ответ/сообщение не отправилось.
           // Запись регистрируется в pendingOutgoing: поллинг подмешивает её
           // обратно, пока письмо не сделает круг через ящик (mergePending).
-          const pendingMsg = {
-            id: envelopeId || EnvelopeId.pendingIdOf(),
-            content: payload,
-            from: 'me',
-            sender_id: ctx.email,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            ts: Date.now(),
-            encrypted: true,
-            vault: true,
-            status: 'sending',
-            _pendingAt: Date.now(),
-          };
+          const gNow = Date.now();
+          const pendingMsg = ChatFeature.buildSendingMessage({
+            envelopeId, payload, ttl: 0, now: gNow,
+            timeStr: MsgFormat.formatTimeLabel(gNow),
+            pendingIdOf: EnvelopeId.pendingIdOf,
+          });
+          pendingMsg.sender_id = ctx.email;
           ctx.chat.append(pendingMsg);
           ctx.markPending('group:' + ctx.currentGroup.id, pendingMsg);
           // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
@@ -163,7 +150,8 @@ export async function sendMessage(ctx) {
           ctx.saveCurrentHistory('group:' + ctx.currentGroup.id);
           try {
             // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
-            const envObjForRelay = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+            // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
+            const envObjForRelay = MsgFormat.parseEnvelopeSafe(envelope);
             const res = await api.sendGroupMessage(ctx.currentGroup.id, content, envObjForRelay);
             // Частичный фейл (SMTP одного из участников): статус 'failed'
             // (красный) — сообщение остаётся в чате и НЕ исчезает через
@@ -191,29 +179,24 @@ export async function sendMessage(ctx) {
           ctx.saveCurrentHistory('group:' + ctx.currentGroup.id);
         } else {
           // Regular chat message
-          if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
-            crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
+          if (ContactsFeature.isPeerEncrypted(ctx.peerKeys, ctx.cryptoReady, ctx.activeChat)) {
             // Encrypt as a vault message (AAD="VAULT") so the peer can recognize
             // and authenticate it as ours.
-            content = await crypto.encryptVault(envelope);
+            content = await AttachmentsFeature.encryptPeerVaultEnvelope(envelope, {
+              activeChat: ctx.activeChat, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys,
+              cryptoReady: ctx.cryptoReady, crypto,
+            });
           }
           // Оптимистично показываем своё сообщение сразу: SMTP Gmail отвечает
           // медленно (до минуты), ждать отправку в UI не нужно. Запись
           // регистрируется в pendingOutgoing: поллинг подмешивает её обратно,
           // пока письмо не сделает круг через ящик (mergePending).
-          const pendingMsg = {
-            id: envelopeId || EnvelopeId.pendingIdOf(),
-            content: payload,
-            from: 'me',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            ts: Date.now(),
-            encrypted: true,
-            vault: true,
-            status: 'sending',
-            _pendingAt: Date.now(),
-            ttl: ttl || 0,
-            expireAt: ttl ? Date.now() + ttl * 1000 : 0,
-          };
+          const sNow = Date.now();
+          const pendingMsg = ChatFeature.buildSendingMessage({
+            envelopeId, payload, ttl, now: sNow,
+            timeStr: MsgFormat.formatTimeLabel(sNow),
+            pendingIdOf: EnvelopeId.pendingIdOf,
+          });
           ctx.chat.append(pendingMsg);
           ctx.markPending(ctx.activeChat, pendingMsg);
           if (ttl) ctx.scheduleEphemeral(pendingMsg, ctx.activeChat);

@@ -35,3 +35,38 @@ export function msgSenderEmail(msg, senderEmail) {
   const raw = typeof msg === 'string' ? msg : msg.sender_id || '';
   return senderEmail(raw);
 }
+
+// Ищем СУЩЕСТВУЮЩЕГО контакта по fingerprint pubkey (смена почты без приглашения).
+// Чистая: peerKeys — карта email→pubkey, envKey — pubkey из конверта, sender —
+// текущий email отправителя (исключаем self-совпадение, регистронезависимо).
+export function findKnownPeerByKey(peerKeys, envKey, sender) {
+  if (!peerKeys || !envKey || !sender) return null;
+  const senderNorm = String(sender).toLowerCase();
+  for (const k of Object.keys(peerKeys)) {
+    if (peerKeys[k] === envKey && String(k).toLowerCase() !== senderNorm) return k;
+  }
+  return null;
+}
+
+// isOutboundLetter: письмо нам (From входит в own aliases) → outbox-история чата.
+export function isOutboundLetter(m, aliases) {
+  if (!m || !aliases) return false;
+  const from = String(m.from || '').toLowerCase();
+  return aliases.some(a => from.includes(a.toLowerCase()));
+}
+
+// resolvePeerSender(isOut, peerEmail, me): кто автор события — собеседник (in) или я (out).
+export function resolvePeerSender(isOut, peerEmail, me) {
+  return isOut ? peerEmail : me;
+}
+
+// resolveEventSender(isOut, peerEmail, fallback): author события без own email fallback
+// (напр. edit/vote: если исходящее — peerEmail, иначе From письма или fallback).
+export function resolveEventSender(isOut, peerEmail, fallback) {
+  return isOut ? peerEmail : (fallback || '');
+}
+
+// isPeerEncrypted(peerKeys, cryptoReady, activeChat): можно шифровать 1:1 пир.
+export function isPeerEncrypted(peerKeys, cryptoReady, activeChat) {
+  return !!cryptoReady && !!peerKeys && !!peerKeys[activeChat];
+}

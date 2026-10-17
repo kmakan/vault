@@ -16,3 +16,47 @@ export function isRecentDuplicate({ lastSend, chatId, text, now }, WINDOW_MS = 3
     && lastSend.text === text
     && (now - lastSend.ts) < WINDOW_MS;
 }
+
+// buildNoteMessage: чистый optimistic-сообщение в «Заметки для себя»
+// (локально, без шифрования и почты). now/timeStr инъецируются — чистота для smoke.
+export function buildNoteMessage(payload, { now, timeStr }) {
+  return {
+    id: 'note-' + now.toString(36) + Math.random().toString(36).substr(2, 5),
+    content: payload,
+    from: 'me',
+    time: timeStr,
+    encrypted: false,
+    vault: false,
+    status: 'sent',
+    _notes: true,
+  };
+}
+
+// buildReplyPayload: чистая сборка тела сообщения с "> quote"-префиксом для reply.
+// replyPreview — адаптер (App.vue передаёт стрелку через proxy).
+export function buildReplyPayload(text, { replyTo, replyPreview }) {
+  let payload = text;
+  if (replyTo) {
+    const quote = replyPreview(replyTo);
+    if (quote) payload = `> ${quote}\n\n${text}`;
+  }
+  return payload;
+}
+
+// buildSendingMessage: чистый optimistic-сообщение при отправке (peer/group).
+// envelopeId уже известен (envelopeId || pending). now/timeStr инъецируются.
+export function buildSendingMessage({ envelopeId, payload, ttl, now, timeStr, pendingIdOf }) {
+  return {
+    id: envelopeId || (pendingIdOf ? pendingIdOf() : ''),
+    content: payload,
+    from: 'me',
+    time: timeStr,
+    ts: now,
+    encrypted: true,
+    vault: true,
+    status: 'sending',
+    _pendingAt: now,
+    ttl: ttl || 0,
+    expireAt: ttl ? now + ttl * 1000 : 0,
+  };
+}
