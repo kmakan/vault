@@ -8,10 +8,10 @@
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
-import * as ContactsFeature from './contacts.js';
 import * as MsgFormat from '../message-format.js';
 
-export async function loadMessages(ctx, email) {
+export async function loadMessages(ctx, email, deps) {
+  const { isOutboundLetter, resolvePeerSender, resolveEventSender, findKnownPeerByKey } = deps;
       // Токен загрузки: если пользователь уже переключился на другой чат,
       // результаты этого (медленного) фетча применять нельзя — иначе
       // сообщения прошлого чата перезапишут новый.
@@ -118,7 +118,7 @@ export async function loadMessages(ctx, email) {
         // меток статуса наших сообщений (🟢 доставлено / 🔵 просмотрено).
         const wireAcks = {}; // msg_id -> {delivered: bool, read: bool}
         const rendered = await Promise.all(related.map(async (m) => {
-          const isOut = ContactsFeature.isOutboundLetter(m, aliases);
+          const isOut = isOutboundLetter(m, aliases);
           let content = m.subject || '(no subject)';
           let msgId = m.uid || m.id;
           let attachment = null;
@@ -149,7 +149,7 @@ export async function loadMessages(ctx, email) {
                 if (robj && robj.react === 1 && robj.msg_id && robj.emoji) {
                   (wireReactions[robj.msg_id] = wireReactions[robj.msg_id] || []).push({
                     emoji: robj.emoji,
-                    user: ContactsFeature.resolvePeerSender(isOut, email, ctx.email),
+                    user: resolvePeerSender(isOut, email, ctx.email),
                     action: robj.action === 'remove' ? 'remove' : 'add',
                   });
                   return null; // не сообщение
@@ -161,7 +161,7 @@ export async function loadMessages(ctx, email) {
                     text: robj.text || '',
                     action: robj.action === 'delete' ? 'delete' : 'edit',
                     date: robj.ts || m.date || 0,
-                    sender: robj.sender || ContactsFeature.resolveEventSender(isOut, email, m.from || ''),
+                    sender: robj.sender || resolveEventSender(isOut, email, m.from || ''),
                   });
                   return null; // не сообщение
                 }
@@ -186,7 +186,7 @@ export async function loadMessages(ctx, email) {
                 }
                 // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
                 //     («я онлайн»); отмечаем активность, в чат не показываем.
-                if (PresenceFeature.ingestSignal(ctx, robj, ContactsFeature.resolvePeerSender(isOut, email, ctx.email), new Date(m.date || Date.now()).getTime())) {
+                if (PresenceFeature.ingestSignal(ctx, robj, resolvePeerSender(isOut, email, ctx.email), new Date(m.date || Date.now()).getTime())) {
                   return null; // не сообщение
                 }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
@@ -225,7 +225,7 @@ export async function loadMessages(ctx, email) {
                 // Аватар/имя в конверте принадлежат отправителю письма:
                 //   входящее (isOut) -> собеседник (email), исходящее -> я (ctx.email).
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
-                const sender = ContactsFeature.resolvePeerSender(isOut, email, ctx.email);
+                const sender = resolvePeerSender(isOut, email, ctx.email);
                 // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — от меня самого
                 // (старый адрес после смены почты / копия в свой ящик). Не
                 // матчим как «смену почты», не сохраняем профиль — иначе
@@ -239,7 +239,7 @@ export async function loadMessages(ctx, email) {
                 // новый email к тому же контакту (копируем ключ), не требуя
                 // нового приглашения.
                 if (env.key && !isOut) {
-                  const oldEmail = ContactsFeature.findKnownPeerByKey(ctx.peerKeys, env.key, sender);
+                  const oldEmail = findKnownPeerByKey(ctx.peerKeys, env.key, sender);
                   if (oldEmail) {
                     // ANTI-PING-PONG: старое письмо (ts ≤ порога) не должно
                     // переименовывать назад — пропускаем письмо целиком

@@ -10,6 +10,13 @@ function EmailsFeature() { return import('./emails.js'); }
 function GroupsFeature() { return import('./groups.js'); }
 function MessagesFeature() { return import('./messages.js'); }
 function HistoryFeature() { return import('./history.js'); }
+// ADR-004 Этап D: feature-модули получают зависимости от других feature через
+// deps-инъекцию. Мост — единственное место, где их законно собрать (он и так
+// lazy-импортит фичи, чтобы не создавать цикл mailbox-api → feature → relay →
+// mailbox-api). Без deps incoming.js/messages.js падают на деструктуризации.
+function BounceFeature() { return import('./bounce.js'); }
+function ChannelsFeature() { return import('./channels.js'); }
+function ContactsFeature() { return import('./contacts.js'); }
 
 // Минимальный ctx-прокси: feature-модулю нужны только используемые поля.
 function makeCtx() {
@@ -43,12 +50,27 @@ export const mailboxApi = {
     if (api && typeof api.saveCursors === 'function') return api.saveCursors(accountId, cursors);
   },
   // ── incoming ──
+  // dep-сборка та же, что в App.vue (единственный владелец knows-how фич).
   async processIncoming(fetched, opts) {
-    const mod = await IncomingFeature();
-    return mod.processIncoming(makeCtx(), fetched, opts);
+    const [mod, bounce, channels] = await Promise.all([IncomingFeature(), BounceFeature(), ChannelsFeature()]);
+    return mod.processIncoming(makeCtx(), fetched, opts, {
+      isBounceMessage: bounce.isBounceMessage,
+      bounceRecipients: bounce.bounceRecipients,
+      bounceReason: bounce.bounceReason,
+      isChannelEnvelope: channels.isChannelEnvelope,
+      ingestChannelEnvelope: channels.ingestChannelEnvelope,
+    });
   },
   // ── loaders ──
-  async loadMessages(email) { const mod = await MessagesFeature(); return mod.loadMessages(makeCtx(), email); },
+  async loadMessages(email) {
+    const [mod, contacts] = await Promise.all([MessagesFeature(), ContactsFeature()]);
+    return mod.loadMessages(makeCtx(), email, {
+      isOutboundLetter: contacts.isOutboundLetter,
+      resolvePeerSender: contacts.resolvePeerSender,
+      resolveEventSender: contacts.resolveEventSender,
+      findKnownPeerByKey: contacts.findKnownPeerByKey,
+    });
+  },
   async loadGroups() { const mod = await GroupsFeature(); return mod.loadGroups(makeCtx()); },
   async loadEmails(silent = false) { const mod = await EmailsFeature(); return mod.loadEmails(makeCtx(), silent); },
   async loadGroupMessages(groupId, forceRescan = false) {

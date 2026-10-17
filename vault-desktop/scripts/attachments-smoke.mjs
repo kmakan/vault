@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createNotesStore } from '../src/features/notes-store.js';
+import * as ChatFeature from '../src/features/chat.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -79,6 +80,8 @@ prepareModuleCopy(
   MOCKS,
 );
 const A = await import(MOCKS + '/attachments.mjs');
+
+const ATTACH_DEPS = { resolveChatKey: ChatFeature.resolveChatKey };
 
 // ── Хелперы ────────────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -172,7 +175,7 @@ console.log('3. fetchDodAttachment (DoD-докачка)');
 {
   const ctx = makeCtx({ dodCache: { '<dod@x>': 'CACHED' } });
   const a = { name: 'f.bin', type: 'application/octet-stream', isDod: true, dod: '<dod@x>' };
-  await A.fetchDodAttachment(ctx, {}, a);
+  await A.fetchDodAttachment(ctx, {}, a, ATTACH_DEPS);
   check('dodCache попадание → data=кэш, dodStatus=ready', a.data === 'CACHED' && a.dodStatus === 'ready');
 
   tauri.calls.length = 0; tauri.body = 'ENCBODY';
@@ -180,20 +183,20 @@ console.log('3. fetchDodAttachment (DoD-докачка)');
   cryptoMock.decryptWithGroupKey = null;
   const ctx2 = makeCtx({ emails: [{ message_id: '<d2@x>', uid: 7, folder: 'INBOX' }] });
   const a2 = { name: 'big.bin', type: 'application/octet-stream', isDod: true, dod: '<d2@x>' };
-  await A.fetchDodAttachment(ctx2, {}, a2);
+  await A.fetchDodAttachment(ctx2, {}, a2, ATTACH_DEPS);
   check('успех: email_fetch_body + data=REAL + закэшировано',
     tauri.calls.some(c => c[0] === 'email_fetch_body') && a2.data === 'REAL' && a2.dodStatus === 'ready' && ctx2.dodCache['<d2@x>'] === 'REAL');
 
   cryptoMock.decryptVault = async () => dodEnvelope('<other@x>', 'X');
   const ctx3 = makeCtx({ emails: [{ message_id: '<d3@x>', uid: 8, folder: 'INBOX' }] });
   const a3 = { name: 'b.bin', type: 'x', isDod: true, dod: '<d3@x>' };
-  await A.fetchDodAttachment(ctx3, {}, a3);
+  await A.fetchDodAttachment(ctx3, {}, a3, ATTACH_DEPS);
   check('ref-mismatch → dodStatus=error, data не подставлен', a3.dodStatus === 'error' && a3.data === undefined);
 
   cryptoMock.decryptVault = async () => dodEnvelope('<d4@x>', 'Y');
   const ctx4 = makeCtx({ emails: [] });
   const a4 = { name: 'c.bin', type: 'x', isDod: true, dod: '<d4@x>' };
-  await A.fetchDodAttachment(ctx4, {}, a4);
+  await A.fetchDodAttachment(ctx4, {}, a4, ATTACH_DEPS);
   check('нет data-письма по Message-ID → dodStatus=error', a4.dodStatus === 'error');
 }
 
@@ -204,7 +207,7 @@ console.log('4. downloadDodAttachment');
   tauri.body = 'ENC'; cryptoMock.decryptVault = async () => dodEnvelope('<d5@x>', 'DL');
   const ctx = makeCtx({ emails: [{ message_id: '<d5@x>', uid: 9, folder: 'INBOX' }] });
   const a = { name: 'f.bin', type: 'x', isDod: true, dod: '<d5@x>' };
-  await A.downloadDodAttachment(ctx, {}, a);
+  await A.downloadDodAttachment(ctx, {}, a, ATTACH_DEPS);
   check('сначала докачивает, затем downloadBase64(data=DL)',
     a.dodStatus === 'ready' && dl.hits.length === 1 && dl.hits[0][0] === 'DL');
 }
@@ -217,7 +220,7 @@ console.log('5. sendAudioMessage — «Заметки для себя»');
   // Чистим перед тестом: состояние изолировано per-email через keyFor(email).
   ctx.notes.clear(ctx.email);
   apiMock.sendCalls.length = 0;
-  await A.sendAudioMessage(ctx, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' });
+  await A.sendAudioMessage(ctx, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' }, ATTACH_DEPS);
   check('заметка: сообщение в messages (audio), почта НЕ трогалась',
     ctx.chat.list().length === 1 && ctx.chat.list()[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
   check('заметка сохранена в notes-store', ctx.notes.load(ctx.email).length === 1);
@@ -235,7 +238,7 @@ console.log('6. handleFileSelect — лимит провайдера');
   const ctx = makeCtx();
   apiMock.sendCalls.length = 0;
   const event = { target: { files: [{ name: 'huge.bin', size: 30 * 1024 * 1024, type: 'application/octet-stream' }], value: 'x' } };
-  await A.handleFileSelect(ctx, event);
+  await A.handleFileSelect(ctx, event, ATTACH_DEPS);
   check('файл > 70% лимита → alert, почта НЕ трогалась, input сброшен',
     alerts.length === 1 && apiMock.sendCalls.length === 0 && event.target.value === '');
   delete globalThis.alert;

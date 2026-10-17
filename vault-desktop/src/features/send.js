@@ -9,12 +9,11 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import * as EnvelopeId from './envelope-id.js';
-import * as ChatFeature from './chat.js';
-import * as ContactsFeature from './contacts.js';
-import * as AttachmentsFeature from './attachments.js';
 import * as MsgFormat from '../message-format.js';
 
-export async function sendMessage(ctx) {
+export async function sendMessage(ctx, deps) {
+  const { resolveChatKey, isRecentDuplicate, buildReplyPayload, buildNoteMessage,
+          buildSendingMessage, isPeerEncrypted, encryptPeerVaultEnvelope } = deps;
       if (!ctx.newMessage.trim()) return;
       // Канал (M2): отдельный путь — пост-конверт с broadcast-ключом,
       // composer только владельца (UI-гейт + проверка в sendChannelPost).
@@ -32,11 +31,11 @@ export async function sendMessage(ctx) {
       // Анти-дубль ПОСЛЕ отправки: двойной Enter с паузой (первая отправка
       // уже завершилась) — тот же текст в тот же чат в течение 30 секунд
       // один раз»).
-      const chatId = ChatFeature.resolveChatKey({
+      const chatId = resolveChatKey({
         activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
       });
       const text = ctx.newMessage.trim();
-      if (ChatFeature.isRecentDuplicate({ lastSend: ctx.lastSend, chatId, text, now: Date.now() })) {
+      if (isRecentDuplicate({ lastSend: ctx.lastSend, chatId, text, now: Date.now() })) {
         console.log('[sendMessage] duplicate ignored (same text sent recently)');
         return;
       }
@@ -56,7 +55,7 @@ export async function sendMessage(ctx) {
         const fullText = quote ? `> ${quote}\n\n${newText}` : newText;
         msg.content = fullText;
         msg.edited = true;
-        const chatKey = ChatFeature.resolveChatKey({
+        const chatKey = resolveChatKey({
           activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
         });
         ctx.recordLocalEdit(chatKey, msg.id, fullText, 'edit');
@@ -72,7 +71,7 @@ export async function sendMessage(ctx) {
         ctx._sendingWatchdog = setTimeout(() => { ctx.setSending(false); }, 60000);
         // If replying, prefix the message with a "> quote" block (kept in plaintext —
         // the whole thing is still enclosed in the vault AAD-encrypted payload below).
-        const payload = ChatFeature.buildReplyPayload(ctx.newMessage, {
+        const payload = buildReplyPayload(ctx.newMessage, {
           replyTo: ctx.replyTo, replyPreview: (m) => ctx.replyPreview(m),
         });
         // Очищаем поле и ответ СРАЗУ — SMTP медленный (30–60 с), UI не должен
@@ -86,7 +85,7 @@ export async function sendMessage(ctx) {
         // Заметки для себя: локальная запись без почты и шифрования.
         if (ctx.activeChat === '__notes__') {
           const now = Date.now();
-          const note = ChatFeature.buildNoteMessage(payload, { now, timeStr: MsgFormat.formatTimeLabel(now) });
+          const note = buildNoteMessage(payload, { now, timeStr: MsgFormat.formatTimeLabel(now) });
           // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
           // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
           if (!ctx.notes.add(ctx.email, note)) {
@@ -135,7 +134,7 @@ export async function sendMessage(ctx) {
           // Запись регистрируется в pendingOutgoing: поллинг подмешивает её
           // обратно, пока письмо не сделает круг через ящик (mergePending).
           const gNow = Date.now();
-          const pendingMsg = ChatFeature.buildSendingMessage({
+          const pendingMsg = buildSendingMessage({
             envelopeId, payload, ttl: 0, now: gNow,
             timeStr: MsgFormat.formatTimeLabel(gNow),
             pendingIdOf: EnvelopeId.pendingIdOf,
@@ -178,10 +177,10 @@ export async function sendMessage(ctx) {
           ctx.saveCurrentHistory('group:' + ctx.currentGroup.id);
         } else {
           // Regular chat message
-          if (ContactsFeature.isPeerEncrypted(ctx.peerKeys, ctx.cryptoReady, ctx.activeChat)) {
+          if (isPeerEncrypted(ctx.peerKeys, ctx.cryptoReady, ctx.activeChat)) {
             // Encrypt as a vault message (AAD="VAULT") so the peer can recognize
             // and authenticate it as ours.
-            content = await AttachmentsFeature.encryptPeerVaultEnvelope(envelope, {
+            content = await encryptPeerVaultEnvelope(envelope, {
               activeChat: ctx.activeChat, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys,
               cryptoReady: ctx.cryptoReady, crypto,
             });
@@ -191,7 +190,7 @@ export async function sendMessage(ctx) {
           // регистрируется в pendingOutgoing: поллинг подмешивает её обратно,
           // пока письмо не сделает круг через ящик (mergePending).
           const sNow = Date.now();
-          const pendingMsg = ChatFeature.buildSendingMessage({
+          const pendingMsg = buildSendingMessage({
             envelopeId, payload, ttl, now: sNow,
             timeStr: MsgFormat.formatTimeLabel(sNow),
             pendingIdOf: EnvelopeId.pendingIdOf,

@@ -1011,6 +1011,8 @@ import * as GroupMetaFeature from './features/group-meta.js';
 import * as ReceiptsFeature from './features/receipts.js';
 import * as MembersFeature from './features/members.js';
 import * as SendFeature from './features/send.js';
+import * as ChatFeature from './features/chat.js';
+import * as BounceFeature from './features/bounce.js';
 import * as RecoveryFeature from './features/recovery.js';
 // Durable-маркер прерванного восстановления (fix/recovery-resilience):
 // блокирует авто-вход/обычный логин/генерацию ключей, пока восстановление не
@@ -2530,8 +2532,8 @@ async toggleVoiceNote(msg, attachment) {
         showToast: (m, ms) => uiStore.toast(m, ms), t: this.t,
       }, msg, attachment);
     },
-    async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment); },
-    async downloadDodAttachment(msg, attachment) { return AttachmentsFeature.downloadDodAttachment(this, msg, attachment); },
+    async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment, { resolveChatKey: ChatFeature.resolveChatKey }); },
+    async downloadDodAttachment(msg, attachment) { return AttachmentsFeature.downloadDodAttachment(this, msg, attachment, { resolveChatKey: ChatFeature.resolveChatKey }); },
     // Было: AttachmentsFeature.openImageViewer(this, attachment) — обёртка без
 // логики, удалена (ADR-001).
 openImageViewer(attachment) { this.viewingImage = attachment; },
@@ -3663,7 +3665,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       } catch (e) { /* тихо */ }
     },
     // ── Сообщения 1:1 (логика в features/messages.js) — тонкий делегат ──
-    async loadMessages(email) { return MessagesFeature.loadMessages(this, email); },
+    async loadMessages(email) { return MessagesFeature.loadMessages(this, email, { isOutboundLetter: ContactsFeature.isOutboundLetter, resolvePeerSender: ContactsFeature.resolvePeerSender, resolveEventSender: ContactsFeature.resolveEventSender, findKnownPeerByKey: ContactsFeature.findKnownPeerByKey }); },
     // Полный рескан группы: письма, «застрявшие за курсором» из-за
     // разового сбоя (session desync / DNS / троттлинг), инкрементальный фетч
     // больше не вернёт. Кнопка в шапке группы делает полный IMAP-скан папок
@@ -4017,7 +4019,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       reader.readAsDataURL(file);
     },
     // ── Отправка 1:1 (логика в features/send.js) — тонкий делегат ──
-    async sendMessage() { return SendFeature.sendMessage(this); },
+    async sendMessage() { return SendFeature.sendMessage(this, { resolveChatKey: ChatFeature.resolveChatKey, isRecentDuplicate: ChatFeature.isRecentDuplicate, buildReplyPayload: ChatFeature.buildReplyPayload, buildNoteMessage: ChatFeature.buildNoteMessage, buildSendingMessage: ChatFeature.buildSendingMessage, isPeerEncrypted: ContactsFeature.isPeerEncrypted, encryptPeerVaultEnvelope: AttachmentsFeature.encryptPeerVaultEnvelope }); },
     searchMessages() {
       alert('Search coming soon!');
     },
@@ -4117,7 +4119,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
     // Входящие конверты (router) — логика в features/incoming.js; Этап 4
     // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
-    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts); },
+    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts, { isChannelEnvelope: ChannelsFeature.isChannelEnvelope, ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope, isBounceMessage: BounceFeature.isBounceMessage, bounceRecipients: BounceFeature.bounceRecipients, bounceReason: BounceFeature.bounceReason }); },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {
@@ -4295,8 +4297,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.showEmojiPicker = false
     },
     // ── Аудио/файлы-вложения (логика в features/attachments.js) ──
-    async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage(this, audioData); },
-    async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect(this, event); },
+    async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage(this, audioData, { resolveChatKey: ChatFeature.resolveChatKey }); },
+    async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect(this, event, { resolveChatKey: ChatFeature.resolveChatKey }); },
     // Мерж сохранённых реакций + реакций из писем — features/reactions.js.
     // Отправитель письма — мы сами: sender_id это сырой заголовок From
     // («Имя <email>» или просто email). userId — рудимент серверной эпохи,

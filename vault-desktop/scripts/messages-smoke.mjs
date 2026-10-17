@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
+import * as ContactsFeature from '../src/features/contacts.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -37,6 +38,13 @@ prepareModuleCopy(
   MOCKS,
 );
 const M = await import(MOCKS + '/messages.mjs');
+
+const MSGS_DEPS = {
+  isOutboundLetter: ContactsFeature.isOutboundLetter,
+  resolvePeerSender: ContactsFeature.resolvePeerSender,
+  resolveEventSender: ContactsFeature.resolveEventSender,
+  findKnownPeerByKey: ContactsFeature.findKnownPeerByKey,
+};
 
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
@@ -84,7 +92,7 @@ console.log('1. crypto-фильтр: не-Vault письмо отбрасыва�
   cryptoMock.decryptVault = async () => { throw new Error('AAD mismatch'); };
   const ctx = makeCtx({ emails: [mail('ENC:foreign', 'peer@x.ru', '<f@x>', 1)] });
   withBody(ctx, ctx.emails[0], 'ENC:foreign');
-  await M.loadMessages(ctx, 'peer@x.ru');
+  await M.loadMessages(ctx, 'peer@x.ru', MSGS_DEPS);
    check('не расшифровалось → не рендерится (список пуст)', ctx.chat.state.messages.length === 0);
 }
 
@@ -94,7 +102,7 @@ console.log('2. конверт {vault:1,text} от собеседника рен
   cryptoMock.decryptVault = async () => JSON.stringify({ vault: 1, id: 'ev1', text: 'привет!' });
   const ctx = makeCtx({ emails: [mail('ENC:1', 'peer@x.ru', '<a@x>', 1)] });
   withBody(ctx, ctx.emails[0], 'ENC:1');
-  await M.loadMessages(ctx, 'peer@x.ru');
+  await M.loadMessages(ctx, 'peer@x.ru', MSGS_DEPS);
   check('сообщение отрисовано: content=текст конверта, from=them, id=ev1',
     ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0].content === 'привет!' && ctx.chat.state.messages[0].from === 'them' && ctx.chat.state.messages[0].id === 'ev1');
 }
@@ -113,7 +121,7 @@ console.log('3. реакция/квитанция/edit/call НЕ рендеря�
     parseCallSignal: (t) => { try { const o = JSON.parse(t); return (o && o.type === 'call_request') ? o : null; } catch (e) { return null; } },
   });
   withBody(ctx, ctx.emails[0], 'ENC:r'); withBody(ctx, ctx.emails[1], 'ENC:k'); withBody(ctx, ctx.emails[2], 'ENC:c');
-  await M.loadMessages(ctx, 'peer@x.ru');
+  await M.loadMessages(ctx, 'peer@x.ru', MSGS_DEPS);
   check('реакция/квитанция/call не дали карточек (список пуст)', ctx.chat.state.messages.length === 0);
 }
 
@@ -124,7 +132,7 @@ console.log('4. stale-guard: activeChat сменился → messages не пе�
   const ctx = makeCtx({ emails: [mail('ENC:x', 'peer@x.ru', '<x@x>', 1)], activeChat: 'other@x.ru' });
   ctx.chat.set(['KEEP']);
   withBody(ctx, ctx.emails[0], 'ENC:x');
-  await M.loadMessages(ctx, 'peer@x.ru');
+  await M.loadMessages(ctx, 'peer@x.ru', MSGS_DEPS);
   check('stale → messages не тронуты (KEEP)', Array.isArray(ctx.chat.state.messages) && ctx.chat.state.messages[0] === 'KEEP');
 }
 

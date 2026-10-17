@@ -14,8 +14,6 @@ import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
-import * as ChannelsFeature from './channels.js';
-import * as BounceFeature from './bounce.js';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
@@ -35,7 +33,9 @@ function byArrival(a, b) {
 }
 
 // ── Драйвер: батч-доставка тел по папкам + цикл классификации ──────────────
-export async function processIncoming(ctx, fetched, { notify = false } = {}) {
+export async function processIncoming(ctx, fetched, opts = {}, deps) {
+  const { isBounceMessage, bounceRecipients, bounceReason, isChannelEnvelope, ingestChannelEnvelope } = deps;
+  const { notify = false } = opts;
   if (!fetched || !fetched.length || !ctx.cryptoReady) return;
   const myEmail = (ctx.email || '').toLowerCase();
   // Срез ДО сортировки: MAX_POOL отбирает 50 НОВЕЙШИХ писем батча (как было).
@@ -56,7 +56,7 @@ export async function processIncoming(ctx, fetched, { notify = false } = {}) {
     const from = ctx.senderEmail(m.from);
     // Пропускаем исходящие (от себя) и пустые from.
     if (!from || from === myEmail) continue;
-    const cls = await classify(ctx, m, from);
+    const cls = await classify(ctx, m, from, deps);
     if (cls === null) continue;
     if (cls.kind === 'message') {
       // M1.10: persist classified message via Rust MessageStore bridge
@@ -106,7 +106,8 @@ async function ensureBodies(ctx, pool) {
 // Возвращает {kind:'message', chatKey, title, envId} для сообщения,
 // null — если письмо не должно попасть в счётчик/уведомления (в т.ч. после
 // выполнения побочных эффектов: call-сигнал, профиль, миграция).
-async function classify(ctx, m, from) {
+async function classify(ctx, m, from, deps) {
+  const { isBounceMessage, bounceRecipients, bounceReason, isChannelEnvelope, ingestChannelEnvelope } = deps;
   // Ignore-лист: сообщения/звонки заблокированного скрыты у получателя
   // целиком — не считаются, не уведомляют, в историю не пишутся
   // (continue ДО расшифровки и ДО дедуп-механики: письмо остаётся
@@ -122,9 +123,9 @@ async function classify(ctx, m, from) {
   // (инцидент 12.10.2026). Теперь баунс гасит исходящий вызов сразу — но
   // только если релей-копия НЕ была принята (см. calls.js: onMailBounce:
   // relayDelivered). Баунс дубля-письма живой (релейный) вызов не рвёт.
-  if (BounceFeature.isBounceMessage(from, m.subject)) {
-    const recipients = BounceFeature.bounceRecipients(body);
-    const reason = BounceFeature.bounceReason(body);
+  if (isBounceMessage(from, m.subject)) {
+    const recipients = bounceRecipients(body);
+    const reason = bounceReason(body);
     console.log('[mail] bounce: recipients=' + (recipients.join(',') || '?')
       + ' reason=' + (reason || '?'));
     try { await ctx.onMailBounce(recipients, reason); }
@@ -324,8 +325,8 @@ async function classify(ctx, m, from) {
       try {
         const plain = await crypto.decryptWithGroupKey(body, ch.key);
         const robj = ctx.parseEnvelope(plain) || JSON.parse(plain);
-        if (ChannelsFeature.isChannelEnvelope(robj)) {
-          const kind = ChannelsFeature.ingestChannelEnvelope(ctx, robj, from);
+        if (isChannelEnvelope(robj)) {
+          const kind = ingestChannelEnvelope(ctx, robj, from);
           if (kind) {
             console.log('[channel] envelope', kind, 'from', from, 'chan', ch.id);
             // post — как сообщение (бейдж+пуш); meta/hello — тихие

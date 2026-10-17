@@ -7,6 +7,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createNotesStore } from '../src/features/notes-store.js';
+import * as ChatFeature from '../src/features/chat.js';
+import * as ContactsFeature from '../src/features/contacts.js';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -57,6 +59,23 @@ prepareModuleCopy(
   MOCKS,
 );
 const S = await import(MOCKS + '/send.mjs');
+
+// deps injection для sendMessage (chat.js, contacts.js — чистые модули;
+// encryptPeerVaultEnvelope реализована inline — совпадает с features/attachments.js).
+const encryptPeerVaultEnvelope = async (envelope, { activeChat, peerKeys, peerPqKeys, cryptoReady, crypto }) => {
+  if (!cryptoReady || !peerKeys || !peerKeys[activeChat]) return envelope;
+  crypto.setPeerPublicKey(peerKeys[activeChat], peerPqKeys && peerPqKeys[activeChat]);
+  return await crypto.encryptVault(envelope);
+};
+const SEND_DEPS = {
+  resolveChatKey: ChatFeature.resolveChatKey,
+  isRecentDuplicate: ChatFeature.isRecentDuplicate,
+  buildReplyPayload: ChatFeature.buildReplyPayload,
+  buildNoteMessage: ChatFeature.buildNoteMessage,
+  buildSendingMessage: ChatFeature.buildSendingMessage,
+  isPeerEncrypted: ContactsFeature.isPeerEncrypted,
+  encryptPeerVaultEnvelope,
+};
 
 // браузерные глобалы, отсутствующие в Node (в Tauri/WebView есть)
 globalThis.alert = () => {};
@@ -116,11 +135,11 @@ const tick = () => new Promise(r => setTimeout(r, 5));
 console.log('1. guards: пустое сообщение / sending / заблокирован');
 {
   apiMock.sent.length = 0;
-  await S.sendMessage(makeCtx({ newMessage: '   ' }));
+  await S.sendMessage(makeCtx({ newMessage: '   ' }), SEND_DEPS);
   check('пустой ввод → ничего не отправлено', apiMock.sent.length === 0);
-  await S.sendMessage(makeCtx({ sending: true }));
+  await S.sendMessage(makeCtx({ sending: true }), SEND_DEPS);
   check('sending=true → повторный вызов игнорируется', apiMock.sent.length === 0);
-  await S.sendMessage(makeCtx({ activeChatType: 'chat', isIgnored: () => true }));
+  await S.sendMessage(makeCtx({ activeChatType: 'chat', isIgnored: () => true }), SEND_DEPS);
   check('заблокированный чат (activeChatType=chat) → не отправлено', apiMock.sent.length === 0);
 }
 
@@ -131,7 +150,7 @@ console.log('2. «Заметки для себя» — локально, поч�
   const ctx = makeCtx({ activeChat: '__notes__', newMessage: 'заметка' });
   // notes-store использует localStorage (мок globalThis.localStorage).
   ctx.notes.clear(ctx.email);
-  await S.sendMessage(ctx);
+  await S.sendMessage(ctx, SEND_DEPS);
   check('заметка сохранена локально, почта НЕ трогалась',
     ctx.notes.load(ctx.email).length === 1 && apiMock.sent.length === 0);
   check('поле ввода очищено', ctx.newMessage === '');
@@ -142,7 +161,7 @@ console.log('3. 1:1: конверт→шифр→api.sendMessage→статус 
 {
   apiMock.sent.length = 0;
   const ctx = makeCtx({ newMessage: 'тест' });
-  await S.sendMessage(ctx);
+  await S.sendMessage(ctx, SEND_DEPS);
   // оптимистичный предпросмотр должен появиться СРАЗУ (до await api.sendMessage)
   check('оптимистичный предпросмотр добавлен в messages', ctx.chat.list().length === 1 && ctx.chat.list()[0].from === 'me');
   check('поле ввода очищено сразу', ctx.newMessage === '');
@@ -157,7 +176,7 @@ console.log('4. группа: шифрование групповым ключо
 {
   apiMock.sent.length = 0;
   const ctx = makeCtx({ activeChatType: 'group', currentGroup: { id: 'G1' }, groupKeys: { G1: 'GK' }, newMessage: 'группа' });
-  await S.sendMessage(ctx);
+  await S.sendMessage(ctx, SEND_DEPS);
   await tick();
   check('api.sendGroupMessage вызван с групповым шифром (GENC(...))',
     apiMock.sent.length === 1 && apiMock.sent[0][0] === 'grp' && String(apiMock.sent[0][2]).startsWith('GENC('));
@@ -170,7 +189,7 @@ console.log('5. сбой api.sendMessage → статус failed');
   apiMock.sent.length = 0;
   apiMock.sendMessage = async () => { throw new Error('smtp down'); };
   const ctx = makeCtx({ newMessage: 'упс' });
-  await S.sendMessage(ctx);
+  await S.sendMessage(ctx, SEND_DEPS);
   await tick();
   check('предпросмотр статус failed при сбое', ctx.chat.list()[0] && ctx.chat.list()[0].status === 'failed');
   // restore

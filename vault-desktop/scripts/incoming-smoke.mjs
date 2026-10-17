@@ -62,8 +62,6 @@ prepareModuleCopy(
     '../relay-client.js': 'relay-client.js',
     '../notify.js': 'notify.js',
     './presence.js': 'presence.js',
-    './channels.js': 'channels.js',
-    './bounce.js': 'bounce.js',
   },
   MOCKS,
 );
@@ -87,6 +85,16 @@ prepareModuleCopy(
 writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
 writeFileSync(MOCKS + '/channels.js', 'export * from "' + MOCKS + '/channels-real.mjs";');
 const { processIncoming } = await import(MOCKS + '/incoming.mjs');
+// deps: чистые функции из bounce.js (re-export реального) и channels.js (real copy)
+const BounceFeature = await import(MOCKS + '/bounce.js');
+const ChannelsFeature = await import(MOCKS + '/channels-real.mjs');
+const INCOMING_DEPS = {
+  isBounceMessage: BounceFeature.isBounceMessage,
+  bounceRecipients: BounceFeature.bounceRecipients,
+  bounceReason: BounceFeature.bounceReason,
+  isChannelEnvelope: ChannelsFeature.isChannelEnvelope,
+  ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope,
+};
 
 // ── Хелперы тестов ─────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -165,8 +173,8 @@ function withBody(ctx, m, b) { ctx.emailBodyCache[`${m.folder || 'INBOX'}:${m.ui
 console.log('1. Пустой/не-Vault/своё письмо — полный no-op');
 {
   const ctx = makeCtx();
-  await processIncoming(ctx, [], { notify: true });
-  await processIncoming(ctx, [msg({ from: { address: 'me@x.ru' } })], { notify: true });
+  await processIncoming(ctx, [], { notify: true }, INCOMING_DEPS);
+  await processIncoming(ctx, [msg({ from: { address: 'me@x.ru' } })], { notify: true }, INCOMING_DEPS);
   withBody(ctx, msg(), 'ENC:1'); // ignored ниже
   check('пустой fetched и self — ничего не случилось', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
 }
@@ -175,7 +183,7 @@ console.log('2. plain-письмо без Vault-конверта — пропу�
 {
   const ctx = makeCtx();
   withBody(ctx, msg(), 'plain text');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('не Vault — не считаем', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
 }
 
@@ -185,7 +193,7 @@ console.log('3. ignore-лист: ДО расшифровки, ДО дедупа 
   ctx.isIgnored = () => true;
   cryptoMock.decryptVault = async () => { throw new Error('не должно вызываться'); };
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('нет unread, нет notify, НЕТ записи в дедуп', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0 && ctx.processedUnreadIds.size === 0);
 }
 
@@ -196,7 +204,7 @@ console.log('4. call-сигнал: handler дёрнут, счётчик не р�
   ctx.parseCallSignal = () => ({ type: 'call_request' });
   cryptoMock.decryptVault = async () => 'callbody';
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('handleCallSignal вызван 1 раз', ctx.callSignals === 1);
   check('нет unread/notify/дедупа', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0 && ctx.processedUnreadIds.size === 0);
 }
@@ -207,7 +215,7 @@ console.log('5. эхо (свой ключ в конверте): seen, но не 
   ctx.peerKeys['peer@x.ru'] = 'PEERK';
   cryptoMock.decryptVault = async () => ({ __env: { key: 'MY_PUB', id: 'e1', text: 'hi' } });
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('эхо помечено seen (mid в дедуп-сете)', ctx.processedUnreadIds.has('1|INBOX'));
   check('но unread/notify нет', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
 }
@@ -219,7 +227,7 @@ console.log('6. профиль: saveProfile вызван, seen, не уведо�
   cryptoMock.decryptVault = async () => ({ __env: { type: 'profile', name: 'Пир', avatar: 'a1', ts: 1 } });
   withBody(ctx, msg(), 'ENC:1');
   apiMock.profileCalls = [];
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('saveProfile вызван', apiMock.profileCalls.length === 1);
   check('профиль seen, не считаем/не шлём', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
 }
@@ -230,7 +238,7 @@ console.log('7. новое сообщение: unread +1, notify FIRE один �
   ctx.peerKeys['peer@x.ru'] = 'PEERK';
   cryptoMock.decryptVault = async () => ({ __env: { id: 'env9', key: 'PEERK', text: 'hello' } });
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
   check('FIRE ровно один, id=dk (mid:Message-ID)', notifyMock.fires.length === 1 && notifyMock.fires[0].id === 'mid:<m1@x>');
   check('все три ключа дедупа занесены', ctx.processedUnreadIds.has('1|INBOX') && ctx.processedUnreadIds.has('mid:<m1@x>') && ctx.processedUnreadIds.has('env:env9'));
@@ -242,9 +250,9 @@ console.log('8. повтор того же письма (mid в дедупе): �
   ctx.peerKeys['peer@x.ru'] = 'PEERK';
   cryptoMock.decryptVault = async () => ({ __env: { id: 'env9', key: 'PEERK', text: 'hello' } });
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: false }); // тихий поллинг съел
+  await processIncoming(ctx, [msg()], { notify: false }, INCOMING_DEPS); // тихий поллинг съел
   const unreadAfterPoll = ctx.unreadCounts['peer@x.ru'] || 0;
-  await processIncoming(ctx, [msg()], { notify: true });  // монитор принёс то же письмо
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);  // монитор принёс то же письмо
   check('unread не удвоился', ctx.unreadCounts['peer@x.ru'] === unreadAfterPoll);
   check('дубль notify не пошёл (notify.js дедупит по id, FIRE не должен дублироваться на уровне вызова — здесь gated counted)', true);
 }
@@ -257,7 +265,7 @@ console.log('9. relay-копия + email-копия (один env.id, разны
   const relayCopy = msg({ uid: 'rl-1', message_id: '<r1@x>' });
   const mailCopy = msg({ uid: 99, message_id: '<e1@x>' });
   withBody(ctx, relayCopy, 'ENC:1'); withBody(ctx, mailCopy, 'ENC:1');
-  await processIncoming(ctx, [relayCopy, mailCopy], { notify: true });
+  await processIncoming(ctx, [relayCopy, mailCopy], { notify: true }, INCOMING_DEPS);
   check('кросс-канальный дедуп: 1 unread', ctx.unreadCounts['peer@x.ru'] === 1);
 }
 
@@ -269,7 +277,7 @@ console.log('10. stale-письмо (fresh=false): unread растёт, notify �
   const old = msg({ uid: 10, message_id: '<o@x>', date: new Date(NOW - 16 * 60 * 1000).toISOString() });
   withBody(ctx, old, 'ENC:1');
   const f0 = firesFrom();
-  await processIncoming(ctx, [old], { notify: true });
+  await processIncoming(ctx, [old], { notify: true }, INCOMING_DEPS);
   check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
   check('notify не FIRE (stale)', notifyMock.fires.length === f0);
 }
@@ -282,7 +290,7 @@ console.log('11. muted-чат: unread растёт, notify нет');
   cryptoMock.decryptVault = async () => ({ __env: { id: 'e11', key: 'PEERK', text: 'm' } });
   withBody(ctx, msg(), 'ENC:1');
   const f0 = firesFrom();
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
   check('muted: notify нет', notifyMock.fires.length === f0);
 }
@@ -295,7 +303,7 @@ console.log('12. видимый чат: ни бейджа, ни пуша');
   cryptoMock.decryptVault = async () => ({ __env: { id: 'e12', key: 'PEERK', text: 'v' } });
   withBody(ctx, msg(), 'ENC:1');
   const f0 = firesFrom();
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('нет unread (чат открыт)', ctx.unreadCounts['peer@x.ru'] === undefined);
   check('нет notify (чат открыт)', notifyMock.fires.length === f0);
 }
@@ -308,7 +316,7 @@ console.log('13. группа: расшифровка групповым клю�
   ctx.peerKeys = {}; // 1:1-пути нет
   cryptoMock.decryptWithGroupKey = async () => ({ __env: { id: 'ge1', key: 'GK', text: 'gm' } });
   withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true });
+  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
   check('unread группы +1', ctx.unreadCounts['group:g1'] === 1);
   check('notify title = имя группы', notifyMock.fires.length >= 1 && notifyMock.fires[notifyMock.fires.length - 1].title === 'Группа');
 }
@@ -329,7 +337,7 @@ console.log('14. смена почты (fingerprint-миграция): ключ 
   cryptoMock.decryptVault = async () => ({ __env: { key: 'OLDK', id: 'fe1', text: 'moved' } });
   const m = msg({ from: { address: 'new@x.ru' }, uid: 14, message_id: '<f@x>' });
   withBody(ctx, m, 'ENC:1');
-  await processIncoming(ctx, [m], { notify: true });
+  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
   // ADR-003 §5.1: перенос теперь идёт ОТ ТЕКУЩЕГО адреса по цепочке алиасов,
   // поэтому проверяется именно он — а не «со старого на новый». Прежний
   // одиночный перенос так умел; цепочка умеет больше (ADR-003 §5.1).
@@ -354,7 +362,7 @@ console.log('15. пул >50: усечение до 50 (как было)');
     ctx.emailBodyCache[`${m.folder}:${m.uid}`] = 'ENC:1';
     fetched.push(m);
   }
-  await processIncoming(ctx, fetched, { notify: false });
+  await processIncoming(ctx, fetched, { notify: false }, INCOMING_DEPS);
   check('обработано ровно 50', ctx.processedUnreadIds.size >= 50 && ctx.unreadCounts['peer@x.ru'] === 50);
 }
 
@@ -388,7 +396,7 @@ console.log('16. ГОНКА ПОРЯДКА БАТЧА (t_674c770f): cancel пе�
   const can = msg({ uid: 102, message_id: '<can@x>', date: new Date(newer).toISOString() });
   withBody(ctx, req, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'cX' }));
   withBody(ctx, can, 'ENC:' + JSON.stringify({ type: 'call_cancel', call_id: 'cX' }));
-  await processIncoming(ctx, [can, req], { notify: true }); // как вернул IMAP
+  await processIncoming(ctx, [can, req], { notify: true }, INCOMING_DEPS); // как вернул IMAP
   // Ожидаем ровно: call_request → incoming_ringing (звонок звонит) →
   // call_cancel (тот же звонок гаснет по отбою звонящего).
   check('request разобран ПЕРВЫМ (звонок успел зазвонить)',
@@ -411,7 +419,7 @@ console.log('17. сортировка батча: UID сравнивается �
   const m9 = msg({ uid: 9, message_id: '<m9@x>', date: same });
   const m10 = msg({ uid: 10, message_id: '<m10@x>', date: same });
   withBody(ctx, m9, 'ENC:1'); withBody(ctx, m10, 'ENC:1');
-  await processIncoming(ctx, [m10, m9], { notify: true });
+  await processIncoming(ctx, [m10, m9], { notify: true }, INCOMING_DEPS);
   // Оба учтены независимо от порядка (дедуп не сломан).
   check('оба письма учтены (uid 9 и 10 не склеились в дедупе)',
     ctx.unreadCounts['peer@x.ru'] === 2 && seenOrder.length === 0,
@@ -427,7 +435,7 @@ console.log('18. дедуп обычных сообщений не сломан 
   const a = msg({ uid: 201, message_id: '<a@x>', date: new Date(NOW - 60 * 1000).toISOString() });
   const b = msg({ uid: 202, message_id: '<b@x>', date: new Date(NOW - 10 * 1000).toISOString() });
   withBody(ctx, a, 'ENC:1'); withBody(ctx, b, 'ENC:1');
-  await processIncoming(ctx, [b, a], { notify: true });
+  await processIncoming(ctx, [b, a], { notify: true }, INCOMING_DEPS);
   check('один env.id учтён один раз', ctx.unreadCounts['peer@x.ru'] === 1,
     { unread: ctx.unreadCounts['peer@x.ru'] });
 }
@@ -455,7 +463,7 @@ console.log('18. DSN/баунс (MAILER-DAEMON): распознан до рас�
   withBody(ctx, m, dsn);
   cryptoMock.decryptVault = async () => { throw new Error('DSN не шифруется — вызова быть не должно'); };
   const dsnFires0 = firesFrom();
-  await processIncoming(ctx, [m], { notify: true });
+  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
   check('onMailBounce вызван 1 раз', ctx.bounceCalls.length === 1, ctx.bounceCalls);
   const call0 = ctx.bounceCalls[0] || {};
   check('получатель распознан (peer@x.ru)', (call0.recipients || []).includes('peer@x.ru'), call0);
@@ -474,7 +482,7 @@ console.log('19. баунс не от собеседника-демона, но 
   });
   withBody(ctx, m, 'Reporting-MTA: dns\nTo: peer@x.ru\nStatus: 5.1.1');
   const dsn2Fires0 = firesFrom();
-  await processIncoming(ctx, [m], { notify: true });
+  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
   check('баунс по теме отдан в onMailBounce', ctx.bounceCalls.length === 1, ctx.bounceCalls);
   check('нет unread/notify', notifyMock.fires.length === dsn2Fires0);
 }
@@ -496,7 +504,7 @@ console.log('20. ЗВОНОК под незнакомым адресом (fp-nam
   ctx.handleCallSignal = async function (sig, from) { got.push([sig.type, sig.call_id, from]); };
   const m = msg({ from: { address: 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx' }, uid: 20, message_id: '<ns@x>' });
   withBody(ctx, m, 'ENC:1');
-  await processIncoming(ctx, [m], { notify: true });
+  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
   check('сигнал звонка доставлен под новым адресом',
     got.length === 1 && got[0][0] === 'call_request' && got[0][1] === 'c-ns1', got);
   check('адрес отправителя — ИЗВЕСТНЫЙ адрес пира, не fp:',

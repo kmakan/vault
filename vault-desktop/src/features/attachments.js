@@ -22,7 +22,6 @@ import crypto from '../crypto.js';
 import { downloadBase64 } from '../chatExport.js';
 import { getAttachmentLimitMb } from '../mailProviders.js';
 import * as EnvelopeId from './envelope-id.js';
-import * as ChatFeature from './chat.js';
 
 // ── Отдача / просмотр ──────────────────────────────────────────
 // ADR-001: зависимостей нет — файл просто отдаётся на скачивание.
@@ -97,11 +96,11 @@ export function findDodLetter(emails, messageId) {
   return (emails || []).find(m => (m.message_id || '').trim() === id);
 }
 
-export async function fetchDodAttachment(ctx, msg, attachment) {
+export async function fetchDodAttachment(ctx, msg, attachment, deps) {
   if (!attachment || !attachment.isDod || !attachment.dod) return;
   if (isDodReady(attachment)) return;
   attachment.dodStatus = 'loading';
-  const chatKey = ChatFeature.resolveChatKey({
+  const chatKey = deps.resolveChatKey({
     activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
   });
   try {
@@ -146,9 +145,9 @@ export async function fetchDodAttachment(ctx, msg, attachment) {
   try { ctx.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
 }
 
-export async function downloadDodAttachment(ctx, msg, attachment) {
+export async function downloadDodAttachment(ctx, msg, attachment, deps) {
   if (attachment.dodStatus !== 'ready') {
-    await fetchDodAttachment(ctx, msg, attachment);
+    await fetchDodAttachment(ctx, msg, attachment, deps);
     if (attachment.dodStatus !== 'ready') return;
   }
   if (attachment.data) downloadBase64(attachment.data, attachment.name, attachment.type);
@@ -235,7 +234,7 @@ export async function encryptPeerVaultEnvelope(envelope, { activeChat, peerKeys,
   return await crypto.encryptVault(envelope);
 }
 
-export async function sendAudioMessage(ctx, audioData) {
+export async function sendAudioMessage(ctx, audioData, deps) {
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
   // шифрования и почты — так же, как текст заметок.
@@ -290,7 +289,7 @@ export async function sendAudioMessage(ctx, audioData) {
   });
   msg.ts = now;
   ctx.chat.append(msg);
-  const chatKey = ChatFeature.resolveChatKey({
+  const chatKey = deps.resolveChatKey({
     activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
   });
   ctx.markPending(chatKey, msg);
@@ -318,7 +317,7 @@ export async function sendAudioMessage(ctx, audioData) {
 
 
 // ── Выбор файлов-вложений (лимиты, сжатие, DoD-разбиение, отправка) ──
-export async function handleFileSelect(ctx, event) {
+export async function handleFileSelect(ctx, event, deps) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
 
@@ -462,7 +461,7 @@ export async function handleFileSelect(ctx, event) {
           },
         };
         ctx.chat.append(msg);
-        const chatKey = ChatFeature.resolveChatKey({
+        const chatKey = deps.resolveChatKey({
           activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
         });
         ctx.markPending(chatKey, msg);
