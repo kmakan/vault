@@ -9,6 +9,7 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import * as EnvelopeId from './envelope-id.js';
+import * as ChatFeature from './chat.js';
 
 export async function sendMessage(ctx) {
       if (!ctx.newMessage.trim()) return;
@@ -28,9 +29,9 @@ export async function sendMessage(ctx) {
       // Анти-дубль ПОСЛЕ отправки: двойной Enter с паузой (первая отправка
       // уже завершилась) — тот же текст в тот же чат в течение 30 секунд
       // один раз»).
-      const chatId = ctx.activeChatType === 'group' && ctx.currentGroup
-        ? 'group:' + ctx.currentGroup.id
-        : ctx.activeChat;
+      const chatId = ChatFeature.resolveChatKey({
+        activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+      });
       const text = ctx.newMessage.trim();
       if (ctx.lastSend && ctx.lastSend.chat === chatId && ctx.lastSend.text === text
           && Date.now() - ctx.lastSend.ts < 30000) {
@@ -53,9 +54,9 @@ export async function sendMessage(ctx) {
         const fullText = quote ? `> ${quote}\n\n${newText}` : newText;
         msg.content = fullText;
         msg.edited = true;
-        const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
-          ? 'group:' + ctx.currentGroup.id
-          : ctx.activeChat;
+        const chatKey = ChatFeature.resolveChatKey({
+          activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+        });
         ctx.recordLocalEdit(chatKey, msg.id, fullText, 'edit');
         ctx.sendEditEmail(msg.id, fullText, 'edit');
         return;

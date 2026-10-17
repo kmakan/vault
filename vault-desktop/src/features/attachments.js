@@ -22,6 +22,7 @@ import crypto from '../crypto.js';
 import { downloadBase64 } from '../chatExport.js';
 import { getAttachmentLimitMb } from '../mailProviders.js';
 import * as EnvelopeId from './envelope-id.js';
+import * as ChatFeature from './chat.js';
 
 // ── Отдача / просмотр ──────────────────────────────────────────
 // ADR-001: зависимостей нет — файл просто отдаётся на скачивание.
@@ -69,9 +70,9 @@ export async function fetchDodAttachment(ctx, msg, attachment) {
   if (!attachment || !attachment.isDod || !attachment.dod) return;
   if (attachment.dodStatus === 'ready' || attachment.dodStatus === 'loading') return;
   attachment.dodStatus = 'loading';
-  const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
-    ? 'group:' + ctx.currentGroup.id
-    : ctx.activeChat;
+  const chatKey = ChatFeature.resolveChatKey({
+    activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+  });
   try {
     const cached = ctx.dodCache[attachment.dod];
     if (cached) {
@@ -216,9 +217,9 @@ export async function sendAudioMessage(ctx, audioData) {
   });
   msg.ts = now;
   ctx.chat.append(msg);
-  const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
-    ? 'group:' + ctx.currentGroup.id
-    : ctx.activeChat;
+  const chatKey = ChatFeature.resolveChatKey({
+    activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+  });
   ctx.markPending(chatKey, msg);
   ctx.showAudioRecorder = false;
   ctx.scrollToBottom(true);
@@ -415,9 +416,9 @@ export async function handleFileSelect(ctx, event) {
           },
         };
         ctx.chat.append(msg);
-        const chatKey = ctx.activeChatType === 'group' && ctx.currentGroup
-          ? 'group:' + ctx.currentGroup.id
-          : ctx.activeChat;
+        const chatKey = ChatFeature.resolveChatKey({
+          activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+        });
         ctx.markPending(chatKey, msg);
         ctx.scrollToBottom(true);
 
