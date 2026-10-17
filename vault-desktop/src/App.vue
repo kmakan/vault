@@ -2157,9 +2157,21 @@ export default {
     pollOptionCount(poll, i) { return PollFeature.pollOptionCount(poll, i); },
     pollLead(poll) { return PollFeature.pollLead(poll); },
     pollLeadLabel(poll) { return PollFeature.pollLeadLabel(poll); },
-    castPollVote(msg, option) { return PollFeature.castPollVote(this, msg, option); },
-    async sendPoll(question, options) { return PollFeature.sendPoll(this, question, options); },
+    castPollVote(msg, option) { return PollFeature.castPollVote(this.pollDeps(), msg, option); },
+    async sendPoll(question, options) { return PollFeature.sendPoll(this.pollDeps(), question, options); },
     applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
+    // ADR-001: явные deps для оркестраторов poll (без this целиком).
+    pollDeps() {
+      return {
+        email: this.email, activeChat: this.activeChat,
+        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
+        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
+        cryptoReady: this.cryptoReady, displayName: this.displayName,
+        newMessageId: this.newMessageId, setSending: v => this.setSending(v),
+        chat: this.chat, scrollToBottom: v => this.scrollToBottom(v),
+        saveCurrentHistory: k => this.saveCurrentHistory(k), t: this.t,
+      };
+    },
     // ── Реакции (логика в features/reactions.js) ──
     reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this); },
     loadStoredReactions() { return ReactionsFeature.loadStoredReactions(this); },
@@ -2187,21 +2199,48 @@ export default {
     applyEdits(list, chatKey, wireEdits) { return EditsFeature.applyEdits({ email: this.email, tombstonesCache: this.tombstonesCache, midTombstonesCache: this.midTombstonesCache }, list, chatKey, wireEdits); },
     sendEditEmail(msgId, text, action) { return EditsFeature.sendEditEmail({ activeChat: this.activeChat, activeChatType: this.activeChatType, currentGroup: this.currentGroup, groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys, email: this.email }, msgId, text, action); },
     // ── История/кэши/оптимистичные исходящие (логика в features/history.js) ──
-    bodyCacheKey() { return HistoryFeature.bodyCacheKey(this); },
-    chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this, chat); },
-    loadBodyCache() { return HistoryFeature.loadBodyCache(this); },
-    cacheBody(key, body) { return HistoryFeature.cacheBody(this, key, body); },
-    persistBodyCache() { return HistoryFeature.persistBodyCache(this); },
-    loadChatCache(chat) { return HistoryFeature.loadChatCache(this, chat); },
-    saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this, chat, list); },
-    markPending(chatKey, msg) { return HistoryFeature.markPending(this, chatKey, msg); },
-    mergePending(chatKey, list) { return HistoryFeature.mergePending(this, chatKey, list); },
-    loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this, chatKey); },
-    normalizeStaleSending(hist) { return HistoryFeature.normalizeStaleSending(this, hist); },
-    mergeHistory(chatKey, list) { return HistoryFeature.mergeHistory(this, chatKey, list); },
+    // ── Local history / caches / pendingOutgoing (logic in features/history.js) ──
+    // ADR-001: функции принимают конкретные зависимости, а не this целиком.
+    bodyCacheKey() { return HistoryFeature.bodyCacheKey(this.email); },
+    chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this.email, chat); },
+    loadBodyCache() {
+      return HistoryFeature.loadBodyCache(this.email).then(({ bodies, order }) => {
+        this.emailBodyCache = bodies;
+        this.bodyCacheOrder = order;
+      });
+    },
+    cacheBody(key, body) {
+      HistoryFeature.cacheBody({ emailBodyCache: this.emailBodyCache, bodyCacheOrder: this.bodyCacheOrder }, key, body);
+      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
+      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
+    },
+    persistBodyCache() { return HistoryFeature.persistBodyCache(this.email, this.emailBodyCache); },
+    loadChatCache(chat) { return HistoryFeature.loadChatCache(this.email, chat); },
+    saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this.email, chat, list, this.msgTs); },
+    markPending(chatKey, msg) { return HistoryFeature.markPending({ setPendingOutgoing: v => this.setPendingOutgoing(chatKey, v) }, chatKey, msg); },
+    mergePending(chatKey, list) {
+      return HistoryFeature.mergePending({
+        pendingOutgoing: this.pendingOutgoing,
+        isTombstoned: this.isTombstoned,
+        msgTs: this.msgTs,
+        mergePendingOutgoing: v => this.mergePendingOutgoing(chatKey, v),
+        dropBucket: () => this.dropBucket(chatKey),
+      }, chatKey, list);
+    },
+    loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this.email, chatKey, this.msgTs); },
+    normalizeStaleSending(hist) { return HistoryFeature.normalizeStaleSending(this.msgTs, hist); },
+    mergeHistory(chatKey, list) {
+      return HistoryFeature.mergeHistory({
+        email: this.email, msgTs: this.msgTs, filterDeleted: this.filterDeleted,
+      }, chatKey, list);
+    },
     msgTs(m) { return HistoryFeature.msgTs(m); },
-    showHistoryFirst(chatKey, isStale) { return HistoryFeature.showHistoryFirst(this, chatKey, isStale); },
-    saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this, chatKey); },
+    showHistoryFirst(chatKey, isStale) {
+      return HistoryFeature.showHistoryFirst({
+        loadHistory: ck => this.loadLocalHistory(ck), chat: this.chat, msgTs: this.msgTs,
+      }, chatKey, isStale);
+    },
+    saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this.email, chatKey, this.chat); },
     // ── Релей/режимы приёма (логика в features/relay.js) ──
     relayConsume() { return RelayFeature.relayConsume(this); },
     loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(this, silent); },

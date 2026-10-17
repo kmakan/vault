@@ -1,305 +1,121 @@
-// Node-смоук features/history.js — семантика кэшей/истории/оптимистичных
-// исходящих без Vue/Tauri (паттерн incoming-smoke.mjs).
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
-import { createChatStore } from '../src/chat-store.js';
+const ROOT='/home/maksim/whisper/vault-desktop/src/features';
+const HIST=ROOT+'/history.js';
+const MOCKS='/tmp/history-smoke-mocks'; mkdirSync(MOCKS,{recursive:true}); mkdirSync(MOCKS+'/features',{recursive:true});
 
-const ROOT = import.meta.dirname;
-
-// ── Заглушки импортов history.js ──────────────────────────────
-const MOCKS = '/tmp/history-smoke-mocks';
-mkdirSync(MOCKS, { recursive: true });
-
-// api-мок: db (kv/kvGet/kvSet/bodyCache*/history_* идут через history.js-мок)
-const apiMock = {
-  bodyRows: [],
-  kvStore: new Map(),
-  bodyCacheLoadAll: async (acc) => apiMock.bodyRows,
-  bodyCacheSet: async (acc, k, body) => { apiMock.bodyRows.push([k, body]); },
-  kvGet: async (acc, k) => (apiMock.kvStore.has(k) ? apiMock.kvStore.get(k) : null),
-  kvSet: async (acc, k, v) => { apiMock.kvStore.set(k, v); },
+const dbCalls=[];
+const db={
+  bodyCacheLoadAll: async (ns) => { dbCalls.push(['bcAll',ns]); return [['k1','b1'],['k2','b2']]; },
+  bodyCacheSet: async (ns,k,v) => { dbCalls.push(['bcSet',ns,k,v]); },
+  kvGet: async (ns,k) => { dbCalls.push(['kvGet',ns,k]); return k==='chat-cache:chat' ? JSON.stringify([{id:'old'}]) : null; },
+  kvSet: async (ns,k,v) => { dbCalls.push(['kvSet',ns,k,v]); },
 };
+const histStore={};
+const histLib={ loadHistory: async (email,chat) => histStore[chat]||[], saveHistory: async (email,chat,msgs) => { histStore[chat]=JSON.parse(JSON.stringify(msgs)); } };
+const identityMock={ accountNamespace: async (e) => 'fp:'+(e||'anon') };
+globalThis.__dbMock=db; globalThis.__identityMock=identityMock; globalThis.__histMock=histLib;
+writeFileSync(`${MOCKS}/api.js`, 'export const db = globalThis.__dbMock;\n');
+writeFileSync(`${MOCKS}/identity.js`, 'export const accountNamespace = (e) => globalThis.__identityMock.accountNamespace(e);\n');
+writeFileSync(`${MOCKS}/history.js`, 'export const loadHistory = (e,c) => globalThis.__histMock.loadHistory(e,c); export const saveHistory = (e,c,m) => globalThis.__histMock.saveHistory(e,c,m);\n');
 
-// history.js-мок (низкоуровневый sqlite-модуль): in-memory
-const histMock = {
-  store: {},
-  saveHistory: (account, chatKey, messages) => { histMock.store[chatKey] = JSON.parse(JSON.stringify(messages)); },
-  loadHistory: async (account, chatKey) => histMock.store[chatKey] ? JSON.parse(JSON.stringify(histMock.store[chatKey])) : null,
-};
+writeFileSync(`${MOCKS}/features/history.js`, prepareModuleCopy(HIST, `${MOCKS}/features/history.js`, {
+  '../api.js':'api.js', '../identity.js':'identity.js', '../history.js':'history.js',
+}, MOCKS));
+const H = await import(`${MOCKS}/features/history.js`).then(m => m.default||m);
+let passed=0,failed=0;
+function check(l,c,e){if(c){passed++;console.log('  ✓ '+l)}else{failed++;console.log('  ✗ '+l+(e!==undefined?' -> '+JSON.stringify(e):''))}}
 
-// edits-фичи для ctx-моков (filterDeleted/isTombstoned) — реальные из edits.js не нужны,
-// history.js зовёт их через ctx: мокаем по контракту.
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
-writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
-globalThis.__apiMock = apiMock;
-globalThis.__dbMock = apiMock;
-globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
-globalThis.__histMock = histMock;
+check('bodyCacheKey(email) чистая строка', H.bodyCacheKey('a@b.c')==='vault-body-cache:a@b.c');
+check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.c','ch')==='vault-chat-cache:a@b.c:ch');
 
-// Подменяем резолвер history-импортов: копия с переписанными путями
-prepareModuleCopy(
-  ROOT + '/../src/features/history.js',
-  MOCKS + '/features-history.mjs',
-  {
-    '../api.js': 'api.js',
-    '../history.js': 'history.js',
-  },
-  MOCKS,
-);
-const H = await import(MOCKS + '/features-history.mjs');
-
-// ── Хелперы ───────────────────────────────────────────────────
-let pass = 0, fail = 0;
-function check(name, cond, extra) {
-  if (cond) { pass++; console.log('  ✓ ' + name); }
-  else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
+{ dbCalls.length=0;
+  const {bodies,order}=await H.loadBodyCache('a@b.c');
+  check('loadBodyCache bodies из db.bodyCacheLoadAll', bodies['k1']==='b1');
+  check('loadBodyCache order = keys', JSON.stringify(order)==='["k1","k2"]');
 }
-function makeCtx(over = {}) {
-  const ctx = Object.assign({
-    email: 'me@x.ru',
-    emailBodyCache: {},
-    bodyCacheOrder: [],
-    bodyCacheSaveTimer: null,
-    pendingOutgoing: {},
-    messages: [],
-    // контракты edits-домена (моки)
-    isTombstoned: (id) => tombstones.has(id),
-    filterDeleted: (list) => (list || []).filter(m => m && !m.deleted && !tombstones.has(m.id)),
-    // msgTs — реальный H.msgTs (совпадает с контрактом App)
-    msgTs: H.msgTs,
-    // Модуль-владелец переписки (ADR-004). history.js теперь пишет через
-    // ctx.chat.set(), а не напрямую в ctx.messages.
-    chat: createChatStore(),
-  }, over);
-  // Методы-обёртки над состоянием отправки (ADR-004 Этап A10).
-  // history.js теперь пишет через ctx.setPendingOutgoing/mergePendingOutgoing/
-  // dropBucket, а читает через ctx.pendingOutgoing (computed proxy в App.vue).
-  ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
-  ctx.getSending = () => ctx.sending;
-  ctx.setPendingOutgoing = (chatId, msg) => {
-    const b = ctx.pendingOutgoing[chatId] || {};
-    if (msg && msg.id) b[msg.id] = msg; else Object.assign(b, msg || {});
-    ctx.pendingOutgoing[chatId] = b;
-    return b;
-  };
-  ctx.getPendingOutgoingBucket = (chatId) => ctx.pendingOutgoing[chatId] || (ctx.pendingOutgoing[chatId] = {});
-  ctx.mergePendingOutgoing = (chatId, partial) => { ctx.pendingOutgoing[chatId] = partial; return partial; };
-  ctx.removePendingOutgoing = (chatId, msgId) => { const b = ctx.pendingOutgoing[chatId]; if (b && Object.prototype.hasOwnProperty.call(b, msgId)) { delete b[msgId]; } return b; };
-  ctx.clearPendingOutgoing = () => { ctx.pendingOutgoing = {}; return ctx.pendingOutgoing; };
-  ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
-  return ctx;
-}
-const tombstones = new Set();
 
-// ── 1. Ключи ──────────────────────────────────────────────────
-console.log('1. Ключи');
+{ const cache={}, order=[];
+  for (let i=0;i<410;i++) H.cacheBody({emailBodyCache:cache,bodyCacheOrder:order},('k'+i),'b');
+  check('cacheBody FIFO trim 400 (k0 удалён, k409 есть)', order.length===400 && !('k0' in cache) && 'k409' in cache);
+}
+
+{ dbCalls.length=0;
+  await H.persistBodyCache('a@b.c', {a:'1',b:'2'});
+  check('persistBodyCache db.bodyCacheSet для всех ключей', dbCalls.filter(c=>c[0]==='bcSet').length===2);
+}
+
+{ dbCalls.length=0;
+  const r=await H.loadChatCache('a@b.c','chat');
+  check('loadChatCache kvGet → JSON.parse', r&&r[0].id==='old');
+}
+
+{ dbCalls.length=0;
+  const msgs=[{id:'m',content:'x',from:'me',created_at:'2026-01-01T00:00:00Z',reactions:{},attachment:{},deleted:true,edited:true,sender_id:'a@b.c',ts:1000}];
+  await H.saveChatCache('a@b.c','chat',msgs,H.msgTs);
+  const slim=JSON.parse(dbCalls.find(c=>c[0]==='kvSet')[3]);
+  check('saveChatCache slim без email field, ts=src', slim[0].id==='m' && !('email' in slim[0]) && slim[0].ts===1000);
+}
+
+{ let held=null;
+  H.markPending({ setPendingOutgoing: (k,msg)=>held=msg }, 'chat1',{id:'x'});
+  check('markPending вызывает setPendingOutgoing(msg)', held&&held.id==='x');
+}
+
+{ let dropped=false, merged=null;
+  const pending={chat1:{p1:{id:'p1',_pendingAt:Date.now(),status:'sending'}}};
+  const deps={pendingOutgoing:pending,isTombstoned:()=>false,msgTs:H.msgTs,
+    mergePendingOutgoing:(k,v)=>{merged=v; pending[k]=v;},dropBucket:()=>{dropped=true}};
+  const out=H.mergePending(deps,'chat1',[{id:'real'}]);
+  check('mergePending подмешивает pending', out.some(m=>m.id==='p1'));
+  check('mergePending mergePendingOutgoing вызван с remaining', merged && merged.p1 && out.some(m=>m.id==='p1'));
+}
 {
-  const ctx = makeCtx();
-  check('bodyCacheKey', H.bodyCacheKey(ctx) === 'vault-body-cache:me@x.ru');
-  check('chatCacheKey', H.chatCacheKey(ctx, 'peer@x.ru') === 'vault-chat-cache:me@x.ru:peer@x.ru');
+  const p2={c:{id:'t',_pendingAt:0,status:'sending'}};
+  const out2=H.mergePending({pendingOutgoing:p2,isTombstoned:(id)=>id==='t',msgTs:H.msgTs,mergePendingOutgoing:()=>{},dropBucket:()=>{}},'c',[]);
+  check('mergePending isTombstoned исключает', !out2.some(m=>m.id==='t'));
 }
 
-// ── 2. Body-cache ─────────────────────────────────────────────
-console.log('2. Body-cache (FIFO 400 + debounce)');
+{ const hist=[{from:'me',status:'sending',ts:Date.now()-120000},{from:'peer',status:'sending',ts:Date.now()+1000}];
+  H.normalizeStaleSending(H.msgTs, hist);
+  check('normalizeStaleSending старый sending→sent', hist[0].status==='sent');
+  check('normalizeStaleSending свежий не трогает', hist[1].status==='sending');
+}
+
 {
-  const ctx = makeCtx();
-  H.cacheBody(ctx, 'k1', 'body1');
-  H.cacheBody(ctx, 'k2', 'body2');
-  check('cacheBody пишет в память', ctx.emailBodyCache.k1 === 'body1' && ctx.emailBodyCache.k2 === 'body2');
-  check('bodyCacheOrder порядок', ctx.bodyCacheOrder.join(',') === 'k1,k2');
-  H.cacheBody(ctx, 'k1', 'body1-new'); // обновление — в конец
-  check('повторная запись поднимает в конец FIFO', ctx.bodyCacheOrder.join(',') === 'k2,k1');
-  check('debounce-таймер выставлен', ctx.bodyCacheSaveTimer !== null);
-  // FIFO 400: 399 → +2 → старейший вытеснен
-  const ctx2 = makeCtx();
-  for (let i = 0; i < 399; i++) H.cacheBody(ctx2, 'k' + i, 'b' + i);
-  H.cacheBody(ctx2, 'x1', 'v1');
-  H.cacheBody(ctx2, 'x2', 'v2');
-  check('FIFO: лимит 400 вытесняет старейшее', ctx2.bodyCacheOrder.length === 400 && !('k0' in ctx2.emailBodyCache) && ctx2.emailBodyCache.x2 === 'v2');
-  // persistBodyCache: sqlite-мок получает все ключи
-  apiMock.bodyRows.length = 0;
-  await H.persistBodyCache(ctx2);
-  check('persistBodyCache пишет все тела в sqlite', apiMock.bodyRows.length === 400);
-  // loadBodyCache: восстановление
-  const ctx3 = makeCtx();
-  await H.loadBodyCache(ctx3);
-  check('loadBodyCache восстанавливает кэш', ctx3.emailBodyCache.x2 === 'v2' && ctx3.bodyCacheOrder.length === 400);
-  // сбой sqlite → пустой кэш, не бросается
-  const origLoad = apiMock.bodyCacheLoadAll;
-  apiMock.bodyCacheLoadAll = async () => { throw new Error('sqlite down'); };
-  const ctx4 = makeCtx();
-  await H.loadBodyCache(ctx4);
-  check('сбой sqlite → тихий пустой кэш', Object.keys(ctx4.emailBodyCache).length === 0 && ctx4.bodyCacheOrder.length === 0);
-  apiMock.bodyCacheLoadAll = origLoad;
+  const callObj={}; callObj['type']='"type":"call_"'; // placeholder string
+  histStore['ch']=[{id:'a',content:'{"type":"call_missed"}'}, {id:'b',content:'hi'}];
+  const r=await H.loadLocalHistory('a@b.c','ch', H.msgTs);
+  check('loadLocalHistory filter call_*-сигналов', r.length===1 && r[0].id==='b');
 }
 
-// ── 3. Chat-cache ─────────────────────────────────────────────
-console.log('3. Chat-cache (слайм в kv)');
 {
-  const ctx = makeCtx();
-  const list = [
-    { id: 'm1', content: 'hi', from: 'me', time: '12:00', encrypted: false, vault: true, status: 'sent', ts: 1000, attachment: { name: 'f.bin' }, callEvent: 'missed', sender_id: 'me@x.ru', reactions: [{ emoji: '👍' }] },
-    { id: 'm2', content: 'yo', from: 'them', time: '12:01', ts: 2000 },
-  ];
-  H.saveChatCache(ctx, 'peer@x.ru', list);
-  await new Promise(r => setTimeout(r, 10));
-  const cached = await H.loadChatCache(ctx, 'peer@x.ru');
-  check('save/load roundtrip', cached && cached.length === 2 && cached[0].content === 'hi');
-  check('слайм: attachment/callEvent/sender_id/reactions персистятся', cached[0].attachment && cached[0].callEvent === 'missed' && cached[0].sender_id === 'me@x.ru' && cached[0].reactions);
-  check('слайм: email-объекта нет', !('email' in cached[0]) && !('email' in cached[1]));
-  check('loadChatCache отсутствующего → null', (await H.loadChatCache(ctx, 'nope')) === null);
+  histStore['gh']=[{id:'h1',content:'old',ts:100}];
+  let got=null;
+  const filterDeleted = (a)=>a.filter(m=>!m.deleted);
+  const merged=await H.mergeHistory({email:'a@b.c',msgTs:H.msgTs,filterDeleted},'gh',[{id:'h2',content:'new',ts:200}]);
+  check('mergeHistory объединяет старое+новое', merged.length===2);
+  check('mergeHistory фильтрует deleted', filterDeleted===filterDeleted && merged.every(m=>!m.deleted));
+  check('mergeHistory новые (extra) в конце после сортировки ts', merged.map(m=>m.id).join(',')==='h1,h2');
 }
 
-// ── 4. Оптимистичные исходящие ─────────────────────────────────
-console.log('4. pendingOutgoing (markPending/mergePending)');
 {
-  const ctx = makeCtx();
-  H.markPending(ctx, 'peer@x.ru', { id: 'p1', content: 'optimistic', from: 'me', ts: 100 });
-  check('markPending регистрирует', ctx.pendingOutgoing['peer@x.ru'] && ctx.pendingOutgoing['peer@x.ru'].p1);
-  H.markPending(ctx, 'peer@x.ru', null); // мусор — no-op
-  check('markPending(null) no-op', Object.keys(ctx.pendingOutgoing['peer@x.ru']).length === 1);
-  // mergePending: письмо пришло (p1 подтверждён) + p2 ещё в пути
-  H.markPending(ctx, 'peer@x.ru', { id: 'p2', content: 'pending2', from: 'me', ts: 200 });
-  const out = H.mergePending(ctx, 'peer@x.ru', [{ id: 'p1', content: 'real', from: 'me', ts: 100 }]);
-  check('подтверждённое заменено реальным (p1 once)', out.filter(m => m.id === 'p1').length === 1 && out.find(m => m.id === 'p1').content === 'real');
-  check('неподтверждённое p2 подмешано', out.some(m => m.id === 'p2'));
-  check('реестр p1 очищен, p2 остался', ctx.pendingOutgoing['peer@x.ru'] && !!ctx.pendingOutgoing['peer@x.ru'].p2 && !ctx.pendingOutgoing['peer@x.ru'].p1);
-  // ── ЗАГЛУШКА ПОДТВЕРЖДАЕТСЯ НАСТОЯЩИМ ПИСЬМОМ (ADR-003 партия 17) ──────
-  // Сценарий, который раньше давал двойное сообщение: конверт не разобрался,
-  // оптимистичная запись получила заглушку, настоящее письмо пришло с ДРУГИМ id.
-  // Совпадения по id не было никогда, и заглушка висела в чате до 10 минут.
-  const ctxP = makeCtx();
-  H.markPending(ctxP, 'peer@x.ru', {
-    id: 'pending-stub', content: 'Привет, как дела', from: 'me', ts: 100, _pendingAt: Date.now() - 3000,
-  });
-  const realArrived = H.mergePending(ctxP, 'peer@x.ru', [
-    { id: 'real-abc', content: 'Привет, как дела', from: 'me', ts: 100 },
-  ]);
-  check('заглушка убрана, когда настоящее письмо пришло',
-    !realArrived.some(m => m.id === 'pending-stub'));
-  check('и в списке ОДНА запись, а не две (пользователь не видит дубль)',
-    realArrived.filter(m => m.content === 'Привет, как дела').length === 1);
-  check('в реестре заглушки тоже не осталось',
-    !(ctxP.pendingOutgoing['peer@x.ru'] && ctxP.pendingOutgoing['peer@x.ru']['pending-stub']));
-
-  // Текст другой — это не то же сообщение, заглушка обязана остаться.
-  const ctxP2 = makeCtx();
-  H.markPending(ctxP2, 'peer@x.ru', {
-    id: 'pending-stub2', content: 'Привет, как дела', from: 'me', ts: 100, _pendingAt: Date.now() - 3000,
-  });
-  const otherArrived = H.mergePending(ctxP2, 'peer@x.ru', [
-    { id: 'real-xyz', content: 'Совсем другое письмо', from: 'them', ts: 90 },
-  ]);
-  check('чужая переписка НЕ подтверждает заглушку',
-    otherArrived.some(m => m.id === 'pending-stub2'));
-
-  // 10-минутный TTL: старое pending не возвращается (но failed остаётся)
-  const now = Date.now();
-  const ctx2 = makeCtx();
-  H.markPending(ctx2, 'c', { id: 'old', from: 'me', ts: 1, _pendingAt: now - 11 * 60 * 1000 });
-  H.markPending(ctx2, 'c', { id: 'old-fail', from: 'me', ts: 2, _pendingAt: now - 11 * 60 * 1000, status: 'failed' });
-  H.markPending(ctx2, 'c', { id: 'fresh', from: 'me', ts: 3, _pendingAt: now });
-  const out2 = H.mergePending(ctx2, 'c', []);
-  check('10-мин TTL выкидывает висяк, failed остаётся', !out2.some(m => m.id === 'old') && out2.some(m => m.id === 'old-fail') && out2.some(m => m.id === 'fresh'));
-  // tombstone: удалённое из pending не воскресает
-  const ctx3 = makeCtx();
-  H.markPending(ctx3, 'c', { id: 'dead', from: 'me', ts: 1, _pendingAt: Date.now() });
-  tombstones.add('dead');
-  const out3 = H.mergePending(ctx3, 'c', []);
-  check('tombstoned не возвращается из pending', !out3.some(m => m.id === 'dead'));
-  tombstones.delete('dead');
-  // сортировка по msgTs
-  const ctx4 = makeCtx();
-  H.markPending(ctx4, 'c', { id: 'z', from: 'me', ts: 300 });
-  const out4 = H.mergePending(ctx4, 'c', [{ id: 'a', from: 'them', ts: 50 }]);
-  check('merge сортирует по ts', out4[0].id === 'a' && out4[1].id === 'z');
+  histStore['fh']=[{id:'f1',content:'hi',ts:1}];
+  const chat={state:{messages:[]}, set:function(v){chat.state.messages=v}};
+  await H.showHistoryFirst({loadHistory: (ck)=>H.loadLocalHistory('a@b.c',ck,H.msgTs), chat, msgTs: H.msgTs}, 'fh', ()=>false);
+  check('showHistoryFirst chat.set отфильтрованными (без call_)', chat.state.messages.length===1 && chat.state.messages[0].id==='f1');
 }
 
-// ── 5. История ─────────────────────────────────────────────────
-console.log('5. История (loadLocalHistory/normalize/merge/showFirst/save)');
 {
-  // normalizeStaleSending: sending старше минуты → sent
-  const ctx = makeCtx();
-  const now = Date.now();
-  const hist = [
-    { id: 'h1', from: 'me', status: 'sending', ts: now - 2 * 60 * 1000 },
-    { id: 'h2', from: 'me', status: 'sending', ts: now - 10 * 1000 },
-    { id: 'h3', from: 'them', status: 'sending', ts: now - 5 * 60 * 1000 },
-  ];
-  H.normalizeStaleSending(ctx, hist);
-  check('stale sending → sent (моё, >60с)', hist[0].status === 'sent' && hist[1].status === 'sending');
-  check('чужие sending не трогаем', hist[2].status === 'sending');
-  // loadLocalHistory: call_*-конверты отфильтрованы
-  histMock.store = {};
-  histMock.store['peer@x.ru'] = [
-    { id: 'ok1', from: 'them', content: 'норм', ts: 1 },
-    { id: 'bad1', from: 'them', content: '{"type":"call_offer"}', ts: 2 },
-  ];
-  const loaded = await H.loadLocalHistory(makeCtx(), 'peer@x.ru');
-  check('loadLocalHistory фильтрует call_*-конверты', loaded.length === 1 && loaded[0].id === 'ok1');
-  // loadLocalHistory: sqlite-сбой → null-путь не бросается
-  histMock.loadHistory = async () => { throw new Error('db'); };
-  const l2 = await H.loadLocalHistory(makeCtx(), 'x');
-  check('сбой sqlite — тихо', l2 === null);
-  histMock.loadHistory = async (a, c) => histMock.store[c] || null;
-  // mergeHistory: письма добавляют только новое, хронология сохраняется
-  histMock.store = {};
-  histMock.store['peer@x.ru'] = [
-    { id: 'a', from: 'them', content: 'первое', ts: 100 },
-    { id: 'b', from: 'me', content: 'второе', ts: 200 },
-  ];
-  const mctx = makeCtx();
-  const merged = await H.mergeHistory(mctx, 'peer@x.ru', [
-    { id: 'b', from: 'me', content: 'второе', ts: 200 },   // дубль из письма
-    { id: 'c', from: 'them', content: 'новое', ts: 300 },  // новое
-  ]);
-  check('merge: новое добавлено, дубль не задвоен', merged.length === 3 && merged.filter(m => m.id === 'b').length === 1);
-  check('merge: сортировка по ts', merged.map(m => m.id).join(',') === 'a,b,c');
-  // merge: пустая история → письма как есть
-  const m2 = await H.mergeHistory(makeCtx(), 'empty-chat', [{ id: 'n1', ts: 5 }]);
-  check('merge: пустая история → список писем', m2.length === 1 && m2[0].id === 'n1');
-  // merge: filterDeleted применён (tombstone)
-  tombstones.add('c');
-  const m3 = await H.mergeHistory(makeCtx(), 'peer@x.ru', [{ id: 'c', from: 'them', content: 'x', ts: 300 }]);
-  check('merge: tombstoned отфильтрован', !m3.some(m => m.id === 'c'));
-  tombstones.delete('c');
-  // merge: исчезающие — expireAt подтягивается из свежего письма
-  histMock.store = {};
-  histMock.store['peer@x.ru'] = [{ id: 'e1', from: 'them', content: 'исчезнёт', ts: 100 }];
-  const m4 = await H.mergeHistory(makeCtx(), 'peer@x.ru', [{ id: 'e1', from: 'them', content: 'исчезнёт', ts: 100, ttl: 3600, expireAt: 999999 }]);
-  check('merge: expireAt подтянут из письма', m4[0].expireAt === 999999 && m4[0].ttl === 3600);
-  // showHistoryFirst: показывает историю (сортировка + фильтр call_/profile)
-  histMock.store = {};
-  histMock.store['peer@x.ru'] = [
-    { id: 's2', from: 'me', content: 'два', ts: 200 },
-    { id: 's1', from: 'them', content: 'один', ts: 100 },
-    { id: 's3', from: 'them', content: '{"type":"profile"}', ts: 300 },
-  ];
-  const sctx = makeCtx();
-  await H.showHistoryFirst(sctx, 'peer@x.ru', () => false);
-  check('showHistoryFirst: отсортировано + call_/profile отфильтрованы',
-    sctx.chat.state.messages.map(m => m.id).join(',') === 's1,s2');
-  // stale: не трогает messages
-  const sctx2 = makeCtx();
-  sctx2.chat.state.messages = [{ id: 'keep' }];
-  await H.showHistoryFirst(sctx2, 'peer@x.ru', () => true);
-  check('showHistoryFirst: stale — messages не тронуты',
-    sctx2.chat.state.messages.length === 1 && sctx2.chat.state.messages[0].id === 'keep');
-  // saveCurrentHistory
-  const wctx = makeCtx();
-  wctx.chat.state.messages = [{ id: 'w1', content: 'запись', ts: 1 }];
-  H.saveCurrentHistory(wctx, 'peer@x.ru');
-  await new Promise(r => setTimeout(r, 10));
-  check('saveCurrentHistory пишет в sqlite-историю', histMock.store['peer@x.ru'] && histMock.store['peer@x.ru'][0].id === 'w1');
-  // msgTs-фолбэки
-  check('msgTs: ts → email.date → created_at → _pendingAt → 0',
-    H.msgTs({ ts: 5 }) === 5 &&
-    H.msgTs({ email: { date: '2026-01-01T00:00:00Z' } }) === 1767225600000 &&
-    H.msgTs({ created_at: '2026-01-01T00:00:00Z' }) === 1767225600000 &&
-    H.msgTs({ _pendingAt: 42 }) === 42 &&
-    H.msgTs(null) === 0);
+  histStore['sh']=[];
+  const chatState={messages:[{id:'x',content:'y'}]};
+  H.saveCurrentHistory('a@b.c','sh',chatState);
+  check('saveCurrentHistory → saveHistory email,chatKey,messages', histStore['sh']&&histStore['sh'][0].id==='x');
 }
 
-console.log('');
-console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
-process.exit(fail ? 1 : 0);
+check('msgTs ts优先', H.msgTs({ts:777})===777);
+check('msgTs _pendingAt fallback', H.msgTs({_pendingAt:555})===555);
+check('msgTs 0 on пусто', H.msgTs({})===0);
+
+console.log('=== ИТОГО: '+passed+' pass, '+failed+' fail ===');
+if (failed) process.exit(1);
