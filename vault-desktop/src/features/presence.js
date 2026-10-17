@@ -23,18 +23,18 @@ const HB_SENT_AT = '_presenceHbSentAt';
 
 // ── Тумблер (kv 'presence-enabled', per-account) ──────────────
 
-export async function isEnabled(ctx) {
+export async function isEnabled(email) {
   try {
-    return (await db.kvGet(await accountNamespace(ctx.email), 'presence-enabled')) === '1';
+    return (await db.kvGet(await accountNamespace(email), 'presence-enabled')) === '1';
   } catch (e) { return false; }
 }
 
-export async function setEnabled(ctx, on) {
+export async function setEnabled(email, on, { startHeartbeats, stopHeartbeats }) {
   try {
-    await db.kvSet(await accountNamespace(ctx.email), 'presence-enabled', on ? '1' : '0');
+    await db.kvSet(await accountNamespace(email), 'presence-enabled', on ? '1' : '0');
   } catch (e) { /* kv недоступен — остаётся in-memory */ }
-  if (on) startHeartbeats(ctx);
-  else stopHeartbeats(ctx);
+  if (on) startHeartbeats();
+  else stopHeartbeats();
 }
 
 // ── Отправка heartbeat ────────────────────────────────────────
@@ -95,8 +95,8 @@ export function ingestSignal(ctx, robj, senderEmail, mailTs) {
 // ── Отображение: онлайн ли контакт (active presence) ──────────
 // isRecentlySeen (profiles.js) — пассивное окно 10 минут от любого
 // письма; здесь то же хранилище lastSeenMap, окно heartbeat.
-export function isOnline(ctx, email) {
-  const t = ctx.lastSeenMap[email];
+export function isOnline(lastSeenMap, email) {
+  const t = lastSeenMap[email];
   if (!t) return false;
   return Date.now() - t < PRESENCE_ONLINE_MS;
 }

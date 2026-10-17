@@ -2111,7 +2111,7 @@ export default {
           else this.idleLoop();
           // Presence (M2): heartbeat-таймер, если тумблер включён (kv,
           // per-account). Восстанавливается на входе, глушится на выходе.
-          try { if (await PresenceFeature.isEnabled(this)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
+          try { if (await PresenceFeature.isEnabled(this.email)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           this.loadEmails().catch(e => {
@@ -2392,9 +2392,12 @@ export default {
     isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this.lastSeenMap, email); },
     // ── Presence (t_e858bdb9) — heartbeat-зелёная точка; логика в
     // features/presence.js. Тумблер живёт в настройках (Приватность).
-    isOnline(email) { return PresenceFeature.isOnline(this, email); },
+    isOnline(email) { return PresenceFeature.isOnline(this.lastSeenMap, email); },
     presenceSetEnabled(on) {
-      PresenceFeature.setEnabled(this, on).catch(e =>
+      PresenceFeature.setEnabled(this.email, on, {
+        startHeartbeats: () => PresenceFeature.startHeartbeats(this),
+        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this),
+      }).catch(e =>
         console.warn('[presence] setEnabled failed:', e && e.message || e));
     },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
