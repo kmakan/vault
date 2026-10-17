@@ -50,5 +50,16 @@ check('clearEmails опустошает', JSON.stringify(s1.state.emails) === '[
 // 7. setEmails возвращает массив
 check('setEmails возвращает state.emails', s1.setEmails(['m@n']) === s1.state.emails);
 
+// 8. J.7: account password через владельца (быв. App.vue data this.password)
+// recovery.js читает через ctx.password → теперь proxy → sessionStore.getPassword()
+check('password стартует пустой', s1.getPassword() === '');
+s1.setPassword('hunter2');
+check('setPassword пишет', s1.getPassword() === 'hunter2');
+check('setPassword возвращает значение', s1.setPassword('secret') === 'secret');
+check('изоляция password — второй стор пуст', createSessionStore().getPassword() === '');
+s1.clearPassword();
+check('clearPassword сбрасывает в пустую строку', s1.getPassword() === '');
+check('setPassword(null) → "" (не краш)', (s1.setPassword(null), s1.getPassword() === ''));
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

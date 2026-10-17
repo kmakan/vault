@@ -1208,7 +1208,7 @@ export default {
       // showMembersinj в uiStore.modalFlags (J.7):
       // restoringSessioninj в session-store.state (J.3a).
       email: '',
-      password: '',
+      // password вынесен из data() в sessionStore (J.7, proxy ниже).
       // rememberMe/imapServer/imapPort/smtpServer/smtpPort/mailProvider
       // inj в uiStore.formState (J.5b).
       // loginLoading/loginErrorinj в session-store.state (J.3a).
@@ -1557,6 +1557,10 @@ export default {
     restoringSession: { get() { return this.sessionStore.state.restoringSession; }, set(v) { this.sessionStore.state.restoringSession = v; } },
     loginLoading: { get() { return this.sessionStore.state.loginLoading; }, set(v) { this.sessionStore.state.loginLoading = v; } },
     loginError: { get() { return this.sessionStore.state.loginError; }, set(v) { this.sessionStore.state.loginError = v; } },
+    // J.7: account password вынесен из data() → sessionStore. recovery.js читает
+    // ctx.password → теперь это proxy на sessionStore.state.password (owner).
+    // v-model login form / changeEmail / handleLogout пишут через setter.
+    password: { get() { return this.sessionStore.getPassword(); }, set(v) { this.sessionStore.setPassword(v); } },
     // J.7: UI constants inj session-store.state:
     quickReactions: { get() { return this.sessionStore.state.quickReactions; } },
     activeChatType: {

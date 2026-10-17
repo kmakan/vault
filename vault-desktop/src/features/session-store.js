@@ -20,6 +20,7 @@ export function createSessionStore() {
   const state = {
     isLoggedIn: false,
     currentEmail: '',    // J.2: account identity (бывш. data this.email)
+    password: '',        // J.7: account password (бывш. data this.password). recovery.js читает через proxy → sessionStore.
     emails: [],
     // J.3a: профиль bio (быв. data this.myBio). SettingsPage :bio.
     myBio: '',
@@ -50,6 +51,12 @@ export function createSessionStore() {
     // ── currentEmail ────────────────────────────────────────────────────
     setCurrentEmail(e) { state.currentEmail = e || ''; return state.currentEmail; },
     getCurrentEmail() { return state.currentEmail; },
+    // ── password ────────────────────────────────────────────────────────
+    // J.7: быв. App.vue data this.password. recovery.js читает ctx.password —
+    // owner-посредник делает это явным deps-параметром (не ctx-данный field).
+    setPassword(p) { state.password = p || ''; return state.password; },
+    getPassword() { return state.password; },
+    clearPassword() { state.password = ''; return state.password; },
     // ── myBio ───────────────────────────────────────────────────────────
     setBio(bio) { state.myBio = bio || ''; return state.myBio; },
     getBio() { return state.myBio; },
@@ -81,7 +88,7 @@ export function createMailboxStore() {
     setEmails(list) { state.emails = list || []; return state.emails; },
     mergeEmails(list) {
       const m = new Map(state.emails.map((m) => [m.uid + "|" + (m.folder || "INBOX"), m]));
-      for (const e of (list || [])) m.set(e.uid + "|" + (e.folder || "INBOX"), e);
+      for (const e of (list || [])) { if (!e) continue; m.set(e.uid + "|" + (e.folder || "INBOX"), e); }
       state.emails = [...m.values()].sort((a, b) =>
         new Date(b.date || 0) - new Date(a.date || 0));
       return state.emails;
