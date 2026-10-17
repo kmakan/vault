@@ -2811,7 +2811,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.activeChatType = 'chat';
       this.contacts = [];
       this.activeChat = null;
-      this.messages = [];
+      this.chat.set([]);
       this.messagesStore.reset();
       this.clearAllUnread();
       this.emails = [];
@@ -2994,7 +2994,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     async selectChannel(ch) {
       this.saveDraft();
-      this.messages = [];
+      this.chat.set([]);
       this.newMessage = '';
       this.cancelReply();
       this.activeChat = 'channel:' + ch.id;
@@ -3003,7 +3003,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.currentGroup = null;
       this.showStarredOnly = false;
       this.loadSeq++;
-      this.messages = this.channelPostsToMessages(ch);
+      this.chat.set(this.channelPostsToMessages(ch));
       this.channelUnread[ch.id] = 0; // канал открыт — сбрасываем счётчик
       // last_ts монотонный (Rust-гейт): пишем максимум visible-постов,
       // иначе последующие непрочитанные перестанут считаться.
@@ -3077,7 +3077,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // optimistic local (владельческое эхо-письмо может и не вернуться)
         this.noteChannelPost(ch.id, env.ts, env, this.email);
         this.channelUnread[ch.id] = 0; // собственный пост — не «непрочитанное»
-        this.messages = this.channelPostsToMessages(ch);
+        this.chat.set(this.channelPostsToMessages(ch));
         this.newMessage = '';
         await this.$nextTick();
         this.scrollToBottom(true);
@@ -3102,7 +3102,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           this.activeChat = '';
           this.activeChatType = 'chat';
           this.currentChannel = null;
-          this.messages = [];
+          this.chat.set([]);
         }
         await this.loadChannels();
       } catch (e) { console.error('[channels] delete:', e); }
@@ -3187,7 +3187,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
       // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
       this.saveDraft(); // черновик прошлого чата — до сброса activeChat
-      this.messages = [];
+      this.chat.set([]);
       this.newMessage = '';
       this.cancelReply();
       await this.restoreDraft(email);
@@ -3196,7 +3196,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const cachedChat = await this.loadChatCache(email);
       if (cachedChat && cachedChat.length) {
         cachedChat.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.messages = cachedChat;
+        this.chat.set(cachedChat);
       }
       // Токен загрузки: незавершённый loadMessages прошлого чата увидит
       // новый seq и не применит свои результаты.
@@ -3328,14 +3328,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     async selectGroup(group) {
       this.saveDraft(); // черновик прошлого чата
-      this.messages = [];
+      this.chat.set([]);
       this.newMessage = '';
       this.cancelReply();
       await this.restoreDraft('group:' + group.id);
       const cachedGroup = await this.loadChatCache(`group:${group.id}`);
       if (cachedGroup && cachedGroup.length) {
         cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.messages = cachedGroup;
+        this.chat.set(cachedGroup);
       }
       this.loadSeq++;
       this.activeChat = `group:${group.id}`;
@@ -3404,7 +3404,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     selectNotes() {
-      this.messages = this.loadNotes();
+      this.chat.set(this.loadNotes());
       this.loadSeq++;
       this.activeChat = '__notes__';
       this.activeChatType = 'chat';
@@ -3452,7 +3452,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       const to = list.findIndex(n => n.id === overId);
       if (to < 0) { list.splice(from, 0, moved); return; }
       list.splice(pos === 'after' ? to + 1 : to, 0, moved);
-      if (this.saveNotes(list)) this.messages = list;
+      if (this.saveNotes(list)) this.chat.set(list);
     },
     // Parse message content — detect vault_attachment JSON and extract preview
     isTextMime(type, name) { return MsgFormat.isTextMime(type, name); },
@@ -3595,7 +3595,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         if (!ok) return;
         const list = this.loadNotes().filter(n => n.id !== msg.id);
         this.saveNotes(list);
-        this.messages = list;
+        this.chat.set(list);
         return;
       }
       const ok = await confirm(uiStore.tr('delete_message_confirm') || 'Удалить сообщение у всех?');
@@ -3608,7 +3608,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       msg.content = '';
       // (у получателей — после доставки delete-письма).
       const idx = this.messages.indexOf(msg);
-      if (idx !== -1) this.messages.splice(idx, 1);
+      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
       const chatKey = this.activeChatType === 'group' && this.currentGroup
         ? 'group:' + this.currentGroup.id
         : this.activeChat;
@@ -3630,7 +3630,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.addTombstone(msg.id);
       this.addMidTombstone(msg.mid);
       const idx = this.messages.indexOf(msg);
-      if (idx !== -1) this.messages.splice(idx, 1);
+      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
       this.saveCurrentHistory(chatKey);
       // chat-cache тоже обновляем: loadChatCache не фильтрует tombstones,
       this.saveChatCache(chatKey, this.messages);
@@ -3851,7 +3851,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.addTombstone(msgId);
       if (mid) this.addMidTombstone(mid);
       const idx = this.messages.findIndex((m) => m.id === msgId);
-      if (idx !== -1) this.messages.splice(idx, 1);
+      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
       this.saveCurrentHistory(chatId);
     },
 
@@ -4907,7 +4907,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.currentGroup = null;
       if (this.activeChat === `group:${gid}`) {
         this.activeChat = null;
-        this.messages = [];
+        this.chat.set([]);
       }
     },
     async deleteGroup() {
@@ -4923,7 +4923,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.currentGroup = null;
       if (this.activeChat === `group:${gid}`) {
         this.activeChat = null;
-        this.messages = [];
+        this.chat.set([]);
       }
     }
   }

@@ -25,7 +25,7 @@ export async function loadMessages(ctx, email) {
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!ctx.peerKeys[email]) {
-        ctx.messages = [];
+        ctx.chat.set([]);
         return;
       }
       // Смена почты: контакт мог сменить адрес — ищем письма по
@@ -42,7 +42,7 @@ export async function loadMessages(ctx, email) {
       // новыми после последнего курсора (правило 07.10). Реакции/квитанции/
       // правки в историю не пишутся — их mid здесь нет, они обрабатываются
       // как раньше (тела берутся из body_cache, см. fetchBodiesDbFirst).
-      const inHist = new Set((ctx.messages || []).map(m => m && m.mid).filter(Boolean));
+      const inHist = new Set((ctx.chat.state.messages || []).map(m => m && m.mid).filter(Boolean));
       const relatedAll = ctx.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
@@ -387,7 +387,7 @@ export async function loadMessages(ctx, email) {
         }
         // ИСТОРИЯ — основа чата, письма — дополнение; статусы/реакции/правки
         // применяются к merged; pending — подмешиваются; удалённые фильтруются.
-        const hadMessages = ctx.messages && ctx.messages.length > 0;
+        const hadMessages = ctx.chat.state.messages && ctx.chat.state.messages.length > 0;
         const merged0 = await ctx.mergeHistory(chat, list);
         const statusById = new Map();
         for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
@@ -414,12 +414,12 @@ export async function loadMessages(ctx, email) {
           // сохранённую историю чата).
           return;
         }
-        ctx.messages = merged;
-        ctx.saveChatCache(chat, ctx.messages);
+        ctx.chat.set(merged);
+        ctx.saveChatCache(chat, ctx.chat.state.messages);
         // Локальная история (IndexedDB) — полный архив чата.
         ctx.saveCurrentHistory(chat);
         // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
-        const incoming = ctx.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
+        const incoming = ctx.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
         ctx.sendReadReceipts(incoming);
         return;
       }
@@ -428,7 +428,7 @@ export async function loadMessages(ctx, email) {
       // а локальная история чата уже показана (showHistoryFirst) — не
       // затираем её. Иначе после перезапуска чаты «пустели», хотя кэш
       // истории на месте.
-      if (ctx.messages && ctx.messages.length) return;
+      if (ctx.chat.state.messages && ctx.chat.state.messages.length) return;
       try {
         const raw = await api.getMessages(email);
         if (stale()) return;
@@ -502,10 +502,10 @@ export async function loadMessages(ctx, email) {
             })
           );
           if (stale()) return;
-          ctx.messages = decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-          for (const m of ctx.messages) if (m.expireAt) ctx.scheduleEphemeral(m, ctx.activeChat);
+          ctx.chat.set(decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+          for (const m of ctx.chat.state.messages) if (m.expireAt) ctx.scheduleEphemeral(m, ctx.activeChat);
         } else {
-          ctx.messages = raw.map(msg => {
+          ctx.chat.set(raw.map(msg => {
             const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
@@ -516,10 +516,10 @@ export async function loadMessages(ctx, email) {
               encrypted: false,
               attachment,
             };
-          }).filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          }).filter(Boolean).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
-        if (!stale()) ctx.messages = [];
+        if (!stale()) ctx.chat.set([]);
       }
 }
