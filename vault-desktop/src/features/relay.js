@@ -274,7 +274,23 @@ export async function idleLoop(ctx) {
   if (monitorUp) {
     // Владелец IDLE — Rust. JS-цикла больше нет; нужен только таймер
     // страховочного фетча (СПАМ + сигналы звонков).
+    //
+    // РЕГРЕССИЯ (найдена смоуком 17.10 при переводе relay-smoke на владельцев):
+    // при конвертации в state-machine из этой ветки пропали ДВА действия
+    // baseline:
+    //   1) startFastFetchTimer(ctx) — без него страховочный фетч (call_* в СПАМ +
+    //      сигналы звонков) не поднимается при живом мониторе вовсе: первый
+    //      call_request ждал бы 30с-поллинг (а в эко — 60с). Хуже того,
+    //      startFastFetchTimer зовётся только из веток idleLoop, то есть
+    //      «курица-яйцо»: сигнал звонка не приходит, потому что нет фетча.
+    //   2) idleState.setIdleActive(false) — флаг оставался true навсегда, а
+    //      stopPolling() сбрасывает callIdleMonitorUp → следующий idleLoop
+    //      упирался в `if (idleState.idleActive) return;` и НЕ поднимал монитор.
+    //      Это эко→off (onEcoMode(false)) и автономный rescue: доставка молча
+    //      падала на 30с-поллинг до перезапуска приложения.
     useSession().setCallIdleMonitorUp(true);
+    idleState.setIdleActive(false);
+    startFastFetchTimer(ctx);
     return;
   }
   // ── Резервный путь: монитор не поднялся, ведём IDLE из JS ──────────
@@ -308,7 +324,13 @@ export async function idleLoop(ctx) {
   }
   // Цикл вышел: звонок ещё идёт — ускоренный поллинг 3с как фолбэк
   // (hangup сам вернёт обычный 30с-поллинг).
-  if ((sessionStore.state.isLoggedIn) && callSession.state.callState !== 'idle') startPolling(ctx, 3000);
+  // РЕГРЕССИЯ (найдена смоуком 17.10): J.3c (5e2bb5e) заменил `ctx.callState` на
+  // `callSession.state.callState`, но НЕ добавил импорт → ReferenceError на каждом
+  // выходе резервного IDLE при залогиненном пользователе. Падало ДО взведения
+  // 60с-ретрая (idleFallback.arm ниже), поэтому резервный IDLE не восстанавливался
+  // сам и почта оставалась на 30с-поллинге. Ходим через useSession() — как и
+  // остальные обращения к call-session в этом файле.
+  if ((sessionStore.state.isLoggedIn) && useSession().callState !== 'idle') startPolling(ctx, 3000);
   // Резервный IDLE умер (провайдер/сеть): обычный поллинг продолжает
   // работать; через 60с пробуем снова — и снова СНАЧАЛА Rust-монитор
   // (idleLoop), то есть при его успехе владение возвращается монитору,
