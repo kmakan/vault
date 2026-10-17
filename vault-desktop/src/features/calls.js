@@ -19,6 +19,7 @@ import { accountNamespace } from '../identity.js';
 import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
+import { invoke } from '@tauri-apps/api/core';
 // Re-export для backward-compat (App.vue / smoke ссылаются через C.SIGNAL_RESEND_DELAYS_MS).
 export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
 import { createMediaWatchdog } from './call-watchdog.js';
@@ -129,6 +130,7 @@ function armRingTimer(ctx, fallbackMs = DEFAULT_RING_MS) {
 // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
 // state machine звонка. Медиа (webrtc-rs) подключается в Фазе 2.
 export function parseCallSignal(decrypted) {
+  // JS-native sync parse (parity Rust parse_call_signal).
   if (!decrypted || typeof decrypted !== 'string') return null;
   try {
     const obj = JSON.parse(decrypted);
@@ -138,6 +140,12 @@ export function parseCallSignal(decrypted) {
     }
   } catch (e) { /* не сигнал */ }
   return null;
+}
+
+// M2.3: Rust bridge parity — parse_call_signal (async via invoke).
+export async function parseCallSignalRust(decrypted) {
+  try { return await invoke('call_parse_signal', { decrypted }); }
+  catch (e) { console.warn('[call] parse_signal bridge failed:', e && e.message || e); return null; }
 }
 
 // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).

@@ -1138,6 +1138,12 @@ fn presence_last_seen(email: String) -> Result<Option<i64>, String> {
     presence::last_seen(&email).map_err(|e| e.to_string())
 }
 
+/// M2.3: Parse a decrypted call-signal envelope (parity JS parseCallSignal).
+#[tauri::command]
+fn call_parse_signal(decrypted: String) -> Result<Option<vault_client::vault::CallSignal>, String> {
+    Ok(vault_client::vault::parse_call_signal(&decrypted))
+}
+
 /// Смена адреса участника группы (смена почты, тот же fingerprint).
 /// Фронт проверяет, что old/new привязаны к одному ключу (peer_keys).
 #[tauri::command]
@@ -2152,6 +2158,8 @@ pub fn run() {
             // M2.2: presence ledger bridge.
             presence_ingest,
             presence_last_seen,
+            // M2.3: call-signal parsing bridge.
+            call_parse_signal,
             channel_signing_key,
             channel_sign_post,
             channels_tokens,
