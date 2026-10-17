@@ -52,6 +52,30 @@ export function splitReply(content) {
   return { quote: quoteLines.join('\n'), body: lines.slice(i).join('\n') };
 }
 
+// Short excerpt used for the reply bar and for the "> " quote prefix.
+// Чистая: вырезает тело (без цитаты), схлопывает пробелы, обрезает до maxLen + эллипс.
+export function replyPreview(content, maxLen = 60) {
+  let text = splitReply(content || '').body;
+  if (!text) text = content || '';
+  text = String(text).replace(/\s+/g, ' ').trim();
+  if (text.length > maxLen) text = text.slice(0, maxLen).trim() + '…';
+  return text;
+}
+
+// Status tooltip (outgoing message status circle). Чистая, tr — адаптер.
+export function statusTitle(msg, tr) {
+  const st = (msg && msg.status) || 'sent';
+  if (st === 'read') return tr('status_read') || 'Read';
+  if (st === 'delivered') return tr('status_delivered') || 'Delivered';
+  if (st === 'sending') return tr('status_sending') || 'Sending';
+  if (st === 'failed') {
+    const who = msg.failedTo && msg.failedTo.length ? ': ' + msg.failedTo.join(', ') : '';
+    return 'Not delivered' + who;
+  }
+  return tr('status_sent') || 'Sent';
+}
+
+// imapCursorsKey/account markers
 export function imapCursorsKey(accountId) {
   return 'vault-imap-cursors-' + accountId;
 }

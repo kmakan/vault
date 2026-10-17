@@ -169,5 +169,21 @@ ok('слишком короткая ссылка отброшена', ex.urls.jo
 ex = M.extractPhonesAndUrls('');
 ok('пустой текст → пустые списки, без исключения', ex.phones.length === 0 && ex.urls.length === 0);
 
+// ── replyPreview ────────────────────────────────────────────────────
+ok('replyPreview — тело без цитаты, схлопнуто, >60 + эллипс',
+  M.replyPreview('> цитата\n\nкраткое тело') === 'краткое тело');
+ok('replyPreview — обрезка до 60 символов + эллипс',
+  M.replyPreview('A'.repeat(80)).length === 61 && M.replyPreview('A'.repeat(80)).endsWith('…'));
+ok('replyPreview — пусто', M.replyPreview('') === '');
+ok('replyPreview — fallback на content при пустом body (т.к. цитата без тела)',
+  M.replyPreview('> цитата') === '> цитата');
+
+// ── statusTitle ──────────────────────────────────────────────────────
+const tr = (k) => ({ status_sent: 'Sent', status_read: 'Read', status_delivered: 'Delivered', status_sending: 'Sending' }[k] || k);
+ok('statusTitle sent', M.statusTitle({ status: 'sent' }, tr) === 'Read' ? false : M.statusTitle({ status: 'sent' }, tr) === 'Sent');
+ok('statusTitle read', M.statusTitle({ status: 'read' }, tr) === 'Read');
+ok('statusTitle sending', M.statusTitle({ status: 'sending' }, tr) === 'Sending');
+ok('statusTitle failed + failedTo', M.statusTitle({ status: 'failed', failedTo: ['a@x','b@y'] }, tr) === 'Not delivered: a@x, b@y');
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

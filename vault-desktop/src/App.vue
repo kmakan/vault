@@ -3556,24 +3556,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // Short excerpt used for the reply bar and for the "> " quote prefix.
     replyPreview(msg) {
-      if (!msg) return '';
-      let text = this.splitReply(msg.content || msg.text || '').body;
-      if (!text) text = msg.content || '';
-      text = String(text).replace(/\s+/g, ' ').trim();
-      if (text.length > 60) text = text.slice(0, 60).trim() + '…';
-      return text;
+      return MsgFormat.replyPreview(msg && (msg.content || msg.text) || '');
     },
     // Подпись (tooltip) к цветному кружку статуса исходящего сообщения.
     statusTitle(msg) {
-      const st = (msg && msg.status) || 'sent';
-      if (st === 'read') return uiStore.tr('status_read') || 'Read';
-      if (st === 'delivered') return uiStore.tr('status_delivered') || 'Delivered';
-      if (st === 'sending') return uiStore.tr('status_sending') || 'Sending';
-      if (st === 'failed') {
-        const who = msg.failedTo && msg.failedTo.length ? ': ' + msg.failedTo.join(', ') : '';
-        return 'Not delivered' + who;
-      }
-      return uiStore.tr('status_sent') || 'Sent';
+      return MsgFormat.statusTitle(msg, (k) => uiStore.tr(k));
     },
     setReply(msg) {
       this.replyTo = msg;
