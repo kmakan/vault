@@ -7219,8 +7219,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "vault-core",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "vault-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "hex",
+ "hkdf",
+ "ml-kem",
+ "rand 0.8.7",
+ "serde",
+ "sha2",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -7268,6 +7285,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tokio",
  "vault-client",
+ "vault-core",
  "webkit2gtk",
  "webrtc",
  "webrtc-audio-processing",

@@ -21,7 +21,7 @@ use ml_kem::ml_kem_768::{
 use ml_kem::{MlKem768, Seed};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::crypto::NONCE_LEN;
+use crate::NONCE_LEN;
 
 /// Соль-домен гибридного KDF (версия схемы — при смене формата менять и её).
 pub const PQ_SALT: &[u8] = b"VAULT-PQ-V1";

@@ -17,7 +17,7 @@ mod channels;
 mod channel_signing;
 mod credential_store;
 mod crypto;
-mod crypto_pq;
+pub use vault_core::crypto_pq;
 mod duress;
 mod file_lock;
 mod email;

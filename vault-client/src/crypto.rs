@@ -1,5 +1,5 @@
 pub mod encryptor;
-pub mod pq;
+pub use vault_core::crypto_pq as pq;
 
 pub use encryptor::{DecryptedContent, Encryptor};
 

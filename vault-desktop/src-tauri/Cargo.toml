@@ -63,6 +63,8 @@ bytes = "1"
 cpal = "0.18"
 audiopus = "0.2"
 ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
+# Общее крипто-ядро (PQ-hybrid) — единый источник истины CLI/desktop/android.
+vault-core = { path = "../../vault-core" }
 hkdf = "0.12"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "rand_core"] }
 

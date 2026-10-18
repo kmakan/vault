@@ -1,0 +1,17 @@
+[package]
+name = "vault-core"
+version = "0.1.0"
+edition = "2021"
+description = "Общее крипто-ядро Vault (PQ-hybrid ML-KEM-768 + X25519) — единый источник истины для CLI, desktop и android."
+
+[dependencies]
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.8"
+hex = "0.4"
+anyhow = "1.0"
+serde = { version = "1", features = ["derive"] }
+hkdf = "0.12"
+sha2 = "0.10"
