@@ -1190,6 +1190,13 @@ export default {
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
+      // ADR-001 Etap 2: deps for MessagesFeature.loadMessages (formerly inline delegate).
+      loadMessagesDeps: {
+        isOutboundLetter: ContactsFeature.isOutboundLetter,
+        resolvePeerSender: ContactsFeature.resolvePeerSender,
+        resolveEventSender: ContactsFeature.resolveEventSender,
+        findKnownPeerByKey: ContactsFeature.findKnownPeerByKey,
+      },
       // Контекстное меню сообщения (копирование)
       messageMenu: null,
       replyTo: null,
@@ -2154,7 +2161,7 @@ export default {
           try { if (await PresenceFeature.isEnabled(this.email)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
-          this.loadEmails().catch(e => {
+          EmailsFeature.loadEmails(this).catch(e => {
             if (String(e && e.message || e).toLowerCase().includes('not connected')) {
               this.showRestoreFailure();
             }
@@ -2822,7 +2829,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         this.startPolling()
         if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
         else this.idleLoop(); // Rust-монитор IDLE — доставка звонков/писем
-        this.loadEmails().catch(e => {
+        EmailsFeature.loadEmails(this).catch(e => {
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
             this.loginError = e.message;
           }
@@ -2916,7 +2923,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
-        this.loadEmails().catch(() => {});
+        EmailsFeature.loadEmails(this).catch(() => {});
         // Сообщаем контактам новый адрес: broadcast-письмо несёт name/avatar
         // и key (тот же fingerprint) — получатели обновят адрес контакта.
         try { await this.broadcastProfile(); } catch (e) { console.error('[change-email] broadcast failed:', e); }
@@ -3254,10 +3261,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.
       if (this.emails.length === 0) {
         try {
-          await this.loadEmails(true);
+          await EmailsFeature.loadEmails(this, true);
         } catch (e) { /* Not connected — тихий фолбэк */ }
       }
-      await this.loadMessages(email);
+      await MessagesFeature.loadMessages(this, email, this.loadMessagesDeps);
       // при открытии чата — сразу к последнему
       // сообщению (вниз).
       this.scrollToBottom(true);
@@ -3414,7 +3421,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         }
       }
 
-      await this.loadGroupMessages(group.id);
+      await GroupsFeature.loadGroupMessages(this, group.id, false);
       this.scrollToBottom(true);
     },
     // --- Заметки для себя
@@ -3692,18 +3699,18 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       } catch (e) { /* тихо */ }
     },
     // ── Сообщения 1:1 (логика в features/messages.js) — тонкий делегат ──
-    async loadMessages(email) { return MessagesFeature.loadMessages(this, email, { isOutboundLetter: ContactsFeature.isOutboundLetter, resolvePeerSender: ContactsFeature.resolvePeerSender, resolveEventSender: ContactsFeature.resolveEventSender, findKnownPeerByKey: ContactsFeature.findKnownPeerByKey }); },
+    // ADR-001 Etap 2: call-site direct -> MessagesFeature.loadMessages(this, email, this.loadMessagesDeps). Delegate removed.
     // Полный рескан группы: письма, «застрявшие за курсором» из-за
     // разового сбоя (session desync / DNS / троттлинг), инкрементальный фетч
     // больше не вернёт. Кнопка в шапке группы делает полный IMAP-скан папок
     // (INBOX+Junk) и восстанавливает пропущенные сообщения.
     async refreshGroupFull() {
       if (!this.currentGroup) return;
-      await this.loadGroupMessages(this.currentGroup.id, true);
+      await GroupsFeature.loadGroupMessages(this, this.currentGroup.id, true);
       this.scrollToBottom(false);
     },
     // ── Групповые сообщения (логика в features/groups.js) — тонкий делегат ──
-    async loadGroupMessages(groupId, forceRescan = false) { return GroupsFeature.loadGroupMessages(this, groupId, forceRescan); },
+    // ADR-001 Etap 2: call-site direct -> GroupsFeature.loadGroupMessages(this, groupId, forceRescan). Delegate removed.
     // Мета-письма групп (VaultGroupMeta: <id>, аватар от админа) — для ВСЕХ
     // групп, где мы участники, а не только для открытой. Вызывается из
     // loadEmails (поллинг): участник, не открывавший группу после смены
@@ -4127,7 +4134,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     // ── Загрузка писем (логика в features/emails.js) — тонкий делегат. ──
-    async loadEmails(silent = false) { return EmailsFeature.loadEmails(this, silent); },
+    // ADR-001 Etap 2: call-site direct -> EmailsFeature.loadEmails(this, silent). Delegate removed.
     // ── Непрочитанные + PUSH-уведомления ─────────
     // processIncoming классифицирует КАЖДЫЙ fetched-батч (поллинг или вход):
     // расшифровывает тела, отличает настоящие сообщения от квитанций/
@@ -4280,7 +4287,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
         // иначе выглядело бы, что блок не работает.
         if (this.activeChatType === 'chat' && this.activeChat === email) {
-          await this.loadMessages(this.activeChat);
+          await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
         }
         uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
       }
@@ -4294,7 +4301,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
       // истории (фильтр до расшифровки), возвращать их нечем. Просто
       // перерисовываем: баннер уходит, новые сообщения начинают приходить.
-      await this.loadMessages(this.activeChat);
+      await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
     },
     // Ignore из меню сообщения: 1:1 — адрес чата, группа — sender_id автора
     // (msgSenderEmail). Тост объясняет, что именно произошло.
@@ -4310,7 +4317,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         await this.ignoreUser(sender);
         // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
         if (this.activeChatType === 'chat' && this.activeChat === sender) {
-          await this.loadMessages(this.activeChat);
+          await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
         }
         uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
       }
@@ -4727,7 +4734,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         await this.loadGroups();
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
         if (this.currentGroup?.id === inv.group_id) {
-          await this.loadGroupMessages(inv.group_id);
+          await GroupsFeature.loadGroupMessages(this, inv.group_id, false);
         }
       } catch (e) {
         alert('Failed to accept invite: ' + e.message);
