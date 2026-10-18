@@ -4702,7 +4702,15 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         console.error('refreshGroupMembers failed:', e);
       }
     },
-    async acceptInvite(inv) { return InvitesFeature.acceptInvite(this, inv); },
+    async acceptInvite(inv) {
+      return InvitesFeature.acceptInvite(this, inv, {
+        decryptGroupKey: (...args) => crypto.decryptGroupKey(...args),
+        kvSet: (...args) => db.kvSet(...args),
+        showToast: (...args) => uiStore.toast(...args),
+        t: (key) => uiStore.tr(key),
+        loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
+      });
+    },
     async declineInvite(inv) { return InvitesFeature.declineInvite(this, inv); },
     showNextInvite() { return InvitesFeature.showNextInvite(this); },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---

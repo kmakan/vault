@@ -6,10 +6,7 @@
 // loadChannels/loadContacts/loadProfiles/refreshGroupMembers/loadStoredPeerKeys
 // остаются в App.vue и вызываются через ctx.
 
-import api, { db } from '../api.js';
-import crypto from '../crypto.js';
-import { uiStore } from './session-store.js';
-function GroupsFeature() { return import('./groups.js'); }
+import api from '../api.js';
 
 export async function processInvites(ctx) {
       // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
@@ -103,34 +100,34 @@ export async function processInvites(ctx) {
 
 // ── ADR-001 Этап 3 (invites): acceptInvite/declineInvite/showNextInvite вынесены из App.vue.
 // ctx-паттерн: this.* -> ctx.*; GroupsFeature — лениво (разрывает цикл);
-// uiStore/crypto/db — импортированы напрямую (как messages.js).
-export async function acceptInvite(ctx, inv) {
+// deps: decryptGroupKey/kvSet/showToast/t/loadGroupMessages — инъекция из App.vue (ADR-001 pattern; smoke не мокает crypto/uiStore/db/groups).
+export async function acceptInvite(ctx, inv, deps) {
+  const { decryptGroupKey, kvSet, showToast, t, loadGroupMessages } = deps;
   const key = `${inv.group_id}|${inv.uid}`;
   if (!ctx.handledInviteKeys.includes(key)) ctx.handledInviteKeys.push(key);
   ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
   ctx.showInvitePopup = false;
   try {
     if (ctx.groups.some(g => g.id === inv.group_id)) {
-      uiStore.toast((uiStore.tr('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
+      showToast((t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
       ctx.showNextInvite();
       return;
     }
     let groupKey = inv.group_key || null;
     if (!groupKey && inv.group_key_enc && inv.sender_public_key && ctx.cryptoReady) {
-      groupKey = await crypto.decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
+      groupKey = await decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
       if (!groupKey) throw new Error('Не удалось расшифровать ключ группы');
     }
     if (!groupKey) throw new Error('В приглашении нет ключа группы');
     await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
     if (inv.group_avatar) {
-      await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
+      await kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
       ctx.groups.setGroupAvatar(inv.group_id, inv.group_avatar);
     }
     await ctx.loadGroups();
     try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
     if (ctx.currentGroup?.id === inv.group_id) {
-      const groups = await GroupsFeature();
-      await groups.loadGroupMessages(ctx, inv.group_id, false);
+      await loadGroupMessages(inv.group_id);
     }
   } catch (e) {
     alert('Failed to accept invite: ' + e.message);
