@@ -64,6 +64,16 @@ pub fn load_keypair_at(keys_dir: &Path, auto_migrate: bool) -> Result<Option<Sto
     }
     let data = fs::read_to_string(&path)?;
     let mut keypair: StoredKeyPair = serde_json::from_str(&data)?;
+    // Legacy-CLI (`crypto.rs::save_keypair` до унификации) писал отсутствующие
+    // PQ-поля как ПУСТЫЕ СТРОКИ, а не пропускал их. Пустая строка — не PQ-ключ:
+    // нормализуем в None, иначе auto_migrate не сработает (is_none() == false),
+    // а "" уедет в PQ-конверт как «ключ собеседника».
+    if keypair.pq_private_key.as_deref() == Some("") {
+        keypair.pq_private_key = None;
+    }
+    if keypair.pq_public_key.as_deref() == Some("") {
+        keypair.pq_public_key = None;
+    }
     // PQ-миграция: у аккаунтов, созданных до post-quantum, нет ML-KEM-пары.
     if auto_migrate && (keypair.pq_private_key.is_none() || keypair.pq_public_key.is_none()) {
         let pq = crate::crypto_pq::pq_generate();
@@ -305,6 +315,32 @@ mod tests {
         let dir = TempDir::new().unwrap();
         save_keypair_at(dir.path(), &kp_legacy()).unwrap();
         assert!(load_keypair_at(dir.path(), false).unwrap().unwrap().pq_private_key.is_none());
+    }
+    /// Legacy-CLI писал PQ-поля пустыми строками вместо пропуска. Такие файлы
+    /// обязаны мигрироваться так же, как файлы без полей (иначе "" уедет в
+    /// конверт как PQ-ключ), и не должны ломать загрузку.
+    #[test]
+    fn load_migrates_legacy_empty_string_pq_fields() {
+        let dir = TempDir::new().unwrap();
+        let legacy_json = r#"{
+  "public_key": "abcd1234",
+  "private_key": "ef567890",
+  "created_at": "2024-01-01T00:00:00Z",
+  "pq_private_key": "",
+  "pq_public_key": ""
+}"#;
+        fs::write(dir.path().join(KEY_FILE), legacy_json).unwrap();
+
+        // Чтение без миграции не должно возвращать "" как PQ-ключ.
+        let read_only = load_keypair_at(dir.path(), false).unwrap().unwrap();
+        assert_eq!(read_only.pq_private_key, None);
+        assert_eq!(read_only.pq_public_key, None);
+
+        // С auto_migrate=true legacy-файл получает настоящую ML-KEM-пару.
+        let loaded = load_keypair_at(dir.path(), true).unwrap().unwrap();
+        assert_eq!(loaded.public_key, "abcd1234");
+        assert!(loaded.pq_private_key.as_deref().is_some_and(|s| !s.is_empty()));
+        assert!(loaded.pq_public_key.as_deref().is_some_and(|s| !s.is_empty()));
     }
     #[test]
     fn load_missing_returns_none() {

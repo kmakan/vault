@@ -109,10 +109,16 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
-        // lock on ENV_MUTEX to serialize env-var access across parallel tests
-        // Direct set under ENV_MUTEX guard (set_env_safe would self-deadlock
-        // on recursive lock). Other modules' tests use set_env_safe which
-        // also takes ENV_MUTEX — we serialize to avoid env races.
+        // Сериализуем env-доступ через общий crate::ENV_MUTEX: две presence-
+        // теста (и любые env-тесты других модулей) в параллельном прогоне
+        // иначе гоняются за одну и ту же процесс-глобальную переменную, и
+        // один тест читает файл другого (ложные FAIL). Держим guard на всё
+        // время работы closure; set_var/remove_var вызываем напрямую
+        // (set_env_safe взял бы ENV_MUTEX повторно → self-deadlock).
+        // Устойчиво к poisoning: падение одного теста не валит остальные.
+        let _guard = crate::ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("VAULT_PRESENCE_FILE", &path);
         let result = f();
         let _ = std::fs::remove_file(&path);

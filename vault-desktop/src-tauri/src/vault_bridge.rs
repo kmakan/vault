@@ -12,9 +12,11 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 use vault_client::vault::AttachmentStore;
-use vault_client::vault::ClassifyKind;
 use vault_client::vault::ClassifyResult;
 use vault_client::vault::MessageStore;
+// ClassifyKind нужен только тестам (test_classify_kind_display) — в прод-сборке не используется.
+#[cfg(test)]
+use vault_client::vault::ClassifyKind;
 
 /// Bridge state — singleton via Tauri State.
 #[derive(Default)]
@@ -147,6 +149,26 @@ pub async fn vault_download_attachment(
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Decode base64 and write it to `dir/filename`, creating `dir` if needed.
+///
+/// Pure filesystem helper (no HOME/download-dir lookup) so the real code path
+/// is unit-testable with an explicit temp dir.
+pub fn save_base64_file(
+    base64_data: &str,
+    filename: &str,
+    dir: &std::path::Path,
+) -> Result<PathBuf, String> {
+    use base64::Engine as _;
+    let binary = base64::engine::general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| format!("base64 decode error: {}", e))?;
+
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(filename);
+    std::fs::write(&path, &binary).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 /// Save already-decrypted base64 file data to the downloads directory.
 ///
 /// Used by the Desktop "Download" button on attachment cards and the
@@ -158,17 +180,10 @@ pub async fn vault_save_file(
     filename: String,
     mime_type: String,
 ) -> Result<String, String> {
-    use base64::Engine as _;
-    let binary = base64::engine::general_purpose::STANDARD
-        .decode(&base64_data)
-        .map_err(|e| format!("base64 decode error: {}", e))?;
-
     let dir = dirs::download_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(std::env::temp_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(&filename);
-    std::fs::write(&path, &binary).map_err(|e| e.to_string())?;
+    let path = save_base64_file(&base64_data, &filename, &dir)?;
     let _ = mime_type; // reserved for future MIME-aware handling
     Ok(path.to_string_lossy().to_string())
 }
@@ -263,21 +278,22 @@ mod tests {
     #[test]
     fn test_save_file_roundtrip() {
         use base64::Engine as _;
-        let dir = dirs::download_dir()
-            .or_else(dirs::home_dir)
-            .unwrap_or_else(std::env::temp_dir);
+        // Явный temp-dir: тест не зависит от $HOME/dirs::download_dir() и не
+        // гоняется с env-тестами, которые временно подменяют HOME.
+        let dir = std::env::temp_dir().join(format!("vault_bridge_save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
         let original = b"save file test";
         let b64 = base64::engine::general_purpose::STANDARD.encode(original);
 
-        // Simulate what vault_save_file does
-        let binary = base64::engine::general_purpose::STANDARD
-            .decode(&b64)
-            .unwrap();
-        let path = dir.join("vault_test_save_file.bin");
-        std::fs::write(&path, &binary).unwrap();
-        let recovered = std::fs::read(&path).unwrap();
-        assert_eq!(recovered, original);
-        let _ = std::fs::remove_file(&path);
+        // Реальный путь сохранения (тот же код, что зовёт Tauri-команда).
+        let path = save_base64_file(&b64, "vault_test_save_file.bin", &dir).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        // Кривой base64 → Err, а не panic.
+        assert!(save_base64_file("!!!not-base64!!!", "x.bin", &dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

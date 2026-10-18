@@ -138,7 +138,7 @@ pub fn human_size(bytes: usize) -> String {
 /// <base64-encoded signature>
 /// ---END VAULT ENCRYPTED---
 /// ```
-pub use crate::vault::attachments::{download_file, EncryptedEnvelope, EncryptedEnvelopeData};
+pub use crate::vault::attachments::EncryptedEnvelope;
 
 
 

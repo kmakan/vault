@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use super::protocol::{VaultEnvelope, VaultMsgType};
+use super::protocol::VaultEnvelope;
+// VaultMsgType нужен только тестам (sample_envelope) — в прод-сборке не используется.
+#[cfg(test)]
+use super::protocol::VaultMsgType;
 use super::reactions::ReactionsStore;
 use super::attachments::{AttachmentStore, AttachmentMeta};
 

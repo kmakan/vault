@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 pub use vault_core::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
 
 const KEYS_DIR: &str = "keys";
-const KEY_FILE: &str = "keypair.json";
-const PEER_KEYS_FILE: &str = "peer_keys.json";
 /// Ключ подписи постов канала (ADR-002). Лежит ЗДЕСЬ, а не в channels.json:
 /// delete_all_keys() чистит ключи поимённо, и channels.json живёт отдельно
 /// и переносится вместе с каналом — там секрету не место (владелец шлёт
