@@ -4702,84 +4702,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         console.error('refreshGroupMembers failed:', e);
       }
     },
-    async acceptInvite(inv) {
-      const key = `${inv.group_id}|${inv.uid}`;
-      if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key);
-      // Попап закрываем СРАЗУ — медленный SMTP (accept-письмо) не должен
-      // висеть в UI. Поллинг инвайт повторно не покажет (handledInviteKeys).
-      this.pendingInvites.splice(this.invitePopupIndex, 1);
-      this.showInvitePopup = false;
-      try {
-        // Дубль-инвайт: группа уже есть локально (приглашение принято ранее).
-        // Это НЕ ошибка — тихо сообщаем (ключ уже помечен обработанным выше).
-        if (this.groups.some(g => g.id === inv.group_id)) {
-          uiStore.toast((uiStore.tr('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
-          this.showNextInvite();
-          return;
-        }
-        // Новый формат: group_key зашифрован на нашем публичном ключе —
-        // расшифровываем своим приватным ключом (ECDH + sender_public_key).
-        let groupKey = inv.group_key || null;
-        if (!groupKey && inv.group_key_enc && inv.sender_public_key && this.cryptoReady) {
-          groupKey = await crypto.decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
-          if (!groupKey) throw new Error('Не удалось расшифровать ключ группы');
-        }
-        if (!groupKey) throw new Error('В приглашении нет ключа группы');
-        await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
-        // Аватар группы из инвайта — сохраняем в kv_store.
-        if (inv.group_avatar) {
-          await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
-          this.groups.setGroupAvatar(inv.group_id, inv.group_avatar);
-        }
-        await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-        if (this.currentGroup?.id === inv.group_id) {
-          await GroupsFeature.loadGroupMessages(this, inv.group_id, false);
-        }
-      } catch (e) {
-        alert('Failed to accept invite: ' + e.message);
-        // Не приняли — возвращаем инвайт в очередь для повторной попытки.
-        const i = this.handledInviteKeys.indexOf(key);
-        if (i >= 0) this.handledInviteKeys.splice(i, 1);
-        this.pendingInvites.push(inv);
-      }
-      this.showNextInvite();
-    },
-    async declineInvite(inv) {
-      const key = `${inv.group_id}|${inv.uid}`;
-      if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key);
-      this.pendingInvites.splice(this.invitePopupIndex, 1);
-      this.showInvitePopup = false;
-      try {
-        await api.declineGroupInvite(inv.group_id, inv.uid, inv.sender);
-      } catch (e) {
-        // ignore
-      }
-      this.showNextInvite();
-    },
-    showNextInvite() {
-      clearTimeout(this._nextInviteTimer);
-      if (this.pendingInvites.length > 0) {
-        if (this.invitePopupIndex >= this.pendingInvites.length) this.invitePopupIndex = 0;
-        // Небольшая задержка: попап должен заметно исчезнуть после
-        // принять/отклонить, а не «сменить содержимое» без закрытия.
-        this._nextInviteTimer = setTimeout(() => {
-          if (this.pendingInvites.length && !this.showInvitePopup) {
-            this.showInvitePopup = true;
-          }
-        }, 1200);
-      } else {
-        this.showInvitePopup = false;
-        // Групповой попап закрыт — показываем накопившиеся запросы контактов.
-        if (this.pendingContacts.length) {
-          this._nextInviteTimer = setTimeout(() => {
-            if (this.pendingContacts.length && !this.showContactPopup) {
-              this.showContactPopup = true;
-            }
-          }, 1200);
-        }
-      }
-    },
+    async acceptInvite(inv) { return InvitesFeature.acceptInvite(this, inv); },
+    async declineInvite(inv) { return InvitesFeature.declineInvite(this, inv); },
+    showNextInvite() { return InvitesFeature.showNextInvite(this); },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
     async acceptContactInvite(c) {
       const key = `${c.sender}|${c.uid}`;

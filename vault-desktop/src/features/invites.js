@@ -6,7 +6,10 @@
 // loadChannels/loadContacts/loadProfiles/refreshGroupMembers/loadStoredPeerKeys
 // остаются в App.vue и вызываются через ctx.
 
-import api from '../api.js';
+import api, { db } from '../api.js';
+import crypto from '../crypto.js';
+import { uiStore } from './session-store.js';
+function GroupsFeature() { return import('./groups.js'); }
 
 export async function processInvites(ctx) {
       // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
@@ -96,4 +99,78 @@ export async function processInvites(ctx) {
       } catch (e) {
         console.error('processInvites: loadProfiles failed:', e);
       }
+}
+
+// ── ADR-001 Этап 3 (invites): acceptInvite/declineInvite/showNextInvite вынесены из App.vue.
+// ctx-паттерн: this.* -> ctx.*; GroupsFeature — лениво (разрывает цикл);
+// uiStore/crypto/db — импортированы напрямую (как messages.js).
+export async function acceptInvite(ctx, inv) {
+  const key = `${inv.group_id}|${inv.uid}`;
+  if (!ctx.handledInviteKeys.includes(key)) ctx.handledInviteKeys.push(key);
+  ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
+  ctx.showInvitePopup = false;
+  try {
+    if (ctx.groups.some(g => g.id === inv.group_id)) {
+      uiStore.toast((uiStore.tr('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
+      ctx.showNextInvite();
+      return;
+    }
+    let groupKey = inv.group_key || null;
+    if (!groupKey && inv.group_key_enc && inv.sender_public_key && ctx.cryptoReady) {
+      groupKey = await crypto.decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
+      if (!groupKey) throw new Error('Не удалось расшифровать ключ группы');
+    }
+    if (!groupKey) throw new Error('В приглашении нет ключа группы');
+    await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
+    if (inv.group_avatar) {
+      await db.kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
+      ctx.groups.setGroupAvatar(inv.group_id, inv.group_avatar);
+    }
+    await ctx.loadGroups();
+    try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
+    if (ctx.currentGroup?.id === inv.group_id) {
+      const groups = await GroupsFeature();
+      await groups.loadGroupMessages(ctx, inv.group_id, false);
+    }
+  } catch (e) {
+    alert('Failed to accept invite: ' + e.message);
+    const i = ctx.handledInviteKeys.indexOf(key);
+    if (i >= 0) ctx.handledInviteKeys.splice(i, 1);
+    ctx.pendingInvites.push(inv);
+  }
+  ctx.showNextInvite();
+}
+
+export async function declineInvite(ctx, inv) {
+  const key = `${inv.group_id}|${inv.uid}`;
+  if (!ctx.handledInviteKeys.includes(key)) ctx.handledInviteKeys.push(key);
+  ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
+  ctx.showInvitePopup = false;
+  try {
+    await api.declineGroupInvite(inv.group_id, inv.uid, inv.sender);
+  } catch (e) {
+    // ignore
+  }
+  ctx.showNextInvite();
+}
+
+export function showNextInvite(ctx) {
+  clearTimeout(ctx._nextInviteTimer);
+  if (ctx.pendingInvites.length > 0) {
+    if (ctx.invitePopupIndex >= ctx.pendingInvites.length) ctx.invitePopupIndex = 0;
+    ctx._nextInviteTimer = setTimeout(() => {
+      if (ctx.pendingInvites.length && !ctx.showInvitePopup) {
+        ctx.showInvitePopup = true;
+      }
+    }, 1200);
+  } else {
+    ctx.showInvitePopup = false;
+    if (ctx.pendingContacts.length) {
+      ctx._nextInviteTimer = setTimeout(() => {
+        if (ctx.pendingContacts.length && !ctx.showContactPopup) {
+          ctx.showContactPopup = true;
+        }
+      }, 1200);
+    }
+  }
 }
