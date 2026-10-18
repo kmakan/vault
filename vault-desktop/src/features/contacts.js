@@ -70,3 +70,68 @@ export function resolveEventSender(isOut, peerEmail, fallback) {
 export function isPeerEncrypted(peerKeys, cryptoReady, activeChat) {
   return !!cryptoReady && !!peerKeys && !!peerKeys[activeChat];
 }
+
+// ADR-001 Etap 3b (contact-invites): acceptContactInvite/declineContactInvite/showNextContact
+// iz App.vue. deps-injection (kak invites.js): zavisimosti peredautsya yavno cherez deps,
+// NE staticheskie importy (smoke-gate contacts ne mokaet crypto/identityStore).
+export async function acceptContactInvite(ctx, c, deps) {
+  const {
+    loadPeerKeyEmails, markAcceptedContact, showToast, t, setPeerKey, markLoaded,
+    savePeerKey, addContact, saveProfile, sendContactAccept, publicKey, peerKeys,
+    markContactHandled, unmarkContactHandled, splicePendingContacts, pushPendingContact,
+    loadProfiles, loadContacts, showNextContact,
+  } = deps;
+  const key = `${c.sender}|${c.uid}`;
+  markContactHandled(key);
+  splicePendingContacts();
+  try {
+    let exists = !!peerKeys()[c.sender];
+    if (!exists) {
+      try { exists = (await loadPeerKeyEmails()).has(c.sender); }
+      catch (e) { /* disk ne dostupen — schitaem novym */ }
+    }
+    if (exists) {
+      await markAcceptedContact(key);
+      showToast((t('already_in_contacts') || 'Kontakt uzhe v spiske') + ': ' + c.sender, 3000);
+      showNextContact();
+      return;
+    }
+    if (c.pq_public_key) setPeerKey(c.sender, c.public_key, c.pq_public_key);
+    await savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);
+    await markAcceptedContact(key);
+    setPeerKey(c.sender, c.public_key);
+    markLoaded(c.sender);
+    await addContact(c.sender);
+    saveProfile(c.sender, c.sender_name, c.sender_avatar, Date.parse(c.date) || Date.now());
+    loadProfiles();
+    await sendContactAccept(c.sender, publicKey());
+    await loadContacts();
+  } catch (e) {
+    alert('Failed to accept contact: ' + e.message);
+    unmarkContactHandled(key);
+    pushPendingContact(c);
+  }
+  showNextContact();
+}
+
+export async function declineContactInvite(ctx, c, deps) {
+  const { markContactHandled, splicePendingContacts, markDeclinedContact, showNextContact } = deps;
+  const key = `${c.sender}|${c.uid}`;
+  markContactHandled(key);
+  splicePendingContacts();
+  try { await markDeclinedContact(key); } catch (e) { /* ignore */ }
+  showNextContact();
+}
+
+export function showNextContact(ctx, deps) {
+  const { clearNextContactTimer, setNextContactTimer, pendingContacts, contactPopupIndex, setContactPopupIndex, setShowContactPopup } = deps;
+  clearNextContactTimer();
+  if (pendingContacts().length > 0) {
+    if (contactPopupIndex() >= pendingContacts().length) setContactPopupIndex(0);
+    setNextContactTimer(() => {
+      if (pendingContacts().length && !setShowContactPopup()) setShowContactPopup(true);
+    }, 1200);
+  } else {
+    setShowContactPopup(false);
+  }
+}

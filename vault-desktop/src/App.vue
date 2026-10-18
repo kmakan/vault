@@ -4730,78 +4730,45 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
     async acceptContactInvite(c) {
-      const key = `${c.sender}|${c.uid}`;
-      if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key);
-      // Попап закрываем СРАЗУ — accept-письмо идёт через медленный SMTP.
-      this.pendingContacts.splice(this.contactPopupIndex, 1);
-      try {
-        // Дубль-инвайт: контакт уже есть (приглашение уже принято).
-        // Поллинг обычно фильтрует таких (peers.has в fetchPendingContactInvites),
-        // но два письма от одного отправителя могут прийти одним пакетом —
-        // это НЕ ошибка: помечаем обработанным и тихо сообщаем.
-        let exists = !!this.peerKeys[c.sender];
-        if (!exists) {
-          try { exists = (await api.loadPeerKeyEmails()).has(c.sender); }
-          catch (e) { /* с диска не прочитать — считаем новым */ }
-        }
-        if (exists) {
-          await api.markAcceptedContact(key);
-          uiStore.toast((uiStore.tr('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + c.sender, 3000);
-          this.showNextContact();
-          return;
-        }
-        // PQ: pq-ключ приглашающего (если прислал) — контакт сразу
-        // гибридный. pq отсутствует → legacy X25519-контакт.
-        // Запись — через владельца identity (ADR-004 J.6).
-        if (c.pq_public_key) identityStore.setPeerKey(c.sender, c.public_key, c.pq_public_key);
-        await crypto.savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);
-        // Вечная пометка «инвайт обработан» — иначе после удаления контакта
-        // старое письмо-инвайт снова покажет попап приглашения.
-        await api.markAcceptedContact(key);
-        // Ключ ОБЯЗАТЕЛЬНО в память — иначе контакт виден в списке (строится
-        // с диска), но selectChat не найдёт ключ и предложит «добавить контакт».
-        // Запись — через владельца identity (ADR-004 J.6).
-        identityStore.setPeerKey(c.sender, c.public_key);
-        identityStore.markLoaded(c.sender);
-        await api.addContact(c.sender);
-        api.saveProfile(c.sender, c.sender_name, c.sender_avatar,
-          Date.parse(c.date) || Date.now());
-        this.loadProfiles();
-        // Отвечаем своим публичным ключом — у пригласившего появится наш контакт.
-        await api.sendContactAccept(c.sender, this.publicKey);
-        await this.loadContacts();
-      } catch (e) {
-        alert('Failed to accept contact: ' + e.message);
-        // Не приняли — возвращаем запрос в очередь для повторной попытки.
-        const i = this.handledContactKeys.indexOf(key);
-        if (i >= 0) this.handledContactKeys.splice(i, 1);
-        this.pendingContacts.push(c);
-      }
-      this.showNextContact();
+      return ContactsFeature.acceptContactInvite(this, c, {
+        loadPeerKeyEmails: () => api.loadPeerKeyEmails(),
+        markAcceptedContact: (key) => api.markAcceptedContact(key),
+        showToast: (...args) => uiStore.toast(...args),
+        t: (key) => uiStore.tr(key),
+        setPeerKey: (email, pub, pq) => identityStore.setPeerKey(email, pub, pq),
+        markLoaded: (email) => identityStore.markLoaded(email),
+        savePeerKey: (...args) => crypto.savePeerKey(...args),
+        addContact: (email) => api.addContact(email),
+        saveProfile: (...args) => api.saveProfile(...args),
+        sendContactAccept: (email, pub) => api.sendContactAccept(email, pub),
+        publicKey: () => this.publicKey,
+        peerKeys: () => this.peerKeys,
+        markContactHandled: (key) => { if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key); },
+        unmarkContactHandled: (key) => { const i = this.handledContactKeys.indexOf(key); if (i >= 0) this.handledContactKeys.splice(i, 1); },
+        splicePendingContacts: () => { this.pendingContacts.splice(this.contactPopupIndex, 1); },
+        pushPendingContact: (c) => { this.pendingContacts.push(c); },
+        loadProfiles: () => this.loadProfiles(),
+        loadContacts: () => this.loadContacts(),
+        showNextContact: () => this.showNextContact(),
+      });
     },
     async declineContactInvite(c) {
-      const key = `${c.sender}|${c.uid}`;
-      if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key);
-      this.pendingContacts.splice(this.contactPopupIndex, 1);
-      try {
-        // Помечаем отклонённым в sqlite kv_store (localStorage не источник).
-        await api.markDeclinedContact(key);
-      } catch (e) { /* ignore */ }
-      this.showNextContact();
+      return ContactsFeature.declineContactInvite(this, c, {
+        markContactHandled: (key) => { if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key); },
+        splicePendingContacts: () => { this.pendingContacts.splice(this.contactPopupIndex, 1); },
+        markDeclinedContact: (key) => api.markDeclinedContact(key),
+        showNextContact: () => this.showNextContact(),
+      });
     },
     showNextContact() {
-      clearTimeout(this._nextContactTimer);
-      if (this.pendingContacts.length > 0) {
-        if (this.contactPopupIndex >= this.pendingContacts.length) this.contactPopupIndex = 0;
-        // Задержка: попап должен заметно исчезнуть, а не «сменить содержимое».
-        this._nextContactTimer = setTimeout(() => {
-          if (this.pendingContacts.length && !this.showContactPopup) {
-            this.showContactPopup = true;
-          }
-        }, 1200);
-      } else {
-        this.showContactPopup = false;
-      }
+      return ContactsFeature.showNextContact(this, {
+        clearNextContactTimer: () => clearTimeout(this._nextContactTimer),
+        setNextContactTimer: (fn, delay) => { clearTimeout(this._nextContactTimer); this._nextContactTimer = setTimeout(fn, delay); },
+        pendingContacts: () => this.pendingContacts,
+        contactPopupIndex: () => this.contactPopupIndex,
+        setContactPopupIndex: (v) => { this.contactPopupIndex = v; },
+        setShowContactPopup: (v) => { this.showContactPopup = v; return this.showContactPopup; },
+      });
     },
     async inviteContactById(email) {
       const id = (email || '').trim();
