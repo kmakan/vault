@@ -16,17 +16,17 @@ export function createContactsStore() {
     state,
     async loadContacts(email) {
       const { contacts, contactAliases } = await _lc(email || sessionStore.getCurrentEmail());
-      state.contacts = contacts || [];
-      if (contactAliases) state.contactAliases = contactAliases;
-      return { contacts: state.contacts, contactAliases: state.contactAliases };
+      this.state.contacts = contacts || [];
+      if (contactAliases) this.state.contactAliases = contactAliases;
+      return { contacts: this.state.contacts, contactAliases: this.state.contactAliases };
     },
-    reset() { state.contacts = []; state.contactAliases = {}; state.ignored = []; state.ignoredUsers = {}; state.lastSeenMap = {}; },
+    reset() { this.state.contacts = []; this.state.contactAliases = {}; this.state.ignored = []; this.state.ignoredUsers = {}; this.state.lastSeenMap = {}; },
     // ── ignoredUsers ────────────────────────────────────────────────────
-    setIgnored(map) { state.ignoredUsers = map || {}; return state.ignoredUsers; },
-    clearIgnored() { state.ignoredUsers = {}; return state.ignoredUsers; },
+    setIgnored(map) { this.state.ignoredUsers = map || {}; return this.state.ignoredUsers; },
+    clearIgnored() { this.state.ignoredUsers = {}; return this.state.ignoredUsers; },
     // ── lastSeenMap ────────────────────────────────────────────────────
-    setLastSeen(email, ts) { state.lastSeenMap[email] = ts; return state.lastSeenMap; },
-    getLastSeen(email) { return state.lastSeenMap[email] || 0; },
+    setLastSeen(email, ts) { this.state.lastSeenMap[email] = ts; return this.state.lastSeenMap; },
+    getLastSeen(email) { return this.state.lastSeenMap[email] || 0; },
   };
 }
 export const contactsStore = createContactsStore();

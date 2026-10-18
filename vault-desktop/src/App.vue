@@ -894,7 +894,7 @@
 // поэтому Vue видит изменения. calls.js мутирует состояние через ctx.X,
 // а App.vue роутит это в computed-прокси → callSession.setX().
 import { useSession } from './features/call-session.js';
-import { reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
@@ -1052,6 +1052,41 @@ export default {
   },
   setup() {
     const { t, setLocale, availableLocales, currentLocale } = useI18n();
+    // ── ЖИВОЙ state владельцев (ADR-004, 18.10.2026) ──────────────────────
+    // Владельцы (features/*-store.js) framework-agnostic: state — обычный
+    // объект, reactive() наворачивает прокси в композиционном корне.
+    // Но запись в state идёт ТРЕМЯ путями:
+    //   1) метод через proxy      — this.sessionStore.login() (App.vue);
+    //   2) метод через raw-импорт  — mailboxState.setEmails(v) (App.vue:1524),
+    //      foldersStore.loadFromRaw(...) (features/folders.js);
+    //   3) прямая запись в state   — relay.js: mailboxStore.state.emails = merged,
+    //      relayState.state.relayFails = 0.
+    // Пути 2 и 3 мутируют объект-ЦЕЛЬ мимо прокси: Vue о записи не узнаёт,
+    // computed'ы App.vue остаются с закешированным значением, и интерфейс
+    // «залипает» тихо. Подтверждено на гейте: вход выполнялся полностью
+    // (sessionStore.state.isLoggedIn === true, пароль и ключ загружены),
+    // а компонент читал isLoggedIn === false, email === '' и показывал экран
+    // входа (0.1.224 → 0.1.225). Тем же классом был заморожен список писем:
+    // computed emails читал mailboxState.state.emails (raw) и не обновлялся
+    // после прихода новых.
+    // Лечение: сам объект state делаем реактивным ОДИН раз здесь — тогда
+    // любой из трёх путей доходит до Vue. Владельцы при этом мутируют state
+    // через this.state (не через захваченный объект) — см. их методы.
+    const liveState = (store) => {
+      store.state = reactive(store.state);
+      return store;
+    };
+    // Синглтоны, к state которых пишут/читают снаружи по raw-импорту.
+    // messagesStore сюда не входит: у него timers (proxy над Timeout ломает
+    // clearTimeout), а все его методы вызываются через proxy в App.vue.
+    liveState(sessionState);
+    liveState(mailboxState);
+    liveState(chatState);
+    liveState(relayState);
+    liveState(contactsStore);
+    liveState(foldersStore);
+    liveState(channelsStore);
+    liveState(identityStore);
     // Модуль-владелец переписки (ADR-004, Этап A1).
     // reactive() оборачивает стор: методы мутируют this.state через прокси,
     // поэтому Vue видит изменения. Без обёртки мутации шли бы мимо прокси
@@ -1059,7 +1094,14 @@ export default {
     const chat = reactive(createChatStore());
     // Модуль-владелец состояния групп (ADR-004, Этап A9). Аналогично чат-хранилищу:
     // groupKeys и groupAvatars больше не data()-свойства, а живут в владельце.
-    const groups = reactive(createGroupsStore());
+    //
+    // ИМЯ: groupsStore, а НЕ groups. `groups` — это СПИСОК групп (data, шаблон
+    // рендерит filteredGroups = this.groups.filter(...)). Первая версия отдавала
+    // владельца под именем `groups`: setup-биндинг перекрывал data-поле, и первое
+    // же `this.groups = r.groups` в loadGroups() затирало владельца массивом —
+    // после этого this.groups.state и this.groups.mergeGroupKeys() падали
+    // (TypeError) прямо в ветке авто-входа: вход не доходил до чатов (18.10).
+    const groupsStore = reactive(createGroupsStore());
     // Модуль-владелец состояния отправки (ADR-004, Этап A10). Аналогично
     // чат- и групповым хранилищам: sending и pendingOutgoing больше не
     // data()-свойства, а живут во владельце. 14 писатц → ctx.setSending/
@@ -1096,7 +1138,7 @@ export default {
       onMessagesScroll: () => this?.onMessagesScroll?.(),
       jumpToBottom: () => this?.jumpToBottom?.(),
     });
-    return { t, setLocale, availableLocales, currentLocale, chat, groups, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groupsStore, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession };
   },
   data() {
     return {
@@ -1258,8 +1300,13 @@ export default {
       // showCreateChannel/showJoinChannel/postingChannel.
       // form-state inj uiStore.formState (J.5b): newChannelName/newChannelAbout/
       // joinChannelLink/newGroupName/newGroupAvatar.
-      groupKeys: {},  // group_id → groupKeyHex (J.5c owner: groups-store)
-      groupAvatars: {},  // group_id → dataUrl (J.5c owner: groups-store)
+      // groupKeys/groupAvatars УБРАНЫ из data() 18.10.2026: они и владелись
+      // groups-store, и объявлялись здесь — data-поле перекрывало computed-прокси
+      // (порядок разрешения this.*: setup → data → props → computed), поэтому
+      // this.groupKeys в шаблоне/методах читал пустой объект, а записи уходили
+      // в this.groupsStore.setGroupKey(...). Групповые ключи были не видны
+      // приложению при полностью рабочем владельце. Присваиваний
+      // this.groupKeys/this.groupAvatars в коде нет — удаление безопасно.
 
       // currentGroup/activeChatType — proxy на chat-store (J.3a).
       // Тост-уведомление внизу экрана inj uiStore (J.3b).
@@ -1406,15 +1453,15 @@ export default {
     },
     // Геттер сохраняет обратную совместимость для чтения; запись — через API.
     groupKeys: {
-      get() { return this.groups.state.groupKeys; },
+      get() { return this.groupsStore.state.groupKeys; },
     },
     groupAvatars: {
-      get() { return this.groups.state.groupAvatars; },
+      get() { return this.groupsStore.state.groupAvatars; },
     },
     // ADR-004 J.7: groupIconMap — пока что пустая карта (иконки групп не в MVP).
     // Прокся на groupAvatars: если понадобится иконка — добавим в groups-store.
     groupIconMap: {
-      get() { return this.groups.state.groupIcons || {}; },
+      get() { return this.groupsStore.state.groupIcons || {}; },
     },
     // searchQueryinj в uiStore (J.5b).
     searchQuery: {
@@ -1556,8 +1603,8 @@ export default {
       set(v) { identityStore.state.peerKeysLoaded = v || {}; },
     },
     // Прокси во владельца чата (ADR-004 J.3a).
-    activeChat: { get() { return chatStore.state.activeChat; }, set(v) { chatStore.state.activeChat = v ?? null; } },
-    currentGroup: { get() { return chatStore.state.currentGroup; }, set(v) { chatStore.state.currentGroup = v ?? null; } },
+    activeChat: { get() { return this.chatStore.state.activeChat; }, set(v) { this.chatStore.state.activeChat = v ?? null; } },
+    currentGroup: { get() { return this.chatStore.state.currentGroup; }, set(v) { this.chatStore.state.currentGroup = v ?? null; } },
     // myBioinj в session-store (J.3a):
     myBio: { get() { return this.sessionStore.state.myBio; }, set(v) { this.sessionStore.setBio(v); } },
     // J.3a: auth state inj session-store.state:
@@ -1574,14 +1621,17 @@ export default {
     // J.7: UI constants inj session-store.state:
     quickReactions: { get() { return this.sessionStore.state.quickReactions; } },
     activeChatType: {
-      get() { return chatStore.state.activeChatType; },
-      set(v) { chatStore.state.activeChatType = v; },
+      get() { return this.chatStore.state.activeChatType; },
+      set(v) { this.chatStore.state.activeChatType = v; },
     },
     // Прокси во владельца mailbox (J.3c): channels + body cache.
-    channels: { get() { return mailboxStore.state.channels; }, set(v) { mailboxStore.state.channels = v || []; } },
+    // this.mailboxStore, а не голый mailboxStore: имя приходит из return setup()
+    // и в options-объекте видно только через this (иначе ReferenceError прямо в
+    // ветке авто-входа — инцидент 18.10).
+    channels: { get() { return this.mailboxStore.state.channels; }, set(v) { this.mailboxStore.state.channels = v || []; } },
     emailBodyCache: {
-      get() { return mailboxStore.state.emailBodyCache; },
-      set(v) { mailboxStore.state.emailBodyCache = v || {}; },
+      get() { return this.mailboxStore.state.emailBodyCache; },
+      set(v) { this.mailboxStore.state.emailBodyCache = v || {}; },
     },
     // Прокси во владельца relay-состояния (ADR-004 Этап A13).
     // ecoMode/relayEnabled/relayDeliveryMode → proxy на relay-store.
@@ -2075,8 +2125,12 @@ export default {
       this.loginError = uiStore.tr('recovery_interrupted') || 'recovery_interrupted';
       return;
     }
-    // Validate saved token
-    if (api.token) {
+    // Validate saved token. Условие — «есть token ИЛИ сохранённый аккаунт»:
+    // token синтетический (serverless-<email>) и мог пропасть (сбой сохранения
+    // localStorage, старый баг автологина), а сохранённые credentials на
+    // устройстве при этом целы. Без второй половины условия вход после потери
+    // token блокировался НАВСЕГДА — форма входа, хотя всё сохранено.
+    if (api.token || localStorage.getItem('vault-email')) {
       // Авто-вход: IMAP-сессия Rust умирает при перезапуске приложения, но
       // учётные данные почты зашифрованы на устройстве (device-ключ) —
       // восстанавливаем подключение без повторного ввода пароля.
@@ -2167,10 +2221,13 @@ export default {
             }
           });
         } catch (e) {
-          // Session died on restart and auto-login could not restore it —
-          // просим ввести пароль снова
-          api.token = null;
-          localStorage.removeItem('vault-token');
+          // Восстановление прошло, но инициализация после него упала.
+          // token НЕ стираем: он синтетический (serverless-<email>) и нужен,
+          // чтобы следующий холодный старт снова попробовал авто-вход. Старое
+          // поведение (api.token = null + removeItem) превращало одну ошибку в
+          // вечный экран входа — человек видел «всё пропало» при целых данных
+          // (инцидент 18.10). Ошибку логируем: иначе причина невидима.
+          console.error('auto-login: post-restore init failed (token kept):', e);
           this.showRestoreFailure();
         } finally {
           this.restoringSession = false;
@@ -3016,9 +3073,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         requestGroupAvatarHeal: this.requestGroupAvatarHeal,
       });
       if (r.groups) this.groups = r.groups;
-      this.groups.mergeGroupKeys(r.keys || {});
-      this.groups.mergeGroupAvatars(r.avatars || {});
-      this.groups.mergeGroupIcons(r.icons);
+      this.groupsStore.mergeGroupKeys(r.keys || {});
+      this.groupsStore.mergeGroupAvatars(r.avatars || {});
+      this.groupsStore.mergeGroupIcons(r.icons);
       for (const c of r.newContacts) this.contacts.push(c);
     },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
@@ -3401,7 +3458,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           if (keyData && keyData.group_key) {
             // Serverless: group key is stored locally in ~/.vault/groups.json
             // (the same file the CLI reads) — no per-user encryption needed.
-            this.groups.setGroupKey(group.id, keyData.group_key);
+            this.groupsStore.setGroupKey(group.id, keyData.group_key);
           } else if (keyData && keyData.encrypted_key) {
             // Decrypt the group key with our private key
             // The encrypted_key was encrypted with our public key by the group creator
@@ -3413,7 +3470,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
                 keyData.encrypted_key,
                 this.peerKeys[creatorEmail]
               );
-              this.groups.setGroupKey(group.id, groupKeyHex);
+              this.groupsStore.setGroupKey(group.id, groupKeyHex);
             }
           }
         } catch (e) {
@@ -3723,10 +3780,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async syncGroupAvatarsFromMeta() { return GroupMetaFeature.syncGroupAvatarsFromMeta(this); },
     // Тонкие прокси во владельца группового состояния (ADR-004 Этап A9).
     // features/* вызывают ctx.setGroupKey — адресуем во владельца.
-    setGroupKey(id, key) { return this.groups.setGroupKey(id, key); },
-    setGroupAvatar(id, avatar) { return this.groups.setGroupAvatar(id, avatar); },
-    clearGroupKeys() { return this.groups.clearGroupKeys(); },
-    clearGroupAvatars() { return this.groups.clearGroupAvatars(); },
+    setGroupKey(id, key) { return this.groupsStore.setGroupKey(id, key); },
+    setGroupAvatar(id, avatar) { return this.groupsStore.setGroupAvatar(id, avatar); },
+    clearGroupKeys() { return this.groupsStore.clearGroupKeys(); },
+    clearGroupAvatars() { return this.groupsStore.clearGroupAvatars(); },
     // Тонкие прокси во владельца состояния отправки (ADR-004 Этап A10).
     // features/* вызывают ctx.setSending/ctx.setPendingOutgoing — адресуем во владельца.
     setSending(val) { return this.sendingStore.setSending(val); },
@@ -4006,7 +4063,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     async onGroupAvatarUpdate({ groupId, avatar }) {
-      this.groups.setGroupAvatar(groupId, avatar);
+      this.groupsStore.setGroupAvatar(groupId, avatar);
       await db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');
       if (!avatar) return;
       // Ключ группы мог быть ещё не загружен (настройки открыты без чата) —
@@ -4525,12 +4582,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const { group, groupKey } = await GroupsCreate.createGroup({
           name: this.newGroupName, avatar: this.newGroupAvatar, cryptoReady: this.cryptoReady,
           onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groups.setGroupAvatar(g.id, av);
+            if (av) this.groupsStore.setGroupAvatar(g.id, av);
             this.groups.push(g);
             this.currentGroup = g;
           },
         });
-        if (groupKey) this.groups.setGroupKey(group.id, groupKey);
+        if (groupKey) this.groupsStore.setGroupKey(group.id, groupKey);
         // Одноразовый аватар диалога больше не нужен.
         this.newGroupAvatar = '';
         this.showGroupSettings = true;
@@ -4566,10 +4623,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         const { invited, skipped } = await GroupsClone.cloneGroup({
           src, name, email: this.email, peerKeys: this.peerKeys, publicKey: this.publicKey,
           onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groups.setGroupAvatar(g.id, av);
+            if (av) this.groupsStore.setGroupAvatar(g.id, av);
             this.groups.push(g);
             this.currentGroup = g;
-            if (g.group_key) this.groups.setGroupKey(g.id, g.group_key);
+            if (g.group_key) this.groupsStore.setGroupKey(g.id, g.group_key);
           },
         });
         const msg = (uiStore.tr('group_clone_done') || 'Клон создан')

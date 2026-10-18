@@ -38,47 +38,47 @@ export function createRelayStore() {
     state,
 
     // ── ecoAutonomous (auto fallback) ───────────────────────────────
-    setEcoAutonomous(v) { state.ecoAutonomous = !!v; return state.ecoAutonomous; },
-    isEcoAutonomous() { return state.ecoAutonomous; },
+    setEcoAutonomous(v) { this.state.ecoAutonomous = !!v; return this.state.ecoAutonomous; },
+    isEcoAutonomous() { return this.state.ecoAutonomous; },
 
     // ── relayOfflineSince (epoch ms или null) ───────────────────────
-    setRelayOfflineSince(v) { state.relayOfflineSince = v; return state.relayOfflineSince; },
-    getRelayOfflineSince() { return state.relayOfflineSince; },
+    setRelayOfflineSince(v) { this.state.relayOfflineSince = v; return this.state.relayOfflineSince; },
+    getRelayOfflineSince() { return this.state.relayOfflineSince; },
 
     // ── relayFails / lastRelayHealth (resilience) ───────────────────
-    setRelayFails(n) { state.relayFails = n; return state.relayFails; },
-    bumpRelayFails() { state.relayFails += 1; return state.relayFails; },
-    resetRelayFails() { state.relayFails = 0; return state.relayFails; },
+    setRelayFails(n) { this.state.relayFails = n; return this.state.relayFails; },
+    bumpRelayFails() { this.state.relayFails += 1; return this.state.relayFails; },
+    resetRelayFails() { this.state.relayFails = 0; return this.state.relayFails; },
 
-    setLastRelayHealth(v) { state.lastRelayHealth = v; return state.lastRelayHealth; },
-    getLastRelayHealth() { return state.lastRelayHealth; },
+    setLastRelayHealth(v) { this.state.lastRelayHealth = v; return this.state.lastRelayHealth; },
+    getLastRelayHealth() { return this.state.lastRelayHealth; },
 
     // ── ecoMode ────────────────────────────────────────────────────────────
     enableEco(on = true) {
-      state.ecoMode = !!on;
-      return state.ecoMode;
+      this.state.ecoMode = !!on;
+      return this.state.ecoMode;
     },
     isEcoMode() {
-      return state.ecoMode;
+      return this.state.ecoMode;
     },
 
     // ── relayEnabled ───────────────────────────────────────────────────────
     enableRelay(on = true) {
-      state.relayEnabled = !!on;
-      return state.relayEnabled;
+      this.state.relayEnabled = !!on;
+      return this.state.relayEnabled;
     },
     isRelayEnabled() {
-      return state.relayEnabled;
+      return this.state.relayEnabled;
     },
 
     // ── relayDeliveryMode ──────────────────────────────────────────────────
     // 'email' | 'relay' — канал доставки исходящего письма.
     setRelayMode(mode) {
-      state.relayDeliveryMode = mode;
-      return state.relayDeliveryMode;
+      this.state.relayDeliveryMode = mode;
+      return this.state.relayDeliveryMode;
     },
     deliveryMode() {
-      return state.relayDeliveryMode;
+      return this.state.relayDeliveryMode;
     },
   };
 }

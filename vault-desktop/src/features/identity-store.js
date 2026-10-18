@@ -12,72 +12,80 @@
 //  - peerPqKeys: {email: b64-pq-pubkey}  (ML-KEM ek)
 //  - peerKeyInput: ''                      (form field)
 //  - peerKeysLoaded: {email: true}        (dedup загрузки)
-
-const peerKeys = {};
-const peerPqKeys = {};
-const peerKeyInput = { value: '' };
-let peerKeysLoaded = {};
+//
+// 18.10.2026 (регрессия ADR-004, класс «запись мимо реактивности»): state был
+// GETTER'ом, возвращавшим НОВЫЙ объект на каждое чтение:
+//     get state() { return { peerKeys, peerPqKeys, peerKeyInput: ..., peerKeysLoaded }; }
+// Значения внутри — одни и те же module-level объекты, но сам объект каждый раз
+// новый, поэтому reactive()/computed никогда не трекали поля: прокси App.vue
+// (this.peerKeys/this.peerPqKeys/this.peerKeyInput) показывали первое прочитанное
+// значение навсегда. Теперь state — обычное поле с теми же четырьмя ключами,
+// а мутации идут через this.state (как у остальных владельцев), поэтому
+// liveState(identityStore) в App.vue делает их реактивными.
 
 function _normalizeKey(email) {
   return String(email || '').toLowerCase();
 }
 
 export function createIdentityStore() {
+  const state = {
+    peerKeys: {},
+    peerPqKeys: {},
+    peerKeyInput: '',
+    peerKeysLoaded: {},
+  };
   return {
-    // state (plain — reactive через computed inj в App.setup)
-    get state() {
-      return { peerKeys, peerPqKeys, peerKeyInput: peerKeyInput.value, peerKeysLoaded };
-    },
+    state,
 
     getPeerKey(email) {
       const k = _normalizeKey(email);
-      return peerKeys[k] || peerKeys[email || ''];
+      return this.state.peerKeys[k] || this.state.peerKeys[email || ''];
     },
     getPeerPqKey(email) {
       const k = _normalizeKey(email);
-      return peerPqKeys[k] || peerPqKeys[email || ''];
+      return this.state.peerPqKeys[k] || this.state.peerPqKeys[email || ''];
     },
     // 2450: очистка на logout
     clearPeerKeys() {
-      for (const k of Object.keys(peerKeys)) delete peerKeys[k];
-      for (const k of Object.keys(peerPqKeys)) delete peerPqKeys[k];
-      peerKeyInput.value = '';
-      peerKeysLoaded = {};
+      for (const k of Object.keys(this.state.peerKeys)) delete this.state.peerKeys[k];
+      for (const k of Object.keys(this.state.peerPqKeys)) delete this.state.peerPqKeys[k];
+      this.state.peerKeyInput = '';
+      this.state.peerKeysLoaded = {};
     },
     // 2457-2459: bulk load из peer_keys.json
     loadPeerKeys(pks) {
       if (!pks) return;
       for (const pk of pks) {
-        peerKeys[pk.email] = pk.public_key;
-        peerKeysLoaded[pk.email] = true;
-        if (pk.pq_public_key) peerPqKeys[pk.email] = pk.pq_public_key;
+        this.state.peerKeys[pk.email] = pk.public_key;
+        this.state.peerKeysLoaded[pk.email] = true;
+        if (pk.pq_public_key) this.state.peerPqKeys[pk.email] = pk.pq_public_key;
       }
     },
     setPeerKey(email, key, pq = null) {
       const norm = _normalizeKey(email);
-      peerKeys[norm] = key;
-      if (pq != null) peerPqKeys[norm] = pq;
+      this.state.peerKeys[norm] = key;
+      if (pq != null) this.state.peerPqKeys[norm] = pq;
     },
     // Удаление пира из всех хранилищ (смена почты: старый адрес убираем,
     // иначе второй контакт с тем же ключом). Порядок у вызывающего:
     // crypto.removePeerKey → removePeerKey → setPeerKey(new).
     removePeerKey(email) {
       const norm = _normalizeKey(email);
-      const had = (norm in peerKeys) || ((email || '') in peerKeys);
-      delete peerKeys[norm];
-      delete peerKeys[email || ''];
-      delete peerPqKeys[norm];
-      delete peerPqKeys[email || ''];
-      delete peerKeysLoaded[norm];
-      delete peerKeysLoaded[email || ''];
+      const had = (norm in this.state.peerKeys) || ((email || '') in this.state.peerKeys);
+      delete this.state.peerKeys[norm];
+      delete this.state.peerKeys[email || ''];
+      delete this.state.peerPqKeys[norm];
+      delete this.state.peerPqKeys[email || ''];
+      delete this.state.peerKeysLoaded[norm];
+      delete this.state.peerKeysLoaded[email || ''];
       return had;
     },
-    setPeerKeyInput(v) { peerKeyInput.value = v ?? ''; },
-    markLoaded(email) { peerKeysLoaded[_normalizeKey(email)] = true; },
+    setPeerKeyInput(v) { this.state.peerKeyInput = v ?? ''; },
+    markLoaded(email) { this.state.peerKeysLoaded[_normalizeKey(email)] = true; },
     // 2995/3030/3184 read-through (dedup)
     hasPeerKey(email) {
       const norm = _normalizeKey(email);
-      return !!peerKeys[norm] || !!peerKeys[email || ''];
+      return !!this.state.peerKeys[norm] || !!this.state.peerKeys[email || ''];
     },
   };
 }

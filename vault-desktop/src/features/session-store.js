@@ -37,29 +37,29 @@ export function createSessionStore() {
 
     // ── isLoggedIn ────────────────────────────────────────────────────────
     login() {
-      state.isLoggedIn = true;
-      return state.isLoggedIn;
+      this.state.isLoggedIn = true;
+      return this.state.isLoggedIn;
     },
     logout() {
-      state.isLoggedIn = false;
-      return state.isLoggedIn;
+      this.state.isLoggedIn = false;
+      return this.state.isLoggedIn;
     },
     is() {
-      return state.isLoggedIn;
+      return this.state.isLoggedIn;
     },
 
     // ── currentEmail ────────────────────────────────────────────────────
-    setCurrentEmail(e) { state.currentEmail = e || ''; return state.currentEmail; },
-    getCurrentEmail() { return state.currentEmail; },
+    setCurrentEmail(e) { this.state.currentEmail = e || ''; return this.state.currentEmail; },
+    getCurrentEmail() { return this.state.currentEmail; },
     // ── password ────────────────────────────────────────────────────────
     // J.7: быв. App.vue data this.password. recovery.js читает ctx.password —
     // owner-посредник делает это явным deps-параметром (не ctx-данный field).
-    setPassword(p) { state.password = p || ''; return state.password; },
-    getPassword() { return state.password; },
-    clearPassword() { state.password = ''; return state.password; },
+    setPassword(p) { this.state.password = p || ''; return this.state.password; },
+    getPassword() { return this.state.password; },
+    clearPassword() { this.state.password = ''; return this.state.password; },
     // ── myBio ───────────────────────────────────────────────────────────
-    setBio(bio) { state.myBio = bio || ''; return state.myBio; },
-    getBio() { return state.myBio; },
+    setBio(bio) { this.state.myBio = bio || ''; return this.state.myBio; },
+    getBio() { return this.state.myBio; },
 
   };
 }
@@ -183,9 +183,9 @@ export function createChatStore() {
   };
   return {
     state,
-    setActiveChat(v) { state.activeChat = v ?? null; return state.activeChat; },
-    setCurrentGroup(g) { state.currentGroup = g ?? null; return state.currentGroup; },
-    setActiveChatType(t) { state.activeChatType = t; return state.activeChatType; },
+    setActiveChat(v) { this.state.activeChat = v ?? null; return this.state.activeChat; },
+    setCurrentGroup(g) { this.state.currentGroup = g ?? null; return this.state.currentGroup; },
+    setActiveChatType(t) { this.state.activeChatType = t; return this.state.activeChatType; },
   };
 }
 export const chatStore = createChatStore();

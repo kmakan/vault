@@ -21,28 +21,28 @@ export function createFoldersStore() {
   return {
     state,
     loadFromRaw(rawFlags, rawNames) {
-      state.chatFlags = rawFlags || {};
-      state.chatFoldersNames = rawNames || [];
+      this.state.chatFlags = rawFlags || {};
+      this.state.chatFoldersNames = rawNames || [];
     },
-    clearFlags() { state.chatFlags = {}; state.chatFoldersNames = []; },
-    flagOf(key) { return state.chatFlags[key] || {}; },
+    clearFlags() { this.state.chatFlags = {}; this.state.chatFoldersNames = []; },
+    flagOf(key) { return this.state.chatFlags[key] || {}; },
     setFlag(key, f) {
-      if (!f || (!f.archived && !f.muted && !f.folder)) delete state.chatFlags[key];
-      else state.chatFlags[key] = f;
+      if (!f || (!f.archived && !f.muted && !f.folder)) delete this.state.chatFlags[key];
+      else this.state.chatFlags[key] = f;
     },
     renameFolder(oldName, newName) {
-      const names = state.chatFoldersNames;
+      const names = this.state.chatFoldersNames;
       const i = names.indexOf(oldName);
       if (i < 0) return false;
       if (newName && !names.includes(newName)) names[i] = newName;
       return true;
     },
     addFolderName(name) {
-      if (name && !state.chatFoldersNames.includes(name)) state.chatFoldersNames.push(name);
+      if (name && !this.state.chatFoldersNames.includes(name)) this.state.chatFoldersNames.push(name);
     },
     removeFolderName(name) {
-      const i = state.chatFoldersNames.indexOf(name);
-      if (i >= 0) state.chatFoldersNames.splice(i, 1);
+      const i = this.state.chatFoldersNames.indexOf(name);
+      if (i >= 0) this.state.chatFoldersNames.splice(i, 1);
     },
     // chat-меню target → ключ флага (group:/channel:/email).
     flagKey(target) {

@@ -10,19 +10,19 @@ export function createChannelsStore() {
   };
   return {
     state,
-    setChannelPosts(chId, arr) { state.channelPosts[chId] = arr || []; return state.channelPosts[chId]; },
+    setChannelPosts(chId, arr) { this.state.channelPosts[chId] = arr || []; return this.state.channelPosts[chId]; },
     addChannelPosts(chId, posts) {
-      const existing = state.channelPosts[chId] || [];
-      state.channelPosts[chId] = [...existing, ...(posts || [])];
-      return state.channelPosts[chId];
+      const existing = this.state.channelPosts[chId] || [];
+      this.state.channelPosts[chId] = [...existing, ...(posts || [])];
+      return this.state.channelPosts[chId];
     },
-    getChannelPosts(chId) { return state.channelPosts[chId] || []; },
-    setUnread(chId, count) { state.channelUnread[chId] = count || 0; return state.channelUnread[chId]; },
-    clearUnread(chId) { state.channelUnread[chId] = 0; },
-    setChannelAvatar(chId, dataUrl) { state.channelAvatars[chId] = dataUrl || ''; return state.channelAvatars[chId]; },
-    getChannelAvatar(chId) { return state.channelAvatars[chId] || ''; },
-    setCurrentChannel(ch) { state.currentChannel = ch ?? null; return state.currentChannel; },
-    reset() { state.channelPosts = {}; state.channelUnread = {}; state.channelAvatars = {}; state.currentChannel = null; },
+    getChannelPosts(chId) { return this.state.channelPosts[chId] || []; },
+    setUnread(chId, count) { this.state.channelUnread[chId] = count || 0; return this.state.channelUnread[chId]; },
+    clearUnread(chId) { this.state.channelUnread[chId] = 0; },
+    setChannelAvatar(chId, dataUrl) { this.state.channelAvatars[chId] = dataUrl || ''; return this.state.channelAvatars[chId]; },
+    getChannelAvatar(chId) { return this.state.channelAvatars[chId] || ''; },
+    setCurrentChannel(ch) { this.state.currentChannel = ch ?? null; return this.state.currentChannel; },
+    reset() { this.state.channelPosts = {}; this.state.channelUnread = {}; this.state.channelAvatars = {}; this.state.currentChannel = null; },
   };
 }
 export const channelsStore = createChannelsStore();

@@ -24,61 +24,61 @@ export function createMailboxStore() {
     state,
     // ── emails ──
     setEmails(list) {
-      state.emails = list || [];
-      return state.emails;
+      this.state.emails = list || [];
+      return this.state.emails;
     },
     mergeEmails(list) {
-      const m = new Map(state.emails.map((m) => [m.uid + '|' + (m.folder || 'INBOX'), m]));
+      const m = new Map(this.state.emails.map((m) => [m.uid + '|' + (m.folder || 'INBOX'), m]));
       for (const e of (list || [])) {
         if (!e) continue;
         m.set(e.uid + '|' + (e.folder || 'INBOX'), e);
       }
-      state.emails = [...m.values()].sort((a, b) =>
+      this.state.emails = [...m.values()].sort((a, b) =>
         new Date(b.date || 0) - new Date(a.date || 0));
-      return state.emails;
+      return this.state.emails;
     },
     mergeEmail(one) { return this.mergeEmails([one]); },
     clearEmails() {
-      state.emails = [];
-      return state.emails;
+      this.state.emails = [];
+      return this.state.emails;
     },
     emailCount() {
-      return (state.emails || []).length;
+      return (this.state.emails || []).length;
     },
     // ── body cache ──
     cacheBody(key, body) {
-      state.emailBodyCache[key] = body;
+      this.state.emailBodyCache[key] = body;
     },
     getEmailBody(key) {
-      return state.emailBodyCache[key] ?? null;
+      return this.state.emailBodyCache[key] ?? null;
     },
     clearBodyCache() {
-      state.emailBodyCache = {};
+      this.state.emailBodyCache = {};
     },
     // ── channels (mailing-list writers; channel*Unread/Avatars отдельно в channels-store.js, J.5d) ──
     setChannels(list) {
-      state.channels = list || [];
-      return state.channels;
+      this.state.channels = list || [];
+      return this.state.channels;
     },
     // ── loading/error (J.3c) ──
     setEmailsLoading(flag) {
-      state.emailsLoading = !!flag;
-      return state.emailsLoading;
+      this.state.emailsLoading = !!flag;
+      return this.state.emailsLoading;
     },
     setEmailError(err) {
-      state.emailError = err || '';
-      return state.emailError;
+      this.state.emailError = err || '';
+      return this.state.emailError;
     },
     reset() {
-      state.emailsLoading = false;
-      state.emailError = '';
+      this.state.emailsLoading = false;
+      this.state.emailError = '';
     },
     hardReset() {
-      state.emails = [];
-      state.channels = [];
-      state.emailBodyCache = {};
-      state.emailsLoading = false;
-      state.emailError = '';
+      this.state.emails = [];
+      this.state.channels = [];
+      this.state.emailBodyCache = {};
+      this.state.emailsLoading = false;
+      this.state.emailError = '';
     },
   };
 }

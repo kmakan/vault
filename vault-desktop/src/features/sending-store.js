@@ -25,31 +25,31 @@ export function createSendingStore() {
     state,
 
     setSending(val) {
-      state.sending = !!val;
-      return state.sending;
+      this.state.sending = !!val;
+      return this.state.sending;
     },
     getSending() {
-      return state.sending;
+      return this.state.sending;
     },
 
     getBucket(chatId) {
-      const b = state.pendingOutgoing[chatId];
+      const b = this.state.pendingOutgoing[chatId];
       if (!b) {
         const fresh = {};
-        state.pendingOutgoing[chatId] = fresh;
+        this.state.pendingOutgoing[chatId] = fresh;
         return fresh;
       }
       return b;
     },
 
     setPendingOutgoing(chatId, pendingMsg) {
-      const bucket = state.pendingOutgoing[chatId] || {};
+      const bucket = this.state.pendingOutgoing[chatId] || {};
       if (pendingMsg && pendingMsg.id) {
         bucket[pendingMsg.id] = pendingMsg;
       } else {
         Object.assign(bucket, pendingMsg || {});
       }
-      state.pendingOutgoing[chatId] = bucket;
+      this.state.pendingOutgoing[chatId] = bucket;
       return bucket;
     },
 
@@ -57,28 +57,28 @@ export function createSendingStore() {
     // Используется mergePending.js: `remaining` — уже ОтФИЛЬТРОВАННЫЙ набор
     // pending-записей; старые ключи (которых нет в remaining) должны исчезнуть.
     mergePendingOutgoing(chatId, bucket) {
-      state.pendingOutgoing[chatId] = bucket || {};
-      return state.pendingOutgoing[chatId];
+      this.state.pendingOutgoing[chatId] = bucket || {};
+      return this.state.pendingOutgoing[chatId];
     },
 
     removePendingOutgoing(chatId, msgId) {
-      const bucket = state.pendingOutgoing[chatId];
+      const bucket = this.state.pendingOutgoing[chatId];
       if (bucket && Object.prototype.hasOwnProperty.call(bucket, msgId)) {
         delete bucket[msgId];
-        state.pendingOutgoing[chatId] = bucket;
+        this.state.pendingOutgoing[chatId] = bucket;
       }
       return bucket || null;
     },
 
     clearPendingOutgoing() {
-      state.pendingOutgoing = {};
-      return state.pendingOutgoing;
+      this.state.pendingOutgoing = {};
+      return this.state.pendingOutgoing;
     },
 
     // Удалить весь бакет для чата (очистка после полного подтверждения).
     dropBucket(chatId) {
-      delete state.pendingOutgoing[chatId];
-      return state.pendingOutgoing;
+      delete this.state.pendingOutgoing[chatId];
+      return this.state.pendingOutgoing;
     },
   };
 }

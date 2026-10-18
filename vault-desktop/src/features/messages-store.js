@@ -11,25 +11,25 @@ export function createMessagesStore() {
   };
   return {
     state,
-    tick() { state.ephemeralTick += 1; },
-    hasTimer(key) { return !!state.ephemeralTimers[key]; },
-    setTimer(key, fn, ms) { state.ephemeralTimers[key] = setTimeout(fn, ms); },
+    tick() { this.state.ephemeralTick += 1; },
+    hasTimer(key) { return !!this.state.ephemeralTimers[key]; },
+    setTimer(key, fn, ms) { this.state.ephemeralTimers[key] = setTimeout(fn, ms); },
     clearTimer(key) {
-      if (state.ephemeralTimers[key]) clearTimeout(state.ephemeralTimers[key]);
-      delete state.ephemeralTimers[key];
+      if (this.state.ephemeralTimers[key]) clearTimeout(this.state.ephemeralTimers[key]);
+      delete this.state.ephemeralTimers[key];
     },
     clearAllTimers() {
-      for (const k of Object.keys(state.ephemeralTimers)) clearTimeout(state.ephemeralTimers[k]);
-      state.ephemeralTimers = {};
+      for (const k of Object.keys(this.state.ephemeralTimers)) clearTimeout(this.state.ephemeralTimers[k]);
+      this.state.ephemeralTimers = {};
     },
-    setCurrentTtl(ttl) { state.currentEphemeralTtl = ttl; },
-    getCurrentTtl() { return state.currentEphemeralTtl; },
+    setCurrentTtl(ttl) { this.state.currentEphemeralTtl = ttl; },
+    getCurrentTtl() { return this.state.currentEphemeralTtl; },
     // Полный сброс (logout/reset).
     reset() {
-      for (const k of Object.keys(state.ephemeralTimers)) clearTimeout(state.ephemeralTimers[k]);
-      state.ephemeralTimers = {};
-      state.ephemeralTick = 0;
-      state.currentEphemeralTtl = 0;
+      for (const k of Object.keys(this.state.ephemeralTimers)) clearTimeout(this.state.ephemeralTimers[k]);
+      this.state.ephemeralTimers = {};
+      this.state.ephemeralTick = 0;
+      this.state.currentEphemeralTtl = 0;
     },
   };
 }
