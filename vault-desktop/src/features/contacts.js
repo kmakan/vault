@@ -20,6 +20,36 @@ export function isIgnored(ignoredUsers, peerKeys, email) {
   return false;
 }
 
+// Добавить блокировку отправителя: НОВАЯ карта (вход не мутируется).
+//
+// Чистая функция, а не две строки в App.vue, по двум причинам. Первая: в
+// App.vue эти строки уже были написаны с ошибкой — `map[key]` в ignoreUser
+// ссылался на переменную из СОСЕДНЕГО метода (unignoreUser), то есть блокировка
+// падала с ReferenceError и не работала вовсе, а сборка этого не видела. Вторая:
+// без смоука такое не ловится — а компонент смоуком не покрыть.
+export function addIgnored(ignoredUsers, key, ts) {
+  const k = String(key || '').toLowerCase().trim();
+  const out = { ...(ignoredUsers || {}) };
+  if (!k) return out;
+  out[k] = ts;
+  return out;
+}
+
+// Снять блокировку: сам адрес + все алиасы того же peer-ключа (смена почты
+// не должна оставлять блок на старом адресе). Возвращает новую карту.
+export function removeIgnored(ignoredUsers, email, peerKeys) {
+  const key = String(email || '').toLowerCase().trim();
+  const src = ignoredUsers || {};
+  if (!key) return { ...src };
+  const pk = peerKeys && (peerKeys[key] || peerKeys[email]);
+  const out = {};
+  for (const k of Object.keys(src)) {
+    if (k === key || (pk && peerKeys[k] === pk)) continue;
+    out[k] = src[k];
+  }
+  return out;
+}
+
 // Отправитель письма — мы сами: sender_id = сырой заголовок From, userId null.
 // Свои письма могли придти со СТАРОГО адреса (смена почты) — проверяем все
 // свои алиасы (aliasesOf: один pubkey → все адреса).

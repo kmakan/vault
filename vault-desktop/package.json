@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-template.cjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && vite build",
+    "build": "node scripts/check-template.cjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && vite build",
     "gate:cycles": "node scripts/ctx-cycles-gate.mjs",
+    "gate:src-integrity": "node scripts/src-integrity-gate.mjs",
     "audit:arch": "node scripts/audit-arch.mjs",
     "progress": "node scripts/progress.mjs",
     "smoke:channels-signing": "node scripts/channels-signing-smoke.mjs",

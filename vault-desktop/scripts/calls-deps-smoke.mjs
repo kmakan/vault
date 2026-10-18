@@ -65,7 +65,14 @@ writeFileSync(
   ),
 );
 writeFileSync(`${MOCKS}/vue-stub.js`, 'export const reactive = (o) => o;\n');
-await stub('features/session-store.js', 'export const sessionStore = { getCurrentEmail: () => "me@x.ru", state: { isLoggedIn: true } };\n');
+// Стаб обязан экспортировать ВСЁ, что модуль импортирует: calls.js берёт
+// `{ sessionStore, uiStore }`. Пока экспортировали только sessionStore, смоук
+// падал SyntaxError'ом на загрузке модуля — и не проверял ничего.
+await stub(
+  'features/session-store.js',
+  'export const sessionStore = { getCurrentEmail: () => "me@x.ru", state: { isLoggedIn: true } };\n'
+  + 'export const uiStore = { toast: () => {}, scrollToBottom: () => {}, tr: (k) => k };\n',
+);
 writeFileSync(`${MOCKS}/features/call-clock.js`, readFileSync(CALL_CLOCK, 'utf8'));
 // ADR-001: calls.js тянет invoke из @tauri-apps/api/core (M2.3 bridge) —
 // подменяем на stub, иначе Node не резолвит пакет в /tmp-копии.

@@ -55,4 +55,28 @@ check('isPeerEncrypted false (!cryptoReady)', C.isPeerEncrypted({a:'k'}, false, 
 check('resolveEventSender out → peerEmail', C.resolveEventSender(true, 'peer@x.y', 'me@x.y') === 'peer@x.y');
 check('resolveEventSender in → fallback', C.resolveEventSender(false, 'peer@x.y', 'from@x.y') === 'from@x.y');
 check('resolveEventSender in empty fallback → ""', C.resolveEventSender(false, 'peer@x.y', '') === '');
+
+// addIgnored / removeIgnored (блокировка отправителя). Логика вынесена из
+// App.vue после реальной поломки: в ignoreUser `map[key]` ссылался на `map` из
+// соседнего unignoreUser → ReferenceError, блокировка не работала, а сборка и
+// смоуки этого не видели (компонент смоуком не покрывается).
+check('addIgnored пишет по нормализованному ключу',
+  C.addIgnored({}, '  Peer@X.Y  ', 42)['peer@x.y'] === 42);
+check('addIgnored не мутирует вход',
+  (() => { const src = { 'a@x.y': 1 }; C.addIgnored(src, 'b@x.y', 2); return Object.keys(src).length === 1; })());
+check('addIgnored без ключа → копия без записи',
+  (() => { const r = C.addIgnored({ 'a@x.y': 1 }, '', 2); return r['a@x.y'] === 1 && Object.keys(r).length === 1; })());
+check('addIgnored из null → одна запись',
+  (() => { const r = C.addIgnored(null, 'a@x.y', 7); return r['a@x.y'] === 7 && Object.keys(r).length === 1; })());
+check('removeIgnored снимает сам адрес',
+  Object.keys(C.removeIgnored({ 'a@x.y': 1, 'b@x.y': 2 }, 'A@X.Y', {})).join(',') === 'b@x.y');
+check('removeIgnored снимает алиас того же peer-ключа',
+  Object.keys(C.removeIgnored({ 'a@x.y': 1, 'b@x.y': 2 }, 'b@x.y', { 'a@x.y': 'PK1', 'b@x.y': 'PK1' })).length === 0);
+check('removeIgnored не трогает чужой ключ',
+  Object.keys(C.removeIgnored({ 'a@x.y': 1, 'b@x.y': 2 }, 'b@x.y', { 'a@x.y': 'PK1', 'b@x.y': 'PK2' })).join(',') === 'a@x.y');
+check('removeIgnored без peerKeys снимает только сам адрес',
+  Object.keys(C.removeIgnored({ 'a@x.y': 1, 'b@x.y': 2 }, 'b@x.y', undefined)).join(',') === 'a@x.y');
+check('removeIgnored не мутирует вход',
+  (() => { const src = { 'a@x.y': 1 }; C.removeIgnored(src, 'a@x.y', {}); return Object.keys(src).length === 1; })());
+
 console.log('=== ИТОГО: '+p+' pass, '+f+' fail ==='); if (f) process.exit(1);

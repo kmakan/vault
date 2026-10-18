@@ -34,4 +34,8 @@ check('buildSendingMessage id пустой (pending)', sm.id === '');
 check('buildSendingMessage ttl+expireAt', sm.ttl === 60 && sm.expireAt === 61000 && sm.status === 'sending');
 check('buildSendingMessage encrypted+vault', sm.encrypted === true && sm.vault === true);
 
+// Сводка обязательна: progress.mjs считает проверки ТОЛЬКО по последним строкам
+// вывода. Без неё смоук попадал в «формат вывода не распознан», и общая сумма
+// проверок по проекту была занижена.
+console.log('=== ИТОГО: ' + p + ' pass, ' + f + ' fail ===');
 if (f) process.exit(1);

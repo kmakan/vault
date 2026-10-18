@@ -63,11 +63,14 @@ for (const f of files) {
 }
 
 console.log('═══ 1. ГРАНИЦА RUST/JS ═══\n');
-const hard = rows.flatMap((r) => r.hits.filter((h) => !h.soft));
+// Хит помнит свой файл: `rows.flatMap(r => r.hits)` отдавал хит БЕЗ имени файла,
+// и цикл ниже падал с TypeError (`r.hits` у хита нет) — весь аудит архитектуры
+// не запускался, возвращая трейс вместо отчёта.
+const hard = rows.flatMap((r) => r.hits.filter((h) => !h.soft).map((h) => ({ ...h, f: r.f })));
 if (hard.length === 0) {
   console.log('  ✓ Крипто-логики в JS нет: ни HMAC, ни KDF, ни subtle.encrypt/sign.');
 } else {
-  for (const r of hard) for (const h of r.hits) if (!h.soft) console.log(`  ✗ ${r.f}: ${h.id} ×${h.n} — ${h.why}`);
+  for (const h of hard) console.log(`  ✗ ${h.f}: ${h.id} ×${h.n} — ${h.why}`);
 }
 const soft = rows.flatMap((r) => r.hits.filter((h) => h.soft));
 console.log(`\n  Байтовая работа в JS (допустима как транспорт): ${soft.reduce((a, b) => a + b.n, 0)} вхождений`);

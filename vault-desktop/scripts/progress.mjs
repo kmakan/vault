@@ -27,18 +27,26 @@ function inventory() {
 
 // Форматы в проекте разные, и каждый уже стоил неверного счёта:
 //   «=== ИТОГ: 29 pass, 0 fail»                     большинство
-//   «ИТОГО: 90 pass, 0 fail»                        НЕ «ИТОГИ»: опечатка в шаблоне
-//                                                  стоила мне 11 «нераспознанных» смоуков
+//   «=== ИТОГО: 29 pass, 0 fail ===»                префикс «===» перед «ИТОГО»
+//   «call-session-smoke: 40/40 checks passed»       счёт вида N/M
 //   «ALL 31 passed»                                 channels-smoke
 //   «=== video-smoke: 57 passed, 0 failed ===»      без слова ИТОГ вовсе
 // Первое число всегда — сколько проверок прошло.
+//
+// ПРОШЛАЯ ОШИБКА. Альтернатива `=== ИТОГ:?` не совпадала со строкой «===
+// ИТОГО: …» (после «ИТОГ» идёт «О», а не «:»), а альтернатива `ИТОГО:?` не
+// пускала префикс «=== ». Из-за этого девять ЗЕЛЁНЫХ смоуков попадали в
+// «формат не распознан», и сумма проверок по проекту была занижена — то есть
+// «ПОКА СУММЕ НЕЛЬЗЯ ДОВЕРЯТЬ» касалось в том числе исправных смоуков.
 function parseCount(out) {
   const lines = out.trim().split('\n').reverse();
-  for (const line of lines.slice(0, 5)) {
+  for (const line of lines.slice(0, 8)) {
     const t = line.trim();
-    let m = /^(?:ИТОГ:?|ИТОГО:?|=== ИТОГ:?)[\s:]*(\d+)\s+(?:pass|passed)\b/i.exec(t);
+    let m = /^(?:=+\s*)?(?:ИТОГО|ИТОГ|ИТОГИ):?\s*(\d+)\s+(?:pass|passed)\b/i.exec(t);
     if (m) return Number(m[1]);
     m = /^ALL\s+(\d+)\s+passed/i.exec(t);
+    if (m) return Number(m[1]);
+    m = /(\d+)\s*\/\s*\d+\s+checks passed/i.exec(t);
     if (m) return Number(m[1]);
     m = /(\d+)\s+passed\b/i.exec(t);
     if (m) return Number(m[1]);

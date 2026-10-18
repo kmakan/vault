@@ -2503,8 +2503,11 @@ export default {
       const key = String(email || '').toLowerCase().trim();
       if (!key || key === (this.email || '').toLowerCase()) return false;
       if (!this.isIgnored(key)) {
-        map[key] = Date.now();
-        contactsStore.setIgnored(map);
+        // Карта строится в features/contacts.js (чистая fn) и отдаётся владельцу
+        // contactsStore: запись в обход setIgnored обошла бы ADR-004.
+        contactsStore.setIgnored(
+          ContactsFeature.addIgnored(contactsStore.state.ignoredUsers, key, Date.now()),
+        );
         await this.saveIgnoredUsers();
       }
       return true;
@@ -2513,14 +2516,10 @@ export default {
     // что скрылось, пока блок был активен) не возвращается — его не было
     // в истории. Снимаем и сам адрес, и алиасы того же ключа.
     async unignoreUser(email) {
-      const key = String(email || '').toLowerCase().trim();
-      if (!key) return;
-      const pk = this.peerKeys && (this.peerKeys[key] || this.peerKeys[email]);
-      const map = { ...contactsStore.state.ignoredUsers };
-      for (const k of Object.keys(map)) {
-        if (k === key || (pk && this.peerKeys[k] === pk)) delete map[k];
-      }
-      contactsStore.setIgnored(map);
+      if (!String(email || '').trim()) return;
+      contactsStore.setIgnored(
+        ContactsFeature.removeIgnored(contactsStore.state.ignoredUsers, email, this.peerKeys),
+      );
       await this.saveIgnoredUsers();
     },
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации

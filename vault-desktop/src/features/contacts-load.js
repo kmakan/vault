@@ -13,7 +13,7 @@
 // подделки компонента. Поведение при ошибке сохранено буквально: contacts = [],
 // а contactAliases остаётся ПРЕЖНИМ (ошибка не должна затирать уже известные
 // алиасы — иначе потеряется привязка истории чата).
-import api from "/tmp/contacts-store-smoke-mocks/api.js";
+import api from '../api.js';
 
 export async function loadContacts(email) {
   try {
