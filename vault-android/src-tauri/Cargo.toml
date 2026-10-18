@@ -21,6 +21,10 @@ serde_json = "1"
 # host-сборки/tests чтобы cargo check проходил локально).
 log = "0.4"
 
+# PM: unified key_store backend (ADR-001 stage4). Android теперь thin wrapper
+# над vault_core::key_store — получает DEDUP/GUARD/auto_migrate из canonical crate.
+vault-core = { path = "../../vault-core" }
+
 # Encryption
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
