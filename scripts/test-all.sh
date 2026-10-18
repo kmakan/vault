@@ -49,7 +49,11 @@ run_suite() {
     # shellcheck disable=SC2086
     if ( cd "$ROOT/$dir" && cargo "$@" ${VAULT_TEST_CARGO_ARGS:-} ) >"$log" 2>&1; then
         local counts
-        counts="$(grep -E '^test result:' "$log" | sed 's/^test result: //' | paste -sd' | ' -)"
+        counts="$(grep -E '^test result:' "$log" \
+            | sed -E 's/^test result: (ok|FAILED)\. ([0-9]+ passed; [0-9]+ failed).*/\2/' \
+            | grep -v '^0 passed; 0 failed$' \
+            | awk '{ printf "%s%s", sep, $0; sep = " | " }')"
+        [ -n "$counts" ] || counts="нет тестовых целей"
         SUMMARY+=("ok    $name: $counts")
         printf '  ✅ %s\n' "$counts"
         grep -E '^warning: unused|^error' "$log" | head -5
