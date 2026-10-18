@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use vault_core::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
+
 const KEYS_DIR: &str = "keys";
 const KEY_FILE: &str = "keypair.json";
 const PEER_KEYS_FILE: &str = "peer_keys.json";
@@ -10,39 +12,6 @@ const PEER_KEYS_FILE: &str = "peer_keys.json";
 /// и переносится вместе с каналом — там секрету не место (владелец шлёт
 /// ссылку подписки, это полупубличная точка).
 const CHANNEL_SIGNING_FILE: &str = "channel_signing.json";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredKeyPair {
-    pub public_key: String,
-    pub private_key: String,
-    pub created_at: String,
-    /// Post-quantum: seed ML-KEM-768, hex 64 байта. У старых
-    /// keypair.json поля нет → миграция генерирует при load_keypair.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pq_private_key: Option<String>,
-    /// Post-quantum: ek ML-KEM-768, base64 1184 байта.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pq_public_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredPeerKey {
-    pub email: String,
-    pub public_key: String,
-    pub label: Option<String>,
-    pub added_at: String,
-    /// Post-quantum: ek ML-KEM-768 контакта, base64. Нет — контакт
-    /// ещё без PQ (миграция), ему уходит legacy X25519-конверт.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pq_public_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyStoreMetadata {
-    pub version: u32,
-    pub key_count: usize,
-    pub last_modified: String,
-}
 
 fn get_keys_dir() -> anyhow::Result<PathBuf> {
     // Test-only override: проверяется ПЕРВЫМ, чтобы тесты (дедупликация
