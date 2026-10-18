@@ -11,6 +11,13 @@ pub struct StoredKeyPair {
     pub public_key: String,
     pub private_key: String,
     pub created_at: String,
+    /// Post-quantum: seed ML-KEM-768, hex 64 байта. У старых
+    /// keypair.json поля нет → миграция (vault-core) генерирует при load_keypair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_private_key: Option<String>,
+    /// Post-quantum: ek ML-KEM-768, base64 1184 байта.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +26,10 @@ pub struct StoredPeerKey {
     pub public_key: String,
     pub label: Option<String>,
     pub added_at: String,
+    /// Post-quantum: ek ML-KEM-768 контакта, base64. Нет — контакт
+    /// ещё без PQ (legacy X25519-конверт).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pq_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +237,8 @@ mod tests {
                 public_key: "abcd1234".to_string(),
                 private_key: "ef567890".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
             };
             save_keypair(&kp).unwrap();
             let loaded = load_keypair().unwrap().unwrap();
@@ -241,6 +254,7 @@ mod tests {
                 public_key: "aabbccdd".to_string(),
                 label: Some("Test User".to_string()),
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
             };
             add_peer_key(key.clone()).unwrap();
             let keys = load_peer_keys().unwrap();
@@ -262,6 +276,8 @@ mod tests {
                 public_key: "abcd1234".to_string(),
                 private_key: "ef567890".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
             };
             save_keypair(&kp).unwrap();
 
@@ -270,6 +286,7 @@ mod tests {
                 public_key: kp.public_key.clone(),
                 label: None,
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
             };
             let err = add_peer_key(own_as_peer).unwrap_err();
             assert!(err.to_string().contains("own public key"));
@@ -281,6 +298,7 @@ mod tests {
                 public_key: "ffff0000".to_string(),
                 label: None,
                 added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
             };
             add_peer_key(real_peer).unwrap();
             assert_eq!(load_peer_keys().unwrap().len(), 1);

@@ -101,6 +101,8 @@ fn save_my_keypair(public_key: String, private_key: String) -> Result<(), String
         public_key,
         private_key,
         created_at: chrono::Utc::now().to_rfc3339(),
+        pq_private_key: None,
+        pq_public_key: None,
     };
     key_store::save_keypair(&keypair).map_err(|e| e.to_string())
 }
@@ -117,6 +119,7 @@ fn save_peer_key(email: String, public_key: String, label: Option<String>) -> Re
         public_key,
         label,
         added_at: chrono::Utc::now().to_rfc3339(),
+        pq_public_key: None,
     };
     key_store::add_peer_key(key).map_err(|e| e.to_string())
 }

@@ -221,157 +221,42 @@ fn write_file_0600(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 pub fn save_keypair(keypair: &StoredKeyPair) -> anyhow::Result<()> {
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
-    save_keypair_at(&keys_dir, keypair)
+    vault_core::key_store::save_keypair_at(&keys_dir, keypair)
 }
 
-/// RAW-ядро сохранения keypair (без guard). Каталог 0700, файл 0600.
-pub(crate) fn save_keypair_at(keys_dir: &Path, keypair: &StoredKeyPair) -> anyhow::Result<()> {
-    ensure_keys_dir_at(keys_dir)?;
-    let path = keys_dir.join(KEY_FILE);
-    let json = serde_json::to_string_pretty(keypair)?;
-    write_file_0600(&path, json.as_bytes())?;
-    Ok(())
-}
-
+/// Загрузить keypair (PQ-миграция при первой загрузке legacy-аккаунта).
 pub fn load_keypair() -> anyhow::Result<Option<StoredKeyPair>> {
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
-    load_keypair_at(&keys_dir)
+    vault_core::key_store::load_keypair_at(&keys_dir, true)
 }
 
-/// RAW-ядро загрузки keypair (без guard) + PQ-миграция (пишет под guard).
-pub(crate) fn load_keypair_at(keys_dir: &Path) -> anyhow::Result<Option<StoredKeyPair>> {
-    let path = keys_dir.join(KEY_FILE);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let data = fs::read_to_string(&path)?;
-    let mut keypair: StoredKeyPair = serde_json::from_str(&data)?;
-    // PQ-миграция: у аккаунтов, созданных до post-quantum, нет
-    // ML-KEM-пары. Генерируем при первой загрузке и сразу сохраняем —
-    // конверты v2 начнут уходить автоматически (PQ-3/PQ-4). Пишем под guard.
-    if keypair.pq_private_key.is_none() || keypair.pq_public_key.is_none() {
-        let pq = crate::crypto_pq::pq_generate();
-        keypair.pq_private_key = Some(pq.seed_hex);
-        keypair.pq_public_key = Some(pq.ek_b64);
-        let json = serde_json::to_string_pretty(&keypair)?;
-        write_file_0600(&path, json.as_bytes())?;
-    }
-    Ok(Some(keypair))
-}
-
-/// RAW-ядро сохранения peer-ключей (без guard). Каталог 0700, файл 0600.
-pub(crate) fn save_peer_keys_at(keys_dir: &Path, keys: &[StoredPeerKey]) -> anyhow::Result<()> {
-    ensure_keys_dir_at(keys_dir)?;
-    let path = keys_dir.join(PEER_KEYS_FILE);
-    let json = serde_json::to_string_pretty(keys)?;
-    write_file_0600(&path, json.as_bytes())?;
-    Ok(())
-}
-
+/// Загрузить peer-ключи.
 pub fn load_peer_keys() -> anyhow::Result<Vec<StoredPeerKey>> {
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
-    load_peer_keys_at(&keys_dir)
+    vault_core::key_store::load_peer_keys_at(&keys_dir)
 }
 
-/// RAW-ядро загрузки peer-ключей (без guard).
-pub(crate) fn load_peer_keys_at(keys_dir: &Path) -> anyhow::Result<Vec<StoredPeerKey>> {
-    let path = keys_dir.join(PEER_KEYS_FILE);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let data = fs::read_to_string(&path)?;
-    let keys: Vec<StoredPeerKey> = serde_json::from_str(&data)?;
-    Ok(keys)
-}
-
+/// Добавить peer-ключ (ADDR GATE + SELF-KEY GUARD + DEDUP — в vault-core).
 pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
-    add_peer_key_at(&keys_dir, key)
+    vault_core::key_store::add_peer_key_at(&keys_dir, key)
 }
 
-/// RAW-ядро добавления peer-ключа (без guard; вызывается внутри захвата).
-/// Все внутренние load/save идут через `_at` (без повторного захвата).
-pub(crate) fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> anyhow::Result<()> {
-    // ADDRESS GATE: peer_keys индексируется по email — только настоящие
-    // адреса. Строки вида fp:<fingerprint> (account-namespace) и прочие
-    // идентификаторы создавали «контакт-отпечаток» в списке (живой баг
-    // 06.10.2026: запись fp:2b:e1:... в peer_keys, добавленная 27.09).
-    // Единая точка ВСЕХ записей (invite-accept, accept, ручная вставка).
-    let em = key.email.trim();
-    if !em.contains('@') || em.to_lowercase().starts_with("fp:") {
-        anyhow::bail!("peer key address must be an email, got: {}", key.email);
-    }
-    // SELF-KEY GUARD: saving one's own public key as a peer's key silently
-    // breaks ECDH in BOTH directions (encrypt-to-self / decrypt mismatch).
-    // stale invite sent from a shared-HOME instance carried the sender's own
-    // keypair as "their" public key, and the acceptor stored it. Reject at
-    // the single choke point all peer-key writes go through (contact invite
-    // accept, contact accept, manual paste).
-    if let Some(kp) = load_keypair_at(keys_dir)? {
-        if kp.public_key == key.public_key {
-            anyhow::bail!("Refusing to save your own public key as a peer key");
-        }
-    }
-    let mut keys = load_peer_keys_at(keys_dir)?;
-    // DEDUP (IDENTITY = публичный ключ; EMAIL = транспорт): тот же
-    // public_key под ДРУГИМ адресом = собеседник сменил почту.
-    // Переименовываем СУЩЕСТВУЮЩУЮ запись вместо второй — иначе у
-    // получателя появляется дубль-контакт с тем же ключом.
-    let existing_by_pubkey = keys.iter().position(|k| k.public_key == key.public_key);
-    if let Some(idx) = existing_by_pubkey {
-        if !keys[idx].email.eq_ignore_ascii_case(&key.email) {
-            keys[idx].email = key.email.clone();
-            keys[idx].label = key.label;
-            // PQ: новый ek обновляет; None НЕ трогает существующий
-            // (контакт без PQ остаётся с PQ-ключом, полученным позже).
-            if key.pq_public_key.is_some() {
-                keys[idx].pq_public_key = key.pq_public_key;
-            }
-            save_peer_keys_at(keys_dir, &keys)?;
-            return Ok(());
-        }
-        // email совпадает — существующее поведение (обновление полей) ниже.
-    }
-    if let Some(existing) = keys.iter_mut().find(|k| k.email == key.email) {
-        existing.public_key = key.public_key;
-        existing.label = key.label;
-        // PQ: новый ключ затирает старый; None НЕ трогает существующий
-        // (контакт без PQ остаётся с PQ-ключом, полученным позже из конверта).
-        if key.pq_public_key.is_some() {
-            existing.pq_public_key = key.pq_public_key;
-        }
-    } else {
-        keys.push(key);
-    }
-    save_peer_keys_at(keys_dir, &keys)
-}
-
+/// Удалить peer-ключ по email.
 pub fn remove_peer_key(email: &str) -> anyhow::Result<bool> {
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
-    let mut keys = load_peer_keys_at(&keys_dir)?;
-    let before = keys.len();
-    keys.retain(|k| k.email != email);
-    let removed = keys.len() < before;
-    if removed {
-        save_peer_keys_at(&keys_dir, &keys)?;
-    }
-    Ok(removed)
+    vault_core::key_store::remove_peer_key_at(&keys_dir, email)
 }
 
+/// Экспорт keypair + peer_keys в backup-строку.
 pub fn export_keys() -> anyhow::Result<String> {
-    let keypair = load_keypair()?.ok_or_else(|| anyhow::anyhow!("No keypair found"))?;
-    let peer_keys = load_peer_keys()?;
-    let export = serde_json::json!({
-        "version": 1,
-        "keypair": keypair,
-        "peer_keys": peer_keys,
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-    });
-    Ok(serde_json::to_string_pretty(&export)?)
+    let keys_dir = get_keys_dir_raw();
+    let _guard = acquire_guard_for_dir(&keys_dir)?;
+    vault_core::key_store::export_keys_at(&keys_dir)
 }
 
 pub fn import_keys(json_data: &str) -> anyhow::Result<KeyStoreMetadata> {
@@ -416,49 +301,23 @@ pub(crate) fn import_keys_at(
     })
 }
 
+/// Метаданные хранилища (version/key_count/last_modified).
 pub fn get_store_metadata() -> anyhow::Result<Option<KeyStoreMetadata>> {
     let dir = get_keys_dir()?;
-    let key_path = dir.join(KEY_FILE);
-    let peer_path = dir.join(PEER_KEYS_FILE);
-
-    if !key_path.exists() && !peer_path.exists() {
-        return Ok(None);
-    }
-
-    let key_count = if key_path.exists() {
-        1 + load_peer_keys().map(|k| k.len()).unwrap_or(0)
-    } else {
-        load_peer_keys().map(|k| k.len()).unwrap_or(0)
-    };
-
-    let last_modified = fs::metadata(&key_path)
-        .or_else(|_| fs::metadata(&peer_path))
-        .and_then(|m| m.modified())
-        .map(|t| {
-            let dt: chrono::DateTime<chrono::Utc> = t.into();
-            dt.to_rfc3339()
-        })
-        .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339());
-
-    Ok(Some(KeyStoreMetadata {
-        version: 1,
-        key_count,
-        last_modified,
-    }))
+    let _guard = acquire_guard_for_dir(&dir)?;
+    vault_core::key_store::get_store_metadata_at(&dir)
 }
 
+/// Удалить keypair + peer_keys. Ключ подписи канала (ADR-002) тоже стирается.
 pub fn delete_all_keys() -> anyhow::Result<()> {
     let dir = get_keys_dir()?;
-    let _ = fs::remove_file(dir.join(KEY_FILE));
-    let _ = fs::remove_file(dir.join(PEER_KEYS_FILE));
-    // ADR-002: ключ подписи каналов — секрет, стирается тем же wipe.
+    vault_core::key_store::delete_all_keys_at(&dir)?;
     let _ = fs::remove_file(dir.join(CHANNEL_SIGNING_FILE));
     Ok(())
 }
 
-
-/// Ключ подписи постов канала (ADR-002). Отсутствие — не ошибка: ключ создаётся
-/// лениво при первом канале владельца.
+/// Ключ подписи постов канала (ADR-002). Отсутствие — не ошибка: ключ
+/// создаётся лениво при первом канале владельца.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredChannelSigningKey {
     pub public_key: String,
@@ -485,17 +344,13 @@ pub fn load_channel_signing_key() -> anyhow::Result<Option<StoredChannelSigningK
     Ok(Some(serde_json::from_str(&data)?))
 }
 
-/// Удалить только peer-ключи (без ключевой пары) — путь «Удалить аккаунт»
-/// (RuStore §5.4). Файл убираем целиком: load_peer_keys() при его
-/// отсутствии возвращает []. Повторный вызов / чистая установка — не ошибка.
+/// Удалить только peer-ключи (keypair жив — RuStore §5.4).
 pub fn delete_all_peer_keys() -> anyhow::Result<()> {
-    let path = get_keys_dir()?.join(PEER_KEYS_FILE);
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    let dir = get_keys_dir()?;
+    vault_core::key_store::delete_all_peer_keys_at(&dir)
 }
+
+
 
 #[cfg(test)]
 mod channel_signing_wipe_tests {

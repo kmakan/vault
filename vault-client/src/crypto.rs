@@ -13,9 +13,19 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use rand::rngs::OsRng;
+use std::path::PathBuf;
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
 pub const NONCE_LEN: usize = 24;
+
+/// RAW-резолв директории ключей CLI (~/.vault/keys, fallback `.vault/keys`).
+/// Формат `keypair.json` совместим с Desktop (StoredKeyPair) — общий
+/// загрузчик/сохранялка теперь живёт в `vault_core::key_store`.
+fn keys_dir() -> PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".vault/keys"))
+        .unwrap_or_else(|| PathBuf::from(".vault/keys"))
+}
 
 /// Очистить тело письма перед Base64-декодом конверта.
 ///
@@ -120,64 +130,54 @@ impl CryptoClient {
         (pub_hex, priv_hex)
     }
 
-    /// Загрузить пару из ~/.vault/keys/keypair.json (формат Desktop
-    /// StoredKeyPair: public_key/private_key hex + pq_private_key/pq_public_key).
-    /// Возвращает false, если файла нет — вызывающий код решает, звать ли
-    /// /keygen. Чужой/битый JSON — тоже false (не фатально: пусть keygen).
+    /// Загрузить пару из ~/.vault/keys/keypair.json (формат Desktop StoredKeyPair:
+    /// public_key/private_key hex + pq_private_key/pq_public_key).
+    /// Возвращает false, если файла нет — вызывающий решает, звать ли /keygen.
+    /// Чужой/битый JSON — тоже false (не фатально: пусть keygen). auto_migrate=false:
+    /// CLI не пишет в файл при загрузке (single-process REPL; перезапись только
+    /// через /keygen+save_keypair). PQ-поля валидируются через pq_from_seed.
     pub fn load_keypair(&mut self) -> bool {
-        let path = dirs::home_dir()
-            .map(|h| h.join(".vault/keys/keypair.json"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".vault/keys/keypair.json"));
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            return false;
+        let dir = keys_dir();
+        let kp = match vault_core::key_store::load_keypair_at(&dir, false) {
+            Ok(Some(kp)) => kp,
+            _ => return false,
         };
-        let Ok(obj) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            return false;
-        };
-        let Some(priv_hex) = obj.get("private_key").and_then(|v| v.as_str()) else {
-            return false;
-        };
-        if self.import_private_key(priv_hex).is_err() {
+        if self.import_private_key(&kp.private_key).is_err() {
             return false;
         }
-        // PQ-поля опциональны (старые аккаунты без PQ продолжают работать
-        // по чистому X25519 — legacy-путь).
-        if let Some(seed_hex) = obj.get("pq_private_key").and_then(|v| v.as_str()) {
+        // PQ-поля опциональны (старые аккаунты без PQ — legacy X25519).
+        if let Some(seed_hex) = &kp.pq_private_key {
             if pq::pq_from_seed(seed_hex).is_some() {
-                self.pq_seed_hex = Some(seed_hex.to_string());
-                if let Some(ek) = obj.get("pq_public_key").and_then(|v| v.as_str()) {
-                    self.pq_ek_b64 = Some(ek.to_string());
-                }
+                self.pq_seed_hex = Some(seed_hex.clone());
+                self.pq_ek_b64 = kp.pq_public_key.clone();
             }
         }
         true
     }
 
-    /// Сохранить текущую пару в ~/.vault/keys/keypair.json (формат Desktop).
-    /// Вызывается после /keygen, чтобы ключи пережили перезапуск REPL.
+    /// Сохранить текущую пару в ~/.vault/keys/keypair.json (формат Desktop
+    /// StoredKeyPair). Вызывается после /keygen, чтобы ключи пережили
+    /// перезапуск REPL. Существующий файл НЕ перезаписывается молча — иначе
+    /// /keygen в тестовом HOME снесёт ключ, которым зашифрована история
+    /// (для смены ключа файл удаляют вручную). PQ-поля `None` сериализуются
+    /// как отсутствующие поля → desktop мигрирует их при загрузке.
     pub fn save_keypair(&self) -> Result<()> {
         let (Some(priv_key), Some(pub_key)) = (&self.private_key, &self.public_key) else {
             return Ok(());
         };
-        let dir = dirs::home_dir()
-            .map(|h| h.join(".vault/keys"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".vault/keys"));
-        std::fs::create_dir_all(&dir).context("Failed to create keys dir")?;
-        let path = dir.join("keypair.json");
+        let dir = keys_dir();
+        let path = dir.join(vault_core::key_store::KEY_FILE);
         if path.exists() {
-            // Не перезаписывать существующий аккаунтный ключ молча —
-            // иначе /keygen в тестовом HOME снесёт ключ, которым уже
-            // зашифрована история. Для смены ключа файл удаляют вручную.
             return Ok(());
         }
-        let obj = serde_json::json!({
-            "public_key": hex::encode(pub_key.as_bytes()),
-            "private_key": hex::encode(priv_key.to_bytes()),
-            "created_at": chrono::Utc::now().to_rfc3339(),
-            "pq_private_key": self.pq_seed_hex.clone().unwrap_or_default(),
-            "pq_public_key": self.pq_ek_b64.clone().unwrap_or_default(),
-        });
-        std::fs::write(&path, serde_json::to_string_pretty(&obj)?)
+        let kp = vault_core::StoredKeyPair {
+            public_key: hex::encode(pub_key.as_bytes()),
+            private_key: hex::encode(priv_key.to_bytes()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            pq_private_key: self.pq_seed_hex.clone(),
+            pq_public_key: self.pq_ek_b64.clone(),
+        };
+        vault_core::key_store::save_keypair_at(&dir, &kp)
             .context("Failed to write keypair.json")?;
         Ok(())
     }

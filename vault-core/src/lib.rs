@@ -9,5 +9,6 @@
 pub const NONCE_LEN: usize = 24;
 
 pub mod crypto_pq;
+pub mod key_store;
 pub mod key_store_types;
 pub use key_store_types::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
