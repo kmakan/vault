@@ -162,7 +162,9 @@ fun releaseLocks() {
 ```bash
 export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/27.0.12077973
-export PATH=/tmp/ndk-bin:$PATH:$ANDROID_HOME/platform-tools
+# toolchain для android-target (CC_/CXX_/AR_/RANLIB_ + platform-tools);
+# заменил хрупкий PATH=/tmp/ndk-bin — scripts/android-env.sh
+. /home/maksim/whisper/scripts/android-env.sh
 export VAULT_KEYSTORE=$HOME/.local/share/vault/vault-release.keystore
 export VAULT_KEYSTORE_PASS=$(cat $HOME/.local/share/vault/keystore-pass.txt)
 export CARGO_NET_OFFLINE=true

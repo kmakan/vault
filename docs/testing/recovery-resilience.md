@@ -119,17 +119,33 @@ backup_import, duress, video, crypto_pq; сам full-scan даёт 8 TLS-тес�
 Это компиляция Android/TLS кода, НЕ Android TLS runtime и НЕ готовый APK.
 Сборку/установку APK этот документ НЕ описывает и НЕ обещает.
 
-⚠️ ENV-ДРЕЙФ линкера (12.10.2026): arm64-check падал НЕ из-за кода, а из-за
-окружения, потерянного между сессиями. `/tmp/ndk-bin` содержал только
-симлинки llvm-ar/llvm-ranlib. Симптомы: `aarch64-linux-android-clang++: No
-such file` (oboe-sys) и ring `sizeof(size_t)!=sizeof(uintptr_t)`
-(`__ANDROID_API__` пуст → clang без NDK sysroot тянет resource-заголовки).
-ВАЖНО: симлинк `aarch64-linux-android-clang → …-android24-clang` НЕ работает —
-bash-wrapper ищет `clang` рядом с собой через `dirname $0`, а симлинк не
-даёт clang найти sysroot. Лечение: **exec-обёртка**
+⚠️ ENV-ДРЕЙФ линкера (12.10.2026, **закрыт 18.10.2026**): arm64-check падал НЕ
+из-за кода, а из-за окружения, потерянного между сессиями. `/tmp/ndk-bin`
+содержал только симлинки llvm-ar/llvm-ranlib. Симптомы:
+`aarch64-linux-android-clang++: No such file` (oboe-sys) и ring
+`sizeof(size_t)!=sizeof(uintptr_t)` (`__ANDROID_API__` пуст → clang без NDK
+sysroot тянет resource-заголовки). ВАЖНО: симлинк
+`aarch64-linux-android-clang → …-android24-clang` НЕ работает — bash-wrapper
+ищет `clang` рядом с собой через `dirname $0`, а симлинк не даёт clang найти
+sysroot. Тогда лечили **exec-обёрткой**
 (`#!/bin/sh; exec <ndk>/bin/aarch64-linux-android24-clang "$@"`) + отдельная
-обёртка `clang++` → `…-android24-clang++` + `PATH=/tmp/ndk-bin`. Тогда clang
-сам находит sysroot (`__ANDROID_MIN_SDK 24`, `__SIZEOF_SIZE_T__ 8`).
+обёртка `clang++` → `…-android24-clang++` + `PATH=/tmp/ndk-bin`. Обёртки
+работали, но жили в `/tmp` — то есть лечили симптом до следующей перезагрузки.
+
+✅ **Решение (18.10.2026, `scripts/android-env.sh`): обёртки не нужны вообще.**
+`cc-rs` уважает `CC_<target>` / `CXX_<target>` / `AR_<target>` / `RANLIB_<target>`
+(имя target — rust triple с `-`→`_`), поэтому скрипт просто экспортирует
+абсолютные пути на **настоящие** бинарники NDK
+(`aarch64-linux-android24-clang`, `armv7a-linux-androideabi24-clang`, `llvm-ar`,
+`llvm-ranlib`) для 4 android-target'ов. Реальный бинарник (не симлинк) сам
+находит sysroot (`__ANDROID_MIN_SDK 24`, `__SIZEOF_SIZE_T__ 8`), ничего вне
+NDK не создаётся. `ring` и `oboe` читают те же переменные через cc.
+
+Проверка 18.10 (NDK 27.0.12077973, API 24, после `cargo clean -p` C/C++ крейты):
+`vault-android/src-tauri` → `cargo check --target aarch64-linux-android` OK
+(bundled sqlite пересобран), `vault-desktop/src-tauri` → OK (ring + oboe-sys
+пересобраны). Без env-скрипта тот же check падает с
+`error occurred in cc-rs: failed to find tool "aarch64-linux-android-clang"`.
 
 ## 4. Уже подтверждено ранее (B6b, 09.10) — НЕ считать незавершённым Leg B
 

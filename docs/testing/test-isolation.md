@@ -55,3 +55,21 @@
   (тесты вообще не трогают env).
 - `vault-desktop/src-tauri/src/vault_bridge.rs` — `save_base64_file(dir)`.
 - `vault-client/tests/qp_transport.rs` — самодостаточная фикстура.
+
+## Прогон всех наборов одной командой
+
+Workspace'а в репозитории нет (крейты автономны), поэтому `cargo test
+--workspace` невозможен. Вместо него — `scripts/test-all.sh`:
+
+```bash
+./scripts/test-all.sh            # core + client + desktop + android
+./scripts/test-all.sh core       # выборочно
+VAULT_TEST_CARGO_ARGS="--offline" ./scripts/test-all.sh
+```
+
+Скрипт печатает `test result:` по каждому крейту, при падении — `error`/
+`panicked at` из лога (логи остаются в `$TMPDIR/vault-test-all.*`).
+Наборы: `vault-core` (lib), `vault-client` (lib+bin+`tests/*`),
+`vault-desktop/src-tauri --lib`, `vault-android/src-tauri --lib`.
+`tests/*_e2e.rs` в `vault-client` помечены `#[ignore]` (нужен живой ящик) —
+запускаются отдельно: `cargo test --test email_e2e -- --ignored`.

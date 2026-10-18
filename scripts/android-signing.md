@@ -42,15 +42,23 @@
 > перед каждым `tauri android build`, не только release.
 
 ```bash
-export ANDROID_HOME=~/Android/Sdk
-export ANDROID_NDK_HOME=~/Android/Sdk/ndk/27.0.12077973
-# NDK 27 без префиксованных ar/ranlib — симлинки для vendored openssl (см. references/android-port-plan.md)
-export PATH=/tmp/ndk-bin:$PATH:$ANDROID_HOME/platform-tools
+# Окружение сборки (ANDROID_HOME/NDK + CC_/CXX_/AR_/RANLIB_ для android-target).
+# Раньше здесь был `export PATH=/tmp/ndk-bin:$PATH` с exec-обёртками — /tmp
+# не переживал перезагрузку, и кросс-сборка C/C++ зависимостей отваливалась
+# (см. docs/testing/recovery-resilience.md, «ENV-дрейф линкера»).
+. scripts/android-env.sh
+
 export VAULT_KEYSTORE=~/.local/share/vault/vault-release.keystore
 export VAULT_KEYSTORE_PASS=$(cat ~/.local/share/vault/keystore-pass.txt)
 npx tauri android build
 # → src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
 ```
+
+`scripts/android-env.sh` также включает `platform-tools` в PATH (adb/logcat) и
+проверяет окружение без записи в репозиторий:
+`cargo check --target aarch64-linux-android` в `vault-desktop/src-tauri`
+(oboe/ring) и в `vault-android/src-tauri` (vendored openssl + bundled sqlite)
+проходят на NDK 27.0.12077973.
 
 Keystore: `~/.local/share/vault/vault-release.keystore` + `keystore-pass.txt`
 (600, НЕ в git). Потеря keystore = невозможность обновлений (same-signature).
