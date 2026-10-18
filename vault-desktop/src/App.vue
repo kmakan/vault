@@ -4771,39 +4771,15 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       });
     },
     async inviteContactById(email) {
-      const id = (email || '').trim();
-      if (!id) return;
-      // Уже в контактах — не шлём повторный запрос (защита от дублей).
-      // Проверяем память И диск: ключ мог быть загружен с диска позже,
-      // а in-memory peerKeys ещё не заполнен.
-      // exists-check по трём источникам: (1) in-memory peerKeys, (2) список
-      // контактов, который показывает UI (this.contacts — виден даже если
-      // in-memory peerKeys ещё не заполнен), (3) диск loadPeerKeyEmails.
-      // Любой найден → дубль, тост «уже в списке» (защита от повторных
-      // приглашений принятым контактам).
-      const low = id.toLowerCase();
-      let exists = !!this.peerKeys[id] || !!this.peerKeys[low];
-      if (!exists && Array.isArray(this.contacts)) {
-        exists = this.contacts.some(c => (c && c.email || '').toLowerCase() === low);
-      }
-      if (!exists) {
-        try {
-          exists = [...(await api.loadPeerKeyEmails())].some(e => e === id || e.toLowerCase() === low);
-        } catch (e) { /* диск недоступен — считаем новым */ }
-      }
-      if (exists) {
-        uiStore.toast((uiStore.tr('already_in_contacts') || 'Этот контакт уже в вашем списке') + ': ' + id, 3000);
-        return;
-      }
-      try {
-        await api.sendContactInvite(id, this.publicKey);
-        uiStore.toast((uiStore.tr('invite_sent') || 'Приглашение отправлено') + ': ' + id, 3000);
-      } catch (e) {
-        // Tauri-команды отклоняют СТРОКОЙ (Rust Err(e.to_string())), не
-        // Error-объектом: e.message может быть undefined — нормализуем.
-        const emsg = (e && e.message) ? e.message : String(e);
-        uiStore.toast((uiStore.tr('invite_send_failed') || 'Не удалось отправить приглашение: ') + emsg, 5000);
-      }
+      return ContactsFeature.inviteContactById(this, email, {
+        peerKeys: () => this.peerKeys,
+        contacts: () => this.contacts,
+        loadPeerKeyEmails: () => api.loadPeerKeyEmails(),
+        sendContactInvite: (id, pub) => api.sendContactInvite(id, pub),
+        showToast: (...args) => uiStore.toast(...args),
+        t: (key) => uiStore.tr(key),
+        publicKey: () => this.publicKey,
+      });
     },
     async deleteContact(email) {
       if (!(await confirm(uiStore.tr('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;

@@ -135,3 +135,32 @@ export function showNextContact(ctx, deps) {
     setShowContactPopup(false);
   }
 }
+
+// ADR-001 Etap 3c: inviteContactById iz App.vue (отправка инвайта контакту).
+// deps-injection: peerKeys/contacts/publicKey — getters; api/uiStore — callable deps.
+export async function inviteContactById(ctx, email, deps) {
+  const { peerKeys, contacts, loadPeerKeyEmails, sendContactInvite, showToast, t, publicKey } = deps;
+  const id = (email || '').trim();
+  if (!id) return;
+  const low = id.toLowerCase();
+  let exists = !!peerKeys()[id] || !!peerKeys()[low];
+  if (!exists && Array.isArray(contacts())) {
+    exists = contacts().some(c => (c && c.email || '').toLowerCase() === low);
+  }
+  if (!exists) {
+    try {
+      exists = [...(await loadPeerKeyEmails())].some(e => e === id || e.toLowerCase() === low);
+    } catch (e) { /* disk nedostupen — schitaem novym */ }
+  }
+  if (exists) {
+    showToast((t('already_in_contacts') || 'Kontakt uzhe v spiske') + ': ' + id, 3000);
+    return;
+  }
+  try {
+    await sendContactInvite(id, publicKey());
+    showToast((t('invite_sent') || 'Priglashenie otpravleno') + ': ' + id, 3000);
+  } catch (e) {
+    const emsg = (e && e.message) ? e.message : String(e);
+    showToast((t('invite_send_failed') || 'Ne udalos otpravit priglashenie: ') + emsg, 5000);
+  }
+}
