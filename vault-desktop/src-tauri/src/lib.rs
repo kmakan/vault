@@ -2260,6 +2260,8 @@ pub fn run() {
             // M1.9: vault-client core bridge (MessageStore classify + store).
             vault_bridge::vault_classify_incoming,
             vault_bridge::vault_store_incoming_message,
+            vault_bridge::vault_download_attachment,
+            vault_bridge::vault_save_file,
         ])
         .setup(|app| {
             // Mobile (Android/iOS): dirs::home_dir() returns None without a

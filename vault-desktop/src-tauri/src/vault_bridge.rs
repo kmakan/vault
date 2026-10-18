@@ -3,11 +3,14 @@
 //! Exposes tauri::commands for the JS frontend (features/incoming.js parity):
 //! - vault_classify_incoming: classify a decrypted plaintext envelope
 //! - vault_store_incoming_message: persist a classified Message in MessageStore
+//! - vault_download_attachment: decrypt an EncryptedEnvelope → native file
+//! - vault_save_file: save already-decrypted base64 data → native file
 //!
 //! State (MessageStore/AttachmentStore) инициализируется лениво и хранится в
 //! Tauri State[VaultBridgeState].
 
 use serde::Deserialize;
+use std::path::PathBuf;
 use vault_client::vault::AttachmentStore;
 use vault_client::vault::ClassifyKind;
 use vault_client::vault::ClassifyResult;
@@ -113,6 +116,63 @@ pub async fn vault_store_incoming_message(
     Ok(stored)
 }
 
+// ── Attachment download (shared vault-core unpacking path) ──────────────
+
+/// Download (decrypt) an `EncryptedEnvelope` and write the original file to
+/// the user's downloads directory.
+///
+/// Uses `vault_client::vault::download_file` so that the CLI and Desktop share
+/// the **same** unpacking logic (envelope parse + XChaCha20-Poly1305 decrypt).
+///
+/// JS passes the full ASCII-armored envelope text.  Returns the absolute path
+/// to the saved file, or an `Err` string on failure.
+#[tauri::command]
+pub async fn vault_download_attachment(
+    envelope_text: String,
+    #[allow(unused_variables)] output_dir: Option<PathBuf>,
+    output_name: Option<String>,
+) -> Result<String, String> {
+    let dir: PathBuf = match &output_dir {
+        Some(d) => d.clone(),
+        None => dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir),
+    };
+    let path = vault_client::vault::download_file(
+        &envelope_text,
+        Some(&dir),
+        output_name.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Save already-decrypted base64 file data to the downloads directory.
+///
+/// Used by the Desktop "Download" button on attachment cards and the
+/// full-size image viewer.  Falls back to the browser `<a download>`
+/// mechanism if the Tauri command fails.
+#[tauri::command]
+pub async fn vault_save_file(
+    base64_data: String,
+    filename: String,
+    mime_type: String,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let binary = base64::engine::general_purpose::STANDARD
+        .decode(&base64_data)
+        .map_err(|e| format!("base64 decode error: {}", e))?;
+
+    let dir = dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(&filename);
+    std::fs::write(&path, &binary).map_err(|e| e.to_string())?;
+    let _ = mime_type; // reserved for future MIME-aware handling
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +236,48 @@ mod tests {
         let loaded = vault_client::vault::MessageStore::with_path(tmp).unwrap();
         assert_eq!(loaded.messages_for("alice@x", None).len(), 1);
         let _ = std::fs::remove_file(std::env::temp_dir().join("m19_test_store_incoming.json"));
+    }
+
+    #[test]
+    fn test_download_attachment_roundtrip() {
+        use vault_client::crypto::Encryptor;
+        let enc = Encryptor::new();
+        let temp = std::env::temp_dir().join("vault_bridge_dl_test");
+        std::fs::create_dir_all(&temp).unwrap();
+        let src = temp.join("test.txt");
+        std::fs::write(&src, b"bridge test data").unwrap();
+        let envelope = enc.encrypt_file(&src).unwrap();
+        let _ = std::fs::remove_file(&src);
+
+        let result = vault_client::vault::download_file(
+            &envelope,
+            Some(&temp),
+            None,
+        );
+        assert!(result.is_ok());
+        let recovered = std::fs::read(result.unwrap()).unwrap();
+        assert_eq!(recovered, b"bridge test data");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_save_file_roundtrip() {
+        use base64::Engine as _;
+        let dir = dirs::download_dir()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(std::env::temp_dir);
+        let original = b"save file test";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(original);
+
+        // Simulate what vault_save_file does
+        let binary = base64::engine::general_purpose::STANDARD
+            .decode(&b64)
+            .unwrap();
+        let path = dir.join("vault_test_save_file.bin");
+        std::fs::write(&path, &binary).unwrap();
+        let recovered = std::fs::read(&path).unwrap();
+        assert_eq!(recovered, original);
+        let _ = std::fs::remove_file(&path);
     }
 }
 

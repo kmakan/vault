@@ -122,9 +122,11 @@ pub fn human_size(bytes: usize) -> String {
     }
 }
 
-/// Encrypted file envelope — the format used for Vault file attachments.
+/// Encrypted file envelope — re-exported from the shared vault module so that
+/// both the CLI and the Desktop Tauri bridge use the same type and the same
+/// `download_file` unpacking path (ADR-001 M1 attachment parity).
 ///
-/// Format:
+/// Format (ASCII-armored, same as `Encryptor::encrypt_file` output):
 /// ```text
 /// ---BEGIN VAULT ENCRYPTED---
 /// Version: 1
@@ -132,109 +134,13 @@ pub fn human_size(bytes: usize) -> String {
 /// Filename: document.pdf
 /// Content-Type: application/pdf
 /// ---
-/// <base64-encoded payload>
+/// <base64-encoded payload>   (nonce ‖ ciphertext ‖ enc_key)
 /// <base64-encoded signature>
 /// ---END VAULT ENCRYPTED---
 /// ```
-///
-/// The payload is: nonce (24 bytes) || ciphertext || enc_key (32 bytes)
-pub struct EncryptedEnvelope;
+pub use crate::vault::attachments::{download_file, EncryptedEnvelope, EncryptedEnvelopeData};
 
-impl EncryptedEnvelope {
-    const BEGIN_MARKER: &'static str = "---BEGIN VAULT ENCRYPTED---";
-    const END_MARKER: &'static str = "---END VAULT ENCRYPTED---";
 
-    /// Build a Vault encrypted envelope from raw file data
-    pub fn build(
-        filename: &str,
-        content_type: &str,
-        encrypted_payload_b64: &str,
-        signature_b64: &str,
-    ) -> String {
-        format!(
-            "{}\nVersion: 1\nType: file\nFilename: {}\nContent-Type: {}\n---\n{}\n{}\n{}\n",
-            Self::BEGIN_MARKER,
-            filename,
-            content_type,
-            encrypted_payload_b64,
-            signature_b64,
-            Self::END_MARKER,
-        )
-    }
-
-    /// Parse an encrypted envelope and extract filename, content_type, payload_b64, signature_b64
-    pub fn parse(envelope: &str) -> Result<EncryptedEnvelopeData> {
-        let envelope = envelope.trim();
-
-        let start = envelope
-            .find(Self::BEGIN_MARKER)
-            .context("Missing BEGIN marker")?;
-        let end = envelope
-            .find(Self::END_MARKER)
-            .context("Missing END marker")?;
-
-        let block = &envelope[start + Self::BEGIN_MARKER.len()..end];
-        let block = block.trim();
-
-        // Split on "---" separator
-        let sep_pos = block.find("---").context("Missing header/body separator")?;
-        let header = block[..sep_pos].trim();
-        let body = block[sep_pos + 3..].trim();
-
-        // Parse header
-        let mut version = None;
-        let mut data_type = None;
-        let mut filename = None;
-        let mut content_type = None;
-
-        for line in header.lines() {
-            let line = line.trim();
-            if let Some(v) = line.strip_prefix("Version: ") {
-                version = Some(v.trim().to_string());
-            } else if let Some(t) = line.strip_prefix("Type: ") {
-                data_type = Some(t.trim().to_string());
-            } else if let Some(f) = line.strip_prefix("Filename: ") {
-                filename = Some(f.trim().to_string());
-            } else if let Some(ct) = line.strip_prefix("Content-Type: ") {
-                content_type = Some(ct.trim().to_string());
-            }
-        }
-
-        let _version = version.context("Missing Version in header")?;
-        let type_str = data_type.context("Missing Type in header")?;
-        if type_str != "file" {
-            anyhow::bail!("Expected Type: file, got: {}", type_str);
-        }
-
-        let lines: Vec<&str> = body.lines().collect();
-        if lines.len() < 2 {
-            anyhow::bail!("Expected payload and signature in body");
-        }
-
-        Ok(EncryptedEnvelopeData {
-            filename: filename.unwrap_or_else(|| "unknown".into()),
-            content_type: content_type.unwrap_or_else(|| "application/octet-stream".into()),
-            payload_b64: lines[0].trim().to_string(),
-            signature_b64: lines[1].trim().to_string(),
-        })
-    }
-
-    /// Check if a string looks like a Vault encrypted file envelope
-    pub fn is_file_envelope(input: &str) -> bool {
-        input.contains(Self::BEGIN_MARKER)
-            && input.contains(Self::END_MARKER)
-            && input.contains("Type: file")
-    }
-}
-
-/// Parsed data from an encrypted envelope
-#[derive(Debug, Clone)]
-pub struct EncryptedEnvelopeData {
-    pub filename: String,
-    pub content_type: String,
-    pub payload_b64: String,
-    pub signature_b64: String,
-}
 
 /// Build a MIME multipart body for an encrypted file attachment.
 ///

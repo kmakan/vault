@@ -130,6 +130,12 @@ pub enum Command {
     SendFile {
         path: String,
     },
+    /// Download (decrypt) a file attachment from an EncryptedEnvelope.
+    /// Args: <file_or_envelope> — path to a file containing the envelope,
+    /// or `-` for stdin.
+    AttachDownload {
+        id: String,
+    },
 
     // ── Groups ────────────────────────────────────────────────
     CreateGroup {
@@ -789,6 +795,22 @@ impl Command {
                         }
                     }
                 }
+                "attachment" | "att" => {
+                    if args.is_empty() {
+                        Command::Unknown("/attachment requires a subcommand (download)".into())
+                    } else {
+                        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                        if parts[0] == "download" && !parts[1].trim().is_empty() {
+                            Command::AttachDownload {
+                                id: parts[1].trim().to_string(),
+                            }
+                        } else {
+                            Command::Unknown(
+                                "/attachment download <file_or_stdin>".into()
+                            )
+                        }
+                    }
+                }
 
                 // Settings
                 "settings" | "cfg" => Command::Settings,
@@ -950,6 +972,7 @@ impl fmt::Display for Command {
             Command::Convert { .. } => write!(f, "convert ..."),
             Command::Attach { path } => write!(f, "attach {}", path),
             Command::SendFile { path } => write!(f, "sendfile {}", path),
+            Command::AttachDownload { id } => write!(f, "attachment download {}", id),
             Command::CreateGroup { name } => write!(f, "creategroup {}", name),
             Command::JoinGroup { group_id } => write!(f, "joingroup {}", group_id),
             Command::LeaveGroup { group_id } => write!(f, "leavegroup {}", group_id),
@@ -1090,6 +1113,21 @@ mod tests {
             }
             _ => panic!("Expected React"),
         }
+    }
+
+    #[test]
+    fn test_parse_attachment_download() {
+        let cmd = Command::parse("/attachment download /tmp/envelope.txt");
+        match cmd {
+            Command::AttachDownload { id } => assert_eq!(id, "/tmp/envelope.txt"),
+            _ => panic!("Expected AttachDownload"),
+        }
+        // Shortcut alias 'att'
+        let cmd = Command::parse("/att download -");
+        assert!(matches!(cmd, Command::AttachDownload { id } if id == "-"));
+        // Missing subcommand → Unknown
+        assert!(matches!(Command::parse("/attachment"), Command::Unknown(_)));
+        assert!(matches!(Command::parse("/attachment foo"), Command::Unknown(_)));
     }
 
     #[test]

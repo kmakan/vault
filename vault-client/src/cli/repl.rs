@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use console::Style;
 use reedline::{DefaultPrompt, FileBackedHistory, Reedline, Signal};
@@ -1800,6 +1800,39 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
             }
         }
 
+        // ── Attachment download (decrypt EncryptedEnvelope → disk) ──────
+        Command::AttachDownload { id } => {
+            // <id> — путь к файлу с EncryptedEnvelope, или "-" для stdin.
+            let envelope_text = if id == "-" {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(
+                    &mut std::io::stdin(),
+                    &mut buf,
+                )
+                .context("Failed to read envelope from stdin")?;
+                buf
+            } else if std::path::Path::new(&id).exists() {
+                std::fs::read_to_string(&id)
+                    .with_context(|| format!("Cannot read file: {}", id))?
+            } else {
+                Output::error(&format!(
+                    "File not found: {} (or use '-' for stdin)",
+                    id
+                ));
+                return Ok(false);
+            };
+
+            let out_dir = std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match crate::vault::download_file(&envelope_text, Some(&out_dir), None) {
+                Ok(path) => Output::success(&format!(
+                    "Downloaded attachment to {}",
+                    path.display()
+                )),
+                Err(e) => Output::error(&format!("Download failed: {}", e)),
+            }
+        }
+
         // ── Groups ────────────────────────────────────────────
         Command::CreateGroup { name } => {
             let mut group_mgr = crate::vault::GroupManager::new();
@@ -2646,11 +2679,15 @@ fn print_help(topic: Option<&str>) {
         }
         Some("files") => {
             Output::block(
-                "/attach /sendfile — File encryption",
+                "/attach /sendfile /attachment — File encryption",
                 &[
-                    "  /attach <path>     Queue a file for sending",
-                    "  /sendfile <path>   Encrypt and send a file immediately",
-                    "  /sf <path>         Shortcut for /sendfile",
+                    "  /attach <path>        Queue a file for sending",
+                    "  /sendfile <path>      Encrypt and send a file immediately",
+                    "  /sf <path>            Shortcut for /sendfile",
+                    "",
+                    "  /attachment download <file>  Decrypt a received EncryptedEnvelope → disk",
+                    "  /attachment download -       Read envelope from stdin, decrypt → disk",
+                    "  /att download <file>        Shortcut for /attachment",
                     "",
                     "Files are encrypted with XChaCha20-Poly1305.",
                     "Encrypted files use the ---BEGIN VAULT ENCRYPTED--- format.",
@@ -2918,7 +2955,7 @@ fn print_help(topic: Option<&str>) {
                     "Send:       /send, /sendfile, /sf",
                     "Keys:       /keygen, /kg, /keys, /k, /keyshare",
                     "Encrypt:    /encrypt, /enc, /decrypt, /dec",
-                    "Files:      /attach, /sendfile, /sf",
+                    "Files:      /attach, /sendfile, /sf, /attachment download",
                     "Folders:    /fc, /fd, /fr, /fa, /frem, /fl, /fch",
                     "Media:      /thumb, /thumbinfo, /ti",
                     "Groups:     /cg, /gm, /gi, /gr, /pm, /dm, /bk, /ub",
@@ -2982,6 +3019,7 @@ fn print_help(topic: Option<&str>) {
                     "  FILES & MEDIA",
                     "    /attach <path>     Queue file",
                     "    /sf <path>         Send file now",
+                    "    /attachment download <file>  Decrypt envelope → disk",
                     "    /thumb <file>      Generate thumbnail",
                     "",
                     "  ORGANIZATION",

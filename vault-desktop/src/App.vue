@@ -278,7 +278,7 @@
             @delete="deleteMessage"
             @poll-vote="castPollVote"
             @open-image="openImageViewer"
-            @download="downloadAttachment"
+            @download="downloadAttachmentFile"
             @dod-download="downloadDodAttachment"
             @text-click="onMessageTextClick"
             @call-back="callBack"
@@ -711,7 +711,7 @@
              :alt="viewingImage.name" class="image-viewer-img" />
         <div class="image-viewer-actions">
           <span class="image-viewer-name">{{ viewingImage.name }}</span>
-          <button class="btn btn-primary" @click="downloadAttachment(viewingImage)"><Icon name="download" :size="14" /> {{ t('download') || 'Скачать' }}</button>
+          <button class="btn btn-primary" @click="downloadAttachmentFile(viewingImage)"><Icon name="download" :size="14" /> {{ t('download') || 'Скачать' }}</button>
         </div>
       </div>
     </div>
@@ -2564,6 +2564,7 @@ export default {
     // ── Вложения (логика в features/attachments.js) — тонкие делегаты,
     // имена сохранены для шаблонных биндингов (гейт check-template). ──
     downloadAttachment(attachment) { return AttachmentsFeature.downloadAttachment(attachment); },
+    async downloadAttachmentFile(attachment) { return AttachmentsFeature.downloadAttachmentFile(attachment); },
     // ADR-001: showToast обёрнут в стрелку — метод компонента теряет this,
 //            если передать его ссылкой (внутри использует состояние).
 async toggleVoiceNote(msg, attachment) {

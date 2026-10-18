@@ -27,7 +27,7 @@ pub use groups::GroupManager;
 pub use invite::InviteManager;
 pub use media::{MediaInfo, ThumbnailManager, ThumbnailSize};
 pub use reactions::{Reaction, ReactionStore};
-pub use attachments::{AttachmentMeta, AttachmentStore};
+pub use attachments::{AttachmentMeta, AttachmentStore, EncryptedEnvelope, EncryptedEnvelopeData, download_file};
 pub use messages::{VaultMessage, MessageStore};
 pub use incoming::{ClassifyKind, ClassifyResult, classify};
 /// M2.3: Call signal core (parity JS parseCallSignal + CallSignal).

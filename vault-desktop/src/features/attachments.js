@@ -31,6 +31,31 @@ export function downloadAttachment(attachment) {
   downloadBase64(attachment.data, attachment.name, attachment.type);
 }
 
+// Download attachment via Tauri native bridge (t_e66389bd).
+// Saves base64 data to the OS downloads directory; falls back to
+// browser download if the Tauri command is unavailable.
+export async function downloadAttachmentFile(attachment) {
+  if (!attachment || !attachment.data) return;
+  try {
+    const result = await invoke('vault_save_file', {
+      base64Data: attachment.data,
+      filename: attachment.name,
+      mimeType: attachment.type || 'application/octet-stream',
+    });
+    if (result) {
+      uiStore.toast(
+        uiStore.tr('download_complete') ||
+        `Сохранено: ${attachment.name}`,
+        2000
+      );
+    }
+    return result;
+  } catch (e) {
+    console.warn('[attachment] native save failed, fallback to browser:', e);
+    downloadBase64(attachment.data, attachment.name, attachment.type);
+  }
+}
+
 // Полноэкранный просмотр изображения-вложения
 // ADR-001: openImageViewer убран как бессмысленная обёртка — он был
 // единственным присваиванием `ctx.viewingImage = attachment`. Держать
