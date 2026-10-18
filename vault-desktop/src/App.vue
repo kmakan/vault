@@ -4709,10 +4709,25 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         showToast: (...args) => uiStore.toast(...args),
         t: (key) => uiStore.tr(key),
         loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
+        markInviteHandled: (key) => { if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key); },
+        unmarkInviteHandled: (key) => { const i = this.handledInviteKeys.indexOf(key); if (i >= 0) this.handledInviteKeys.splice(i, 1); },
+        isCryptoReady: () => this.cryptoReady,
+        groups: () => this.groups,
+        showNextInvite: () => this.showNextInvite(),
       });
     },
-    async declineInvite(inv) { return InvitesFeature.declineInvite(this, inv); },
-    showNextInvite() { return InvitesFeature.showNextInvite(this); },
+    async declineInvite(inv) {
+      return InvitesFeature.declineInvite(this, inv, {
+        markInviteHandled: (key) => { if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key); },
+        showNextInvite: () => this.showNextInvite(),
+      });
+    },
+    showNextInvite() {
+      return InvitesFeature.showNextInvite(this, {
+        clearNextTimer: () => clearTimeout(this._nextInviteTimer),
+        setNextTimer: (fn, delay) => { clearTimeout(this._nextInviteTimer); this._nextInviteTimer = setTimeout(fn, delay); },
+      });
+    },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
     async acceptContactInvite(c) {
       const key = `${c.sender}|${c.uid}`;

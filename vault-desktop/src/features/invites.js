@@ -102,19 +102,19 @@ export async function processInvites(ctx) {
 // ctx-паттерн: this.* -> ctx.*; GroupsFeature — лениво (разрывает цикл);
 // deps: decryptGroupKey/kvSet/showToast/t/loadGroupMessages — инъекция из App.vue (ADR-001 pattern; smoke не мокает crypto/uiStore/db/groups).
 export async function acceptInvite(ctx, inv, deps) {
-  const { decryptGroupKey, kvSet, showToast, t, loadGroupMessages } = deps;
+  const { decryptGroupKey, kvSet, showToast, t, loadGroupMessages, markInviteHandled, unmarkInviteHandled, isCryptoReady, groups, showNextInvite } = deps;
   const key = `${inv.group_id}|${inv.uid}`;
-  if (!ctx.handledInviteKeys.includes(key)) ctx.handledInviteKeys.push(key);
+  markInviteHandled(key);
   ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
   ctx.showInvitePopup = false;
   try {
-    if (ctx.groups.some(g => g.id === inv.group_id)) {
+    if (groups().some(g => g.id === inv.group_id)) {
       showToast((t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
-      ctx.showNextInvite();
+      showNextInvite();
       return;
     }
     let groupKey = inv.group_key || null;
-    if (!groupKey && inv.group_key_enc && inv.sender_public_key && ctx.cryptoReady) {
+    if (!groupKey && inv.group_key_enc && inv.sender_public_key && isCryptoReady()) {
       groupKey = await decryptGroupKey(inv.group_key_enc, inv.sender_public_key);
       if (!groupKey) throw new Error('Не удалось расшифровать ключ группы');
     }
@@ -122,7 +122,7 @@ export async function acceptInvite(ctx, inv, deps) {
     await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
     if (inv.group_avatar) {
       await kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
-      ctx.groups.setGroupAvatar(inv.group_id, inv.group_avatar);
+      groups().setGroupAvatar(inv.group_id, inv.group_avatar);
     }
     await ctx.loadGroups();
     try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
@@ -131,16 +131,16 @@ export async function acceptInvite(ctx, inv, deps) {
     }
   } catch (e) {
     alert('Failed to accept invite: ' + e.message);
-    const i = ctx.handledInviteKeys.indexOf(key);
-    if (i >= 0) ctx.handledInviteKeys.splice(i, 1);
+    unmarkInviteHandled(key);
     ctx.pendingInvites.push(inv);
   }
-  ctx.showNextInvite();
+  showNextInvite();
 }
 
-export async function declineInvite(ctx, inv) {
+export async function declineInvite(ctx, inv, deps) {
+  const { markInviteHandled, showNextInvite } = deps;
   const key = `${inv.group_id}|${inv.uid}`;
-  if (!ctx.handledInviteKeys.includes(key)) ctx.handledInviteKeys.push(key);
+  markInviteHandled(key);
   ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
   ctx.showInvitePopup = false;
   try {
@@ -148,14 +148,15 @@ export async function declineInvite(ctx, inv) {
   } catch (e) {
     // ignore
   }
-  ctx.showNextInvite();
+  showNextInvite();
 }
 
-export function showNextInvite(ctx) {
-  clearTimeout(ctx._nextInviteTimer);
+export function showNextInvite(ctx, deps) {
+  const { clearNextTimer, setNextTimer } = deps;
+  clearNextTimer();
   if (ctx.pendingInvites.length > 0) {
     if (ctx.invitePopupIndex >= ctx.pendingInvites.length) ctx.invitePopupIndex = 0;
-    ctx._nextInviteTimer = setTimeout(() => {
+    setNextTimer(() => {
       if (ctx.pendingInvites.length && !ctx.showInvitePopup) {
         ctx.showInvitePopup = true;
       }
@@ -163,7 +164,7 @@ export function showNextInvite(ctx) {
   } else {
     ctx.showInvitePopup = false;
     if (ctx.pendingContacts.length) {
-      ctx._nextInviteTimer = setTimeout(() => {
+      setNextTimer(() => {
         if (ctx.pendingContacts.length && !ctx.showContactPopup) {
           ctx.showContactPopup = true;
         }
