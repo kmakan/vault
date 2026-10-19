@@ -86,7 +86,7 @@
               class="btn-sm"
               :class="isMemberIgnored(member.email) ? 'btn-success' : 'btn-danger'"
               @click="$emit(isMemberIgnored(member.email) ? 'unblock' : 'block', member.email)"
-              :title="isMemberIgnored(member.email) ? (t('unblock') || 'Unblock user') : (t('chat_block') || 'Block')"
+              :title="isMemberIgnored(member.email) ? (t('chat_unblock') || 'Unblock user') : (t('chat_block') || 'Block')"
             >{{ isMemberIgnored(member.email) ? '✓' : '⊘' }}</button>
             <button
               class="btn-sm btn-danger"
@@ -115,7 +115,7 @@
             <button
               class="btn-sm btn-success"
               @click="$emit('unblock', email)"
-              :title="t('unblock') || 'Unblock user'"
+              :title="t('chat_unblock') || 'Unblock user'"
             >✓</button>
           </div>
         </div>

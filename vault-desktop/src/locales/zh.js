@@ -633,4 +633,20 @@ export default {
   err_notes_full_voice: '本地笔记存储已满——语音消息未保存。请删除部分笔记/附件。',
   err_notes_full_file: '本地笔记存储已满——文件未保存。',
   err_generic: '错误：',
+
+  // 由 locale-keys 门禁补齐的键（2026-10-19）——说明见 ru.js。
+  back: '返回',
+  call_accepted: '已接通',
+  chat_unread: '未读',
+  contact_request_title: '联系人请求',
+  contact_request_text: '接受请求后，对方会出现在你的联系人中。',
+  download_complete: '文件已保存：{name}',
+  group: '群组',
+  lock_checking: '正在检查…',
+  lock_unlock: '解锁',
+  relay_remove: '删除中继',
+  send: '发送',
+  video_unavailable: '此 WebView 中无法使用视频',
+  video_start_failed: '无法启动视频',
+  video_camera_off: '摄像头不可用——只能看到对方',
 }

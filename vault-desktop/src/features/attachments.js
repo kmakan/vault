@@ -44,7 +44,9 @@ export async function downloadAttachmentFile(attachment) {
     });
     if (result) {
       uiStore.toast(
-        uiStore.tr('download_complete') ||
+        // Ключ с плейсхолдером: tr теперь прокидывает params в t().
+        // Фолбэк — на случай, если гейт locale-keys пропустит ключ в новой локали.
+        uiStore.tr('download_complete', { name: attachment.name }) ||
         `Сохранено: ${attachment.name}`,
         2000
       );

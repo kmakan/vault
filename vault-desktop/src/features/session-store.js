@@ -172,7 +172,10 @@ export function createUiStore() {
     onMessagesScroll() { (this._onMessagesScroll || (() => {}))(); },
     jumpToBottom() { (this._jumpToBottom || (() => {}))(); },
     // удобный прокси для шаблонов/модулей без App-ctx
-    tr(key) { return t(key); },
+    // tr(key, params): params прокидываются в t() — нужны ключам с
+    // плейсхолдерами ({name} в download_complete). До 19.10.2026 params
+    // отбрасывались, и подстановка была недоступна вызывающим из фич.
+    tr(key, params) { return t(key, params); },
     toast(msg, ms) { showToast(msg, ms); },
   };
 }

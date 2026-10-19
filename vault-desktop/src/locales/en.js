@@ -637,4 +637,22 @@ export default {
   err_notes_full_voice: 'Local notes storage is full — voice message not saved. Delete some notes/attachments.',
   err_notes_full_file: 'Local notes storage is full — file not saved.',
   err_generic: 'Error: ',
+
+  // Ключи, добитые гейтом locale-keys (19.10.2026) — см. комментарий в ru.js.
+  // relay_enable здесь был пропущен с самого начала (есть только в ru/zh).
+  back: 'Back',
+  call_accepted: 'Connected',
+  chat_unread: 'Unread',
+  contact_request_title: 'Contact request',
+  contact_request_text: 'Accept the request and the person will appear in your contacts.',
+  download_complete: 'File saved: {name}',
+  group: 'Group',
+  lock_checking: 'Checking…',
+  lock_unlock: 'Unlock',
+  relay_enable: 'Accelerated delivery via relay',
+  relay_remove: 'Remove relay',
+  send: 'Send',
+  video_unavailable: 'Video is unavailable in this WebView',
+  video_start_failed: 'Failed to start video',
+  video_camera_off: 'Camera unavailable — you can only see the other person',
 }
