@@ -133,19 +133,26 @@ impl VaultMessage {
         )
     }
 
-    /// Parse from email body
+    /// Parse from email body — обратная к [`Self::to_email_body`].
+    ///
+    /// Формат: блок X-заголовков, пустая строка, `envelope_json`, перевод
+    /// строки, `encrypted_payload` (payload может содержать переводы строк —
+    /// поэтому берём остаток целиком, а не первую строку).
+    ///
+    /// ВАЖНО: это НЕ транспорт shipping-приложения. Desktop и CLI шлют
+    /// stealth-письмо: пустая тема, в теле — сам wrapped JSON (`{vault:1,…}`),
+    /// без `X-Vault-*` заголовков (см. `vault-desktop/src-tauri/src/lib.rs`,
+    /// `recovery_build_escrow_email`, и `features/channels.js`). Этот вариант
+    /// конверта оставлен как отдельный, X-header, формат — в проде не
+    /// используется; контракт обмена — payload JSON (см. `incoming::classify`).
     pub fn from_email_body(body: &str) -> Option<Self> {
-        let parts: Vec<&str> = body.splitn(2, "\n\n").collect();
-        if parts.len() < 2 {
-            return None;
-        }
-
-        let envelope: VaultEnvelope = serde_json::from_str(parts[1]).ok()?;
-        let encrypted_payload = parts[0].to_string();
+        let (_, rest) = body.split_once("\n\n")?;
+        let (envelope_json, encrypted_payload) = rest.split_once('\n')?;
+        let envelope: VaultEnvelope = serde_json::from_str(envelope_json).ok()?;
 
         Some(Self {
             envelope,
-            encrypted_payload,
+            encrypted_payload: encrypted_payload.to_string(),
         })
     }
 }
@@ -208,5 +215,37 @@ mod tests {
         assert!(body.contains("X-Vault-Encrypted: 1"));
         assert!(body.contains("X-Vault-Type: message"));
         assert!(body.contains("X-Vault-ID: m1"));
+    }
+
+    /// `from_email_body(to_email_body(m)) == m` — иначе writer и reader
+    /// расходятся, и письмо, отправленное одним кодом, не читается другим.
+    #[test]
+    fn test_email_body_roundtrip() {
+        let msg = VaultMessage::new("a@test.com", "b@test.com", "m1", "cGF5bG9hZA==");
+        let body = msg.to_email_body();
+        let parsed = VaultMessage::from_email_body(&body).expect("roundtrip: body должен разбираться");
+        assert_eq!(parsed.envelope.version, msg.envelope.version);
+        assert_eq!(parsed.envelope.msg_type, VaultMsgType::Message);
+        assert_eq!(parsed.envelope.from, "a@test.com");
+        assert_eq!(parsed.envelope.to, "b@test.com");
+        assert_eq!(parsed.envelope.message_id, "m1");
+        assert_eq!(parsed.encrypted_payload, "cGF5bG9hZA==");
+        assert!(parsed.envelope.in_reply_to.is_none());
+    }
+
+    /// Roundtrip письма-ответа: in_reply_to должен пережить и пустой
+    /// X-Vault-Reply-To (не «null»), и непустой.
+    #[test]
+    fn test_email_body_roundtrip_reply() {
+        let msg = VaultMessage::reply("b@test.com", "a@test.com", "m2", "m1", "cA==");
+        let parsed = VaultMessage::from_email_body(&msg.to_email_body()).expect("roundtrip reply");
+        assert_eq!(parsed.envelope.in_reply_to, Some("m1".to_string()));
+        assert_eq!(parsed.encrypted_payload, "cA==");
+    }
+
+    /// Тело без разделителя заголовок/тело — не конверт, а мусор.
+    #[test]
+    fn test_from_email_body_garbage() {
+        assert!(VaultMessage::from_email_body("обычное письмо без конверта").is_none());
     }
 }
