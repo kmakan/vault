@@ -1,76 +1,91 @@
-// M0 C1 — Wire format parity: Rust VaultEnvelope ↔ JS parseEnvelope.
-// Rust canonical (vault-client/src/vault/protocol.rs) использует X-headers
-// + envelope_json {version, msg_type, from, to, message_id, in_reply_to, timestamp}.
-// JS parseEnvelope читает encrypted_payload {vault:1, id, text, name, avatar, ...}.
-// Этот smoke validate roundtrip между слоями без реального Rust runtime —
-// использует contract spec из docs/M0-WIRE-FORMAT-PARITY.md.
+// M0 C1 — контракт обмена payload: JS parseEnvelope ↔ Rust incoming::classify.
+//
+// Фикстура `vault-client/tests/fixtures/m0-wire-contract.json` — общая с
+// Rust-тестом `vault-client/tests/m0_wire_contract.rs`. Одни и те же байты
+// обязаны одинаково читаться обеими сторонами: расхождение ломает любой из
+// двух гейтов.
+//
+// Правило «сколько объявлено — столько проверено»: число проверок считается
+// ЗАРАНЕЕ по всей фикстуре, до выполнения, и в конце сверяется с числом
+// выполненных. Пропущенный кейс, лишнее поле в фикстуре, выпавшая проверка →
+// красный. (Прежний скрипт печатал «из 23», выполняя 16, и выходил с кодом 0;
+// первая версия этого гейта считала «объявлено» внутри цикла, поэтому пропуск
+// кейса уменьшал оба числа и оставался зелёным — самопроверка 19.10 это поймала.)
+//
+// Покрытие и границы — в docs/M0-WIRE-FORMAT-PARITY.md.
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { parseEnvelope } from '../src/message-format.js';
 
-const ok = (label, cond) => {
-  if (cond) { console.log('  ✓ ' + label); globalThis.__m0ok = (globalThis.__m0ok || 0) + 1; }
-  else  { console.log('  ✗ ' + label); globalThis.__m0fail = (globalThis.__m0fail || 0) + 1; }
-};
+const FIXTURE = '../../vault-client/tests/fixtures/m0-wire-contract.json';
 
-// ── 1. Rust VaultMessage::new → to_email_body ─────────────────────
-// Симуляция Rust to_email_body: X-headers + envelope_json + payload_json
-function toEmailBodyRust(env, payload) {
-  const envelopeJson = JSON.stringify({
-    version: env.version, msg_type: env.msg_type,
-    from: env.from, to: env.to, message_id: env.message_id,
-    in_reply_to: env.in_reply_to || null,
-    timestamp: env.timestamp,
-  });
-  return `X-Vault-Encrypted: 1\r\nX-Vault-Type: ${env.msg_type}\r\nX-Vault-ID: ${env.message_id}\r\nX-Vault-From: ${env.from}\r\nX-Vault-Reply-To: ${env.in_reply_to || ''}\r\n\r\n${envelopeJson}\n${JSON.stringify(payload)}`;
+function die(msg) {
+  console.log('✗ ' + msg);
+  process.exit(1);
 }
 
-const rustEnv = {
-  version: '1', msg_type: 'message',
-  from: 'alice@x.ru', to: 'bob@x.ru',
-  message_id: 'msg-1', in_reply_to: null,
-  timestamp: '2026-10-16T10:00:00Z',
-};
-const appPayload = { vault: 1, id: 'msg-1', text: 'привет', name: 'Аня', avatar: '', ts: 1700000000, key: 'PUB', pq: '', ttl: 0, tok: '' };
-const emailBody = toEmailBodyRust(rustEnv, appPayload);
+const fixture = JSON.parse(readFileSync(fileURLToPath(new URL(FIXTURE, import.meta.url)), 'utf8'));
+const cases = fixture.cases;
+if (!Array.isArray(cases) || cases.length === 0) die('фикстура без кейсов: ' + FIXTURE);
 
-// X-headers parsing
-const headers = {};
-const parts = emailBody.split('\r\n\r\n');
-for (const line of parts[0].split('\r\n')) {
-  const [k, ...rest] = line.split(': ');
-  headers[k] = rest.join(' ');
+// ── Проход 1: сколько проверок объявлено (по всей фикстуре, до выполнения) ──
+let declared = 0;
+for (const c of cases) {
+  if (typeof c.payload !== 'string' || !c.expect || !('js_parse_envelope' in c.expect)) {
+    die(`[${c.name}] в фикстуре нет payload или expect.js_parse_envelope`);
+  }
+  const want = c.expect.js_parse_envelope;
+  if (want === null) {
+    declared += 1;
+  } else if (typeof want === 'object' && Object.keys(want).length > 0) {
+    declared += Object.keys(want).length;
+  } else {
+    die(`[${c.name}] ожидание js_parse_envelope пустое — кейс ничего не проверяет`);
+  }
 }
-ok('X-Vault-Encrypted: 1', headers['X-Vault-Encrypted'] === '1');
-ok('X-Vault-Type: message', headers['X-Vault-Type'] === 'message');
-ok('X-Vault-ID: msg-1', headers['X-Vault-ID'] === 'msg-1');
-ok('X-Vault-From', headers['X-Vault-From'] === 'alice@x.ru');
 
-// envelope_json parse (Rust VaultEnvelope)
-const [envelopeJson, payloadStr] = parts[1].split('\n');
-const envParsed = JSON.parse(envelopeJson);
-ok('VaultEnvelope.version == "1"', envParsed.version === '1');
-ok('VaultEnvelope.msg_type == message', envParsed.msg_type === 'message');
-ok('VaultEnvelope.from', envParsed.from === 'alice@x.ru');
-ok('VaultEnvelope.message_id == msg-1', envParsed.message_id === 'msg-1');
-ok('VaultEnvelope.in_reply_to null', envParsed.in_reply_to === null);
+// ── Проход 2: выполнение ───────────────────────────────────────────────────
+let checked = 0;
+let failed = 0;
 
-// ── 2. JS parseEnvelope ↔ Rust payload layer ───────────────────────
-const parsedEnv = parseEnvelope(payloadStr);
-ok('parseEnvelope: id == msg-1', parsedEnv.id === 'msg-1');
-ok('parseEnvelope: text == привет', parsedEnv.text === 'привет');
-ok('parseEnvelope: name == Аня', parsedEnv.name === 'Аня');
-ok('parseEnvelope: ts == 1700000000', parsedEnv.ts === 1700000000);
+function ok(label, cond) {
+  checked++;
+  if (cond) {
+    console.log('  ✓ ' + label);
+  } else {
+    failed++;
+    console.log('  ✗ ' + label);
+  }
+}
 
-// ── 3. Reply (in_reply_to) parity ──────────────────────────────────
-const rustReplyEnv = { ...rustEnv, in_reply_to: 'msg-1', message_id: 'msg-2' };
-const replyBody = toEmailBodyRust(rustReplyEnv, { ...appPayload, id: 'msg-2' });
-const replyParts = replyBody.split('\r\n\r\n');
-const replyEnv = JSON.parse(replyParts[1].split('\n')[0]);
-ok('reply: in_reply_to == msg-1', replyEnv.in_reply_to === 'msg-1');
-ok('reply: message_id == msg-2', replyEnv.message_id === 'msg-2');
+for (const c of cases) {
+  console.log('\n' + c.name);
+  const want = c.expect.js_parse_envelope;
+  const env = parseEnvelope(c.payload);
 
-// ── 4. Legacy plaintext (vault !== 1) → null ───────────────────────
-ok('legacy plaintext → parseEnvelope null', parseEnvelope('just text') === null);
+  if (want === null) {
+    ok('не конверт-сообщение (parseEnvelope → null)', env === null);
+    continue;
+  }
 
-console.log(`\nM0 C1 wire-parity: ${globalThis.__m0ok}/23 passed, ${globalThis.__m0fail || 0} failed`);
-if (globalThis.__m0fail) process.exit(1);
+  if (env === null) {
+    checked += Object.keys(want).length; // объявленные проверки не выполнены
+    failed++;
+    console.log('  ✗ parseEnvelope вернул null, а конверт ожидался');
+    continue;
+  }
+  for (const [key, value] of Object.entries(want)) {
+    // env несёт все ключи конверта (пустые значения по умолчанию), поэтому
+    // undefined тут означает расхождение схемы, а не «поля нет в фикстуре».
+    ok(`${key} == ${JSON.stringify(value)}  (получено ${JSON.stringify(env[key])})`, env[key] === value);
+  }
+}
+
+if (checked !== declared) {
+  failed++;
+  console.log(`\n✗ выполнено проверок ${checked}, объявлено ${declared} — проверка выпала`);
+}
+console.log(`\nM0 wire-contract (JS): ${checked}/${declared} проверок, провалов ${failed}`);
+if (failed) process.exit(1);

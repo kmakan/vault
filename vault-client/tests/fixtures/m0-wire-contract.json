@@ -1,0 +1,49 @@
+{
+  "why": "M0 C1: одни и те же байты payload обязаны читаться одинаково JS parseEnvelope (vault-desktop/src/message-format.js) и Rust incoming::classify (vault-client/src/vault/incoming.rs). Фикстуру читают оба гейта: cargo test --test m0_wire_contract и npm run smoke:m0-wire. Расхождение ломает любой из них, а не проходит незамеченным.",
+  "from": "alice@test.com",
+  "producer": "vault-desktop/src/App.vue buildEnvelope: {vault:1, id, text, name, avatar, key, ts[, pq][, gavatar][, tok]}",
+  "transport": "stealth: пустая тема, тело письма = сам wrapped JSON, без X-Vault-* заголовков (lib.rs recovery_build_escrow_email, features/channels.js)",
+  "not_covered_here": "profile/presence/call/poll/channel-конверты (их разбирают отдельные ветки JS и Rust), вложения, X-header вариант конверта (protocol.rs, покрыт Rust-раундтрипом)",
+  "cases": [
+    {
+      "name": "message 1:1 — как собирает buildEnvelope",
+      "payload": "{\"vault\":1,\"id\":\"msg-1\",\"text\":\"привет\",\"name\":\"Аня\",\"avatar\":\"\",\"key\":\"PUB\",\"ts\":1700000000}",
+      "expect": {
+        "js_parse_envelope": { "id": "msg-1", "text": "привет", "name": "Аня", "ts": 1700000000, "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "msg-1", "title": "Аня", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "message с PQ-ключом и ttl (гибрид + самоочистка)",
+      "payload": "{\"vault\":1,\"id\":\"msg-2\",\"text\":\"hi\",\"name\":\"Bob\",\"ts\":1700000001,\"pq\":\"PQEK\",\"ttl\":86400}",
+      "expect": {
+        "js_parse_envelope": { "id": "msg-2", "text": "hi", "name": "Bob", "ts": 1700000001, "pq": "PQEK", "ttl": 86400 },
+        "rust_classify": { "kind": "message", "id": "msg-2", "title": "Bob", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "media-конверт: text = JSON вложения",
+      "payload": "{\"vault\":1,\"id\":\"msg-3\",\"text\":\"{\\\"kind\\\":\\\"file\\\",\\\"name\\\":\\\"a.png\\\"}\",\"name\":\"Аня\",\"ts\":1700000002}",
+      "expect": {
+        "js_parse_envelope": { "id": "msg-3", "ts": 1700000002 },
+        "rust_classify": { "kind": "message", "id": "msg-3", "title": "Аня", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "legacy plaintext — не конверт (обе стороны игнорируют)",
+      "payload": "обычный текст письма, не конверт",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    },
+    {
+      "name": "JSON без vault — не конверт",
+      "payload": "{\"hello\":\"world\"}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    }
+  ]
+}
