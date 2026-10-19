@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use vault_client::vault::AttachmentStore;
 use vault_client::vault::ClassifyResult;
 use vault_client::vault::MessageStore;
+use vault_client::vault::VaultMessage;
 // ClassifyKind нужен только тестам (test_classify_kind_display) — в прод-сборке не используется.
 #[cfg(test)]
 use vault_client::vault::ClassifyKind;
@@ -71,28 +72,33 @@ pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serd
     }
 }
 
-/// Store an incoming message (after classify confirmed kind=Message).
+/// Payload → `VaultMessage`: контракт с JS, вынесенный из команды, чтобы его
+/// можно было проверить на хосте.
 ///
-/// JS передаёт `from`, `envId`, `plain` (decrypted payload JSON) + `chatKey`.
-/// Rust парсит payload и создаёт VaultMessage via store logic. Это parity
-/// с CLI `messages.rs:store_incoming`.
-#[tauri::command]
-pub async fn vault_store_incoming_message(
-    state: tauri::State<'_, VaultBridgeState>,
-    from: String,
-    chat_key: Option<String>,
-    env_id: Option<String>,
-    plain: String,
-) -> Result<bool, String> {
+/// Имена полей — это `JSON.stringify(cls.msg)` из `features/incoming.js:415`:
+/// `id, from, to, ts, text, name, avatar, reactions, edited, replies,
+/// in_reply_to, ttl`. Полный payload конверта читается тем же кодом (в мосте
+/// приходят и минимум-заготовка, и полный объект).
+///
+/// `id` берётся по цепочке: envId из JS (кросс-канальный дедуп relay-копии и
+/// email-копии) → `id` payload → legacy `message_id` → пусто.
+pub fn message_from_payload(
+    from: &str,
+    to: &str,
+    env_id: Option<&str>,
+    plain: &str,
+) -> Result<VaultMessage, String> {
     let p: serde_json::Value =
-        serde_json::from_str(&plain).map_err(|e| format!("payload parse: {}", e))?;
-    let id = env_id.as_deref().or_else(|| p.get("id").and_then(|v| v.as_str()))
+        serde_json::from_str(plain).map_err(|e| format!("payload parse: {}", e))?;
+    let id = env_id
+        .or_else(|| p.get("id").and_then(|v| v.as_str()))
         .or_else(|| p.get("message_id").and_then(|v| v.as_str()))
-        .unwrap_or("").to_string();
-    let vm = vault_client::vault::VaultMessage {
+        .unwrap_or("")
+        .to_string();
+    Ok(VaultMessage {
         id,
-        from,
-        to: std::env::var("VAULT_EMAIL").unwrap_or_default(),
+        from: from.to_string(),
+        to: to.to_string(),
         ts: p.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
         text: p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         name: p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -106,7 +112,28 @@ pub async fn vault_store_incoming_message(
             .unwrap_or_default(),
         in_reply_to: p.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
         ttl: p.get("ttl").and_then(|v| v.as_u64()),
-    };
+    })
+}
+
+/// Store an incoming message (after classify confirmed kind=Message).
+///
+/// JS передаёт `from`, `envId`, `plain` (decrypted payload JSON) + `chatKey`.
+/// Rust парсит payload и создаёт VaultMessage via store logic. Это parity
+/// с CLI `messages.rs:store_incoming`.
+#[tauri::command]
+pub async fn vault_store_incoming_message(
+    state: tauri::State<'_, VaultBridgeState>,
+    from: String,
+    chat_key: Option<String>,
+    env_id: Option<String>,
+    plain: String,
+) -> Result<bool, String> {
+    let vm = message_from_payload(
+        &from,
+        &std::env::var("VAULT_EMAIL").unwrap_or_default(),
+        env_id.as_deref(),
+        &plain,
+    )?;
     let mut store = state.messages();
     let from = vm.from.clone();
     let stored = store.store_incoming(&from, chat_key.as_deref(), vm);
@@ -365,6 +392,78 @@ mod tests {
         assert!(!dir.parent().unwrap().join("escaped.bin").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Контракт payload → VaultMessage (то, что вынесено из команды) ──────
+    // До 19.10.2026 маппинг жил внутри `vault_store_incoming_message` и не
+    // проверялся ничем: переименование поля на JS-стороне (`features/incoming.js`
+    // шлёт `JSON.stringify(cls.msg)`) прошло бы молча — сообщения писались бы
+    // с пустыми id/ts.
+
+    /// Полный конверт: каждое поле доезжает до VaultMessage.
+    #[test]
+    fn test_message_from_payload_full() {
+        let plain = r#"{"vault":1,"id":"msg-1","text":"привет","name":"Аня",
+            "avatar":"data:image/png;base64,AAA","ts":1700000000,
+            "reactions":["👍","❤"],"edited":true,"replies":["m0"],
+            "in_reply_to":"m0","ttl":86400}"#;
+        let vm = message_from_payload("alice@x", "me@x", Some("msg-1"), plain).unwrap();
+        assert_eq!(vm.id, "msg-1");
+        assert_eq!(vm.from, "alice@x");
+        assert_eq!(vm.to, "me@x");
+        assert_eq!(vm.ts, 1700000000);
+        assert_eq!(vm.text, "привет");
+        assert_eq!(vm.name, "Аня");
+        assert!(vm.avatar.starts_with("data:image/png"));
+        assert_eq!(vm.reactions, vec!["👍".to_string(), "❤".to_string()]);
+        assert!(vm.edited);
+        assert_eq!(vm.replies, vec!["m0".to_string()]);
+        assert_eq!(vm.in_reply_to.as_deref(), Some("m0"));
+        assert_eq!(vm.ttl, Some(86400));
+    }
+
+    /// Минимум, который реально шлёт `features/incoming.js:415` (текст/имя/
+    /// аватар пустые — полный персист идёт другим путём). Маппинг обязан
+    /// принять его без ошибок и не выдумать данные.
+    #[test]
+    fn test_message_from_payload_incoming_js_stub() {
+        let plain = r#"{"id":"uid-1|INBOX","from":"alice@x","to":"me@x",
+            "ts":1700000123456,"text":"","name":"","avatar":"",
+            "reactions":[],"edited":false,"replies":[],"in_reply_to":null,"ttl":null}"#;
+        let vm = message_from_payload("alice@x", "me@x", Some("uid-1|INBOX"), plain).unwrap();
+        assert_eq!(vm.id, "uid-1|INBOX");
+        assert_eq!(vm.ts, 1700000123456);
+        assert_eq!(vm.text, "");
+        assert_eq!(vm.name, "");
+        assert_eq!(vm.reactions.len(), 0);
+        assert!(!vm.edited);
+        assert_eq!(vm.in_reply_to, None);
+        assert_eq!(vm.ttl, None);
+    }
+
+    /// Цепочка id: envId из JS важнее `payload.id` (дедуп relay-копии и
+    /// email-копии одного сообщения), затем legacy `message_id`, иначе пусто.
+    #[test]
+    fn test_message_from_payload_id_chain() {
+        let with_both = r#"{"id":"from-payload"}"#;
+        assert_eq!(
+            message_from_payload("a@x", "m@x", Some("from-js"), with_both).unwrap().id,
+            "from-js"
+        );
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, with_both).unwrap().id,
+            "from-payload"
+        );
+        let legacy = r#"{"message_id":"legacy-1"}"#;
+        assert_eq!(message_from_payload("a@x", "m@x", None, legacy).unwrap().id, "legacy-1");
+        assert_eq!(message_from_payload("a@x", "m@x", None, "{}").unwrap().id, "");
+    }
+
+    /// Не-JSON — ошибка: сообщение не должно сохраниться «молча с пустым id».
+    #[test]
+    fn test_message_from_payload_rejects_non_json() {
+        let err = message_from_payload("a@x", "m@x", None, "просто текст").unwrap_err();
+        assert!(err.starts_with("payload parse:"), "неожиданная ошибка: {err}");
     }
 }
 
