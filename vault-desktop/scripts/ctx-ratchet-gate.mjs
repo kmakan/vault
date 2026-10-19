@@ -28,6 +28,12 @@
 // на модули останется косметикой.
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+// Счёт `ctx`-ссылок — ИЗ ОБЩЕЙ БИБЛИОТЕКИ (ADR-005 §6/W0).
+// Причина: W0 добавил второй инструмент про ту же величину («JS-логика»), и он
+// сначала считал 735 против 686 здесь — потому что правило было написано дважды
+// (сырой счёт по всем .js против счёта без комментариев по features+api).
+// Отсюда и возник вопрос «какая новая ctx?». Правило живёт в одном месте.
+import { countCtxRefs } from './lib/arch-metrics.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const BASE_FILE = path.join(ROOT, 'scripts', 'ctx-ratchet-baseline.json');
@@ -191,8 +197,7 @@ const current = {
     ctxRefSites: SCAN.reduce((s, sp) => {
       const f = path.resolve(ROOT, 'src', sp);
       if (!existsSync(f)) return s;
-      const raw = readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-      return s + (raw.match(CTX_READ) || []).length;
+      return s + countCtxRefs(readFileSync(f, 'utf8'));
     }, 0),
     // У Set есть .size, а НЕ .length: v.length === undefined, условие
     // undefined > 1 всегда ложно, и метрика молча читалась нулём.
