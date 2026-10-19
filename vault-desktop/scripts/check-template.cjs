@@ -13,8 +13,15 @@
  *          guard-клик молча ничего не делает (баг «Файл» 05.09–11.09).
  *   E3     модульный импорт, вызванный в шаблоне Options API —
  *          шаблон видит только свойства инстанса (баг openExternal).
+ *   E4     this.X в скрипте/шаблоне компонента, которого нет среди
+ *          data/computed/methods/props/setup → TypeError при вызове, и
+ *          только у живого человека (клик), без стектрейса в интерфейсе.
+ *          История класса: this.alertMsg в copyText (нет метода вовсе),
+ *          this.uiStore в showToast (есть, но не в инстансе) — ADR-003 §5.5,
+ *          партия 10, тикет t_ddc24f52.
  *
  * E2/E3 — частные случаи E1, но метятся отдельно: разные фиксы.
+ * E4 — про СКРИПТ (E1 про шаблон): источник правды тот же bindings.
  * Запуск: node scripts/check-template.cjs [файлы...] (по умолчанию src/).
  * Выход: 0 = OK; 1 = проблемы (сборка падает).
  */
@@ -77,6 +84,87 @@ function findTplLine(tplLines, tplOffset, name) {
   return 0;
 }
 
+/* Обход AST: fn на каждом узле. loc и комментарии не трогаем. */
+function walkAst(node, fn) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const c of node) walkAst(c, fn); return; }
+  if (typeof node.type === 'string') fn(node);
+  for (const k of Object.keys(node)) {
+    if (k === 'loc' || k === 'leadingComments' || k === 'trailingComments' || k === 'innerComments') continue;
+    walkAst(node[k], fn);
+  }
+}
+
+/* this.X в скрипте — по AST. Текстовый разбор тут не годится: в этом же файле
+ * `this.foo` встречается в комментариях-пояснениях и в строках, и любой такой
+ * текст дал бы ложное срабатывание.
+ *
+ * Возвращаем:
+ *   refs     — чтения/вызовы `this.X`;
+ *   assigned — цели присваивания `this.X = ...` (заведённые ad-hoc поля).
+ * В проекте так живут нереактивные хендлы (`this._unlistenMediaConnected`,
+ * `this._nextInviteTimer`, `this.onWindowResize`) — они НЕ в data(), и ругаться
+ * на них нельзя: это не поломка, а осознанный приём. А вот `this.alertMsg(...)`
+ * (вызван, но нигде не объявлен и не присвоен) — ровно искомый класс.
+ *   opaque   — члены, которых в bindings не видно по определению: миксины и
+ *              extends (fail-closed: сообщаем, а не пропускаем молча). Тоже по
+ *              AST, а не регэкспом: `extends:` внутри объекта метода — не опция.
+ */
+function thisRefsInScript(scriptContent) {
+  let ast;
+  try {
+    ast = babel.parse(scriptContent, { sourceType: 'module' });
+  } catch (e) {
+    return { error: e.message, refs: [], assigned: new Set(), opaque: [] };
+  }
+  const refs = [];
+  const assigned = new Set();
+  const opaque = [];
+  for (const n of ast.program.body) {
+    if (n.type !== 'ExportDefaultDeclaration' || !n.declaration || n.declaration.type !== 'ObjectExpression') continue;
+    for (const p of n.declaration.properties) {
+      if (p.computed || !p.key) continue;
+      const k = p.key.name || p.key.value;
+      if (k === 'mixins' || k === 'extends') opaque.push(k);
+    }
+  }
+  walkAst(ast, (n) => {
+    if (n.type === 'AssignmentExpression' && n.operator === '=' &&
+        n.left && n.left.type === 'MemberExpression' &&
+        n.left.object && n.left.object.type === 'ThisExpression' &&
+        !n.left.computed && n.left.property && n.left.property.type === 'Identifier') {
+      assigned.add(n.left.property.name);
+      return;
+    }
+    if (n.type !== 'MemberExpression') return;
+    if (!n.object || n.object.type !== 'ThisExpression') return;
+    if (n.computed || !n.property || n.property.type !== 'Identifier') return; // this['x'] — имя динамическое
+    refs.push({ name: n.property.name, offset: n.property.start });
+  });
+  return { refs, assigned, opaque };
+}
+
+/* this.X в ВЫРАЖЕНИЯХ шаблона ({{ }} и :/@/v- атрибуты). В обычном тексте и в
+ * литеральных атрибутах `this.foo` — это текст, а не код: справка вида
+ * «вызовите this.foo» не должна валить гейт. */
+function thisRefsInTemplate(content) {
+  const exprs = [];
+  for (const m of content.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+    exprs.push({ text: m[1], index: m.index + m[0].indexOf('{{') + 2 });
+  }
+  const attr = /(?:^|\s)([:@][\w:.\-]*|v-(?:if|else-if|for|show|model|bind|on|html|text)[\w:.\-]*)\s*=\s*"([^"]*)"/g;
+  for (const m of content.matchAll(attr)) {
+    exprs.push({ text: m[2], index: m.index + m[0].indexOf(m[2]) });
+  }
+  const refs = [];
+  for (const e of exprs) {
+    for (const mm of e.text.matchAll(/this\.([A-Za-z_$][\w$]*)/g)) {
+      refs.push({ name: mm[1], offset: e.index + mm.index + 5 });
+    }
+  }
+  return refs;
+}
+
 /* ── ADR-001 Этап 1: спреды `...featureState()` в data() ──────────────
  *
  * Фичи выносят своё состояние в модуль (`foldersState()`), а App.vue
@@ -114,27 +202,37 @@ async function resolveStateSpreads(descriptor, file, problems) {
     }
   }
 
-  // спреды внутри возвращаемого объекта data()
-  const wanted = new Set();
-  let dataBody = null;
+  // спреды внутри возвращаемых объектов data() и setup(): оба кладут имена в
+  // инстанс, и оба обязаны быть разрешены — иначе this.X из фичи станет
+  // ложным срабатыванием E4.
+  const retObjects = [];
   for (const n of ast.program.body) {
     if (n.type !== 'ExportDefaultDeclaration' || !n.declaration || n.declaration.type !== 'ObjectExpression') continue;
-    const data = n.declaration.properties.find(
-      p => !p.computed && p.key && (p.key.name === 'data' || p.key.value === 'data'));
-    if (!data) continue;
-    // data() {...} — это ObjectMethod (сам узел = тело), а data: function(){}
-    // — Property с .value. Поддерживаем оба.
-    const fnNode = data.type === 'ObjectMethod' ? data : data.value;
-    if (!fnNode || !fnNode.body || !fnNode.body.body) continue;
-    const ret = fnNode.body.body.find(
-      s => s.type === 'ReturnStatement' && s.argument && s.argument.type === 'ObjectExpression');
-    if (ret) dataBody = ret.argument;
+    for (const opt of ['data', 'setup']) {
+      const prop = n.declaration.properties.find(
+        p => !p.computed && p.key && (p.key.name === opt || p.key.value === opt));
+      if (!prop) continue;
+      // data() {...} — это ObjectMethod (сам узел = тело), а data: function(){}
+      // — Property с .value. Поддерживаем оба.
+      const fnNode = prop.type === 'ObjectMethod' ? prop : prop.value;
+      if (!fnNode || !fnNode.body || !fnNode.body.body) continue;
+      const ret = fnNode.body.body.find(
+        s => s.type === 'ReturnStatement' && s.argument && s.argument.type === 'ObjectExpression');
+      if (ret) retObjects.push({ opt, obj: ret.argument });
+    }
   }
-  if (!dataBody) return {};
-  for (const p of dataBody.properties) {
-    if (p.type !== 'SpreadElement') continue;
-    const a = p.argument;
-    if (a && a.type === 'CallExpression' && a.callee && a.callee.type === 'Identifier') wanted.add(a.callee.name);
+  const wanted = new Set();
+  for (const { opt, obj } of retObjects) {
+    for (const p of obj.properties) {
+      if (p.type !== 'SpreadElement') continue;
+      const a = p.argument;
+      if (a && a.type === 'CallExpression' && a.callee && a.callee.type === 'Identifier') {
+        wanted.add(a.callee.name);
+      } else {
+        // Fail-closed: неизвестный источник спреда = имена полей невидимы.
+        problems.push(`${file}: [E1-spread] ${opt}(): спред не от фабрики — ключи не разрешены, this.* и биндинги из него гейт не проверит`);
+      }
+    }
   }
   if (!wanted.size) return {};
 
@@ -242,6 +340,42 @@ function analyzeWithBindings(file, descriptor, bindings, problems, src) {
   if (!descriptor.scriptSetup) {
     for (const name of nonFunctionsInMethods(scriptContent, file, problems)) {
       problems.push(`${file}: [E1-src] "${name}" объявлен в methods{} как не-функция — Vue дропает его в проде; перенести в data()`);
+    }
+  }
+
+  /* ── E4: this.X — член инстанса ────────────────────────────────────────
+   * Источник правды — те же bindings (data/computed/methods/props/setup) плюс
+   * ключи спредов фич, которые resolveStateSpreads уже влил в bindings.
+   * $-имена не проверяем: это прокси Vue ($refs/$emit/$nextTick/$route/...).
+   *
+   * Почему не текстовый поиск: `this.foo` в этом репозитории живёт ещё и в
+   * комментариях-пояснениях и в строках — текстовый скан дал бы ложные
+   * срабатывания. По AST комментарии и строки не MemberExpression.
+   */
+  // E4 — про Options API script-блок: у <script setup> `this` в скрипте не
+  // существует (там setup-скоуп), проверять нечего.
+  if (descriptor.script) {
+    const scriptBase = descriptor.script.loc ? descriptor.script.loc.start.offset : src.indexOf(scriptContent);
+    const tplBase = descriptor.template.loc ? descriptor.template.loc.start.offset : 0;
+    const lineAt = (base, off) => src.slice(0, base + off).split('\n').length;
+    const scan = thisRefsInScript(scriptContent);
+    if (scan.error) problems.push(`${file}: [E4] this-скана нет, parse: ${scan.error}`);
+    for (const src2 of scan.opaque) {
+      problems.push(`${file}: [E4-${src2}] компонент использует ${src2} — члены оттуда в bindings не видны, this.* гейт не проверит`);
+    }
+    const thisRefs = [
+      ...scan.refs.map(r => ({ ...r, line: lineAt(scriptBase, r.offset) })),
+      ...thisRefsInTemplate(descriptor.template.content).map(r => ({ ...r, line: lineAt(tplBase, r.offset) })),
+    ];
+    const seen = new Set();
+    for (const r of thisRefs.sort((a, b) => a.line - b.line)) {
+      if (r.name.startsWith('$')) continue;        // прокси Vue: $refs/$emit/$nextTick/$route...
+      if (known.has(r.name)) continue;             // data/computed/methods/props/setup (+ спреды фич)
+      if (scan.assigned.has(r.name)) continue;     // ad-hoc поле: this.X = ... (см. thisRefsInScript)
+      const key = `${r.line}:${r.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      problems.push(`${file}:${r.line}: [E4] this.${r.name} — нет в data/computed/methods/props/setup и нигде не присвоен: TypeError при вызове`);
     }
   }
 
