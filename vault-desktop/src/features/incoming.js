@@ -1,7 +1,14 @@
 // Feature module: входящие конверты (router). Этап 4 декомпозиции App.vue —
 // единая точка классификации всех входящих писем/relay-конвертов.
-// Чистые функции получают компонент как `ctx` (паттерн Этапа 1), все
-// зависимости явные. Семантика перенесена 1:1 из App.vue:processIncoming —
+// Зависимости приходят ЯВНО объектом `deps` (ADR-005 R3): в W1 модуль перестал
+// читать компонент как `ctx`, поэтому у него больше нет доступа к состоянию,
+// которого нет в контракте. Контракт собирается в одном месте —
+// `App.vue:processIncoming`. `groups` и `channels` передаются ГЕТТЕРАМИ, а не
+// снимком: во время батча ренейм адреса вызывает loadGroups, который
+// ПЕРЕПРИСВАИВАЕТ массив, и снимок показал бы устаревший список (следующие
+// письма батча не нашли бы группу и не посчитались).
+//
+// Семантика перенесена 1:1 из App.vue:processIncoming —
 // без изменения логики (три хрупких инварианта: ignore-continue ДО
 // расшифровки и ДО дедупа; эхо/профиль — seen, но не уведомление;
 // разделение дедупа счётчика и дедупа уведомления, регресс 2fa9103).
@@ -17,7 +24,7 @@ import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
-// ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ ctx.
+// ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ deps.
 import { identityStore } from './identity-store.js';
 // W1 (ADR-005 R1): решение «что это за письмо» — в Rust. `invoke` до W1 здесь
 // вообще не был импортирован, хотя вызывался для vault_store_incoming_message:
@@ -66,11 +73,10 @@ function byArrival(a, b) {
 }
 
 // ── Драйвер: батч-доставка тел по папкам + цикл классификации ──────────────
-export async function processIncoming(ctx, fetched, opts = {}, deps) {
-  const { isBounceMessage, bounceRecipients, bounceReason, ingestChannelEnvelope } = deps;
+export async function processIncoming(deps, fetched, opts = {}) {
   const { notify = false } = opts;
-  if (!fetched || !fetched.length || !ctx.cryptoReady) return;
-  const myEmail = (ctx.email || '').toLowerCase();
+  if (!fetched || !fetched.length || !deps.cryptoReady) return;
+  const myEmail = (deps.email || '').toLowerCase();
   // Срез ДО сортировки: MAX_POOL отбирает 50 НОВЕЙШИХ писем батча (как было).
   // ПОРЯДОК РАЗБОРА — хронологический, а не «как вернул IMAP».
   // Rust отдаёт батч новыми сверху (email.rs: sort_by(|a,b| b.id.cmp(&a.id)) —
@@ -84,12 +90,12 @@ export async function processIncoming(ctx, fetched, opts = {}, deps) {
   // корректный сценарий: звонок успевает зазвонить и сразу гаснет по своему
   // же отбою. См. docs/CALL-MAIL-PATH-DIAGNOSIS.md §3 (слой 3), t_674c770f.
   const pool = fetched.slice(0, MAX_POOL).slice().sort(byArrival);
-  await ensureBodies(ctx, pool);
+  await ensureBodies(deps, pool);
   for (const m of pool) {
-    const from = ctx.senderEmail(m.from);
+    const from = deps.senderEmail(m.from);
     // Пропускаем исходящие (от себя) и пустые from.
     if (!from || from === myEmail) continue;
-    const cls = await routeLetter(ctx, m, from, deps);
+    const cls = await routeLetter(deps, m, from);
     if (cls === null) continue;
     if (cls.kind === 'message') {
       // M1.10: persist classified message via Rust MessageStore bridge
@@ -105,7 +111,7 @@ export async function processIncoming(ctx, fetched, opts = {}, deps) {
           console.warn('[vault_bridge] store_incoming failed:', e && e.message || e);
         }
       }
-      await countAndNotify(ctx, m, cls, { notify });
+      await countAndNotify(deps, m, cls, { notify });
     }
   }
 }
@@ -113,7 +119,7 @@ export async function processIncoming(ctx, fetched, opts = {}, deps) {
 // Тела: добираем недостающие батчем по папкам (как sendDeliveredReceipts).
 // Download-on-demand: письма крупнее 2МБ пропускаем — их содержимое
 // подтягивается по клику с карточки вложения, а не в фоне поллинга.
-async function ensureBodies(ctx, pool) {
+async function ensureBodies(deps, pool) {
   const byFolder = {};
   for (const m of pool) {
     const f = m.folder || 'INBOX';
@@ -121,7 +127,7 @@ async function ensureBodies(ctx, pool) {
   }
   for (const [folder, msgs] of Object.entries(byFolder)) {
     const missing = msgs.filter(m =>
-      ctx.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined
+      deps.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined
       && (m.size || 0) <= 2 * 1024 * 1024
     );
     if (!missing.length) continue;
@@ -129,7 +135,7 @@ async function ensureBodies(ctx, pool) {
       const bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
       for (const m of missing) {
         const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
-        if (b) ctx.cacheBody(`${folder}:${m.uid || m.id}`, b);
+        if (b) deps.cacheBody(`${folder}:${m.uid || m.id}`, b);
       }
     } catch (e) { /* тела не обязательны — классификация тихо пропустит */ }
   }
@@ -139,15 +145,15 @@ async function ensureBodies(ctx, pool) {
 // Возвращает {kind:'message', chatKey, title, envId} для сообщения,
 // null — если письмо не должно попасть в счётчик/уведомления (в т.ч. после
 // выполнения побочных эффектов: call-сигнал, профиль, миграция).
-async function routeLetter(ctx, m, from, deps) {
+async function routeLetter(deps, m, from) {
   const { isBounceMessage, bounceRecipients, bounceReason, ingestChannelEnvelope } = deps;
   // Ignore-лист: сообщения/звонки заблокированного скрыты у получателя
   // целиком — не считаются, не уведомляют, в историю не пишутся
   // (continue ДО расшифровки и ДО дедуп-механики: письмо остаётся
   // «необработанным» и после разблокировки не всплывёт).
-  if (ctx.isIgnored(from)) return null;
+  if (deps.isIgnored(from)) return null;
 
-  const body = ctx.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
+  const body = deps.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid || m.id}`] || '';
 
   // Служебное письмо о НЕДОСТАВКЕ (DSN / bounce). Проверяем ДО
   // crypto.isEncrypted: DSN — обычный текст, и раньше он молча отбрасывался.
@@ -161,7 +167,7 @@ async function routeLetter(ctx, m, from, deps) {
     const reason = bounceReason(body);
     console.log('[mail] bounce: recipients=' + (recipients.join(',') || '?')
       + ' reason=' + (reason || '?'));
-    try { await ctx.onMailBounce(recipients, reason); }
+    try { await deps.onMailBounce(recipients, reason); }
     catch (e) { console.warn('[mail] bounce handling failed:', e && e.message || e); }
     return null; // служебное письмо: не сообщение, в счётчик/уведомления не идёт
   }
@@ -173,9 +179,9 @@ async function routeLetter(ctx, m, from, deps) {
   let envId = ''; // id конверта (общий для relay-копии и email-копии)
 
   // 1:1 — расшифровка пир-ключом.
-  if (ctx.peerKeys[from]) {
+  if (deps.peerKeys[from]) {
     try {
-      crypto.setPeerPublicKey(ctx.peerKeys[from], ctx.peerPqKeys && ctx.peerPqKeys[from]);
+      crypto.setPeerPublicKey(deps.peerKeys[from], deps.peerPqKeys && deps.peerPqKeys[from]);
       const plain = await crypto.decryptVault(body);
       // Тип письма решает Rust (W1). undefined — мост упал: письмо не наше
       // дело в этом прогоне, но и «обработанным» оно не станет.
@@ -192,19 +198,19 @@ async function routeLetter(ctx, m, from, deps) {
       // await дают request → cancel строго по порядку доставки.
       if (cls && cls.kind === 'call') {
         const callSig = JSON.parse(plain); // классификатор уже разобрал JSON
-        try { await ctx.handleCallSignal(callSig, from); }
+        try { await deps.handleCallSignal(callSig, from); }
         catch (e) { console.warn('[call] signal failed:', e); }
         return null;
       }
       // Presence (M2): heartbeat «я онлайн» от пира — точка загорается сразу,
       // без открытия чата (kind=presence Rust выдаёт до «это конверт»).
       if (cls && cls.kind === 'presence') {
-        PresenceFeature.noteHeartbeat(ctx, ctx.canonicalOf(from) || from, new Date(m.date || Date.now()).getTime());
+        PresenceFeature.noteHeartbeat(deps.noteSeen, deps.canonicalOf(from) || from, new Date(m.date || Date.now()).getTime());
         console.log('[presence] heartbeat from', from);
         return null; // не сообщение, не уведомление
       }
       const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-        ? ctx.parseEnvelope(plain)
+        ? deps.parseEnvelope(plain)
         : null;
       if (env) {
         // env.id — ключ кросс-канального дедупа (relay-копия и
@@ -215,7 +221,7 @@ async function routeLetter(ctx, m, from, deps) {
         // отвечать ему мгновенными пушами. Ноль ручного ввода.
         if (env.tok) {
           try {
-            const rs = await relay.getSettings(ctx.email);
+            const rs = await relay.getSettings(deps.email);
             const r = rs.relays[rs.active] || rs.relays[0];
             if (r) {
               const known = (rs.peers[r.url] || {})[String(from).toLowerCase()];
@@ -232,7 +238,7 @@ async function routeLetter(ctx, m, from, deps) {
               }
               
               if (known !== env.tok) {
-                await relay.setPeerToken(ctx.email, r.url, from, env.tok, peerFp);
+                await relay.setPeerToken(deps.email, r.url, from, env.tok, peerFp);
                 console.log('[relay] peer token auto-learned:', from, peerFp ? '(fp: ' + peerFp + ')' : '');
               }
             }
@@ -243,17 +249,17 @@ async function routeLetter(ctx, m, from, deps) {
         // Не профиль, не сообщение, не «смена почты» — иначе свой же
         // аватар перезаписывается старым из собственного письма.
         if (env.key && crypto.publicKey && env.key === crypto.publicKey) {
-          ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX'));
+          deps.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX'));
           return null;
         }
         // Смена почты: письмо могло прийти со старого адреса
         // контакта (алиаса) — чат ведём по каноническому (показываемому).
-        chatKey = ctx.canonicalOf(from) || from;
+        chatKey = deps.canonicalOf(from) || from;
         // Имя для заголовка: локальное переопределение пользователя →
         // свежее из профиля письма (env.name) → nameOf(). НЕ contact.name —
         {
-          const lpn = ctx.localProfileOf(from);
-          title = (lpn && lpn.name) || env.name || ctx.nameOf(from);
+          const lpn = deps.localProfileOf(from);
+          title = (lpn && lpn.name) || env.name || deps.nameOf(from);
         }
         // Профиль отправителя: имя/аватар/«О себе» — сохраняем
         // СРАЗУ при поллинге, не дожидаясь открытия чата.
@@ -261,7 +267,7 @@ async function routeLetter(ctx, m, from, deps) {
         if (cls.kind === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
           api.saveProfile(from, env.name, env.avatar, env.ts || 0,
             typeof env.bio === 'string' ? env.bio : undefined);
-          if (cls.kind === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
+          if (cls.kind === 'profile') { deps.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
         }
       }
     } catch (e) { /* не наше письмо */ }
@@ -271,7 +277,7 @@ async function routeLetter(ctx, m, from, deps) {
     // известных peerKeys (fingerprint-матчинг) и привязываем новый адрес.
     try {
       let matched = null;
-      for (const [knownEmail, knownKey] of Object.entries(ctx.peerKeys)) {
+      for (const [knownEmail, knownKey] of Object.entries(deps.peerKeys)) {
         if (String(knownEmail).toLowerCase() === from) continue;
         crypto.setPeerPublicKey(knownKey);
         try {
@@ -288,12 +294,12 @@ async function routeLetter(ctx, m, from, deps) {
             // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
             // ответные конверты идут на несуществующий SMTP-адрес.
             console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
-            try { await ctx.handleCallSignal(JSON.parse(plain), knownEmail); }
+            try { await deps.handleCallSignal(JSON.parse(plain), knownEmail); }
             catch (e) { console.warn('[call] signal failed:', e); }
             return null;
           }
           const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-            ? ctx.parseEnvelope(plain)
+            ? deps.parseEnvelope(plain)
             : null;
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.
@@ -317,36 +323,36 @@ async function routeLetter(ctx, m, from, deps) {
         // группы и пометки откатывались на старый адрес (живые данные 08.10).
         await api.renamePeerIdentity(matched.knownEmail, from);
         // Группы: переименовать адрес участника во всех, где он числится.
-        await ctx.migratePeerGroups(matched.knownEmail, from);
+        await deps.migratePeerGroups(matched.knownEmail, from);
         // Переносим историю чата по ВСЕЙ цепочке алиасов, а не только со
         // старого адреса. Если пир менял почту дважды и приложение не работало
         // в первый раз, одного переноса мало: chat-cache самого первого адреса
         // осиротел бы, и переписка исчезла бы молча (ADR-003 §5.1).
-        await ctx.migrateChatHistoryChain(from, ctx.email, ctx.contactAliases);
+        await deps.migrateChatHistoryChain(from, deps.email, deps.contactAliases);
         // СТАРЫЙ адрес убираем из всех хранилищ — иначе второй контакт
         // с тем же ключом (порядок: до setPeerKey, как в App.vue).
         if (String(matched.knownEmail).toLowerCase() !== String(from).toLowerCase()) {
           try { await crypto.removePeerKey(matched.knownEmail); } catch (e) { /* ignore */ }
-          // Удаление — через владельца identity (ADR-004 J.6), БЕЗ ctx.
+          // Удаление — через владельца identity (ADR-004 J.6), БЕЗ deps.
           identityStore.removePeerKey(matched.knownEmail);
           api.removeContact(matched.knownEmail);
           api.deleteProfile(matched.knownEmail);
         }
-        ctx.setPeerKey(from, matched.env.key, matched.env.pq || null);
+        deps.setPeerKey(from, matched.env.key, matched.env.pq || null);
         // Порог ренейма = дата этого (свежего) письма.
         await api.bumpIdentityRenameTs(matched.env.key, _idTs);
         // Профиль со старого адреса переносим на новый.
-        const oldProf = ctx.profiles[matched.knownEmail];
+        const oldProf = deps.profiles[matched.knownEmail];
         if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);
         // «Это письмо профиля» — решение Rust (kind пира, совпавшего по ключу).
         if (matched.kind === 'profile' || matched.env.name || matched.env.avatar || typeof matched.env.bio === 'string') {
           api.saveProfile(from, matched.env.name, matched.env.avatar, matched.env.ts || 0,
             typeof matched.env.bio === 'string' ? matched.env.bio : undefined);
         }
-        chatKey = ctx.canonicalOf(from) || from;
-        const lp = ctx.localProfileOf(from);
+        chatKey = deps.canonicalOf(from) || from;
+        const lp = deps.localProfileOf(from);
         title = (lp && lp.name) || from;
-        if (matched.kind === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
+        if (matched.kind === 'profile') { deps.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
       }
     } catch (e) { /* не наше письмо */ }
   }
@@ -356,7 +362,7 @@ async function routeLetter(ctx, m, from, deps) {
   // В отличие от групп, отправитель НЕ обязан быть в members-списке —
   // подписчик не знает других подписчиков; авторизация = знание ключа.
   if (!chatKey) {
-    for (const ch of (ctx.channels || [])) {
+    for (const ch of (deps.channels() || [])) {
       if (!ch.key) continue;
       try {
         const plain = await crypto.decryptWithGroupKey(body, ch.key);
@@ -365,7 +371,7 @@ async function routeLetter(ctx, m, from, deps) {
         if (cls === undefined) return null; // мост упал — письмо не трогаем
         if (!cls || cls.kind !== 'channel') continue; // не канал — мимо
         const robj = JSON.parse(plain); // классификатор уже разобрал JSON
-        const applied = ingestChannelEnvelope(ctx, robj, from);
+        const applied = ingestChannelEnvelope(robj, from);
         if (applied) {
           console.log('[channel] envelope', applied, 'from', from, 'chan', ch.id);
           // post — как сообщение (бейдж+пуш); meta/hello — тихие
@@ -385,7 +391,7 @@ async function routeLetter(ctx, m, from, deps) {
   // мигрируем адрес в составе группы (groups_rename_member) и считаем
   // участником. Без этого письмо от сменившего почту молча терялось
   if (!chatKey) {
-    for (const g of ctx.groups) {
+    for (const g of deps.groups()) {
       let members = (g.members || []).map(x => String(x.email || '').toLowerCase());
       if (!members.includes(from)) {
         // Ошибку ПРОГРАММИРОВАНИЯ в tryMigrateGroupMember ловим здесь, а не
@@ -396,7 +402,7 @@ async function routeLetter(ctx, m, from, deps) {
         // переезд в остальных.
         let migrated;
         try {
-          migrated = await ctx.tryMigrateGroupMember(g, from);
+          migrated = await deps.tryMigrateGroupMember(g, from);
         } catch (err) {
           migrated = false;
           console.error('[groups] tryMigrateGroupMember упал — группа', g.id,
@@ -406,11 +412,11 @@ async function routeLetter(ctx, m, from, deps) {
         members = (g.members || []).map(x => String(x.email || '').toLowerCase());
       }
       if (!members.includes(from)) continue;
-      let gk = ctx.groupKeys[g.id];
-      if (!gk && ctx.cryptoReady) {
+      let gk = deps.groupKeys[g.id];
+      if (!gk && deps.cryptoReady) {
         try {
           const kd = await api.getMyGroupKey(g.id);
-          if (kd && kd.group_key) { ctx.setGroupKey(g.id, kd.group_key); gk = kd.group_key; }
+          if (kd && kd.group_key) { deps.setGroupKey(g.id, kd.group_key); gk = kd.group_key; }
         } catch (e) { /* ключ недоступен */ }
       }
       if (!gk) continue;
@@ -423,16 +429,16 @@ async function routeLetter(ctx, m, from, deps) {
           // Сервис-письма группы: hav = запрос аватарки — отвечаем владельцу
           // аватара (24ч rate-limit внутри replyGroupAvatarHeal).
           console.log('[classify] hav seen:', g.id);
-          await ctx.replyGroupAvatarHeal(g.id);
+          await deps.replyGroupAvatarHeal(g.id);
           return null;
         }
         const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-          ? ctx.parseEnvelope(plain)
+          ? deps.parseEnvelope(plain)
           : null;
         if (env) {
           // Самовосстановление аватарки группы из конверта сообщения
           // (guard на непустое — внутри метода).
-          if (env.gavatar) await ctx.healGroupAvatarFromMessage(g.id, env.gavatar);
+          if (env.gavatar) await deps.healGroupAvatarFromMessage(g.id, env.gavatar);
           chatKey = 'group:' + g.id; title = g.name || '';
           // env.id — ключ кросс-канального дедупа (relay-копия и
           // email-копия одного сообщения несут ОДИН конверт).
@@ -451,7 +457,7 @@ async function routeLetter(ctx, m, from, deps) {
   let msg = {
     id: envId || m.message_id || (m.uid + "|" + (m.folder || "INBOX")),
     from,
-    to: ctx.email || "",
+    to: deps.email || "",
     ts: m.date ? Math.floor(new Date(m.date).getTime()) : 0,
     text: "",
     name: "",
@@ -466,7 +472,7 @@ async function routeLetter(ctx, m, from, deps) {
 }
 
 // ── Хвост: дедуп + счётчик + уведомление ─────────────────────────────────
-async function countAndNotify(ctx, m, cls, { notify }) {
+async function countAndNotify(deps, m, cls, { notify }) {
   const { chatKey, title, envId } = cls;
   // Дедуп: письмо уже учтено ранее (повторный фетч) — пропускаем,
   // иначе счётчик непрочитанных рос бы на каждом поллинге.
@@ -489,25 +495,25 @@ async function countAndNotify(ctx, m, cls, { notify }) {
   // пропускалось: пуш не появлялся НИКОГДА. Теперь счётчик растёт
   // только для новых писем, а уведомление дедупится НЕЗАВИСИМО —
   // персист notifiedIds в notify.js (ключ dk = Message-ID).
-  const counted = !(ctx.processedUnreadIds.has(mid) || ctx.processedUnreadIds.has(dk) || (ek && ctx.processedUnreadIds.has(ek)));
+  const counted = !(deps.processedUnreadIds.has(mid) || deps.processedUnreadIds.has(dk) || (ek && deps.processedUnreadIds.has(ek)));
   if (counted) {
-    ctx.processedUnreadIds.add(mid);
-    ctx.processedUnreadIds.add(dk);
-    if (ek) ctx.processedUnreadIds.add(ek);
-    if (ctx.processedUnreadIds.size > 600) {
+    deps.processedUnreadIds.add(mid);
+    deps.processedUnreadIds.add(dk);
+    if (ek) deps.processedUnreadIds.add(ek);
+    if (deps.processedUnreadIds.size > 600) {
       // Держим хвост: выкидываем старые (Set в порядке вставки).
-      for (const old of ctx.processedUnreadIds) {
-        ctx.processedUnreadIds.delete(old);
-        if (ctx.processedUnreadIds.size <= 500) break;
+      for (const old of deps.processedUnreadIds) {
+        deps.processedUnreadIds.delete(old);
+        if (deps.processedUnreadIds.size <= 500) break;
       }
     }
-    await ctx.saveUnreadSeen();
+    await deps.saveUnreadSeen();
   }
   const fresh = Date.now() - new Date(m.date || 0).getTime() < FRESH_WINDOW_MS;
   // Счётчик непрочитанных: для новых писем, кроме видимого сейчас чата.
-  if (counted && !ctx.chatVisible(chatKey)) {
-    ctx.incUnread(chatKey);
-    await ctx.saveUnreadCounts();
+  if (counted && !deps.chatVisible(chatKey)) {
+    deps.incUnread(chatKey);
+    await deps.saveUnreadCounts();
   }
   // Уведомление: только тихий поллинг, только свежие письма (старые
   // задержанные/догоняющие письма спамом не считаем) и только когда
@@ -520,7 +526,7 @@ async function countAndNotify(ctx, m, cls, { notify }) {
   // за последние 90с — эко-тикер поллит каждые 5с. Пара изменений
   // (сервер+клиент) деплоится строго вместе: сервер без клиента = ноль
   // уведомлений в эко+фон, клиент без сервера = дубли в эко+открыто.
-  if (notify && fresh && !ctx.chatVisible(chatKey) && !ctx.isMuted(chatKey)) {
+  if (notify && fresh && !deps.chatVisible(chatKey) && !deps.isMuted(chatKey)) {
     // пуш должен был быть.
     console.log('[notify] FIRE mid=' + (m.message_id || '?').slice(0, 20) + ' chat=' + chatKey);
     notifyNewMessage({
@@ -534,6 +540,6 @@ async function countAndNotify(ctx, m, cls, { notify }) {
       id: dk,
     });
   } else if (notify) {
-    console.log('[notify] SKIP fresh=' + fresh + ' visible=' + ctx.chatVisible(chatKey) + ' muted=' + ctx.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');
+    console.log('[notify] SKIP fresh=' + fresh + ' visible=' + deps.chatVisible(chatKey) + ' muted=' + deps.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');
   }
 }

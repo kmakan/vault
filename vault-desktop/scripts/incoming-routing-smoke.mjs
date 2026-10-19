@@ -116,8 +116,11 @@ function ok(label, cond) {
   else { failed++; console.log('  ✗ ' + label); }
 }
 
-// Свежий ctx: ровно те поля, которые маршрутизатор читает на этих путях.
-function makeCtx(over = {}) {
+// Свежие зависимости: ровно то, что маршрутизатор читает на этих путях.
+// Модуль после W1 не читает компонент как ctx — контракт явный (deps), поэтому
+// и стенд собирает его явно: если маршрутизатор начнёт читать новое поле,
+// которого нет в контракте, кейс упадёт, а не «просто не сработает».
+function makeDeps(over = {}) {
   const st = globalThis.__state;
   return {
     cryptoReady: true,
@@ -152,8 +155,9 @@ function makeCtx(over = {}) {
     chatVisible: () => false,
     isMuted: () => false,
     incUnread: (k) => { st.unread[k] = (st.unread[k] || 0) + 1; },
-    channels: [],
-    groups: [],
+    // Геттеры: во время батча массив может быть переприсвоен (ренейм → loadGroups).
+    channels: () => [],
+    groups: () => [],
     groupKeys: {},
     setGroupKey: () => {},
     tryMigrateGroupMember: async () => false,
@@ -165,12 +169,14 @@ function makeCtx(over = {}) {
     profiles: {},
     setPeerKey: () => {},
     onMailBounce: async () => {},
+    noteSeen: () => {},
     ...over,
   };
 }
 
 const DEPS = {
-  ingestChannelEnvelope: (ctx, obj) => (obj && obj.post ? 'post' : null),
+  // Каналы: мост связывает свой ctx сам (App.vue), модуль отдаёт только данные.
+  ingestChannelEnvelope: (obj) => (obj && obj.post ? 'post' : null),
   isBounceMessage: () => false,
   bounceRecipients: () => [],
   bounceReason: () => '',
@@ -208,11 +214,11 @@ async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, expect
   state.heartbeats = [];
   state.healed = [];
   calls.length = 0;
-  const ctx = makeCtx(ctxOver);
-  for (const k of Object.keys(ctx.emailBodyCache)) delete ctx.emailBodyCache[k];
-  ctx.emailBodyCache['INBOX:1'] = 'encrypted-body';
-  await processIncoming(ctx, [letter()], { notify: false }, DEPS);
-  expect(ctx);
+  const deps = { ...makeDeps(ctxOver), ...DEPS };
+  for (const k of Object.keys(deps.emailBodyCache)) delete deps.emailBodyCache[k];
+  deps.emailBodyCache['INBOX:1'] = 'encrypted-body';
+  await processIncoming(deps, [letter()], { notify: false });
+  expect(deps);
 }
 
 const MSG = '{"vault":1,"id":"m1","text":"привет","name":"Bob","key":"BOBKEY"}';
@@ -261,7 +267,7 @@ await run('kind=presence — только heartbeat (без решения в JS
 await run('kind=channel — пост канала считается как сообщение канала', {
   kind: { kind: 'channel' },
   plain: '{"channel":1,"chan":"ch1","post":{"body":"hi"},"id":"chp-1"}',
-  ctxOver: { channels: [{ id: 'ch1', key: 'CHKEY', name: 'Chan' }] },
+  ctxOver: { channels: () => [{ id: 'ch1', key: 'CHKEY', name: 'Chan' }] },
   expect: () => {
     ok('бейдж канала вырос', globalThis.__state.unread['channel:ch1'] === 1);
   },
@@ -271,7 +277,7 @@ await run('kind=group-service (hav) — ответ на запрос авата�
   kind: { kind: 'group-service' },
   plain: '{"hav":1}',
   ctxOver: {
-    groups: [{ id: 'g1', name: 'G', members: [{ email: 'bob@x' }] }],
+    groups: () => [{ id: 'g1', name: 'G', members: [{ email: 'bob@x' }] }],
     groupKeys: { g1: 'GK' },
   },
   expect: () => {
@@ -295,9 +301,9 @@ await run('мост упал — письмо не считается и не п
   plain: MSG,
   bridgeDown: true,
   ctxOver: { peerKeys: { 'bob@x': 'BOBKEY' } },
-  expect: (ctx) => {
+  expect: (deps) => {
     ok('бейдж НЕ вырос', Object.keys(globalThis.__state.unread).length === 0);
-    ok('processedUnreadIds пуст (письмо повторится)', ctx.processedUnreadIds.size === 0);
+    ok('processedUnreadIds пуст (письмо повторится)', deps.processedUnreadIds.size === 0);
   },
 });
 
@@ -308,9 +314,9 @@ console.log('\nмост упал громко (console.error), а не молч�
   const seen = [];
   const orig = console.error;
   console.error = (...a) => seen.push(a.join(' '));
-  const ctx = makeCtx({ peerKeys: { 'bob@x': 'BOBKEY' } });
-  ctx.emailBodyCache['INBOX:1'] = 'encrypted-body';
-  try { await processIncoming(ctx, [letter()], { notify: false }, DEPS); } finally { console.error = orig; }
+  const deps = { ...makeDeps({ peerKeys: { 'bob@x': 'BOBKEY' } }), ...DEPS };
+  deps.emailBodyCache['INBOX:1'] = 'encrypted-body';
+  try { await processIncoming(deps, [letter()], { notify: false }); } finally { console.error = orig; }
   ok('в логе есть «Rust-классификатор недоступен»',
     seen.some(s => s.includes('Rust-классификатор недоступен')));
 }

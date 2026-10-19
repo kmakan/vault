@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 589,
-  "totalFunctions": 302,
-  "functionsWithCtx": 102,
+  "totalCtxRefs": 527,
+  "totalFunctions": 311,
+  "functionsWithCtx": 98,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 88,
@@ -26,9 +26,9 @@
         "senderEmail",
         "showAudioRecorder"
       ],
-      "functions": 13,
-      "functionsWithCtx": 8,
-      "biggestCtxFn": "toggleVoiceNote"
+      "functions": 14,
+      "functionsWithCtx": 6,
+      "biggestCtxFn": "handleFileSelect"
     },
     "src/features/autoclean.js": {
       "ctxRefs": 0,
@@ -165,9 +165,9 @@
     "src/features/contacts.js": {
       "ctxRefs": 0,
       "fields": [],
-      "functions": 8,
-      "functionsWithCtx": 0,
-      "biggestCtxFn": null
+      "functions": 14,
+      "functionsWithCtx": 2,
+      "biggestCtxFn": "declineContactInvite"
     },
     "src/features/drafts.js": {
       "ctxRefs": 7,
@@ -402,42 +402,11 @@
       "biggestCtxFn": null
     },
     "src/features/incoming.js": {
-      "ctxRefs": 62,
-      "fields": [
-        "cacheBody",
-        "canonicalOf",
-        "channels",
-        "chatVisible",
-        "contactAliases",
-        "cryptoReady",
-        "email",
-        "emailBodyCache",
-        "groupKeys",
-        "groups",
-        "handleCallSignal",
-        "healGroupAvatarFromMessage",
-        "isIgnored",
-        "isMuted",
-        "localProfileOf",
-        "migrateChatHistoryChain",
-        "migratePeerGroups",
-        "nameOf",
-        "onMailBounce",
-        "parseCallSignal",
-        "parseEnvelope",
-        "peerKeys",
-        "peerPqKeys",
-        "processedUnreadIds",
-        "profiles",
-        "replyGroupAvatarHeal",
-        "saveUnreadCounts",
-        "saveUnreadSeen",
-        "senderEmail",
-        "tryMigrateGroupMember"
-      ],
-      "functions": 5,
-      "functionsWithCtx": 4,
-      "biggestCtxFn": "countAndNotify"
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 6,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/invites.js": {
       "ctxRefs": 48,
@@ -588,7 +557,7 @@
         "peerKeys",
         "peerPqKeys"
       ],
-      "functions": 7,
+      "functions": 8,
       "functionsWithCtx": 5,
       "biggestCtxFn": "isEnabled"
     },

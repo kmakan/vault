@@ -4221,9 +4221,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ── Непрочитанные + PUSH-уведомления ─────────
     // processIncoming классифицирует КАЖДЫЙ fetched-батч (поллинг или вход):
     // расшифровывает тела, отличает настоящие сообщения от квитанций/
-    // инвайтов/meta (parseEnvelope), ведёт счётчики непрочитанных и
+    // инвайтов/meta, ведёт счётчики непрочитанных и
     // (при notify=true) шлёт системные уведомления. Контент НЕ показываем
     // (зашифровано + zero-metadata) — только имя отправителя/группы.
+    // С W1 тип письма определяет Rust (vault_classify_incoming), здесь —
+    // расшифровка ключами и эффекты (features/incoming.js).
     //
     // ИДЕМПОТЕНТНОСТЬ: каждое письмо учитывается ровно ОДИН раз
     // processedUnreadIds (персист в kv 'unread-seen') хранит uid|folder уже
@@ -4236,7 +4238,54 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
     // Входящие конверты (router) — логика в features/incoming.js; Этап 4
     // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
-    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts, { ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope, isBounceMessage: BounceFeature.isBounceMessage, bounceRecipients: BounceFeature.bounceRecipients, bounceReason: BounceFeature.bounceReason }); },
+    // Входящие (W1, ADR-005 R3): контракт зависимостей собирается здесь —
+    // модуль больше не читает компонент как ctx (см. features/incoming.js).
+    // Методы обёрнуты стрелками: `deps.h = this.handleCallSignal` потерял бы
+    // `this` при вызове. channels/groups — геттеры: ренейм адреса по ходу батча
+    // вызывает loadGroups, который ПЕРЕПРИСВАИВАЕТ массив (снимок устарел бы).
+    // Держим один вызов без промежуточной переменной: тело делегата не должно
+    // обрастать собственной логикой (ратчет js-logic).
+    async processIncoming(fetched, opts) {
+      return IncomingFeature.processIncoming({
+        cryptoReady: this.cryptoReady,
+        email: this.email,
+        peerKeys: this.peerKeys,
+        peerPqKeys: this.peerPqKeys || {},
+        emailBodyCache: this.emailBodyCache,
+        processedUnreadIds: this.processedUnreadIds,
+        profiles: this.profiles,
+        contactAliases: this.contactAliases,
+        groupKeys: this.groupKeys,
+        channels: () => this.channels,
+        groups: () => this.groups,
+        senderEmail: (raw) => this.senderEmail(raw),
+        cacheBody: (k, v) => this.cacheBody(k, v),
+        isIgnored: (from) => this.isIgnored(from),
+        noteSeen: (email, ts) => this.noteSeen(email, ts),
+        onMailBounce: (r, why) => this.onMailBounce(r, why),
+        handleCallSignal: (sig, from) => this.handleCallSignal(sig, from),
+        canonicalOf: (x) => this.canonicalOf(x),
+        parseEnvelope: (plain) => this.parseEnvelope(plain),
+        localProfileOf: (x) => this.localProfileOf(x),
+        nameOf: (x) => this.nameOf(x),
+        setPeerKey: (e, k, pq) => this.setPeerKey(e, k, pq),
+        migratePeerGroups: (a, b) => this.migratePeerGroups(a, b),
+        migrateChatHistoryChain: (a, b, c) => this.migrateChatHistoryChain(a, b, c),
+        tryMigrateGroupMember: (g, from) => this.tryMigrateGroupMember(g, from),
+        setGroupKey: (id, k) => this.setGroupKey(id, k),
+        replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
+        healGroupAvatarFromMessage: (id, av) => this.healGroupAvatarFromMessage(id, av),
+        saveUnreadSeen: () => this.saveUnreadSeen(),
+        saveUnreadCounts: () => this.saveUnreadCounts(),
+        chatVisible: (k) => this.chatVisible(k),
+        isMuted: (k) => this.isMuted(k),
+        incUnread: (k) => this.incUnread(k),
+        ingestChannelEnvelope: (obj, from) => ChannelsFeature.ingestChannelEnvelope(this, obj, from),
+        isBounceMessage: BounceFeature.isBounceMessage,
+        bounceRecipients: BounceFeature.bounceRecipients,
+        bounceReason: BounceFeature.bounceReason,
+      }, fetched, opts);
+    },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {
