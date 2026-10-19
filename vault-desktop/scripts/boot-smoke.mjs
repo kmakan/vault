@@ -44,6 +44,14 @@
 //   • в консоли/Runtime нет ошибок неопределённых идентификаторов и TypeError;
 //   • (фаза 2) isLoggedIn=true, groups — массив, groupsStore — хранилище.
 //
+// 6. 19.10.2026 (t_ddc24f52): `loadChannels()` звал `this.channelsStore` —
+//    члена с таким именем у инстанса нет (владелец — модульный импорт).
+//    TypeError бросался ВНУТРИ цикла по каналам, ловился `catch` рядом и
+//    тонул в консоли: посты/непрочитанные всех каналов после первого не
+//    загружались. На аккаунте с одним каналом симптом неотличим от нормы,
+//    поэтому фаза 3 гоняет ДВА канала и требует, чтобы цикл дошёл до
+//    последнего: посты и счётчики непрочитанного обоих.
+//
 // Зависимостей не добавляет: Node ≥22 (глобальный WebSocket, fetch) + любой
 // установленный Chrome/Chromium. Если браузера нет — гейт ПРОПУСКАЕТСЯ с
 // громким предупреждением (нельзя валить сборку на машине без Chrome), но
@@ -133,7 +141,8 @@ async function cdpConnect(port) {
 // инъекция обслуживает обе фазы, и «сохранённые данные» появляются ровно
 // тогда, когда их ждёт фаза 2.
 const STUB = `(function () {
-  var auto = new URLSearchParams(location.search).get('smoke') === 'autologin';
+  var mode = new URLSearchParams(location.search).get('smoke') || '';
+  var auto = mode === 'autologin' || mode === 'channels';
   var calls = [];
   window.__SMOKE_CALLS = calls;
   var EMAIL = 'smoke@example.test';
@@ -144,6 +153,25 @@ const STUB = `(function () {
     smtp_server: 'smtp.example.test', smtp_port: 465,
   };
   var keypair = { public_key: hex('a'), private_key: hex('b') };
+  // Фаза «каналы»: ДВА канала с разными last_ts. Один канал не отличил бы
+  // исправную загрузку от оборвавшейся на первом (см. фазу ниже).
+  var CHANNELS = mode === 'channels' ? [
+    { id: 'chn_smoke_1', name: 'Smoke One', created_by: EMAIL,
+      created_at: '2026-01-01T00:00:00Z', owner_fpr: hex('d'), about: '',
+      key: hex('e'), key_version: 1, is_owner: true, last_ts: 2000, known_subscribers: [] },
+    { id: 'chn_smoke_2', name: 'Smoke Two', created_by: EMAIL,
+      created_at: '2026-01-02T00:00:00Z', owner_fpr: hex('d'), about: '',
+      key: hex('f'), key_version: 1, is_owner: true, last_ts: 4000, known_subscribers: [] },
+  ] : [];
+  // ts постов: канал 1 — 1 пост, 0 непрочитанных (1000 <= last_ts 2000);
+  // канал 2 — 2 поста, 1 непрочитанный (5000 > last_ts 4000).
+  var CHANNEL_POSTS = {
+    chn_smoke_1: [{ id: 'post-1', ts: 1000, body: 'one', sender: '' }],
+    chn_smoke_2: [
+      { id: 'post-2', ts: 3000, body: 'two', sender: '' },
+      { id: 'post-3', ts: 5000, body: 'three', sender: '' },
+    ],
+  };
   var table = {
     load_credentials: function () { return auto ? creds : null; },
     load_my_keypair: function () { return auto ? keypair : null; },
@@ -162,13 +190,24 @@ const STUB = `(function () {
     db_tombstones_load: function () { return []; },
     contacts_load: function () { return { contacts: [], contactAliases: {} }; },
     load_contacts: function () { return { contacts: [], contactAliases: {} }; },
-    channels_load: function () { return []; },
-    load_channels: function () { return []; },
+    channels_load: function () { return CHANNELS; },
+    load_channels: function () { return CHANNELS; },
+    // Посты/аватары каналов App.vue читает через db.kvGet → db_kv_get.
+    // В остальных фазах kv пуст, как и раньше (команды не было в таблице).
+    db_kv_get: function (args) {
+      if (mode !== 'channels') return null;
+      var key = (args && args.key) || '';
+      if (key.indexOf('channel-posts:') === 0) {
+        return JSON.stringify(CHANNEL_POSTS[key.slice('channel-posts:'.length)] || []);
+      }
+      if (key.indexOf('channel-avatar:') === 0) return '';
+      return null;
+    },
   };
-  var invoke = async function (cmd) {
+  var invoke = async function (cmd, args) {
     calls.push(cmd);
     var f = table[cmd];
-    try { return f ? f() : null; } catch (e) { return null; }
+    try { return f ? f(args) : null; } catch (e) { return null; }
   };
   // Диагностика (видна только при SMOKE_DEBUG): сколько было загрузок
   // документа и доходило ли состояние до «в чатах» хоть на миг.
@@ -286,6 +325,24 @@ const TOAST_EXPR = `(async () => {
   return JSON.stringify(out);
 })()`;
 
+// Состояние загрузки каналов (фаза 3). Смысл — не «каналы есть», а «цикл
+// загрузки ДОШЁЛ до последнего канала»: до 19.10 в `loadChannels()` стоял
+// `this.channelsStore` (такого члена у инстанса нет) → TypeError ВНУТРИ цикла,
+// а ошибка тонула в `catch (e) { console.error('Failed to load channels:', e) }`
+// рядом: посты и счётчики всех каналов после первого не загружались.
+const CHANNELS_EXPR = `(() => {
+  const app = document.querySelector('#app');
+  const p = app && app._vnode && app._vnode.component && app._vnode.component.proxy;
+  if (!p) return JSON.stringify({ hasProxy: false });
+  const ids = (p.channels || []).map((c) => c.id);
+  const posts = {}; const unread = {};
+  for (const id of ids) {
+    posts[id] = Array.isArray(p.channelPosts && p.channelPosts[id]) ? p.channelPosts[id].length : null;
+    unread[id] = Object.prototype.hasOwnProperty.call(p.channelUnread || {}, id) ? p.channelUnread[id] : null;
+  }
+  return JSON.stringify({ hasProxy: true, channelsLen: ids.length, ids, posts, unread });
+})()`;
+
 // ── Фазы ────────────────────────────────────────────────────────────────
 const PHASES = [
   {
@@ -332,6 +389,33 @@ const PHASES = [
         else if (toast.directToastShown !== 'SMOKE-VIA-METHOD') {
           failed.push(`this.showToast(...) не доходит до DOM (.app-toast: «${toast.directToastShown}»)`);
         }
+      }
+      return failed;
+    },
+  },
+  {
+    name: 'каналы: 2 канала — загрузка не обрывается на первом',
+    query: '?smoke=channels',
+    extraExpr: CHANNELS_EXPR,
+    check(s, problems) {
+      const failed = [];
+      for (const p of problems) {
+        if (/is not defined|ReferenceError|TypeError|Failed to load channels/.test(p)) failed.push(p);
+      }
+      const c = s.extra;
+      if (!c || !c.hasProxy) {
+        failed.push('не достучались до инстанса приложения для проверки каналов');
+        return failed;
+      }
+      if (s.isLoggedIn !== true) failed.push(`авто-вход не дошёл до чатов (isLoggedIn=${s.isLoggedIn})`);
+      if (c.channelsLen !== 2) failed.push(`загружено каналов ${c.channelsLen}, ожидалось 2`);
+      if (c.posts.chn_smoke_1 !== 1) failed.push(`канал 1: постов ${c.posts.chn_smoke_1}, ожидалось 1`);
+      if (c.posts.chn_smoke_2 !== 2) {
+        failed.push(`канал 2: постов ${c.posts.chn_smoke_2}, ожидалось 2 — цикл loadChannels оборвался на первом канале`);
+      }
+      if (c.unread.chn_smoke_1 !== 0) failed.push(`канал 1: непрочитанных ${c.unread.chn_smoke_1}, ожидалось 0`);
+      if (c.unread.chn_smoke_2 !== 1) {
+        failed.push(`канал 2: непрочитанных ${c.unread.chn_smoke_2}, ожидалось 1 — посты канала 2 не загрузились`);
       }
       return failed;
     },
@@ -455,6 +539,14 @@ async function main() {
           awaitPromise: true,
         });
         try { state.toast = JSON.parse(toastRes.result?.result?.value || 'null'); } catch { state.toast = null; }
+      }
+      if (phase.extraExpr) {
+        const exRes = await cmd('Runtime.evaluate', {
+          expression: phase.extraExpr,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        try { state.extra = JSON.parse(exRes.result?.result?.value || 'null'); } catch { state.extra = null; }
       }
       const realProblems = problems.filter((p) => !/\[crypto\] нет сохранённого ключа/.test(p));
       const phaseFailed = phase.check(state, realProblems);
