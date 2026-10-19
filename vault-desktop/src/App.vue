@@ -4140,7 +4140,47 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       reader.readAsDataURL(file);
     },
     // ── Отправка 1:1 (логика в features/send.js) — тонкий делегат ──
-    async sendMessage() { return SendFeature.sendMessage(this, { resolveChatKey: ChatFeature.resolveChatKey, isRecentDuplicate: ChatFeature.isRecentDuplicate, buildReplyPayload: ChatFeature.buildReplyPayload, buildNoteMessage: ChatFeature.buildNoteMessage, buildSendingMessage: ChatFeature.buildSendingMessage, isPeerEncrypted: ContactsFeature.isPeerEncrypted, encryptPeerVaultEnvelope: AttachmentsFeature.encryptPeerVaultEnvelope }); },
+    // W2 партия 2 (ADR-005 R3): модуль не читает компонент. В контракте —
+    // только то, чем владеет компонент: анти-дубль последней отправки и
+    // watchdog (get/set: они читаются И пишутся), UI-режим composer'а
+    // (editingMessage/replyTo), sending-store (владелец pendingOutgoing),
+    // сборка конверта (протокол, W4) и эффекты других доменов.
+    // Без `;` внутри литерала: тело делегата остаётся одним выражением
+    // (ратчет App.vue), т.е. ни одной ветки здесь нет.
+    async sendMessage() {
+      return SendFeature.sendMessage({
+        resolveChatKey: ChatFeature.resolveChatKey,
+        isRecentDuplicate: ChatFeature.isRecentDuplicate,
+        buildReplyPayload: ChatFeature.buildReplyPayload,
+        buildNoteMessage: ChatFeature.buildNoteMessage,
+        buildSendingMessage: ChatFeature.buildSendingMessage,
+        isPeerEncrypted: ContactsFeature.isPeerEncrypted,
+        encryptPeerVaultEnvelope: AttachmentsFeature.encryptPeerVaultEnvelope,
+        sending: this.sendingStore,
+        notes: this.notes,
+        chat: this.chat,
+        groupKeys: this.groupKeys,
+        setGroupKey: (id, k) => this.setGroupKey(id, k),
+        cryptoReady: this.cryptoReady,
+        getLastSend: () => this.lastSend,
+        setLastSend: (v) => (this.lastSend = v),
+        getWatchdog: () => this._sendingWatchdog,
+        setWatchdog: (t) => (this._sendingWatchdog = t),
+        editingMessage: this.editingMessage,
+        replyTo: this.replyTo,
+        cancelEdit: () => this.cancelEdit(),
+        cancelReply: () => this.cancelReply(),
+        saveDraft: () => this.saveDraft(),
+        isIgnored: (e) => this.isIgnored(e),
+        buildEnvelope: (text, ttl) => this.buildEnvelope(text, ttl),
+        markPending: (k, m) => this.markPending(k, m),
+        saveCurrentHistory: (k) => this.saveCurrentHistory(k),
+        recordLocalEdit: (k, id, t, a) => this.recordLocalEdit(k, id, t, a),
+        sendEditEmail: (id, t, a) => this.sendEditEmail(id, t, a),
+        scheduleEphemeral: (m, c) => this.scheduleEphemeral(m, c),
+        sendChannelPost: () => this.sendChannelPost(),
+      });
+    },
     searchMessages() {
       alert('Search coming soon!');
     },

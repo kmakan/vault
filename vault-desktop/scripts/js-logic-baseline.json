@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 518,
+    "ctxRefSites": 418,
     "appVueOwn": 198,
     "appVueMethods": 350,
     "protocolSites": 67,
@@ -24,8 +24,7 @@
     "features/presence.js": 12,
     "features/profiles.js": 37,
     "features/receipts.js": 17,
-    "features/recovery.js": 44,
-    "features/send.js": 100
+    "features/recovery.js": 44
   },
   "ctxFieldsByFile": {
     "features/calls.js": [
@@ -277,45 +276,6 @@
       "startPolling",
       "startRelayTicker",
       "userId"
-    ],
-    "features/send.js": [
-      "_sendingWatchdog",
-      "activeChat",
-      "activeChatType",
-      "buildEnvelope",
-      "cancelEdit",
-      "cancelReply",
-      "chat",
-      "clearDraft",
-      "cryptoReady",
-      "currentGroup",
-      "editingMessage",
-      "email",
-      "ephemeralTtlOf",
-      "getPendingOutgoingBucket",
-      "getSending",
-      "groupKeys",
-      "isIgnored",
-      "lastSend",
-      "markPending",
-      "newMessage",
-      "notes",
-      "peerKeys",
-      "peerPqKeys",
-      "recordLocalEdit",
-      "replyBody",
-      "replyPreview",
-      "replyQuote",
-      "replyTo",
-      "saveCurrentHistory",
-      "saveDraft",
-      "scheduleEphemeral",
-      "sendChannelPost",
-      "sendEditEmail",
-      "setGroupKey",
-      "setPendingOutgoing",
-      "setRelayMode",
-      "setSending"
     ]
   },
   "protocolByFile": {

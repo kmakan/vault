@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 439,
+  "totalCtxRefs": 364,
   "totalFunctions": 311,
-  "functionsWithCtx": 93,
+  "functionsWithCtx": 92,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -668,39 +668,11 @@
       "biggestCtxFn": null
     },
     "src/features/send.js": {
-      "ctxRefs": 75,
-      "fields": [
-        "_sendingWatchdog",
-        "activeChat",
-        "activeChatType",
-        "buildEnvelope",
-        "cancelEdit",
-        "cancelReply",
-        "cryptoReady",
-        "currentGroup",
-        "editingMessage",
-        "email",
-        "ephemeralTtlOf",
-        "groupKeys",
-        "isIgnored",
-        "lastSend",
-        "markPending",
-        "peerKeys",
-        "peerPqKeys",
-        "recordLocalEdit",
-        "replyBody",
-        "replyPreview",
-        "replyQuote",
-        "replyTo",
-        "saveCurrentHistory",
-        "saveDraft",
-        "scheduleEphemeral",
-        "sendChannelPost",
-        "sendEditEmail"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "sendMessage"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/sending-store.js": {
       "ctxRefs": 0,

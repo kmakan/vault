@@ -279,6 +279,14 @@ const problems = [];
 // на диске и мог бы попасть в следующий коммит, а закоммиченный потолок при этом
 // ещё держал бы гейт зелёным. То есть момент, когда гейт ослепнут, наступил бы
 // позже — на ревью, где его уже нет.
+//
+// НАПРАВЛЕНИЕ (дефект найден 19.10 на партии `send`, исправлен): «слабее» — это
+// потолок, который РАЗРЕШАЕТ больше, а не меньше. В прежней редакции падало
+// уменьшение (`sharedWriteFields` 13 → 0, у поля исчезал писатель) — то есть
+// гейт наказывал ровно ту работу, которую ждёт W2: модуль целиком уходит с
+// `ctx`, поле перестаёт быть общим. Проверка теперь смотрит туда же, куда
+// `--write`: рост ссылок/полей и ПОЯВЛЕНИЕ писателя у поля — ослабление;
+// уменьшение — ужесточение (его и надо коммитить).
 if (existsSync(BASE_FILE)) {
   const work = JSON.parse(readFileSync(BASE_FILE, 'utf8'));
   const weaker = [];
@@ -288,13 +296,13 @@ if (existsSync(BASE_FILE)) {
   if (work.totals.ctxFields > prev.totals.ctxFields) {
     weaker.push('ctxFields ' + prev.totals.ctxFields + ' → ' + work.totals.ctxFields);
   }
-  if (work.totals.sharedWriteFields < prev.totals.sharedWriteFields) {
+  if (work.totals.sharedWriteFields > prev.totals.sharedWriteFields) {
     weaker.push('sharedWriteFields ' + prev.totals.sharedWriteFields + ' → ' + work.totals.sharedWriteFields);
   }
-  for (const f of Object.keys(prev.fieldWriters)) {
+  for (const f of Object.keys(work.fieldWriters || {})) {
     const a = (prev.fieldWriters[f] || []).length;
-    const b = ((work.fieldWriters || {})[f] || []).length;
-    if (b < a) weaker.push('писателей у `' + f + '` в файле ' + a + ' → ' + b);
+    const b = (work.fieldWriters[f] || []).length;
+    if (b > a) weaker.push('писателей у `' + f + '` в файле ' + a + ' → ' + b);
   }
   if (weaker.length) {
     console.log('✗ ctx-ratchet: потолок ОСЛАБЛЕН в scripts/ctx-ratchet-baseline.json');
