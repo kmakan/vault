@@ -3116,7 +3116,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.cancelReply();
       this.activeChat = 'channel:' + ch.id;
       this.activeChatType = 'channel';
-      this.channelsStore.setCurrentChannel(ch);
+      // channelsStore — МОДУЛЬНЫЙ импорт (App.vue:973), а не setup-локаль:
+      // в инстанс он не отдаётся, поэтому `this.channelsStore` был undefined
+      // (TypeError на каждый клик по каналу). Голое имя здесь и есть верный
+      // доступ — так же он читается в computed выше.
+      channelsStore.setCurrentChannel(ch);
       this.currentGroup = null;
       this.showStarredOnly = false;
       this.loadSeq++;
@@ -3232,7 +3236,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           const posts = JSON.parse((await db.kvGet(await accountNamespace(this.email), 'channel-posts:' + ch.id)) || '[]');
           this.channelPosts[ch.id] = posts;
           this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
-          this.channelsStore.setChannelAvatar(ch.id, (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '');
+          // Тоже модульный импорт (см. selectChannel): `this.channelsStore`
+          // бросал TypeError ВНУТРИ цикла, и посты/счётчики всех каналов после
+          // первого не загружались — ошибка тонула в catch рядом.
+          channelsStore.setChannelAvatar(ch.id, (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '');
         }
       } catch (e) { console.error('Failed to load channels:', e); }
     },
