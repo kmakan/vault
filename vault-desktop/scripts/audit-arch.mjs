@@ -38,7 +38,13 @@ const LOGIC_MARKERS = [
     soft: true },
   { id: 'hmac-sha', re: /createHmac|createHash|subtle\.digest\(['"]SHA-?/g,
     why: 'своя хеш-функция вместо Rust' },
-  { id: 'pbkdf', re: /pbkdf2|scrypt|argon2/i,
+  // Границы слова обязательны: без них `scrypt` находится ВНУТРИ
+  // `isCryptoReady` («i-sCrypt-o»), и аудит показывает «KDF в JS» в файле,
+  // где крипто-логики нет вовсе. Флаг `g` — иначе `match` вернёт максимум
+  // одно вхождение и счёт в отчёте занижен. Оба дефекта ловились только
+  // самопроверкой на заведомо известном случае (ADR-004: цифра инструмента
+  // верна настолько, насколько проверен инструмент).
+  { id: 'pbkdf', re: /\b(pbkdf2|scrypt|argon2)/gi,
     why: 'KDF в JS' },
 ];
 
