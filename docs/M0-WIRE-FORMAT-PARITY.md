@@ -40,6 +40,11 @@ Producer (JS, `vault-desktop/src/App.vue` `buildEnvelope`):
 | Rust | `cd vault-client && cargo test --test m0_wire_contract` | 14 |
 | JS | `cd vault-desktop && npm run smoke:m0-wire` | 15 |
 
+JS-гейт **входит в `npm run build`** (сразу после `locale-keys-gate`, до
+`vite build`): он чистый node без зависимостей и читает фикстуру по пути от
+своего файла, поэтому выполняется и в CI (`check-desktop`). Rust-часть гоняет
+CI-задача `check-client` (`cargo test`).
+
 Одни и те же байты обязаны одинаково читаться обеими сторонами: расхождение
 ломает любой из двух гейтов. Числа разные, потому что каждая сторона объявляет в
 фикстуре только свои ожидания (`rust_classify` / `js_parse_envelope`).
@@ -96,7 +101,8 @@ Producer (JS, `vault-desktop/src/App.vue` `buildEnvelope`):
 - [x] Doc parity (этот файл, ревизия 19.10)
 - [x] X-header roundtrip в Rust: `to_email_body` / `from_email_body` + тесты
 - [x] Общий контракт-гейт на фикстуре: `cargo test --test m0_wire_contract` и
-      `npm run smoke:m0-wire` (заменяет `m0-e2e-parity.mjs`)
+      `npm run smoke:m0-wire` (JS-часть входит в `npm run build`; заменяет
+      `m0-e2e-parity.mjs`, который не запускался ничем)
 - [x] Пункт «JS `parseEnvelope` → `from_email_body`-style» закрыт как
       неактуальный: JS не парсит тело письма с X-заголовками вовсе — тело
       расшифровывается, а payload разбирает `parseEnvelope`; core-конверт живёт
