@@ -62,6 +62,18 @@ pub fn save_base64_to_public_downloads(
             .map_err(|e| format!("attach_current_thread: {e}"))?;
         let context = unsafe { JObject::from_raw(ctx.context().cast()) };
         let outcome = insert_into_mediastore(&mut env, &context, &bytes, &display_name, &mime);
+        let outcome = match outcome {
+            Ok(path) => Ok(path),
+            Err(e) => {
+                // Текст Java-исключения — в саму ошибку. Без него отказ выглядел
+                // как «Java exception was thrown», и причину (Invalid column
+                // MIME_TYPE) пришлось искать в logcat MediaProvider.
+                Err(match java_exception_message(&mut env) {
+                    Some(j) => format!("{e}: {j}"),
+                    None => e,
+                })
+            }
+        };
         if outcome.is_err() {
             // Pending Java-исключение гасим: иначе оно всплывёт на следующем
             // JNI-вызове этого потока и уронит процесс (FATAL EXCEPTION).
@@ -75,6 +87,31 @@ pub fn save_base64_to_public_downloads(
         Ok(Err(e)) => Err(e),
         Err(_) => Err("JNI panicked (MediaStore save)".to_string()),
     }
+}
+
+/// Текст текущего Java-исключения (`Throwable.toString()`), если оно есть.
+///
+/// ЗАЧЕМ: без него ошибка JNI выглядит как «Java exception was thrown», и
+/// причину приходится искать в logcat (`E/DatabaseUtils: ... Invalid column
+/// MIME_TYPE` — так и нашли). Теперь текст прилетает прямо в строку ошибки.
+///
+/// Порядок обязателен: `exception_occurred` снимает pending-ссылку и держит
+/// local ref; `exception_clear` НУЖЕН до любых следующих JNI-вызовов (иначе
+/// они падают с «exception pending») — поэтому toString вызываем уже после
+/// clear, имея на руках throwable.
+fn java_exception_message(env: &mut JNIEnv) -> Option<String> {
+    use jni::objects::JString;
+    if !env.exception_check().ok()? {
+        return None;
+    }
+    let throwable = env.exception_occurred().ok()?;
+    env.exception_clear().ok()?;
+    let value = env
+        .call_method(&throwable, "toString", "()Ljava/lang/String;", &[])
+        .ok()?;
+    let obj = value.l().ok()?;
+    let text: String = env.get_string(&JString::from(obj)).ok()?.into();
+    Some(text)
 }
 
 /// Версия Android (Build.VERSION.SDK_INT) — нужна, потому что
@@ -122,9 +159,15 @@ fn insert_into_mediastore(
         .new_object(&cv_class, "()V", &[])
         .map_err(|e| format!("new ContentValues: {e}"))?;
 
-    put_string(env, &cv, "DISPLAY_NAME", display_name)?;
-    put_string(env, &cv, "MIME_TYPE", mime)?;
-    put_string(env, &cv, "RELATIVE_PATH", "Download")?;
+    // ВНИМАНИЕ: ключи ContentValues — это ИМЕНА КОЛОНОК БД, а не имена Java-констант
+    // `MediaStore.MediaColumns.*`. Первая версия (19.10, 0.1.226) передавала
+    // DISPLAY_NAME/MIME_TYPE/RELATIVE_PATH, и MediaProvider отверг insert:
+    //   E/DatabaseUtils: java.lang.IllegalArgumentException: Invalid column MIME_TYPE
+    // Правильные значения: "_display_name", "mime_type", "relative_path".
+    // RELATIVE_PATH у коллекции Downloads должен начинаться с "Download/".
+    put_string(env, &cv, "_display_name", display_name)?;
+    put_string(env, &cv, "mime_type", mime)?;
+    put_string(env, &cv, "relative_path", "Download/")?;
 
     let downloads_class = env
         .find_class("android/provider/MediaStore$Downloads")
