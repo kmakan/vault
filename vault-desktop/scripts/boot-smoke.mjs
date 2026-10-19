@@ -26,6 +26,17 @@
 //                          приложение обязано дойти до ЧАТОВ (isLoggedIn),
 //                          не потерять token и не бросить Reference/TypeError.
 //
+// 5. `a3e82eb` (16.10, ADR-001 «toast-state owner») перевёл тост на uiStore,
+//    но `uiStore` НЕ живёт на инстансе, а `setup()` читал `this?.showToast`
+//    (в setup `this` === undefined). Оба пути тоста умерли МОЛЧА: фичи звали
+//    uiStore.toast → пустышку, а метод App.vue падал на
+//    `this.uiStore.setToastMessage` (TypeError). Нашлось на живой приёмке
+//    19.10.2026 (t_e66389bd: скачивание рапортовало успех беззвучно).
+//    Поэтому фаза 2 проверяет и КАНАЛ тоста, а не только рендер и login:
+//      • `uiStore.tr(key)` обязан отдавать перевод, а не сам ключ;
+//      • `uiStore.toast(...)` (путь фич) и `this.showToast(...)` (путь
+//        App.vue) обязаны доводить текст до DOM (.app-toast).
+//
 // Проверка честная: берём НАСТОЯЩИЙ dist/ (то, что вшивается в APK/бинарник),
 // поднимаем на 127.0.0.1, открываем headless-браузером, подставляем заглушку
 // Tauri-моста и требуем:
@@ -246,6 +257,35 @@ const STATE_EXPR = `(() => {
   });
 })()`;
 
+// Проверка КАНАЛА ТОСТА (см. пункт 5 в шапке). Оба пути обязаны доводить текст
+// до DOM: uiStore.toast — путь фич (relay/contacts/attachments/forward),
+// this.showToast — путь App.vue. uiStore.tr обязан быть подключён к i18n.
+const TOAST_EXPR = `(async () => {
+  const app = document.querySelector('#app');
+  const p = app && app._vnode && app._vnode.component && app._vnode.component.proxy;
+  if (!p) return JSON.stringify({ hasProxy: false });
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const shown = () => {
+    const el = document.querySelector('.app-toast');
+    return el ? el.innerText.trim() : '';
+  };
+  const out = { hasProxy: true, i18nRegistered: false, storeToastShown: '', directToastShown: '' };
+  try {
+    out.i18nRegistered = p.uiStore ? p.uiStore.tr('download') !== 'download' : false;
+  } catch (e) { out.i18nError = String((e && e.message) || e); }
+  try {
+    p.uiStore.toast('SMOKE-VIA-STORE');
+    await wait(150);
+    out.storeToastShown = shown();
+  } catch (e) { out.storeError = String((e && e.message) || e); }
+  try {
+    p.showToast('SMOKE-VIA-METHOD');
+    await wait(150);
+    out.directToastShown = shown();
+  } catch (e) { out.directError = String((e && e.message) || e); }
+  return JSON.stringify(out);
+})()`;
+
 // ── Фазы ────────────────────────────────────────────────────────────────
 const PHASES = [
   {
@@ -275,6 +315,23 @@ const PHASES = [
         if (s.groupsIsArray !== true) failed.push(`this.groups должен быть СПИСКОМ групп (получено: массив=${s.groupsIsArray})`);
         if (s.groupsStoreOk !== true) failed.push('this.groupsStore должен быть хранилищем групп (.state)');
         if (!s.token) failed.push('авто-вход потерял vault-token (следующий старт не попробует вход)');
+      }
+      // Канал тоста (пункт 5 в шапке): молчаливо мёртвый тост — тот же класс
+      // «зелёная сборка, сломанный прод», что и ReferenceError в setup.
+      const toast = s.toast;
+      if (!toast || !toast.hasProxy) {
+        failed.push('проверка тоста не выполнилась (нет инстанса)');
+      } else {
+        if (toast.i18nError) failed.push(`uiStore.tr падает: ${toast.i18nError}`);
+        else if (!toast.i18nRegistered) failed.push('uiStore.tr не подключён к i18n (отдаёт сам ключ вместо перевода)');
+        if (toast.storeError) failed.push(`uiStore.toast падает: ${toast.storeError}`);
+        else if (toast.storeToastShown !== 'SMOKE-VIA-STORE') {
+          failed.push(`uiStore.toast(...) не доходит до DOM (.app-toast: «${toast.storeToastShown}») — тосты фич глотаются`);
+        }
+        if (toast.directError) failed.push(`this.showToast падает: ${toast.directError}`);
+        else if (toast.directToastShown !== 'SMOKE-VIA-METHOD') {
+          failed.push(`this.showToast(...) не доходит до DOM (.app-toast: «${toast.directToastShown}»)`);
+        }
       }
       return failed;
     },
@@ -389,6 +446,16 @@ async function main() {
 
       const res = await cmd('Runtime.evaluate', { expression: STATE_EXPR, returnByValue: true });
       const state = JSON.parse(res.result?.result?.value || '{}');
+      // Канал тоста проверяем только там, где приложение уже вошло (фаза 2):
+      // в фазе входа тост никто не показывает.
+      if (phase.query.includes('smoke=autologin')) {
+        const toastRes = await cmd('Runtime.evaluate', {
+          expression: TOAST_EXPR,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        try { state.toast = JSON.parse(toastRes.result?.result?.value || 'null'); } catch { state.toast = null; }
+      }
       const realProblems = problems.filter((p) => !/\[crypto\] нет сохранённого ключа/.test(p));
       const phaseFailed = phase.check(state, realProblems);
 

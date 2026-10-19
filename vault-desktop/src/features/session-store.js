@@ -130,7 +130,11 @@ export function createUiStore() {
     showChatSearch: false,
     showJumpToBottom: false,
   };
-  let toastMessage = '';
+  let toastState = { message: '' };
+  // Реактивный «сток» тоста. Сам модуль framework-agnostic (см. шапку файла),
+  // поэтому reactive({message}) создаёт App.vue и отдаёт сюда через
+  // setToastSink. Без этого присвоение писалось в обычную переменную, и
+  // computed `toastMessage` в App.vue не пересчитывался (тост не появлялся).
   let toastTimer = null;
   let scrollToBottom = () => {};
   let _onMessagesScroll = () => {};
@@ -149,11 +153,12 @@ export function createUiStore() {
     setModal(name, v) { modalFlags[name] = !!v; return modalFlags[name]; },
     getModal(name) { return !!modalFlags[name]; },
     resetModals() { for (const k of Object.keys(modalFlags)) modalFlags[k] = false; },
-    setToastMessage(v) { toastMessage = v ?? ''; },
-    getToastMessage() { return toastMessage; },
+    setToastSink(sink) { toastState = sink || { message: '' }; },
+    setToastMessage(v) { toastState.message = v ?? ''; return toastState.message; },
+    getToastMessage() { return toastState.message; },
     setToastTimer(t) { toastTimer = t; },
     getToastTimer() { return toastTimer; },
-    clearToast() { toastMessage = ''; if (toastTimer) clearTimeout(toastTimer); toastTimer = null; },
+    clearToast() { toastState.message = ''; if (toastTimer) clearTimeout(toastTimer); toastTimer = null; },
     // J.5b: скролл-callback'и — App.vue передаёт стрелки (refs/DOM неизвестны
     // модулю), фичи берут через uiStore.scrollToBottom/onMessagesScroll.
     setScrollToBottom(fn) { scrollToBottom = fn || (() => {}); },

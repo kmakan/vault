@@ -149,10 +149,30 @@ pub async fn vault_download_attachment(
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Имя файла без путей и управляющих символов.
+///
+/// Имя вложения приходит из расшифрованного конверта, то есть от отправителя —
+/// это НЕ доверенный ввод. `../` в имени увёл бы запись за пределы каталога
+/// загрузок (`dir.join(filename)`), поэтому имя чистим до обоих путей
+/// сохранения (desktop и Android). Функция чистая и тестируется на хосте.
+pub fn sanitize_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base.chars().filter(|c| !c.is_control()).collect();
+    // `.` и `..` — не имена файлов; ведущие точки убираем, чтобы не создавать
+    // скрытые файлы и не ломать MediaStore.
+    let trimmed = cleaned.trim().trim_start_matches('.').trim();
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Decode base64 and write it to `dir/filename`, creating `dir` if needed.
 ///
 /// Pure filesystem helper (no HOME/download-dir lookup) so the real code path
-/// is unit-testable with an explicit temp dir.
+/// is unit-testable with an explicit temp dir. Имя файла санитизируется
+/// (`sanitize_filename`): источник имени — отправитель вложения.
 pub fn save_base64_file(
     base64_data: &str,
     filename: &str,
@@ -164,7 +184,7 @@ pub fn save_base64_file(
         .map_err(|e| format!("base64 decode error: {}", e))?;
 
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let path = dir.join(filename);
+    let path = dir.join(sanitize_filename(filename));
     std::fs::write(&path, &binary).map_err(|e| e.to_string())?;
     Ok(path)
 }
@@ -174,12 +194,31 @@ pub fn save_base64_file(
 /// Used by the Desktop "Download" button on attachment cards and the
 /// full-size image viewer.  Falls back to the browser `<a download>`
 /// mechanism if the Tauri command fails.
+///
+/// Android: `dirs` здесь непригоден (см. `android_save`): `download_dir()`
+/// = None, `home_dir()` = приватный каталог приложения, куда пользователь не
+/// попадёт. Файл кладём в общие Downloads через MediaStore; если MediaStore
+/// недоступен (API < 29) — откатываемся на прежний `dirs`-путь.
 #[tauri::command]
 pub async fn vault_save_file(
     base64_data: String,
     filename: String,
     mime_type: String,
 ) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        let result = crate::android_save::save_base64_to_public_downloads(
+            &base64_data,
+            &filename,
+            &mime_type,
+        );
+        match result {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                eprintln!("[vault_save_file] MediaStore недоступен, откат на dirs: {e}");
+            }
+        }
+    }
     let dir = dirs::download_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(std::env::temp_dir);
@@ -292,6 +331,38 @@ mod tests {
 
         // Кривой base64 → Err, а не panic.
         assert!(save_base64_file("!!!not-base64!!!", "x.bin", &dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Имя вложения приходит из расшифрованного конверта (недоверенный ввод).
+    // До 19.10.2026 `save_base64_file` делал `dir.join(filename)` как есть —
+    // `../../` в имени писал файл за пределами каталога загрузок.
+    #[test]
+    fn test_sanitize_filename_strips_paths_and_traversal() {
+        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("/sdcard/Download/a.png"), "a.png");
+        assert_eq!(sanitize_filename("C:\\Users\\x\\b.txt"), "b.txt");
+        assert_eq!(sanitize_filename(".."), "file");
+        assert_eq!(sanitize_filename("."), "file");
+        assert_eq!(sanitize_filename("   "), "file");
+        assert_eq!(sanitize_filename(".hidden"), "hidden");
+        assert_eq!(sanitize_filename("dod\ntest.png"), "dodtest.png");
+        assert_eq!(sanitize_filename("человек.png"), "человек.png");
+        assert_eq!(sanitize_filename("dodtest.png"), "dodtest.png");
+    }
+
+    #[test]
+    fn test_save_file_does_not_escape_target_dir() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir()
+            .join(format!("vault_bridge_traversal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"x");
+
+        let path = save_base64_file(&b64, "../../escaped.bin", &dir).unwrap();
+        assert_eq!(path, dir.join("escaped.bin"));
+        assert!(!dir.parent().unwrap().join("escaped.bin").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

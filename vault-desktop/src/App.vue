@@ -894,7 +894,7 @@
 // поэтому Vue видит изменения. calls.js мутирует состояние через ctx.X,
 // а App.vue роутит это в computed-прокси → callSession.setX().
 import { useSession } from './features/call-session.js';
-import { computed, reactive, watch } from 'vue';
+import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import api, { db } from './api.js';
@@ -1125,12 +1125,28 @@ export default {
     // reactive не обёрнуто: заметки читаются по запросу, не рендерятся в реальном
     // времени. Методы load/save работают напрямую с localStorage через keyFor(email).
     const notes = createNotesStore();
-    // J.3b: init uiStore (t/showToast) через proxy на this.* (i18n plugin + method).
-    // Vue options this.* доступен после монтирования — lazy proxy.
-    const uiT = computed(() => this?.t ?? ((k) => k));
-    const uiToast = computed(() => this?.showToast ?? (() => {}));
-    watch(uiT, (fn) => uiStore.setT(fn), { immediate: true });
-    watch(uiToast, (fn) => uiStore.setShowToast(fn), { immediate: true });
+    // J.3b: init uiStore (t/showToast).
+    //
+    // БЫЛО (регресс ADR-001, a3e82eb от 16.10): `computed(() => this?.showToast)`
+    // + `watch(...)`. В `setup()` Options API `this` ВСЕГДА undefined (setup
+    // вызывается до создания инстанса), поэтому watch регистрировал в uiStore
+    // пустышку `() => {}`, и все `uiStore.toast(...)` из фич молча глотались;
+    // `this.t` там же означал, что uiStore.tr() возвращал сам ключ
+    // («download_complete» в тосте вместо текста). Нашлось на живой приёмке
+    // 19.10 (t_e66389bd): скачивание вложения рапортовало успех беззвучно.
+    //
+    // ТЕПЕРЬ: обе функции замыкаются на setup-скоуп (t — из useI18n, стоит
+    // стабильной функцией; текст берётся по текущей локали на каждый вызов),
+    // тост пишется в reactive-сток, который читает computed `toastMessage`.
+    const toastState = reactive({ message: '' });
+    uiStore.setToastSink(toastState);
+    uiStore.setT(t);
+    let toastTimer = null;
+    uiStore.setShowToast((message, ms = 5000) => {
+      toastState.message = message;
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastState.message = ''; }, ms);
+    });
     // J.5b: скролл-callback'и (this.scrollToBottom/onMessagesScroll/jumpToBottom
     // — методы App.vue, refs/DOM неизвестны модулю) — прокидываем через uiStore.
     uiStore.setScrollCallbacks({
@@ -1138,7 +1154,7 @@ export default {
       onMessagesScroll: () => this?.onMessagesScroll?.(),
       jumpToBottom: () => this?.jumpToBottom?.(),
     });
-    return { t, setLocale, availableLocales, currentLocale, chat, groupsStore, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession };
+    return { t, setLocale, availableLocales, currentLocale, chat, groupsStore, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession, uiStore };
   },
   data() {
     return {
@@ -3949,11 +3965,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
     // ── Duress-замок ────────────────────────────────────────
     // (логика в features/duress.js; обёртки см. в блоке feature-обёрток выше)
+    //
+    // Тело живёт в uiStore (регистрация в setup) — здесь только делегат.
+    // БЫЛО: `this.uiStore.setToastMessage(...)`, но `uiStore` — модульный
+    // синглтон, на инстансе его нет (`this.uiStore === undefined`) →
+    // `TypeError: Cannot read properties of undefined (reading 'setToastMessage')`
+    // при каждом вызове. Нашлось на живой приёмке 19.10 (t_e66389bd).
     showToast(message, ms = 5000) {
-      this.uiStore.setToastMessage(message);
-      const t = this.uiStore.getToastTimer();
-      if (t) clearTimeout(t);
-      this.uiStore.setToastTimer(setTimeout(() => { this.uiStore.clearToast(); }, ms));
+      uiStore.toast(message, ms);
     },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
     async onRecoveryCreated({ mnemonic }) {

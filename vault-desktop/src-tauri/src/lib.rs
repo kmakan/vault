@@ -151,6 +151,12 @@ pub(crate) fn service_monitor_ensure_ctx(env: &mut jni::JNIEnv, context: &jni::o
 /// M1.9: Bridge — vault-client reusable core (MessageStore, attachments, classify).
 mod vault_bridge;
 
+/// Android: сохранение вложений в ПУБЛИЧНЫЕ Downloads (MediaStore) вместо
+/// приватного каталога приложения, куда `dirs` уводит на мобильной платформе
+/// (живая приёмка 19.10.2026, t_e66389bd).
+#[cfg(target_os = "android")]
+mod android_save;
+
 pub mod voicenote;
 
 use credential_store::StoredCredentials;
