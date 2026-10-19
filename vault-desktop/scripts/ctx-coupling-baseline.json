@@ -1,34 +1,14 @@
 {
-  "totalCtxRefs": 527,
+  "totalCtxRefs": 439,
   "totalFunctions": 311,
-  "functionsWithCtx": 98,
+  "functionsWithCtx": 93,
   "modules": {
     "src/features/attachments.js": {
-      "ctxRefs": 88,
-      "fields": [
-        "activeChat",
-        "activeChatType",
-        "buildEnvelope",
-        "compressImage",
-        "cryptoReady",
-        "currentGroup",
-        "dodCache",
-        "email",
-        "emails",
-        "groupKeys",
-        "isTextMime",
-        "markPending",
-        "mediaQuality",
-        "parseEnvelope",
-        "peerKeys",
-        "peerPqKeys",
-        "saveCurrentHistory",
-        "senderEmail",
-        "showAudioRecorder"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 14,
-      "functionsWithCtx": 6,
-      "biggestCtxFn": "handleFileSelect"
+      "functionsWithCtx": 1,
+      "biggestCtxFn": "downloadAttachment"
     },
     "src/features/autoclean.js": {
       "ctxRefs": 0,

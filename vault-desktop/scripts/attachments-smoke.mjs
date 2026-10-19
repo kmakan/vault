@@ -6,6 +6,12 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
+// Владельцы состояния (ADR-004): модуль читает их напрямую, поэтому стенд
+// настраивает состояние ими же. absolutizeImports ведёт импорты копии в эти
+// же файлы → Node отдаёт тот же экземпляр модуля, то есть те же синглтоны.
+import { chatStore, sessionStore } from '../src/features/session-store.js';
+import { identityStore } from '../src/features/identity-store.js';
+import { mailboxState } from '../src/features/mailbox-store.js';
 import { createNotesStore } from '../src/features/notes-store.js';
 import * as ChatFeature from '../src/features/chat.js';
 import path from 'node:path';
@@ -40,11 +46,13 @@ writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export defau
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/chatExport.js', 'export const downloadBase64 = (...a) => globalThis.__dl.hits.push(a);');
 writeFileSync(MOCKS + '/mailProviders.js', 'export const getAttachmentLimitMb = () => globalThis.__providers.limitMb;');
+writeFileSync(MOCKS + '/message-store.js', 'export const mediaQuality = () => globalThis.__mediaQuality();');
 
 globalThis.__tauri = tauri;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__dl = dl;
 globalThis.__providers = providers;
+globalThis.__mediaQuality = () => 'original';
 
 const apiMock = {
   sendCalls: [],
@@ -76,12 +84,51 @@ prepareModuleCopy(
     '../crypto.js': 'crypto.js',
     '../chatExport.js': 'chatExport.js',
     '../mailProviders.js': 'mailProviders.js',
+    '../message-store.js': 'message-store.js',
   },
   MOCKS,
 );
 const A = await import(MOCKS + '/attachments.mjs');
 
-const ATTACH_DEPS = { resolveChatKey: ChatFeature.resolveChatKey };
+// Состояние мира: чат/адрес/ключи/письма — через владельцев, как в проде.
+function resetWorld({ activeChat = 'peer@x.ru', activeChatType = 'peer', currentGroup = null,
+                      email = 'me@x.ru', peerKeys = { 'peer@x.ru': 'PUB' }, peerPqKeys = {},
+                      emails = [] } = {}) {
+  chatStore.setActiveChat(activeChat);
+  chatStore.setActiveChatType(activeChatType);
+  chatStore.setCurrentGroup(currentGroup);
+  sessionStore.setCurrentEmail(email);
+  identityStore.state.peerKeys = peerKeys;
+  identityStore.state.peerPqKeys = peerPqKeys;
+  mailboxState.setEmails(emails);
+}
+
+// Эффекты (то, что модуль НЕ должен делать сам) — счётчики вызовов, чтобы
+// проверять не «что-то произошло», а ИМЕННО какие эффекты и в каком порядке.
+function makeDeps(over = {}) {
+  const deps = {
+    resolveChatKey: ChatFeature.resolveChatKey,
+    groupKeys: {},
+    cryptoReady: true,
+    dodCache: {},
+    forceCalls: 0,
+    forceUpdate: () => { deps.forceCalls++; },
+    historyCalls: [],
+    saveCurrentHistory: (...a) => { deps.historyCalls.push(a); },
+    pendingCalls: [],
+    markPending: (...a) => { deps.pendingCalls.push(a); },
+    hideCalls: 0,
+    hideAudioRecorder: () => { deps.hideCalls++; },
+    // ADR-004 A15: notes-store — mock localStorage для чтения/записи заметок.
+    notes: createNotesStore(),
+    // Модуль-владелец переписки (ADR-004, Этап A1).
+    chat: createChatStore(),
+    buildEnvelope: async (payload) => JSON.stringify({ id: 'env1', text: payload }),
+    compressImage: async () => '',
+    ...over,
+  };
+  return deps;
+}
 
 // ── Хелперы ────────────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -173,31 +220,58 @@ console.log('2. toggleVoiceNote (фон. плеер, Android)');
 // ── 3. fetchDodAttachment: кэш / успех / ref-mismatch / not-dod ─
 console.log('3. fetchDodAttachment (DoD-докачка)');
 {
-  const ctx = makeCtx({ dodCache: { '<dod@x>': 'CACHED' } });
+  // Отрицательные кейсы (ref-mismatch, нет письма) пишут console.warn — это
+  // ОЖИДАЕМО, но в логе сборки стектрейсы выглядят как падение гейта.
+  const origWarn = console.warn;
+  console.warn = () => {};
+  // Кэш: до чтения писем дело не доходит.
+  resetWorld();
+  const d0 = makeDeps({ dodCache: { '<dod@x>': 'CACHED' } });
   const a = { name: 'f.bin', type: 'application/octet-stream', isDod: true, dod: '<dod@x>' };
-  await A.fetchDodAttachment(ctx, {}, a, ATTACH_DEPS);
+  await A.fetchDodAttachment(d0, {}, a);
   check('dodCache попадание → data=кэш, dodStatus=ready', a.data === 'CACHED' && a.dodStatus === 'ready');
+  check('кэш: перерисовка есть, история не переписывается (ранний return)',
+    d0.forceCalls === 1 && d0.historyCalls.length === 0, [d0.forceCalls, d0.historyCalls.length]);
 
   tauri.calls.length = 0; tauri.body = 'ENCBODY';
   cryptoMock.decryptVault = async () => dodEnvelope('<d2@x>', 'REAL');
   cryptoMock.decryptWithGroupKey = null;
-  const ctx2 = makeCtx({ emails: [{ message_id: '<d2@x>', uid: 7, folder: 'INBOX' }] });
+  // Письма ищутся у владельца mailbox-store, а не в ctx.emails.
+  resetWorld({ emails: [{ message_id: '<d2@x>', uid: 7, folder: 'INBOX' }] });
+  const d2 = makeDeps();
   const a2 = { name: 'big.bin', type: 'application/octet-stream', isDod: true, dod: '<d2@x>' };
-  await A.fetchDodAttachment(ctx2, {}, a2, ATTACH_DEPS);
+  await A.fetchDodAttachment(d2, {}, a2);
   check('успех: email_fetch_body + data=REAL + закэшировано',
-    tauri.calls.some(c => c[0] === 'email_fetch_body') && a2.data === 'REAL' && a2.dodStatus === 'ready' && ctx2.dodCache['<d2@x>'] === 'REAL');
+    tauri.calls.some(c => c[0] === 'email_fetch_body') && a2.data === 'REAL' && a2.dodStatus === 'ready' && d2.dodCache['<d2@x>'] === 'REAL');
+  check('успех: история сохранена по ключу чата из владельца (peer@x.ru)',
+    d2.historyCalls.length === 1 && d2.historyCalls[0][0] === 'peer@x.ru', d2.historyCalls);
+  check('успех: перерисовка ровно одна', d2.forceCalls === 1, d2.forceCalls);
 
   cryptoMock.decryptVault = async () => dodEnvelope('<other@x>', 'X');
-  const ctx3 = makeCtx({ emails: [{ message_id: '<d3@x>', uid: 8, folder: 'INBOX' }] });
+  resetWorld({ emails: [{ message_id: '<d3@x>', uid: 8, folder: 'INBOX' }] });
+  const d3 = makeDeps();
   const a3 = { name: 'b.bin', type: 'x', isDod: true, dod: '<d3@x>' };
-  await A.fetchDodAttachment(ctx3, {}, a3, ATTACH_DEPS);
+  await A.fetchDodAttachment(d3, {}, a3);
   check('ref-mismatch → dodStatus=error, data не подставлен', a3.dodStatus === 'error' && a3.data === undefined);
 
   cryptoMock.decryptVault = async () => dodEnvelope('<d4@x>', 'Y');
-  const ctx4 = makeCtx({ emails: [] });
+  resetWorld({ emails: [] });
+  const d4 = makeDeps();
   const a4 = { name: 'c.bin', type: 'x', isDod: true, dod: '<d4@x>' };
-  await A.fetchDodAttachment(ctx4, {}, a4, ATTACH_DEPS);
+  await A.fetchDodAttachment(d4, {}, a4);
   check('нет data-письма по Message-ID → dodStatus=error', a4.dodStatus === 'error');
+
+  // Ключевое свойство W2: состояние читается ЖИВЫМ. Переключили чат во владельце
+  // между вызовами — второй вызов обязан сохранить историю уже по новому ключу
+  // (снимок состояния на старте модуля дал бы старый).
+  cryptoMock.decryptVault = async () => dodEnvelope('<d6@x>', 'Z');
+  resetWorld({ activeChat: 'other@x.ru', peerKeys: { 'other@x.ru': 'PUB' },
+               emails: [{ message_id: '<d6@x>', uid: 10, folder: 'INBOX' }] });
+  const d6 = makeDeps();
+  await A.fetchDodAttachment(d6, {}, { name: 'z.bin', type: 'x', isDod: true, dod: '<d6@x>' });
+  check('состояние чата читается живым (не снимок на импорте)',
+    d6.historyCalls.length === 1 && d6.historyCalls[0][0] === 'other@x.ru', d6.historyCalls);
+  console.warn = origWarn;
 }
 
 // ── 4. downloadDodAttachment: fetch→download ───────────────────
@@ -205,42 +279,68 @@ console.log('4. downloadDodAttachment');
 {
   dl.hits.length = 0;
   tauri.body = 'ENC'; cryptoMock.decryptVault = async () => dodEnvelope('<d5@x>', 'DL');
-  const ctx = makeCtx({ emails: [{ message_id: '<d5@x>', uid: 9, folder: 'INBOX' }] });
+  resetWorld({ emails: [{ message_id: '<d5@x>', uid: 9, folder: 'INBOX' }] });
+  const deps = makeDeps();
   const a = { name: 'f.bin', type: 'x', isDod: true, dod: '<d5@x>' };
-  await A.downloadDodAttachment(ctx, {}, a, ATTACH_DEPS);
+  await A.downloadDodAttachment(deps, {}, a);
   check('сначала докачивает, затем downloadBase64(data=DL)',
     a.dodStatus === 'ready' && dl.hits.length === 1 && dl.hits[0][0] === 'DL');
 }
 
-// ── 5. sendAudioMessage: заметки (локально, без почты) ─────────
-console.log('5. sendAudioMessage — «Заметки для себя»');
+// ── 5. sendAudioMessage: заметки и 1:1 ─────────────────────────
+console.log('5. sendAudioMessage');
 {
-  const ctx = makeCtx({ activeChat: '__notes__' });
-  // notes-store использует localStorage (мок globalThis.localStorage).
-  // Чистим перед тестом: состояние изолировано per-email через keyFor(email).
-  ctx.notes.clear(ctx.email);
+  // Заметки: адрес берётся у владельца сессии (не из ctx.email).
+  resetWorld({ activeChat: '__notes__', email: 'notes@x.ru' });
+  const deps = makeDeps();
+  deps.notes.clear('notes@x.ru');
   apiMock.sendCalls.length = 0;
-  await A.sendAudioMessage(ctx, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' }, ATTACH_DEPS);
+  await A.sendAudioMessage(deps, { duration: 3, size: 2048, base64: 'B64', mimeType: 'audio/webm' });
   check('заметка: сообщение в messages (audio), почта НЕ трогалась',
-    ctx.chat.list().length === 1 && ctx.chat.list()[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
-  check('заметка сохранена в notes-store', ctx.notes.load(ctx.email).length === 1);
-  check('showAudioRecorder выключен', ctx.showAudioRecorder === false);
+    deps.chat.list().length === 1 && deps.chat.list()[0].attachment.isAudio === true && apiMock.sendCalls.length === 0);
+  check('заметка сохранена под адресом из sessionStore',
+    deps.notes.load('notes@x.ru').length === 1, deps.notes.load('notes@x.ru').length);
+  check('рекордер закрыт эффектом hideAudioRecorder', deps.hideCalls === 1);
+
+  // 1:1: конверт + оптимистичный предпросмотр + pending + история.
+  resetWorld({ activeChat: 'peer@x.ru', activeChatType: 'peer', peerKeys: { 'peer@x.ru': 'PUB' } });
+  cryptoMock.encryptVault = async (e) => 'ENC:' + e;
+  const d = makeDeps();
+  apiMock.sendCalls.length = 0;
+  await A.sendAudioMessage(d, { duration: 2, size: 1024, base64: 'B64', mimeType: 'audio/webm' });
+  check('1:1: отправлено письмо с зашифрованным конвертом',
+    apiMock.sendCalls.length === 1 && apiMock.sendCalls[0][0] === 'msg' && String(apiMock.sendCalls[0][2]).startsWith('ENC:'),
+    apiMock.sendCalls.map(c => c[0]));
+  check('1:1: предпросмотр в переписке + pending + история',
+    d.chat.list().length === 1 && d.pendingCalls.length === 1 && d.historyCalls.length === 1 && d.hideCalls === 1);
 }
 
-// ── 6. handleFileSelect: лимит провайдера ──────────────────────
-console.log('6. handleFileSelect — лимит провайдера');
+// ── 6. handleFileSelect: лимит и заметки ───────────────────────
+console.log('6. handleFileSelect');
 {
   const alerts = [];
   globalThis.alert = (m) => alerts.push(String(m));
   globalThis.FileReader = class {
-    readAsDataURL() { if (this.onload) this.onload({ target: { result: 'data:image/png;base64,ZZZ' } }); }
+    readAsDataURL() { if (this.onload) this.onload({ target: { result: 'data:text/plain;base64,ZZZ' } }); }
   };
-  const ctx = makeCtx();
+  // Лимит провайдера: адрес аккаунта — из владельца сессии.
+  resetWorld({ email: 'me@x.ru' });
+  const deps = makeDeps();
   apiMock.sendCalls.length = 0;
   const event = { target: { files: [{ name: 'huge.bin', size: 30 * 1024 * 1024, type: 'application/octet-stream' }], value: 'x' } };
-  await A.handleFileSelect(ctx, event, ATTACH_DEPS);
+  await A.handleFileSelect(deps, event);
   check('файл > 70% лимита → alert, почта НЕ трогалась, input сброшен',
     alerts.length === 1 && apiMock.sendCalls.length === 0 && event.target.value === '');
+
+  // «Заметки для себя»: файл кладётся владельцу заметок, чат — владельцу переписки.
+  resetWorld({ activeChat: '__notes__', email: 'notes@x.ru' });
+  const dn = makeDeps();
+  dn.notes.clear('notes@x.ru');
+  const ev2 = { target: { files: [{ name: 'v.txt', size: 10, type: 'text/plain' }], value: 'x' } };
+  await A.handleFileSelect(dn, ev2);
+  check('заметка-файл: notes.add под адресом сессии + чат обновлён, почта не трогалась',
+    dn.notes.load('notes@x.ru').length === 1 && dn.chat.list().length === 1 && apiMock.sendCalls.length === 0,
+    [dn.notes.load('notes@x.ru').length, dn.chat.list().length]);
   delete globalThis.alert;
 }
 

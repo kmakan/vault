@@ -1,14 +1,13 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 621,
+    "ctxRefSites": 518,
     "appVueOwn": 198,
     "appVueMethods": 350,
     "protocolSites": 67,
     "protocolFiles": 13
   },
   "ctxByFile": {
-    "features/attachments.js": 103,
     "features/calls.js": 39,
     "features/channels.js": 6,
     "features/drafts.js": 9,
@@ -29,30 +28,6 @@
     "features/send.js": 100
   },
   "ctxFieldsByFile": {
-    "features/attachments.js": [
-      "$forceUpdate",
-      "activeChat",
-      "activeChatType",
-      "buildEnvelope",
-      "chat",
-      "compressImage",
-      "cryptoReady",
-      "currentGroup",
-      "dodCache",
-      "email",
-      "emails",
-      "groupKeys",
-      "isTextMime",
-      "markPending",
-      "mediaQuality",
-      "notes",
-      "parseEnvelope",
-      "peerKeys",
-      "peerPqKeys",
-      "saveCurrentHistory",
-      "senderEmail",
-      "showAudioRecorder"
-    ],
     "features/calls.js": [
       "activeChat",
       "activeChatType",

@@ -2645,8 +2645,12 @@ async toggleVoiceNote(msg, attachment) {
         showToast: (m, ms) => uiStore.toast(m, ms), t: uiStore.tr,
       }, msg, attachment);
     },
-    async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment(this, msg, attachment, { resolveChatKey: ChatFeature.resolveChatKey }); },
-    async downloadDodAttachment(msg, attachment) { return AttachmentsFeature.downloadDodAttachment(this, msg, attachment, { resolveChatKey: ChatFeature.resolveChatKey }); },
+    // W2 (ADR-005 R3): внутри модуля нет ctx — состояние он берёт у владельцев
+    // (chat/identity/mailbox/session stores), а здесь получает только ЭФФЕКТЫ.
+    // forceUpdate нужен, потому что вложение — обычный объект внутри сообщения:
+    // после мутации data/dodStatus рендер сам не обновится.
+    async fetchDodAttachment(msg, attachment) { return AttachmentsFeature.fetchDodAttachment({ resolveChatKey: ChatFeature.resolveChatKey, groupKeys: this.groupKeys, dodCache: this.dodCache, forceUpdate: () => this.$forceUpdate(), saveCurrentHistory: (k) => this.saveCurrentHistory(k) }, msg, attachment); },
+    async downloadDodAttachment(msg, attachment) { return AttachmentsFeature.downloadDodAttachment({ resolveChatKey: ChatFeature.resolveChatKey, groupKeys: this.groupKeys, dodCache: this.dodCache, forceUpdate: () => this.$forceUpdate(), saveCurrentHistory: (k) => this.saveCurrentHistory(k) }, msg, attachment); },
     // Было: AttachmentsFeature.openImageViewer(this, attachment) — обёртка без
 // логики, удалена (ADR-001).
 openImageViewer(attachment) { this.viewingImage = attachment; },
@@ -4461,8 +4465,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       this.showEmojiPicker = false
     },
     // ── Аудио/файлы-вложения (логика в features/attachments.js) ──
-    async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage(this, audioData, { resolveChatKey: ChatFeature.resolveChatKey }); },
-    async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect(this, event, { resolveChatKey: ChatFeature.resolveChatKey }); },
+    async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), hideAudioRecorder: () => (this.showAudioRecorder = false) }, audioData); },
+    async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), compressImage: (d, s, q) => this.compressImage(d, s, q) }, event); },
     // Мерж сохранённых реакций + реакций из писем — features/reactions.js.
     // Отправитель письма — мы сами: sender_id это сырой заголовок From
     // («Имя <email>» или просто email). userId — рудимент серверной эпохи,

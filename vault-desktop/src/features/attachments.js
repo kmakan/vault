@@ -1,6 +1,13 @@
 // Feature module: вложения (файлы/аудио/изображения + download-on-demand).
-// Этап 5 декомпозиции App.vue — изоляция фич-доменов (ctx-паттерн).
+// Этап 5 декомпозиции App.vue — изоляция фич-доменов.
 // Пилот ADR-001: первый вынос inline-логики App.vue в отдельный домен.
+//
+// ADR-005 W2 (`t_bcb8927a`): модуль больше НЕ читает экземпляр компонента
+// (`ctx`), хотя был его крупнейшим потребителем (103 ссылки). Замена — не
+// механическая, а по ВЛАДЕЛЬЦАМ состояния (ADR-004): открытый чат, ключи,
+// адрес аккаунта и список писем читаются у тех, кто ими владеет; эффекты
+// (история, конверт, заметки, UI-флаги) приходят явным `deps`.
+// Что осталось в `deps` и почему — в комментарии у каждого входа.
 //
 // Срезы домена:
 //  - downloadAttachment/downloadDodAttachment/openImageViewer: отдача и
@@ -22,7 +29,24 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import { downloadBase64 } from '../chatExport.js';
 import { getAttachmentLimitMb } from '../mailProviders.js';
+import { isTextMime, parseEnvelope, senderEmail } from '../message-format.js';
+import { mediaQuality } from '../message-store.js';
 import * as EnvelopeId from './envelope-id.js';
+import { chatStore as chatState, sessionStore } from './session-store.js';
+import { identityStore } from './identity-store.js';
+import { mailboxState } from './mailbox-store.js';
+
+// ── Владельцы состояния вместо ctx (ADR-005 R3, W2) ───────────────────────
+// `chatUi` — алиас на state владельца открытого чата. Алиас безопасен:
+// владелец заменяет ПОЛЯ (setActiveChat), а не сам объект state, поэтому
+// ссылка не протухает, а значение читается живым — ровно как читал
+// `ctx.activeChat` (тоже computed-прокси во владельца).
+const chatUi = chatState.state;
+
+// Почта аккаунта — ФУНКЦИЕЙ, а не снимком: вход/выход могут случиться посреди
+// длинной операции (чтение файла, докачка тела), и прежний код читал живое
+// значение в каждой точке, а не один раз на входе.
+const myEmail = () => sessionStore.getCurrentEmail();
 
 // ── Отдача / просмотр ──────────────────────────────────────────
 // ADR-001: зависимостей нет — файл просто отдаётся на скачивание.
@@ -118,47 +142,55 @@ export function isDodReady(attachment) {
 }
 
 // findDodLetter: чистый поиск data-письма по Message-ID в списке входящих.
-// Вынесен из fetchDodAttachment, чтобы сократить ctx.emails refs в orchestration.
+// Вынесен из fetchDodAttachment: получает список писем параметром (список
+// принадлежит владельцу mailbox-store), поэтому не знает ни про компонент,
+// ни про его состояние.
 export function findDodLetter(emails, messageId) {
   const id = String(messageId || '').trim();
   return (emails || []).find(m => (m.message_id || '').trim() === id);
 }
 
-export async function fetchDodAttachment(ctx, msg, attachment, deps) {
+// Докачка DoD-вложения. `deps` — только эффекты, которые принадлежат
+// компоненту: кэш (data-объект), перерисовка, персист истории, ключ чата.
+// Состояние чата/ключи/письма — у владельцев (см. шапку модуля).
+export async function fetchDodAttachment(deps, msg, attachment) {
   if (!attachment || !attachment.isDod || !attachment.dod) return;
   if (isDodReady(attachment)) return;
   attachment.dodStatus = 'loading';
   const chatKey = deps.resolveChatKey({
-    activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+    activeChat: chatUi.activeChat, activeChatType: chatUi.activeChatType, currentGroup: chatUi.currentGroup,
   });
   try {
-    const cached = ctx.dodCache[attachment.dod];
+    const cached = deps.dodCache[attachment.dod];
     if (cached) {
       attachment.data = cached;
       attachment.dodStatus = 'ready';
-      ctx.$forceUpdate();
+      deps.forceUpdate();
       return;
     }
-    const target = findDodLetter(ctx.emails, attachment.dod);
+    const target = findDodLetter(mailboxState.state.emails, attachment.dod);
     if (!target) throw new Error(uiStore.tr('dod_letter_not_found') || 'data-письмо не найдено (оно могло не дойти или быть удалено)');
     const body = await invoke('email_fetch_body', { uid: String(target.uid || target.id), folder: target.folder || 'INBOX' });
     if (!body) throw new Error('empty body');
-    const senderEmail = ctx.activeChatType === 'group'
-      ? ((msg && msg.sender_id && ctx.senderEmail(msg.sender_id)) || '')
-      : ctx.activeChat;
+    // Имя `sender` — не косметика: локальная `const senderEmail` затеняла бы
+    // импортированный чистый senderEmail(), а её инициализатор ссылался бы на
+    // саму себя (TDZ) — функция падала бы на первом же групповом DoD.
+    const sender = chatUi.activeChatType === 'group'
+      ? ((msg && msg.sender_id && senderEmail(msg.sender_id)) || '')
+      : chatUi.activeChat;
     const plain = await decryptDodBody(body, {
-      activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
-      groupKeys: ctx.groupKeys, senderEmail,
-      peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, crypto,
+      activeChatType: chatUi.activeChatType, currentGroup: chatUi.currentGroup,
+      groupKeys: deps.groupKeys, senderEmail: sender,
+      peerKeys: identityStore.state.peerKeys, peerPqKeys: identityStore.state.peerPqKeys, crypto,
     });
     if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
-    const env = ctx.parseEnvelope(plain);
+    const env = parseEnvelope(plain);
     const raw = env ? env.text : plain;
     const obj = JSON.parse(raw);
     if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');
     if (String(obj.ref || '') !== attachment.dod.trim()) throw new Error('ref mismatch');
     attachment.data = obj.data;
-    ctx.dodCache[attachment.dod] = obj.data;
+    deps.dodCache[attachment.dod] = obj.data;
     attachment.dodStatus = 'ready';
     attachment.isImage = !!(attachment.type && attachment.type.startsWith('image/'));
     attachment.isAudio = !!(attachment.type && attachment.type.startsWith('audio/'));
@@ -169,13 +201,13 @@ export async function fetchDodAttachment(ctx, msg, attachment, deps) {
     attachment.dodStatus = 'error';
     uiStore.toast((uiStore.tr('dod_error') || 'Не удалось загрузить файл:') + ' ' + (e && e.message || e), 8000);
   }
-  ctx.$forceUpdate();
-  try { ctx.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
+  deps.forceUpdate();
+  try { deps.saveCurrentHistory(chatKey); } catch (e) { /* ignore */ }
 }
 
-export async function downloadDodAttachment(ctx, msg, attachment, deps) {
+export async function downloadDodAttachment(deps, msg, attachment) {
   if (attachment.dodStatus !== 'ready') {
-    await fetchDodAttachment(ctx, msg, attachment, deps);
+    await fetchDodAttachment(deps, msg, attachment);
     if (attachment.dodStatus !== 'ready') return;
   }
   if (attachment.data) downloadBase64(attachment.data, attachment.name, attachment.type);
@@ -262,11 +294,14 @@ export async function encryptPeerVaultEnvelope(envelope, { activeChat, peerKeys,
   return await crypto.encryptVault(envelope);
 }
 
-export async function sendAudioMessage(ctx, audioData, deps) {
+// Голосовое. `deps` здесь шире, чем у DoD: заметки и переписка — per-app
+// экземпляры владельцев (создаются в setup, синглтона нет), плюс эффекты
+// отправки (конверт, pending, история) и UI-флаг рекордера.
+export async function sendAudioMessage(deps, audioData) {
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   // Заметки для себя: голосовое хранится ЛОКАЛЬНО (localStorage), без
   // шифрования и почты — так же, как текст заметок.
-  if (ctx.activeChat === '__notes__') {
+  if (chatUi.activeChat === '__notes__') {
     const now = Date.now();
     const name = `voice-${now}.webm`;
     const msg = buildVoiceOptimisticMsg(audioData, {
@@ -276,16 +311,16 @@ export async function sendAudioMessage(ctx, audioData, deps) {
     msg.vault = false;
     msg._notes = true;
     // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
-    // НЕ делаем `const list = ctx.notes...` и не мутируем list — эвристика
+    // НЕ делаем `const list = deps.notes...` и не мутируем list — эвристика
     // поймает alias-мутацию. add() сама load→push→save с защитой от дубля.
-    if (!ctx.notes.add(ctx.email, msg)) {
-      ctx.chat.set(ctx.notes.load(ctx.email));
+    if (!deps.notes.add(myEmail(), msg)) {
+      deps.chat.set(deps.notes.load(myEmail()));
       alert(uiStore.tr('err_notes_full_voice'));
-      ctx.showAudioRecorder = false;
+      deps.hideAudioRecorder();
       return;
     }
-    ctx.chat.set(ctx.notes.load(ctx.email));
-    ctx.showAudioRecorder = false;
+    deps.chat.set(deps.notes.load(myEmail()));
+    deps.hideAudioRecorder();
     uiStore.scrollToBottom(true);
     return;
   }
@@ -304,33 +339,33 @@ export async function sendAudioMessage(ctx, audioData, deps) {
   // реальным письмом (иначе поллинг не смог бы заменить предпросмотр,
   // и голосовое «появлялось и исчезало»).
   const { wire, envelopeId } = await encryptAttachmentEnvelope(attachmentPayload, {
-    activeChatType: ctx.activeChatType, activeChat: ctx.activeChat, currentGroup: ctx.currentGroup,
-    groupKeys: ctx.groupKeys, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, cryptoReady: ctx.cryptoReady,
-    buildEnvelope: (p) => ctx.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
+    activeChatType: chatUi.activeChatType, activeChat: chatUi.activeChat, currentGroup: chatUi.currentGroup,
+    groupKeys: deps.groupKeys, peerKeys: identityStore.state.peerKeys, peerPqKeys: identityStore.state.peerPqKeys, cryptoReady: deps.cryptoReady,
+    buildEnvelope: (p) => deps.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
   });
 
   // Оптимистичный предпросмотр у отправителя.
   const now = Date.now();
   const msg = buildVoiceOptimisticMsg(audioData, {
     id: envelopeId || EnvelopeId.pendingIdOf(),
-    timeStr, name, status: 'sending', encrypted: ctx.cryptoReady, _pendingAt: now,
+    timeStr, name, status: 'sending', encrypted: deps.cryptoReady, _pendingAt: now,
   });
   msg.ts = now;
-  ctx.chat.append(msg);
+  deps.chat.append(msg);
   const chatKey = deps.resolveChatKey({
-    activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+    activeChat: chatUi.activeChat, activeChatType: chatUi.activeChatType, currentGroup: chatUi.currentGroup,
   });
-  ctx.markPending(chatKey, msg);
-  ctx.showAudioRecorder = false;
+  deps.markPending(chatKey, msg);
+  deps.hideAudioRecorder();
   uiStore.scrollToBottom(true);
 
-  if (ctx.activeChat) {
+  if (chatUi.activeChat) {
     try {
-      if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+      if (chatUi.activeChatType === 'group' && chatUi.currentGroup) {
         // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
-        await api.sendGroupMessage(ctx.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
+        await api.sendGroupMessage(chatUi.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
       } else {
-        await api.sendMessage(ctx.activeChat, wire, audioData.mimeType || 'audio/webm');
+        await api.sendMessage(chatUi.activeChat, wire, audioData.mimeType || 'audio/webm');
       }
       msg.status = 'sent';
     } catch (err) {
@@ -339,13 +374,15 @@ export async function sendAudioMessage(ctx, audioData, deps) {
       alert('Failed to send voice message: ' + (err && err.message || err));
     }
     // Персистим финальный статус в историю (иначе после перезапуска
-    ctx.saveCurrentHistory(chatKey);
+    deps.saveCurrentHistory(chatKey);
   }
 }
 
 
 // ── Выбор файлов-вложений (лимиты, сжатие, DoD-разбиение, отправка) ──
-export async function handleFileSelect(ctx, event, deps) {
+// `deps`: заметки/переписка (per-app владельцы), эффекты отправки и сжатие
+// картинки. Состояние чата/ключи/адрес/письма — у владельцев (см. шапку).
+export async function handleFileSelect(deps, event) {
   const files = event.target.files;
   if (!files || files.length === 0) return;
 
@@ -354,14 +391,14 @@ export async function handleFileSelect(ctx, event, deps) {
       // Для заметок почтовый лимит провайдера неважен (файл никуда не
       // отправляется), но localStorage ограничен (~5МБ) — не даём выбрать
       // заведомо непомещающийся файл.
-      if (ctx.activeChat === '__notes__' && file.size > 3 * 1024 * 1024) {
+      if (chatUi.activeChat === '__notes__' && file.size > 3 * 1024 * 1024) {
         alert(`Файл «${file.name}» — ${(file.size / 1024 / 1024).toFixed(1)} МБ. В «Заметки для себя» вложения хранятся локально (лимит ~5 МБ на весь чат), файлы больше 3 МБ не прикрепляются.`);
         continue;
       }
       // Лимит вложений провайдера (Gmail 25MB, Zoho 25MB, ...): письмо с
       // base64-телом ~на 33% больше файла, поэтому сравниваем с 70% от
       // лимита — предупреждаем ДО отправки, пока провайдер не отклонил.
-      const limitMb = getAttachmentLimitMb(ctx.email);
+      const limitMb = getAttachmentLimitMb(myEmail());
       const limitBytes = Math.floor(limitMb * 1024 * 1024 * 0.7);
       if (file.size > limitBytes) {
         alert(
@@ -382,10 +419,10 @@ export async function handleFileSelect(ctx, event, deps) {
         // original = без сжатия; high = макс. сторона 1920; low = 1280.
         if (fileType.startsWith('image/') && fileType !== 'image/gif') {
           try {
-            const quality = await ctx.mediaQuality();
+            const quality = await mediaQuality();
             if (quality !== 'original') {
               const maxSide = quality === 'low' ? 1280 : 1920;
-              const compressed = await ctx.compressImage(e.target.result, maxSide, 0.82);
+              const compressed = await deps.compressImage(e.target.result, maxSide, 0.82);
               if (compressed && compressed.length < e.target.result.length) {
                 base64 = compressed.split(',')[1];
                 fileType = 'image/jpeg';
@@ -397,7 +434,7 @@ export async function handleFileSelect(ctx, event, deps) {
         }
         const isImage = fileType.startsWith('image/');
         const isAudio = fileType.startsWith('audio/');
-        const isText = !isImage && !isAudio && ctx.isTextMime(fileType, fileName);
+        const isText = !isImage && !isAudio && isTextMime(fileType, fileName);
         let textContent = '';
         if (isText) {
           try {
@@ -416,7 +453,7 @@ export async function handleFileSelect(ctx, event, deps) {
         const DOD_THRESHOLD = 1024 * 1024;
         const useDod = fileSize > DOD_THRESHOLD;
         let dodMid = '';
-        if (useDod) dodMid = `<vault-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}@${(ctx.email || 'localhost').split('@')[1] || 'localhost'}>`;
+        if (useDod) dodMid = `<vault-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}@${(myEmail() || 'localhost').split('@')[1] || 'localhost'}>`;
         const attachmentPayload = useDod
           ? JSON.stringify({
               vault_attachment: true,
@@ -439,19 +476,19 @@ export async function handleFileSelect(ctx, event, deps) {
 
         // Заметки для себя: файл хранится ЛОКАЛЬНО (localStorage), без
         // шифрования и почты — так же, как текст заметок.
-        if (ctx.activeChat === '__notes__') {
+        if (chatUi.activeChat === '__notes__') {
           const noteMsg = buildNoteWithAttachment(file, {
             displayContent, base64, isImage, isAudio, isText, textContent,
             timeStr: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           });
           // Запись ТОЛЬКО через владельца notes-store (ADR-004 A15).
           // add() сама load→push→save с защитой от дубля; при ошибке откатывает.
-          if (!ctx.notes.add(ctx.email, noteMsg)) {
-            ctx.chat.set(ctx.notes.load(ctx.email));
+          if (!deps.notes.add(myEmail(), noteMsg)) {
+            deps.chat.set(deps.notes.load(myEmail()));
             alert(uiStore.tr('err_notes_full_file'));
             return;
           }
-          ctx.chat.set(ctx.notes.load(ctx.email));
+          deps.chat.set(deps.notes.load(myEmail()));
           uiStore.scrollToBottom(true);
           return;
         }
@@ -462,9 +499,9 @@ export async function handleFileSelect(ctx, event, deps) {
         // слияния с реальным письмом (иначе поллинг не заменит предпросмотр,
         // и файл «появится и исчезнет» у отправителя).
         const { wire, envelopeId } = await encryptAttachmentEnvelope(attachmentPayload, {
-          activeChatType: ctx.activeChatType, activeChat: ctx.activeChat, currentGroup: ctx.currentGroup,
-          groupKeys: ctx.groupKeys, peerKeys: ctx.peerKeys, peerPqKeys: ctx.peerPqKeys, cryptoReady: ctx.cryptoReady,
-          buildEnvelope: (p) => ctx.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
+          activeChatType: chatUi.activeChatType, activeChat: chatUi.activeChat, currentGroup: chatUi.currentGroup,
+          groupKeys: deps.groupKeys, peerKeys: identityStore.state.peerKeys, peerPqKeys: identityStore.state.peerPqKeys, cryptoReady: deps.cryptoReady,
+          buildEnvelope: (p) => deps.buildEnvelope(p), crypto, envelopeIdOf: EnvelopeId.envelopeIdOf,
         });
 
         // Create preview message
@@ -474,7 +511,7 @@ export async function handleFileSelect(ctx, event, deps) {
           from: 'me',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           ts: Date.now(),
-          encrypted: ctx.cryptoReady,
+          encrypted: deps.cryptoReady,
           status: 'sending',
           _pendingAt: Date.now(),
           attachment: {
@@ -488,29 +525,29 @@ export async function handleFileSelect(ctx, event, deps) {
             textContent: textContent,
           },
         };
-        ctx.chat.append(msg);
+        deps.chat.append(msg);
         const chatKey = deps.resolveChatKey({
-          activeChat: ctx.activeChat, activeChatType: ctx.activeChatType, currentGroup: ctx.currentGroup,
+          activeChat: chatUi.activeChat, activeChatType: chatUi.activeChatType, currentGroup: chatUi.currentGroup,
         });
-        ctx.markPending(chatKey, msg);
+        deps.markPending(chatKey, msg);
         uiStore.scrollToBottom(true);
 
-        if (ctx.activeChat) {
+        if (chatUi.activeChat) {
           // DoD: data-письмо уходит ПЕРВЫМ. Если мета не уйдёт и её
           // переотправят — data-дубль безвреден (один Message-ID
-          // дедуплируется на приёме), а обратный порядок дал бы
+          // дедуплицируется на приёме), а обратный порядок дал бы
           // карточку без данных. Сбой data = мета бесполезна → failed.
           if (useDod) {
             const dataPayload = JSON.stringify({ vault_dod_data: 1, ref: dodMid, data: base64 });
             try {
-              if (ctx.activeChatType === 'group' && ctx.currentGroup) {
-                const groupKey = ctx.groupKeys[ctx.currentGroup.id];
+              if (chatUi.activeChatType === 'group' && chatUi.currentGroup) {
+                const groupKey = deps.groupKeys[chatUi.currentGroup.id];
                 if (!groupKey) throw new Error('group key unavailable');
-                const dataWire = await crypto.encryptWithGroupKey(await ctx.buildEnvelope(dataPayload), groupKey);
-                const members = await api.getGroupMembers(ctx.currentGroup.id);
+                const dataWire = await crypto.encryptWithGroupKey(await deps.buildEnvelope(dataPayload), groupKey);
+                const members = await api.getGroupMembers(chatUi.currentGroup.id);
                 const failedData = [];
                 for (const member of members || []) {
-                  if (member.email === ctx.email) continue;
+                  if (member.email === myEmail()) continue;
                   try { await api.sendDodEmail(member.email, dataWire, dodMid); }
                   catch (e) { failedData.push(member.email); }
                 }
@@ -518,26 +555,26 @@ export async function handleFileSelect(ctx, event, deps) {
                   console.warn('DoD data partial fail:', failedData);
                   uiStore.toast((uiStore.tr('dod_partial_fail') || 'Данные файла не ушли:') + ' ' + failedData.join(', '), 8000);
                 }
-              } else if (ctx.cryptoReady && ctx.peerKeys[ctx.activeChat]) {
-                crypto.setPeerPublicKey(ctx.peerKeys[ctx.activeChat], ctx.peerPqKeys && ctx.peerPqKeys[ctx.activeChat]);
-                const dataWire = await crypto.encryptVault(await ctx.buildEnvelope(dataPayload));
-                await api.sendDodEmail(ctx.activeChat, dataWire, dodMid);
+              } else if (deps.cryptoReady && identityStore.state.peerKeys[chatUi.activeChat]) {
+                crypto.setPeerPublicKey(identityStore.state.peerKeys[chatUi.activeChat], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[chatUi.activeChat]);
+                const dataWire = await crypto.encryptVault(await deps.buildEnvelope(dataPayload));
+                await api.sendDodEmail(chatUi.activeChat, dataWire, dodMid);
               } else {
                 throw new Error('crypto not ready');
               }
             } catch (err) {
               console.error('DoD data send failed:', err);
               msg.status = 'failed';
-              ctx.saveCurrentHistory(chatKey);
+              deps.saveCurrentHistory(chatKey);
               return;
             }
           }
           try {
-            if (ctx.activeChatType === 'group' && ctx.currentGroup) {
+            if (chatUi.activeChatType === 'group' && chatUi.currentGroup) {
               // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
-              await api.sendGroupMessage(ctx.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
+              await api.sendGroupMessage(chatUi.currentGroup.id, wire, envelopeId ? { id: envelopeId } : null);
             } else {
-              await api.sendMessage(ctx.activeChat, wire, file.type);
+              await api.sendMessage(chatUi.activeChat, wire, file.type);
             }
             msg.status = 'sent';
           } catch (err) {
@@ -545,7 +582,7 @@ export async function handleFileSelect(ctx, event, deps) {
             msg.status = 'failed';
           }
           // Персистим финальный статус в историю (иначе после перезапуска
-          ctx.saveCurrentHistory(chatKey);
+          deps.saveCurrentHistory(chatKey);
         }
       };
       reader.readAsDataURL(file);
