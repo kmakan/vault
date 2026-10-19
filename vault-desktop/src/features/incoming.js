@@ -6,8 +6,10 @@
 // расшифровки и ДО дедупа; эхо/профиль — seen, но не уведомление;
 // разделение дедупа счётчика и дедупа уведомления, регресс 2fa9103).
 //
-// Расширение новым типом конверта: добавить ветку в classify() с
-// собственным kind и обработать её там же — драйвер не меняется.
+// Расширение новым типом конверта: тип объявляется в Rust-классификаторе
+// (vault-client/src/vault/incoming.rs) и закрепляется кейсом в общей фикстуре;
+// здесь добавляется только ЭФФЕКТ. Ветвиться на «что это за конверт» в JS
+// нельзя — это протокольное решение (ADR-005 R1, W1 `t_2243231f`).
 
 import { uiStore } from "./session-store.js";
 import api from '../api.js';
@@ -17,9 +19,37 @@ import { notifyNewMessage } from '../notify.js';
 import * as PresenceFeature from './presence.js';
 // ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ ctx.
 import { identityStore } from './identity-store.js';
+// W1 (ADR-005 R1): решение «что это за письмо» — в Rust. `invoke` до W1 здесь
+// вообще не был импортирован, хотя вызывался для vault_store_incoming_message:
+// ReferenceError глотался catch'ем, и персист в Rust MessageStore не работал.
+import { invoke } from '@tauri-apps/api/core';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
 const FRESH_WINDOW_MS = 15 * 60 * 1000;
+
+// ── Решение «что это за письмо» — в Rust (ADR-005 R1, эпик W1) ─────────────
+// До W1 роутер решал сам: `parseCallSignal` / `presence === 1` /
+// `parseEnvelope` / `channel === 1` / `hav === 1`. Это были ДУБЛИ решений
+// Rust-классификатора, и расходились они молча. Теперь решение одно —
+// `vault_classify_incoming`; в JS остаются только эффекты (обработчик звонка,
+// presence, сохранение профиля, тосты/бейджи, кэш тел).
+//
+// Паритет закреплён фикстурой `vault-client/tests/fixtures/m0-wire-contract.json`
+// (гейты `cargo test --test m0_wire_contract` и `npm run smoke:m0-wire`):
+// «Rust-ветка» и «JS-ветка» не могут разойтись незаметно.
+//
+// Возврат: `{kind,...}` — решение; `null` — не наше письмо; `undefined` — мост
+// упал. Разница принципиальная: `null` окончателен, письмо можно забыть;
+// `undefined` значит «не смогли решить», письмо НЕ помечается обработанным и
+// поллинг повторит его. Глотать отказ моста в `null` — терять почту тихо.
+async function classifyPlain(plain, from) {
+  try {
+    return await invoke('vault_classify_incoming', { input: { from, decrypted: plain } });
+  } catch (e) {
+    console.error('[classify] Rust-классификатор недоступен — письмо останется необработанным:', e && e.message || e);
+    return undefined;
+  }
+}
 
 // Сравнение писем для разбора батча: ХРОНОЛОГИЯ, старые первыми.
 // Ключ 1 — Date-заголовок (UID между папками несравнимы: в INBOX и в Спам
@@ -37,7 +67,7 @@ function byArrival(a, b) {
 
 // ── Драйвер: батч-доставка тел по папкам + цикл классификации ──────────────
 export async function processIncoming(ctx, fetched, opts = {}, deps) {
-  const { isBounceMessage, bounceRecipients, bounceReason, isChannelEnvelope, ingestChannelEnvelope } = deps;
+  const { isBounceMessage, bounceRecipients, bounceReason, ingestChannelEnvelope } = deps;
   const { notify = false } = opts;
   if (!fetched || !fetched.length || !ctx.cryptoReady) return;
   const myEmail = (ctx.email || '').toLowerCase();
@@ -59,7 +89,7 @@ export async function processIncoming(ctx, fetched, opts = {}, deps) {
     const from = ctx.senderEmail(m.from);
     // Пропускаем исходящие (от себя) и пустые from.
     if (!from || from === myEmail) continue;
-    const cls = await classify(ctx, m, from, deps);
+    const cls = await routeLetter(ctx, m, from, deps);
     if (cls === null) continue;
     if (cls.kind === 'message') {
       // M1.10: persist classified message via Rust MessageStore bridge
@@ -109,8 +139,8 @@ async function ensureBodies(ctx, pool) {
 // Возвращает {kind:'message', chatKey, title, envId} для сообщения,
 // null — если письмо не должно попасть в счётчик/уведомления (в т.ч. после
 // выполнения побочных эффектов: call-сигнал, профиль, миграция).
-async function classify(ctx, m, from, deps) {
-  const { isBounceMessage, bounceRecipients, bounceReason, isChannelEnvelope, ingestChannelEnvelope } = deps;
+async function routeLetter(ctx, m, from, deps) {
+  const { isBounceMessage, bounceRecipients, bounceReason, ingestChannelEnvelope } = deps;
   // Ignore-лист: сообщения/звонки заблокированного скрыты у получателя
   // целиком — не считаются, не уведомляют, в историю не пишутся
   // (continue ДО расшифровки и ДО дедуп-механики: письмо остаётся
@@ -147,6 +177,10 @@ async function classify(ctx, m, from, deps) {
     try {
       crypto.setPeerPublicKey(ctx.peerKeys[from], ctx.peerPqKeys && ctx.peerPqKeys[from]);
       const plain = await crypto.decryptVault(body);
+      // Тип письма решает Rust (W1). undefined — мост упал: письмо не наше
+      // дело в этом прогоне, но и «обработанным» оно не станет.
+      const cls = await classifyPlain(plain, from);
+      if (cls === undefined) return null;
       // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
       // бейджи, не в уведомления) — уходят в state machine звонка.
       // AWAIT (было fire-and-forget): handleCallSignal внутри ходит в
@@ -156,26 +190,22 @@ async function classify(ctx, m, from, deps) {
       // чем request дочитал свой isCallSeen, — звонок гас без рингтона.
       // Порядок разбора батча (processIncoming: byArrival) + последовательный
       // await дают request → cancel строго по порядку доставки.
-      const callSig = ctx.parseCallSignal(plain);
-      if (callSig) {
+      if (cls && cls.kind === 'call') {
+        const callSig = JSON.parse(plain); // классификатор уже разобрал JSON
         try { await ctx.handleCallSignal(callSig, from); }
         catch (e) { console.warn('[call] signal failed:', e); }
         return null;
       }
-      // Presence (M2): {presence:1, ts} — heartbeat «я онлайн» от пира.
-      // ЖИВОЙ поллинг: точка загорается сразу, без открытия чата.
-      // До parseEnvelope: presence — не конверт (env=null → точка бы
-      // не загорелась до ручного открытия чата с этим контактом).
-      // Канонический адрес — точка на той же карточке, куда упало бы
-      // сообщение от этого ключа (смена почты не расщепляет dot).
-      try {
-        const robj = JSON.parse(plain);
-        if (PresenceFeature.ingestSignal(ctx, robj, ctx.canonicalOf(from) || from, new Date(m.date || Date.now()).getTime())) {
-          console.log('[presence] heartbeat from', from);
-          return null; // не сообщение, не уведомление
-        }
-      } catch (e) { /* не JSON — продолжаем */ }
-      const env = ctx.parseEnvelope(plain);
+      // Presence (M2): heartbeat «я онлайн» от пира — точка загорается сразу,
+      // без открытия чата (kind=presence Rust выдаёт до «это конверт»).
+      if (cls && cls.kind === 'presence') {
+        PresenceFeature.noteHeartbeat(ctx, ctx.canonicalOf(from) || from, new Date(m.date || Date.now()).getTime());
+        console.log('[presence] heartbeat from', from);
+        return null; // не сообщение, не уведомление
+      }
+      const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
+        ? ctx.parseEnvelope(plain)
+        : null;
       if (env) {
         // env.id — ключ кросс-канального дедупа (relay-копия и
         // email-копия одного сообщения несут ОДИН конверт).
@@ -227,10 +257,11 @@ async function classify(ctx, m, from, deps) {
         }
         // Профиль отправителя: имя/аватар/«О себе» — сохраняем
         // СРАЗУ при поллинге, не дожидаясь открытия чата.
-        if (env.type === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
+        // «Это письмо профиля» решает Rust (kind=profile), а не сверка полей.
+        if (cls.kind === 'profile' || env.name || env.avatar || typeof env.bio === 'string') {
           api.saveProfile(from, env.name, env.avatar, env.ts || 0,
             typeof env.bio === 'string' ? env.bio : undefined);
-          if (env.type === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
+          if (cls.kind === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
         }
       }
     } catch (e) { /* не наше письмо */ }
@@ -245,27 +276,29 @@ async function classify(ctx, m, from, deps) {
         crypto.setPeerPublicKey(knownKey);
         try {
           const plain = await crypto.decryptVault(body);
-          // ЗВОНОК под ещё не известным адресом. Конверт расшифрован ключом
-          // пира, но это сигнал, а не письмо личности: ниже матчинг требует
-          // parseEnvelope (у сигнала конверта нет) и он уходил дальше по ветке
-          // «смена почты», где call_* не разбирались — сигнал терялся, и звонок
-          // от десктопа на телефон не доходил вообще (регресс с 25dd18a, где
-          // в конверт уезжал from = fp:<…>). Ловим здесь, до матчинга.
-          const callSig = ctx.parseCallSignal(plain);
-          if (callSig) {
+          // Тип письма — Rust (W1). ЗВОНОК под ещё не известным адресом:
+          // конверт расшифрован ключом пира, но это сигнал, а не письмо
+          // личности. Раньше сигнал отличался тем, что `parseCallSignal` его
+          // узнавал, а `parseEnvelope` нет; теперь это одно решение Rust.
+          // Сигнал, ушедший в ветку «смена почты», терялся (регресс 25dd18a).
+          const cls = await classifyPlain(plain, knownEmail);
+          if (cls === undefined) return null; // мост упал — письмо не трогаем
+          if (cls && cls.kind === 'call') {
             // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
             // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
             // ответные конверты идут на несуществующий SMTP-адрес.
             console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
-            try { await ctx.handleCallSignal(callSig, knownEmail); }
+            try { await ctx.handleCallSignal(JSON.parse(plain), knownEmail); }
             catch (e) { console.warn('[call] signal failed:', e); }
             return null;
           }
-          const env = ctx.parseEnvelope(plain);
+          const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
+            ? ctx.parseEnvelope(plain)
+            : null;
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.
           if (env && env.key === knownKey && !(crypto.publicKey && env.key === crypto.publicKey)) {
-            matched = { knownEmail, plain, env }; break;
+            matched = { knownEmail, plain, env, kind: cls.kind }; break;
           }
         } catch (e) { /* не этим ключом */ }
       }
@@ -305,14 +338,15 @@ async function classify(ctx, m, from, deps) {
         // Профиль со старого адреса переносим на новый.
         const oldProf = ctx.profiles[matched.knownEmail];
         if (oldProf) api.saveProfile(from, oldProf.name, oldProf.avatar, matched.env.ts || 0);
-        if (matched.env.type === 'profile' || matched.env.name || matched.env.avatar || typeof matched.env.bio === 'string') {
+        // «Это письмо профиля» — решение Rust (kind пира, совпавшего по ключу).
+        if (matched.kind === 'profile' || matched.env.name || matched.env.avatar || typeof matched.env.bio === 'string') {
           api.saveProfile(from, matched.env.name, matched.env.avatar, matched.env.ts || 0,
             typeof matched.env.bio === 'string' ? matched.env.bio : undefined);
         }
         chatKey = ctx.canonicalOf(from) || from;
         const lp = ctx.localProfileOf(from);
         title = (lp && lp.name) || from;
-        if (matched.env.type === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
+        if (matched.kind === 'profile') { ctx.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
       }
     } catch (e) { /* не наше письмо */ }
   }
@@ -326,17 +360,19 @@ async function classify(ctx, m, from, deps) {
       if (!ch.key) continue;
       try {
         const plain = await crypto.decryptWithGroupKey(body, ch.key);
-        const robj = ctx.parseEnvelope(plain) || JSON.parse(plain);
-        if (isChannelEnvelope(robj)) {
-          const kind = ingestChannelEnvelope(ctx, robj, from);
-          if (kind) {
-            console.log('[channel] envelope', kind, 'from', from, 'chan', ch.id);
-            // post — как сообщение (бейдж+пуш); meta/hello — тихие
-            if (kind === 'post') {
-              return { kind: 'message', chatKey: 'channel:' + ch.id, title: ch.name || '', envId: String(robj.id || '') };
-            }
-            return null;
+        // Канальный конверт — решение Rust (`channel===1`), не проверка полей в JS.
+        const cls = await classifyPlain(plain, from);
+        if (cls === undefined) return null; // мост упал — письмо не трогаем
+        if (!cls || cls.kind !== 'channel') continue; // не канал — мимо
+        const robj = JSON.parse(plain); // классификатор уже разобрал JSON
+        const applied = ingestChannelEnvelope(ctx, robj, from);
+        if (applied) {
+          console.log('[channel] envelope', applied, 'from', from, 'chan', ch.id);
+          // post — как сообщение (бейдж+пуш); meta/hello — тихие
+          if (applied === 'post') {
+            return { kind: 'message', chatKey: 'channel:' + ch.id, title: ch.name || '', envId: String(robj.id || '') };
           }
+          return null;
         }
       } catch (e) { /* не канал — мимо */ }
     }
@@ -380,19 +416,19 @@ async function classify(ctx, m, from, deps) {
       if (!gk) continue;
       try {
         const plain = await crypto.decryptWithGroupKey(body, gk);
-        const env = ctx.parseEnvelope(plain);
-        if (!env) {
+        // Тип письма — Rust (W1): hav-запрос, сообщение или не наше.
+        const cls = await classifyPlain(plain, from);
+        if (cls === undefined) return null; // мост упал — письмо не трогаем
+        if (cls && cls.kind === 'group-service') {
           // Сервис-письма группы: hav = запрос аватарки — отвечаем владельцу
           // аватара (24ч rate-limit внутри replyGroupAvatarHeal).
-          try {
-            const robj = JSON.parse(plain);
-            if (robj && robj.hav === 1) {
-              console.log('[classify] hav seen:', g.id);
-              await ctx.replyGroupAvatarHeal(g.id);
-              return null;
-            }
-          } catch (e) { /* не JSON-сервис */ }
+          console.log('[classify] hav seen:', g.id);
+          await ctx.replyGroupAvatarHeal(g.id);
+          return null;
         }
+        const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
+          ? ctx.parseEnvelope(plain)
+          : null;
         if (env) {
           // Самовосстановление аватарки группы из конверта сообщения
           // (guard на непустое — внутри метода).

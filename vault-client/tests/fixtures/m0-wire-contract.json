@@ -1,9 +1,9 @@
 {
-  "why": "M0 C1: одни и те же байты payload обязаны читаться одинаково JS parseEnvelope (vault-desktop/src/message-format.js) и Rust incoming::classify (vault-client/src/vault/incoming.rs). Фикстуру читают оба гейта: cargo test --test m0_wire_contract и npm run smoke:m0-wire. Расхождение ломает любой из них, а не проходит незамеченным.",
+  "why": "M0 C1 + W1: одни и те же байты payload обязаны читаться одинаково JS parseEnvelope (vault-desktop/src/message-format.js) и Rust incoming::classify (vault-client/src/vault/incoming.rs). С 19.10 (W1) здесь закреплено и РЕШЕНИЕ РОУТЕРА: какому типу принадлежит письмо (message/profile/presence/call/channel/group-service), чтобы это решение можно было перенести в Rust без изменения поведения. Фикстуру читают оба гейта: cargo test --test m0_wire_contract и npm run smoke:m0-wire. Расхождение ломает любой из них, а не проходит незамеченным.",
   "from": "alice@test.com",
   "producer": "vault-desktop/src/App.vue buildEnvelope: {vault:1, id, text, name, avatar, key, ts[, pq][, gavatar][, tok]}",
   "transport": "stealth: пустая тема, тело письма = сам wrapped JSON, без X-Vault-* заголовков (lib.rs recovery_build_escrow_email, features/channels.js)",
-  "not_covered_here": "profile/presence/call/poll/channel-конверты (их разбирают отдельные ветки JS и Rust), вложения, X-header вариант конверта (protocol.rs, покрыт Rust-раундтрипом)",
+  "not_covered_here": "вложения (encrypted envelope → download_file), квитанции (receipts), групповые ключи/escrow, relay-дубликаты, X-header вариант конверта (protocol.rs, покрыт Rust-раундтрипом). Групповой message-конверт отличается от 1:1 не байтами, а ключом расшифровки (записан здесь как message с пояснением); meta группы обрабатывает group-meta.js, а не роутер.",
   "cases": [
     {
       "name": "message 1:1 — как собирает buildEnvelope",
@@ -43,6 +43,126 @@
       "expect": {
         "js_parse_envelope": null,
         "rust_classify": null
+      }
+    },
+    {
+      "name": "профиль: письмо как его собирает profiles.js (type:profile + text:\"\")",
+      "payload": "{\"vault\":1,\"id\":\"prof-1\",\"type\":\"profile\",\"text\":\"\",\"name\":\"Bob\",\"avatar\":\"data:img\",\"bio\":\"hi\",\"key\":\"PUB\",\"ts\":1700000010}",
+      "expect": {
+        "js_parse_envelope": { "id": "prof-1", "text": "", "type": "profile", "name": "Bob", "avatar": "data:img", "bio": "hi", "ts": 1700000010, "key": "PUB" },
+        "rust_classify": { "kind": "profile", "id": "prof-1", "title": "Bob", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "профиль с текстом — всё равно профиль (type раньше, чем «это сообщение»)",
+      "payload": "{\"vault\":1,\"type\":\"profile\",\"text\":\"x\",\"name\":\"Bob\"}",
+      "expect": {
+        "js_parse_envelope": { "text": "x", "type": "profile", "name": "Bob" },
+        "rust_classify": { "kind": "profile", "title": "Bob", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "профиль без text — роутер его не видит (не vault-конверт)",
+      "payload": "{\"vault\":1,\"type\":\"profile\",\"name\":\"Bob\"}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    },
+    {
+      "name": "presence heartbeat {presence:1} — точка контакта, не сообщение",
+      "payload": "{\"presence\":1,\"ts\":12345}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": { "kind": "presence" }
+      }
+    },
+    {
+      "name": "presence побеждает message (проверяется до конверта)",
+      "payload": "{\"vault\":1,\"text\":\"hi\",\"presence\":1,\"ts\":1}",
+      "expect": {
+        "js_parse_envelope": { "text": "hi" },
+        "rust_classify": { "kind": "presence" }
+      }
+    },
+    {
+      "name": "presence:\"1\" строкой — не heartbeat (JS сравнивает строго с числом)",
+      "payload": "{\"presence\":\"1\",\"ts\":1}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    },
+    {
+      "name": "call_request: type call_* + call_id (сигнал звонка)",
+      "payload": "{\"vault\":1,\"id\":\"call-1\",\"type\":\"call_request\",\"call_id\":\"c1\",\"ts\":1}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": { "kind": "call", "id": "call-1", "title": null, "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "call_id без type call_* — обычное сообщение, не сигнал",
+      "payload": "{\"vault\":1,\"id\":\"m4\",\"text\":\"x\",\"call_id\":\"c1\",\"key\":\"PUB\"}",
+      "expect": {
+        "js_parse_envelope": { "id": "m4", "text": "x", "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "m4", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "poll — сообщение со своим подтипом, не сигнал управления",
+      "payload": "{\"vault\":1,\"id\":\"poll-1\",\"text\":\"вопрос\",\"type\":\"poll\",\"poll\":{\"id\":\"p1\",\"question\":\"q?\",\"options\":[\"a\",\"b\"]},\"ts\":1}",
+      "expect": {
+        "js_parse_envelope": { "id": "poll-1", "text": "вопрос", "type": "poll", "ts": 1 },
+        "rust_classify": { "kind": "message", "id": "poll-1", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "text не строка — не конверт (parseEnvelope требует typeof text)",
+      "payload": "{\"vault\":1,\"text\":123}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    },
+    {
+      "name": "пустой текст — валидное (пустое) сообщение",
+      "payload": "{\"vault\":1,\"id\":\"m5\",\"text\":\"\",\"key\":\"PUB\"}",
+      "expect": {
+        "js_parse_envelope": { "id": "m5", "text": "", "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "m5", "chat_key": "alice@test.com" }
+      }
+    },
+    {
+      "name": "канальный конверт {channel:1} — вне vault, отдельная ветка транспорта",
+      "payload": "{\"channel\":1,\"chan\":\"ch1\",\"post\":{\"body\":\"hello\"},\"id\":\"chp-1\",\"ts\":2}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": { "kind": "channel", "id": "chp-1" }
+      }
+    },
+    {
+      "name": "сервисное письмо группы {hav:1} — запрос аватарки",
+      "payload": "{\"hav\":1}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": { "kind": "group-service" }
+      }
+    },
+    {
+      "name": "meta группы — не решение роутера (обрабатывает group-meta.js)",
+      "payload": "{\"meta\":1,\"name\":\"G\",\"avatar\":\"data:g\"}",
+      "expect": {
+        "js_parse_envelope": null,
+        "rust_classify": null
+      }
+    },
+    {
+      "name": "групповой message-конверт — те же байты, что 1:1 (группу даёт ключ, не байты)",
+      "payload": "{\"vault\":1,\"id\":\"gm-1\",\"text\":\"hi\",\"name\":\"Аня\",\"gavatar\":\"data:g\",\"key\":\"PUB\",\"ts\":1700000020}",
+      "expect": {
+        "js_parse_envelope": { "id": "gm-1", "text": "hi", "gavatar": "data:g" },
+        "rust_classify": { "kind": "message", "id": "gm-1", "chat_key": "alice@test.com" }
       }
     }
   ]

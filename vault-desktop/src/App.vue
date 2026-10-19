@@ -4236,7 +4236,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
     // Входящие конверты (router) — логика в features/incoming.js; Этап 4
     // декомпозиции. Один драйвер на все 4 вызова (монитор/поллинг/fast/relay).
-    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts, { isChannelEnvelope: ChannelsFeature.isChannelEnvelope, ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope, isBounceMessage: BounceFeature.isBounceMessage, bounceRecipients: BounceFeature.bounceRecipients, bounceReason: BounceFeature.bounceReason }); },
+    async processIncoming(fetched, opts) { return IncomingFeature.processIncoming(this, fetched, opts, { ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope, isBounceMessage: BounceFeature.isBounceMessage, bounceRecipients: BounceFeature.bounceRecipients, bounceReason: BounceFeature.bounceReason }); },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
     chatVisible(chatKey) {

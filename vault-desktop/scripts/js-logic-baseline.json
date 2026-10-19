@@ -1,10 +1,10 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 686,
+    "ctxRefSites": 683,
     "appVueOwn": 198,
     "appVueMethods": 350,
-    "protocolSites": 69,
+    "protocolSites": 67,
     "protocolFiles": 13
   },
   "ctxByFile": {
@@ -18,7 +18,7 @@
     "features/group-avatars.js": 4,
     "features/group-meta.js": 11,
     "features/groups.js": 45,
-    "features/incoming.js": 65,
+    "features/incoming.js": 62,
     "features/invites.js": 48,
     "features/members.js": 16,
     "features/messages.js": 72,
@@ -191,7 +191,6 @@
       "migratePeerGroups",
       "nameOf",
       "onMailBounce",
-      "parseCallSignal",
       "parseEnvelope",
       "peerKeys",
       "peerPqKeys",
@@ -407,7 +406,7 @@
       "ttl": 5
     },
     "features/incoming.js": {
-      "envelope-parse": 5,
+      "envelope-parse": 3,
       "envelope-json": 3
     },
     "features/messages.js": {

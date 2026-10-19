@@ -82,6 +82,17 @@ export function stopHeartbeats(ctx) {
 // Возвращает true, если письмо было presence-сигналом (не сообщение).
 export function ingestSignal(ctx, robj, senderEmail, mailTs) {
   if (!robj || robj.presence !== 1) return false;
+  noteHeartbeat(ctx, senderEmail, mailTs);
+  return true;
+}
+
+// Эффект heartbeat БЕЗ повторного решения о типе.
+//
+// Нужен там, где тип письма уже решил Rust (`kind=presence`, W1 ADR-005):
+// повторная проверка `robj.presence === 1` в JS означала бы, что решение
+// осталось в двух местах и может разойтись. Здесь только последствия:
+// отметка «видели» + запись heartbeat в Rust-леджер.
+export function noteHeartbeat(ctx, senderEmail, mailTs) {
   // ts отправителя может убегать вперёд из-за расхождения часов; верим
   // времени письма сервера, но не даём отметке уйти в будущее.
   const t = Math.min(Number(mailTs) || Date.now(), Date.now());
@@ -89,7 +100,6 @@ export function ingestSignal(ctx, robj, senderEmail, mailTs) {
   // M2.2: persist heartbeat ledger via Rust bridge (offline last-seen).
   try { invoke("presence_ingest", { email: senderEmail, ts: t, source: "hb" }); }
   catch (e) { /* non-blocking: in-memory lastSeenMap достаточно для UI */ }
-  return true;
 }
 
 // ── Отображение: онлайн ли контакт (active presence) ──────────

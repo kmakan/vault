@@ -274,7 +274,9 @@ mod tests {
     #[test]
     fn test_classify_incoming_profile() {
         let store = MessageStore::with_path(std::path::PathBuf::from("/tmp/__nonexistent_vault_messages3.json")).unwrap();
-        let plain = r#"{"vault":1,"name":"Bob","avatar":"x"}"#;
+        // Как в features/profiles.js: письмо профиля несёт text:""
+        // (без `text` строкой это не vault-конверт — см. incoming.rs).
+        let plain = r#"{"vault":1,"type":"profile","text":"","name":"Bob","avatar":"x"}"#;
         let r = store.classify_incoming("bob@x", plain).unwrap();
         assert_eq!(r.kind, crate::vault::ClassifyKind::Profile);
     }

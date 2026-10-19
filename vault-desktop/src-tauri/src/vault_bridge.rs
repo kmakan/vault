@@ -63,10 +63,15 @@ fn classify_result_to_json(r: &ClassifyResult) -> serde_json::Value {
 
 /// Classify an incoming decrypted plaintext via core.
 /// Returns JSON {kind, msg_type, env_id, chat_key, title} or null.
+///
+/// Классификатор чистый: ему нужны только байты письма, состояние — нет.
+/// Раньше здесь создавался `MessageStore::new()`, который на КАЖДОЕ входящее
+/// письмо читал `~/.vault/messages.json` с диска. Пока команда была мёртвой,
+/// это было незаметно; с W1 она на горячем пути поллинга, поэтому вызов идёт
+/// напрямую в `vault::classify`.
 #[tauri::command]
 pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serde_json::Value>, String> {
-    let store = MessageStore::new().map_err(|e| e.to_string())?;
-    match store.classify_incoming(&input.from, &input.decrypted) {
+    match vault_client::vault::classify(&input.decrypted, &input.from) {
         Some(r) => Ok(Some(classify_result_to_json(&r))),
         None => Ok(None),
     }

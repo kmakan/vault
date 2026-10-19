@@ -26,40 +26,48 @@ Producer (JS, `vault-desktop/src/App.vue` `buildEnvelope`):
 
 | Сторона | Код | Что читает |
 |---|---|---|
-| JS (парсер конверта) | `src/message-format.js` `parseEnvelope` | `id`, `text`, `name`, `avatar`, `type`, `ts`, `key`, `pq`, `ttl`, `bio`, `tok`, `gavatar`, `poll` |
-| JS (классификация, прод) | `src/features/incoming.js` `classify` | `kind`, `chatKey`, `title`, `envId` (своя ветка, не Rust) |
-| Rust core | `vault-client/src/vault/incoming.rs` `classify` | `kind`, `env_id` (`obj.id`), `chat_key` (`from`), `title` (`name`) |
+| JS (парсер конверта) | `src/message-format.js` `parseEnvelope` | `id`, `text`, `name`, `avatar`, `type`, `ts`, `key`, `pq`, `ttl`, `bio`, `tok`, `gavatar`, `poll` — извлечение полей, не решение о типе |
+| JS (маршрутизатор) | `src/features/incoming.js` `routeLetter` | **тип не решает**: зовёт `vault_classify_incoming` (Rust) и исполняет эффекты (обработчик звонка, presence, профиль, тосты/бейджи) |
+| Rust core (решение о типе) | `vault-client/src/vault/incoming.rs` `classify` | `kind` (`message`/`profile`/`presence`/`call`/`channel`/`group-service`), `env_id`, `chat_key`, `title` |
 | Rust persist | `vault-desktop/src-tauri/src/vault_bridge.rs` `vault_store_incoming_message` | `id`, `text`, `name`, `avatar`, `ts`, `reactions`, `edited`, `replies`, `in_reply_to`, `ttl` → `MessageStore` |
+
+Порядок проверок классификатора повторяет прод-роутер (а не «здравый смысл»),
+потому что цель переноса — не изменить поведение: call (`type=call_*` + `call_id`)
+→ presence (`presence === 1`) → vault-конверт (`vault=1` + `text` строкой, внутри
+`type=profile` → профиль) → канал (`channel === 1`) → `hav === 1`. Каждое правило
+закреплено кейсом фикстуры, включая ловушки: `call_id` без `type=call_*` — это
+сообщение; `text:123` — не конверт; poll — сообщение, а не сигнал управления.
 
 ## 3. Чем проверяется
 
-Фикстура одна на оба языка: `vault-client/tests/fixtures/m0-wire-contract.json`.
+Фикстура одна на оба языка: `vault-client/tests/fixtures/m0-wire-contract.json`
+(20 кейсов).
 
-| Гейт | Команда | Проверок (19.10) |
+| Гейт | Команда | Проверок (19.10, W1) |
 |---|---|---|
-| Rust | `cd vault-client && cargo test --test m0_wire_contract` | 14 |
-| JS | `cd vault-desktop && npm run smoke:m0-wire` | 15 |
+| Rust `incoming::classify` | `cd vault-client && cargo test --test m0_wire_contract` | 46 |
+| JS `parseEnvelope` | `cd vault-desktop && npm run smoke:m0-wire` | 48 |
+| JS маршрутизатор (эффекты) | `cd vault-desktop && npm run smoke:incoming` | 16 |
 
-JS-гейт **входит в `npm run build`** (сразу после `locale-keys-gate`, до
-`vite build`): он чистый node без зависимостей и читает фикстуру по пути от
-своего файла, поэтому выполняется и в CI (`check-desktop`). Rust-часть гоняет
-CI-задача `check-client` (`cargo test`).
+JS-гейты **входят в `npm run build`**: `smoke:m0-wire` и `smoke:incoming` стоят
+до `vite build`. Rust-часть гоняет CI-задача `check-client` (`cargo test`).
 
 Одни и те же байты обязаны одинаково читаться обеими сторонами: расхождение
-ломает любой из двух гейтов. Числа разные, потому что каждая сторона объявляет в
+ломает любой из гейтов. Числа разные, потому что каждая сторона объявляет в
 фикстуре только свои ожидания (`rust_classify` / `js_parse_envelope`).
 
 Правило **«сколько объявлено — столько проверено»**: число проверок считается по
 всей фикстуре *до* выполнения и сверяется с выполненным, поэтому пропущенный
-кейс или непокрытое поле → красный. Самопроверки 19.10: расхождение JS-поля → JS
-красный (exit 1); расхождение Rust-поля → Rust красный; пропуск кейса → оба
-красных («14/15, провалов 1» и «выполнено 13 из объявленных 14»).
+кейс или непокрытое поле → красный.
 
 ## 4. Что этим гейтом НЕ покрыто
 
-- **profile / presence / call_\* / poll / channel-конверты**: у JS своя ветка в
-  `features/incoming.js`, у Rust — `incoming::classify`; расхождение между ними
-  здесь не ловится (отдельный пункт в §7).
+- **Групповой meta-конверт** (`meta:1` + name/avatar) — его применяет
+  `features/group-meta.js` (мета-скан), а не роутер; в фикстуре записан как «не
+  решение роутера».
+- Групповой **message**-конверт отличается от 1:1 не байтами, а ключом
+  расшифровки: `chat_key = group:<id>` строит JS-адаптер после успешной
+  расшифровки групповым ключом (в фикстуре — кейс с пояснением).
 - Вложения (encrypted envelope → `vault_client::vault::download_file`), чеки
   (receipts), групповые ключи, escrow, relay-дубликаты.
 - Маппинг payload → `MessageStore` (`vault_bridge.rs`) — только живьём.
@@ -76,8 +84,10 @@ CI-задача `check-client` (`cargo test`).
   `has_vault_subject`, `is_vault_any` без вызовов; CLI использует только
   `is_vault_receipt` / `clean_subject` (`cli/repl.rs`). Префикс темы `[VAULT]` в
   стелс-транспорте не используется.
-- `vault_bridge::vault_classify_incoming` — Tauri-команда зарегистрирована
-  (`lib.rs`), но из JS не вызывается ни разу: JS классифицирует сам.
+- `vault_bridge::vault_classify_incoming` — **больше не мёртвая команда**: с W1
+  её вызывает `features/incoming.js` (решение о типе письма в Rust). Заодно убран
+  `MessageStore::new()` внутри команды: он читал `~/.vault/messages.json` на
+  каждое входящее письмо, хотя классификатору состояние не нужно.
 
 ## 6. Маппинг полей (актуальный)
 
@@ -107,9 +117,8 @@ CI-задача `check-client` (`cargo test`).
       неактуальный: JS не парсит тело письма с X-заголовками вовсе — тело
       расшифровывается, а payload разбирает `parseEnvelope`; core-конверт живёт
       только в Rust
-- [ ] Свести ветки profile/presence/call/poll/channel: JS
-      `features/incoming.js` `classify` ↔ Rust `incoming::classify` под общий
-      гейт (сейчас расхождение ловится только чтением/живьём)
-- [ ] `vault_classify_incoming`: удалить или начать использовать (мёртвая
-      Tauri-команда)
+- [x] Свести ветки profile/presence/call/poll/channel: общая фикстура покрывает
+      20 кейсов, решение о типе письма перенесено в Rust, JS — адаптер и эффекты
+      (W1, `t_2243231f`). JS-гейт маршрутизатора: `npm run smoke:incoming`.
+- [x] `vault_classify_incoming`: больше не мёртвая — её зовёт `incoming.js`
 - [ ] Маппинг payload → `MessageStore` (`vault_bridge.rs`) покрыть тестом
