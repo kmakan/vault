@@ -112,19 +112,7 @@
       "peerKeys",
       "peerPqKeys"
     ],
-    "profiles.js": [
-      "contactCardEmail",
-      "contacts",
-      "editContactAvatar",
-      "editContactName",
-      "editingContact",
-      "email",
-      "localProfiles",
-      "peerKeys",
-      "profiles",
-      "showContactCard",
-      "showContactEdit"
-    ],
+    "profiles.js": [],
     "reactions.js": [],
     "receipts.js": [
       "cacheBody",
@@ -196,38 +184,11 @@
     ],
     "_presenceSending": [
       "presence.js"
-    ],
-    "profiles": [
-      "profiles.js"
-    ],
-    "contactCardEmail": [
-      "profiles.js"
-    ],
-    "showContactCard": [
-      "profiles.js"
-    ],
-    "editingContact": [
-      "profiles.js"
-    ],
-    "editContactName": [
-      "profiles.js"
-    ],
-    "editContactAvatar": [
-      "profiles.js"
-    ],
-    "showContactEdit": [
-      "profiles.js"
-    ],
-    "localProfiles": [
-      "profiles.js"
-    ],
-    "contacts": [
-      "profiles.js"
     ]
   },
   "totals": {
-    "ctxFields": 70,
-    "ctxRefSites": 169,
+    "ctxFields": 59,
+    "ctxRefSites": 132,
     "sharedWriteFields": 0
   }
 }

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 169,
+    "ctxRefSites": 132,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
@@ -18,7 +18,6 @@
     "features/members.js": 16,
     "features/migrate.js": 1,
     "features/presence.js": 11,
-    "features/profiles.js": 37,
     "features/receipts.js": 17
   },
   "ctxFieldsByFile": {
@@ -104,19 +103,6 @@
       "isLoggedIn",
       "peerKeys",
       "peerPqKeys"
-    ],
-    "features/profiles.js": [
-      "contactCardEmail",
-      "contacts",
-      "editContactAvatar",
-      "editContactName",
-      "editingContact",
-      "email",
-      "localProfiles",
-      "peerKeys",
-      "profiles",
-      "showContactCard",
-      "showContactEdit"
     ],
     "features/receipts.js": [
       "cacheBody",

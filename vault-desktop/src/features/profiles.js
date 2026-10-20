@@ -21,6 +21,16 @@
 import api, { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
+// ADR-005 W2 (`t_bcb8927a`), партия 8: состояние — у владельцев.
+//   · uiStore.formState/modalFlags — форма правки контакта и карточка контакта
+//     (UI-состояние, ADR-003 §2: остаётся в компоненте, но живёт у владельца
+//     форм/модалок);
+//   · contactsStore — список контактов;
+//   · identityStore — ключи пиров;
+//   · sessionStore — email аккаунта.
+import { uiStore, sessionStore } from './session-store.js';
+import { contactsStore } from './contacts-store.js';
+import { identityStore } from './identity-store.js';
 
 // ── Резолв имён/аватаров ───────────────────────────────────────
 // ADR-001: зависимости в сигнатуре (деструктуризация = жёсткая граница).
@@ -194,76 +204,82 @@ export async function broadcastProfile({ email, displayName, profiles, peerKeys,
 }
 
 // ── UI-flow: карточка и локальная правка ────────────────────────
-// ADR-001 граница: UI-flow мутирует состояние модалок компонента
-// (contactCardEmail/showContactCard/editingContact/...) — остаётся на ctx
-// как «тяжёлый оркестратор». Модалки — чисто вью-состояние, не бизнес-логика.
+// ADR-005 W2 (партия 8): состояние UI-flow — у владельцев:
+// contactCardEmail/showContactCard/editingContact/editContactName/
+// editContactAvatar — uiStore (formState + modalFlags). Модалки — чисто
+// вью-состояние, не бизнес-логика (ADR-003 §2), но владелец у них один:
+// uiStore, и он РЕАКТИВЕН (20.10: обычный объект кэшировался в computed
+// навсегда — модалки не открывались).
+// Карта профилей (profiles) и локальные имена (localProfiles) — состояние
+// компонента: в deps тремя узкими доступами.
 // Модалка редактирования контакта (локальные имя/аватар).
 // Карточка контакта: тап по аватару в шапке чата.
-export async function openContactCard(ctx, email) {
+export async function openContactCard(deps, email) {
   if (!email || email === '__notes__') return;
   // вью-данные (bio мог прийти поллингом, но profiles не обновился).
-  await loadProfiles({ setProfiles: (v) => { ctx.profiles = v; } }).catch(() => {});
-  ctx.contactCardEmail = email;
-  ctx.showContactCard = true;
+  await loadProfiles({ setProfiles: (v) => { deps.setProfiles(v); } }).catch(() => {});
+  uiStore.setFormField('contactCardEmail', email);
+  uiStore.setModal('showContactCard', true);
 }
 
 // Из карточки → локальная правка имени/аватара (старый попап).
-export function startEditFromCard(ctx) {
-  const email = ctx.contactCardEmail;
-  ctx.showContactCard = false;
-  openContactEdit(ctx, email);
+export function startEditFromCard(deps) {
+  const email = uiStore.getFormField('contactCardEmail');
+  uiStore.setModal('showContactCard', false);
+  openContactEdit(deps, email);
 }
 
-export function openContactEdit(ctx, email) {
+export function openContactEdit(deps, email) {
   if (!email) return;
-  ctx.editingContact = email;
-  const lp = localProfileOf(ctx.localProfiles, email);
-  ctx.editContactName = (lp && lp.name) || '';
-  ctx.editContactAvatar = (lp && lp.avatar) || '';
-  ctx.showContactEdit = true;
+  uiStore.setFormField('editingContact', email);
+  const lp = localProfileOf(deps.getLocalProfiles(), email);
+  uiStore.setFormField('editContactName', (lp && lp.name) || '');
+  uiStore.setFormField('editContactAvatar', (lp && lp.avatar) || '');
+  uiStore.setModal('showContactEdit', true);
 }
 
-export function handleContactAvatarSelect(ctx, event) {
+export function handleContactAvatarSelect(deps, event) {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = async (e) => {
     // Сжимаем до 64×64, как и свои аватары (localStorage не резиновый).
-    ctx.editContactAvatar = await shrinkAvatar(e.target.result);
+    uiStore.setFormField('editContactAvatar', await shrinkAvatar(e.target.result));
   };
   reader.readAsDataURL(file);
   event.target.value = '';
 }
 
-export function saveContactEdit(ctx) {
-  const email = ctx.editingContact;
+export function saveContactEdit(deps) {
+  const email = uiStore.getFormField('editingContact');
   if (!email) return;
-  const name = ctx.editContactName.trim();
-  const avatar = ctx.editContactAvatar || '';
+  const name = String(uiStore.getFormField('editContactName') || '').trim();
+  const avatar = uiStore.getFormField('editContactAvatar') || '';
   if (!name && !avatar) {
     // Пусто = сброс к реальным имени/аватару собеседника.
-    delete ctx.localProfiles[email];
+    delete deps.getLocalProfiles()[email];
   } else {
-    ctx.localProfiles[email] = { name, avatar };
+    deps.getLocalProfiles()[email] = { name, avatar };
   }
-  saveLocalProfiles({ email: ctx.email, localProfiles: ctx.localProfiles });
+  saveLocalProfiles({ email: sessionStore.getCurrentEmail(), localProfiles: deps.getLocalProfiles() });
   // Обновляем отображение в списке контактов (contact.name берётся из
   // peer-key label — подменяем на локальное имя, если задано).
-  const c = ctx.contacts.find(x => x.email === email);
-  if (c) c.name = name || nameOf({ profiles: ctx.profiles, localProfiles: ctx.localProfiles, peerKeys: ctx.peerKeys }, email);
-  ctx.showContactEdit = false;
-  ctx.editingContact = null;
+  const c = contactsStore.state.contacts.find(x => x.email === email);
+  if (c) c.name = name || nameOf({ profiles: deps.getProfiles(), localProfiles: deps.getLocalProfiles(), peerKeys: identityStore.state.peerKeys }, email);
+  uiStore.setModal('showContactEdit', false);
+  uiStore.setFormField('editingContact', null);
 }
 
-export function resetContactEdit(ctx) {
-  if (ctx.editingContact) {
-    delete ctx.localProfiles[ctx.editingContact];
-    saveLocalProfiles({ email: ctx.email, localProfiles: ctx.localProfiles });
-    const c = ctx.contacts.find(x => x.email === ctx.editingContact);
-    if (c) c.name = nameOf({ profiles: ctx.profiles, localProfiles: ctx.localProfiles, peerKeys: ctx.peerKeys }, ctx.editingContact);
+export function resetContactEdit(deps) {
+  const editing = uiStore.getFormField('editingContact');
+  if (editing) {
+    delete deps.getLocalProfiles()[editing];
+    saveLocalProfiles({ email: sessionStore.getCurrentEmail(), localProfiles: deps.getLocalProfiles() });
+    const c = contactsStore.state.contacts.find(x => x.email === editing);
+    if (c) c.name = nameOf({ profiles: deps.getProfiles(), localProfiles: deps.getLocalProfiles(), peerKeys: identityStore.state.peerKeys }, editing);
   }
-  ctx.showContactEdit = false;
-  ctx.editingContact = null;
+  uiStore.setModal('showContactEdit', false);
+  uiStore.setFormField('editingContact', null);
 }
 
 // ── Картинки ───────────────────────────────────────────────────

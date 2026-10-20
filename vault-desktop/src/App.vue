@@ -1400,12 +1400,10 @@ export default {
       // пользователь может называть собеседника как удобно и ставить свой
       // аватар для него — это НЕ меняет реальные имя/аватар собеседника.
       localProfiles: {},
-      showContactEdit: false,
-      editingContact: null,
-      showContactCard: false,
-      contactCardEmail: '',
-      editContactName: '',
-      editContactAvatar: '',
+      // showContactEdit/showContactCard/editingContact/contactCardEmail/
+      // editContactName/editContactAvatar — в uiStore (formState + modalFlags),
+      // ADR-005 W2 партия 8: карточка и правка контакта — UI-flow фичи, и его
+      // состояние должно лежать у владельца форм/модалок, а не в data().
       // User identity
       userId: null,
       // Tombstones удалённых сообщений: msg_id удалённых НАВСЕГДА. Письмо-
@@ -1524,6 +1522,14 @@ export default {
     invitePopupIndex: { get() { return uiStore.getFormField('invitePopupIndex'); }, set(v) { uiStore.setFormField('invitePopupIndex', v); } },
     contactPopupIndex: { get() { return uiStore.getFormField('contactPopupIndex'); }, set(v) { uiStore.setFormField('contactPopupIndex', v); } },
     chatSearchQuery: { get() { return uiStore.getFormField('chatSearchQuery'); }, set(v) { uiStore.setFormField('chatSearchQuery', v); } },
+    // ADR-005 W2 (партия 8): UI-flow карточки/правки контакта — в uiStore.
+    // Прокси те же по имени, поэтому шаблон не меняется.
+    contactCardEmail: { get() { return uiStore.getFormField('contactCardEmail'); }, set(v) { uiStore.setFormField('contactCardEmail', v); } },
+    editingContact: { get() { return uiStore.getFormField('editingContact'); }, set(v) { uiStore.setFormField('editingContact', v); } },
+    editContactName: { get() { return uiStore.getFormField('editContactName'); }, set(v) { uiStore.setFormField('editContactName', v); } },
+    editContactAvatar: { get() { return uiStore.getFormField('editContactAvatar'); }, set(v) { uiStore.setFormField('editContactAvatar', v); } },
+    showContactCard: { get() { return uiStore.getModal('showContactCard'); }, set(v) { uiStore.setModal('showContactCard', v); } },
+    showContactEdit: { get() { return uiStore.getModal('showContactEdit'); }, set(v) { uiStore.setModal('showContactEdit', v); } },
     // login/server-form fieldsinj в uiStore.formState (J.5b):
     rememberMe: { get() { return uiStore.getFormField('rememberMe'); }, set(v) { uiStore.setFormField('rememberMe', v); } },
     imapServer: { get() { return uiStore.getFormField('imapServer'); }, set(v) { uiStore.setFormField('imapServer', v); } },
@@ -1787,6 +1793,17 @@ export default {
     // На Android WebView userAgent содержит 'Android' — надёжнее, чем ширина.
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
+    },
+    // Контракт фичи профилей (ADR-005 W2, партия 8): карта профилей и локальные
+    // имена/аватары — состояние компонента (три узких доступа), остальное
+    // состояние UI-flow лежит у uiStore, а владельцы (контакты, ключи, email)
+    // модуль берёт сам.
+    profilesDeps() {
+      return {
+        getProfiles: () => this.profiles,
+        setProfiles: (v) => { this.profiles = v; },
+        getLocalProfiles: () => this.localProfiles,
+      };
     },
     // Контракт фичи звонков (ADR-005 W2, партия 7): состояние — у
     // владельцев (identity-store/chatStore/call-session — модуль берёт их сам),
@@ -2537,12 +2554,12 @@ export default {
     async onBioSave(text) { return ProfilesFeature.onBioSave({ email: this.email, showToast: (m) => uiStore.toast(m), t: uiStore.tr }, text); },
     async onProfileSave() { return ProfilesFeature.onProfileSave({ showToast: (m) => uiStore.toast(m), t: uiStore.tr, broadcastProfile: () => this.broadcastProfile() }); },
     async broadcastProfile() { return ProfilesFeature.broadcastProfile({ email: this.email, displayName: this.displayName, profiles: this.profiles, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys }); },
-    async openContactCard(email) { return ProfilesFeature.openContactCard(this, email); },
-    startEditFromCard() { return ProfilesFeature.startEditFromCard(this); },
-    openContactEdit(email) { return ProfilesFeature.openContactEdit(this, email); },
-    handleContactAvatarSelect(event) { return ProfilesFeature.handleContactAvatarSelect(this, event); },
-    saveContactEdit() { return ProfilesFeature.saveContactEdit(this); },
-    resetContactEdit() { return ProfilesFeature.resetContactEdit(this); },
+    async openContactCard(email) { return ProfilesFeature.openContactCard(this.profilesDeps, email); },
+    startEditFromCard() { return ProfilesFeature.startEditFromCard(this.profilesDeps); },
+    openContactEdit(email) { return ProfilesFeature.openContactEdit(this.profilesDeps, email); },
+    handleContactAvatarSelect(event) { return ProfilesFeature.handleContactAvatarSelect(this.profilesDeps, event); },
+    saveContactEdit() { return ProfilesFeature.saveContactEdit(this.profilesDeps); },
+    resetContactEdit() { return ProfilesFeature.resetContactEdit(this.profilesDeps); },
     async shrinkAvatar(dataUrl) { return ProfilesFeature.shrinkAvatar(dataUrl); },
     compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
     noteSeen(email, ts) { this.lastSeenMap = ProfilesFeature.noteSeen(this.lastSeenMap, email, ts); },

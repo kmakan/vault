@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 153,
+  "totalCtxRefs": 116,
   "totalFunctions": 313,
-  "functionsWithCtx": 74,
+  "functionsWithCtx": 68,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -451,23 +451,11 @@
       "biggestCtxFn": "isEnabled"
     },
     "src/features/profiles.js": {
-      "ctxRefs": 37,
-      "fields": [
-        "contactCardEmail",
-        "contacts",
-        "editContactAvatar",
-        "editContactName",
-        "editingContact",
-        "email",
-        "localProfiles",
-        "peerKeys",
-        "profiles",
-        "showContactCard",
-        "showContactEdit"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 23,
-      "functionsWithCtx": 6,
-      "biggestCtxFn": "openContactCard"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/reactions.js": {
       "ctxRefs": 0,

@@ -44,6 +44,17 @@ prepareModuleCopy(
   },
   MOCKS,
 );
+// ADR-005 W2 (партия 8): модуль берёт владельца контактов (contacts-store) →
+// тот тянет contacts-load → api.js, а api.js на уровне модуля создаёт
+// ApiClient, которому нужен localStorage. Ставим заглушку ДО импорта копии —
+// иначе копия падает на ReferenceError ещё до первого утверждения.
+globalThis.localStorage ||= {
+  _d: {},
+  getItem(k) { return this._d[k] ?? null; },
+  setItem(k, v) { this._d[k] = String(v); },
+  removeItem(k) { delete this._d[k]; },
+  clear() { this._d = {}; },
+};
 const P = await import(MOCKS + '/features-profiles.mjs');
 
 // ── Image/canvas-моки ──────────────────────────────────────────
@@ -71,6 +82,13 @@ function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
   else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
 }
+// ADR-005 W2 (партия 8): состояние — у владельцев. Копия модуля импортирует
+// РЕАЛЬНЫЕ session-store/contacts-store/identity-store, поэтому смоук берёт
+// те же синглтоны — иначе проверял бы не тот объект.
+const { uiStore, sessionStore } = await import(ROOT + '/../src/features/session-store.js');
+const { contactsStore } = await import(ROOT + '/../src/features/contacts-store.js');
+const { identityStore } = await import(ROOT + '/../src/features/identity-store.js');
+
 function makeCtx(over = {}) {
   return Object.assign({
     email: 'me@x.ru',
@@ -91,6 +109,37 @@ function makeCtx(over = {}) {
   }, over);
 }
 const toasts = [];
+
+// Стенд UI-flow: состояние раскладывается по владельцам, а модуль получает
+// три узких доступа (deps) к картам профилей.
+function makeWorld(over = {}) {
+  const w = Object.assign({
+    email: 'me@x.ru',
+    profiles: {},
+    localProfiles: {},
+    peerKeys: {},
+    peerPqKeys: {},
+    contacts: [],
+    contactCardEmail: '', showContactCard: false,
+    editingContact: null, editContactName: '', editContactAvatar: '', showContactEdit: false,
+  }, over);
+  identityStore.state.peerKeys = w.peerKeys;
+  identityStore.state.peerPqKeys = w.peerPqKeys;
+  contactsStore.state.contacts = w.contacts;
+  sessionStore.setCurrentEmail(w.email);
+  uiStore.setFormField('contactCardEmail', w.contactCardEmail);
+  uiStore.setFormField('editingContact', w.editingContact);
+  uiStore.setFormField('editContactName', w.editContactName);
+  uiStore.setFormField('editContactAvatar', w.editContactAvatar);
+  uiStore.setModal('showContactCard', w.showContactCard);
+  uiStore.setModal('showContactEdit', w.showContactEdit);
+  const deps = {
+    getProfiles: () => w.profiles,
+    setProfiles: (v) => { w.profiles = v; },
+    getLocalProfiles: () => w.localProfiles,
+  };
+  return { w, deps };
+}
 
 // ── 1. Резолв: nameOf/avatarOf/aliasesOf ───────────────────────
 console.log('1. Резолв имён/аватаров');
@@ -202,37 +251,55 @@ console.log('3. broadcastProfile (wire)');
 // ── 4. UI-flow: карточка/правка ────────────────────────────────
 console.log('4. UI-flow (карточка/правка)');
 {
-  const ctx = makeCtx({
+  const { w: ctx, deps } = makeWorld({
     contacts: [{ email: 'a@x.ru', name: 'Wire' }],
     localProfiles: {},
   });
   // openContactCard: refresh profiles + флаги
   apiMock.profilesStore = { 'a@x.ru': { name: 'A' } };
-  await P.openContactCard(ctx, 'a@x.ru');
-  check('openContactCard: profiles обновлены + показ', ctx.showContactCard === true && ctx.contactCardEmail === 'a@x.ru' && ctx.profiles['a@x.ru']);
-  check('openContactCard: notes/пусто — no-op', (await P.openContactCard(makeCtx(), '__notes__'), await P.openContactCard(makeCtx(), ''), true));
+  // Сначала no-op: он открывает СВОЙ стенд (makeWorld сбрасывает UI-состояние
+  // владельца — синглона), иначе последующие шаги увидят пустую карточку.
+  check('openContactCard: notes/пусто — no-op',
+    (await P.openContactCard(makeWorld().deps, '__notes__'),
+     await P.openContactCard(makeWorld().deps, ''), true));
+  await P.openContactCard(deps, 'a@x.ru');
+  check('openContactCard: profiles обновлены + показ',
+    uiStore.getModal('showContactCard') === true
+    && uiStore.getFormField('contactCardEmail') === 'a@x.ru' && ctx.profiles['a@x.ru']);
   // startEditFromCard
   ctx.localProfiles['a@x.ru'] = { name: 'Лок', avatar: 'AV' };
-  P.startEditFromCard(ctx);
-  check('startEditFromCard: карточка закрыта, правка открыта с локальными', ctx.showContactCard === false && ctx.showContactEdit === true && ctx.editContactName === 'Лок' && ctx.editContactAvatar === 'AV');
+  P.startEditFromCard(deps);
+  check('startEditFromCard: карточка закрыта, правка открыта с локальными',
+    uiStore.getModal('showContactCard') === false && uiStore.getModal('showContactEdit') === true
+    && uiStore.getFormField('editContactName') === 'Лок'
+    && uiStore.getFormField('editContactAvatar') === 'AV');
   // openContactEdit без локального
-  const ctx2 = makeCtx();
-  P.openContactEdit(ctx2, 'b@x.ru');
-  check('openContactEdit: пустые поля без локального', ctx2.editContactName === '' && ctx2.editContactAvatar === '');
-  // saveContactEdit: имя+аватар
-  const ctx3 = makeCtx({ contacts: [{ email: 'a@x.ru', name: 'Wire' }], editingContact: 'a@x.ru', editContactName: '  Моё имя  ', editContactAvatar: 'AV' });
-  P.saveContactEdit(ctx3);
-  check('saveContactEdit: trim + localProfiles + контакт переименован', ctx3.localProfiles['a@x.ru'].name === 'Моё имя' && ctx3.contacts[0].name === 'Моё имя' && ctx3.showContactEdit === false);
+  const w2 = makeWorld();
+  P.openContactEdit(w2.deps, 'b@x.ru');
+  check('openContactEdit: пустые поля без локального',
+    uiStore.getFormField('editContactName') === '' && uiStore.getFormField('editContactAvatar') === '');
+  // saveContactEdit: имя+аватар.
+  // КОГО редактируем — берётся ИЗ openContactEdit (иначе смоук задавал
+  // editingContact заранее и не проверял, что правка вообще помнит адрес).
+  const w3 = makeWorld({ contacts: [{ email: 'a@x.ru', name: 'Wire' }], localProfiles: { 'a@x.ru': { name: 'Лок', avatar: 'AV' } } });
+  P.openContactEdit(w3.deps, 'a@x.ru');
+  uiStore.setFormField('editContactName', '  Моё имя  ');
+  P.saveContactEdit(w3.deps);
+  check('saveContactEdit: trim + localProfiles + контакт переименован',
+    w3.w.localProfiles['a@x.ru'].name === 'Моё имя' && w3.w.contacts[0].name === 'Моё имя'
+    && uiStore.getModal('showContactEdit') === false);
   await new Promise(r => setTimeout(r, 5));
   check('saveContactEdit: персист kv', JSON.parse(dbMock.kv.get('local-profiles'))['a@x.ru'].name === 'Моё имя');
   // saveContactEdit: пусто = сброс
-  const ctx4 = makeCtx({ localProfiles: { 'a@x.ru': { name: 'X' } }, contacts: [{ email: 'a@x.ru', name: 'X' }], profiles: { 'a@x.ru': { name: 'Real' } }, editingContact: 'a@x.ru', editContactName: '', editContactAvatar: '' });
-  P.saveContactEdit(ctx4);
-  check('saveContactEdit пусто → сброс на реальное имя', !ctx4.localProfiles['a@x.ru'] && ctx4.contacts[0].name === 'Real');
+  const w4 = makeWorld({ localProfiles: { 'a@x.ru': { name: 'X' } }, contacts: [{ email: 'a@x.ru', name: 'X' }], profiles: { 'a@x.ru': { name: 'Real' } }, editingContact: 'a@x.ru', editContactName: '', editContactAvatar: '' });
+  P.saveContactEdit(w4.deps);
+  check('saveContactEdit пусто → сброс на реальное имя', !w4.w.localProfiles['a@x.ru'] && w4.w.contacts[0].name === 'Real');
   // resetContactEdit
-  const ctx5 = makeCtx({ localProfiles: { 'a@x.ru': { name: 'X' } }, contacts: [{ email: 'a@x.ru', name: 'X' }], profiles: { 'a@x.ru': { name: 'Real' } }, editingContact: 'a@x.ru' });
-  P.resetContactEdit(ctx5);
-  check('resetContactEdit: удаление локального + возврат имени', !ctx5.localProfiles['a@x.ru'] && ctx5.contacts[0].name === 'Real' && ctx5.showContactEdit === false);
+  const w5 = makeWorld({ localProfiles: { 'a@x.ru': { name: 'X' } }, contacts: [{ email: 'a@x.ru', name: 'X' }], profiles: { 'a@x.ru': { name: 'Real' } }, editingContact: 'a@x.ru' });
+  P.resetContactEdit(w5.deps);
+  check('resetContactEdit: удаление локального + возврат имени',
+    !w5.w.localProfiles['a@x.ru'] && w5.w.contacts[0].name === 'Real'
+    && uiStore.getModal('showContactEdit') === false);
 }
 
 // ── 5. Картинки ────────────────────────────────────────────────
