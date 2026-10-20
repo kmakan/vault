@@ -9,55 +9,24 @@
       "name": "message 1:1 — как собирает buildEnvelope",
       "payload": "{\"vault\":1,\"id\":\"msg-1\",\"text\":\"привет\",\"name\":\"Аня\",\"avatar\":\"\",\"key\":\"PUB\",\"ts\":1700000000}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "msg-1",
-          "text": "привет",
-          "name": "Аня",
-          "ts": 1700000000,
-          "key": "PUB"
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "msg-1",
-          "title": "Аня",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "msg-1", "text": "привет", "name": "Аня", "ts": 1700000000, "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "msg-1", "title": "Аня", "chat_key": "alice@test.com" }
       }
     },
     {
       "name": "message с PQ-ключом и ttl (гибрид + самоочистка)",
       "payload": "{\"vault\":1,\"id\":\"msg-2\",\"text\":\"hi\",\"name\":\"Bob\",\"ts\":1700000001,\"pq\":\"PQEK\",\"ttl\":86400}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "msg-2",
-          "text": "hi",
-          "name": "Bob",
-          "ts": 1700000001,
-          "pq": "PQEK",
-          "ttl": 86400
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "msg-2",
-          "title": "Bob",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "msg-2", "text": "hi", "name": "Bob", "ts": 1700000001, "pq": "PQEK", "ttl": 86400 },
+        "rust_classify": { "kind": "message", "id": "msg-2", "title": "Bob", "chat_key": "alice@test.com" }
       }
     },
     {
       "name": "media-конверт: text = JSON вложения",
       "payload": "{\"vault\":1,\"id\":\"msg-3\",\"text\":\"{\\\"kind\\\":\\\"file\\\",\\\"name\\\":\\\"a.png\\\"}\",\"name\":\"Аня\",\"ts\":1700000002}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "msg-3",
-          "ts": 1700000002
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "msg-3",
-          "title": "Аня",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "msg-3", "ts": 1700000002 },
+        "rust_classify": { "kind": "message", "id": "msg-3", "title": "Аня", "chat_key": "alice@test.com" }
       }
     },
     {
@@ -77,7 +46,7 @@
       }
     },
     {
-      "name": "text без маркера vault — не конверт",
+      "name": "text без маркера vault — не конверт (метка обязательна)",
       "payload": "{\"text\":\"hi\"}",
       "expect": {
         "js_parse_envelope": null,
@@ -88,38 +57,16 @@
       "name": "профиль: письмо как его собирает profiles.js (type:profile + text:\"\")",
       "payload": "{\"vault\":1,\"id\":\"prof-1\",\"type\":\"profile\",\"text\":\"\",\"name\":\"Bob\",\"avatar\":\"data:img\",\"bio\":\"hi\",\"key\":\"PUB\",\"ts\":1700000010}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "prof-1",
-          "text": "",
-          "type": "profile",
-          "name": "Bob",
-          "avatar": "data:img",
-          "bio": "hi",
-          "ts": 1700000010,
-          "key": "PUB"
-        },
-        "rust_classify": {
-          "kind": "profile",
-          "id": "prof-1",
-          "title": "Bob",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "prof-1", "text": "", "type": "profile", "name": "Bob", "avatar": "data:img", "bio": "hi", "ts": 1700000010, "key": "PUB" },
+        "rust_classify": { "kind": "profile", "id": "prof-1", "title": "Bob", "chat_key": "alice@test.com" }
       }
     },
     {
       "name": "профиль с текстом — всё равно профиль (type раньше, чем «это сообщение»)",
       "payload": "{\"vault\":1,\"type\":\"profile\",\"text\":\"x\",\"name\":\"Bob\"}",
       "expect": {
-        "js_parse_envelope": {
-          "text": "x",
-          "type": "profile",
-          "name": "Bob"
-        },
-        "rust_classify": {
-          "kind": "profile",
-          "title": "Bob",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "text": "x", "type": "profile", "name": "Bob" },
+        "rust_classify": { "kind": "profile", "title": "Bob", "chat_key": "alice@test.com" }
       }
     },
     {
@@ -135,21 +82,15 @@
       "payload": "{\"presence\":1,\"ts\":12345}",
       "expect": {
         "js_parse_envelope": null,
-        "rust_classify": {
-          "kind": "presence"
-        }
+        "rust_classify": { "kind": "presence" }
       }
     },
     {
       "name": "presence побеждает message (проверяется до конверта)",
       "payload": "{\"vault\":1,\"text\":\"hi\",\"presence\":1,\"ts\":1}",
       "expect": {
-        "js_parse_envelope": {
-          "text": "hi"
-        },
-        "rust_classify": {
-          "kind": "presence"
-        }
+        "js_parse_envelope": { "text": "hi" },
+        "rust_classify": { "kind": "presence" }
       }
     },
     {
@@ -165,45 +106,23 @@
       "payload": "{\"vault\":1,\"id\":\"call-1\",\"type\":\"call_request\",\"call_id\":\"c1\",\"ts\":1}",
       "expect": {
         "js_parse_envelope": null,
-        "rust_classify": {
-          "kind": "call",
-          "id": "call-1",
-          "title": null,
-          "chat_key": "alice@test.com"
-        }
+        "rust_classify": { "kind": "call", "id": "call-1", "title": null, "chat_key": "alice@test.com" }
       }
     },
     {
       "name": "call_id без type call_* — обычное сообщение, не сигнал",
       "payload": "{\"vault\":1,\"id\":\"m4\",\"text\":\"x\",\"call_id\":\"c1\",\"key\":\"PUB\"}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "m4",
-          "text": "x",
-          "key": "PUB"
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "m4",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "m4", "text": "x", "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "m4", "chat_key": "alice@test.com" }
       }
     },
     {
       "name": "poll — сообщение со своим подтипом, не сигнал управления",
       "payload": "{\"vault\":1,\"id\":\"poll-1\",\"text\":\"вопрос\",\"type\":\"poll\",\"poll\":{\"id\":\"p1\",\"question\":\"q?\",\"options\":[\"a\",\"b\"]},\"ts\":1}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "poll-1",
-          "text": "вопрос",
-          "type": "poll",
-          "ts": 1
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "poll-1",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "poll-1", "text": "вопрос", "type": "poll", "ts": 1 },
+        "rust_classify": { "kind": "message", "id": "poll-1", "chat_key": "alice@test.com" }
       }
     },
     {
@@ -218,16 +137,8 @@
       "name": "пустой текст — валидное (пустое) сообщение",
       "payload": "{\"vault\":1,\"id\":\"m5\",\"text\":\"\",\"key\":\"PUB\"}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "m5",
-          "text": "",
-          "key": "PUB"
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "m5",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "m5", "text": "", "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "m5", "chat_key": "alice@test.com" }
       }
     },
     {
@@ -235,10 +146,7 @@
       "payload": "{\"channel\":1,\"chan\":\"ch1\",\"post\":{\"body\":\"hello\"},\"id\":\"chp-1\",\"ts\":2}",
       "expect": {
         "js_parse_envelope": null,
-        "rust_classify": {
-          "kind": "channel",
-          "id": "chp-1"
-        }
+        "rust_classify": { "kind": "channel", "id": "chp-1" }
       }
     },
     {
@@ -246,9 +154,7 @@
       "payload": "{\"hav\":1}",
       "expect": {
         "js_parse_envelope": null,
-        "rust_classify": {
-          "kind": "group-service"
-        }
+        "rust_classify": { "kind": "group-service" }
       }
     },
     {
@@ -263,16 +169,8 @@
       "name": "групповой message-конверт — те же байты, что 1:1 (группу даёт ключ, не байты)",
       "payload": "{\"vault\":1,\"id\":\"gm-1\",\"text\":\"hi\",\"name\":\"Аня\",\"gavatar\":\"data:g\",\"key\":\"PUB\",\"ts\":1700000020}",
       "expect": {
-        "js_parse_envelope": {
-          "id": "gm-1",
-          "text": "hi",
-          "gavatar": "data:g"
-        },
-        "rust_classify": {
-          "kind": "message",
-          "id": "gm-1",
-          "chat_key": "alice@test.com"
-        }
+        "js_parse_envelope": { "id": "gm-1", "text": "hi", "gavatar": "data:g" },
+        "rust_classify": { "kind": "message", "id": "gm-1", "chat_key": "alice@test.com" }
       }
     }
   ]
