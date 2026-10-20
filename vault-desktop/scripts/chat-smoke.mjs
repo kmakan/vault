@@ -26,6 +26,11 @@ check('buildNoteMessage чистые флаги', nm._notes === true && nm.statu
 // buildReplyPayload
 check('buildReplyPayload без replyTo → как есть', buildReplyPayload('hi', { replyTo:null, replyPreview:_=>'' }) === 'hi');
 check('buildReplyPayload с quote → "> quote\\n\\nhi"', buildReplyPayload('hi', { replyTo:{r:1}, replyPreview:_=>'' }))
+// С НЕПУСТОЙ цитатой: иначе «цитата подставляется» неотличимо от «цитата
+// пустая, подставить нечего» — мутация цитаты была бы незаметна.
+check('buildReplyPayload с НЕПУСТОЙ цитатой → цитата подставлена',
+  buildReplyPayload('мой ответ', { replyTo:{r:1}, replyPreview:()=>'текст исходного' }) === '> текст исходного\n\nмой ответ',
+  buildReplyPayload('мой ответ', { replyTo:{r:1}, replyPreview:()=>'текст исходного' }));
 
 
 // buildSendingMessage

@@ -272,6 +272,25 @@ console.log('1. пустой батч / своё письмо — ничего �
     && deps.processedUnreadIds.size === 0);
 }
 
+// ── 1b. Классификатор сказал «не наше» — письмо не трогаем ────────────────
+// Решение «что это за письмо» принимает RUST (vault_classify_incoming).
+// Если JS решает сам — письмо, которое Rust отверг, будет обработано.
+console.log('1b. классификатор отверг письмо — не обрабатываем');
+{
+  resetWorld();
+  const deps = makeDeps({ classify: () => null });
+  const m = letter();
+  withBody(deps, m, 'ENC:x');
+  await processIncoming(deps, [m], { notify: true });
+  check('отвергнутое письмо: ни бейджа, ни уведомления, ни дедупа',
+    Object.keys(globalThis.__state.unread).length === 0 && notifyMock.fires.length === 0
+    && deps.processedUnreadIds.size === 0, {
+      unread: Object.keys(globalThis.__state.unread).length,
+      notify: notifyMock.fires.length,
+      dedup: deps.processedUnreadIds.size,
+    });
+}
+
 // ── 2. Не-Vault письмо — пропуск ──────────────────────────────────────────
 console.log('2. plain-письмо без Vault-шифртекста — пропуск');
 {

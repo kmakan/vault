@@ -1,7 +1,6 @@
 {
   "uncoveredFeatures": [],
   "smokesWithoutMutations": [
-    "attachments-smoke.mjs",
     "autoclean-smoke.mjs",
     "avatar-image-smoke.mjs",
     "batch2-smoke.mjs",
@@ -9,7 +8,6 @@
     "call-session-smoke.mjs",
     "calls-deps-smoke.mjs",
     "channels-signing-smoke.mjs",
-    "chat-smoke.mjs",
     "chat-store-smoke.mjs",
     "clipboard-smoke.mjs",
     "contacts-delete-smoke.mjs",
@@ -34,7 +32,6 @@
     "history-smoke.mjs",
     "identity-store-smoke.mjs",
     "incoming-routing-smoke.mjs",
-    "incoming-smoke.mjs",
     "invites-store-smoke.mjs",
     "local-db-init-smoke.mjs",
     "m0-wire-smoke.mjs",
@@ -47,7 +44,6 @@
     "poll-state-smoke.mjs",
     "recovery-escrow-smoke.mjs",
     "recovery-session-smoke.mjs",
-    "recovery-smoke.mjs",
     "relay-client-smoke.mjs",
     "relay-smoke.mjs",
     "relay-store-smoke.mjs",
