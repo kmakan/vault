@@ -52,6 +52,15 @@ const REL_IMPORT = /(?:from|import)\s+['"](\.{1,2}\/[^'"]+)['"]/g;
 // Разбор делается по ТЕКСТУ смоука (без запуска): аргументы вызова режутся
 // по верхнему уровню, третий аргумент — литерал карты моков, пятый (`extra`)
 // — замены, которых в карте нет.
+// Комментарии вырезаются ПЕРЕД разбором аргументов: комментарий с запятой
+// («…ИМЯ ИМПОРТА, а не путь…») разрывал аргументы, и карта моков не читалась —
+// копия уходила на фолбэк (проверка пофайлово), то есть гейт молча слаб.
+// Режем только ПОСТРОЧНЫЕ комментарии (// в начале строки) — чтобы не
+// порезать 'https://…' внутри строкового литерала.
+function stripLineComments(text) {
+  return text.replace(/^\s*\/\/.*$/gm, '');
+}
+
 function findPrepareCalls(body) {
   const calls = [];
   const re = /prepareModuleCopy\s*\(/g;
@@ -67,7 +76,7 @@ function findPrepareCalls(body) {
       if (ch === '(') depth++;
       else if (ch === ')') depth--;
     }
-    calls.push(body.slice(open + 1, i - 1));
+    calls.push(stripLineComments(body.slice(open + 1, i - 1)));
   }
   return calls;
 }
@@ -132,6 +141,11 @@ const smokes = readdirSync(SCRIPTS)
 
 const problems = [];
 let checked = 0, copies = 0;
+// Счётчики прозрачности: сколько копий проверено ПОКОПИЙНО (карта моков
+// разобрана) и сколько — фолбэком (файловая проверка). Ноль покопийных при
+// ненулевом числе копий означает, что разбор перестал работать и гейт молча
+// ослаб (ровно тот класс, который он закрывает).
+let perCopy = 0, fallback = 0;
 
 for (const sm of smokes) {
   const body = readFileSync(path.join(SCRIPTS, sm), 'utf8');
@@ -216,6 +230,7 @@ for (const sm of smokes) {
     // не удалось (аргумент — переменная), откатываемся на файловую проверку:
     // гейт с ложными срабатываниями отключают, а врущий гейт хуже.
     const copy = copiesByKey.get(keyOf(rel));
+    if (copy) perCopy++; else fallback++;
     const textReplaced = (sp) => {
       const esc = sp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp('\\.replace\\([\\s\\S]{0,400}?' + esc).test(body);
@@ -248,4 +263,5 @@ if (problems.length) {
   process.exit(1);
 }
 console.log('✓ import-gate: ' + copies + ' копирований модулей, все на общем хелпере, '
+  + 'моки проверены покопийно (' + perCopy + ' покопийно, ' + fallback + ' фолбэком), '
   + 'относительные импорты разрешаются');
