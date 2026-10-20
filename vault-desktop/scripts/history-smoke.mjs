@@ -71,9 +71,30 @@ check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.
   check('mergePending mergePendingOutgoing вызван с remaining', merged && merged.p1 && out.some(m=>m.id==='p1'));
 }
 {
-  const p2={c:{id:'t',_pendingAt:0,status:'sending'}};
+  // СВЕЖИЙ pending (_pendingAt = сейчас): иначе его отбрасывает «устарелость»,
+  // и проверка tombstone была бы замаскирована (второй guard).
+  // ВАЖНО: корзина pending КЛЮЧУЕТСЯ ПО id сообщения (bucket[id] = msg) — если
+  // положить туда само сообщение, цикл разберёт его ПОЛЯ как записи и
+  // проверка будет смотреть не на то (мы так и сделали сначала).
+  const p2={c:{t:{id:'t',_pendingAt:Date.now(),status:'sending'}}};
   const out2=H.mergePending({pendingOutgoing:p2,isTombstoned:(id)=>id==='t',msgTs:H.msgTs,mergePendingOutgoing:()=>{},dropBucket:()=>{}},'c',[]);
-  check('mergePending isTombstoned исключает', !out2.some(m=>m.id==='t'));
+  check('mergePending isTombstoned исключает', !out2.some(m=>m.id==='t'), out2);
+}
+{
+  // Просроченное pending (старше 10 минут) — отбрасывается даже без tombstone.
+  const old={c:{old:{id:'old',_pendingAt:Date.now()-11*60*1000,status:'sending'}}};
+  const outOld=H.mergePending({pendingOutgoing:old,isTombstoned:()=>false,msgTs:H.msgTs,mergePendingOutgoing:()=>{},dropBucket:()=>{}},'c',[]);
+  check('mergePending просроченное pending отбрасывает', !outOld.some(m=>m.id==='old'), outOld);
+}
+{
+  // Pending, совпавший с реальным сообщением (тот же текст в окне) — не
+  // дублируется в чате.
+  const real={id:'r1',content:'привет',ts:Date.now()};
+  // id заглушки ДОЛЖЕН начинаться с 'pending-' (по нему matchesPending и опознаёт заглушку).
+  const pend={c:{'pending-abc':{id:'pending-abc',content:'привет',ts:Date.now(),_pendingAt:Date.now(),status:'sending'}}};
+  const outDup=H.mergePending({pendingOutgoing:pend,isTombstoned:()=>false,msgTs:H.msgTs,mergePendingOutgoing:()=>{},dropBucket:()=>{}},'c',[real]);
+  check('mergePending: pending-дубль реального не добавляется',
+    outDup.filter(m=>m.content==='привет').length === 1, outDup);
 }
 
 { const hist=[{from:'me',status:'sending',ts:Date.now()-120000},{from:'peer',status:'sending',ts:Date.now()+1000}];

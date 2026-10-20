@@ -20,6 +20,10 @@ check('parsePollEnvelope валид → id/question/options',parsed.id==='p1'&&p
 check('parsePollEnvelope myVote:null+votes:{}',parsed.myVote===null&&Object.keys(parsed.votes).length===0);
 check('parsePollEnvelope <2 опций → null',P.parsePollEnvelope({type:'poll',poll:{id:'p2',question:'q',options:['a']}})===null);
 check('parsePollEnvelope type!=poll → null',P.parsePollEnvelope({type:'msg',poll:{question:'q',options:['a','b']}})===null);
+// Вопрос обрезается до 200 символов (лимит формата), иначе в чат уходит
+// произвольная длина — и разные клиенты считают по-разному.
+const longQ=P.parsePollEnvelope({type:'poll',poll:{id:'p9',question:'x'.repeat(500),options:['a','b']}});
+check('parsePollEnvelope: вопрос обрезан до 200', longQ && longQ.question.length===200, longQ && longQ.question.length);
 const poll={options:['a','b','c'],votes:{'x@x':0,'y@x':0,'z@x':2}};
 const v=P.pollVotes(poll);
 check('pollVotes counts=[2,0,1]',JSON.stringify(v.counts)==='[2,0,1]');
