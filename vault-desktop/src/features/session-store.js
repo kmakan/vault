@@ -76,12 +76,23 @@ export { createMailboxStore, mailboxState as mailboxStore } from './mailbox-stor
 // ADR-004 J.3b: owner для UI-утилит (i18n t + showToast — часто-используемые
 // delegates в relay.js/calls.js). Вынос из ctx.* в singleton, чтобы state-machine
 // не зависел от App.vue data-methods (ctx-coupling: 3× t, 3× showToast в relay.js).
-export function createUiStore() {
-  let t = (k) => k;
-  let showToast = () => {};
-  let searchQuery = '';
-  // J.5b: form-state (newChannel*/newGroup*) вынесен из App.data в uiStore.
-  const formState = {
+// UI-состояние владельца: поля форм, флаги модалок, поиск.
+//
+// ВАЖНО (20.10.2026). Это состояние обязано быть РЕАКТИВНЫМ, иначе модалки
+// не открываются. Computed в App.vue поверх ОБЫЧНОГО объекта не имеет
+// реактивных зависимостей → Vue кэширует значение навсегда: `showSettings =
+// true` не открывал настройки, и то же для формы создания группы и поиска
+// чатов. Найдено пробой на живой сборке (headless Chrome, настоящий dist/).
+//
+// Тот же класс уже был починен для тоста (setToastSink — см. ниже), а для
+// модалок и форм его забыли. Поэтому состояние ИНЪЕКТИРУЕТСЯ: App.vue
+// создаёт reactive-объект и отдаёт его через setUiState. Сам модуль остаётся
+// framework-agnostic (vue не импортируется) — принцип из шапки файла.
+export function defaultUiState() {
+  return {
+    searchQuery: '',
+    // J.5b: form-state (newChannel*/newGroup*) вынесен из App.data в uiStore.
+    form: {
     newChannelName: '',
     newChannelAbout: '',
     joinChannelLink: '',
@@ -103,10 +114,10 @@ export function createUiStore() {
     imapPort: '',
     smtpServer: '',
     smtpPort: '',
-    mailProvider: '',
-  };
-  // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
-  const modalFlags = {
+      mailProvider: '',
+    },
+    // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
+    modals: {
     showChannelPanel: false,
     showCreateChannel: false,
     showJoinChannel: false,
@@ -127,9 +138,18 @@ export function createUiStore() {
     showEmojiPicker: false,
     showSettings: false,
     showMembers: false,
-    showChatSearch: false,
-    showJumpToBottom: false,
+      showChatSearch: false,
+      showJumpToBottom: false,
+    },
   };
+}
+
+export function createUiStore() {
+  let t = (k) => k;
+  let showToast = () => {};
+  // Состояние UI по умолчанию — обычный объект (node/смоуки). Реактивность
+  // приходит инъекцией (setUiState) — см. defaultUiState.
+  let uiState = defaultUiState();
   let toastState = { message: '' };
   // Реактивный «сток» тоста. Сам модуль framework-agnostic (см. шапку файла),
   // поэтому reactive({message}) создаёт App.vue и отдаёт сюда через
@@ -144,15 +164,18 @@ export function createUiStore() {
     getT() { return t; },
     setShowToast(fn) { showToast = fn; },
     getToast() { return showToast; },
+    // ── Реактивное UI-состояние (инъекция от App.vue) ────────────────
+    setUiState(state) { uiState = state || defaultUiState(); return uiState; },
+    getUiState() { return uiState; },
     // J.5b: searchQuery-form state вынесен из App.data в uiStore.
-    setSearchQuery(v) { searchQuery = v ?? ''; },
-    getSearchQuery() { return searchQuery; },
-    setFormField(k, v) { formState[k] = v ?? ''; return formState[k]; },
-    getFormField(k) { return formState[k]; },
-    resetForm() { for (const k of Object.keys(formState)) formState[k] = ''; },
-    setModal(name, v) { modalFlags[name] = !!v; return modalFlags[name]; },
-    getModal(name) { return !!modalFlags[name]; },
-    resetModals() { for (const k of Object.keys(modalFlags)) modalFlags[k] = false; },
+    setSearchQuery(v) { uiState.searchQuery = v ?? ''; return uiState.searchQuery; },
+    getSearchQuery() { return uiState.searchQuery; },
+    setFormField(k, v) { uiState.form[k] = v ?? ''; return uiState.form[k]; },
+    getFormField(k) { return uiState.form[k]; },
+    resetForm() { for (const k of Object.keys(uiState.form)) uiState.form[k] = ''; },
+    setModal(name, v) { uiState.modals[name] = !!v; return uiState.modals[name]; },
+    getModal(name) { return !!uiState.modals[name]; },
+    resetModals() { for (const k of Object.keys(uiState.modals)) uiState.modals[k] = false; },
     setToastSink(sink) { toastState = sink || { message: '' }; },
     setToastMessage(v) { toastState.message = v ?? ''; return toastState.message; },
     getToastMessage() { return toastState.message; },

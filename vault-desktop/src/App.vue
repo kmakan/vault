@@ -902,7 +902,7 @@ import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
 import { createInvitesStore } from './features/invites-store.js';
-import { sessionStore as sessionState, chatStore as chatState, uiStore } from './features/session-store.js';
+import { sessionStore as sessionState, chatStore as chatState, uiStore, defaultUiState } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
 import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
@@ -1146,6 +1146,21 @@ export default {
     // тост пишется в reactive-сток, который читает computed `toastMessage`.
     const toastState = reactive({ message: '' });
     uiStore.setToastSink(toastState);
+    // ── UI-состояние владельца uiStore: флаги модалок, поля форм, поиск ──
+    //
+    // ОБЯЗАТЕЛЬНО реактивное. Computed поверх ОБЫЧНОГО объекта не имеет
+    // реактивных зависимостей, и Vue кэширует его значение НАВСЕГДА: флаг
+    // `showSettings = true` не открывал настройки (то же — форма создания
+    // группы, поиск чатов, инвайт-попап). Найдено 20.10.2026 пробой на живой
+    // сборке (headless Chrome, настоящий dist/): флаг выставлялся, а
+    // `.modal-overlay` в DOM не появлялся.
+    //
+    // Тот же класс уже был починен для тоста (setToastSink — reactive-объект
+    // создаёт App.vue и отдаёт владельцу); для модалок и форм это забыли.
+    // Приём тот же: модуль остаётся framework-agnostic (vue не импортируется),
+    // реактивность приходит инъекцией.
+    const uiState = reactive(defaultUiState());
+    uiStore.setUiState(uiState);
     uiStore.setT(t);
     let toastTimer = null;
     uiStore.setShowToast((message, ms = 5000) => {

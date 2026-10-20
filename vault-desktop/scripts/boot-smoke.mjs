@@ -343,6 +343,45 @@ const CHANNELS_EXPR = `(() => {
   return JSON.stringify({ hasProxy: true, channelsLen: ids.length, ids, posts, unread });
 })()`;
 
+// ── Проверка живости UI-состояния (модалки/формы) ──────────────────────────
+//
+// КЛАСС, НАЙДЕННЫЙ 20.10.2026: флаги модалок и поля форм лежат в uiStore
+// (ADR-004 J.5b/J.7). Если это состояние — ОБЫЧНЫЙ объект, computed в
+// App.vue не имеет реактивных зависимостей, и Vue кэширует его значение
+// НАВСЕГДА: флаг выставляется, а `.modal-overlay` в DOM не появляется.
+// Ни один гейт этого не видел: сборка зелёная, смоуки зелёные, а настройки
+// (и форма создания группы, и поиск чатов, и инвайт-попап) не открываются.
+//
+// Проверка — как действие пользователя: клик по кнопке настроек обязан
+// открыть модалку, а запись в поле формы обязана дойти до владельца.
+const MODAL_EXPR = `(async () => {
+  const host = document.querySelector('#app');
+  const app = host && host.__vue_app__;
+  const inst = app && (app._instance || (app._container && app._container._vnode && app._container._vnode.component));
+  const p = inst && inst.proxy;
+  if (!p) return JSON.stringify({ error: 'нет инстанса' });
+  const before = document.querySelectorAll('.modal-overlay').length;
+  const btn = Array.from(document.querySelectorAll('button')).find((b) => {
+    const t = (b.getAttribute('title') || '') + ' ' + (b.textContent || '');
+    return /\u043d\u0430\u0441\u0442\u0440|settings/i.test(t);
+  });
+  if (btn) btn.click();
+  await new Promise((r) => setTimeout(r, 400));
+  const after = document.querySelectorAll('.modal-overlay').length;
+  // Поле формы: значение обязано доехать до владельца (иначе форма создания
+  // группы отправит пустое имя).
+  // Чтение ДО записи: незакэшированный computed вычисляется заново и
+  // заморозку не покажет — нужен уже закэшированный.
+  const formBefore = p.newGroupName;
+  p.newGroupName = 'boot-probe';
+  await new Promise((r) => setTimeout(r, 150));
+  const form = p.newGroupName;
+  p.newGroupName = '';
+  p.showSettings = false;
+  await new Promise((r) => setTimeout(r, 150));
+  return JSON.stringify({ before, after, form, formBefore, clicked: !!btn });
+})()`;
+
 // ── Фазы ────────────────────────────────────────────────────────────────
 const PHASES = [
   {
@@ -388,6 +427,23 @@ const PHASES = [
         if (toast.directError) failed.push(`this.showToast падает: ${toast.directError}`);
         else if (toast.directToastShown !== 'SMOKE-VIA-METHOD') {
           failed.push(`this.showToast(...) не доходит до DOM (.app-toast: «${toast.directToastShown}»)`);
+        }
+      }
+      // Живость UI-состояния (20.10.2026): флаги модалок/поля форм обязаны
+      // быть РЕАКТИВНЫМИ. Обычный объект в uiStore → computed кэшируется
+      // навсегда → модалка не открывается, а сборка зелёная.
+      const modal = s.modal;
+      if (!modal || modal.error) {
+        failed.push('проверка модалки не выполнилась (нет инстанса)');
+      } else {
+        if (!modal.clicked) failed.push('кнопка настроек не найдена в DOM — проверка модалки не意义');
+        else if (modal.after <= modal.before) {
+          failed.push(`модалка НЕ открылась по клику (было ${modal.before}, стало ${modal.after}) — UI-состояние не реактивно (uiStore)`);
+        }
+        if (modal.form !== 'boot-probe') {
+          failed.push(`поле формы не переживает запись («${modal.form}») — computed заморожен (uiStore.formState)`);
+        } else if (modal.formBefore === 'boot-probe') {
+          failed.push('проверка поля формы некорректна: значение было прочитано только после записи');
         }
       }
       return failed;
@@ -533,6 +589,13 @@ async function main() {
       // Канал тоста проверяем только там, где приложение уже вошло (фаза 2):
       // в фазе входа тост никто не показывает.
       if (phase.query.includes('smoke=autologin')) {
+        // Живость UI-состояния: модалка обязана открываться (см. MODAL_EXPR).
+        const modalRes = await cmd('Runtime.evaluate', {
+          expression: MODAL_EXPR,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        try { state.modal = JSON.parse(modalRes.result?.result?.value || 'null'); } catch { state.modal = null; }
         const toastRes = await cmd('Runtime.evaluate', {
           expression: TOAST_EXPR,
           returnByValue: true,
