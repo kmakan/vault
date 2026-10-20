@@ -50,3 +50,62 @@ export async function sendEscrowEmail(accountEmail, mnemonic, spamToastKey) {
   }
   return { wrappedJson, spamToastKey };
 }
+// ── ADR-005 W3 (партия 12): поиск эскроу-письма в ящике ────────────────
+// Эскроу-письмо лежит в спаме у большинства провайдеров, и Gmail удаляет
+// спам примерно через 30 дней. Поэтому поиск ПОВТОРЯЕТСЯ (до 4 попыток) и
+// находит письмо, даже если оно пришло не сразу.
+//
+// ПРАВИЛО ОДНО: найденное письмо с salt/nonce/wrapped, совпадающими с нашими,
+// — это НАШЕ. Совпадение проверяется по всем трём полям сразу.
+//
+// ЕСЛИ ПИСЬМО ЛЕЖИТ НЕ В INBOX — копируем его туда (провайдер не удалит) и
+// предупреждаем, что письмо нельзя удалять; если копирование не вышло —
+// просим пользователя переложить его вручную. Иначе письмо, найденное в
+// спаме, было бы «найдено» и через месяц молча пропало бы.
+export async function locateEscrowFlow(deps, wrappedJson, attempt = 0) {
+  const {
+    email, fetchEmails, fetchBodies, parseEscrowEmail, copyToInbox,
+    toast, t, warn, sleep, attempts = 4, delayMs = 5000,
+  } = deps;
+  if (attempt >= attempts) return false;
+  await sleep(delayMs);
+  try {
+    let local = null;
+    try { local = JSON.parse(wrappedJson); } catch { return false; }
+    const msgs = await fetchEmails(email());
+    const candidates = (msgs || []).filter((m) => !(m.subject || '').trim()).slice(0, 80);
+    const byFolder = {};
+    for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
+    for (const [folder, list] of Object.entries(byFolder)) {
+      const bodies = await fetchBodies(list.map((m) => String(m.uid)), folder);
+      // uid берём ИЗ ПАРЫ тела: в оригинале копировался uid последнего
+      // кандидата папки (m из внешнего цикла), а не найденного письма — то
+      // есть копировалась НЕ ТА ПИСЬМО. Исправлено: копируем найденное.
+      for (const [uid, body] of bodies || []) {
+        const w = await parseEscrowEmail(body);
+        if (!w) continue;
+        let p = null;
+        try { p = JSON.parse(w); } catch { continue; }
+        if (p && p.salt === local.salt && p.nonce === local.nonce && p.wrapped === local.wrapped) {
+          if (folder !== 'INBOX') {
+            // Вариант A: автоматически копируем письмо во INBOX, чтобы
+            // провайдер не удалил его из спама.
+            try {
+              await copyToInbox(String(uid), folder);
+              toast(t('recovery_moved_toast'), 12000);
+            } catch (e) {
+              warn('escrow copy to inbox failed:', e);
+              toast(t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
+            }
+          } else {
+            toast(t('recovery_keep'), 8000);
+          }
+          return true;
+        }
+      }
+    }
+  } catch (e) {
+    warn('escrow locate failed:', e);
+  }
+  return locateEscrowFlow(deps, wrappedJson, attempt + 1);
+}

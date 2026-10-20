@@ -2238,6 +2238,58 @@ export default {
     receiptsDeps() {
       return {
         cryptoReady: () => this.cryptoReady,
+        // Квитанции «прочитано» (ADR-005 W3, партия 12).
+        activeChatType: () => this.activeChatType,
+        currentGroup: () => this.currentGroup,
+        activeChat: () => this.activeChat,
+        peerKeys: () => this.peerKeys,
+        peerPqKeys: () => this.peerPqKeys,
+        groupKeys: () => this.groupKeys,
+        loadSentReads: () => this.loadSentReads(),
+        saveSentReads: (v) => this.saveSentReads(v),
+        encryptWithGroupKey: (payload, key) => crypto.encryptWithGroupKey(payload, key),
+        setPeerPublicKey: (k, pq) => crypto.setPeerPublicKey(k, pq),
+        encryptVault: (payload) => crypto.encryptVault(payload),
+        sendGroupRead: (id, content) => api.sendGroupRead(id, content),
+        sendReadReceipt: (email, content) => api.sendReadReceipt(email, content),
+        onError: (e) => console.error('Failed to send read receipts:', e),
+      };
+    },
+    // Контракт автоочистки (ADR-005 W3, партия 12): зеркала памяти и период.
+    autocleanDeps() {
+      return {
+        isLoggedIn: () => this.isLoggedIn,
+        account: () => this.email,
+        emails: () => this.emails,
+        emailBodyCache: () => this.emailBodyCache,
+        bodyCacheOrder: () => this.bodyCacheOrder,
+        loadPeriod: () => db.kvGet('anon', 'autoclean-period'),
+        applyMirrors: (applied) => {
+          this.emails = applied.emails;
+          this.emailBodyCache = applied.emailBodyCache;
+          this.bodyCacheOrder = applied.bodyCacheOrder;
+        },
+        persistBodyCache: () => this.persistBodyCache(),
+        logPurged: (bodies, msgs, period) => {
+          console.info('[autoclean] purged', bodies, 'bodies /', msgs, 'msgs, period', period);
+        },
+        onError: (e) => console.warn('[autoclean] failed:', e),
+      };
+    },
+    // Контракт поиска эскроу-письма (ADR-005 W3, партия 12). Провайдеры
+    // кладут эскроу в спам, а Gmail удаляет спам через ~30 дней — поэтому
+    // поиск повторяется, а найденное письмо копируется во «Входящие».
+    recoveryEscrowDeps() {
+      return {
+        email: () => this.email,
+        fetchEmails: (email) => api.fetchEmails(email),
+        fetchBodies: (uids, folder) => invoke('email_fetch_bodies', { uids, folder }).catch(() => []),
+        parseEscrowEmail: (body) => crypto.recoveryParseEscrowEmail(body),
+        copyToInbox: (uid, folder) => invoke('email_copy_to_inbox', { uid, folder }),
+        toast: (msg, ms) => uiStore.toast(msg, ms),
+        t: (key) => uiStore.tr(key),
+        warn: (...args) => console.warn(...args),
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       };
     },
     // Контракт фичи писем (ADR-005 W2, партия 10): список писем и флаги
@@ -4009,49 +4061,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Ищем только что отправленное эскроу-письмо (совпадение salt+nonce+wrapped)
     // и сообщаем, где оно лежит.
     async locateEscrow(wrappedJson, attempt = 0) {
-      if (attempt >= 4) return;
-      await new Promise((r) => setTimeout(r, 5000));
-      try {
-        let local = null;
-        try { local = JSON.parse(wrappedJson); } catch { return; }
-        const msgs = await api.fetchEmails(this.email);
-        const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
-        const byFolder = {};
-        for (const m of candidates) (byFolder[m.folder] = byFolder[m.folder] || []).push(m);
-        for (const [folder, list] of Object.entries(byFolder)) {
-          const bodies = await invoke('email_fetch_bodies', {
-            uids: list.map((m) => String(m.uid)),
-            folder,
-          }).catch(() => []);
-          for (const [, body] of bodies || []) {
-            const w = await crypto.recoveryParseEscrowEmail(body);
-            if (!w) continue;
-            let p = null;
-            try { p = JSON.parse(w); } catch { continue; }
-            if (p && p.salt === local.salt && p.nonce === local.nonce && p.wrapped === local.wrapped) {
-              if (folder !== 'INBOX') {
-                // Вариант A: автоматически копируем письмо во INBOX
-                // чтобы провайдер не удалил его из спама. Если не вышло —
-                // просим пользователя переложить вручную. В любом случае
-                // предупреждаем, что письмо удалять нельзя.
-                try {
-                  await invoke('email_copy_to_inbox', { uid: String(m.uid), folder });
-                  uiStore.toast(t('recovery_moved_toast'), 12000);
-                } catch (e) {
-                  console.warn('escrow copy to inbox failed:', e);
-                  uiStore.toast(t('recovery_spam_folder') + folder + t('recovery_spam_move'), 15000);
-                }
-              } else {
-                uiStore.toast(t('recovery_keep'), 8000);
-              }
-              return;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('escrow locate failed:', e);
-      }
-      this.locateEscrow(wrappedJson, attempt + 1);
+      return RecoveryEscrow.locateEscrowFlow(this.recoveryEscrowDeps, wrappedJson, attempt);
     },
     // Поиск эскроу-письма в последних письмах + восстановление по словам.
     // Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создастся новая пара.
@@ -4297,26 +4307,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // а письма без идентификатора исключаются — ключ 'INBOX:' в purge удалил бы
     // по префиксу больше, чем задумано.
     async runAutoclean(period) {
-      const p = period || (await db.kvGet('anon', 'autoclean-period')) || 'off';
-      if (p === 'off' || !this.isLoggedIn) return;
-      if (!Autoclean.periodDaysOf(p)) return;
-      try {
-        const acc = this.email || 'anon';
-        const cutoff = Autoclean.autocleanCutoff(p);
-        const r = await Autoclean.runPurge(acc, {
-          emails: this.emails,
-          emailBodyCache: this.emailBodyCache,
-          bodyCacheOrder: this.bodyCacheOrder,
-        }, cutoff);
-        if (!r.applied) return;
-        this.emails = r.applied.emails;
-        this.emailBodyCache = r.applied.emailBodyCache;
-        this.bodyCacheOrder = r.applied.bodyCacheOrder;
-        this.persistBodyCache();
-        console.info('[autoclean] purged', r.purged, 'bodies /', r.keys.length, 'msgs, period', p);
-      } catch (e) {
-        console.warn('[autoclean] failed:', e);
-      }
+      return Autoclean.runAutocleanFlow(this.autocleanDeps, period);
     },
     openChatMenu(target, e) { return ChatUiFeature.openChatMenu(this.chatUiDeps, target, e); },
     closeChatMenu() { return ChatUiFeature.closeChatMenu(this.chatUiDeps); },
@@ -4439,39 +4430,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Отправить квитанцию «просмотрено» по входящим сообщениям текущего чата.
     // Вызывается после рендера сообщений (открытие чата и поллинг).
     async sendReadReceipts(incomingIds) {
-      if (!incomingIds || !incomingIds.length) return;
-      const sent = this.loadSentReads();
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      const sentIds = sent[chatKey] || [];
-      const fresh = incomingIds.filter(id => id && sentIds.indexOf(id) < 0);
-      if (!fresh.length) return;
-      const payload = JSON.stringify({ read: 1, msg_ids: fresh });
-      // иначе при медленном SMTP (30-60с) следующий поллинг (30с) считает
-      // fresh заново и уходит вторая копия квитанции (в ящиках лежали дубли
-      // {read:1} с одинаковыми msg_ids — «письма отправляются циклично»).
-      sent[chatKey] = sentIds.concat(fresh);
-      this.saveSentReads(sent);
-      (async () => {
-        try {
-          if (this.activeChatType === 'group' && this.currentGroup) {
-            const groupKey = this.groupKeys[this.currentGroup.id];
-            if (!groupKey) return;
-            const content = await crypto.encryptWithGroupKey(payload, groupKey);
-            await api.sendGroupRead(this.currentGroup.id, content);
-          } else if (this.activeChat && this.peerKeys[this.activeChat]) {
-            crypto.setPeerPublicKey(this.peerKeys[this.activeChat], this.peerPqKeys && this.peerPqKeys[this.activeChat]);
-            const content = await crypto.encryptVault(payload);
-            await api.sendReadReceipt(this.activeChat, content);
-          }
-        } catch (e) {
-          console.error('Failed to send read receipts:', e);
-          // SMTP упал — снимаем метку, чтобы квитанция повторилась позже.
-          sent[chatKey] = sentIds;
-          this.saveSentReads(sent);
-        }
-      })();
+      return ReceiptsFeature.sendReadReceiptsFlow(this.receiptsDeps, incomingIds);
     },
     // Квитанции «доставлено» по новым входящим (поллинг): как только письмо
     // получено и расшифровано как vault-сообщение — отправителю уходит

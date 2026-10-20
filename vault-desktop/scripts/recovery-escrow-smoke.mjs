@@ -104,5 +104,96 @@ for (const loc of ['ru', 'en', 'zh']) {
   ok(loc + '.js определяет recovery_escrow_failed', /recovery_escrow_failed:\s*'[^']+'/.test(body));
 }
 
+// ── Поток поиска эскроу-письма (ADR-005 W3, партия 12) ─────────────────
+// Ключевое: эскроу лежит в спаме, и провайдер его удаляет. Поэтому поиск
+// повторяется, а найденное письмо копируется во «Входящие».
+console.log('\nПоток поиска эскроу-письма (locateEscrowFlow)');
+{
+  const LOCAL = JSON.stringify({ salt: 'S', nonce: 'N', wrapped: 'W' });
+  const MINE = JSON.stringify({ salt: 'S', nonce: 'N', wrapped: 'W' });
+  const OTHER = JSON.stringify({ salt: 'S2', nonce: 'N2', wrapped: 'W2' });
+  const calls = [];
+  const deps = (over = {}) => ({
+    email: () => 'me@bk.ru',
+    fetchEmails: async () => ([
+      { uid: 'u1', folder: 'INBOX', subject: '' },
+      { uid: 'u2', folder: 'Spam', subject: '' },
+      { uid: 'u3', folder: 'INBOX', subject: 'обычное письмо' },
+    ]),
+    fetchBodies: async (uids, folder) => {
+      calls.push(['fetchBodies', folder, uids.join(',')]);
+      if (folder === 'Spam') return [['u2', 'ESCROW:' + MINE]];
+      return [['u1', 'ESCROW:' + OTHER]];
+    },
+    parseEscrowEmail: async (body) => {
+      const m = /^ESCROW:(.*)$/.exec(body || '');
+      return m ? m[1] : null;
+    },
+    copyToInbox: async (uid, folder) => { calls.push(['copyToInbox', uid, folder]); },
+    toast: (msg, ms) => calls.push(['toast', msg, ms]),
+    t: (k) => 'T:' + k,
+    warn: (...a) => calls.push(['warn', String(a[0])]),
+    sleep: async () => {},
+    attempts: 4,
+    delayMs: 0,
+    ...over,
+  });
+  // 1. Найдено в INBOX → предупреждение «не удаляйте», копирования нет.
+  calls.length = 0;
+  let found = await R.locateEscrowFlow(deps({
+    fetchBodies: async (uids, folder) => (folder === 'INBOX'
+      ? [['u1', 'ESCROW:' + MINE]] : []),
+  }), LOCAL);
+  ok('поток: найдено в INBOX', found === true);
+  ok('поток: в INBOX копирования нет', !calls.some((c) => c[0] === 'copyToInbox'), calls);
+  ok('поток: в INBOX — предупреждение «не удаляйте»',
+    calls.some((c) => c[0] === 'toast' && c[1] === 'T:recovery_keep'), calls);
+
+  // 2. Найдено в спаме → копируем в INBOX (иначе провайдер удалит).
+  calls.length = 0;
+  found = await R.locateEscrowFlow(deps(), LOCAL);
+  ok('поток: найдено в спаме', found === true);
+  ok('поток: письмо скопировано во INBOX', calls.some((c) => c[0] === 'copyToInbox'), calls);
+  ok('поток: копируется ИМЕННО найденное письмо (uid из пары тела)',
+    calls.some((c) => c[0] === 'copyToInbox' && c[1] === 'u2'), calls);
+  ok('поток: после копирования — предупреждение «переложено»',
+    calls.some((c) => c[0] === 'toast' && c[1] === 'T:recovery_moved_toast'), calls);
+
+  // 3. Не найдено → поиск ПОВТОРЯЕТСЯ (письмо могло прийти позже).
+  calls.length = 0;
+  let attemptsSeen = 0;
+  found = await R.locateEscrowFlow(deps({
+    fetchBodies: async () => [],
+    fetchEmails: async () => { attemptsSeen++; return []; },
+  }), LOCAL);
+  ok('поток: не найдено → поиск повторён', attemptsSeen > 1, attemptsSeen);
+  ok('поток: попыток не больше лимита', attemptsSeen <= 4, attemptsSeen);
+  ok('поток: не найдено — false', found === false);
+
+  // 4. Битый wrappedJson → тихо, без повторов.
+  calls.length = 0;
+  attemptsSeen = 0;
+  found = await R.locateEscrowFlow(deps({
+    fetchEmails: async () => { attemptsSeen++; return []; },
+  }), '{битый json');
+  ok('поток: битый wrapped → выход без обращения к ящику', attemptsSeen === 0, attemptsSeen);
+
+  // 5. Совпадение только по salt — НЕ наше письмо: сверка идёт по всем трём
+  // полям (salt+nonce+wrapped), иначе обрезанное письмо сошлось бы за наше.
+  calls.length = 0;
+  found = await R.locateEscrowFlow(deps({
+    fetchBodies: async () => [['u1', 'ESCROW:' + JSON.stringify({ salt: 'S', nonce: 'ДРУГОЙ', wrapped: 'W' })]],
+  }), LOCAL);
+  ok('поток: совпадение только по salt — не наше письмо', found === false, calls);
+
+  // 6. Копирование не вышло → просим переложить вручную.
+  calls.length = 0;
+  found = await R.locateEscrowFlow(deps({
+    copyToInbox: async () => { throw new Error('нет команды'); },
+  }), LOCAL);
+  ok('поток: при отказе копирования — просьба переложить вручную',
+    calls.some((c) => c[0] === 'toast' && String(c[1]).includes('T:recovery_spam_folder')), calls);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

@@ -46,7 +46,8 @@ prepareModuleCopy(
   },
   MOCKS,
 );
-const { sendDeliveredReceipts } = await import(MOCKS + '/receipts.mjs');
+const R = await import(MOCKS + '/receipts.mjs');
+const { sendDeliveredReceipts } = R;
 
 // ADR-005 W2 (партия 11): состояние — у владельцев. Смоук берёт ТЕ ЖЕ
 // синглтоны, что импортирует копия модуля, — иначе проверял бы не тот объект.
@@ -151,6 +152,83 @@ await new Promise((r) => setTimeout(r, 50));
 const sentMap = JSON.parse(_kv.get('delivered-sent') || '{}');
 check('при падении SMTP метка снята (квитанция повторится позже)',
   !Object.values(sentMap).some((v) => v === undefined) && !('msg-40' in sentMap), sentMap);
+
+// ── Квитанции «прочитано» (ADR-005 W3, партия 12) ─────────────────────
+// Антидубль: метка «уже отправлено» пишется ДО отправки — иначе при
+// медленном SMTP поллинг успевает отправить вторую копию.
+console.log('\nКвитанции «прочитано» (sendReadReceiptsFlow)');
+{
+  const calls = [];
+  const sentReads = {};
+  const deps = (over = {}) => ({
+    activeChatType: () => 'chat',
+    currentGroup: () => null,
+    activeChat: () => 'peer@x.ru',
+    peerKeys: () => ({ 'peer@x.ru': 'PK' }),
+    peerPqKeys: () => ({}),
+    groupKeys: () => ({}),
+    loadSentReads: () => ({ ...sentReads }),
+    saveSentReads: (v) => { calls.push(['save', JSON.stringify(v)]); Object.assign(sentReads, v); },
+    encryptWithGroupKey: async (p, k) => 'GENC:' + k,
+    setPeerPublicKey: () => {},
+    encryptVault: async (p) => 'ENC:' + p,
+    sendGroupRead: async (id, c) => { calls.push(['groupRead', id, c]); },
+    sendReadReceipt: async (email, c) => { calls.push(['readReceipt', email, c]); },
+    onError: (e) => calls.push(['error', e.message]),
+    ...over,
+  });
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps(), ['m1', 'm2']);
+  check('квитанция 1:1 отправлена', calls.some((c) => c[0] === 'readReceipt' && c[1] === 'peer@x.ru'), calls);
+  check('квитанция 1:1: payload с msg_ids',
+    calls.some((c) => c[0] === 'readReceipt' && String(c[2]).includes('m1')), calls);
+  await new Promise((r) => setTimeout(r, 30));
+  check('метка «отправлено» записана (антидубль)',
+    JSON.stringify(sentReads).includes('m1'), sentReads);
+
+  // Повтор тех же id — второй квитанции НЕ уходит.
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps(), ['m1']);
+  await new Promise((r) => setTimeout(r, 30));
+  check('повтор тех же id не отправляет квитанцию снова',
+    !calls.some((c) => c[0] === 'readReceipt'), calls);
+
+  // Пустой список — ничего.
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps(), []);
+  check('пустой список → ничего не отправлено', calls.length === 0, calls);
+
+  // Группа: квитанция шифруется ключом ГРУППЫ.
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps({
+    activeChatType: () => 'group',
+    currentGroup: () => ({ id: 'g1' }),
+    groupKeys: () => ({ g1: 'GK' }),
+  }), ['gm1']);
+  await new Promise((r) => setTimeout(r, 30));
+  check('квитанция группы: ключ группы использован',
+    calls.some((c) => c[0] === 'groupRead' && c[1] === 'g1' && c[2] === 'GENC:GK'), calls);
+
+  // Без ключа группы — квитанция не уходит (но метка уже записана).
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps({
+    activeChatType: () => 'group',
+    currentGroup: () => ({ id: 'g2' }),
+    groupKeys: () => ({}),
+  }), ['gm2']);
+  await new Promise((r) => setTimeout(r, 30));
+  check('без ключа группы квитанция не уходит', !calls.some((c) => c[0] === 'groupRead'), calls);
+
+  // Отказ SMTP — метка снимается, квитанция повторится позже.
+  calls.length = 0;
+  await R.sendReadReceiptsFlow(deps({
+    sendReadReceipt: async () => { throw new Error('SMTP down'); },
+  }), ['m3']);
+  await new Promise((r) => setTimeout(r, 30));
+  check('при падении SMTP метка снята (квитанция повторится)',
+    !JSON.stringify(sentReads).includes('m3'), sentReads);
+  check('ошибка залогирована', calls.some((c) => c[0] === 'error'), calls);
+}
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

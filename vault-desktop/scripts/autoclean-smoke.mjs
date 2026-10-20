@@ -161,5 +161,59 @@ try {
 } catch (e) { threw = true; }
 ok('отказ purge пробрасывается — вызывающий ловит и предупреждает', threw === true);
 
+// ── Поток из UI (ADR-005 W3, партия 12): runAutocleanFlow ─────────────
+// Период из настроек, зеркала памяти обновляются ЦЕЛИКОМ, отказ purge —
+// предупреждение, а не падение.
+console.log('\nПоток автоочистки (runAutocleanFlow)');
+{
+  const calls = [];
+  const deps = {
+    isLoggedIn: () => true,
+    account: () => 'fp:me',
+    emails: () => [{ uid: 1, date: daysAgo(40) }],
+    emailBodyCache: () => ({ 'INBOX:1': 'тело' }),
+    bodyCacheOrder: () => ['INBOX:1'],
+    loadPeriod: async () => '30d',
+    applyMirrors: (a) => calls.push(['applyMirrors', a.emails.length, Object.keys(a.emailBodyCache).length]),
+    persistBodyCache: () => calls.push(['persist']),
+    logPurged: (b, m, p) => calls.push(['purged', b, m, p]),
+    onError: (e) => calls.push(['error', e.message]),
+  };
+  reset();
+  await A.runAutocleanFlow(deps);
+  ok('поток: зеркала применены', calls.some((c) => c[0] === 'applyMirrors'), calls);
+  ok('поток: кэш сохранён', calls.some((c) => c[0] === 'persist'), calls);
+  ok('поток: отчёт записан', calls.some((c) => c[0] === 'purged' && c[3] === '30d'), calls);
+  ok('поток: purge ушёл в namespace аккаунта', state.purged.length === 1 && state.purged[0].account === 'fp:me', state.purged);
+
+  // Период из настроек отключён → чистки нет.
+  reset();
+  calls.length = 0;
+  await A.runAutocleanFlow({ ...deps, loadPeriod: async () => 'off' });
+  ok('поток: период off → ничего не чистим', calls.length === 0 && state.purged.length === 0, calls);
+
+  // Не залогинены → чистки нет (даже если период задан).
+  reset();
+  calls.length = 0;
+  await A.runAutocleanFlow({ ...deps, isLoggedIn: () => false }, '30d');
+  ok('поток: не залогинен → ничего не чистим', calls.length === 0 && state.purged.length === 0, calls);
+
+  // Явный период важнее настроек.
+  reset();
+  calls.length = 0;
+  await A.runAutocleanFlow({ ...deps, loadPeriod: async () => '7d' }, '30d');
+  ok('поток: явный период важнее периода из настроек',
+    calls.some((c) => c[0] === 'purged' && c[3] === '30d'), calls);
+
+  // Отказ purge — предупреждение, зеркала НЕ применяются.
+  reset();
+  state.failPurge = true;
+  calls.length = 0;
+  await A.runAutocleanFlow(deps);
+  state.failPurge = false;
+  ok('поток: отказ purge → onError, а не исключение', calls.some((c) => c[0] === 'error'), calls);
+  ok('поток: при отказе зеркала НЕ применяются', !calls.some((c) => c[0] === 'applyMirrors'), calls);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

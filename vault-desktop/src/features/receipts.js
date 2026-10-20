@@ -89,3 +89,51 @@ export async function sendDeliveredReceipts(deps, fetched) {
       }
       db.kvSet(acc, 'delivered-sent', JSON.stringify(sentMap)).catch(() => {});
 }
+
+// ── ADR-005 W3 (партия 12): квитанции «прочитано» ──────────────────────
+// Отправителю уходит {read:1, msg_ids:[...]}, чтобы у него загорелась жёлтая
+// точка.
+//
+// АНТИДУБЛЬ. Метки «уже отправлено» пишутся ДО отправки, а не после: при
+// медленном SMTP (30-60 с) следующий поллинг (30 с) иначе посчитал бы письма
+// свежими и ушёл вторая копия квитанции — в ящиках лежали дубли {read:1} с
+// одинаковыми msg_ids («письма отправляются циклично»). Если SMTP упал —
+// метка снимается, и квитанция повторится позже.
+export async function sendReadReceiptsFlow(deps, incomingIds) {
+  const {
+    activeChatType, currentGroup, activeChat, peerKeys, peerPqKeys, groupKeys,
+    loadSentReads, saveSentReads,
+    encryptWithGroupKey, setPeerPublicKey, encryptVault,
+    sendGroupRead, sendReadReceipt, onError,
+  } = deps;
+  if (!incomingIds || !incomingIds.length) return;
+  const sent = loadSentReads();
+  const chatKey = activeChatType() === 'group' && currentGroup()
+    ? 'group:' + currentGroup().id
+    : activeChat();
+  const sentIds = sent[chatKey] || [];
+  const fresh = incomingIds.filter((id) => id && sentIds.indexOf(id) < 0);
+  if (!fresh.length) return;
+  const payload = JSON.stringify({ read: 1, msg_ids: fresh });
+  sent[chatKey] = sentIds.concat(fresh);
+  saveSentReads(sent);
+  (async () => {
+    try {
+      if (activeChatType() === 'group' && currentGroup()) {
+        const groupKey = groupKeys()[currentGroup().id];
+        if (!groupKey) return;
+        const content = await encryptWithGroupKey(payload, groupKey);
+        await sendGroupRead(currentGroup().id, content);
+      } else if (activeChat() && peerKeys()[activeChat()]) {
+        setPeerPublicKey(peerKeys()[activeChat()], peerPqKeys() && peerPqKeys()[activeChat()]);
+        const content = await encryptVault(payload);
+        await sendReadReceipt(activeChat(), content);
+      }
+    } catch (e) {
+      onError(e);
+      // SMTP упал — снимаем метку, чтобы квитанция повторилась позже.
+      sent[chatKey] = sentIds;
+      saveSentReads(sent);
+    }
+  })();
+}

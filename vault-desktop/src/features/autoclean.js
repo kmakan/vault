@@ -83,3 +83,31 @@ export async function runPurge(account, state, cutoff) {
   const purged = await db.autocleanPurge(account, JSON.stringify(keys));
   return { purged, keys, applied: applyPurge(state, keys) };
 }
+// ── ADR-005 W3 (партия 12): поток автоочистки из UI ───────────────────
+// Период берётся из настроек, если не задан; зеркала памяти (список писем,
+// кэш тел, порядок кэша) обновляются ТОЛЬКО целиком — частичное применение
+// оставило бы память в состоянии, которого не существует. UI и хранилище —
+// deps'ами.
+export async function runAutocleanFlow(deps, period) {
+  const {
+    isLoggedIn, account, emails, emailBodyCache, bodyCacheOrder,
+    loadPeriod, applyMirrors, persistBodyCache, logPurged, onError,
+  } = deps;
+  const p = period || (await loadPeriod()) || 'off';
+  if (p === 'off' || !isLoggedIn()) return;
+  if (!periodDaysOf(p)) return;
+  try {
+    const cutoff = autocleanCutoff(p);
+    const r = await runPurge(account() || 'anon', {
+      emails: emails(),
+      emailBodyCache: emailBodyCache(),
+      bodyCacheOrder: bodyCacheOrder(),
+    }, cutoff);
+    if (!r.applied) return;
+    applyMirrors(r.applied);
+    persistBodyCache();
+    logPurged(r.purged, r.keys.length, p);
+  } catch (e) {
+    onError(e);
+  }
+}
