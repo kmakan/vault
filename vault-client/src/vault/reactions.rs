@@ -49,16 +49,29 @@ pub struct ReactionStore(ReactionsStore);
 impl ReactionStore {
     pub fn new() -> Self { Self(ReactionsStore::default()) }
 
-    /// Validate emoji (basic: 1-4 code points, not empty, no spaces).
+    /// Validate emoji — правило живёт в StoredReaction (единственный источник).
+    ///
+    /// Раньше оно было продублировано в двух структурах, и правка одной копии
+    /// оставляла вторую со старым поведением (тот же класс, что «правило
+    /// описано в двух местах»).
     pub fn is_valid_emoji(emoji: &str) -> bool {
-        !emoji.is_empty() && emoji.chars().count() <= 4 && !emoji.contains(char::is_whitespace)
+        StoredReaction::is_valid_emoji(emoji)
     }
 
     /// Add reaction. Returns Ok(true) if added, Ok(false) if invalid or already present.
+    ///
+    /// ВАЖНО: «уже есть» — это Ok(false), и это НЕ косметика. Вызывающий (CLI)
+    /// по Ok(true) не только печатает «Reacted …», но и ОТПРАЛЯЕТ письмо-
+    /// уведомление. Прежняя реализация возвращала Ok(true) всегда, и повторная
+    /// та же реакция приводила к ПОВТОРНОЙ отправке уведомления (тот же
+    /// класс, что «дубль квитанции»). Считаем по «до/после», как в
+    /// remove_reaction.
     pub fn add_reaction(&mut self, msg_id: &str, emoji: &str, user: &str) -> Result<bool, String> {
         if !Self::is_valid_emoji(emoji) { return Ok(false); }
+        let before = self.0.inner().get("__local__").and_then(|m| m.get(msg_id)).map_or(0, |v| v.len());
         self.0.add_reaction(msg_id, emoji, user);
-        Ok(true)
+        let after = self.0.inner().get("__local__").and_then(|m| m.get(msg_id)).map_or(0, |v| v.len());
+        Ok(after > before)
     }
 
     /// Remove reaction. Returns Ok(true) removed, Ok(false) not found/invalid.
@@ -241,5 +254,99 @@ mod tests {
         assert_eq!(reactions_for_message(&store, "__local__", "msg-1"), vec!["👍".to_string()]);
         store.remove_reaction("msg-1", "👍", "alice@x");
         assert!(reactions_for_message(&store, "__local__", "msg-1").is_empty());
+    }
+
+    /// Валидация эмодзи: непустой, до 4 code points, без пробелов. Это ввод
+    /// пользователя — серверная проверка, а не украшение.
+    /// Мутационный гейт Rust-ядра выловил, что на эти правила теста не было.
+    #[test]
+    fn test_is_valid_emoji_rules() {
+        assert!(ReactionStore::is_valid_emoji("👍"), "обычный эмодзи валиден");
+        assert!(ReactionStore::is_valid_emoji("❤"), "одно code point — валидно");
+        assert!(!ReactionStore::is_valid_emoji(""), "пустая строка — не эмодзи");
+        assert!(
+            !ReactionStore::is_valid_emoji("👍👍👍👍👍"),
+            "больше 4 code points — не эмодзи"
+        );
+        assert!(
+            !ReactionStore::is_valid_emoji("👍 "),
+            "эмодзи с пробелом — не эмодзи"
+        );
+        // Путь CLI (repl.rs) валидирует через StoredReaction::is_valid_emoji —
+        // правило должно вести себя ОДИНАКОВО в обеих точках.
+        assert!(StoredReaction::is_valid_emoji("👍"));
+        assert!(!StoredReaction::is_valid_emoji(""));
+        assert!(!StoredReaction::is_valid_emoji("👍👍👍👍👍"));
+        assert!(!StoredReaction::is_valid_emoji("👍 "));
+    }
+
+    /// Одна и та же пара (эмодзи, пользователь) не добавляется дважды:
+    /// иначе в чате появляются «двойные» реакции.
+    #[test]
+    fn test_add_reaction_dedup() {
+        let mut store = ReactionsStore::default();
+        store.add_reaction("msg-1", "👍", "alice@x");
+        store.add_reaction("msg-1", "👍", "alice@x");
+        // Считаем СЫРУЮ карту: reactions_for_message отдаёт список УНИКАЛЬНЫХ
+        // эмодзи, а нам нужно знать, сколько ЗАПИСЕЙ (реакция = эмодзи+пользователь).
+        let raw = store.inner().get("__local__").unwrap().get("msg-1").unwrap();
+        assert_eq!(
+            raw.len(),
+            1,
+            "повтор той же реакции от того же пользователя не добавляется"
+        );
+        // Другой пользователь — другая реакция, она добавляется.
+        store.add_reaction("msg-1", "👍", "bob@x");
+        let raw2 = store.inner().get("__local__").unwrap().get("msg-1").unwrap();
+        assert_eq!(raw2.len(), 2, "реакция другого пользователя добавляется");
+        assert_eq!(reactions_for_message(&store, "__local__", "msg-1").len(), 1, "эмодзи один");
+    }
+
+    /// Снятие реакции чужого пользователя не работает: реакция принадлежит
+    /// автору, а не тому, кто её видит.
+    #[test]
+    fn test_remove_reaction_of_other_user_does_nothing() {
+        let mut store = ReactionsStore::default();
+        store.add_reaction("msg-1", "👍", "alice@x");
+        store.remove_reaction("msg-1", "👍", "bob@x");
+        assert_eq!(
+            reactions_for_message(&store, "__local__", "msg-1").len(),
+            1,
+            "чужая реакция не должна сниматься"
+        );
+    }
+
+    /// Снятая последняя реакция убирает запись сообщения из карты — иначе в
+    /// карте чата копятся пустые записи.
+    #[test]
+    fn test_empty_reaction_entry_is_dropped() {
+        let mut store = ReactionsStore::default();
+        store.add_reaction("msg-1", "👍", "alice@x");
+        store.remove_reaction("msg-1", "👍", "alice@x");
+        assert!(
+            !store.inner().get("__local__").unwrap().contains_key("msg-1"),
+            "пустая запись реакций должна исчезнуть из карты"
+        );
+    }
+
+    /// ReactionStore (API для repl) отвечает: true — снято, false — не было.
+    #[test]
+    fn test_reaction_store_reports_whether_removed() {
+        let mut rs = ReactionStore::new();
+        assert!(rs.add_reaction("msg-1", "👍", "alice@x").unwrap());
+        assert!(
+            !rs.add_reaction("msg-1", "👍", "alice@x").unwrap(),
+            "дубль не добавляется (иначе CLI повторно отправит уведомление)"
+        );
+        assert!(!rs.add_reaction("msg-2", "", "alice@x").unwrap(), "пустой эмодзи не добавляется");
+        assert!(rs.remove_reaction("msg-1", "👍", "alice@x").unwrap(), "снятие сообщает true");
+        assert!(
+            !rs.remove_reaction("msg-1", "👍", "alice@x").unwrap(),
+            "повторное снятие сообщает false"
+        );
+        assert!(
+            !rs.remove_reaction("msg-1", "", "alice@x").unwrap(),
+            "невалидный эмодзи при снятии — false"
+        );
     }
 }
