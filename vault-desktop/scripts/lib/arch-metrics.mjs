@@ -128,7 +128,43 @@ export const ctxFields = (src) =>
 // `this.<владелец>.<метод>()` попадали в «логику» (найдено на живом App.vue
 // 20.10: startCallClock/stopCallClock и прокси login).
 // Правило совпадает с `appvue-inventory.mjs`. Всё остальное — логика.
-const DELEG_RE = /^\s*return\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\([^;]*\);\s*$/;
+// Делегат — метод, тело которого РОВНО `return <вызов>(<аргументы>);`.
+//
+// Раньше это проверялось регуляркой `\([^;]*\)` — и она НЕ узнавала
+// делегата, у которого в аргументах есть стрелка с телом: `Mod.foo({ cb: () => {
+// x = 1; } })`. Такой «свой» метод попадал в «логику» (найдено на живом
+// App.vue 20.10: loadProfiles/loadLocalProfiles/loginWithRecovery/…).
+// Теперь аргументы разбираются по балансу скобок: `;` внутри вложенной стрелки
+// допустим, а тело по-прежнему должно быть РОВНО одним выражением.
+const CALL_HEAD_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
+function isDelegateBody(body) {
+  const t = String(body).trim();
+  if (!t.startsWith('return ') || !t.endsWith(';')) return false;
+  const inner = t.slice(7, -1);
+  if (!CALL_HEAD_RE.test(inner)) return false;
+  let depth = 0;
+  let quote = null;
+  let callEnd = -1;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth < 0) return false;
+      // Вызов закрылся — дальше в теле ничего быть не должно (иначе это уже
+      // два выражения, а не делегат).
+      if (depth === 0) { callEnd = i; break; }
+    }
+  }
+  if (callEnd < 0) return false;
+  return inner.slice(callEnd + 1).trim() === '';
+}
 const METHOD_RE = /^\s{4}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^()]*)\)\s*\{/;
 // Тело метода — между СКОБКАМИ тела. Скобки ищем С КОНЦА: иначе параметр со
 // значением по умолчанию вида `opts = {}` даёт «первую» `{` не ту, и тело
@@ -184,7 +220,7 @@ export function appVueInventory(appSource) {
       i = j - 1;
     }
     methods++;
-    if (DELEG_RE.test(body)) delegates++;
+    if (isDelegateBody(body)) delegates++;
     else ownNames.push(name);
   }
   return { found: true, lines: lines.length, blockLines: end - start - 1, methods, delegates, own: ownNames.length, ownNames };
@@ -224,6 +260,10 @@ export function selfTest() {
     { name: 'App.vue: делегат this.владелец.метод() — не логика', src: 'methods: {\n    foo() { return this.callSession.startCallClock(); },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
     // Присваивание в data — это логика (не делегат).
     { name: 'App.vue: присваивание — логика', src: 'methods: {\n    foo(v) { return this.x = v; },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 1, id: 'own' },
+    // Делегат, у которого в АРГУМЕНТАХ стрелка с телом: `;` внутри не делает
+    // его «логикой» (регулярка `[^;]*` раньше такие отвергала).
+    { name: 'App.vue: делегат со стрелкой в аргументах — не логика', src: 'methods: {\n    foo() { return Mod.foo({ cb: () => { x = 1; } }); },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
+    { name: 'App.vue: два выражения — логика', src: 'methods: {\n    foo() { return Mod.foo({ cb: () => { x = 1; } }); return 2; },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 1, id: 'own' },
   ];
   const fails = [];
   for (const c of cases) {
