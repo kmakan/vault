@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 69,
+    "ctxRefSites": 53,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
@@ -13,7 +13,6 @@
     "features/folders.js": 11,
     "features/group-avatars.js": 4,
     "features/group-meta.js": 11,
-    "features/members.js": 16,
     "features/migrate.js": 1,
     "features/presence.js": 11
   },
@@ -54,17 +53,6 @@
       "replyGroupAvatarHeal",
       "setGroupAvatar",
       "setGroupKey"
-    ],
-    "features/members.js": [
-      "addMemberQuery",
-      "addMemberSelected",
-      "currentGroup",
-      "emailSharesFingerprint",
-      "loadChannels",
-      "loadGroups",
-      "peerKeys",
-      "publicKey",
-      "showAddMemberPopup"
     ],
     "features/migrate.js": [
       "migrateOwnProfile"

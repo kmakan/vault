@@ -68,17 +68,7 @@
     "local-db-init.js": [],
     "mailbox-api.js": [],
     "mailbox-store.js": [],
-    "members.js": [
-      "addMemberQuery",
-      "addMemberSelected",
-      "currentGroup",
-      "emailSharesFingerprint",
-      "loadChannels",
-      "loadGroups",
-      "peerKeys",
-      "publicKey",
-      "showAddMemberPopup"
-    ],
+    "members.js": [],
     "messages-store.js": [],
     "messages.js": [],
     "migrate.js": [
@@ -120,25 +110,13 @@
     "chatFolderNewName": [
       "folders.js"
     ],
-    "showAddMemberPopup": [
-      "members.js"
-    ],
-    "addMemberSelected": [
-      "members.js"
-    ],
-    "addMemberQuery": [
-      "members.js"
-    ],
-    "currentGroup": [
-      "members.js"
-    ],
     "_presenceSending": [
       "presence.js"
     ]
   },
   "totals": {
-    "ctxFields": 33,
-    "ctxRefSites": 69,
+    "ctxFields": 24,
+    "ctxRefSites": 53,
     "sharedWriteFields": 0
   }
 }

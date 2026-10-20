@@ -1794,6 +1794,17 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракт фичи участников (ADR-005 W2, партия 12): текущая группа —
+    // владелец chatStore, форма «добавить участника» — владелец uiStore
+    // (модуль берёт их сам), остальное — эффекты.
+    membersDeps() {
+      return {
+        publicKey: () => this.publicKey,
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
+        emailSharesFingerprint: (a, b) => this.emailSharesFingerprint(a, b),
+      };
+    },
     // Контракт фичи квитанций (ADR-005 W2, партия 11): состояние у
     // владельцев (identity-store/mailbox-store/session-store), разбор конверта
     // и адреса — чистые функции message-format.js. В deps остаётся одно:
@@ -5074,7 +5085,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       } catch (e) { /* тихо: поле некритично, матчинг идёт по peer_keys */ }
     },
     // ── Приглашение участников (логика в features/members.js) ──
-    async inviteSelectedMembers() { return MembersFeature.inviteSelectedMembers(this); },
+    async inviteSelectedMembers() { return MembersFeature.inviteSelectedMembers(this.membersDeps); },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     // ── Приглашения в группы (логика в features/invites.js) ──
     // ADR-005 W2 партия 4: контракт модуля — состояние у владельцев

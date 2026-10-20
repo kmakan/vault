@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 63,
+  "totalCtxRefs": 47,
   "totalFunctions": 313,
-  "functionsWithCtx": 64,
+  "functionsWithCtx": 63,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -359,21 +359,11 @@
       "biggestCtxFn": null
     },
     "src/features/members.js": {
-      "ctxRefs": 16,
-      "fields": [
-        "addMemberQuery",
-        "addMemberSelected",
-        "currentGroup",
-        "emailSharesFingerprint",
-        "loadChannels",
-        "loadGroups",
-        "peerKeys",
-        "publicKey",
-        "showAddMemberPopup"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "inviteSelectedMembers"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/messages-store.js": {
       "ctxRefs": 0,
