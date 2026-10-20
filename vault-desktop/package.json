@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-template.cjs && node scripts/options-dup-gate.mjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && npm run smoke:all && vite build && node scripts/boot-smoke.mjs",
+    "build": "node scripts/check-template.cjs && node scripts/options-dup-gate.mjs && node scripts/feature-coverage-gate.mjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && npm run smoke:all && vite build && node scripts/boot-smoke.mjs",
     "smoke:all": "for f in scripts/*smoke*.mjs; do case \"$f\" in *boot-smoke*) continue;; esac; node \"$f\" || exit 1; done",
     "smoke:boot": "node scripts/boot-smoke.mjs",
     "gate:cycles": "node scripts/ctx-cycles-gate.mjs",
@@ -49,6 +49,9 @@
     "smoke:groups": "node scripts/groups-smoke.mjs",
     "smoke:recovery": "node scripts/recovery-smoke.mjs",
     "gate:options-dup": "node scripts/options-dup-gate.mjs",
+    "gate:feature-coverage": "node scripts/feature-coverage-gate.mjs",
+    "gate:mutations": "node scripts/mutation-gate.mjs",
+    "quality": "npm run build && npm run gate:mutations && npm run gate:feature-coverage",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
     "smoke:send": "node scripts/send-smoke.mjs",
     "smoke:messages": "node scripts/messages-smoke.mjs"

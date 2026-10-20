@@ -54,6 +54,13 @@ jobs:
       - name: Check frontend
         working-directory: vault-desktop
         run: npm run build
+      # Мутационное тестирование: каждый смоук обязан ЛОВИТ подложенную поломку.
+      # Мутация, на которой смоук остался зелёным, — дырка в проверках, которую
+      # не найдёт ни один обычный тест (20.10.2026: так нашлись девять слабых
+      # сценариев за день).
+      - name: Mutation testing
+        working-directory: vault-desktop
+        run: npm run gate:mutations
       - name: Check Tauri
         working-directory: vault-desktop
         run: npx tauri build

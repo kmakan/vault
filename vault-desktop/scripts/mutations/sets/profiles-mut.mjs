@@ -1,0 +1,41 @@
+// Набор мутаций: profiles-mut
+// Цель: убедиться, что смоук profiles-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'profiles-mut',
+  file: 'src/features/profiles.js',
+  smoke: 'profiles-smoke.mjs',
+  mutations: [
+    { name: "био не пишется в kv",
+      pattern: "  const v = await setBio({ email: deps.email(), text });",
+      replacement: "  const v = String(text || '').slice(0, 200);" },
+    { name: "био не обновляет состояние",
+      pattern: "  deps.setMyBio(v);",
+      replacement: "  void 0;" },
+    { name: "аватар не кладётся в профиль",
+      pattern: "  profiles[deps.email()].avatar = dataUrl || '';",
+      replacement: "  void 0;" },
+    { name: "профиль с аватаром не сохраняется",
+      pattern: "  await api.saveProfile(deps.email(), deps.displayName() || deps.email(), dataUrl || '', Date.now());",
+      replacement: "  void 0;" },
+    { name: "аватар не попадает в состояние",
+      pattern: "  deps.setUserAvatarUrl(dataUrl);",
+      replacement: "  void 0;" },
+    { name: "имя не обновляется",
+      pattern: "  deps.setDisplayName(name || deps.email() || '');",
+      replacement: "  void 0;" },
+    { name: "пустое имя не заменяется адресом",
+      pattern: "  deps.setDisplayName(name || deps.email() || '');",
+      replacement: "  deps.setDisplayName(name || '');" },
+    { name: "большой файл проходит без отказа",
+      pattern: "  if (file.size > 2 * 1024 * 1024) {",
+      replacement: "  if (false) {" },
+    { name: "файл аватара не кладётся в профиль",
+      pattern: "    profiles[deps.email()].avatar = ev.target.result;",
+      replacement: "    void 0;" },
+    { name: "окно загрузки аватара не закрывается",
+      pattern: "    deps.setShowAvatarUpload(false);",
+      replacement: "    void 0;" },
+  ],
+};

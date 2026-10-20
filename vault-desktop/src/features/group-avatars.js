@@ -8,6 +8,13 @@
 //
 // Данные: аватар = kv `group-avatar:<gid>` (namespace 'anon', НЕ email-keyed —
 // смена почты аккаунта его не трогает).
+//
+// ВНИМАНИЕ (20.10.2026, найдено гейтом покрытия): здесь были вызовы
+// `groupKeyOf(ctx, ...)` — имя `ctx` осталось от ADR-005 W2, а параметр
+// переименован в `deps`. Внутренний вызов падал в ReferenceError, который
+// глотал catch, и весь heal-запрос/ответ молча не работал. Фича без смоука
+// это и скрывала. Теперь на каждую фичу есть смоук, и гейт покрытия требует
+// его наличия.
 // Доставка (всё под групповым ключом, открытого текста нет):
 //  1) healFromMessage: gavatar в групповом конверте → лечим kv из ЛЮБОГО
 //     нового письма группы;
@@ -61,7 +68,7 @@ export async function replyHeal(deps, groupId) {
     if (!my) return; // у меня пусто — не отвечаем (защита от петли)
     const flagKey = REPLIED_P + groupId;
     if (!(await rateLimitExpired(flagKey))) return; // 24ч rate-limit
-    const groupKey = await groupKeyOf(ctx, groupId);
+    const groupKey = await groupKeyOf(deps, groupId);
     if (!groupKey) { console.log('[group] avatar-heal reply skip: no group key', groupId); return; }
     const content = await crypto.encryptWithGroupKey(JSON.stringify({ meta: 1, avatar: my }), groupKey);
     await api.sendGroupMeta(groupId, content);
@@ -79,7 +86,7 @@ export async function requestHeal(deps, groupId) {
   try {
     const flagKey = SENT_P + groupId;
     if (!(await rateLimitExpired(flagKey))) return; // 24ч rate-limit
-    const groupKey = await groupKeyOf(ctx, groupId);
+    const groupKey = await groupKeyOf(deps, groupId);
     if (!groupKey) return; // нечем шифровать — группу пропускаем тихо
     const content = await crypto.encryptWithGroupKey(JSON.stringify({ hav: 1 }), groupKey);
     await api.sendGroupMeta(groupId, content);

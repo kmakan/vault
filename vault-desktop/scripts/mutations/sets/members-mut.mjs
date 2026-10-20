@@ -1,0 +1,41 @@
+// Набор мутаций: members-mut
+// Цель: убедиться, что смоук members-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'members-mut',
+  file: 'src/features/members.js',
+  smoke: 'members-smoke.mjs',
+  mutations: [
+    { name: "приглашение не отправляется",
+      pattern: "          await api.inviteGroupMember(group.id, email, enc, deps.publicKey());",
+      replacement: "          void 0;" },
+    { name: "уже участник НЕ скипается (повторный инвайт)",
+      pattern: "          if ((group.members || []).some(m => m.email === email)) {",
+      replacement: "          if (false) {" },
+    { name: "участник без ключа отправляется (ключа нет — зашифровать нечем)",
+      pattern: "          if (!peerPub) {",
+      replacement: "          if (false) {" },
+    { name: "миграция адреса по отпечатку не выполняется",
+      pattern: "          if (stale) {",
+      replacement: "          if (false) {" },
+    { name: "после миграции адрес в составе не обновляется",
+      pattern: "            stale.email = email;",
+      replacement: "            void 0;" },
+    { name: "попап не закрывается сразу",
+      pattern: "  uiStore.setModal('showAddMemberPopup', false);",
+      replacement: "  void 0;" },
+    { name: "выбранные участники не очищаются (повторная отправка)",
+      pattern: "  uiStore.setFormField('addMemberSelected', []);",
+      replacement: "  void 0;" },
+    { name: "состав группы не перечитывается с диска",
+      pattern: "      try { await deps.loadGroups();",
+      replacement: "      try { void 0;" },
+    { name: "инвайт шифруется не тем ключом группы",
+      pattern: "          const enc = await crypto.encryptGroupKeyForUser(groupKeys[0], peerPub);",
+      replacement: "          const enc = 'PLAINTEXT';" },
+    { name: "участник не помечается «приглашён»",
+      pattern: "            members.push({ email, role: 'Member', invited: true });",
+      replacement: "            void 0;" },
+  ],
+};

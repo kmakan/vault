@@ -1,0 +1,41 @@
+// Набор мутаций: ephemeral-mut
+// Цель: убедиться, что смоук ephemeral-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'ephemeral-mut',
+  file: 'src/features/ephemeral.js',
+  smoke: 'ephemeral-smoke.mjs',
+  mutations: [
+    { name: "метка TTL не из списка опций",
+      pattern: "  const opt = deps.ephemeralOptions().find((o) => o.v === Number(sec));",
+      replacement: "  const opt = null;" },
+    { name: "TTL не пишется в kv",
+      pattern: "  await db.kvSet('anon', 'ephemeral:' + chatId, String(seconds || 0));",
+      replacement: "  void 0;" },
+    { name: "индикатор в шапке не перерисовывается",
+      pattern: "  deps.messagesStore.tick(); // перерисовать индикатор в шапке",
+      replacement: "  void 0;" },
+    { name: "таймер не взводится",
+      pattern: "  deps.messagesStore.setTimer(key, () => {",
+      replacement: "  if (false) deps.messagesStore.setTimer(key, () => {" },
+    { name: "истёкшее при запуске НЕ удаляется сразу",
+      pattern: "  if (await isExpired(msg.expiresAt, now)) {",
+      replacement: "  if (false) {" },
+    { name: "повторное взведение таймера не игнорируется",
+      pattern: "  if (deps.messagesStore.hasTimer(key)) return;",
+      replacement: "  void 0;" },
+    { name: "истёкшее сообщение не удаляется (нет tombstone)",
+      pattern: "  deps.addTombstone(msgId);",
+      replacement: "  void 0;" },
+    { name: "история не сохраняется после истечения",
+      pattern: "  deps.saveCurrentHistory(chatId);",
+      replacement: "  void 0;" },
+    { name: "модалка эфемерных не закрывается",
+      pattern: "  uiStore.setModal('showEphemeralMenu', false);",
+      replacement: "  void 0;" },
+    { name: "истёкшее сообщение остаётся в списке",
+      pattern: "  if (idx !== -1) deps.chat.removeById(list[idx].id);",
+      replacement: "  void 0;" },
+  ],
+};
