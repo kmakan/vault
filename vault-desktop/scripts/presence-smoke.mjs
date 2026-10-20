@@ -17,7 +17,7 @@ const db = {
 };
 writeFileSync(`${MOCKS}/api.js`, `let getImpl = async (ns,key) => (globalThis.__pvGet ? globalThis.__pvGet(ns,key) : (globalThis.__pv ?? null));\nexport const db = { kvGet: getImpl, kvSet: async () => {} };\nexport default { db, sendReaction: async (peer, content) => { (globalThis.__hb = globalThis.__hb || []).push([peer, content]); } };\n`);
 writeFileSync(`${MOCKS}/identity.js`, 'export async function accountNamespace(email){ return "ns"; }\n');
-writeFileSync(`${MOCKS}/crypto.js`, 'export default { encryptVault: async (p) => { (globalThis.__enc = globalThis.__enc || []).push(p); return "ENC:" + p; }, setPeerPublicKey: (k) => { (globalThis.__pk = globalThis.__pk || []).push(k); } };\n');
+writeFileSync(`${MOCKS}/crypto.js`, 'export default { encryptVault: async (p) => { if (globalThis.__encFailFirst) { globalThis.__encFailFirst = false; throw new Error("encrypt failed"); } (globalThis.__enc = globalThis.__enc || []).push(p); return "ENC:" + p; }, setPeerPublicKey: (k) => { (globalThis.__pk = globalThis.__pk || []).push(k); } };\n');
 writeFileSync(`${MOCKS}/tauri.js`, 'export async function invoke(){}\n');
 
 writeFileSync(`${MOCKS}/features/presence.js`,
@@ -72,28 +72,27 @@ check('setEnabled(false) stops heartbeat', started === 0 && stopped === 1);
   const { identityStore } = await import('/home/maksim/whisper/vault-desktop/src/features/identity-store.js');
   const { sendHeartbeat } = mod;
   globalThis.__hb = []; globalThis.__enc = []; globalThis.__pk = [];
-  identityStore.state.peerKeys = { 'a@x.org': 'KA', 'b@x.org': 'KB' };
+  // ТРИ пира: список берётся ИЗ КАРТЫ пиров. Список, зашитый в код, дал бы
+  // два письма — и проверка на количество это поймала бы.
+  identityStore.state.peerKeys = { 'a@x.org': 'KA', 'b@x.org': 'KB', 'c@x.org': 'KC' };
   identityStore.state.peerPqKeys = {};
   sessionStore.state.isLoggedIn = true;
   await sendHeartbeat({ cryptoReady: () => true });
-  check('heartbeat: письмо каждому пиру с ключом (2)', globalThis.__hb.length === 2, globalThis.__hb);
+  check('heartbeat: письмо каждому пиру из карты (3)', globalThis.__hb.length === 3, globalThis.__hb);
   const payload = globalThis.__enc.length ? JSON.parse(globalThis.__enc[0]) : {};
   check('heartbeat: конверт presence:1', payload.presence === 1 && typeof payload.ts === 'number', payload);
-  check('heartbeat: ключ пира установлен перед шифрованием', globalThis.__pk.length === 2, globalThis.__pk);
+  check('heartbeat: ключ пира установлен перед шифрованием', globalThis.__pk.length === 3, globalThis.__pk);
   // Ошибка ОДНОГО адресата не должна останавливать остальных (как
   // sendGroupReact): шифрование первого падает — второй всё равно получает
   // heartbeat.
   globalThis.__hb = []; globalThis.__enc = []; globalThis.__pk = [];
   identityStore.state.peerKeys = { 'a@x.org': 'KA', 'b@x.org': 'KB' };
-  const realEncrypt = cryptoMock.encryptVault;
+  // Первый вызов encryptVault падает — второй адресат должен получить heartbeat
+  // всё равно (ошибка одного не должна останавливать остальных).
   let encCalls = 0;
-  cryptoMock.encryptVault = async (p) => {
-    encCalls++;
-    if (encCalls === 1) throw new Error('encrypt failed for first peer');
-    return realEncrypt(p);
-  };
+  globalThis.__encFailFirst = true;
   await sendHeartbeat({ cryptoReady: () => true });
-  cryptoMock.encryptVault = realEncrypt;
+  globalThis.__encFailFirst = false;
   check('heartbeat: ошибка одного адресата не мешает остальным',
     globalThis.__hb.length === 1 && globalThis.__hb[0][0] === 'b@x.org', globalThis.__hb);
   globalThis.__hb = [];

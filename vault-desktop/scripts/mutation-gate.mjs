@@ -46,6 +46,7 @@ if (!toRun.length) {
 const t0 = Date.now();
 let total = 0, caught = 0;
 const survived = [];
+const crashed = [];
 const broken = [];
 
 for (const set of toRun) {
@@ -54,6 +55,7 @@ for (const set of toRun) {
   total += res.total;
   caught += res.caught.length;
   for (const s of res.survived) survived.push(`${set.id}: ${s}`);
+  for (const s of (res.crashed || [])) crashed.push(`${set.id}: ${s}`);
   for (const b of res.broken) broken.push(`${set.id}: ${b.name} — ${b.reason}`);
 }
 
@@ -67,6 +69,10 @@ if (broken.length) {
 if (survived.length) {
   console.log('\n✗ ВЫЖИВШИЕ МУТАЦИИ (смоук зелёный на сломанном коде — тест ничего не проверяет):');
   for (const s of survived) console.log('  • ' + s);
+  for (const c of crashed) console.log('  • ' + c);
+}
+if (crashed.length) {
+  console.log('\n  (пойманы падением с исключением, а не утверждением — ' + crashed.length + ')');
 }
 if (survived.length || broken.length) {
   console.log('\n  Мутационное тестирование — не «для галочки»: каждая выжившая');

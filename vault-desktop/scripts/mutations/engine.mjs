@@ -46,7 +46,13 @@ function restoreFile(file, content) {
   writeFileSync(path.join(ROOT, file), content);
 }
 
-// Прогон смоука: мутация должна его ПОЛОВАТЬ (ненулевой код выхода).
+// Маркеры ПРОВАЛА УТВЕРЖДЕНИЯ (смоук упал на проверке, а не на ошибке).
+// Смоук, который УПАЛ С ИСКЛЮЧЕНИЕМ, «ловит» любую мутацию (код выхода ≠ 0)
+// — и это ложное срабатывание: тест ничего не проверяет, он просто сломан.
+// Поэтому гейт различает: провал утверждения — мутация поймана честно;
+// исключение — смоук сломан, и это ОТДЕЛЬНАЯ категория провала.
+const FAILURE_MARKERS = /(^|\s)(✗|FAIL:|FAILED|провалов)/m;
+
 function runSmoke(smoke, timeoutMs = 180000) {
   const res = spawnSync(process.execPath, [path.join(ROOT, 'scripts', smoke)], {
     cwd: ROOT,
@@ -79,7 +85,22 @@ export function runSet(set, opts = {}) {
   }
   const caught = [];
   const survived = [];
+  const crashed = [];
   const broken = [];
+
+  // БАЗОВЫЙ ПРОГОН на чистом дереве: смоук обязан проходить ДО мутаций.
+  // Иначе «пойманная» мутация ничего не значит: сломанный тест ловит всё
+  // (код выхода ≠ 0), и набор рисует зелёную галочку там, где проверок нет.
+  {
+    const base = runSmoke(set.smoke, set.timeoutMs);
+    if (base.code !== 0) {
+      return {
+        id: set.id, total: set.mutations.length, caught, survived, crashed,
+        broken: [{ name: '(базовый прогон)', reason: 'смоук не проходит на чистом дереве — набор бессмысленен' }],
+      };
+    }
+  }
+
   for (const m of set.mutations) {
     // Мутация может бить по СВОЕМУ файлу (набор — про набор, а не про файл).
     const mFile = m.file || file;
@@ -103,8 +124,17 @@ export function runSet(set, opts = {}) {
       continue;
     }
     if (out.code !== 0) {
-      caught.push(m.name);
-      log('  ✓ ' + m.name);
+      if (FAILURE_MARKERS.test(out.output)) {
+        caught.push(m.name);
+        log('  ✓ ' + m.name);
+      } else {
+        // Смоук упал с ИСКЛЮЧЕНИЕМ: мутация «поймана» случайно (любой
+        // непустой код выхода считался провалом). Такой смоук ничего не
+        // проверяет — это поломка теста, а не успех мутации.
+        crashed.push(m.name);
+        caught.push(m.name);
+        log('  ✓ ' + m.name + ' (смоук упал с исключением — поведение сломано, но без утверждения)');
+      }
     } else {
       survived.push(m.name);
       log('  ✗ ' + m.name + ' — ВЫЖИЛА (тест зелёный на сломанном коде!)');
@@ -115,5 +145,5 @@ export function runSet(set, opts = {}) {
   if (sha(after) !== sha(original)) {
     broken.push({ name: '(восстановление)', reason: 'файл не восстановлен побайтно' });
   }
-  return { id: set.id, total: set.mutations.length, caught, survived, broken };
+  return { id: set.id, total: set.mutations.length, caught, survived, crashed, broken };
 }
