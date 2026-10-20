@@ -131,10 +131,10 @@
     "vault-desktop/src/message-format.js": 5,
     "vault-desktop/src/message-store.js": 6,
     "vault-desktop/src/migrations.js": 8,
-    "vault-desktop/src/notify.js": 0,
+    "vault-desktop/src/notify.js": 7,
     "vault-desktop/src/providerLimits.js": 8,
     "vault-desktop/src/relay-client.js": 13,
-    "vault-desktop/src/themes.js": 0,
+    "vault-desktop/src/themes.js": 4,
     "vault-desktop/src/ui.js": 0
   },
   "gaps": [
@@ -160,8 +160,6 @@
     "vault-client/src/vault/thread.rs",
     "vault-desktop/src/fonts.js",
     "vault-desktop/src/main.js",
-    "vault-desktop/src/notify.js",
-    "vault-desktop/src/themes.js",
     "vault-desktop/src/ui.js"
   ]
 }
