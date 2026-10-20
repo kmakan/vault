@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 364,
+  "totalCtxRefs": 306,
   "totalFunctions": 311,
-  "functionsWithCtx": 92,
+  "functionsWithCtx": 91,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -458,44 +458,11 @@
       "biggestCtxFn": null
     },
     "src/features/messages.js": {
-      "ctxRefs": 57,
-      "fields": [
-        "activeChat",
-        "aliasesOf",
-        "applyEdits",
-        "applyPollVotes",
-        "applyReactions",
-        "cacheBody",
-        "contactAliases",
-        "cryptoReady",
-        "email",
-        "emailBodyCache",
-        "emails",
-        "filterDeleted",
-        "isIgnored",
-        "isOwnSender",
-        "loadProfiles",
-        "loadSeq",
-        "mergeHistory",
-        "mergePending",
-        "migrateChatHistoryChain",
-        "migratePeerGroups",
-        "noteSeen",
-        "parseCallSignal",
-        "parsePollEnvelope",
-        "peerKeys",
-        "peerPqKeys",
-        "pendingOutgoing",
-        "profiles",
-        "saveChatCache",
-        "saveCurrentHistory",
-        "scheduleEphemeral",
-        "sendReadReceipts",
-        "showHistoryFirst"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "loadMessages"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/migrate.js": {
       "ctxRefs": 1,
@@ -528,12 +495,11 @@
       "biggestCtxFn": "castPollVote"
     },
     "src/features/presence.js": {
-      "ctxRefs": 12,
+      "ctxRefs": 11,
       "fields": [
         "_presenceSending",
         "cryptoReady",
         "isLoggedIn",
-        "noteSeen",
         "peerKeys",
         "peerPqKeys"
       ],

@@ -1,52 +1,75 @@
 // Feature module: 1:1 чат — загрузка/расшифровка/классификация/мерж сообщений.
-// Этап 5 декомпозиции App.vue (ctx-паттерн). ADR-001 домен 2 (под-домен
-// «загрузка сообщений 1:1»). Вынесено из App.vue МЕХАНИЧЕСКИ (this.* -> ctx.*),
-// поведение 1:1. Состояние/downstream (showHistoryFirst/mergeHistory/
-// applyReactions/Edits/PollVotes/filterDeleted/mergePending/parseMessageContent/
-// processCallSignal/scheduleEphemeral/sendReadReceipts/isIgnored/isOwnSender/
-// noteSeen/loadProfiles/...) остаются в App.vue и вызываются через ctx.
+// ADR-001 домен 2 (под-домен «загрузка сообщений 1:1»). Поведение — как было.
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 3: модуль больше НЕ читает компонент.
+// Данные берутся у владельцев (ADR-004): открытый чат — `chatStore`, почта —
+// `sessionStore`, ключи — `identityStore`, письма и кэш тел — `mailboxState`,
+// алиасы контактов — `contactsStore`; per-app стор `chat` и sending приходят
+// в `deps` вместе с эффектами других доменов: `loadMessages(deps, email)`.
+//
+// ЧТО ОСТАЛОСЬ В deps И ПОЧЕМУ (домен загрузки — точка сборки многих фич):
+//   · `chat`/`sending` — per-app экземпляры владельцев (создаются в setup);
+//   · `getLoadSeq` — токен загрузки: читается ВНУТРИ `stale()`, то есть живьём;
+//   · `profiles` — снимок состояния профилей (геттер: профили грузятся в
+//     том же проходе, а не хранятся у владельца);
+//   · `mergeHistory`/`applyReactions`/`applyEdits`/`applyPollVotes`/
+//     `filterDeleted`/`mergePending`/`loadProfiles`/`scheduleEphemeral`/
+//     `sendReadReceipts`/`showHistoryFirst`/`saveChatCache`/`saveCurrentHistory`/
+//     `cacheBody`/`noteSeen`/`setPeerKey`/`isIgnored`/`isOwnSender`/`aliasesOf`/
+//     `parseCallSignal`/`parsePollEnvelope`/`migratePeerGroups`/
+//     `migrateChatHistoryChain` — эффекты и решения соседних доменов.
+//     `noteSeen` — связанная функция отметки: её получает presence.js
+//     (ADR-005 R3), компонент модулю не виден.
 import { uiStore } from "./session-store.js";
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
 import * as MsgFormat from '../message-format.js';
-// ADR-004 J.6: владелец peer-ключей — прямой импорт, БЕЗ ctx.
+// ADR-004: владельцы состояния — прямые импорты, БЕЗ deps.
 import { identityStore } from './identity-store.js';
+import { chatStore as chatState, sessionStore } from './session-store.js';
+import { mailboxState } from './mailbox-store.js';
+import { contactsStore } from './contacts-store.js';
 
-export async function loadMessages(ctx, email, deps) {
+// chatUi — алиас на state владельца открытого чата (владелец меняет поля, а не
+// объект). Почта — функцией: вход/выход могут случиться посреди загрузки.
+const chatUi = chatState.state;
+const myEmail = () => sessionStore.getCurrentEmail();
+
+export async function loadMessages(deps, email) {
   const { isOutboundLetter, resolvePeerSender, resolveEventSender, findKnownPeerByKey } = deps;
       // Токен загрузки: если пользователь уже переключился на другой чат,
       // результаты этого (медленного) фетча применять нельзя — иначе
       // сообщения прошлого чата перезапишут новый.
-      const seq = ctx.loadSeq;
+      const seq = deps.getLoadSeq();
       const chat = email;
-      const stale = () => seq !== ctx.loadSeq || ctx.activeChat !== chat;
+      const stale = () => seq !== deps.getLoadSeq() || chatUi.activeChat !== chat;
       // ВАЖНО: await — история должна загрузиться ДО мержа, иначе
       // гонка с loadMessages: merged=[] без истории и saveCurrentHistory([])
       // затирал сохранённую историю → сообщения «пропадали» (kmakan).
-      await ctx.showHistoryFirst(chat, stale);
+      await deps.showHistoryFirst(chat, stale);
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
-      if (!ctx.peerKeys[email]) {
-        ctx.chat.set([]);
+      if (!identityStore.state.peerKeys[email]) {
+        deps.chat.set([]);
         return;
       }
       // Смена почты: контакт мог сменить адрес — ищем письма по
       // ВСЕМ адресам с его ключом (алиасы), иначе история старого адреса
       // не видна в чате нового адреса.
-      const aliases = ctx.aliasesOf(email);
+      const aliases = deps.aliasesOf(email);
       // Ignore-лист: у заблокированного чат открывается пустым (показываем
       // только локальную историю ДО блокировки, новые письма не расшифровываем
       // и не кэшируем). Старые письма в состоянии переписки (chat-store)
       // остаются после showHistoryFirst — блок скрывает именно НОВОЕ.
-      const ignored = ctx.isIgnored(email);
+      const ignored = deps.isIgnored(email);
       // Письма, уже сохранённые в истории чата (mid = Message-ID), из почты
       // НЕ перефетчивем: история — источник правды из БД, IMAP — только за
       // новыми после последнего курсора (правило 07.10). Реакции/квитанции/
       // правки в историю не пишутся — их mid здесь нет, они обрабатываются
       // как раньше (тела берутся из body_cache, см. fetchBodiesDbFirst).
-      const inHist = new Set((ctx.chat.state.messages || []).map(m => m && m.mid).filter(Boolean));
-      const relatedAll = ctx.emails
+      const inHist = new Set((deps.chat.state.messages || []).map(m => m && m.mid).filter(Boolean));
+      const relatedAll = mailboxState.state.emails
         .filter(m => {
           const f = (m.from || '').toLowerCase();
           const t = (m.to || '').toLowerCase();
@@ -66,9 +89,9 @@ export async function loadMessages(ctx, email, deps) {
       // расшифрованному содержимому: {react:1,...} = реакция, {vault:1,...}
       // = конверт сообщения, иначе = legacy-текст.
       const related = relatedAll;
-      console.log('[loadMessages] email=' + email + ' emailsTotal=' + ctx.emails.length + ' related=' + related.length);
+      console.log('[loadMessages] email=' + email + ' emailsTotal=' + mailboxState.state.emails.length + ' related=' + related.length);
       if (related.length > 0) {
-        crypto.setPeerPublicKey(ctx.peerKeys[email], ctx.peerPqKeys && ctx.peerPqKeys[email]);
+        crypto.setPeerPublicKey(identityStore.state.peerKeys[email], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[email]);
         // Батч-фетч тел: группируем по папке и запрашиваем все тела одной
         // командой (Rust выбирает папку один раз). Поштучный фетч делал
         const byFolder = {};
@@ -83,7 +106,7 @@ export async function loadMessages(ctx, email, deps) {
           // поллинг — иначе инвайты/вложения/голосовые «застревают» пустыми
           // навсегда (так пропадали приглашения и аудио после гонки доставки).
           const missing = msgs.filter(m => {
-            const b = ctx.emailBodyCache[`${folder}:${m.uid || m.id}`];
+            const b = mailboxState.state.emailBodyCache[`${folder}:${m.uid || m.id}`];
             if (b !== undefined && b !== '') return false;
             // Download-on-demand: письма крупнее порога НЕ фетчим телом
             // автоматически — открытие чата не должно качать десятки МБ.
@@ -107,7 +130,7 @@ export async function loadMessages(ctx, email, deps) {
             if (stale()) return;
             for (const m of missing) {
               const b = bodies[String(m.uid || m.id)];
-              if (b) ctx.cacheBody(`${folder}:${m.uid || m.id}`, b);
+              if (b) deps.cacheBody(`${folder}:${m.uid || m.id}`, b);
             }
           }
         }
@@ -127,11 +150,11 @@ export async function loadMessages(ctx, email, deps) {
           let attachment = null;
           try {
             const cacheKey = (m.folder || 'INBOX') + ':' + (m.uid || m.id);
-            const body = ctx.emailBodyCache[cacheKey] || '';
+            const body = mailboxState.state.emailBodyCache[cacheKey] || '';
             // Vault messages carry a raw base64 body — decrypt with AAD="VAULT".
             // Only a message that authenticates as a vault message is shown in
             // the chat; anything else is treated as ordinary/foreign mail.
-            if (ctx.cryptoReady) {
+            if (deps.cryptoReady) {
               let text;
               try {
                 text = await crypto.decryptVault(body);
@@ -143,7 +166,7 @@ export async function loadMessages(ctx, email, deps) {
               // Звонки (M3): call_* конверты — сигналы, НЕ сообщения. В истории
               // чата не рендерятся (как реакции/квитанции). Живая обработка —
               // в processIncoming (handleCallSignal); здесь просто пропуск.
-              const callSig = ctx.parseCallSignal(text);
+              const callSig = deps.parseCallSignal(text);
               if (callSig) return null; // не сообщение
               // 1) Реакция: {react:1, msg_id, emoji, action} — в чат не
               //    показываем, накапливаем для applyReactions.
@@ -152,7 +175,7 @@ export async function loadMessages(ctx, email, deps) {
                 if (robj && robj.react === 1 && robj.msg_id && robj.emoji) {
                   (wireReactions[robj.msg_id] = wireReactions[robj.msg_id] || []).push({
                     emoji: robj.emoji,
-                    user: resolvePeerSender(isOut, email, ctx.email),
+                    user: resolvePeerSender(isOut, email, myEmail()),
                     action: robj.action === 'remove' ? 'remove' : 'add',
                   });
                   return null; // не сообщение
@@ -182,14 +205,17 @@ export async function loadMessages(ctx, email, deps) {
                 //     письмо (как реакция), агрегируется в карточку опроса.
                 if (robj && robj.poll === 1 && robj.poll_id) {
                   (wirePollVotes[robj.poll_id] = wirePollVotes[robj.poll_id] || []).push({
-                    voter: ContactsFeature.resolvePeerSender(isOut, email, ctx.email),
+                    voter: resolvePeerSender(isOut, email, myEmail()),
                     option: Number(robj.option) || 0,
                   });
                   return null; // не сообщение
                 }
                 // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
                 //     («я онлайн»); отмечаем активность, в чат не показываем.
-                if (PresenceFeature.ingestSignal(ctx, robj, resolvePeerSender(isOut, email, ctx.email), new Date(m.date || Date.now()).getTime())) {
+                //     Решение «это presence?» — в presence.js (ADR-005 R1: тип
+                //     конверта решает не JS-модуль); сюда приходит только
+                //     связанная функция отметки — компонент модуль не видит.
+                if (PresenceFeature.ingestSignal(deps.noteSeen, robj, resolvePeerSender(isOut, email, myEmail()), new Date(m.date || Date.now()).getTime())) {
                   return null; // не сообщение
                 }
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
@@ -226,9 +252,9 @@ export async function loadMessages(ctx, email, deps) {
                 }
                 // isOut=true = письмо прислал СОБЕСЕДНИК (см. from: isOut?'them':'me').
                 // Аватар/имя в конверте принадлежат отправителю письма:
-                //   входящее (isOut) -> собеседник (email), исходящее -> я (ctx.email).
+                //   входящее (isOut) -> собеседник (email), исходящее -> я (myEmail()).
                 // поэтому avatarOf(собеседник) возвращал пусто (асимметрия аватаров).
-                const sender = resolvePeerSender(isOut, email, ctx.email);
+                const sender = resolvePeerSender(isOut, email, myEmail());
                 // ЭХО-ЗАЩИТА: письмо с МОИМ ключом — от меня самого
                 // (старый адрес после смены почты / копия в свой ящик). Не
                 // матчим как «смену почты», не сохраняем профиль — иначе
@@ -242,7 +268,11 @@ export async function loadMessages(ctx, email, deps) {
                 // новый email к тому же контакту (копируем ключ), не требуя
                 // нового приглашения.
                 if (env.key && !isOut) {
-                  const oldEmail = findKnownPeerByKey(ctx.peerKeys, env.key, sender);
+                  // Нормализованный адрес отправителя: сравнение в ренейме
+                  // идёт по нижнему регистру (иначе «Peer@x» снова попадал бы
+                  // в удаление как «старый адрес»).
+                  const senderNorm = String(sender).toLowerCase();
+                  const oldEmail = findKnownPeerByKey(identityStore.state.peerKeys, env.key, sender);
                   if (oldEmail) {
                     // ANTI-PING-PONG: старое письмо (ts ≤ порога) не должно
                     // переименовывать назад — пропускаем письмо целиком
@@ -262,13 +292,13 @@ export async function loadMessages(ctx, email, deps) {
                     // Группы: переименовать адрес во всех, где он участник.
                     // tryMigrateGroupMember срабатывает только на входящем
                     // письме и ищет по peerKeys — который ренейм уже почистил.
-                    await ctx.migratePeerGroups(oldEmail, sender);
+                    await deps.migratePeerGroups(oldEmail, sender);
                     // Переносим историю чата по ВСЕЙ цепочке алиасов: пир мог
                     // менять почту несколько раз, и одного переноса не хватит —
                     // осиротевший ключ означает исчезнувую переписку (ADR-003 §5.1).
-                    await ctx.migrateChatHistoryChain(sender, ctx.email, ctx.contactAliases);
+                    await deps.migrateChatHistoryChain(sender, myEmail(), contactsStore.state.contactAliases);
                     // Копируем профиль старого адреса на новый (имя/аватар).
-                    const oldProf = ctx.profiles[oldEmail];
+                    const oldProf = deps.profiles()[oldEmail];
                     if (oldProf) api.saveProfile(sender, oldProf.name, oldProf.avatar, env.ts || 0);
                     // Смена почты: СТАРЫЙ адрес убираем из всех хранилищ
                     // (диск/память/стабы контактов/профиль) — иначе остаётся
@@ -277,20 +307,20 @@ export async function loadMessages(ctx, email, deps) {
                     // переименования/добавления новой.
                     if (String(oldEmail).toLowerCase() !== senderNorm) {
                       try { await crypto.removePeerKey(oldEmail); } catch (e) {}
-                      // Удаление — через владельца identity (ADR-004 J.6), БЕЗ ctx.
+                      // Удаление — через владельца identity (ADR-004 J.6), БЕЗ deps.
                       identityStore.removePeerKey(oldEmail);
                       api.removeContact(oldEmail);
                       api.deleteProfile(oldEmail);
                       console.log('[identity] peer renamed: '+oldEmail+' → '+sender);
                     }
                     // Регистрируем ключ под новым email (peer_keys.json).
-                    ctx.setPeerKey(sender, env.key, env.pq || null);
+                    deps.setPeerKey(sender, env.key, env.pq || null);
                     // Порог ренейма = дата этого (свежего) письма.
                     await api.bumpIdentityRenameTs(env.key, _idTs);
-                  } else if (!ctx.peerKeys[sender] && env.key !== crypto.publicKey) {
+                  } else if (!identityStore.state.peerKeys[sender] && env.key !== crypto.publicKey) {
                     // Незнакомый ключ с нового адреса: сохраняем как есть —
                     // контакт появится после обмена ключами (инвайт/QR).
-                    ctx.setPeerKey(sender, env.key, env.pq || null);
+                    deps.setPeerKey(sender, env.key, env.pq || null);
                   }
                 }
                 if (env.name || env.avatar) {
@@ -309,7 +339,7 @@ export async function loadMessages(ctx, email, deps) {
                 }
                 // Голосование (poll): карточка вместо текста.
                 if (env.type === 'poll') {
-                  const p = ctx.parsePollEnvelope(env);
+                  const p = deps.parsePollEnvelope(env);
                   if (p) return {
                     id: p.id || msgId,
                     content: p.question,
@@ -361,7 +391,7 @@ export async function loadMessages(ctx, email, deps) {
           }
         }));
         if (stale()) return;
-        ctx.loadProfiles();
+        deps.loadProfiles();
         // Дедупликация по id конверта: одно письмо может лежать в нескольких
         // папках (Rust дедуплицирует по Message-ID, но письма без заголовка
         // проскакивают дважды; плюс Sent-копии наших исходящих).
@@ -380,7 +410,7 @@ export async function loadMessages(ctx, email, deps) {
         }
         // pending-записи отправителя: квитанции {read:1}/{delivered:1} снимают
         // 'failed'/'sent' → 'read'/'delivered'.
-        const pb = ctx.pendingOutgoing[chat] || {};
+        const pb = deps.sending.state.pendingOutgoing[chat] || {};
         for (const [pid, pmsg] of Object.entries(pb)) {
           const ack = wireAcks[pid];
           if (!ack) continue;
@@ -389,8 +419,8 @@ export async function loadMessages(ctx, email, deps) {
         }
         // ИСТОРИЯ — основа чата, письма — дополнение; статусы/реакции/правки
         // применяются к merged; pending — подмешиваются; удалённые фильтруются.
-        const hadMessages = ctx.chat.state.messages && ctx.chat.state.messages.length > 0;
-        const merged0 = await ctx.mergeHistory(chat, list);
+        const hadMessages = deps.chat.state.messages && deps.chat.state.messages.length > 0;
+        const merged0 = await deps.mergeHistory(chat, list);
         const statusById = new Map();
         for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
         for (const m of merged0) {
@@ -405,24 +435,24 @@ export async function loadMessages(ctx, email, deps) {
           if (ack && ack.read) m.status = 'read';
           else if (ack && ack.delivered) m.status = 'delivered';
         }
-        ctx.applyReactions(merged0, chat, wireReactions);
-        ctx.applyEdits(merged0, chat, wireEdits);
-        ctx.applyPollVotes(merged0, wirePollVotes);
-        const merged = ctx.filterDeleted(ctx.mergePending(chat, merged0));
-        for (const m of merged) if (m.expireAt) ctx.scheduleEphemeral(m, chat);
+        deps.applyReactions(merged0, chat, wireReactions);
+        deps.applyEdits(merged0, chat, wireEdits);
+        deps.applyPollVotes(merged0, wirePollVotes);
+        const merged = deps.filterDeleted(deps.mergePending(chat, merged0));
+        for (const m of merged) if (m.expireAt) deps.scheduleEphemeral(m, chat);
         if (!merged.length && hadMessages && !stale()) {
           // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
           // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
           // сохранённую историю чата).
           return;
         }
-        ctx.chat.set(merged);
-        ctx.saveChatCache(chat, ctx.chat.state.messages);
+        deps.chat.set(merged);
+        deps.saveChatCache(chat, deps.chat.state.messages);
         // Локальная история (IndexedDB) — полный архив чата.
-        ctx.saveCurrentHistory(chat);
+        deps.saveCurrentHistory(chat);
         // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
-        const incoming = ctx.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
-        ctx.sendReadReceipts(incoming);
+        const incoming = deps.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
+        deps.sendReadReceipts(incoming);
         return;
       }
 
@@ -430,12 +460,12 @@ export async function loadMessages(ctx, email, deps) {
       // а локальная история чата уже показана (showHistoryFirst) — не
       // затираем её. Иначе после перезапуска чаты «пустели», хотя кэш
       // истории на месте.
-      if (ctx.chat.state.messages && ctx.chat.state.messages.length) return;
+      if (deps.chat.state.messages && deps.chat.state.messages.length) return;
       try {
         const raw = await api.getMessages(email);
         if (stale()) return;
-        if (ctx.cryptoReady && ctx.peerKeys[email]) {
-          crypto.setPeerPublicKey(ctx.peerKeys[email], ctx.peerPqKeys && ctx.peerPqKeys[email]);
+        if (deps.cryptoReady && identityStore.state.peerKeys[email]) {
+          crypto.setPeerPublicKey(identityStore.state.peerKeys[email], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[email]);
           const decrypted = await Promise.all(
             raw.map(async (msg) => {
               // SOS (duress): пишется в чат как обычное сообщение с префиксом —
@@ -444,11 +474,11 @@ export async function loadMessages(ctx, email, deps) {
                 const envCheck = msg.content && crypto.isEncrypted(msg.content)
                   ? MsgFormat.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
                 if (envCheck && envCheck.type === 'sos') {
-                  uiStore.toast('🚨 ' + (envCheck.name || ctx.activeChat) + ': ' + envCheck.text, 8000);
+                  uiStore.toast('🚨 ' + (envCheck.name || chatUi.activeChat) + ': ' + envCheck.text, 8000);
                   return {
                     ...msg,
                     content: '🚨 SOS: ' + envCheck.text,
-                    from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
                     time: new Date(msg.created_at).toLocaleTimeString(),
                     status: 'delivered',
                     attachment: null,
@@ -459,7 +489,7 @@ export async function loadMessages(ctx, email, deps) {
               const base = {
                 ...msg,
                 content: text,
-                from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
                 time: new Date(msg.created_at).toLocaleTimeString(),
                 status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
                 attachment,
@@ -470,11 +500,11 @@ export async function loadMessages(ctx, email, deps) {
                   const env = MsgFormat.parseEnvelope(text);
                   if (env && env.type === 'sos') {
                     // SOS (duress): тоже в чат (см. выше) — тост как дубль-уведомление.
-                    uiStore.toast('🚨 ' + (env.name || ctx.activeChat) + ': ' + env.text, 8000);
+                    uiStore.toast('🚨 ' + (env.name || chatUi.activeChat) + ': ' + env.text, 8000);
                     return {
                       ...msg,
                       content: '🚨 SOS: ' + env.text,
-                      from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                      from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
                       time: new Date(msg.created_at).toLocaleTimeString(),
                       status: 'delivered',
                       attachment: null,
@@ -482,8 +512,8 @@ export async function loadMessages(ctx, email, deps) {
                   }
                   if (env) {
                     // Зелёная точка: письмо от контакта = активность сейчас
-                    if (!ctx.isOwnSender(msg.sender_id)) {
-                      ctx.noteSeen(ctx.activeChat, new Date(msg.created_at).getTime());
+                    if (!deps.isOwnSender(msg.sender_id)) {
+                      deps.noteSeen(chatUi.activeChat, new Date(msg.created_at).getTime());
                     }
                     const parsed = MsgFormat.parseMessageContent(env.text);
                     // Исчезающие: отсчёт у получателя — от момента доставки
@@ -504,15 +534,15 @@ export async function loadMessages(ctx, email, deps) {
             })
           );
           if (stale()) return;
-          ctx.chat.set(decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
-          for (const m of ctx.chat.state.messages) if (m.expireAt) ctx.scheduleEphemeral(m, ctx.activeChat);
+          deps.chat.set(decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+          for (const m of deps.chat.state.messages) if (m.expireAt) deps.scheduleEphemeral(m, chatUi.activeChat);
         } else {
-          ctx.chat.set(raw.map(msg => {
+          deps.chat.set(raw.map(msg => {
             const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
               content: text,
-              from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+              from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: false,
@@ -522,6 +552,6 @@ export async function loadMessages(ctx, email, deps) {
         }
       } catch (error) {
         console.error('Failed to load messages:', error);
-        if (!stale()) ctx.chat.set([]);
+        if (!stale()) deps.chat.set([]);
       }
 }

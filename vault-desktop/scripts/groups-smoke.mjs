@@ -28,11 +28,19 @@ const cryptoMock = {
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/presence.js',
-  'export const ingestSignal = (ctxArg) => { if (globalThis.__presReject) { globalThis.__presGotCtx = (ctxArg && ctxArg.__isCtx === true); return true; } return false; }');
+  // Контракт приёма heartbeat (ADR-005 R3): связанная функция отметки
+  // (НЕ компонент) + решение «это presence?» внутри presence.js.
+  'export const ingestSignal = (noteSeen, robj, senderEmail, mailTs) => {' +
+  '  globalThis.__presCalls.push({ noteSeen, robj, senderEmail, mailTs });' +
+  '  if (!robj || robj.presence !== 1) return false;' +
+  '  noteSeen(senderEmail, mailTs);' +
+  '  return true;' +
+  '}');
 
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
 globalThis.__cryptoMock = cryptoMock;
+globalThis.__presCalls = [];
 
 prepareModuleCopy(
   ROOT + '/src/features/groups.js',
@@ -186,20 +194,23 @@ console.log('5. stale-guard: активный чат сменился → messag
     Array.isArray(ctx.chat.state.messages) && ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0] === 'KEEP');
 }
 
-// ── 6. presence-сигнал: ingestSignal(ctx,...) без ReferenceError ──
-console.log('6. presence-сигнал через ingestSignal(ctx) — регресс this→ctx');
+// ── 6. presence-сигнал: ingestSignal(noteSeen,...) без ReferenceError ──
+console.log('6. presence-сигнал через ingestSignal(noteSeen) — регресс this→ctx');
 {
   apiMock.myGroupKey = null;
   apiMock.groupMessages = [gmail('ENC:p', 'peer@x.ru', '<p@x>')];
   cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ presence: 1, ts: Date.now() });
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, __isCtx: true });
-  globalThis.__presReject = true;   // мок presence вернёт true (сигнал поглощён)
-  globalThis.__presGotCtx = false;
+  const seen = [];
+  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, noteSeen: (e, ts) => { seen.push([e, ts]); } });
+  globalThis.__presCalls = [];
   let threw = null;
   try { await G.loadGroupMessages(ctx, 'G1'); } catch (e) { threw = e; }
-  check('presence без ReferenceError, ingestSignal получил ctx (не голый this)',
-    threw === null && globalThis.__presGotCtx === true && ctx.chat.state.messages.length === 0);
-  globalThis.__presReject = false;
+  const call = globalThis.__presCalls[0];
+  check('presence без ReferenceError, ingestSignal получил функцию отметки (не ctx, не this)',
+    threw === null && !!call && typeof call.noteSeen === 'function' && ctx.chat.state.messages.length === 0,
+    { threw: threw && String(threw), call: !!call, msgs: ctx.chat.state.messages.length });
+  check('отметка активности ушла в ctx.noteSeen (связанная функция)',
+    seen.length === 1 && seen[0][0] === 'peer@x.ru', seen);
 }
 
 

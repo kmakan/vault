@@ -161,39 +161,7 @@
       "showAddMemberPopup"
     ],
     "messages-store.js": [],
-    "messages.js": [
-      "activeChat",
-      "aliasesOf",
-      "applyEdits",
-      "applyPollVotes",
-      "applyReactions",
-      "cacheBody",
-      "contactAliases",
-      "cryptoReady",
-      "email",
-      "emailBodyCache",
-      "filterDeleted",
-      "isIgnored",
-      "isOwnSender",
-      "loadProfiles",
-      "loadSeq",
-      "mergeHistory",
-      "mergePending",
-      "migrateChatHistoryChain",
-      "migratePeerGroups",
-      "noteSeen",
-      "parseCallSignal",
-      "parsePollEnvelope",
-      "peerKeys",
-      "peerPqKeys",
-      "profiles",
-      "saveChatCache",
-      "saveCurrentHistory",
-      "scheduleEphemeral",
-      "sendReadReceipts",
-      "setPeerKey",
-      "showHistoryFirst"
-    ],
+    "messages.js": [],
     "migrate.js": [
       "migrateOwnProfile"
     ],
@@ -202,7 +170,6 @@
     "presence.js": [
       "_presenceSending",
       "cryptoReady",
-      "noteSeen",
       "peerKeys",
       "peerPqKeys"
     ],
@@ -383,8 +350,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 187,
-    "ctxRefSites": 418,
-    "sharedWriteFields": 5
+    "ctxFields": 155,
+    "ctxRefSites": 345,
+    "sharedWriteFields": 0
   }
 }

@@ -78,12 +78,19 @@ export function stopHeartbeats(ctx) {
 }
 
 // ── Приём ──────────────────────────────────────────────────────
-// Вызывается из роутера входящих (рядом с веткой poll-голосов) —
-// Возвращает true, если письмо было presence-сигналом (не сообщение).
-export function ingestSignal(ctx, robj, senderEmail, mailTs) {
+// Приём heartbeat-сигнала. Возвращает true, если письмо было
+// presence-сигналом (не сообщение).
+//
+// `noteSeen` — СВЯЗАННАЯ функция отметки, а не компонент: принимающий
+// модуль не должен знать, откуда взялся эффект (ADR-005 R3). Связывание
+// делает вызывающий (App.vue — через контракт модуля; groups.js —
+// пока ещё ctx-модуль, лямбда замыкает ctx).
+//
+// Решение «это presence?» — здесь, в одном месте: вызывающий приносит
+// разобранный конверт и получает ответ «сигнал или нет».
+export function ingestSignal(noteSeen, robj, senderEmail, mailTs) {
   if (!robj || robj.presence !== 1) return false;
-  // ctx здесь — компонент: отдаём эффекту связанную функцию отметки.
-  noteHeartbeat((email, ts) => ctx.noteSeen(email, ts), senderEmail, mailTs);
+  noteHeartbeat(noteSeen, senderEmail, mailTs);
   return true;
 }
 

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-template.cjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && node scripts/m0-wire-smoke.mjs && node scripts/incoming-routing-smoke.mjs && node scripts/attachments-smoke.mjs && node scripts/send-smoke.mjs && vite build && node scripts/boot-smoke.mjs",
+    "build": "node scripts/check-template.cjs && node scripts/src-integrity-gate.mjs && node scripts/import-gate.mjs && node scripts/owner-refs-gate.mjs && node scripts/feature-import-gate.mjs && node scripts/ctx-ratchet-gate.mjs && node scripts/ctx-coupling-gate.mjs && node scripts/ctx-cycles-gate.mjs && node scripts/js-logic-ratchet-gate.mjs && node scripts/audit-arch.mjs && node scripts/locale-keys-gate.mjs && node scripts/m0-wire-smoke.mjs && node scripts/incoming-routing-smoke.mjs && node scripts/attachments-smoke.mjs && node scripts/send-smoke.mjs && node scripts/messages-smoke.mjs && vite build && node scripts/boot-smoke.mjs",
     "smoke:boot": "node scripts/boot-smoke.mjs",
     "gate:cycles": "node scripts/ctx-cycles-gate.mjs",
     "gate:locale-keys": "node scripts/locale-keys-gate.mjs",
@@ -41,7 +41,8 @@
     "smoke:m0-wire": "node scripts/m0-wire-smoke.mjs",
     "smoke:incoming": "node scripts/incoming-routing-smoke.mjs",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
-    "smoke:send": "node scripts/send-smoke.mjs"
+    "smoke:send": "node scripts/send-smoke.mjs",
+    "smoke:messages": "node scripts/messages-smoke.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

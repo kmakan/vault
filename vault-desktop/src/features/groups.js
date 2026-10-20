@@ -18,6 +18,11 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
       const seq = ctx.loadSeq;
       const chat = 'group:' + groupId;
       const stale = () => seq !== ctx.loadSeq || ctx.activeChat !== chat;
+      // СВЯЗАННАЯ функция отметки активности: presence.js принимает эффект,
+      // а не компонент (ADR-005 R3). Лямбда замыкает ctx — одна ссылка на
+      // ctx.noteSeen на весь модуль (а не по ссылке на каждый вызов), и `this`
+      // внутри метода компонента остаётся компонентом.
+      const markSeen = (email, ts) => ctx.noteSeen(email, ts);
       // Закреплённое сообщение группы — баннер виден сразу (без ожидания
       // поллинга), потом pin-письма из цикла ниже обновят его по дате.
       if (!stale()) {
@@ -126,7 +131,10 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             // Presence: {presence:1, ts} — heartbeat участника; активность
             // без карточки в чате (группы: peer-ключ есть только у 1:1, но
             // сигнал может прийти и по групповому каналу от старых клиентов).
-            if (PresenceFeature.ingestSignal(ctx, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
+            // В presence.js уходит СВЯЗАННАЯ функция отметки, а не ctx
+            // (ADR-005 R3): модуль пока ctx-based, поэтому лямбда markSeen
+            // замыкает ctx.
+            if (PresenceFeature.ingestSignal(markSeen, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
               continue; // presence не рендерится как сообщение
             }
             if (obj && obj.meta === 1 && obj.avatar) {
@@ -189,7 +197,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             }
             const { text, attachment } = ctx.parseMessageContent(plaintext);
             if (env && !ctx.isOwnSender(msg.sender_id)) {
-              ctx.noteSeen(msg.sender_id, new Date(msg.created_at).getTime());
+              markSeen(msg.sender_id, new Date(msg.created_at).getTime());
             }
             const gMailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
             const gExpireAt = env && env.ttl ? gMailTs + env.ttl * 1000 : 0;

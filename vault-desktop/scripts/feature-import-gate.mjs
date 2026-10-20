@@ -40,7 +40,7 @@ const PRIMITIVES = new Set([
   'call-terminal',   // только factory createTerminalSender() — состояние внутри created-объекта.
   'recovery-session', // чистые функции над localStorage-маркером: storage инъектируется параметром. Нет feature-семантики, только durable-флаг.
   'contacts-load',   // loadContacts(email): чистая функция, возвращает {contacts, contactAliases}, не мутирует ctx. Инкапсулирует правило «один ключ — несколько адресов».
-  'presence',        // heartbeat-signal format + чистые ingestSignal/isOnline. Состояние — в ctx (HB_TIMER как string-key, а не переменная). Инфраструктурный модуль presence-сигналов.
+  'presence',        // heartbeat-signal format + чистые ingestSignal/isOnline. Приём: ingestSignal(noteSeen, robj, …) — связанная функция отметки, а не ctx (ADR-005 R3). Состояние отправки — в ctx (HB_TIMER как string-key, а не переменная). Инфраструктурный модуль presence-сигналов.
 ]);
 
 // (б) Singleton-владельцы состояния + мост к владельцам.

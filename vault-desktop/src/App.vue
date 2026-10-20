@@ -1248,13 +1248,8 @@ export default {
       // Токен загрузки: инкремент в selectChat/selectGroup. Медленный
       // loadMessages старого чата не должен перезаписать новый чат.
       loadSeq: 0,
-      // ADR-001 Etap 2: deps for MessagesFeature.loadMessages (formerly inline delegate).
-      loadMessagesDeps: {
-        isOutboundLetter: ContactsFeature.isOutboundLetter,
-        resolvePeerSender: ContactsFeature.resolvePeerSender,
-        resolveEventSender: ContactsFeature.resolveEventSender,
-        findKnownPeerByKey: ContactsFeature.findKnownPeerByKey,
-      },
+      // ADR-005 W2 партия 3: контракт MessagesFeature.loadMessages — в
+      // одноимённом делегаторе (ниже в methods), собран живьём на каждый вызов.
       // Контекстное меню сообщения (копирование)
       messageMenu: null,
       replyTo: null,
@@ -3348,7 +3343,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           await EmailsFeature.loadEmails(this, true);
         } catch (e) { /* Not connected — тихий фолбэк */ }
       }
-      await MessagesFeature.loadMessages(this, email, this.loadMessagesDeps);
+      await this.loadMessages(email);
       // при открытии чата — сразу к последнему
       // сообщению (вниз).
       this.scrollToBottom(true);
@@ -3783,7 +3778,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       } catch (e) { /* тихо */ }
     },
     // ── Сообщения 1:1 (логика в features/messages.js) — тонкий делегат ──
-    // ADR-001 Etap 2: call-site direct -> MessagesFeature.loadMessages(this, email, this.loadMessagesDeps). Delegate removed.
+    // ADR-005 W2 партия 3: вызов идёт через делегатор this.loadMessages(email)
+    // (контракт модуля собирается там, модуль компонент не читает).
     // Полный рескан группы: письма, «застрявшие за курсором» из-за
     // разового сбоя (session desync / DNS / троттлинг), инкрементальный фетч
     // больше не вернёт. Кнопка в шапке группы делает полный IMAP-скан папок
@@ -4140,6 +4136,47 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       reader.readAsDataURL(file);
     },
     // ── Отправка 1:1 (логика в features/send.js) — тонкий делегат ──
+    // W2 партия 3 (ADR-005 R3): контракт `loadMessages` собирается здесь и
+    // ЖИВЬЁМ на каждый вызов — модуль не читает компонент. Состояние чата,
+    // почты, ключей и алиасов он берёт у владельцев сам; в контракте остаётся
+    // только per-app владелец `chat`/`sending`, токен загрузки (`loadSeq`
+    // читается внутри stale()), и эффекты соседних доменов.
+    // Без `;` внутри литерала: тело — одно выражение (ратчет App.vue).
+    async loadMessages(email) {
+      return MessagesFeature.loadMessages({
+        chat: this.chat,
+        sending: this.sendingStore,
+        getLoadSeq: () => this.loadSeq,
+        cryptoReady: this.cryptoReady,
+        profiles: () => this.profiles,
+        isOwnSender: (id) => this.isOwnSender(id),
+        isIgnored: (e) => this.isIgnored(e),
+        aliasesOf: (e) => this.aliasesOf(e),
+        setPeerKey: (e, k, pq) => this.setPeerKey(e, k, pq),
+        scheduleEphemeral: (m, c) => this.scheduleEphemeral(m, c),
+        showHistoryFirst: (chatKey, stale) => this.showHistoryFirst(chatKey, stale),
+        sendReadReceipts: (ids) => this.sendReadReceipts(ids),
+        saveCurrentHistory: (chatKey) => this.saveCurrentHistory(chatKey),
+        saveChatCache: (chatKey, list) => this.saveChatCache(chatKey, list),
+        cacheBody: (k, b) => this.cacheBody(k, b),
+        mergeHistory: (chatKey, list) => this.mergeHistory(chatKey, list),
+        mergePending: (chatKey, list) => this.mergePending(chatKey, list),
+        filterDeleted: (list) => this.filterDeleted(list),
+        loadProfiles: () => this.loadProfiles(),
+        parsePollEnvelope: (env) => this.parsePollEnvelope(env),
+        parseCallSignal: (text) => this.parseCallSignal(text),
+        noteSeen: (e, ts) => this.noteSeen(e, ts),
+        migratePeerGroups: (a, b) => this.migratePeerGroups(a, b),
+        migrateChatHistoryChain: (a, b, c) => this.migrateChatHistoryChain(a, b, c),
+        applyReactions: (list, chatKey, wire) => this.applyReactions(list, chatKey, wire),
+        applyEdits: (list, chatKey, wire) => this.applyEdits(list, chatKey, wire),
+        applyPollVotes: (list, wire) => this.applyPollVotes(list, wire),
+        isOutboundLetter: ContactsFeature.isOutboundLetter,
+        resolvePeerSender: ContactsFeature.resolvePeerSender,
+        resolveEventSender: ContactsFeature.resolveEventSender,
+        findKnownPeerByKey: ContactsFeature.findKnownPeerByKey,
+      }, email);
+    },
     // W2 партия 2 (ADR-005 R3): модуль не читает компонент. В контракте —
     // только то, чем владеет компонент: анти-дубль последней отправки и
     // watchdog (get/set: они читаются И пишутся), UI-режим composer'а
@@ -4463,7 +4500,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
         // иначе выглядело бы, что блок не работает.
         if (this.activeChatType === 'chat' && this.activeChat === email) {
-          await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
+          await this.loadMessages(this.activeChat);
         }
         uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
       }
@@ -4477,7 +4514,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
       // истории (фильтр до расшифровки), возвращать их нечем. Просто
       // перерисовываем: баннер уходит, новые сообщения начинают приходить.
-      await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
+      await this.loadMessages(this.activeChat);
     },
     // Ignore из меню сообщения: 1:1 — адрес чата, группа — sender_id автора
     // (msgSenderEmail). Тост объясняет, что именно произошло.
@@ -4493,7 +4530,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         await this.ignoreUser(sender);
         // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
         if (this.activeChatType === 'chat' && this.activeChat === sender) {
-          await MessagesFeature.loadMessages(this, this.activeChat, this.loadMessagesDeps);
+          await this.loadMessages(this.activeChat);
         }
         uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
       }

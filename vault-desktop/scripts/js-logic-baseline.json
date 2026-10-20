@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 418,
+    "ctxRefSites": 345,
     "appVueOwn": 198,
-    "appVueMethods": 350,
+    "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
   },
@@ -19,9 +19,8 @@
     "features/groups.js": 45,
     "features/invites.js": 48,
     "features/members.js": 16,
-    "features/messages.js": 72,
     "features/migrate.js": 1,
-    "features/presence.js": 12,
+    "features/presence.js": 11,
     "features/profiles.js": 37,
     "features/receipts.js": 17,
     "features/recovery.js": 44
@@ -172,42 +171,6 @@
       "publicKey",
       "showAddMemberPopup"
     ],
-    "features/messages.js": [
-      "activeChat",
-      "aliasesOf",
-      "applyEdits",
-      "applyPollVotes",
-      "applyReactions",
-      "cacheBody",
-      "chat",
-      "contactAliases",
-      "cryptoReady",
-      "email",
-      "emailBodyCache",
-      "emails",
-      "filterDeleted",
-      "isIgnored",
-      "isOwnSender",
-      "loadProfiles",
-      "loadSeq",
-      "mergeHistory",
-      "mergePending",
-      "migrateChatHistoryChain",
-      "migratePeerGroups",
-      "noteSeen",
-      "parseCallSignal",
-      "parsePollEnvelope",
-      "peerKeys",
-      "peerPqKeys",
-      "pendingOutgoing",
-      "profiles",
-      "saveChatCache",
-      "saveCurrentHistory",
-      "scheduleEphemeral",
-      "sendReadReceipts",
-      "setPeerKey",
-      "showHistoryFirst"
-    ],
     "features/migrate.js": [
       "migrateOwnProfile"
     ],
@@ -215,7 +178,6 @@
       "_presenceSending",
       "cryptoReady",
       "isLoggedIn",
-      "noteSeen",
       "peerKeys",
       "peerPqKeys"
     ],
