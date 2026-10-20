@@ -252,6 +252,34 @@ console.log('3. startPolling/stopPolling');
   // РЕГРЕССИЯ H+: первый тик обязан быть ЧЕРЕЗ ИНТЕРВАЛ, а не немедленно
   // (немедленный полный поллинг на старте дрался за IMAP-lock с первичной загрузкой).
   check('первый тик НЕ немедленный (регрессия H+)', relayMock.polls === 0 && ops('loadEmails').length === 0);
+  // Владелец таймера идемпотентен: повторный start обязан отвергнуться, иначе
+  // у поллинга живут ДВА таймера (двойной опрос, двойная нагрузка на IMAP-lock).
+  // Проверяем КОНКРЕТНО: тот же таймер, а не «какой-нибудь таймер».
+  const pollTimerBefore = pollingCycle.timer;
+  R.startPolling(ctx, 1000);
+  check('повторный startPolling отвергнут (таймер прежний, второй не создан)',
+    pollingCycle.timer === pollTimerBefore, { before: pollTimerBefore, now: pollingCycle.timer });
+  // То же правило у тикера релея — отдельный владелец, отдельная строка.
+  // Сначала ЗАПУСКАЕМ тикер (иначе сравнивать нечего), потом — ещё раз.
+  relayTicker.start(async () => {});
+  const tickerBefore = relayTicker.timer;
+  relayTicker.start(async () => {});
+  check('повторный start тикера отвергнут (таймер прежний)',
+    tickerBefore !== null && relayTicker.timer === tickerBefore,
+    { before: tickerBefore, now: relayTicker.timer });
+  // idleFallback: arm снимает ПРЕДЫДУЩИЙ таймер — иначе fallback срабатывает
+  // дважды (двойной вход в idleLoop). Проверяем на ДВУХ последовательных arm:
+  // прежний таймер обязан УМЕРТЬ (иначе вызов сработает дважды).
+  let fbFired = 0;
+  idleFallback.arm(() => { fbFired += 1; });
+  const fbFirst = idleFallback.timer;
+  idleFallback.arm(() => { fbFired += 1; });
+  check('idleFallback.arm снимает прежний таймер (без двойного срабатывания)',
+    fbFirst !== null && idleFallback.timer !== fbFirst, { first: fbFirst, now: idleFallback.timer });
+  await fire('t', fbFirst); await flush();
+  check('прежний таймер fallback НЕ срабатывает (иначе двойной вход в idleLoop)',
+    fbFired === 0, { fired: fbFired });
+  idleFallback.clear();
   // Not connected → restoreSession (поллинг жив)
   bridge.behavior.loadEmails = async () => { throw new Error('Not connected'); };
   await fire('i', pollingCycle.timer); await flush();
