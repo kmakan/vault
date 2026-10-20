@@ -91,7 +91,10 @@ function unresolvableBare(outFile, src) {
 //                · динамический импорт import('./crypto.js') — не `from ...`,
 //                  и общий переписыватель импортов его не видит;
 //                · выражения вида import.meta.env.VITE_RELAY_URL || '' — в Node
-//              import.meta.env не существует, и модуль падает при загрузке.
+//              import.meta.env не существует, и модуль падает при загрузке;
+//                · подмена ИМЕНИ импорта на оператор:
+//                  "import { invoke } from '@tauri-apps/api/core';" →
+//                  "const invoke = globalThis.__INVOKE__;" (recovery-session-smoke).
 //              Эти подмены терялись при первой же конвертации, потому что
 //              шаблон искал только `from '...'`; восемь смоуков падали на этом.
 // Возвращает путь к записанной копии.
@@ -111,20 +114,21 @@ export function prepareModuleCopy(realFile, outFile, mocks, mocksDir, extra) {
     src = src.split(from).join(to);
   }
   src = absolutizeImports(src, path.dirname(realFile));
-  mkdirSync(path.dirname(outFile), { recursive: true });
-  writeFileSync(outFile, src);
   // Копия обязана быть ЗАГРУЖАЕМОЙ. Если в ней остался пакетный импорт, копия
   // упадёт при загрузке с ERR_MODULE_NOT_FOUND — и смоук будет красным «не
   // там, где сломан». Ловим здесь, где копия делается: сообщение называет
-  // и спецификатор, и модуль.
+  // и спецификатор, и модуль. Проверка ДО записи: сломанная копия не должна
+  // попасть на диск (иначе следующий запуск прочитает её и упадёт о позже).
   const bare = unresolvableBare(outFile, src);
   if (bare.length) {
     throw new Error(
       'prepareModuleCopy: в копии ' + path.basename(outFile) + ' (из ' + path.basename(realFile) +
       ') остались нерезолвящиеся импорты: ' + bare.join(', ') +
-      '. Замокан их в карте моков (или замени текстом) — иначе копия упадёт ' +
-      'с ERR_MODULE_NOT_FOUND при загрузке.');
+      '. Замокан их в карте моков (или замени текстом через `extra`) — иначе ' +
+      'копия упадёт с ERR_MODULE_NOT_FOUND при загрузке.');
   }
+  mkdirSync(path.dirname(outFile), { recursive: true });
+  writeFileSync(outFile, src);
   // Возвращаем ТРАНСФОРМИРОВАННЫЙ src (а не путь), чтобы вызывающие, оборачивающие
   // результат внешним writeFileSync, записали именно код, а не путь к файлу.
   return src;
