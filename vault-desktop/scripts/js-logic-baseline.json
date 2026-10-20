@@ -2,10 +2,10 @@
   "measuredAt": "2026-10-19",
   "totals": {
     "ctxRefSites": 0,
-    "appVueOwn": 121,
+    "appVueOwn": 116,
     "appVueMethods": 351,
-    "protocolSites": 67,
-    "protocolFiles": 13
+    "protocolSites": 49,
+    "protocolFiles": 12
   },
   "ctxByFile": {},
   "ctxFieldsByFile": {},
@@ -16,13 +16,10 @@
     },
     "features/calls.js": {
       "envelope-json": 1,
-      "call-state": 19
-    },
-    "features/chat.js": {
-      "ttl": 2
+      "call-state": 18
     },
     "features/envelope-id.js": {
-      "envelope-json": 2
+      "envelope-json": 1
     },
     "features/forward.js": {
       "envelope-build": 1,
@@ -33,8 +30,7 @@
     },
     "features/groups.js": {
       "envelope-parse": 1,
-      "envelope-json": 2,
-      "ttl": 5
+      "envelope-json": 2
     },
     "features/incoming.js": {
       "envelope-parse": 3,
@@ -42,8 +38,7 @@
     },
     "features/messages.js": {
       "envelope-parse": 3,
-      "envelope-json": 1,
-      "ttl": 7
+      "envelope-json": 1
     },
     "features/receipts.js": {
       "envelope-parse": 1
@@ -54,11 +49,9 @@
     "features/send.js": {
       "envelope-parse": 1,
       "envelope-build": 1,
-      "envelope-json": 1,
-      "ttl": 1
+      "envelope-json": 1
     },
     "message-format.js": {
-      "envelope-parse": 1,
       "envelope-json": 1
     }
   },
@@ -126,11 +119,6 @@
     "onRecoveryFilePicked",
     "loginWithRecovery",
     "onExperimentsCalls",
-    "ephemeralLabel",
-    "applyEphemeral",
-    "setEphemeralTtl",
-    "scheduleEphemeral",
-    "expireEphemeral",
     "showToast",
     "onRecoveryCreated",
     "locateEscrow",

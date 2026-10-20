@@ -20,6 +20,7 @@
 //     `migrateChatHistoryChain` — эффекты и решения соседних доменов.
 //     `noteSeen` — связанная функция отметки: её получает presence.js
 //     (ADR-005 R3), компонент модулю не виден.
+import { expireAt } from '../ephemeral-rule.js';
 import { uiStore } from "./session-store.js";
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
@@ -238,7 +239,8 @@ export async function loadMessages(deps, email) {
               if (env && env.ttl) {
                 const _mailTs = new Date(m.date || Date.now()).getTime() || Date.now();
                 msgTtl = env.ttl;
-                msgExpireAt = _mailTs + env.ttl * 1000;
+                // Правило времени жизни — из Rust (ADR-005 R1, W4).
+                msgExpireAt = await expireAt(_mailTs, env.ttl);
               }
               if (env) {
                 content = env.text;
@@ -375,7 +377,7 @@ export async function loadMessages(deps, email) {
               vault: true,
               mid: m.message_id || '',
               ttl: msgTtl,
-              expireAt: msgExpireAt,
+              expiresAt: msgExpireAt,
               email: m,
             };
           } catch (e) {
@@ -439,7 +441,7 @@ export async function loadMessages(deps, email) {
         deps.applyEdits(merged0, chat, wireEdits);
         deps.applyPollVotes(merged0, wirePollVotes);
         const merged = deps.filterDeleted(deps.mergePending(chat, merged0));
-        for (const m of merged) if (m.expireAt) deps.scheduleEphemeral(m, chat);
+        for (const m of merged) if (m.expiresAt) deps.scheduleEphemeral(m, chat).catch(() => {});
         if (!merged.length && hadMessages && !stale()) {
           // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
           // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
@@ -521,8 +523,9 @@ export async function loadMessages(deps, email) {
                     // read-receipt-синхронизации; доставка — честный компромисс.
                     // new Date(undefined) давал NaN и таймер не взводился.
                     const mailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
-                    const expireAt = env.ttl ? mailTs + env.ttl * 1000 : 0;
-                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expireAt };
+                    // Правило времени жизни — из Rust (ADR-005 R1, W4).
+                    const expiresAt = await expireAt(mailTs, env.ttl);
+                    return { ...base, id: env.id || base.id, content: parsed.text, attachment: parsed.attachment, encrypted: true, ttl: env.ttl || 0, expiresAt };
                   }
                   const parsed = MsgFormat.parseMessageContent(text);
                   return { ...base, content: parsed.text, attachment: parsed.attachment, encrypted: true };
@@ -535,7 +538,7 @@ export async function loadMessages(deps, email) {
           );
           if (stale()) return;
           deps.chat.set(decrypted.sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
-          for (const m of deps.chat.state.messages) if (m.expireAt) deps.scheduleEphemeral(m, chatUi.activeChat);
+          for (const m of deps.chat.state.messages) if (m.expiresAt) deps.scheduleEphemeral(m, chatUi.activeChat).catch(() => {});
         } else {
           deps.chat.set(raw.map(msg => {
             const { text, attachment } = MsgFormat.parseMessageContent(msg.content);

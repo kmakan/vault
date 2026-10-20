@@ -1,5 +1,6 @@
 pub mod contacts;
 pub mod edit;
+pub mod ephemeral;
 pub mod filter;
 pub mod folders;
 pub mod groups;

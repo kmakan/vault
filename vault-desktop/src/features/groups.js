@@ -16,6 +16,7 @@
 //
 // STEALTH-группы: тема писем пустая → subject-фильтрации нет; единый проход
 // классифицирует реакцию/правку/квитанцию/pin/poll/presence/meta/hav/сообщение.
+import { expireAt } from '../ephemeral-rule.js';
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
@@ -189,7 +190,8 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
                     created_at: msg.created_at,
                     poll: p,
                     ttl: (env && env.ttl) || 0,
-                    expireAt: env && env.ttl ? gPollTs + env.ttl * 1000 : 0,
+                    // Правило времени жизни — из Rust (ADR-005 R1, W4).
+                    expiresAt: env && env.ttl ? await expireAt(gPollTs, env.ttl) : 0,
                   });
                   continue;
                 }
@@ -210,7 +212,8 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
               markSeen(msg.sender_id, new Date(msg.created_at).getTime());
             }
             const gMailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
-            const gExpireAt = env && env.ttl ? gMailTs + env.ttl * 1000 : 0;
+            // Правило времени жизни — из Rust (ADR-005 R1, W4).
+            const gExpireAt = env && env.ttl ? await expireAt(gMailTs, env.ttl) : 0;
             decrypted.push({
               ...msg,
               content: text,
@@ -222,7 +225,7 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
               mid: msg.message_id || '',
               ...(env && env.id ? { id: env.id } : {}),
               ttl: (env && env.ttl) || 0,
-              expireAt: gExpireAt,
+              expiresAt: gExpireAt,
             });
           }
           if (stale()) return;
@@ -286,7 +289,7 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
             return;
           }
           deps.chat.set(merged);
-          for (const m of deps.chat.state.messages) if (m.expireAt) deps.scheduleEphemeral(m, chat);
+          for (const m of deps.chat.state.messages) if (m.expiresAt) deps.scheduleEphemeral(m, chat).catch(() => {});
           deps.saveChatCache(chat, deps.chat.state.messages);
           // Локальная история (IndexedDB) — полный архив группы.
           deps.saveCurrentHistory(chat);

@@ -29,9 +29,12 @@ check('buildReplyPayload с quote → "> quote\\n\\nhi"', buildReplyPayload('hi'
 
 
 // buildSendingMessage
-const sm = buildSendingMessage({ envelopeId:'', payload:'hi', ttl:60, now:1000, timeStr:'12:00', pendingIdOf:()=>'' });
+// ADR-005 R1/W4: момент истечения ПРИХОДИТ из Rust (правило времени жизни),
+// функция остаётся чистой и сама его не вычисляет.
+const sm = buildSendingMessage({ envelopeId:'', payload:'hi', ttl:60, now:1000, timeStr:'12:00', pendingIdOf:()=>'', expiresAt:61000 });
 check('buildSendingMessage id пустой (pending)', sm.id === '');
-check('buildSendingMessage ttl+expireAt', sm.ttl === 60 && sm.expireAt === 61000 && sm.status === 'sending');
+check('buildSendingMessage ttl+expiresAt (из Rust)', sm.ttl === 60 && sm.expiresAt === 61000 && sm.status === 'sending');
+check('buildSendingMessage без TTL → не исчезает', buildSendingMessage({ envelopeId:'', payload:'hi', ttl:0, now:1000, timeStr:'12:00', pendingIdOf:()=>'' }).expiresAt === 0);
 check('buildSendingMessage encrypted+vault', sm.encrypted === true && sm.vault === true);
 
 // Сводка обязательна: progress.mjs считает проверки ТОЛЬКО по последним строкам

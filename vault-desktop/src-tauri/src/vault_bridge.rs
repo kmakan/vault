@@ -77,6 +77,27 @@ pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serd
     }
 }
 
+/// ADR-005 R1 / W4: правило времени жизни сообщения — в Rust.
+/// JS не считает «когда истечёт» сам: он получает готовые значения отсюда.
+///
+/// Момент истечения: `base_ms + ttl_secs*1000` (0 — не исчезает).
+#[tauri::command]
+pub fn vault_ephemeral_expire_at(base_ms: i64, ttl_secs: i64) -> i64 {
+    vault_client::vault::ephemeral::expire_at(base_ms, ttl_secs)
+}
+
+/// Истекло ли сообщение к моменту `now_ms` (`expires_at == 0` — никогда).
+#[tauri::command]
+pub fn vault_ephemeral_is_expired(expires_at: i64, now_ms: i64) -> bool {
+    vault_client::vault::ephemeral::is_expired(expires_at, now_ms)
+}
+
+/// Сколько миллисекунд осталось до истечения (0 — истекло или не истекает).
+#[tauri::command]
+pub fn vault_ephemeral_remaining_ms(expires_at: i64, now_ms: i64) -> i64 {
+    vault_client::vault::ephemeral::remaining_ms(expires_at, now_ms)
+}
+
 /// Payload → `VaultMessage`: контракт с JS, вынесенный из команды, чтобы его
 /// можно было проверить на хосте.
 ///

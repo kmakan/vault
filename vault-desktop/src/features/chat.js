@@ -45,7 +45,9 @@ export function buildReplyPayload(text, { replyTo, replyPreview }) {
 
 // buildSendingMessage: чистый optimistic-сообщение при отправке (peer/group).
 // envelopeId уже известен (envelopeId || pending). now/timeStr инъецируются.
-export function buildSendingMessage({ envelopeId, payload, ttl, now, timeStr, pendingIdOf }) {
+// expiresAt — ГОТОВЫЙ момент истечения (правило в Rust, ADR-005 R1/W4):
+// функция остаётся чистой и не решает «когда истечёт» сама.
+export function buildSendingMessage({ envelopeId, payload, ttl, now, timeStr, pendingIdOf, expiresAt }) {
   return {
     id: envelopeId || (pendingIdOf ? pendingIdOf() : ''),
     content: payload,
@@ -57,6 +59,6 @@ export function buildSendingMessage({ envelopeId, payload, ttl, now, timeStr, pe
     status: 'sending',
     _pendingAt: now,
     ttl: ttl || 0,
-    expireAt: ttl ? now + ttl * 1000 : 0,
+    expiresAt: expiresAt || 0,
   };
 }

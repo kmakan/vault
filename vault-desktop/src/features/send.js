@@ -16,6 +16,7 @@
 //   · markPending / saveCurrentHistory / recordLocalEdit / sendEditEmail /
 //     saveDraft / scheduleEphemeral / sendChannelPost / isIgnored — эффекты
 //     других доменов, вызываемые через компонент.
+import { expireAt } from '../ephemeral-rule.js';
 import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
@@ -218,12 +219,14 @@ export async function sendMessage(deps) {
           const sNow = Date.now();
           const pendingMsg = buildSendingMessage({
             envelopeId, payload, ttl, now: sNow,
+            // Правило времени жизни — из Rust (ADR-005 R1, W4).
+            expiresAt: await expireAt(sNow, ttl),
             timeStr: MsgFormat.formatTimeLabel(sNow),
             pendingIdOf: EnvelopeId.pendingIdOf,
           });
           deps.chat.append(pendingMsg);
           deps.markPending(chatUi.activeChat, pendingMsg);
-          if (ttl) deps.scheduleEphemeral(pendingMsg, chatUi.activeChat);
+          if (ttl) deps.scheduleEphemeral(pendingMsg, chatUi.activeChat).catch(() => {});
           // Своё исходящее ПЕРСИСТИМ сразу (как почтовый мессенджер пишет в msgs при
           // отправке): отображение НЕ зависит от Sent-копии в ящике, которую
           // пользователь может удалить. История = источник своих сообщений.

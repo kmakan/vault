@@ -71,9 +71,17 @@ export const PROTOCOL_MARKERS = [
   { id: 'call-state',
     re: /\b(?:setCallState\s*\(\s*|callState\s*(?:===|!==|==|!=|=)\s*)['"](?:idle|ringing|active|ended|declined|missed|cancelled|busy)['"]/g,
     why: 'переход состояния звонка в JS: машина состояний — в Rust (W4)' },
+  // Время жизни сообщения — ПРАВИЛО ПРОТОКОЛА (ADR-005 R1, W4): с 20.10
+  // арифметика живёт в Rust (vault_client::vault::ephemeral), JS зовёт мост.
+  //
+  // Ловим АРИФМЕТИКУ (`ttl * 1000`, `base + ttl*1000`) — это и есть решение.
+  // Поле `expireAt`/`expiresAt` больше не ловим: в UI-модели это ЗНАЧЕНИЕ ИЗ
+  // RUST (момент истечения приезжает готовым), а не вычисление. Прежняя
+  // регулярка ловила и имя поля, и строку склейки ('... ttl=' + ttl + ' ...'),
+  // и текст комментария — то есть ловила не решение, а совпадения слов.
   { id: 'ttl',
-    re: /\bttl\b\s*[*+]|\bexpireAt\b/g,
-    why: 'арифметика TTL/истечения в JS: время жизни сообщения — правило протокола' },
+    re: /\bttl\b\s*[*+]\s*(?:\d|ttl\b)/g,
+    why: 'арифметика TTL/истечения в JS: время жизни сообщения — правило протокола (решение — в Rust)' },
 ];
 
 const hits = (src, markers) => markers
@@ -81,7 +89,9 @@ const hits = (src, markers) => markers
   .filter((h) => h.n > 0);
 
 export const cryptoHits = (src) => hits(src, CRYPTO_MARKERS);
-export const protocolHits = (src) => hits(src, PROTOCOL_MARKERS);
+// Комментарии не считаются: правило протокола — это КОД, а не текст про него
+// (иначе «ttl*1000» в пояснении считалось бы решением в JS).
+export const protocolHits = (src) => hits(stripComments(src), PROTOCOL_MARKERS);
 
 // ── ctx-ссылки ─────────────────────────────────────────────────────────
 // ОПРЕДЕЛЕНИЕ ОДНО — и оно же у `ctx-ratchet-gate.mjs`, иначе получаются «два
@@ -194,6 +204,11 @@ export function selfTest() {
     // (3) состояние звонка: переход ловится, UI-строка — нет.
     { name: 'call-state: переход пойман',   src: "useSession().setCallState('active');", fn: protocolHits, want: 1, id: 'call-state' },
     { name: 'call-state: UI-метка чиста',   src: "const label = t('call_active');",      fn: protocolHits, want: 0, id: null },
+    // (3a) TTL: арифметика — решение протокола (ловится), поле из Rust — нет.
+    { name: 'ttl: арифметика в JS поймана', src: 'const e = base + ttl * 1000;',        fn: protocolHits, want: 1, id: 'ttl' },
+    { name: 'ttl: поле из Rust — не решение', src: 'const e = msg.expiresAt;',         fn: protocolHits, want: 0, id: null },
+    { name: 'ttl: склейка строк — не арифметика', src: "log('ttl=' + ttl + ' chat=' + id);", fn: protocolHits, want: 0, id: null },
+    { name: 'ttl: комментарий — не решение', src: '// раньше было base + ttl*1000\n',  fn: protocolHits, want: 0, id: null },
     // (4) ctx и App.vue: делегат не считается логикой, свой метод — считается.
     { name: 'ctx: ссылка поймана',          src: 'await ctx.sendMessage(x);',            fn: (s) => [{ id: 'ctx', n: countCtxRefs(s) }], want: 1, id: 'ctx' },
     // Комментарий — не связь. Без этой пары один инструмент считает 686, другой

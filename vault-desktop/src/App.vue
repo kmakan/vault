@@ -991,6 +991,7 @@ import * as GroupAvatarsFeature from './features/group-avatars.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
+import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
@@ -1876,6 +1877,22 @@ export default {
         setProcessedUnreadIds: (v) => { this.processedUnreadIds = v; },
         unreadOf: (k) => this.unreadOf(k),
         clearUnread: (k) => this.clearUnread(k),
+      };
+    },
+    // Контракт фичи эфемерных сообщений (ADR-005 W4): правило времени жизни —
+    // в Rust (features/ephemeral.js зовёт мост), здесь только состояние UI.
+    ephemeralDeps() {
+      return {
+        activeChat: () => this.activeChat,
+        activeChatType: () => this.activeChatType,
+        currentGroup: () => this.currentGroup,
+        ephemeralOptions: () => this.ephemeralOptions,
+        setCurrentEphemeralTtl: (v) => { this.currentEphemeralTtl = v; },
+        messagesStore: this.messagesStore,
+        chat: this.chat,
+        addTombstone: (id) => this.addTombstone(id),
+        addMidTombstone: (mid) => this.addMidTombstone(mid),
+        saveCurrentHistory: (k) => this.saveCurrentHistory(k),
       };
     },
     // Контракт фичи правок/удаления (ADR-005 W3, партия 4).
@@ -3982,59 +3999,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // TTL хранится per-chat в kv_store ('ephemeral:<chatId>'), уходит в
     // конверте (env.ttl, секунды). У получателя таймер стартует при ПОКАЗЕ
     // сообщения; у отправителя — сразу после отправки.
-    ephemeralLabel(sec) {
-      const opt = this.ephemeralOptions.find((o) => o.v === Number(sec));
-      return opt ? opt.label : sec + ' c';
-    },
-    async applyEphemeral(seconds) {
-      this.showEphemeralMenu = false;
-      const chatId = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      if (!chatId || chatId === '__notes__') return;
-      try {
-        await this.setEphemeralTtl(chatId, seconds);
-        console.log('[ephemeral] set ttl=' + seconds + ' for ' + chatId);
-      } catch (e) {
-        console.error('[ephemeral] save failed:', e);
-      }
-      this.currentEphemeralTtl = Number(seconds) || 0;
-      uiStore.toast(
-        seconds > 0
-          ? 'Исчезающие сообщения: ' + this.ephemeralLabel(seconds) + ' (новые сообщения в этом чате)'
-          : 'Исчезающие сообщения выключены',
-      );
-    },
+    ephemeralLabel(sec) { return EphemeralFeature.ephemeralLabel(this.ephemeralDeps, sec); },
+    async applyEphemeral(seconds) { return EphemeralFeature.applyEphemeral(this.ephemeralDeps, seconds); },
     async ephemeralTtlOf(chatId) { return MsgStore.ephemeralTtlOf(chatId); },
-    async setEphemeralTtl(chatId, seconds) {
-      await db.kvSet('anon', 'ephemeral:' + chatId, String(seconds || 0));
-      this.messagesStore.tick(); // перерисовать индикатор в шапке
-    },
-    scheduleEphemeral(msg, chatId) {
-      if (!msg || !msg.expireAt) return;
-      const key = chatId + ':' + msg.id;
-      if (this.messagesStore.hasTimer(key)) return;
-      console.log('[ephemeral] arm timer id=' + msg.id + ' chat=' + chatId + ' in ' + Math.round((msg.expireAt - Date.now()) / 1000) + 's');
-      // Истёкшие пока приложение было закрыто: удаляем сразу.
-      if (Date.now() >= msg.expireAt) {
-        this.expireEphemeral(chatId, msg.id, msg.mid);
-        return;
-      }
-      this.messagesStore.setTimer(key, () => {
-        this.expireEphemeral(chatId, msg.id, msg.mid);
-        this.messagesStore.clearTimer(key);
-      }, msg.expireAt - Date.now());
-    },
-    expireEphemeral(chatId, msgId, mid) {
-      // Тот же механизм, что «Удалить у всех» (deleteMessage): tombstone
-      // персистентен → сообщение не воскреснет из истории/письма после
-      // перезапуска или поллинга.
-      this.addTombstone(msgId);
-      if (mid) this.addMidTombstone(mid);
-      const idx = this.messages.findIndex((m) => m.id === msgId);
-      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
-      this.saveCurrentHistory(chatId);
-    },
+    async setEphemeralTtl(chatId, seconds) { return EphemeralFeature.setEphemeralTtl(this.ephemeralDeps, chatId, seconds); },
+    scheduleEphemeral(msg, chatId) { return EphemeralFeature.scheduleEphemeral(this.ephemeralDeps, msg, chatId); },
+    expireEphemeral(chatId, msgId, mid) { return EphemeralFeature.expireEphemeral(this.ephemeralDeps, chatId, msgId, mid); },
 
     // --- Key Recovery
     // Минимальный тост: сообщение внизу, автоскрытие (по умолчанию 5с).
