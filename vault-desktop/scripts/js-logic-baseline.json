@@ -2,7 +2,7 @@
   "measuredAt": "2026-10-19",
   "totals": {
     "ctxRefSites": 0,
-    "appVueOwn": 126,
+    "appVueOwn": 121,
     "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
@@ -143,11 +143,6 @@
     "loadCursors",
     "saveCursors",
     "chatVisible",
-    "loadUnreadCounts",
-    "saveUnreadSeen",
-    "saveUnreadCounts",
-    "resetUnread",
-    "isMuted",
     "runAutoclean",
     "openChatMenu",
     "closeChatMenu",

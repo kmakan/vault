@@ -991,6 +991,7 @@ import * as GroupAvatarsFeature from './features/group-avatars.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
+import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
 import * as RelayFeature from './features/relay.js';
@@ -1863,6 +1864,19 @@ export default {
     editingMessage: {
       get() { return uiStore.getFormField('editingMessage'); },
       set(v) { uiStore.setFormField('editingMessage', v); },
+    },
+    // Контракт фичи непрочитанных (ADR-005 W3, партия 5): счётчики — у
+    // владельца чата, дедуп-отметки — в состоянии компонента.
+    unreadDeps() {
+      return {
+        email: () => this.email,
+        unreadCounts: () => this.unreadCounts,
+        setUnreadCounts: (v) => { this.unreadCounts = v; },
+        processedUnreadIds: () => this.processedUnreadIds,
+        setProcessedUnreadIds: (v) => { this.processedUnreadIds = v; },
+        unreadOf: (k) => this.unreadOf(k),
+        clearUnread: (k) => this.clearUnread(k),
+      };
     },
     // Контракт фичи правок/удаления (ADR-005 W3, партия 4).
     editsDeps() {
@@ -4438,38 +4452,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     unreadOf(chatKey) {
       return this.chat.unreadOf(chatKey);
     },
-    async loadUnreadCounts() {
-      try {
-        const raw = await db.kvGet(await accountNamespace(this.email), 'unread-counts');
-        this.unreadCounts = raw ? JSON.parse(raw) : {};
-        const seenRaw = await db.kvGet(await accountNamespace(this.email), 'unread-seen');
-        this.processedUnreadIds = new Set(seenRaw ? JSON.parse(seenRaw) : []);
-      } catch (e) { this.unreadCounts = {}; this.processedUnreadIds = new Set(); }
-    },
-    async saveUnreadSeen() {
-      try {
-        await db.kvSet(await accountNamespace(this.email), 'unread-seen', JSON.stringify(Array.from(this.processedUnreadIds)));
-      } catch (e) { /* kv недоступен — дедуп живёт в памяти до перезапуска */ }
-    },
-    async saveUnreadCounts() {
-      try {
-        await db.kvSet(await accountNamespace(this.email), 'unread-counts', JSON.stringify(this.unreadCounts));
-      } catch (e) { /* kv недоступен — счётчики живут в памяти до перезапуска */ }
-    },
-    async resetUnread(chatKey) {
-      if (this.unreadOf(chatKey) > 0) {
-        this.clearUnread(chatKey);
-        await this.saveUnreadCounts();
-      }
-    },
+    async loadUnreadCounts() { return UnreadFeature.loadUnreadCounts(this.unreadDeps); },
+    async saveUnreadSeen() { return UnreadFeature.saveUnreadSeen(this.unreadDeps); },
+    async saveUnreadCounts() { return UnreadFeature.saveUnreadCounts(this.unreadDeps); },
+    async resetUnread(chatKey) { return UnreadFeature.resetUnread(this.unreadDeps, chatKey); },
     // архив + mute per-chat ─────────────────────
     // (загрузка/сохранение kv-блобов и папки — features/folders.js;
     //  обёртки см. в блоке feature-обёрток выше)
-    isMuted(key) {
-      // Ключи chatFlags — lowercased (flagKey); chatKey из processIncoming
-      // может прийти в каноническом регистре контакта — нормализуем.
-      return !!this.chatFlagOf(String(key || '').toLowerCase()).muted;
-    },
+    isMuted(key) { return UnreadFeature.isMuted(key); },
     // автоочистка («удалять сообщения с устройства», модель DC) ──
     // Период хранит SettingsPage (kv 'autoclean-period'); здесь — запуск:
     // 1) SQL-purge конвертов/тел/чат-кэшей старше cutoff (db_autoclean_purge);
