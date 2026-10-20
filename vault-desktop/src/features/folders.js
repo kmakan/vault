@@ -14,12 +14,14 @@ import { foldersStore } from './folders-store.js';
 import { uiStore, sessionStore } from './session-store.js';
 
 // Состояние фичи — в ./folders/state.js (чистый модуль без импортов: его
-// поднимает check-template.cjs для резолва спреда `...foldersState()`).
+// состояние папок — у владельца folders-store (ADR-004 J.7): спред
+// `...foldersState()` в App.vue перекрывал компьютед-прокси на владельца
+// (data сильнее ctx в прокси Vue) — и модуль читал uiStore в обход данных.
+// Класс ловит options-dup-gate (data ∩ computed).
 // Логика папок, использующая это состояние, — здесь.
 // J.7: владелец chatFlags/chatFoldersNames — foldersStore (ADR-004).
 // folders.js больше не пишет ctx напрямую — читает/пишет через owner,
 // App.vue читает через reactive proxy (computed).
-export { foldersState } from './folders/state.js';
 
 // Список имён папок для панели — по алфавиту (чистая функция, App.vue
 // делегирует из computed). Сортировка на копии: не мутируем реактивный массив.

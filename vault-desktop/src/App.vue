@@ -982,7 +982,6 @@ import * as ForwardFeature from './features/forward.js';
 import * as FoldersFeature from './features/folders.js';
 // Фабрики состояния — из чистых модулей без импортов (их поднимает
 // check-template.cjs, чтобы разрезолвить спреды в data()).
-import { foldersState } from './features/folders/state.js';
 import { foldersStore } from './features/folders-store.js';
 import { duressState } from './features/duress/state.js';
 import { pollState } from './features/poll/state.js';
@@ -1424,8 +1423,19 @@ export default {
       ...pollState(),
       // Пересылка: состояние (пересылаемое сообщение) — features/forward/state.js
       ...forwardState(),
-      // Папки чатов: состояние живёт в features/folders.js (ADR-001 Этап 1)
-      ...foldersState(),
+      // Папки чатов: состояние — у владельца folders-store (ADR-004 J.7):
+      // chatFlags/chatFoldersNames читаются компьютед-прокси, поля диалога
+      // (folderDialogOpen/chatFolderNewName) — в uiStore (ADR-005 W2 п.14).
+      //
+      // СПРЕДА ТУТ БЫТЬ НЕ ДОЛЖНО (и раньше был — `...foldersState()`): в Vue
+      // прокси читает setupState → data → props → ctx, поэтому поле в data()
+      // ПЕРЕКРЫВАЕТ компьютед-прокси. Итог (найдено на устройстве 20.10):
+      // компьютед на владельца был недостижим, модуль читал uiStore — пусто,
+      // и папка создавалась БЕЗ ИМЕНИ. Класс ловит options-dup-gate.
+      //
+      // activeFolder — состояние компонента (выбранная папка в списке), его
+      // владелец — сам список, а не фича.
+      activeFolder: '',
       midTombstonesCache: [],
       // IMAP-курсоры: in-memory кэш + sqlite персист.
       cursorsCache: {},
