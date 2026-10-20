@@ -48,9 +48,11 @@ Producer (JS, `vault-desktop/src/App.vue` `buildEnvelope`):
 | Rust `incoming::classify` | `cd vault-client && cargo test --test m0_wire_contract` | 46 |
 | JS `parseEnvelope` | `cd vault-desktop && npm run smoke:m0-wire` | 48 |
 | JS маршрутизатор (эффекты) | `cd vault-desktop && npm run smoke:incoming` | 16 |
+| JS хвост роутера (дедуп/уведомления/пути) | `cd vault-desktop && npm run smoke:incoming-effects` | 40 |
 
-JS-гейты **входят в `npm run build`**: `smoke:m0-wire` и `smoke:incoming` стоят
-до `vite build`. Rust-часть гоняет CI-задача `check-client` (`cargo test`).
+JS-гейты **входят в `npm run build`**: `smoke:m0-wire`, `smoke:incoming` и
+`smoke:incoming-effects` стоят до `vite build`. Rust-часть гоняет CI-задача
+`check-client` (`cargo test`).
 
 Одни и те же байты обязаны одинаково читаться обеими сторонами: расхождение
 ломает любой из гейтов. Числа разные, потому что каждая сторона объявляет в

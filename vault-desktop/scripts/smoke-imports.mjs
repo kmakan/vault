@@ -21,6 +21,7 @@
 // настоящими — это правильно и дешевле, чем писать для каждого новый мок.
 import path from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 // fromDir — каталог НАСТОЯЩЕГО модуля (то, из которого копия пришла).
 export function absolutizeImports(src, fromDir) {
@@ -41,6 +42,42 @@ export function absolutizeImports(src, fromDir) {
 // фиксирует намерение явно: читаю текст, а не подменяю модуль.
 export function readModuleSource(rel) {
   return readFileSync(path.resolve(path.dirname(import.meta.dirname), rel), 'utf8');
+}
+
+// Спецификаторы, которые в копии остались «голыми» (не относительные и не
+// абсолютные) и потому НЕ резолвятся от её каталога.
+//
+// ЗАЧЕМ. Копия живёт в /tmp, где node_modules нет: любой оставшийся пакетный
+// импорт ('@tauri-apps/api/core', 'vue') даёт ERR_MODULE_NOT_FOUND — при
+// загрузке копии, то есть ДО первого утверждения теста. Смоук падает «не
+// там, где сломан», и (если он не подключён к сборке) — молча.
+//
+// Именно так сломался `incoming-smoke` после W1: Tauri-мост был замотан для
+// копии channels.js, а копия incoming.js пошла поимпорту '@tauri-apps/api/core'
+// и упала при загрузке. Гейт (import-gate) проверял это ФАЙЛОВО и потому не
+// увидел: спецификатор был назван в файле — хоть и для другой копии.
+//
+// Проверка резолвимости, а не «список запрещённых»: если смоук копирует внутрь
+// проекта, 'vue' резолвится от каталога копии — и это не поломка.
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
+// Проверяются ТОЛЬКО статические импорты. Динамические — законный способ
+// подключить ОПЦИОНАЛЬНЫЙ плагин: `try { await import('@tauri-apps/plugin-http') }
+// catch { /* фолбэк на window.fetch */ }` (relay-client.js). Такой импорт в
+// копии из /tmp упадёт — и это НЕ поломка: модуль сам это предусмотрел.
+function unresolvableBare(outFile, src) {
+  const clean = stripComments(src);
+  const specs = [
+    ...[...clean.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]),
+    ...[...clean.matchAll(/\bimport\s+['"]([^'"]+)['"]/g)].map((m) => m[1]),
+  ].filter((sp) => !sp.startsWith('.') && !path.isAbsolute(sp));
+  if (!specs.length) return [];
+  let req;
+  try { req = createRequire(path.resolve(outFile)); } catch { return []; }
+  return [...new Set(specs)].filter((sp) => {
+    try { req.resolve(sp); return false; } catch { return true; }
+  });
 }
 
 // Полный цикл подготовки модуля для смоука.
@@ -76,6 +113,18 @@ export function prepareModuleCopy(realFile, outFile, mocks, mocksDir, extra) {
   src = absolutizeImports(src, path.dirname(realFile));
   mkdirSync(path.dirname(outFile), { recursive: true });
   writeFileSync(outFile, src);
+  // Копия обязана быть ЗАГРУЖАЕМОЙ. Если в ней остался пакетный импорт, копия
+  // упадёт при загрузке с ERR_MODULE_NOT_FOUND — и смоук будет красным «не
+  // там, где сломан». Ловим здесь, где копия делается: сообщение называет
+  // и спецификатор, и модуль.
+  const bare = unresolvableBare(outFile, src);
+  if (bare.length) {
+    throw new Error(
+      'prepareModuleCopy: в копии ' + path.basename(outFile) + ' (из ' + path.basename(realFile) +
+      ') остались нерезолвящиеся импорты: ' + bare.join(', ') +
+      '. Замокан их в карте моков (или замени текстом) — иначе копия упадёт ' +
+      'с ERR_MODULE_NOT_FOUND при загрузке.');
+  }
   // Возвращаем ТРАНСФОРМИРОВАННЫЙ src (а не путь), чтобы вызывающие, оборачивающие
   // результат внешним writeFileSync, записали именно код, а не путь к файлу.
   return src;

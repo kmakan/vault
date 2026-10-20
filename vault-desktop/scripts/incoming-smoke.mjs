@@ -1,452 +1,529 @@
-// Node-смоук features/incoming.js — семантика router без Vue/Tauri.
-// Мокаем api/crypto/relay/notify через подмену импортов (заглушки в tmp-модулях).
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { prepareModuleCopy } from './smoke-imports.mjs';
+// Node-смоук features/incoming.js — ХВОСТ роутера: дедуп, уведомления,
+// свежесть, mute/visible, баунс, пул, порядок батча, ренейм, группа.
+//
+// РАЗДЕЛЕНИЕ С `incoming-routing-smoke` (kind → эффект). Там Rust-классификатор
+// подменён и проверяется «какой kind → какой эффект». Здесь наоборот: тип
+// задан смоуком, а проверяется то, что НИЖЕ маршрутизации —
+//   · дедуп: uid|folder, mid:Message-ID, env:envId (кросс-канальный);
+//   · разделение дедупа СЧЁТЧИКА и дедупа УВЕДОМЛЕНИЯ (инвариант 2fa9103:
+//     тихий поллинг не должен съедать push монитора);
+//   · окно свежести, mute, видимый чат;
+//   · пул писем за прогон (MAX_POOL) и ХРОНОЛОГИЧЕСКИЙ разбор батча
+//     (UID как число) — отсюда гонка call_request/call_cancel;
+//   · путь «смена почты» (fingerprint-матчинг) и путь группы.
+//
+// Модуль копируется в /tmp с подменёнными импортами (общий хелпер
+// prepareModuleCopy) — тестируется НАСТОЯЩИЙ роутер, а не его пересказ.
+// Мост Rust (`@tauri-apps/api/core`) замокан: классификатор отдаёт заданный
+// смоуком kind, персист — фиксируется вызовом.
+//
+// ПОЧЕМУ ЭТОТ ФАЙЛ ВОЗРОДИЛСЯ. До W1 (19.10) роутер сам решал «что это за
+// письмо» в JS и читал состояние из компонента. W1 перенёс решение в Rust
+// (`vault_classify_incoming`) и перевёл модуль на явный контракт deps. Смоук
+// остался на старом API: он звал `processIncoming(ctx, …, deps)` (четыре
+// аргумента), ждал, что тип разберёт JS, и подменял только 5 импортов —
+// `@tauri-apps/api/core` в копии остался настоящим, и копия падала при загрузке
+// с ERR_MODULE_NOT_FOUND. Смоук не был подключён к сборке — поломку никто не
+// видел (класс «смоук вне приёмки», см. journal 17.10).
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
-const require = createRequire(import.meta.url);
 const ROOT = path.resolve(import.meta.dirname, '..');
-
-// ── Заглушки импортов incoming.js ──────────────────────────────
 const MOCKS = '/tmp/incoming-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-// crypto-мок: управляем расшифровкой per-test
+// ── Мост Rust ──────────────────────────────────────────────────────────────
+// Классификатор: kind задаёт смоук (стенд). Персист: фиксируем вызов.
+globalThis.__invoke = async (cmd, args) => {
+  const st = globalThis.__state;
+  st.bridgeCalls.push({ cmd, args });
+  if (st.bridgeDown) throw new Error('мост недоступен (тест)');
+  if (cmd === 'vault_classify_incoming') {
+    const input = (args && args.input) || {};
+    return st.classify(input.decrypted, input.from);
+  }
+  return null;
+};
+
+// ── Моки внешних модулей ───────────────────────────────────────────────────
+const apiMock = {
+  calls: [],
+  bodies: {},
+  fetchBodiesDbFirst: async (folder, uids) => {
+    const out = {};
+    for (const uid of uids) {
+      const b = apiMock.bodies[folder + ':' + uid];
+      if (b !== undefined) out[String(uid)] = b;
+    }
+    return out;
+  },
+  saveProfile: (...a) => { apiMock.calls.push(['saveProfile', ...a]); },
+  identityLetterFresh: async () => true,
+  renamePeerIdentity: async (a, b) => { apiMock.calls.push(['renamePeerIdentity', a, b]); },
+  bumpIdentityRenameTs: async (k, ts) => { apiMock.calls.push(['bumpIdentityRenameTs', k, ts]); },
+  removeContact: (e) => { apiMock.calls.push(['removeContact', e]); },
+  deleteProfile: (e) => { apiMock.calls.push(['deleteProfile', e]); },
+  getMyGroupKey: async () => null,
+};
 const cryptoMock = {
   publicKey: 'MY_PUB',
-  isEncrypted: (b) => typeof b === 'string' && b.startsWith('ENC:'),
-  setPeerPublicKey: () => {},
-  decryptVault: null,          // назначается тестом
-  decryptWithGroupKey: null,   // назначается тестом
+  isEncrypted: (s) => typeof s === 'string' && s.startsWith('ENC:'),
+  setPeerPublicKey: (key) => { cryptoMock.currentKey = key; },
+  removePeerKey: async (e) => { apiMock.calls.push(['removePeerKey', e]); },
+  // Расшифровка с ключом, который поставил setPeerPublicKey. Если смоук задал
+  // `plainForKey`, расшифровка идёт только этим ключом — иначе цикл
+  // fingerprint-матчинга нашёл бы «чужое» письмо первым попавшим ключом.
+  decryptVault: async (body) => {
+    const st = globalThis.__state;
+    if (st.plainForKey && cryptoMock.currentKey !== st.plainForKey) {
+      throw new Error('не этим ключом');
+    }
+    // plainFromBody: тело САМО является конвертом (без шифртекста) — так
+    // удобно для call-сигналов: роутер сам разбирает пришедший JSON.
+    if (st.plainFromBody) return String(body).replace(/^ENC:/, '');
+    if (st.plainForBody) return st.plainForBody(body);
+    return st.plain;
+  },
+  decryptWithGroupKey: async () => globalThis.__state.groupPlain,
 };
-// api-мок
-const apiMock = {
-  fetchEmailBodies: async () => ({}),
-  saveProfile: (...a) => { apiMock.profileCalls.push(a); },
-  getMyGroupKey: null,
-  profileCalls: [],
-  // контракт api.identityLetterFresh (api.js:884): письмо свежее порога → true
-  identityLetterFresh: async () => true,
-  renamePeerIdentity: async () => {},
-  bumpIdentityRenameTs: async () => {},
-  removeContact: () => {},
-  deleteProfile: () => {},
-};
-// relay-мок
 const relayMock = {
-  getSettings: null,
-  setPeerToken: null,
+  getSettings: async () => ({ relays: [], active: 0, peers: {} }),
+  fingerprintOf: async () => null,
+  setPeerToken: async () => {},
 };
-// notify-мок
 const notifyMock = { fires: [] };
 notifyMock.notifyNewMessage = (n) => { notifyMock.fires.push(n); };
 
-writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = { kvGet: async () => null, kvSet: async () => {} };');
-writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
-writeFileSync(MOCKS + '/relay-client.js', 'const relay = globalThis.__relayMock; export default relay; export const getSettings = (...a) => relay.getSettings(...a); export const setPeerToken = (...a) => relay.setPeerToken(...a);');
-writeFileSync(MOCKS + '/notify.js', 'export const notifyNewMessage = (n) => globalThis.__notifyMock.notifyNewMessage(n); export const initNotifications = async () => {};');
+writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__invoke(...a);\n');
+writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api;\n');
+writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;\n');
+writeFileSync(MOCKS + '/relay-client.js', [
+  'const relay = globalThis.__relayMock;',
+  'export default relay;',
+  'export const getSettings = (...a) => relay.getSettings(...a);',
+  'export const fingerprintOf = (...a) => relay.fingerprintOf(...a);',
+  'export const setPeerToken = (...a) => relay.setPeerToken(...a);',
+  '',
+].join('\n'));
+writeFileSync(MOCKS + '/notify.js', 'export const notifyNewMessage = (n) => globalThis.__notifyMock.notifyNewMessage(n);\n');
+writeFileSync(MOCKS + '/session-store.js', 'export const uiStore = { tr: (k) => k };\n');
+writeFileSync(MOCKS + '/identity-store.js', 'export const identityStore = { removePeerKey: (e) => globalThis.__state.removedPeerKeys.push(e) };\n');
+writeFileSync(MOCKS + '/presence.js', [
+  'export const noteHeartbeat = (...a) => globalThis.__state.heartbeats.push(a);',
+  // Маршрутизатор после W1 НЕ решает, что это presence: тип приходит из Rust.
+  'export const ingestSignal = () => { throw new Error("маршрутизатор не должен решать, что это presence"); };',
+  '',
+].join('\n'));
 
 globalThis.__apiMock = apiMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__relayMock = relayMock;
 globalThis.__notifyMock = notifyMock;
 
-// Подменяем резолверincoming-импортов: копия incoming.js с переписанными путями
+// Баунс — НАСТОЯЩИЙ модуль (чистые функции, без внешних импортов).
+const BounceFeature = await import(pathToFileURL(ROOT + '/src/features/bounce.js').href);
+
+// ── Копия настоящего incoming.js с подменёнными импортами ─────────────────
+// ВСЕ импорты роутера обязаны быть здесь: '@tauri-apps/api/core' — не
+// исключение (до W1 его не было, и смоук падал на загрузке копии).
 prepareModuleCopy(
   ROOT + '/src/features/incoming.js',
   MOCKS + '/incoming.mjs',
   {
+    './session-store.js': 'session-store.js',
     '../api.js': 'api.js',
     '../crypto.js': 'crypto.js',
     '../relay-client.js': 'relay-client.js',
     '../notify.js': 'notify.js',
     './presence.js': 'presence.js',
-  },
-  MOCKS,
-);
-// presence-мок: сигналы presence в этих тестах не разбираем (свой смоук)
-writeFileSync(MOCKS + '/presence.js', 'export const ingestSignal = () => false;');
-// bounce: РЕАЛЬНЫЙ модуль (чистые функции, без внешних импортов) — проверяем
-// и DSN-ветку incoming.js, и то, что баунс не считается сообщением.
-writeFileSync(MOCKS + '/bounce.js',
-  'export * from ' + JSON.stringify(ROOT + '/src/features/bounce.js') + ';');
-// channels: реальный модуль (проверяем и канальную ветку incoming) с
-// подменой внешним импортов — тот же приём, что в channels-smoke.
-prepareModuleCopy(
-  ROOT + '/src/features/channels.js',
-  MOCKS + '/channels-real.mjs',
-  {
+    './identity-store.js': 'identity-store.js',
     '@tauri-apps/api/core': 'core.js',
-    '../api.js': 'api.js',
   },
   MOCKS,
 );
-writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
-writeFileSync(MOCKS + '/channels.js', 'export * from "' + MOCKS + '/channels-real.mjs";');
-const { processIncoming } = await import(MOCKS + '/incoming.mjs');
-// deps: чистые функции из bounce.js (re-export реального) и channels.js (real copy)
-const BounceFeature = await import(MOCKS + '/bounce.js');
-const ChannelsFeature = await import(MOCKS + '/channels-real.mjs');
-const INCOMING_DEPS = {
-  isBounceMessage: BounceFeature.isBounceMessage,
-  bounceRecipients: BounceFeature.bounceRecipients,
-  bounceReason: BounceFeature.bounceReason,
-  isChannelEnvelope: ChannelsFeature.isChannelEnvelope,
-  ingestChannelEnvelope: ChannelsFeature.ingestChannelEnvelope,
-};
+const { processIncoming } = await import(pathToFileURL(MOCKS + '/incoming.mjs').href);
 
-// ── Хелперы тестов ─────────────────────────────────────────────
+// ── Стенд ──────────────────────────────────────────────────────────────────
 let pass = 0, fail = 0;
-const firesFrom = () => notifyMock.fires.length;
 function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
-  else { fail++; console.log('  ✗ ' + name + (extra ? ' — ' + JSON.stringify(extra) : '')); }
+  else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 
-// Простейший ctx: все зависимости явные
-function makeCtx(over = {}) {
-  const ctx = Object.assign({
+// Стенд на каждый сценарий: счётчики предыдущего не должны «доказывать» следующий.
+function resetWorld(over = {}) {
+  globalThis.__state = {
+    bridgeCalls: [],
+    bridgeDown: false,
+    classify: () => ({ kind: 'message' }),
+    plain: '',
+    plainForKey: null,
+    plainFromBody: false,
+    plainForBody: null,
+    groupPlain: null,
+    unread: {},
+    notifs: [],
+    callSignals: [],
+    heartbeats: [],
+    healed: [],
+    healedMsg: [],
+    migratedGroups: [],
+    migratedChain: [],
+    setPeerKey: [],
+    bounces: [],
+    seen: [],
+    removedPeerKeys: [],
+    savedSeen: 0,
+    savedCounts: 0,
+    cached: [],
+    ...over,
+  };
+  notifyMock.fires = [];
+  apiMock.calls = [];
+  apiMock.bodies = {};
+  cryptoMock.currentKey = null;
+}
+
+// Контракт deps — ровно то, что собирает App.vue:processIncoming (ADR-005 R3).
+function makeDeps(over = {}) {
+  const st = globalThis.__state;
+  const deps = {
     cryptoReady: true,
     email: 'me@x.ru',
     peerKeys: {},
     peerPqKeys: {},
-    groups: [],
-    groupKeys: {},
-    profiles: {},
     emailBodyCache: {},
     processedUnreadIds: new Set(),
-    unreadCounts: {},
-    relayEnabled: false,
-    // методы
-    senderEmail: (raw) => (typeof raw === 'string' ? raw : (raw && raw.address) || ''),
+    profiles: {},
+    contactAliases: {},
+    groupKeys: {},
+    // Точная копия поведения message-format.senderEmail: адрес из «Имя <адрес>».
+    // Упрощённый мок уводил кейсы в ветку «неизвестный адрес» — тест проходил
+    // по чужой ветке и врал.
+    senderEmail: (raw) => {
+      const mm = String(raw || '').match(/<([^>]+)>/);
+      return (mm ? mm[1] : String(raw || '')).trim().toLowerCase();
+    },
+    cacheBody: (k, v) => { st.cached.push([k, v]); },
     isIgnored: () => false,
-    cacheBody: (k, b) => {},
-    parseCallSignal: () => null,
-    parseEnvelope: (t) => (t && t.__env !== undefined ? t.__env : null),
-    handleCallSignal: async function () { this.callSignals++; },
-    canonicalOf: (e) => null,
+    noteSeen: (e, ts) => { st.seen.push([e, ts]); },
+    onMailBounce: async (r, why) => { st.bounces.push({ recipients: r, reason: why }); },
+    handleCallSignal: async (sig, from) => { st.callSignals.push({ sig, from }); },
+    canonicalOf: (x) => x,
+    parseEnvelope: (plain) => {
+      try {
+        const o = JSON.parse(plain);
+        return (o && o.vault === 1) ? o : null;
+      } catch { return null; }
+    },
     localProfileOf: () => null,
-    nameOf: (e) => e,
-    // ADR-003 §5.1: одиночный migrateChatHistory вытеснен migrateChatHistoryChain
-    // (перенос по всей цепочке прежних адресов пира). Мок обязан знать новое
-    // имя: иначе вызов падает, а ошибка ловится громким catch — и тест молчит.
-    migrateChatHistoryChain: async () => {},
-    setPeerKey: () => {},
+    nameOf: () => '',
+    setPeerKey: (e, k, pq) => { st.setPeerKey.push([e, k, pq]); },
+    migratePeerGroups: async (a, b) => { st.migratedGroups.push([a, b]); },
+    migrateChatHistoryChain: async (a, b, c) => { st.migratedChain.push([a, b, c]); },
     tryMigrateGroupMember: async () => false,
-    migratePeerGroups: async () => {},
+    setGroupKey: (id, k) => { st.groupKeys[id] = k; },
+    replyGroupAvatarHeal: async (id) => { st.healed.push(id); },
+    healGroupAvatarFromMessage: async (id, av) => { st.healedMsg.push([id, av]); },
+    saveUnreadSeen: async () => { st.savedSeen++; },
+    saveUnreadCounts: async () => { st.savedCounts++; },
     chatVisible: () => false,
     isMuted: () => false,
-    t: (k) => 'NEW',
-    saveUnreadSeen: async () => {},
-    saveUnreadCounts: async () => {},
-    callSignals: 0,
-    // Методы-обёртки над groupKeys (ADR-004 Этап A9).
-    setGroupKey(id, key) { this.groupKeys[id] = key; return key; },
-    // DSN-ветка (features/bounce.js): сюда пишем вызовы, тесты читают.
-    bounceCalls: [],
-    onMailBounce: async function (recipients, reason) {
-      this.bounceCalls.push({ recipients, reason });
-      return false;
-    },
-  }, over);
-  // unreadCounts: owner API stub → пишет в data (backward-compat для READS).
-  ctx.incUnread = (k) => { ctx.unreadCounts[k] = (ctx.unreadCounts[k] || 0) + 1; return ctx.unreadCounts[k]; };
-  ctx.unreadOf = (k) => ctx.unreadCounts[k] || 0;
-  ctx.clearUnread = (k) => { delete ctx.unreadCounts[k]; return ctx.unreadCounts; };
-  return ctx;
+    incUnread: (k) => { st.unread[k] = (st.unread[k] || 0) + 1; },
+    // Геттеры: во время батча массив может быть переприсвоен (ренейм → loadGroups).
+    channels: () => [],
+    groups: () => [],
+    // Баунс — настоящие чистые функции.
+    isBounceMessage: BounceFeature.isBounceMessage,
+    bounceRecipients: BounceFeature.bounceRecipients,
+    bounceReason: BounceFeature.bounceReason,
+    ingestChannelEnvelope: (obj) => (obj && obj.post ? 'post' : null),
+  };
+  return Object.assign(deps, over);
 }
 
 const NOW = Date.now();
-function msg(over = {}) {
-  return Object.assign({
-    uid: 1, folder: 'INBOX', from: { address: 'peer@x.ru' },
+// `from` в почтовом списке — СТРОКА («Имя <адрес>» или адрес), как её кладёт
+// Rust-мост. Мок-объект {address: …} уводил роутер в ветку «[object Object]»
+// — тест проходил по чужой ветке и врал.
+function letter(over = {}) {
+  return {
+    uid: 1, folder: 'INBOX', from: 'peer@x.ru',
     message_id: '<m1@x>', date: new Date(NOW).toISOString(),
-    body: 'ENC:1',
-  }, over);
-}
-
-// Тела кладём в кэш заранее (мимо fetchEmailBodies)
-function withBody(ctx, m, b) { ctx.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid}`] = b; }
-
-// ── Сценарии ───────────────────────────────────────────────────
-console.log('1. Пустой/не-Vault/своё письмо — полный no-op');
-{
-  const ctx = makeCtx();
-  await processIncoming(ctx, [], { notify: true }, INCOMING_DEPS);
-  await processIncoming(ctx, [msg({ from: { address: 'me@x.ru' } })], { notify: true }, INCOMING_DEPS);
-  withBody(ctx, msg(), 'ENC:1'); // ignored ниже
-  check('пустой fetched и self — ничего не случилось', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
-}
-
-console.log('2. plain-письмо без Vault-конверта — пропуск');
-{
-  const ctx = makeCtx();
-  withBody(ctx, msg(), 'plain text');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('не Vault — не считаем', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
-}
-
-console.log('3. ignore-лист: ДО расшифровки, ДО дедупа — письмо «необработанное»');
-{
-  const ctx = makeCtx();
-  ctx.isIgnored = () => true;
-  cryptoMock.decryptVault = async () => { throw new Error('не должно вызываться'); };
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('нет unread, нет notify, НЕТ записи в дедуп', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0 && ctx.processedUnreadIds.size === 0);
-}
-
-console.log('4. call-сигнал: handler дёрнут, счётчик не растёт, notify нет');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  ctx.parseCallSignal = () => ({ type: 'call_request' });
-  cryptoMock.decryptVault = async () => 'callbody';
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('handleCallSignal вызван 1 раз', ctx.callSignals === 1);
-  check('нет unread/notify/дедупа', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0 && ctx.processedUnreadIds.size === 0);
-}
-
-console.log('5. эхо (свой ключ в конверте): seen, но не уведомляем, не считаем');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { key: 'MY_PUB', id: 'e1', text: 'hi' } });
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('эхо помечено seen (mid в дедуп-сете)', ctx.processedUnreadIds.has('1|INBOX'));
-  check('но unread/notify нет', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
-}
-
-console.log('6. профиль: saveProfile вызван, seen, не уведомляем');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { type: 'profile', name: 'Пир', avatar: 'a1', ts: 1 } });
-  withBody(ctx, msg(), 'ENC:1');
-  apiMock.profileCalls = [];
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('saveProfile вызван', apiMock.profileCalls.length === 1);
-  check('профиль seen, не считаем/не шлём', ctx.unreadCounts['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
-}
-
-console.log('7. новое сообщение: unread +1, notify FIRE один раз');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'env9', key: 'PEERK', text: 'hello' } });
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
-  check('FIRE ровно один, id=dk (mid:Message-ID)', notifyMock.fires.length === 1 && notifyMock.fires[0].id === 'mid:<m1@x>');
-  check('все три ключа дедупа занесены', ctx.processedUnreadIds.has('1|INBOX') && ctx.processedUnreadIds.has('mid:<m1@x>') && ctx.processedUnreadIds.has('env:env9'));
-}
-
-console.log('8. повтор того же письма (mid в дедупе): счётчик не растёт, но notify-гейт тоже молчит (2fa9103-инвариант: счётчик ≠ уведомление)');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'env9', key: 'PEERK', text: 'hello' } });
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: false }, INCOMING_DEPS); // тихий поллинг съел
-  const unreadAfterPoll = ctx.unreadCounts['peer@x.ru'] || 0;
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);  // монитор принёс то же письмо
-  check('unread не удвоился', ctx.unreadCounts['peer@x.ru'] === unreadAfterPoll);
-  check('дубль notify не пошёл (notify.js дедупит по id, FIRE не должен дублироваться на уровне вызова — здесь gated counted)', true);
-}
-
-console.log('9. relay-копия + email-копия (один env.id, разные mid): unread только один');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'envX', key: 'PEERK', text: 'dup' } });
-  const relayCopy = msg({ uid: 'rl-1', message_id: '<r1@x>' });
-  const mailCopy = msg({ uid: 99, message_id: '<e1@x>' });
-  withBody(ctx, relayCopy, 'ENC:1'); withBody(ctx, mailCopy, 'ENC:1');
-  await processIncoming(ctx, [relayCopy, mailCopy], { notify: true }, INCOMING_DEPS);
-  check('кросс-канальный дедуп: 1 unread', ctx.unreadCounts['peer@x.ru'] === 1);
-}
-
-console.log('10. stale-письмо (fresh=false): unread растёт, notify нет');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'e10', key: 'PEERK', text: 'old' } });
-  const old = msg({ uid: 10, message_id: '<o@x>', date: new Date(NOW - 16 * 60 * 1000).toISOString() });
-  withBody(ctx, old, 'ENC:1');
-  const f0 = firesFrom();
-  await processIncoming(ctx, [old], { notify: true }, INCOMING_DEPS);
-  check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
-  check('notify не FIRE (stale)', notifyMock.fires.length === f0);
-}
-
-console.log('11. muted-чат: unread растёт, notify нет');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  ctx.isMuted = () => true;
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'e11', key: 'PEERK', text: 'm' } });
-  withBody(ctx, msg(), 'ENC:1');
-  const f0 = firesFrom();
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('unread +1', ctx.unreadCounts['peer@x.ru'] === 1);
-  check('muted: notify нет', notifyMock.fires.length === f0);
-}
-
-console.log('12. видимый чат: ни бейджа, ни пуша');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  ctx.chatVisible = () => true;
-  cryptoMock.decryptVault = async () => ({ __env: { id: 'e12', key: 'PEERK', text: 'v' } });
-  withBody(ctx, msg(), 'ENC:1');
-  const f0 = firesFrom();
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('нет unread (чат открыт)', ctx.unreadCounts['peer@x.ru'] === undefined);
-  check('нет notify (чат открыт)', notifyMock.fires.length === f0);
-}
-
-console.log('13. группа: расшифровка групповым ключом, chatKey=group:<id>, title=имя группы');
-{
-  const ctx = makeCtx();
-  ctx.groups = [{ id: 'g1', name: 'Группа', members: [{ email: 'peer@x.ru' }] }];
-   ctx.setGroupKey('g1', 'GK'); // через владельца (ADR-004 Этап A9)
-  ctx.peerKeys = {}; // 1:1-пути нет
-  cryptoMock.decryptWithGroupKey = async () => ({ __env: { id: 'ge1', key: 'GK', text: 'gm' } });
-  withBody(ctx, msg(), 'ENC:1');
-  await processIncoming(ctx, [msg()], { notify: true }, INCOMING_DEPS);
-  check('unread группы +1', ctx.unreadCounts['group:g1'] === 1);
-  check('notify title = имя группы', notifyMock.fires.length >= 1 && notifyMock.fires[notifyMock.fires.length - 1].title === 'Группа');
-}
-
-console.log('14. смена почты (fingerprint-миграция): ключ известен под старым адресом');
-{
-  const ctx = makeCtx();
-  ctx.peerKeys = { 'old@x.ru': 'OLDK' };
-  // ПЕРОД БЫЛ СМЕНЁН ТРИЖДЫ: new → mid → new2. Карта алиасов обязана дойти до
-  // переноса, иначе весь смысл §5.1 теряется и цепочка обходится вхолостую.
-  ctx.contactAliases = { 'new@x.ru': ['mid@x.ru'], 'mid@x.ru': ['old@x.ru'] };
-  // Сигнатура новая: (newEmail, myEmail, contactAliases) — перенос идёт от
-  // ТЕКУЩЕГО адреса по цепочке алиасов, а не от старого к новому напрямую.
-  ctx.migrateChatHistoryChain = async (newE, myE, aliases) => {
-    ctx.migrated = [newE, aliases];
+    ...over,
   };
-  ctx.setPeerKey = (e, k) => { ctx.boundKey = [e, k]; };
-  cryptoMock.decryptVault = async () => ({ __env: { key: 'OLDK', id: 'fe1', text: 'moved' } });
-  const m = msg({ from: { address: 'new@x.ru' }, uid: 14, message_id: '<f@x>' });
-  withBody(ctx, m, 'ENC:1');
-  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
-  // ADR-003 §5.1: перенос теперь идёт ОТ ТЕКУЩЕГО адреса по цепочке алиасов,
-  // поэтому проверяется именно он — а не «со старого на новый». Прежний
-  // одиночный перенос так умел; цепочка умеет больше (ADR-003 §5.1).
-  check('перенос истории вызван для ТЕКУЩЕГО адреса', ctx.migrated && ctx.migrated[0] === 'new@x.ru');
-  check('и получил карту алиасов — без неё цепочка не обойдётся',
-    ctx.migrated && ctx.migrated[1] === ctx.contactAliases);
-  check('карта действительно цепочка, а не плоский список',
-    ctx.contactAliases['new@x.ru'][0] === 'mid@x.ru'
-    && ctx.contactAliases['mid@x.ru'][0] === 'old@x.ru');
-  check('ключ привязан к новому адресу', ctx.boundKey && ctx.boundKey[0] === 'new@x.ru' && ctx.boundKey[1] === 'OLDK');
-  check('сообщение посчитано по новому адресу', ctx.unreadCounts['new@x.ru'] === 1);
+}
+// Письмо с телом в кэше: батч-догрузка тел не нужна, маршрутизация — сразу.
+function withBody(deps, m, body) {
+  deps.emailBodyCache[`${m.folder || 'INBOX'}:${m.uid}`] = body;
 }
 
-console.log('15. пул >50: усечение до 50 (как было)');
+// ── 1. Пустой батч и своё письмо — полный no-op ───────────────────────────
+console.log('1. пустой батч / своё письмо — ничего не случилось');
 {
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { key: 'PEERK', text: 'many' } });
+  resetWorld();
+  const deps = makeDeps();
+  await processIncoming(deps, [], { notify: true });
+  await processIncoming(deps, [letter({ from: 'me@x.ru' })], { notify: true });
+  check('нет бейджа, нет уведомления, дедуп пуст',
+    Object.keys(globalThis.__state.unread).length === 0 && notifyMock.fires.length === 0
+    && deps.processedUnreadIds.size === 0);
+}
+
+// ── 2. Не-Vault письмо — пропуск ──────────────────────────────────────────
+console.log('2. plain-письмо без Vault-шифртекста — пропуск');
+{
+  resetWorld();
+  const deps = makeDeps();
+  const m = letter();
+  withBody(deps, m, 'plain text');
+  await processIncoming(deps, [m], { notify: true });
+  check('не считается и не уведомляется',
+    Object.keys(globalThis.__state.unread).length === 0 && notifyMock.fires.length === 0);
+}
+
+// ── 3. Ignore-лист: ДО расшифровки, ДО дедупа ─────────────────────────────
+console.log('3. ignore-лист: письмо остаётся «необработанным»');
+{
+  // Ключ пира ЕСТЬ: иначе письмо и без ignore-листа никуда не дойдёт
+  // (нечего расшифровывать) — и проверка была бы беззубой: сломанный
+  // ignore-лист прошёл бы незамеченным.
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'ig1', key: 'PEERK', text: 'x' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' }, isIgnored: () => true });
+  const m = letter();
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  check('нет unread, нет notify, в дедуп НЕ записан',
+    Object.keys(globalThis.__state.unread).length === 0 && notifyMock.fires.length === 0
+    && deps.processedUnreadIds.size === 0, [...deps.processedUnreadIds]);
+}
+
+// ── 4. Новое сообщение: бейдж + уведомление + дедуп ───────────────────────
+console.log('4. kind=message: бейдж +1, уведомление, дедуп по трём ключам');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'env9', key: 'PEERK', text: 'hello' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const m = letter();
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  const st = globalThis.__state;
+  check('бейдж вырос', st.unread['peer@x.ru'] === 1, st.unread);
+  check('уведомление одно, id = mid:Message-ID',
+    notifyMock.fires.length === 1 && notifyMock.fires[0].id === 'mid:<m1@x>', notifyMock.fires);
+  check('в дедуп занесены uid|folder, mid: и env:',
+    deps.processedUnreadIds.has('1|INBOX') && deps.processedUnreadIds.has('mid:<m1@x>')
+    && deps.processedUnreadIds.has('env:env9'), [...deps.processedUnreadIds]);
+  check('персист в Rust MessageStore вызван',
+    st.bridgeCalls.some(c => c.cmd === 'vault_store_incoming_message'));
+}
+
+// ── 5. Инвариант 2fa9103: дедуп счётчика ≠ дедуп уведомления ─────────────
+console.log('5. тихий поллинг не съедает push монитора (регресс 2fa9103)');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'env9', key: 'PEERK', text: 'hello' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const m = letter();
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: false });   // тихий поллинг
+  const unreadAfterPoll = globalThis.__state.unread['peer@x.ru'] || 0;
+  await processIncoming(deps, [m], { notify: true });    // монитор принёс то же письмо
+  check('счётчик не удвоился', globalThis.__state.unread['peer@x.ru'] === unreadAfterPoll,
+    globalThis.__state.unread);
+  check('но уведомление ПРОШЛО (уведомление дедупится отдельно)',
+    notifyMock.fires.length === 1, notifyMock.fires);
+}
+
+// ── 6. Кросс-канальный дедуп: relay-копия + email-копия ───────────────────
+console.log('6. один env.id в двух каналах — один бейдж');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'envX', key: 'PEERK', text: 'dup' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const relayCopy = letter({ uid: 'rl-1', message_id: '<r1@x>' });
+  const mailCopy = letter({ uid: 99, message_id: '<e1@x>' });
+  withBody(deps, relayCopy, 'ENC:1');
+  withBody(deps, mailCopy, 'ENC:1');
+  await processIncoming(deps, [relayCopy, mailCopy], { notify: true });
+  check('бейдж один', globalThis.__state.unread['peer@x.ru'] === 1, globalThis.__state.unread);
+}
+
+// ── 7. Свежесть: старое письмо — бейдж есть, уведомления нет ─────────────
+console.log('7. stale-письмо: счётчик растёт, уведомления нет');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'e10', key: 'PEERK', text: 'old' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const old = letter({ uid: 10, message_id: '<o@x>', date: new Date(NOW - 16 * 60 * 1000).toISOString() });
+  withBody(deps, old, 'ENC:1');
+  await processIncoming(deps, [old], { notify: true });
+  check('бейдж +1', globalThis.__state.unread['peer@x.ru'] === 1, globalThis.__state.unread);
+  check('уведомления нет (старше окна свежести)', notifyMock.fires.length === 0, notifyMock.fires);
+}
+
+// ── 8. Muted / видимый чат ────────────────────────────────────────────────
+console.log('8. muted и видимый чат: уведомления нет');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'e11', key: 'PEERK', text: 'm' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' }, isMuted: () => true });
+  const m = letter({ uid: 11, message_id: '<mu@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  check('muted: бейдж есть, уведомления нет',
+    globalThis.__state.unread['peer@x.ru'] === 1 && notifyMock.fires.length === 0, notifyMock.fires);
+}
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'e12', key: 'PEERK', text: 'v' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' }, chatVisible: () => true });
+  const m = letter({ uid: 12, message_id: '<vi@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  check('видимый чат: ни бейджа, ни уведомления',
+    globalThis.__state.unread['peer@x.ru'] === undefined && notifyMock.fires.length === 0,
+    { unread: globalThis.__state.unread, notifs: notifyMock.fires.length });
+}
+
+// ── 9. Группа: chatKey = group:<id>, title = имя группы ──────────────────
+console.log('9. группа: письмо считается по ключу группы');
+{
+  resetWorld({ plain: '', groupPlain: JSON.stringify({ vault: 1, id: 'ge1', key: 'GK', text: 'gm' }) });
+  const deps = makeDeps({
+    peerKeys: {},
+    groups: () => [{ id: 'g1', name: 'Группа', members: [{ email: 'peer@x.ru' }] }],
+    groupKeys: { g1: 'GK' },
+  });
+  const m = letter();
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  check('бейдж группы +1', globalThis.__state.unread['group:g1'] === 1, globalThis.__state.unread);
+  check('уведомление: title = имя группы',
+    notifyMock.fires.length === 1 && notifyMock.fires[0].title === 'Группа', notifyMock.fires);
+}
+
+// ── 10. Смена почты (fingerprint-матчинг) ──────────────────────────────────
+console.log('10. смена почты: полный ренейм по цепочке алиасов');
+{
+  resetWorld({
+    plain: JSON.stringify({ vault: 1, id: 'fe1', key: 'OLDK', text: 'moved' }),
+    plainForKey: 'OLDK',
+  });
+  const aliases = { 'new@x.ru': ['mid@x.ru'], 'mid@x.ru': ['old@x.ru'] };
+  const deps = makeDeps({
+    peerKeys: { 'old@x.ru': 'OLDK' },
+    contactAliases: aliases,
+  });
+  const m = letter({ from: 'new@x.ru', uid: 14, message_id: '<f@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  const st = globalThis.__state;
+  check('перенос истории вызван для ТЕКУЩЕГО адреса и получил карту алиасов',
+    st.migratedChain.length === 1 && st.migratedChain[0][0] === 'new@x.ru'
+    && st.migratedChain[0][2] === aliases, st.migratedChain);
+  check('группы переименованы', st.migratedGroups.length === 1 && st.migratedGroups[0][1] === 'new@x.ru',
+    st.migratedGroups);
+  check('ключ привязан к новому адресу', st.setPeerKey.length === 1 && st.setPeerKey[0][0] === 'new@x.ru',
+    st.setPeerKey);
+  check('старый адрес убран из хранилищ',
+    st.removedPeerKeys.includes('old@x.ru')
+    && apiMock.calls.some(c => c[0] === 'removeContact' && c[1] === 'old@x.ru'), st.removedPeerKeys);
+  check('письмо посчитано по новому адресу', st.unread['new@x.ru'] === 1, st.unread);
+}
+
+// ── 11. Эхо: письмо с моим ключом — seen, но не сообщение ─────────────────
+console.log('11. эхо (свой ключ): помечено обработанным, но не считается');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'e1', key: 'MY_PUB', text: 'hi' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const m = letter({ uid: 15, message_id: '<ec@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  check('эхо в дедупе', deps.processedUnreadIds.has('15|INBOX'), [...deps.processedUnreadIds]);
+  check('но нет бейджа и уведомления',
+    globalThis.__state.unread['peer@x.ru'] === undefined && notifyMock.fires.length === 0);
+}
+
+// ── 12. Пул: за прогон обрабатывается не больше 50 писем ──────────────────
+console.log('12. пул > 50: усечение до 50 за прогон');
+{
+  // У каждого письма СВОЙ env.id: иначе кросс-канальный дедуп (env:envId)
+  // схлопнул бы все 70 писем в одно — и проверка считала бы не пул, а дедуп.
+  resetWorld({
+    plainForBody: (body) => JSON.stringify({
+      vault: 1, id: 'env' + String(body).replace(/^ENC:/, ''), key: 'PEERK', text: 'm',
+    }),
+  });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
   const fetched = [];
   for (let i = 0; i < 70; i++) {
-    const m = msg({ uid: 1000 + i, message_id: `<p${i}@x>` });
-    ctx.emailBodyCache[`${m.folder}:${m.uid}`] = 'ENC:1';
+    const m = letter({ uid: 1000 + i, message_id: `<p${i}@x>` });
+    withBody(deps, m, 'ENC:' + m.uid);
     fetched.push(m);
   }
-  await processIncoming(ctx, fetched, { notify: false }, INCOMING_DEPS);
-  check('обработано ровно 50', ctx.processedUnreadIds.size >= 50 && ctx.unreadCounts['peer@x.ru'] === 50);
+  await processIncoming(deps, fetched, { notify: false });
+  check('обработано ровно 50', globalThis.__state.unread['peer@x.ru'] === 50,
+    globalThis.__state.unread);
 }
 
-console.log('16. ГОНКА ПОРЯДКА БАТЧА (t_674c770f): cancel перед request');
+// ── 13. Порядок батча: ХРОНОЛОГИЯ, а не «как вернул IMAP» ────────────────
+console.log('13. гонка порядка: call_cancel (UID больше) разбирается ПОСЛЕ request');
 {
-  // Реальный сценарий: fetch_newer отдаёт батч новыми сверху
-  // (email.rs sort_by(|a,b| b.id.cmp(&a.id))), поэтому call_cancel
-  // (UID больше) приходит в массиве ПЕРВЫМ. Если разбор идёт как вернул
-  // IMAP — request гаснет на гварде isCallSeen и звонок не звонит.
-  // Проверяем, что порядок разбора = хронологический.
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
+  // Реальный сценарий: Rust отдаёт батч новыми сверху, поэтому cancel
+  // (UID больше) приходит ПЕРВЫМ. Разбор по порядку доставки обязателен:
+  // иначе terminal успевает записать call_id в 'call-seen' раньше, чем
+  // request прочитает гвард, — и звонок гаснет без рингтона (t_674c770f).
+  resetWorld({
+    plainFromBody: true,
+    classify: () => ({ kind: 'call' }),
+  });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
   const order = [];
-  ctx.parseCallSignal = (t) => JSON.parse(t);
-  // Тело = 'ENC:' + JSON-сигнал (isEncrypted требует префикс ENC:),
-  // расшифровка отдаёт сам сигнал.
-  cryptoMock.decryptVault = async (b) => b.slice(4);
-  ctx.handleCallSignal = async function (sig) {
-    order.push(sig.type);
-    // Имитируем persist kv 'call-seen': терминальный ЗАПИСЫВАЕТ id,
-    // request — читает его гвардом. Порядок чтения/записи решает исход.
-    if (sig.type === 'call_cancel') { ctx.seen.add(sig.call_id); return; }
-    if (ctx.seen.has(sig.call_id)) { order.push('request ГАСНУТ'); return; }
-    ctx.seen.add(sig.call_id);
-    order.push('incoming_ringing');
-  };
-  ctx.seen = new Set();
-  // Батч как от IMAP: cancel (UID 102, новее) ПЕРВЫМ, request (UID 101) вторым.
-  const older = NOW - 20 * 1000, newer = NOW - 5 * 1000;
-  const req = msg({ uid: 101, message_id: '<req@x>', date: new Date(older).toISOString() });
-  const can = msg({ uid: 102, message_id: '<can@x>', date: new Date(newer).toISOString() });
-  withBody(ctx, req, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'cX' }));
-  withBody(ctx, can, 'ENC:' + JSON.stringify({ type: 'call_cancel', call_id: 'cX' }));
-  await processIncoming(ctx, [can, req], { notify: true }, INCOMING_DEPS); // как вернул IMAP
-  // Ожидаем ровно: call_request → incoming_ringing (звонок звонит) →
-  // call_cancel (тот же звонок гаснет по отбою звонящего).
+  deps.handleCallSignal = async (sig) => { order.push(sig.type); };
+  const older = new Date(NOW - 20 * 1000).toISOString();
+  const newer = new Date(NOW - 5 * 1000).toISOString();
+  const req = letter({ uid: 101, message_id: '<req@x>', date: older });
+  const can = letter({ uid: 102, message_id: '<can@x>', date: newer });
+  withBody(deps, req, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'cX' }));
+  withBody(deps, can, 'ENC:' + JSON.stringify({ type: 'call_cancel', call_id: 'cX' }));
+  await processIncoming(deps, [can, req], { notify: true }); // как вернул IMAP
   check('request разобран ПЕРВЫМ (звонок успел зазвонить)',
-    order[0] === 'call_request' && order[1] === 'incoming_ringing', order);
-  check('cancel разобран вторым и погасил звонок',
-    order[2] === 'call_cancel', order);
-  check('request НЕ потерян (нет тихого выхода по call-seen)',
-    !order.includes('request ГАСНУТ'), order);
+    order[0] === 'call_request' && order[1] === 'call_cancel', order);
 }
 
-console.log('17. сортировка батча: UID сравнивается ЧИСЛОМ (\'9\' < \'10\')');
+// ── 14. UID сравнивается ЧИСЛОМ ───────────────────────────────────────────
+console.log('14. сортировка батча: UID как число (\'9\' < \'10\')');
 {
-  // Строковая сортировка UID переставила бы 10 перед 9 ('1' < '9' лексически).
-  // Даты одинаковые — работает ключ 2 (UID как число).
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  const seenOrder = [];
-  cryptoMock.decryptVault = async () => ({ __env: { key: 'PEERK', text: 'm' } });
+  resetWorld({ plainFromBody: true, classify: () => ({ kind: 'call' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const order = [];
+  deps.handleCallSignal = async (sig) => { order.push(sig.uid); };
   const same = new Date(NOW).toISOString();
-  const m9 = msg({ uid: 9, message_id: '<m9@x>', date: same });
-  const m10 = msg({ uid: 10, message_id: '<m10@x>', date: same });
-  withBody(ctx, m9, 'ENC:1'); withBody(ctx, m10, 'ENC:1');
-  await processIncoming(ctx, [m10, m9], { notify: true }, INCOMING_DEPS);
-  // Оба учтены независимо от порядка (дедуп не сломан).
-  check('оба письма учтены (uid 9 и 10 не склеились в дедупе)',
-    ctx.unreadCounts['peer@x.ru'] === 2 && seenOrder.length === 0,
-    { unread: ctx.unreadCounts['peer@x.ru'] });
+  const m9 = letter({ uid: 9, message_id: '<m9@x>', date: same });
+  const m10 = letter({ uid: 10, message_id: '<m10@x>', date: same });
+  withBody(deps, m9, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'c9', uid: 9 }));
+  withBody(deps, m10, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'c10', uid: 10 }));
+  await processIncoming(deps, [m10, m9], { notify: true });
+  check('uid 9 разобран раньше uid 10 (строковая сортировка переставила бы)',
+    order.length === 2 && order[0] === 9 && order[1] === 10, order);
 }
 
-console.log('18. дедуп обычных сообщений не сломан реордерингом (env.id)');
+// ── 15. Дедуп по env.id не ломается реордерингом ─────────────────────────
+console.log('15. дедуп по env.id не зависит от порядка в батче');
 {
-  // Кросс-канальный дедуп env.id не должен зависеть от порядка в батче.
-  const ctx = makeCtx();
-  ctx.peerKeys['peer@x.ru'] = 'PEERK';
-  cryptoMock.decryptVault = async () => ({ __env: { key: 'PEERK', id: 'envSame', text: 'm' } });
-  const a = msg({ uid: 201, message_id: '<a@x>', date: new Date(NOW - 60 * 1000).toISOString() });
-  const b = msg({ uid: 202, message_id: '<b@x>', date: new Date(NOW - 10 * 1000).toISOString() });
-  withBody(ctx, a, 'ENC:1'); withBody(ctx, b, 'ENC:1');
-  await processIncoming(ctx, [b, a], { notify: true }, INCOMING_DEPS);
-  check('один env.id учтён один раз', ctx.unreadCounts['peer@x.ru'] === 1,
-    { unread: ctx.unreadCounts['peer@x.ru'] });
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'envSame', key: 'PEERK', text: 'm' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const a = letter({ uid: 201, message_id: '<a@x>', date: new Date(NOW - 60 * 1000).toISOString() });
+  const b = letter({ uid: 202, message_id: '<b@x>', date: new Date(NOW - 10 * 1000).toISOString() });
+  withBody(deps, a, 'ENC:1');
+  withBody(deps, b, 'ENC:1');
+  await processIncoming(deps, [b, a], { notify: true });
+  check('один env.id учтён один раз', globalThis.__state.unread['peer@x.ru'] === 1,
+    globalThis.__state.unread);
 }
 
-console.log('18. DSN/баунс (MAILER-DAEMON): распознан до расшифровки, отдан в onMailBounce, НЕ сообщение');
+// ── 16. DSN / баунс: служебное письмо гасит звонок, а не «не наше» ───────
+console.log('16. баунс (DSN): onMailBounce вызван, письмо НЕ сообщение');
 {
-  // Инцидент 12.10.2026. classify() отбрасывал всё, что не crypto.isEncrypted,
-  // поэтому служебный DSN о недоставке висел мёртвым грузом: письмо-вызов
-  // отбито, а вызов «звонит» 5 минут. Теперь DSN — ветка ДО шифртекста.
-  const ctx = makeCtx();
-  // Тело как у реального Gmail-DSN (uid 8463): Final-Recipient + код SMTP.
+  resetWorld();
+  const deps = makeDeps();
   const dsn = [
     'Content-Type: message/delivery-status',
     '',
@@ -455,63 +532,96 @@ console.log('18. DSN/баунс (MAILER-DAEMON): распознан до рас�
     'Status: 5.7.1',
     'Diagnostic-Code: smtp; 554 5.7.1 Message rejected under suspicion of SPAM',
   ].join('\n');
-  const m = msg({
+  const m = letter({
     uid: 777, message_id: '<dsn@x>',
-    from: { address: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>' },
+    from: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
     subject: 'Delivery Status Notification (Failure)',
   });
-  withBody(ctx, m, dsn);
-  cryptoMock.decryptVault = async () => { throw new Error('DSN не шифруется — вызова быть не должно'); };
-  const dsnFires0 = firesFrom();
-  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
-  check('onMailBounce вызван 1 раз', ctx.bounceCalls.length === 1, ctx.bounceCalls);
-  const call0 = ctx.bounceCalls[0] || {};
-  check('получатель распознан (peer@x.ru)', (call0.recipients || []).includes('peer@x.ru'), call0);
-  check('причина = 554 5.7.1 SPAM', /554 5\.7\.1/.test(call0.reason || ''), call0);
-  check('DSN не посчитан как сообщение (нет unread/notify)',
-    ctx.unreadCounts['mailer-daemon@googlemail.com'] === undefined && notifyMock.fires.length === dsnFires0);
+  withBody(deps, m, dsn);
+  await processIncoming(deps, [m], { notify: true });
+  const b = globalThis.__state.bounces[0] || {};
+  check('onMailBounce вызван 1 раз', globalThis.__state.bounces.length === 1, globalThis.__state.bounces);
+  check('получатель распознан (peer@x.ru)', (b.recipients || []).includes('peer@x.ru'), b);
+  check('причина = 554 5.7.1 SPAM', /554 5\.7\.1/.test(b.reason || ''), b);
+  check('баунс не посчитан как сообщение',
+    globalThis.__state.unread['mailer-daemon@googlemail.com'] === undefined && notifyMock.fires.length === 0);
 }
 
-console.log('19. баунс не от собеседника-демона, но по теме: тема ловит (не только From)');
+// ── 17. Баунс по теме (не только по From) ─────────────────────────────────
+console.log('17. баунс по теме от другого демона — тоже баунс');
 {
-  const ctx = makeCtx();
-  const m = msg({
+  resetWorld();
+  const deps = makeDeps();
+  const m = letter({
     uid: 778, message_id: '<dsn2@x>',
-    from: { address: 'postmaster@ya.ru' },
+    from: 'postmaster@ya.ru',
     subject: 'Undelivered Mail Returned to Sender',
   });
-  withBody(ctx, m, 'Reporting-MTA: dns\nTo: peer@x.ru\nStatus: 5.1.1');
-  const dsn2Fires0 = firesFrom();
-  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
-  check('баунс по теме отдан в onMailBounce', ctx.bounceCalls.length === 1, ctx.bounceCalls);
-  check('нет unread/notify', notifyMock.fires.length === dsn2Fires0);
+  withBody(deps, m, 'Reporting-MTA: dns\nTo: peer@x.ru\nStatus: 5.1.1');
+  await processIncoming(deps, [m], { notify: true });
+  check('баунс отдан в onMailBounce', globalThis.__state.bounces.length === 1, globalThis.__state.bounces);
+  check('нет уведомления', notifyMock.fires.length === 0);
 }
 
-console.log('20. ЗВОНОК под незнакомым адресом (fp-namespace) не теряется');
+// ── 18. Звонок под незнакомым адресом (fp-namespace) ──────────────────────
+console.log('18. звонок под новым адресом: сигнал уходит под ИЗВЕСТНЫЙ адрес');
 {
-  // Регресс 12.10.2026: десктоп публиковал конверты с from = fp:<…>
-  // (нормализация account внутри relayPublish, коммит 25dd18a). У пира
-  // такого адреса в peerKeys нет → конверт уходил в ветку «смена почты»,
-  // где call-сигнал НЕ разбирался и молча терялся: звонок от десктопа не
-  // доходил вообще. Теперь сигнал доходит до state machine.
-  const ctx = makeCtx();
-  ctx.peerKeys = { 'icemaksim@gmail.com': 'ANNAK' };
-  ctx.parseCallSignal = (t) => { try { return JSON.parse(t); } catch (e) { return null; } };
-  // Расшифровка по старому ключу срабатывает (fingerprint-матчинг):
-  // первая попытка (новый адрес) — мимо, вторая (известный ключ) — ок.
-  cryptoMock.decryptVault = async (b) => JSON.stringify({ vault: 1, id: 'ev1', type: 'call_request', call_id: 'c-ns1', key: 'ANNAK' });
+  // Регресс 12.10.2026: десктоп публиковал конверты с from = fp:<…>.
+  // У пира такого адреса в peerKeys нет → конверт уходил в ветку «смена
+  // почты», где сигнал НЕ разбирался и молча терялся: звонок не доходил
+  // вовсе. Теперь сигнал доходит до state machine — под известным адресом.
+  resetWorld({
+    plainFromBody: true,
+    classify: () => ({ kind: 'call' }),
+  });
+  const deps = makeDeps({ peerKeys: { 'icemaksim@gmail.com': 'ANNAK' } });
   const got = [];
-  ctx.handleCallSignal = async function (sig, from) { got.push([sig.type, sig.call_id, from]); };
-  const m = msg({ from: { address: 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx' }, uid: 20, message_id: '<ns@x>' });
-  withBody(ctx, m, 'ENC:1');
-  await processIncoming(ctx, [m], { notify: true }, INCOMING_DEPS);
-  check('сигнал звонка доставлен под новым адресом',
-    got.length === 1 && got[0][0] === 'call_request' && got[0][1] === 'c-ns1', got);
-  check('адрес отправителя — ИЗВЕСТНЫЙ адрес пира, не fp:',
+  deps.handleCallSignal = async (sig, from) => { got.push([sig.type, sig.call_id, from]); };
+  const m = letter({
+    from: 'fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx',
+    uid: 20, message_id: '<ns@x>',
+  });
+  withBody(deps, m, 'ENC:' + JSON.stringify({
+    type: 'call_request', call_id: 'c-ns1', key: 'ANNAK',
+  }));
+  await processIncoming(deps, [m], { notify: true });
+  check('сигнал звонка доставлен', got.length === 1 && got[0][0] === 'call_request', got);
+  check('адрес — ИЗВЕСТНЫЙ адрес пира, не fp:',
     got.length === 1 && got[0][2] === 'icemaksim@gmail.com', got);
-  check('fp-адрес не попадает в state machine (иначе currentCall.peer = fp:… → SMTP «Invalid recipient email»)',
-    got.length === 1 && !String(got[0][2]).startsWith('fp:'), got);
-  check('звонок НЕ посчитан как сообщение', ctx.unreadCounts['fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx'] === undefined);
+  check('звонок НЕ посчитан как сообщение',
+    globalThis.__state.unread['fp:c7:3c:e5:5a:9f:7b:46:6f:xxxx'] === undefined);
+}
+
+// ── 19. Мост упал: письмо не считается и не помечается обработанным ──────
+console.log('19. мост Rust упал: письмо повторится на следующем поллинге');
+{
+  resetWorld({
+    bridgeDown: true,
+    plain: JSON.stringify({ vault: 1, id: 'e19', key: 'PEERK', text: 'm' }),
+  });
+  // Канал настроен: «мост упал» ≠ «письмо не наше». При отказе моста письмо
+  // не трогают ВООБЩЕ — ни в 1:1, ни в каналах, ни в группах. Если бы отказ
+  // выглядел как «не наше» (null), роутер пошёл бы дальше по каналам и
+  // группам и позвал классификатор ещё раз.
+  const deps = makeDeps({
+    peerKeys: { 'peer@x.ru': 'PEERK' },
+    channels: () => [{ id: 'ch1', key: 'CHKEY', name: 'Chan' }],
+  });
+  const m = letter({ uid: 19, message_id: '<bd@x>' });
+  withBody(deps, m, 'ENC:1');
+  const seen = [];
+  const orig = console.error;
+  console.error = (...a) => seen.push(a.join(' '));
+  try { await processIncoming(deps, [m], { notify: true }); } finally { console.error = orig; }
+  const st = globalThis.__state;
+  const classifyCalls = st.bridgeCalls.filter(c => c.cmd === 'vault_classify_incoming').length;
+  check('бейдж НЕ вырос', st.unread['peer@x.ru'] === undefined, st.unread);
+  check('в дедуп НЕ записано (письмо не потеряно)',
+    deps.processedUnreadIds.size === 0, [...deps.processedUnreadIds]);
+  check('классификатор позван ровно один раз (письмо не пошло дальше по путям)',
+    classifyCalls === 1, classifyCalls);
+  check('падение моста громкое (console.error), а не молча',
+    seen.some(s => s.includes('Rust-классификатор недоступен')), seen);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

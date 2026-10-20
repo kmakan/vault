@@ -117,13 +117,13 @@ async function loadApi(cfg) {
   prepareModuleCopy(
     ROOT + '/src/api.js',
     file,
-    // Крипто уходит на мок; таури-зависимость подменяется ниже строкой replace,
-    // потому что это ИМЯ ИМПОРТА, а не путь (хелпер тут не годится).
+    // Крипто уходит на мок; таури-зависимость подменяется через `extra` —
+    // это ИМЯ ИМПОРТА, а не путь (хелпер подменяет импорт целиком).
     { './crypto.js': 'crypto.js' },
     MOCKS,
+    [["import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__INVOKE__;']],
   );
-  let out = readFileSync(file, 'utf8')
-    .replace("import { invoke } from '@tauri-apps/api/core';", 'const invoke = globalThis.__INVOKE__;');
+  let out = readFileSync(file, 'utf8');
   // recovery-session подключаем по абсолютному пути, как было раньше.
   out = out.split(`from '${ROOT}/src/features/recovery-session.js'`)
            .join(`from '${ROOT}/src/features/recovery-session.js'`);
