@@ -956,6 +956,7 @@ import * as ReportContent from './features/report-content.js';
 import * as PinWire from './features/group-pin-wire.js';
 import * as Geo from './geo.js';
 import * as Autoclean from './features/autoclean.js';
+import * as LogoutFeature from './features/logout.js';
 import * as ContactsDelete from './features/contacts-delete.js';
 import * as RecoveryEscrow from './features/recovery-escrow.js';
 import * as RestoreFailure from './features/restore-failure.js';
@@ -2255,6 +2256,84 @@ export default {
         onError: (e) => console.error('Failed to send read receipts:', e),
       };
     },
+    // Контракт выхода из аккаунта (ADR-005 W3, партия 13). ШАГИ сброса
+    // перечислены в features/logout.js — здесь только конкретные владельцы.
+    logoutDeps() {
+      return {
+        stopPolling: () => this.stopPolling(),
+        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this.presenceDeps),
+        logoutApi: () => api.logout(),
+        resetLogin: () => { this.isLoggedIn = false; this.email = ''; this.password = ''; },
+        resetIdentity: () => { this.userId = null; },
+        resetGroups: () => {
+          this.groups = [];
+          this.clearGroupKeys();
+          this.currentGroup = null;
+        },
+        resetContacts: () => { this.contacts = []; },
+        resetChat: () => {
+          this.activeChat = null;
+          this.activeChatType = 'chat';
+          this.chat.set([]);
+          this.messagesStore.reset();
+        },
+        resetUnread: () => this.clearAllUnread(),
+        resetMailbox: () => { this.emails = []; this.emailError = ''; },
+        resetInvites: () => {
+          this.pendingInvites = [];
+          this.showInvitePopup = false;
+          this.pendingContacts = [];
+          this.showContactPopup = false;
+        },
+        resetUi: () => {
+          this.showSettings = false;
+          this.showGroupSettings = false;
+          this.showAddMemberPopup = false;
+        },
+        resetProfile: () => {
+          this.profiles = {};
+          this.userAvatarUrl = '';
+          this.displayName = '';
+        },
+      };
+    },
+    // Контракт входа по мнемонике восстановления (ADR-005 W3, партия 13).
+    recoveryLoginDeps() {
+      return {
+        api, crypto, invoke, db, relay, initNotifications, t: uiStore.tr,
+        // Записи состояния — через прокси компонента (sessionStore обёрнут
+        // reactive): запись в сырой синглтон не перерисовала бы форму
+        // (тот же класс, что с флагами модалок).
+        setLoginLoading: (v) => { this.loginLoading = v; },
+        setLoginError: (v) => { this.loginError = v; },
+        markLoggedIn: () => { this.sessionStore.login(); },
+        setUserId: (v) => { this.userId = v; },
+        publicKey: () => this.publicKey,
+        // Релей/эко — через прокси владельца relay-store.
+        ecoMode: () => this.ecoMode,
+        enableEco: (on) => this.enableEco(on),
+        relayEnabled: () => this.relayEnabled,
+        enableRelay: (on) => this.enableRelay(on),
+        // Эффекты пост-логинового пути.
+        initCrypto: (opts) => this.initCrypto(opts),
+        initLocalDb: () => this.initLocalDb(),
+        loadUnreadCounts: () => this.loadUnreadCounts(),
+        loadLocalProfiles: () => this.loadLocalProfiles(),
+        loadBodyCache: () => this.loadBodyCache(),
+        loadContacts: () => this.loadContacts(),
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
+        loadEmails: () => EmailsFeature.loadEmails(this.emailsDeps),
+        startPolling: (ms) => this.startPolling(ms),
+        startRelayTicker: () => this.startRelayTicker(),
+        idleLoop: () => this.idleLoop(),
+        logout: () => this.logout(),
+        onEcoMode: (on, silent) => this.onEcoMode(on, silent),
+        // Синхронизация эко с релеем — relay.js ещё ctx-модуль, поэтому его
+        // зовёт компонент (модулю компонент не достаётся).
+        syncEcoWithRelay: () => RelayFeature.syncEcoWithRelay(this, true),
+      };
+    },
     // Контракт автоочистки (ADR-005 W3, партия 12): зеркала памяти и период.
     autocleanDeps() {
       return {
@@ -3337,35 +3416,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     async handleLogout() {
-      this.stopPolling();
-      PresenceFeature.stopHeartbeats(this.presenceDeps); // M2: heartbeat больше не отправляем
-      try { await api.logout(); } catch (e) { /* ignore */ }
-      // Сбрасываем всё состояние сессии к экрану логина.
-      this.isLoggedIn = false;
-      this.userId = null;
-      this.email = '';
-      this.password = '';
-      this.groups = [];
-      this.clearGroupKeys();
-      this.currentGroup = null;
-      this.activeChatType = 'chat';
-      this.contacts = [];
-      this.activeChat = null;
-      this.chat.set([]);
-      this.messagesStore.reset();
-      this.clearAllUnread();
-      this.emails = [];
-      this.emailError = '';
-      this.pendingInvites = [];
-      this.showInvitePopup = false;
-      this.pendingContacts = [];
-      this.showContactPopup = false;
-      this.showSettings = false;
-      this.showGroupSettings = false;
-      this.showAddMemberPopup = false;
-      this.profiles = {};
-      this.userAvatarUrl = '';
-      this.displayName = '';
+      return LogoutFeature.logoutFlow(this.logoutDeps);
     },
     // --- Смена почты
     // Ключи E2E (keypair.json) не привязаны к email: меняем только транспорт.
@@ -3970,40 +4021,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // файла/эскроу (без фолбэка), ПЕРЕзагрузка ключа без генерации, durable
     // commit и снятие маркера последним.
     async loginWithRecovery() {
-      return RecoveryFeature.loginWithRecovery({
-        api, crypto, invoke, db, relay, initNotifications, t: uiStore.tr,
-        // Записи состояния — через прокси компонента (sessionStore обёрнут
-        // reactive): запись в сырой синглтон не перерисовала бы форму
-        // (тот же класс, что с флагами модалок).
-        setLoginLoading: (v) => { this.loginLoading = v; },
-        setLoginError: (v) => { this.loginError = v; },
-        markLoggedIn: () => { this.sessionStore.login(); },
-        setUserId: (v) => { this.userId = v; },
-        publicKey: () => this.publicKey,
-        // Релей/эко — через прокси владельца relay-store.
-        ecoMode: () => this.ecoMode,
-        enableEco: (on) => this.enableEco(on),
-        relayEnabled: () => this.relayEnabled,
-        enableRelay: (on) => this.enableRelay(on),
-        // Эффекты пост-логинового пути.
-        initCrypto: (opts) => this.initCrypto(opts),
-        initLocalDb: () => this.initLocalDb(),
-        loadUnreadCounts: () => this.loadUnreadCounts(),
-        loadLocalProfiles: () => this.loadLocalProfiles(),
-        loadBodyCache: () => this.loadBodyCache(),
-        loadContacts: () => this.loadContacts(),
-        loadGroups: () => this.loadGroups(),
-        loadChannels: () => this.loadChannels(),
-        loadEmails: () => EmailsFeature.loadEmails(this.emailsDeps),
-        startPolling: (ms) => this.startPolling(ms),
-        startRelayTicker: () => this.startRelayTicker(),
-        idleLoop: () => this.idleLoop(),
-        logout: () => this.logout(),
-        onEcoMode: (on, silent) => this.onEcoMode(on, silent),
-        // Синхронизация эко с релеем — relay.js ещё ctx-модуль, поэтому его
-        // зовёт компонент (модулю компонент не достаётся).
-        syncEcoWithRelay: () => RelayFeature.syncEcoWithRelay(this, true),
-      });
+      return RecoveryFeature.loginWithRecovery(this.recoveryLoginDeps);
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() { return MsgStore.mediaQuality(); },

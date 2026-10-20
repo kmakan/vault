@@ -896,8 +896,14 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
       // Раньше он уезжал за пределы параметров, и `uiStore.tr` был undefined —
       // а тест это фиксировал как «ожидаемо» (seenTr === undefined). Проверка
       // была зелёной на НЕРАБОЧЕЙ подмене: переводчик в контракт не доезжал.
+      // Контракт входа по мнемонике живёт в computed recoveryLoginDeps
+      // (ADR-005 W3, партия 13) — делегат берёт его отсюда, поэтому в
+      // stub-компоненте должен быть ЭТОТ контракт, а не пустой this.
       await delegate({ loginWithRecovery: async (deps) => { seenTr = deps.t; } },
-        ...names.slice(0, -1).map(() => ({})), uiStoreStub).call({ t, uiStore: uiStoreStub });
+        ...names.slice(0, -1).map(() => ({})), uiStoreStub).call({
+          t, uiStore: uiStoreStub,
+          recoveryLoginDeps: { t, api: {}, crypto: {}, invoke: () => {}, db: {}, relay: {} },
+        });
     } catch (e) { console.error('delegate failed: ' + (e && e.message)); }
     // J.5b: делегат читает uiStore.tr (не this.t) — без ReferenceError, и
     // переводчик реально уходит в контракт (deps.t — функция).
