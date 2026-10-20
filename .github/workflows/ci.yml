@@ -61,6 +61,29 @@ jobs:
       - name: Mutation testing
         working-directory: vault-desktop
         run: npm run gate:mutations
+      # Гигиена текста: иероглифы и битые байты (U+FFFD) в коде, комментариях и
+      # документации. За сессию 20.10 это повторилось пять раз (в коммите, в
+      # модуле, в журнале, в смоуке, в черновике) — разовый прогон не помогает,
+      # помогает гейт в CI. Легитимно: src/locales/zh.js и название языка
+      # `language_zh` в выпадающем списке.
+      - name: Text hygiene (no CJK, no mojibake)
+        working-directory: vault-desktop
+        run: npm run gate:hygiene
+      # Мутационное тестирование RUST-ядра: тесты крейта обязаны ловить
+      # подложенную поломку. Ядро — то, куда W4 переносит решения о протоколе,
+      # и до 20.10 его тесты проверялись ТОЛЬКО обычными тестами (а обычный
+      # тест не отвечает на вопрос «а он что-то проверяет?»). Гейт уже нашёл
+      # три настоящих пробела: тест на переполнение TTL не переполнял, у
+      # fingerprint не проверялся формат (его сверяет релей-сервер), а
+      # длина ключа голоса не проверялась вовсе.
+      - name: Rust mutation testing
+        working-directory: vault-desktop
+        run: npm run gate:rust-mutations
+      # Плотность мутаций: у каждого модуля с логикой есть набор. Список дыр
+      # может только сокращаться; новый модуль без набора = регресс.
+      - name: Mutation density ratchet
+        working-directory: vault-desktop
+        run: npm run gate:mutation-density
       - name: Check Tauri
         working-directory: vault-desktop
         run: npx tauri build
