@@ -25,7 +25,11 @@ globalThis.__invoke = async (cmd, args) => {
     androidOpened.push(args.url);
     return null;
   }
-  if (cmd === 'db_account_migrate') { globalThis.__migrateCalls.push(args); return { total: 7 }; }
+  if (cmd === 'db_account_migrate') {
+    globalThis.__migrateCalls.push(args);
+    if (globalThis.__migrateFails) throw new Error('перенос отказан');
+    return { total: 7 };
+  }
   if (cmd === 'groups_rename_member') { globalThis.__renameCalls.push(args); return null; }
   return null;
 };
@@ -141,6 +145,18 @@ reset();
 await MIG.migrateAccountData('old@bk.ru', 'old@bk.ru');
 ok('резолвер вернул сам адрес → перенос пропущен', globalThis.__migrateCalls.length === 0);
 globalThis.__nsFallback = false;
+
+// Отказ переноса (например, БД занята) НЕ выходит наружу: смена почты не
+// должна превращаться в необработанное исключение, из-за которого приложение
+// падает на экране входа.
+globalThis.__nsFallback = false;
+globalThis.__migrateFails = true;
+reset();
+let migrateThrew = false;
+try { await MIG.migrateAccountData('old@bk.ru', 'new@bk.ru'); } catch (e) { migrateThrew = true; }
+ok('отказ переноса не выходит наружу (ошибка поймана)', migrateThrew === false);
+ok('при отказе перенос всё же пытался выполниться', globalThis.__migrateCalls.length === 1);
+globalThis.__migrateFails = false;
 
 // ── migrateOwnGroups: кто считается «своим» ───────────────────────────
 globalThis.__groups = [

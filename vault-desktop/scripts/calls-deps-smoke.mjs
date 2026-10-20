@@ -117,6 +117,21 @@ const C = await import(MOCKS + '/features/calls.js');
   const withJunk = { ...state, someUnrelatedField: 'should-not-matter' };
   check('лишние поля в deps не влияют на результат',
     C.canCallBack(withJunk, { callEvent: { kind: 'missed' } }) === true);
+
+  // ОТРИЦАТЕЛЬНЫЕ ветки: «перезвонить» нельзя, пока идёт звонок, в группе и
+  // без ключа пира. Без этих проверок функция зелёная на любом мутанте:
+  // успешный путь один, а ломать его — легко (см. мутационный гейт).
+  const ev = { callEvent: { kind: 'missed' } };
+  check('перезвонить нельзя во время активного звонка',
+    C.canCallBack({ ...state, callState: 'ringing' }, ev) === false);
+  check('перезвонить нельзя в групповом чате',
+    C.canCallBack({ ...state, activeChatType: 'group' }, ev) === false);
+  check('перезвонить нельзя без ключа пира',
+    C.canCallBack({ ...state, peerKeys: {} }, ev) === false);
+  check('перезвонить нельзя, если звонки выключены (нет самого флага)',
+    C.canCallBack({ ...state, expCalls: null }, ev) === false);
+  check('без события звонка перезвонить нельзя',
+    C.canCallBack(state, {}) === false);
 }
 
 // ── 2. Функции с ОДНИМ скаляром: объект-контекст им не передать ────
@@ -138,6 +153,15 @@ const C = await import(MOCKS + '/features/calls.js');
   check('перевод вызван ровно один раз', calls === 1, calls);
   check('callEventLabel без callEvent → пусто и перевод НЕ звался',
     C.callEventLabel(t, {}) === '' && calls === 1, calls);
+  // Длительность завершённого звонка дописывается к подписи — «02:05».
+  check('завершённый звонок с длительностью → подпись с временем',
+    C.callEventLabel(t, { callEvent: { kind: 'ended', duration: 125 } }) === 'T:call_ended · 02:05',
+    C.callEventLabel(t, { callEvent: { kind: 'ended', duration: 125 } }));
+  check('завершённый звонок без длительности → без времени',
+    C.callEventLabel(t, { callEvent: { kind: 'ended', duration: 0 } }) === 'T:call_ended');
+  check('неизвестный вид события → «пропущенный»',
+    C.callEventLabel(t, { callEvent: { kind: 'что-то' } }) === 'T:call_missed',
+    C.callEventLabel(t, { callEvent: { kind: 'что-то' } }));
 }
 
 // ── 4. Регрессия-щит: ctx-сигнатуры больше нет ─────────────────────

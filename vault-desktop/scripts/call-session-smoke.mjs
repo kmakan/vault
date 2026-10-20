@@ -90,9 +90,13 @@ ok('C8 _all deep clone', JSON.stringify(s._all()).includes('callState'));
 
 // C9: часы — тик владельца (ADR-004 E)
 let ticks = 0;
+// ПЕРЕД старом ставим НЕНУЛЕВОЕ значение: проверка «сбросил в 0» на нулевом
+// значении проходит и при сломанном сбросе (проверка-декорация).
+s.setCallClockSec(42);
+ok('C9 перед старом часов накоплено 42 с', s.callClockSec === 42);
 const h = s.startCallClock(() => ticks++);
 ok('C9 startCallClock возвращает хендл', !!h);
-ok('C9 startCallClock сбрасывает callClockSec 0', s.callClockSec === 0);
+ok('C9 startCallClock сбрасывает callClockSec в 0', s.callClockSec === 0);
 ok('C9 startCallClock запоминает callClockTimer', s.callClockTimer === h);
 // реальный node setInterval (в этом smoke нет мока) → 1 tick за ~1.2с
 await new Promise((r) => setTimeout(r, 1200));
@@ -100,6 +104,20 @@ ok('C9 тик инкрементит callClockSec', s.callClockSec === 1);
 ok('C9 onTick вызван', ticks === 1);
 s.stopCallClock();
 ok('C9 stopCallClock очищает callClockTimer', s.callClockTimer === null);
+
+// C10: приведение к boolean и offers — мутаторы, которые легко сломать
+{
+  const t = createCallSession();
+  t.setSpeaker(1);
+  ok('C10 setSpeaker приводит к boolean', t.speaker === true);
+  t.setMuted(0);
+  ok('C10 setMuted приводит к boolean', t.muted === false);
+  t.setOffers({ local: 'L', remote: 'R' });
+  ok('C10 offers: локальный записан', t.localOffer === 'L');
+  ok('C10 offers: удалённый записан', t.remoteOffer === 'R');
+  t.setOffers({ local: 'L2' });
+  ok('C10 offers: undefined-поля не затирают прежние', t.remoteOffer === 'R' && t.localOffer === 'L2');
+}
 
 const passed = checks.filter((c) => c.pass).length;
 const failed = checks.filter((c) => !c.pass);

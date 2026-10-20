@@ -89,6 +89,21 @@ const getRelays = () => JSON.parse(kv.get('relay-list') || '[]');
 const bodyOf = (i) => JSON.parse(fetchCalls[i].opts.body);
 const ours = () => getRelays().find(r => r.url === RELAY_URL);
 
+// ── 0. normalizeRelayUrl: адрес релея нормализуется ───────────
+// Только https и без хвостовых слэшей: иначе «тот же» релей заводится
+// дважды (https://x/ и https://x — разные ключи в kv), а токен теряется.
+console.log('0. normalizeRelayUrl');
+{
+  check('https без хвостовых слэшей — как есть',
+    RC.normalizeRelayUrl('https://relay.example/relay') === 'https://relay.example/relay');
+  check('хвостовые слэши срезаются',
+    RC.normalizeRelayUrl('https://relay.example/relay///') === 'https://relay.example/relay');
+  check('пробелы обрезаются',
+    RC.normalizeRelayUrl('  https://relay.example/relay  ') === 'https://relay.example/relay');
+  check('http-релей отвергается (только https)', RC.normalizeRelayUrl('http://relay.example/relay') === null);
+  check('пустой адрес отвергается', RC.normalizeRelayUrl('') === null);
+}
+
 // ── 1. reRegisterOurRelay: заявка текущего токена ──────────────
 console.log('1. reRegisterOurRelay — keep текущего токена');
 {

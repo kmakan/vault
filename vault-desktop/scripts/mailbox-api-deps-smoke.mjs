@@ -59,10 +59,13 @@ writeFileSync(MOCKS + '/history.js', 'export const cacheBody = () => {};');
 writeFileSync(MOCKS + '/session-store.js', `const state = { isLoggedIn: true, emails: [], channels: [], emailBodyCache: {}, activeChat: 'a@x.ru', currentGroup: null, activeChatType: 'peer' };
 export const sessionStore = { getCurrentEmail: () => 'me@x.ru', state };
 export const chatStore = { state };
-export const mailboxStore = { state, cacheBody() {} };
+export const mailboxStore = { state, cacheBody(k, b) { globalThis.__cached = (globalThis.__cached || []).concat([[k, b]]); } };
 export const uiStore = { toast() {}, tr: (k) => k };
 `);
-writeFileSync(MOCKS + '/api.js', `const api = { loadCursors: async () => ({}), saveCursors: async () => {} };
+writeFileSync(MOCKS + '/api.js', `const api = {
+  loadCursors: async (id) => { globalThis.__cursorsLoaded = (globalThis.__cursorsLoaded || []).concat([id]); return { INBOX: 'cursor-1' }; },
+  saveCursors: async (id, c) => { globalThis.__cursorsSaved = (globalThis.__cursorsSaved || []).concat([[id, c]]); },
+};
 export default api;
 export const db = {};
 `);
@@ -162,18 +165,50 @@ console.log('\n4. ctx вызывающего доезжает (J.4-фикс)');
     'получено ключей: ' + Object.keys(incomingSpy.calls.at(-1).ctx || {}).length);
   await mailboxApi.loadMessages('peer@x.ru', appCtx);
   check('loadMessages: ctx передан как есть (identity)', messagesSpy.calls.at(-1).ctx === appCtx);
+  // ВАЖНО: calls.at(-1) берёт ПОСЛЕДНИЙ вызов, а loadGroups идёт перед
+  // loadGroupMessages. Проверка «loadGroups: ctx доехал» на at(-1) проверяла
+  // СЛЕДУЮЩИЙ вызов — фиктивная проверка (декорация): сломанный loadGroups
+  // проходил зелёным. Теперь у каждого вызова свой снимок.
+  const gBeforeGroups = groupsSpy.calls.length;
   await mailboxApi.loadGroups(appCtx);
+  const groupsCall = groupsSpy.calls[gBeforeGroups];
+  check('loadGroups: ctx доехал как есть', groupsCall && groupsCall.ctx === appCtx);
   await mailboxApi.loadEmails(false, appCtx);
+  const gBeforeGroupMsgs = groupsSpy.calls.length;
   await mailboxApi.loadGroupMessages('g1', false, appCtx);
-  check('loadGroups: ctx доехал как есть', groupsSpy.calls.at(-1).ctx === appCtx);
+  const groupMsgsCall = groupsSpy.calls[gBeforeGroupMsgs];
   check('loadGroupMessages: ctx доехал как есть + аргументы на месте',
-    groupsSpy.calls.at(-1).ctx === appCtx && groupsSpy.calls.at(-1).id === 'g1' && groupsSpy.calls.at(-1).force === false);
+    groupMsgsCall && groupMsgsCall.ctx === appCtx && groupMsgsCall.id === 'g1' && groupMsgsCall.force === false);
   check('loadEmails: ctx доехал как есть + silent на месте',
     emailsSpy.calls.at(-1).ctx === appCtx && emailsSpy.calls.at(-1).silent === false);
   // Без ctx — fallback-проекция (контракт сохранён, не падает).
   await mailboxApi.processIncoming(['m3'], {});
   const fallback = incomingSpy.calls.at(-1).ctx;
   check('без ctx работает fallback-проекция', fallback !== appCtx && typeof fallback.email === 'string');
+  // Проекция обязана отдавать почту ВЛАДЕЛЬЦА сессии: без неё входящие
+  // письма считались бы чужими (или не считались бы вовсе).
+  check('fallback-проекция отдаёт email владельца сессии', fallback.email === 'me@x.ru', fallback.email);
+
+  // Курсоры: мост обязан ходить в api, а не отдавать пустую заглушку.
+  const cursors = await mailboxApi.loadCursors('acc-1');
+  check('loadCursors возвращает значение api', cursors && cursors.INBOX === 'cursor-1', cursors);
+  check('loadCursors спросил у api с тем же id',
+    (globalThis.__cursorsLoaded || []).includes('acc-1'), globalThis.__cursorsLoaded);
+  await mailboxApi.saveCursors('acc-1', { INBOX: 'cursor-2' });
+  check('saveCursors дошёл до api', (globalThis.__cursorsSaved || []).some(([id, c]) => id === 'acc-1' && c.INBOX === 'cursor-2'),
+    globalThis.__cursorsSaved);
+
+  // Кэш тел: тело обязано попасть в mailboxStore, иначе входящее письмо
+  // нельзя открыть (тело пришло, но не сохранено).
+  mailboxApi.cacheBody('INBOX:9', 'тело');
+  check('cacheBody пишет тело в mailboxStore',
+    (globalThis.__cached || []).some(([k, b]) => k === 'INBOX:9' && b === 'тело'), globalThis.__cached);
+
+  // Скролл: мост обязан отдавать установленный App.vue скроллер.
+  let scrolled = 0;
+  mailboxApi.setScroller(() => { scrolled += 1; });
+  mailboxApi.scrollToBottom(true);
+  check('setScroller подменяет скролл (вызов доходит)', scrolled === 1, scrolled);
 }
 
 // ── 5. Анти-рот по КЛАССУ: каждый вызов моста в relay.js обязан передавать ctx ──

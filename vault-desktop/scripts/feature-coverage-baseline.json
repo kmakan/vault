@@ -1,22 +1,6 @@
 {
   "uncoveredFeatures": [],
-  "smokesWithoutMutations": [
-    "batch2-smoke.mjs",
-    "boot-smoke.mjs",
-    "call-session-smoke.mjs",
-    "calls-deps-smoke.mjs",
-    "channels-signing-smoke.mjs",
-    "contacts-smoke.mjs",
-    "crypto-smoke.mjs",
-    "ctx-cycles-smoke.mjs",
-    "incoming-routing-smoke.mjs",
-    "m0-wire-smoke.mjs",
-    "mailbox-api-deps-smoke.mjs",
-    "migrations-smoke.mjs",
-    "relay-client-smoke.mjs",
-    "relay-smoke.mjs",
-    "video-smoke.mjs"
-  ],
+  "smokesWithoutMutations": [],
   "exemptions": [
     {
       "feature": "duress/state.js",

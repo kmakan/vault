@@ -72,6 +72,36 @@ console.log('4. сверка с форматом lib.rs::encrypt_vault_message')
   check('3 поля по разделителю', hybrid.split('|').length === 3);
 }
 
+// ── 5. пэйдинг base64 (decode_quoted_printable съедал '=') ──────
+console.log('5. re-pad: тело без пэйдинга');
+{
+  // Старые сборки съедали '=' на конце тела. Без восстановления пэйдинга atob
+  // бросает, и письмо молча считается незашифрованным (isEncrypted → false).
+  const noPad = Buffer.from('x'.repeat(41), 'binary').toString('base64').replace(/=+$/, '');
+  check('тело без пэйдинга распознаётся (re-pad)', c.isEncrypted(noPad) === true);
+  check('тело без пэйдинга и без ключа — false', nokey.isEncrypted(noPad) === false);
+}
+
+// ── 6. isValidKeypair — контракт сохранённой пары ключей ──────
+console.log('6. isValidKeypair');
+{
+  const pk = 'a'.repeat(64);
+  check('валидная пара принимается',
+    mod.isValidKeypair({ public_key: 'b'.repeat(64), private_key: pk }) === true);
+  check('приватный = публичный — невалидна (такая пара в хранилище — мусор)',
+    mod.isValidKeypair({ public_key: pk, private_key: pk }) === false);
+  check('не-hex — невалидна',
+    mod.isValidKeypair({ public_key: 'z'.repeat(64), private_key: pk }) === false);
+  check('не-hex — невалидна (и публичный)',
+    mod.isValidKeypair({ public_key: pk, private_key: 'z'.repeat(64) }) === false);
+  check('короткий ключ — невалидна',
+    mod.isValidKeypair({ public_key: 'ab', private_key: pk }) === false);
+  check('не объект — невалидна',
+    mod.isValidKeypair(null) === false && mod.isValidKeypair('ключ') === false);
+  check('без private_key — невалидна',
+    mod.isValidKeypair({ public_key: pk }) === false);
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

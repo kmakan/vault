@@ -195,6 +195,8 @@ console.log('1. relayConsume (виртуальные письма)');
   check('2 свежих конверта слиты в mailboxStore (дубль отфильтрован)', emails.length === 2);
   check('uid rl-<id> + folder RELAY', emails.every((m) => m.uid.startsWith('rl-') && m.folder === 'RELAY'));
   check('from нормализован в нижний регистр', emails.every((m) => m.from === 'peer@x.ru'));
+  check('письма отсортированы по дате (новые первыми)',
+    emails[0].uid === 'rl-r2' && emails[1].uid === 'rl-r1', emails.map((m) => m.uid));
   check('тела в body-cache сразу',
     mailboxStore.getEmailBody('RELAY:rl-r1') === 'ENC:hello' && mailboxStore.getEmailBody('RELAY:rl-r2') === 'ENC:second');
   const pi = ops('processIncoming');

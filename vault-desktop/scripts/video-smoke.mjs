@@ -35,7 +35,10 @@ function makeFakeFrame(w, h) {
     displayHeight: h,
     byteLength: 12,
     copyTo: (buf) => { buf.fill(7); return 12; },
-    close() {},
+    // Закрытие кадра — часть контракта: незакрытый VideoFrame держит
+    // буфер GPU, и WebCodecs копит их до падения на телефоне.
+    closed: false,
+    close() { this.closed = true; globalThis.__closedFrames = (globalThis.__closedFrames || 0) + 1; },
   };
 }
 function makeTrack(count, w, h) {
@@ -288,6 +291,8 @@ console.log('2. startCamera — отправка кадров (camera → encode
   // а поток делаем конечным — все его кадры будут скипнуты.
   V.stopCamera();
   await tick(5);
+  check('все кадры закрыты после кодирования (нет утечки буферов)',
+    (globalThis.__closedFrames || 0) > 0, globalThis.__closedFrames);
   check('stopCamera: энкодер закрыт', enc.closed === true);
   check('stopCamera: треки остановлены', localEl.srcObject._track._stopped === true);
 

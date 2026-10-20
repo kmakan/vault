@@ -52,7 +52,7 @@ writeFileSync(MOCKS + '/api.js', [
 ].join('\n'));
 writeFileSync(MOCKS + '/crypto.js', [
   'export default {',
-  '  isEncrypted: () => true,',
+  '  isEncrypted: () => globalThis.__state.encrypted !== false,',
   '  setPeerPublicKey: () => {},',
   '  decryptVault: async () => globalThis.__state.plain,',
   '  decryptWithGroupKey: async () => globalThis.__state.plain,',
@@ -190,6 +190,7 @@ function letter(over = {}) {
 const state = {
   kind: null,
   plain: '',
+  encrypted: true,
   bridgeDown: false,
   unread: {},
   notifs: [],
@@ -201,11 +202,12 @@ const state = {
 globalThis.__state = state;
 const { processIncoming } = await import(pathToFileURL(MODULE).href);
 
-async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, expect }) {
+async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, letterOver = {}, encrypted = true, expect }) {
   console.log('\n' + name);
   // Свежий стенд на каждый кейс: иначе счётчики предыдущего кейса «доказывают» следующий.
   state.kind = kind;
   state.plain = plain;
+  state.encrypted = encrypted;
   state.bridgeDown = bridgeDown;
   state.unread = {};
   state.notifs = [];
@@ -217,11 +219,74 @@ async function run(name, { kind, plain, bridgeDown = false, ctxOver = {}, expect
   const deps = { ...makeDeps(ctxOver), ...DEPS };
   for (const k of Object.keys(deps.emailBodyCache)) delete deps.emailBodyCache[k];
   deps.emailBodyCache['INBOX:1'] = 'encrypted-body';
-  await processIncoming(deps, [letter()], { notify: false });
+  await processIncoming(deps, [letter(letterOver)], { notify: false });
   expect(deps);
 }
 
 const MSG = '{"vault":1,"id":"m1","text":"привет","name":"Bob","key":"BOBKEY"}';
+
+// ── Отрицательные ветки роутера ───────────────────────────────────────────
+// Без них смоук зелёный на сломанном роутере: успешный путь один, а ломать
+// его — легко (мутационный гейт это и показал).
+await run('cryptoReady=false — письма не разбираются вовсе', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  ctxOver: { cryptoReady: false, peerKeys: { 'bob@x': 'BOBKEY' } },
+  expect: () => {
+    ok('без криптографии бейдж не вырос', Object.keys(globalThis.__state.unread).length === 0);
+    ok('без криптографии персист не вызван',
+      !calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
+
+await run('своё письмо — не считается входящим', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  letterOver: { from: 'me@test.com' },
+  // Ключ для СВОЕГО адреса обязателен: иначе письмо отсеется на другом
+  // основании (нет ключа пира) и проверка «своё письмо отброшено» прошла бы
+  // даже при сломанном сравнении с myEmail.
+  ctxOver: { peerKeys: { 'me@test.com': 'BOBKEY' } },
+  expect: () => {
+    ok('своё письмо не увеличивает бейдж', Object.keys(globalThis.__state.unread).length === 0);
+    ok('своё письмо не пишется в персист',
+      !calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
+
+await run('заблокированный отправитель — не считается входящим', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  ctxOver: { isIgnored: () => true, peerKeys: { 'bob@x': 'BOBKEY' } },
+  expect: () => {
+    ok('заблокированный отправитель не увеличивает бейдж', Object.keys(globalThis.__state.unread).length === 0);
+    ok('заблокированный отправитель не пишется в персист',
+      !calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
+
+await run('незашифрованное тело — не конверт', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  encrypted: false,
+  ctxOver: { peerKeys: { 'bob@x': 'BOBKEY' } },
+  expect: () => {
+    ok('незашифрованное тело не увеличивает бейдж', Object.keys(globalThis.__state.unread).length === 0);
+    ok('незашифрованное тело не пишется в персист',
+      !calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
+
+await run('нет ключа пира — письмо не декодируется (ждём ключ)', {
+  kind: { kind: 'message', env_id: 'm1' },
+  plain: MSG,
+  ctxOver: { peerKeys: {} },
+  expect: () => {
+    ok('без ключа пира письмо не учитывается', Object.keys(globalThis.__state.unread).length === 0);
+    ok('без ключа пира персист не вызван',
+      !calls.some(c => c.cmd === 'vault_store_incoming_message'));
+  },
+});
 
 await run('kind=message — письмо учтено и ушло в персист', {
   kind: { kind: 'message', env_id: 'm1' },
