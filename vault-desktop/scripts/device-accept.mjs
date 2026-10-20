@@ -104,6 +104,9 @@ const PROBES = {
     }
     const composer = document.querySelector('input.message-field');
     step('чат открылся (поле ввода есть)', !!composer, { hasComposer: !!composer, activeChat: p.activeChat });
+    // Мобильная навигация (W3 партия 10): чат открыт — значит мобильный чат
+    // переключился (список → переписка).
+    step('мобильный чат переключился на переписку', p.mobileChatOpen === true, { mobileChatOpen: p.mobileChatOpen });
     if (composer) {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
       setter.call(composer, 'проверка приёмки');
