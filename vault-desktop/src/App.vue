@@ -3874,8 +3874,15 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     clearPendingOutgoing() { return this.sendingStore.clearPendingOutgoing(); },
     dropBucket(chatId) { return this.sendingStore.dropBucket(chatId); },
     // Тонкие прокси во владельца сессии (ADR-004 Этап A12).
-    // features/* вызывают ctx.login/logout/setEmails — адресуем во владельца.
-    login() { return this.sessionStore.login(); },
+    // features/* вызывают ctx.logout/setEmails — адресуем во владельца.
+    //
+    // ПРОКСИ login() УДАЛЁН СОЗНАТЕЛЬНО: он перебивал полный вход
+    // (`async login()` выше). Options API — обычный литерал объекта: при двух
+    // ключах с одним именем поздний выигрывает, ранний молча исчезает.
+    // Итог был такой: кнопка «Войти» только переключала флаг isLoggedIn, к
+    // IMAP не подключались ВООБЩЕ (проверено пробой на живой сборке: calls: []
+    // после submit формы). Теперь login() — единственный, полный. Фичам, кому
+    // был нужен флаг сессии, дано отдельное имя: markLoggedIn.
     logout() { return this.sessionStore.logout(); },
     setEmails(list) { return this.mailboxStore.setEmails(list); },
     clearEmails() { return this.mailboxStore.clearEmails(); },
@@ -3954,8 +3961,39 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // файла/эскроу (без фолбэка), ПЕРЕзагрузка ключа без генерации, durable
     // commit и снятие маркера последним.
     async loginWithRecovery() {
-      await RecoveryFeature.loginWithRecovery(this, {
-        api, crypto, invoke, db, relay, RelayFeature, initNotifications, t: uiStore.tr,
+      return RecoveryFeature.loginWithRecovery({
+        api, crypto, invoke, db, relay, initNotifications, t: uiStore.tr,
+        // Записи состояния — через прокси компонента (sessionStore обёрнут
+        // reactive): запись в сырой синглтон не перерисовала бы форму
+        // (тот же класс, что с флагами модалок).
+        setLoginLoading: (v) => { this.loginLoading = v; },
+        setLoginError: (v) => { this.loginError = v; },
+        markLoggedIn: () => { this.sessionStore.login(); },
+        setUserId: (v) => { this.userId = v; },
+        publicKey: () => this.publicKey,
+        // Релей/эко — через прокси владельца relay-store.
+        ecoMode: () => this.ecoMode,
+        enableEco: (on) => this.enableEco(on),
+        relayEnabled: () => this.relayEnabled,
+        enableRelay: (on) => this.enableRelay(on),
+        // Эффекты пост-логинового пути.
+        initCrypto: (opts) => this.initCrypto(opts),
+        initLocalDb: () => this.initLocalDb(),
+        loadUnreadCounts: () => this.loadUnreadCounts(),
+        loadLocalProfiles: () => this.loadLocalProfiles(),
+        loadBodyCache: () => this.loadBodyCache(),
+        loadContacts: () => this.loadContacts(),
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
+        loadEmails: () => EmailsFeature.loadEmails(this),
+        startPolling: (ms) => this.startPolling(ms),
+        startRelayTicker: () => this.startRelayTicker(),
+        idleLoop: () => this.idleLoop(),
+        logout: () => this.logout(),
+        onEcoMode: (on, silent) => this.onEcoMode(on, silent),
+        // Синхронизация эко с релеем — relay.js ещё ctx-модуль, поэтому его
+        // зовёт компонент (модулю компонент не достаётся).
+        syncEcoWithRelay: () => RelayFeature.syncEcoWithRelay(this, true),
       });
     },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
@@ -4111,7 +4149,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // parse/unwrap кандидата устойчивы к чужим/битым письмам, import_backup
     // бросается наружу. App.vue — только тонкий делегат.
     async recoverFromEscrow(mnemonic) {
-      return RecoveryFeature.recoverFromEscrow(this, mnemonic, { api, crypto, invoke });
+      return RecoveryFeature.recoverFromEscrow(this.email, mnemonic, { api, crypto, invoke });
     },
 
     // Аватар группы обновил админ (GroupSettings): сохраняем локально и

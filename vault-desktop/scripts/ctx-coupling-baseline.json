@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 222,
+  "totalCtxRefs": 187,
   "totalFunctions": 313,
-  "functionsWithCtx": 86,
+  "functionsWithCtx": 85,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -524,37 +524,10 @@
       "biggestCtxFn": null
     },
     "src/features/recovery.js": {
-      "ctxRefs": 35,
-      "fields": [
-        "ecoMode",
-        "email",
-        "idleLoop",
-        "imapPort",
-        "imapServer",
-        "initCrypto",
-        "initLocalDb",
-        "loadBodyCache",
-        "loadChannels",
-        "loadContacts",
-        "loadEmails",
-        "loadGroups",
-        "loadLocalProfiles",
-        "loadUnreadCounts",
-        "onEcoMode",
-        "password",
-        "publicKey",
-        "recoveryFileJson",
-        "recoveryWordsInput",
-        "relayEnabled",
-        "rememberMe",
-        "smtpPort",
-        "smtpServer",
-        "startPolling",
-        "startRelayTicker",
-        "userId"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 3,
-      "functionsWithCtx": 2,
+      "functionsWithCtx": 1,
       "biggestCtxFn": "loginWithRecovery"
     },
     "src/features/relay-idle.js": {

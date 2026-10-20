@@ -319,6 +319,9 @@ console.log('\nrecovery-session.js (pure маркер):');
 // записывающий порядок действий; зависимости инъектируются.
 console.log('\nRecoveryFeature.loginWithRecovery — поток:');
 const RF = await import(ROOT + '/src/features/recovery.js');
+// Владельцы состояния (ADR-004): форма восстановления — uiStore.formState,
+// сессия (email/password) — sessionStore. Модуль читает их напрямую.
+const { uiStore, sessionStore } = await import(ROOT + '/src/features/session-store.js');
 const VALID_BACKUP = JSON.stringify({ version: 1, keys: { keypair: {
   public_key: '1'.repeat(64), private_key: '2'.repeat(64), created_at: '1970-01-01T00:00:00Z',
 }, peer_keys: [] } });
@@ -329,7 +332,7 @@ const VALID_BACKUP = JSON.stringify({ version: 1, keys: { keypair: {
   const original = localStorage.setItem;
   localStorage.setItem = () => { throw new Error('storage unavailable'); };
   const { ctx, deps, order } = makeFlow({});
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   localStorage.setItem = original;
   check('сбой marker: видимая ошибка и 0 connect/import',
     ctx.loginError === 'T:recovery_state_unavailable' && !ctx.isLoggedIn &&
@@ -427,15 +430,53 @@ function makeFlow(cfg) {
     loadEmails: () => { order.push('loadEmails'); return Promise.resolve(); },
     showToast: (m) => order.push('toast:' + m),
   };
+  // Форма восстановления и серверов — владелец uiStore.formState; email и
+  // пароль — владелец sessionStore. Раньше это был ctx; теперь модуль берёт
+  // значения у владельцев (ADR-005 W2, партия 6).
+  uiStore.setFormField('recoveryWordsInput', cfg.words || 'word word word');
+  uiStore.setFormField('recoveryFileJson', cfg.fileJson || '');
+  uiStore.setFormField('rememberMe', cfg.remember !== false);
+  uiStore.setFormField('imapServer', '');
+  uiStore.setFormField('imapPort', '');
+  uiStore.setFormField('smtpServer', '');
+  uiStore.setFormField('smtpPort', '');
+  sessionStore.setCurrentEmail('restore@example.invalid');
+  sessionStore.setPassword('pw');
   const deps = {
     api: apiMock,
     crypto: cryptoMock,
     invoke: invokeMock,
     db: { kvGet: async () => null, kvSet: async () => {} },
     relay: { getSettings: async () => ({ enabled: false }) },
-    RelayFeature: { syncEcoWithRelay: async () => {} },
     initNotifications: async () => {},
     t: (k) => 'T:' + k,
+    // Возможности со стороны компонента: App.vue собирает их в deps, модуль
+    // компонент не видит. Записи состояния идут через них (в проде — через
+    // reactive-прокси, иначе форма не перерисовалась бы).
+    setLoginLoading: (v) => { ctx.loginLoading = v; },
+    setLoginError: (v) => { ctx.loginError = v; },
+    markLoggedIn: () => { ctx.login(); },
+    setUserId: (v) => { ctx.userId = v; },
+    publicKey: () => ctx.publicKey,
+    ecoMode: () => ctx.ecoMode,
+    enableEco: (on) => ctx.enableEco(on),
+    relayEnabled: () => ctx.relayEnabled,
+    enableRelay: (on) => ctx.enableRelay(on),
+    initCrypto: (opts) => ctx.initCrypto(opts),
+    initLocalDb: () => ctx.initLocalDb(),
+    loadUnreadCounts: () => ctx.loadUnreadCounts(),
+    loadLocalProfiles: () => ctx.loadLocalProfiles(),
+    loadBodyCache: () => ctx.loadBodyCache(),
+    loadContacts: () => ctx.loadContacts(),
+    loadGroups: () => ctx.loadGroups(),
+    loadChannels: () => ctx.loadChannels(),
+    loadEmails: () => ctx.loadEmails(),
+    startPolling: (ms) => ctx.startPolling(ms),
+    startRelayTicker: () => ctx.startRelayTicker(),
+    idleLoop: () => ctx.idleLoop(),
+    logout: () => ctx.logout(),
+    onEcoMode: (on, silent) => ctx.onEcoMode(on, silent),
+    syncEcoWithRelay: async () => { order.push('syncEcoWithRelay'); },
   };
   return { ctx, deps, order };
 }
@@ -449,7 +490,7 @@ function makeFlow(cfg) {
   const { ctx, deps, order } = makeFlow(cfg);
   deps.api = Object.assign(api, deps.api); // живой ApiClient + наш fetchEmails
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   check('успех: isLoggedIn true, loginLoading false, loginError пуст',
     ctx.isLoggedIn === true && ctx.loginLoading === false && ctx.loginError === '');
@@ -481,7 +522,7 @@ function makeFlow(cfg) {
   const { ctx, deps } = makeFlow({ remember: true });
   deps.api = Object.assign(api, deps.api);
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   check('успех remember:true → save_credentials ровно 1',
     (calls.counters.save_credentials || 0) === 1);
@@ -504,7 +545,7 @@ async function expectFailure(label, cfg, expectError) {
   const { ctx, deps, order } = makeFlow(cfg);
   deps.api = Object.assign(api, deps.api);
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   const okErr = ctx.loginError === expectError;
   check(label + ': loginLoading false, isLoggedIn false, ошибка ' + expectError,
@@ -561,7 +602,7 @@ await expectFailure('import reject (эскроу)', { importBackup: 'THROW' }, '
   const { ctx, deps, order } = makeFlow({ fileJson: VALID_BACKUP, importBackup: 'THROW' });
   deps.api = Object.assign(api, deps.api);
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   check('файл import reject → ошибка в UI', ctx.loginError === 'import boom');
   check('файл import reject → escrow НЕ пробуем (fetchEmails 0)',
@@ -578,7 +619,7 @@ await expectFailure('import reject (эскроу)', { importBackup: 'THROW' }, '
   const api = new mod.ApiClient();
   const { ctx, deps, order } = makeFlow({ fileJson: '{}' });
   deps.api = Object.assign(api, deps.api);
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   check('backup без keypair: 0 import, старый ключ не считается восстановленным',
     !ctx.isLoggedIn && ctx.loginError.startsWith('Invalid recovery backup') &&
     !order.includes('invoke:import_backup') && !order.some(o => o.startsWith('initCrypto:')));
@@ -591,7 +632,7 @@ await expectFailure('дисковый ключ не совпал с backup', { o
   const { ctx, deps, order } = makeFlow({ fileJson: '{ not json' });
   deps.api = Object.assign(api, deps.api);
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   check('битый JSON файла → видимая ошибка (loginError непуст)',
     typeof ctx.loginError === 'string' && ctx.loginError.length > 0);
@@ -608,7 +649,7 @@ await expectFailure('дисковый ключ не совпал с backup', { o
   const { ctx, deps } = makeFlow({ importBackup: 'THROW' });
   deps.api = Object.assign(api, deps.api);
   const unmute = mute();
-  await RF.loginWithRecovery(ctx, deps);
+  await RF.loginWithRecovery(deps);
   unmute();
   // Логин прошёл (email_connect ушёл в живой ApiClient), но import упал —
   // marker блокирует повтор. Проверяем через calls.log живого ApiClient.
@@ -771,7 +812,7 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     !delBody || !/email_fetch_bodies/.test(delBody));
   if (delBody) {
     let called = false;
-    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'initNotifications', 'uiStore'];
+    const names = ['api', 'crypto', 'invoke', 'db', 'relay', 'RelayFeature', 'EmailsFeature', 'initNotifications', 'uiStore'];
     // Execute the ACTUAL delegate without a global `t`. The old shorthand
     // compiled successfully but threw ReferenceError on the real button.
     const delegate = new Function('RecoveryFeature', ...names,
@@ -780,12 +821,18 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
     // J.5b: делегат читает uiStore.tr (не this.t) — прокидываем stub.
     const uiStoreStub = { tr: t, toast: () => {}, scrollToBottom: () => {} };
     let seenTr = null;
-    await delegate({ loginWithRecovery: async (_, deps) => { seenTr = deps.t; } },
-      ...names.map(() => ({})), uiStoreStub).call({ t, uiStore: uiStoreStub });
-    // J.5b: делегат читает uiStore.tr (не this.t) — без ReferenceError.
-    // deps.t не передаётся (t не в names), так что seenTr — undefined,
-    // но сам вызов не падает — это и есть ценность теста.
-    check('App.vue: живой делегат запускается без ReferenceError', seenTr === undefined);
+    try {
+      // ВАЖНО: stub uiStore обязан попасть в СВОЙ слот (последний в names).
+      // Раньше он уезжал за пределы параметров, и `uiStore.tr` был undefined —
+      // а тест это фиксировал как «ожидаемо» (seenTr === undefined). Проверка
+      // была зелёной на НЕРАБОЧЕЙ подмене: переводчик в контракт не доезжал.
+      await delegate({ loginWithRecovery: async (deps) => { seenTr = deps.t; } },
+        ...names.slice(0, -1).map(() => ({})), uiStoreStub).call({ t, uiStore: uiStoreStub });
+    } catch (e) { console.error('delegate failed: ' + (e && e.message)); }
+    // J.5b: делегат читает uiStore.tr (не this.t) — без ReferenceError, и
+    // переводчик реально уходит в контракт (deps.t — функция).
+    console.log('  [debug] seenTr=' + typeof seenTr + ' | delBody=' + String(delBody).slice(0, 220).replace(/\n/g, ' '));
+    check('App.vue: живой делегат запускается без ReferenceError', typeof seenTr === 'function');
   }
   // mounted: guard маркера ДО авто-входа; initCrypto загрузка-only.
   check('App.vue mounted: guard recovery-pending перед авто-входом',

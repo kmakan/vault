@@ -1,8 +1,8 @@
 // Feature module: восстановление аккаунта из эскроу-письма по 12 словам.
 // Изоляция фичи (правило канбан t_7c3929d2): новая фича — отдельный модуль,
-// App.vue — только тонкий делегат; ВСЕ зависимости явные (ctx + инъекция
-// { api, crypto, invoke }), поэтому модуль импортируется в Node без
-// Tauri/Vue и покрывается smoke'ом напрямую. Новых npm-зависимостей нет.
+// App.vue — только тонкий делегат; ВСЕ зависимости явные, поэтому модуль
+// импортируется в Node без Tauri/Vue и покрывается smoke'ом напрямую. Новых
+// npm-зависимостей нет.
 //
 // Поиск эскроу-письма среди последних писем ящика + распаковка backup по
 // мнемонике. Вызывается ПОСЛЕ логина ДО initCrypto() — иначе создалась бы
@@ -17,7 +17,18 @@
 // recovery-session.js — pure persisted-маркер прерванного восстановления
 // (не импортирует api/crypto, поэтому цикла нет): маркер запирает
 // durable-авто-вход, пока восстановление не закоммичено.
-import { uiStore } from "./session-store.js";
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 6: модуль больше НЕ читает компонент.
+// Состояние — у владельцев (ADR-004), эффекты — явный deps (ADR-005 R3):
+//   · `sessionStore` — владелец сессии: email, password (читаются прямо);
+//     ЗАПИСИ loginLoading/loginError/«вошли» идут через deps — они идут
+//     через reactive-прокси компонента, иначе запись в сырой синглтон не
+//     перерисовала бы форму (тот же класс, что с флагами модалок);
+//   · `uiStore.formState` — владелец полей формы восстановления и серверов
+//     (recoveryWordsInput/recoveryFileJson/imap*/smtp*/rememberMe);
+//   · `publicKey`/`userId` — состояние компонента (deps);
+//   · остальное (initCrypto/load*/startPolling/idleLoop/…) — эффекты.
+import { uiStore, sessionStore } from './session-store.js';
 import * as RecoverySession from './recovery-session.js';
 
 // Reject an incomplete backup BEFORE import_backup can modify disk stores.
@@ -34,13 +45,13 @@ function recoveryBackupPublicKey(jsonData) {
   return kp.public_key;
 }
 
-export async function recoverFromEscrow(ctx, mnemonic, { api, crypto, invoke }) {
+export async function recoverFromEscrow(email, mnemonic, { api, crypto, invoke }) {
   console.log('[recovery] step 1: validate mnemonic');
   if (!(await crypto.recoveryValidateMnemonic(mnemonic))) {
     throw new Error('Неверный формат ключа (нужно 12 слов)');
   }
   console.log('[recovery] step 2: fetch emails');
-  const msgs = await api.fetchEmails(ctx.email);
+  const msgs = await api.fetchEmails(email);
   console.log('[recovery] step 3: got', msgs.length, 'msgs, filtering empty subject');
   const candidates = msgs.filter((m) => !(m.subject || '').trim()).slice(0, 80);
   console.log('[recovery] step 4: candidates', candidates.length, 'byFolder');
@@ -116,19 +127,20 @@ export async function recoverFromEscrow(ctx, mnemonic, { api, crypto, invoke }) 
 //     фолбэку на эскроу. import_backup частично меняет диск — после его сбоя
 //     нельзя пытаться другой backup.
 //
-// ctx — экземпляр App (initCrypto/initLocalDb/load*/startPolling/toast и т.д.).
-// Все зависимости инъектируются: модуль импортируется в Node без Vue/Tauri.
+// Зависимости инъектируются: модуль импортируется в Node без Vue/Tauri.
 // Логи НЕ содержат пароль/слова/тело письма/backup.
-export async function loginWithRecovery(ctx, deps) {
-  const { api, crypto, invoke, db, relay, RelayFeature, initNotifications, t } = deps || {};
+export async function loginWithRecovery(deps) {
+  const { api, crypto, invoke, db, relay, initNotifications, t } = deps || {};
   const tr = (key, fallback) => {
     const v = typeof t === 'function' ? t(key) : '';
     return v || fallback;
   };
-  ctx.loginLoading = true;
-  ctx.loginError = '';
+  // Форма восстановления и серверов — владелец uiStore.formState.
+  const form = (k) => uiStore.getFormField(k);
+  deps.setLoginLoading(true);
+  deps.setLoginError('');
   try {
-    const words = (ctx.recoveryWordsInput || '').trim();
+    const words = (form('recoveryWordsInput') || '').trim();
     // 0) Слова обязательны и должны быть валидны ДО маркера: невалидная
     //    мнемоника не должна запирать экран восстановления.
     if (!(await crypto.recoveryValidateMnemonic(words))) {
@@ -139,17 +151,18 @@ export async function loginWithRecovery(ctx, deps) {
       throw new Error(tr('recovery_state_unavailable', 'recovery_state_unavailable'));
     }
     const config = {};
-    if ((ctx.imapServer || '').trim()) config.imap_server = ctx.imapServer.trim();
-    if ((ctx.imapPort || '').trim()) config.imap_port = parseInt(ctx.imapPort.trim(), 10);
-    if ((ctx.smtpServer || '').trim()) config.smtp_server = ctx.smtpServer.trim();
-    if ((ctx.smtpPort || '').trim()) config.smtp_port = parseInt(ctx.smtpPort.trim(), 10);
+    if ((form('imapServer') || '').trim()) config.imap_server = form('imapServer').trim();
+    if ((form('imapPort') || '').trim()) config.imap_port = parseInt(form('imapPort').trim(), 10);
+    if ((form('smtpServer') || '').trim()) config.smtp_server = form('smtpServer').trim();
+    if ((form('smtpPort') || '').trim()) config.smtp_port = parseInt(form('smtpPort').trim(), 10);
     // 2) Логин БЕЗ durable-персиста (память + IMAP-сессия только).
-    const data = await api.login(ctx.email, ctx.password, {
-      remember: ctx.rememberMe,
+    const email = sessionStore.getCurrentEmail();
+    const data = await api.login(email, sessionStore.getPassword(), {
+      remember: form('rememberMe'),
       config,
       deferPersistence: true,
     });
-    ctx.userId = data.user_id;
+    deps.setUserId(data.user_id);
 
     let expectedPublicKey = null;
     const importInvoke = async (command, args) => {
@@ -162,7 +175,7 @@ export async function loginWithRecovery(ctx, deps) {
     // 3) Импорт ключа. Файл — приоритетный путь; его ошибка видима и НЕ
     //    откатывается на эскроу (import частично меняет диск).
     let restored = false;
-    const fileJson = (ctx.recoveryFileJson || '').trim();
+    const fileJson = (form('recoveryFileJson') || '').trim();
     if (fileJson) {
       // JSON.parse бросает на битом файле — ошибка уходит в UI (молчаливого
       // «не восстановилось, но вход прошёл» быть не должно).
@@ -171,7 +184,7 @@ export async function loginWithRecovery(ctx, deps) {
       restored = true;
     }
     if (!restored) {
-      restored = await recoverFromEscrow(ctx, words, { api, crypto, invoke: importInvoke });
+      restored = await recoverFromEscrow(email, words, { api, crypto, invoke: importInvoke });
     }
     if (!restored) {
       throw new Error(tr('recovery_not_found', 'recovery_not_found'));
@@ -180,47 +193,49 @@ export async function loginWithRecovery(ctx, deps) {
     // 4) Перезагрузка ВОССТАНОВЛЕННОГО ключа ДО isLoggedIn/commit.
     //    allowCreate:false — генерация новой пары здесь недопустима: import
     //    либо положил ключ, либо это ошибка (recovery_missing_keys).
-    const keyLoaded = await ctx.initCrypto({ allowCreate: false });
-    if (!keyLoaded || ctx.publicKey !== expectedPublicKey) {
+    const keyLoaded = await deps.initCrypto({ allowCreate: false });
+    if (!keyLoaded || deps.publicKey() !== expectedPublicKey) {
       throw new Error(tr('recovery_missing_keys', 'recovery_missing_keys'));
     }
 
     // 5) Durable-коммит: только теперь вход становится настоящим.
     //    Маркер снимается внутри, последним шагом.
-    await api.commitRecoveryLogin({ remember: ctx.rememberMe });
+    await api.commitRecoveryLogin({ remember: form('rememberMe') });
 
     // 6) Дальше — обычный пост-логиновый путь (порядок как в login()).
-    ctx.login();
+    deps.markLoggedIn();
     initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
-    await ctx.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
-    ctx.loadUnreadCounts();
-    ctx.loadLocalProfiles();
+    await deps.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
+    deps.loadUnreadCounts();
+    deps.loadLocalProfiles();
     // 0.1.180: инициализация релей/eco (зеркало login/auto-login): дефолт —
     // релей ВКЛ (free-100/день) → eco, foreground-служба не поднимается.
     // Явный выбор юзера (KV '0') уважается навсегда.
-    ctx.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
+    deps.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
     try {
-      const rs = await relay.getSettings(ctx.email);
-      ctx.enableRelay(rs.enabled);
-      if (ctx.relayEnabled) {
-        await RelayFeature.syncEcoWithRelay(ctx, true).catch(() => {});
-        ctx.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
+      const rs = await relay.getSettings(email);
+      deps.enableRelay(rs.enabled);
+      if (deps.relayEnabled()) {
+        // Синхронизация эко с релеем — эффект: компонент сам зовёт relay.js
+        // (тот ещё ctx-модуль). Модулю компонент не достаётся.
+        await deps.syncEcoWithRelay().catch(() => {});
+        deps.enableEco((await db.kvGet('anon', 'eco-mode')) === '1');
       }
     } catch (e) { /* релей опционален */ }
-    await ctx.loadBodyCache();
-    await ctx.loadContacts();
-    await ctx.loadGroups();
-    try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
-    if (ctx.ecoMode) { ctx.onEcoMode(true, true).catch(() => {}); }
-    ctx.startPolling();
-    if (ctx.ecoMode) { ctx.startPolling(60000); ctx.startRelayTicker(); }
-    else ctx.idleLoop();
-    ctx.loadEmails().catch(() => {});
+    await deps.loadBodyCache();
+    await deps.loadContacts();
+    await deps.loadGroups();
+    try { await deps.loadChannels(); } catch (e) { /* не критично */ }
+    if (deps.ecoMode()) { deps.onEcoMode(true, true).catch(() => {}); }
+    deps.startPolling();
+    if (deps.ecoMode()) { deps.startPolling(60000); deps.startRelayTicker(); }
+    else deps.idleLoop();
+    deps.loadEmails().catch(() => {});
     uiStore.toast(tr('recovery_ok', 'recovery_ok'));
   } catch (error) {
     // Провал: маркер ОСТАЁТСЯ (его снимает только commitRecoveryLogin), поэтому
     // следующий старт не сделает авто-вход без ключей. isLoggedIn выключает
-    // владелец сессии (ctx.logout() — session-store, delete_credentials НЕ
+    // владелец сессии (logout — session-store, delete_credentials НЕ
     // вызывает, см. session-store.js), а RAM-память ApiClient (email/password/
     // token/connected) чистит abandonSessionMemory: без него после провала
     // api.connected остаётся true — приложение считает себя подключённым к
@@ -228,10 +243,10 @@ export async function loginWithRecovery(ctx, deps) {
     // Полный api.logout() здесь ЗАПРЕЩЁН — он вызывает delete_credentials и
     // стёр бы сохранённый пароль пользователя, а провал восстановления не
     // имеет на это права.
-    ctx.logout();
-    ctx.loginError = (error && error.message) || String(error);
+    deps.logout();
+    deps.setLoginError((error && error.message) || String(error));
     try { api.abandonSessionMemory(); } catch (e) { /* память и так не persists */ }
   } finally {
-    ctx.loginLoading = false;
+    deps.setLoginLoading(false);
   }
 }

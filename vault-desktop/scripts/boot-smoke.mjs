@@ -174,7 +174,11 @@ const STUB = `(function () {
   };
   var table = {
     load_credentials: function () { return auto ? creds : null; },
-    load_my_keypair: function () { return auto ? keypair : null; },
+    // Фаза «вход с формы»: ключ есть (иначе initCrypto после входа упал бы
+    // на генерации пары — и ошибка в консоли не дала бы отличить «вход не
+    // работает» от «вход работает, но стенд не готов»), а credentials НЕТ
+    // (приложение остаётся на экране входа — его мы и проверяем).
+    load_my_keypair: function () { return (auto || mode === 'login') ? keypair : null; },
     get_fingerprint: function () { return hex('c'); },
     get_key_store_metadata: function () { return { version: 1, key_count: auto ? 1 : 0, last_modified: 0 }; },
     load_peer_keys: function () { return []; },
@@ -382,17 +386,56 @@ const MODAL_EXPR = `(async () => {
   return JSON.stringify({ before, after, form, formBefore, clicked: !!btn });
 })()`;
 
+// ── Проверка входа с формы ────────────────────────────────────────────────
+//
+// КЛАСС, НАЙДЕННЫЙ 20.10.2026: в `methods` App.vue было ДВА метода `login`
+// (полный вход и тонкий прокси сессии). Options API — обычный литерал
+// объекта: поздний ключ перебивает ранний, ранний МОЛЧА исчезает. Итог:
+// кнопка «Войти» только переключала флаг isLoggedIn — к IMAP не подключались
+// ВООБЩЕ (проверено пробой на живой сборке: после submit calls: []).
+//
+// Проверка — как действие пользователя: заполнить форму и нажать «Войти».
+// Обязательное требование: команда `email_connect` дошла до бэкенда. Флаг
+// isLoggedIn без `email_connect` — это ровно тот сломанный случай.
+const LOGIN_EXPR = `(async () => {
+  const inputs = document.querySelectorAll('.login-box input[type=email], .login-box input[type=password]');
+  if (!inputs.length) return JSON.stringify({ error: 'нет полей формы входа' });
+  const setVal = (el, v) => {
+    const d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (d && d.set) d.set.call(el, v); else el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  setVal(inputs[0], 'probe@example.test');
+  setVal(inputs[1], 'probe-pass');
+  await new Promise((r) => setTimeout(r, 250));
+  const before = (window.__SMOKE_CALLS || []).length;
+  const form = document.querySelector('.login-box form');
+  if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  else { const btn = document.querySelector('.login-box button[type=submit]'); if (btn) btn.click(); }
+  await new Promise((r) => setTimeout(r, 1500));
+  const calls = (window.__SMOKE_CALLS || []).slice(before);
+  return JSON.stringify({ calls, submitted: !!form });
+})()`;
+
 // ── Фазы ────────────────────────────────────────────────────────────────
 const PHASES = [
   {
     name: 'экран входа',
-    query: '',
+    query: '?smoke=login',
     check(s, problems) {
       const failed = [];
       if (s.children < 1 || s.htmlLen < 40) {
         failed.push(`корень #app пуст (children=${s.children}, len=${s.htmlLen}) — приложение не отрендерилось`);
       }
       for (const p of problems) if (/is not defined|ReferenceError|TypeError/.test(p)) failed.push(p);
+      // Кнопка «Войти» обязана дойти до бэкенда (email_connect). Прокси
+      // `login()` поверх полного входа тихо ломал это (20.10.2026).
+      const l = s.login;
+      if (!l || l.error) {
+        failed.push('проверка входа с формы не выполнилась: ' + ((l && l.error) || 'нет данных'));
+      } else if (!l.calls.some((c) => c === 'email_connect')) {
+        failed.push(`кнопка «Войти» НЕ подключилась к IMAP (вызовы бэкенда: ${l.calls.join(', ') || '—'}) — метод входа перебит другим`);
+      }
       return failed;
     },
   },
@@ -586,6 +629,15 @@ async function main() {
 
       const res = await cmd('Runtime.evaluate', { expression: STATE_EXPR, returnByValue: true });
       const state = JSON.parse(res.result?.result?.value || '{}');
+      // Фаза «экран входа»: жмём «Войти» как пользователь (см. LOGIN_EXPR).
+      if (phase.query.includes('smoke=login')) {
+        const loginRes = await cmd('Runtime.evaluate', {
+          expression: LOGIN_EXPR,
+          returnByValue: true,
+          awaitPromise: true,
+        });
+        try { state.login = JSON.parse(loginRes.result?.result?.value || 'null'); } catch { state.login = null; }
+      }
       // Канал тоста проверяем только там, где приложение уже вошло (фаза 2):
       // в фазе входа тост никто не показывает.
       if (phase.query.includes('smoke=autologin')) {

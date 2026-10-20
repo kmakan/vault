@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 252,
-    "appVueOwn": 194,
-    "appVueMethods": 352,
+    "ctxRefSites": 208,
+    "appVueOwn": 193,
+    "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
   },
@@ -20,8 +20,7 @@
     "features/migrate.js": 1,
     "features/presence.js": 11,
     "features/profiles.js": 37,
-    "features/receipts.js": 17,
-    "features/recovery.js": 44
+    "features/receipts.js": 17
   },
   "ctxFieldsByFile": {
     "features/calls.js": [
@@ -149,40 +148,6 @@
       "peerKeys",
       "peerPqKeys",
       "senderEmail"
-    ],
-    "features/recovery.js": [
-      "ecoMode",
-      "email",
-      "enableEco",
-      "enableRelay",
-      "idleLoop",
-      "imapPort",
-      "imapServer",
-      "initCrypto",
-      "initLocalDb",
-      "loadBodyCache",
-      "loadChannels",
-      "loadContacts",
-      "loadEmails",
-      "loadGroups",
-      "loadLocalProfiles",
-      "loadUnreadCounts",
-      "login",
-      "loginError",
-      "loginLoading",
-      "logout",
-      "onEcoMode",
-      "password",
-      "publicKey",
-      "recoveryFileJson",
-      "recoveryWordsInput",
-      "relayEnabled",
-      "rememberMe",
-      "smtpPort",
-      "smtpServer",
-      "startPolling",
-      "startRelayTicker",
-      "userId"
     ]
   },
   "protocolByFile": {
@@ -345,7 +310,6 @@
     "removePendingOutgoing",
     "clearPendingOutgoing",
     "dropBucket",
-    "login",
     "logout",
     "setEmails",
     "clearEmails",

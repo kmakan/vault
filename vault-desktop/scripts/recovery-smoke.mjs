@@ -152,10 +152,9 @@ console.log('RED — старый recoverFromEscrow из App.vue (устойчи
 console.log('GREEN — живой модуль recovery.js');
 const run = async (cfg) => {
   const { deps, state } = makeDeps(cfg);
-  const ctx = { email: 'me@x.ru' };
   const unmute = mute();
   let threw = false, ret;
-  try { ret = await RECOVERY.recoverFromEscrow(ctx, 'MNEMONIC', deps); }
+  try { ret = await RECOVERY.recoverFromEscrow('me@x.ru', 'MNEMONIC', deps); }
   catch { threw = true; } finally { unmute(); }
   return { state, threw, ret };
 };
@@ -258,6 +257,177 @@ const run = async (cfg) => {
   check('9 все 80 тел действительно разобраны (не проглочена ошибка mock)',
     !threw && ret === false && state.parseCalls === 80 && state.imports.length === 0,
     { threw, ret, parsed: state.parseCalls });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// loginWithRecovery — полный вход-с-восстановлением (критический путь)
+// ══════════════════════════════════════════════════════════════════
+// До W2-партии 6 у этого пути НЕ БЫЛО смоука вообще: проверялся только
+// поиск эскроу (recoverFromEscrow), а весь вход (маркер → логин без
+// durable → импорт → перезагрузка ключа → commit → пост-логиновый путь)
+// жил без проверки. Именно в этом пути прятался баг «кнопка Войти только
+// переключает флаг».
+console.log('GREEN — loginWithRecovery (полный путь входа)');
+
+// localStorage для durable-маркера (recovery-session.js).
+const markerStore = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (markerStore.has(k) ? markerStore.get(k) : null),
+  setItem: (k, v) => { markerStore.set(k, String(v)); },
+  removeItem: (k) => { markerStore.delete(k); },
+};
+const { sessionStore, uiStore } = await import(ROOT + '/../src/features/session-store.js');
+const PUB = 'a'.repeat(64);
+const PRIV = 'b'.repeat(64);
+const BACKUP_JSON = JSON.stringify({
+  keys: { keypair: { public_key: PUB, private_key: PRIV, created_at: '2026-01-01T00:00:00Z' } },
+});
+
+function makeLoginDeps(cfg = {}) {
+  const state = {
+    calls: [], loginCalls: 0, commitCalls: 0, abandonCalls: 0, imports: [],
+    initCryptoOpts: null, markedLoggedIn: 0, loading: [], errors: [], userIds: [],
+    publicKey: PUB, lastLogin: null,
+  };
+  const deps = {
+    api: {
+      login: async (email, password, opts) => {
+        state.loginCalls++;
+        state.calls.push('api.login');
+        state.lastLogin = { email, password, opts };
+        // Маркер обязан УЖЕ стоять к моменту логина ( durable-авто-вход запрещён).
+        state.markerAtLogin = markerStore.get('vault-recovery-pending');
+        return { user_id: 'U1' };
+      },
+      commitRecoveryLogin: async () => { state.commitCalls++; state.calls.push('commitRecoveryLogin'); },
+      abandonSessionMemory: async () => { state.abandonCalls++; },
+      fetchEmails: async () => { state.calls.push('fetchEmails'); return cfg.msgs || []; },
+    },
+    crypto: {
+      recoveryValidateMnemonic: async () => cfg.validMnemonic !== false,
+      recoveryParseEscrowEmail: async () => 'WRAPPED',
+      recoveryUnwrapBackup: async () => BACKUP_JSON,
+    },
+    invoke: async (cmd, args) => {
+      state.calls.push('invoke:' + cmd);
+      if (cmd === 'import_backup') { state.imports.push(args.jsonData); return true; }
+      // Тела эскроу-писем: одно кандидатное письмо в INBOX.
+      if (cmd === 'email_fetch_bodies') return [['1', 'GOOD']];
+      return true;
+    },
+    db: { kvGet: async (ns, k) => (k === 'eco-mode' ? '0' : null), kvSet: async () => {} },
+    relay: { getSettings: async () => ({ enabled: false, relays: [], active: 0, peers: {} }) },
+    initNotifications: async () => {},
+    t: (k) => k,
+    // Возможности со стороны компонента (App.vue собирает их в deps).
+    setLoginLoading: (v) => { state.loading.push(v); },
+    setLoginError: (v) => { state.errors.push(v); },
+    markLoggedIn: () => { state.markedLoggedIn++; },
+    setUserId: (v) => { state.userIds.push(v); },
+    publicKey: () => state.publicKey,
+    ecoMode: () => false,
+    enableEco: () => {},
+    relayEnabled: () => false,
+    enableRelay: () => {},
+    initCrypto: async (opts) => { state.initCryptoOpts = opts; return true; },
+    initLocalDb: async () => { state.calls.push('initLocalDb'); },
+    loadUnreadCounts: () => { state.calls.push('loadUnreadCounts'); },
+    loadLocalProfiles: () => { state.calls.push('loadLocalProfiles'); },
+    loadBodyCache: async () => { state.calls.push('loadBodyCache'); },
+    loadContacts: async () => { state.calls.push('loadContacts'); },
+    loadGroups: async () => { state.calls.push('loadGroups'); },
+    loadChannels: async () => { state.calls.push('loadChannels'); },
+    loadEmails: async () => { state.calls.push('loadEmails'); },
+    startPolling: (ms) => { state.calls.push('startPolling:' + (ms || 'default')); },
+    startRelayTicker: () => { state.calls.push('startRelayTicker'); },
+    idleLoop: () => { state.calls.push('idleLoop'); },
+    logout: () => { state.calls.push('logout'); },
+    onEcoMode: async () => { state.calls.push('onEcoMode'); },
+    syncEcoWithRelay: async () => { state.calls.push('syncEcoWithRelay'); },
+  };
+  return { deps, state };
+}
+
+// Стенд входа: сбрасываем маркер, форму и сессию.
+function resetLoginStage() {
+  markerStore.clear();
+  sessionStore.setCurrentEmail('me@x.ru');
+  sessionStore.setPassword('secret-pass');
+  uiStore.setFormField('recoveryWordsInput', 'w1 w2 w3');
+  uiStore.setFormField('recoveryFileJson', '');
+  uiStore.setFormField('rememberMe', true);
+  uiStore.setFormField('imapServer', 'imap.test');
+  uiStore.setFormField('imapPort', '993');
+  uiStore.setFormField('smtpServer', '');
+  uiStore.setFormField('smtpPort', '');
+}
+
+// A. Успешный вход через эскроу — весь путь.
+{
+  resetLoginStage();
+  const { deps, state } = makeLoginDeps({ msgs: [msg('INBOX', 1, '')] });
+  const unmute = mute();
+  try { await RECOVERY.loginWithRecovery(deps); } finally { unmute(); }
+  check('A: api.login вызван один раз', state.loginCalls === 1, state.loginCalls);
+  check('A: логин БЕЗ durable-персиста (deferPersistence)',
+    state.lastLogin && state.lastLogin.opts && state.lastLogin.opts.deferPersistence === true, state.lastLogin);
+  check('A: маркер прерванного восстановления стоял УЖЕ к моменту логина',
+    state.markerAtLogin === '1', state.markerAtLogin);
+  check('A: ключ перезагружен БЕЗ генерации (allowCreate:false)',
+    state.initCryptoOpts && state.initCryptoOpts.allowCreate === false, state.initCryptoOpts);
+  check('A: durable-коммит после импорта', state.commitCalls === 1, state.commitCalls);
+  check('A: импорт ключа выполнен', state.imports.length === 1, state.imports);
+  check('A: вход отмечен (markLoggedIn)', state.markedLoggedIn === 1, state.markedLoggedIn);
+  check('A: пост-логиновый путь выполнен (initLocalDb → … → startPolling)',
+    ['initLocalDb', 'loadUnreadCounts', 'loadLocalProfiles', 'loadBodyCache', 'loadContacts',
+      'loadGroups', 'loadChannels', 'loadEmails'].every((c) => state.calls.includes(c))
+    && state.calls.some((c) => c.startsWith('startPolling')), state.calls);
+  // Ошибок нет: последняя запись — пустая (модуль чистит её в начале).
+  check('A: ошибка не выставлена', state.errors.length > 0 && state.errors[state.errors.length - 1] === '', state.errors);
+  check('A: индикатор загрузки снят в finally', state.loading[0] === true && state.loading[state.loading.length - 1] === false, state.loading);
+  check('A: пользователь записан (userId)', state.userIds.length === 1 && state.userIds[0] === 'U1', state.userIds);
+}
+
+// B. Невалидная мнемоника — ни логина, ни маркера, ни импорта.
+{
+  resetLoginStage();
+  const { deps, state } = makeLoginDeps({ validMnemonic: false });
+  const unmute = mute();
+  try { await RECOVERY.loginWithRecovery(deps); } finally { unmute(); }
+  check('B: логин НЕ выполнялся', state.loginCalls === 0, state.loginCalls);
+  check('B: маркер НЕ поставлен (невалидные слова не запирают экран)',
+    markerStore.get('vault-recovery-pending') !== '1', markerStore.get('vault-recovery-pending'));
+  check('B: импорта не было', state.imports.length === 0, state.imports);
+  check('B: ошибка показана, сессия сброшена, память API очищена',
+    state.errors.length > 0 && state.errors[state.errors.length - 1] !== ''
+    && state.calls.includes('logout') && state.abandonCalls === 1,
+    { errors: state.errors, calls: state.calls, abandon: state.abandonCalls });
+}
+
+// C. Файл восстановления — импорт напрямую, эскроу НЕ ищется.
+{
+  resetLoginStage();
+  uiStore.setFormField('recoveryFileJson', BACKUP_JSON);
+  const { deps, state } = makeLoginDeps();
+  const unmute = mute();
+  try { await RECOVERY.loginWithRecovery(deps); } finally { unmute(); }
+  check('C: файл импортирован', state.imports.length === 1 && state.imports[0] === BACKUP_JSON, state.imports);
+  check('C: эскроу НЕ искали (fetchEmails не звали)', !state.calls.includes('fetchEmails'), state.calls);
+  check('C: вход состоялся', state.markedLoggedIn === 1 && state.commitCalls === 1, state);
+}
+
+// D. Ключ не совпал после импорта — вход НЕ завершается, маркер остаётся.
+{
+  resetLoginStage();
+  const { deps, state } = makeLoginDeps({ msgs: [msg('INBOX', 1, '')] });
+  state.publicKey = 'c'.repeat(64);   // другой ключ, чем импортированный
+  const unmute = mute();
+  try { await RECOVERY.loginWithRecovery(deps); } finally { unmute(); }
+  check('D: вход не отмечен и durable-коммита не было',
+    state.markedLoggedIn === 0 && state.commitCalls === 0, state);
+  check('D: маркер ОСТАЛСЯ (следующий старт не сделает молчаливый вход)',
+    markerStore.get('vault-recovery-pending') === '1', markerStore.get('vault-recovery-pending'));
+  check('D: ошибка показана', state.errors.length > 0 && state.errors[state.errors.length - 1] !== '', state.errors);
 }
 
 console.log('');

@@ -154,34 +154,7 @@
     ],
     "recovery-escrow.js": [],
     "recovery-session.js": [],
-    "recovery.js": [
-      "email",
-      "idleLoop",
-      "imapPort",
-      "imapServer",
-      "initCrypto",
-      "initLocalDb",
-      "loadBodyCache",
-      "loadChannels",
-      "loadContacts",
-      "loadEmails",
-      "loadGroups",
-      "loadLocalProfiles",
-      "loadUnreadCounts",
-      "loginError",
-      "loginLoading",
-      "onEcoMode",
-      "password",
-      "publicKey",
-      "recoveryFileJson",
-      "recoveryWordsInput",
-      "rememberMe",
-      "smtpPort",
-      "smtpServer",
-      "startPolling",
-      "startRelayTicker",
-      "userId"
-    ],
+    "recovery.js": [],
     "relay-idle.js": [],
     "relay-store.js": [],
     "relay.js": [],
@@ -269,20 +242,11 @@
     ],
     "contacts": [
       "profiles.js"
-    ],
-    "loginLoading": [
-      "recovery.js"
-    ],
-    "loginError": [
-      "recovery.js"
-    ],
-    "userId": [
-      "recovery.js"
     ]
   },
   "totals": {
-    "ctxFields": 111,
-    "ctxRefSites": 252,
+    "ctxFields": 85,
+    "ctxRefSites": 208,
     "sharedWriteFields": 0
   }
 }
