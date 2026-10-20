@@ -1794,6 +1794,22 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракт фичи duress (ADR-005 W2, партия 9): состояние замка — узкие
+    // доступы (спред ...duressState() копирует значения в data(), поэтому
+    // модулю нужен геттер/сеттер, а не сам объект), ключи пиров и email модуль
+    // берёт у владельцев сам.
+    duressDeps() {
+      return {
+        isLocked: () => this.duressLocked,
+        setLocked: (v) => { this.duressLocked = v; },
+        isUnlockedThisSession: () => this.duressUnlockedThisSession,
+        setUnlockedThisSession: (v) => { this.duressUnlockedThisSession = v; },
+        setPending: (v) => { this.duressPending = v; },
+        logout: () => this.logout(),
+        displayName: () => this.displayName,
+        nextTick: (cb) => this.$nextTick(cb),
+      };
+    },
     // Контракт фичи профилей (ADR-005 W2, партия 8): карта профилей и локальные
     // имена/аватары — состояние компонента (три узких доступа), остальное
     // состояние UI-flow лежит у uiStore, а владельцы (контакты, ключи, email)
@@ -2656,11 +2672,11 @@ export default {
     restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
     // ── Duress-замок — логика в features/duress.js; LockScreen-события
     // (unlock/duress/panic) приходят из шаблона в эти обёртки.
-    async checkDuressLock() { return DuressFeature.checkDuressLock(this); },
-    onLockUnlock() { return DuressFeature.onLockUnlock(this); },
-    onLockDuress() { return DuressFeature.onLockDuress(this); },
-    async onLockPanic() { return DuressFeature.onLockPanic(this); },
-    async sendDuressSos() { return DuressFeature.sendDuressSos(this); },
+    async checkDuressLock() { return DuressFeature.checkDuressLock(this.duressDeps); },
+    onLockUnlock() { return DuressFeature.onLockUnlock(this.duressDeps); },
+    onLockDuress() { return DuressFeature.onLockDuress(this.duressDeps); },
+    async onLockPanic() { return DuressFeature.onLockPanic(this.duressDeps); },
+    async sendDuressSos() { return DuressFeature.sendDuressSos(this.duressDeps); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() {
       if (this.relayDeliveryMode === 'email') {

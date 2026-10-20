@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 132,
+    "ctxRefSites": 106,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
@@ -10,7 +10,6 @@
   "ctxByFile": {
     "features/channels.js": 6,
     "features/drafts.js": 9,
-    "features/duress.js": 26,
     "features/emails.js": 20,
     "features/folders.js": 11,
     "features/group-avatars.js": 4,
@@ -33,18 +32,6 @@
       "email",
       "newMessage",
       "setDraft"
-    ],
-    "features/duress.js": [
-      "$nextTick",
-      "_duressVisibilityBound",
-      "displayName",
-      "duressLocked",
-      "duressPending",
-      "duressUnlockedThisSession",
-      "email",
-      "logout",
-      "peerKeys",
-      "peerPqKeys"
     ],
     "features/emails.js": [
       "email",

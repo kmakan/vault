@@ -28,17 +28,7 @@
       "currentGroup",
       "email"
     ],
-    "duress.js": [
-      "$nextTick",
-      "_duressVisibilityBound",
-      "displayName",
-      "duressLocked",
-      "duressPending",
-      "duressUnlockedThisSession",
-      "email",
-      "peerKeys",
-      "peerPqKeys"
-    ],
+    "duress.js": [],
     "edits.js": [],
     "emails.js": [
       "email",
@@ -143,21 +133,6 @@
     "channelById": [
       "channels.js"
     ],
-    "duressLocked": [
-      "duress.js"
-    ],
-    "_duressVisibilityBound": [
-      "duress.js"
-    ],
-    "duressUnlockedThisSession": [
-      "duress.js"
-    ],
-    "duressPending": [
-      "duress.js"
-    ],
-    "email": [
-      "duress.js"
-    ],
     "emailsLoading": [
       "emails.js"
     ],
@@ -187,8 +162,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 59,
-    "ctxRefSites": 132,
+    "ctxFields": 50,
+    "ctxRefSites": 106,
     "sharedWriteFields": 0
   }
 }

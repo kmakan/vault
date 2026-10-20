@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 116,
+  "totalCtxRefs": 92,
   "totalFunctions": 313,
-  "functionsWithCtx": 68,
+  "functionsWithCtx": 66,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -153,19 +153,10 @@
       "biggestCtxFn": null
     },
     "src/features/duress.js": {
-      "ctxRefs": 24,
-      "fields": [
-        "_duressVisibilityBound",
-        "displayName",
-        "duressLocked",
-        "duressPending",
-        "duressUnlockedThisSession",
-        "email",
-        "peerKeys",
-        "peerPqKeys"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 6,
-      "functionsWithCtx": 6,
+      "functionsWithCtx": 4,
       "biggestCtxFn": "onLockUnlock"
     },
     "src/features/edits.js": {

@@ -1,5 +1,5 @@
 // Feature module: duress lock (аварийная защита). Stage 1 of the App.vue
-// decomposition — pure functions receive the component instance as `ctx`
+// decomposition — фича получает узкий контракт, а не компонент
 // instead of `this`, so every dependency is explicit and testable in
 // isolation.
 //
@@ -8,7 +8,7 @@
 // panic-PIN — Rust уже стёр данные, локальный выход на логин.
 // Android-ветка: нативный LockActivity, JS-замок не показывается.
 
-import { uiStore } from "./session-store.js";
+import { uiStore, sessionStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -19,7 +19,20 @@ import { identityStore } from './identity-store.js';
 
 // Состояние фичи — в ./duress/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...duressState()`).
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 9: модуль больше НЕ читает компонент.
+// Состояние замка (duressLocked/duressUnlockedThisSession/duressPending)
+// разложено по УЗКИМ доступам в deps: спред `...duressState()` копирует
+// значения в data(), поэтому модулю нужен именно доступ (геттер/сеттер),
+// а не сам объект. Ключи пиров — владелец identity-store, email — владелец
+// session-store. Внутренний флаг «слушатель visibility уже навешен» —
+// модульная переменная: это не состояние приложения.
 export { duressState } from './duress/state.js';
+
+// Слушатель возврата в приложение навешивается ОДИН раз за жизнь окна.
+// Это внутренняя деталь модуля (не состояние приложения) — поэтому живёт
+// здесь, а не в компоненте.
+let visibilityBound = false;
 
 // Lock config from Rust key store (null-safe read).
 async function lockEnabled() {
@@ -32,17 +45,17 @@ async function lockEnabled() {
 }
 
 // При старте: если замок включён — показываем LockScreen вместо UI.
-export async function checkDuressLock(ctx) {
+export async function checkDuressLock(deps) {
   // Android: не показываем — двойной запрос кода, нативный LockActivity.
   if (/android/i.test(navigator.userAgent)) {
-    ctx.duressLocked = false;
+    deps.setLocked(false);
     console.log('[duress] android branch: native LockActivity handles the lock');
     return;
   }
   try {
     const cfg = await invoke('duress_get_config');
     const enabled = !!(cfg && cfg.lock_enabled && cfg.lock_hash);
-    ctx.duressLocked = enabled;
+    deps.setLocked(enabled);
     console.log('[duress] lock check: enabled=', cfg && cfg.lock_enabled,
       ', hash=', !!(cfg && cfg.lock_hash), '→ locked=', enabled);
   } catch (e) {
@@ -52,13 +65,13 @@ export async function checkDuressLock(ctx) {
   // mounted НЕ выполняется при повторном открытии, замок не показывался.
   // Ловим возврат из фона: замок включён и в этой сессии ещё не
   // разблокирован (duressUnlockedThisSession false) — показать.
-  if (!ctx._duressVisibilityBound) {
-    ctx._duressVisibilityBound = true;
+  if (!visibilityBound) {
+    visibilityBound = true;
     const relock = async () => {
-      if (ctx.duressUnlockedThisSession) return;
+      if (deps.isUnlockedThisSession()) return;
       const enabled = await lockEnabled();
       if (enabled) {
-        ctx.duressLocked = true;
+        deps.setLocked(true);
         console.log('[duress] relock on resume → locked=true');
       }
     };
@@ -67,7 +80,7 @@ export async function checkDuressLock(ctx) {
       // снимаем, чтобы relock при возврате ПОКАЗАЛ замок (банковский
       // паттерн: замок после КАЖДОГО ухода, не только смерти процесса).
       if (document.visibilityState === 'hidden') {
-        ctx.duressUnlockedThisSession = false;
+        deps.setUnlockedThisSession(false);
       } else {
         relock();
       }
@@ -80,10 +93,10 @@ export async function checkDuressLock(ctx) {
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
       await listen('vault://window-hidden', () => {
-        ctx.duressUnlockedThisSession = false;
+        deps.setUnlockedThisSession(false);
         lockEnabled().then((enabled) => {
           if (enabled) {
-            ctx.duressLocked = true;
+            deps.setLocked(true);
             console.log('[duress] tray-hide → armed lock for next show');
           }
         });
@@ -95,39 +108,39 @@ export async function checkDuressLock(ctx) {
   setTimeout(async () => {
     const enabled = await lockEnabled();
     if (enabled) {
-      ctx.duressLocked = true;
+      deps.setLocked(true);
       console.log('[duress] lock re-check → locked=true');
     }
   }, 1200);
 }
 
-export function onLockUnlock(ctx) {
-  ctx.duressLocked = false;
-  ctx.duressUnlockedThisSession = true; // до ухода в фон замок не ре-армить
+export function onLockUnlock(deps) {
+  deps.setLocked(false);
+  deps.setUnlockedThisSession(true); // до ухода в фон замок не ре-армить
 }
 
 // Duress-PIN: открываем приложение КАК ОБЫЧНО (не выдаём), но после
 // монтирования тихо отправляем SOS-письмо выбранным контактам.
-export function onLockDuress(ctx) {
-  ctx.duressLocked = false;
-  ctx.duressPending = true;
-  ctx.$nextTick(() => sendDuressSos(ctx));
+export function onLockDuress(deps) {
+  deps.setLocked(false);
+  deps.setPending(true);
+  deps.nextTick(() => sendDuressSos(deps));
 }
 
 // Panic-PIN: Rust уже стёр данные — выходим на login (локально пусто).
-export async function onLockPanic(ctx) {
-  ctx.duressLocked = false;
+export async function onLockPanic(deps) {
+  deps.setLocked(false);
   try {
     await api.logout();
   } catch (e) { /* ignore */ }
-  ctx.logout();
-  ctx.email = null;
+  deps.logout();
+  sessionStore.setCurrentEmail(null);
   uiStore.toast(uiStore.tr('panic_done') || 'Данные стёрты', 4000);
 }
 
 // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
 // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
-export async function sendDuressSos(ctx) {
+export async function sendDuressSos(deps) {
   try {
     const cfg = await invoke('duress_get_config');
     const rcpts = (cfg.sos_recipients || []).filter(Boolean);
@@ -159,7 +172,7 @@ export async function sendDuressSos(ctx) {
     // ещё не загрузиться — читаем прямо из key_store.
     // Запись — через владельца identity (ADR-004 J.6): прямой импорт
     // singleton, БЕЗ ctx (ctx исключаем — независимость от фрагментов).
-    if (!ctx.peerKeys || !Object.keys(ctx.peerKeys).length) {
+    if (!identityStore.state.peerKeys || !Object.keys(identityStore.state.peerKeys).length) {
       try {
         const stored = await crypto.loadPeerKeys();
         for (const pk of stored) {
@@ -170,15 +183,15 @@ export async function sendDuressSos(ctx) {
     }
     for (const rcpt of rcpts) {
       try {
-        const pk = ctx.peerKeys && ctx.peerKeys[rcpt];
+        const pk = identityStore.state.peerKeys && identityStore.state.peerKeys[rcpt];
         if (!pk) {
           console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
           continue;
         }
-        crypto.setPeerPublicKey(pk, ctx.peerPqKeys && ctx.peerPqKeys[rcpt]);
+        crypto.setPeerPublicKey(pk, identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[rcpt]);
         const content = await crypto.encryptVault(JSON.stringify({
           vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-          type: 'sos', text, name: ctx.displayName || '', ts: Date.now(),
+          type: 'sos', text, name: (deps.displayName() || ''), ts: Date.now(),
         }));
         await api.sendEmail('local', { to: rcpt, subject: '', body: content });
       } catch (e) {
@@ -189,6 +202,6 @@ export async function sendDuressSos(ctx) {
   } catch (e) {
     console.warn('[duress] sendSos failed:', e);
   } finally {
-    ctx.duressPending = false;
+    deps.setPending(false);
   }
 }
