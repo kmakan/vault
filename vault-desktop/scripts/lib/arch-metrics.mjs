@@ -115,10 +115,23 @@ export const ctxFields = (src) =>
 // Правило совпадает с `appvue-inventory.mjs`. Всё остальное — логика в монолите.
 const DELEG_RE = /^\s*return\s+[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([^;]*\);\s*$/;
 const METHOD_RE = /^\s{4}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^()]*)\)\s*\{/;
+// Тело метода — между СКОБКАМИ тела. Скобки ищем С КОНЦА: иначе параметр со
+// значением по умолчанию вида `opts = {}` даёт «первую» `{` не ту, и тело
+// делегата читается как мусор — метод-делегат попадал в «логику» (найдено на
+// живом App.vue 20.10: `sendCallEnvelope(peer, payload, opts = {})`).
 const inner = (s) => {
-  const a = s.indexOf('{');
   const b = s.lastIndexOf('}');
-  return a < 0 || b < a ? '' : s.slice(a + 1, b);
+  if (b < 0) return '';
+  let depth = 0;
+  let a = -1;
+  for (let i = b; i >= 0; i--) {
+    if (s[i] === '}') depth++;
+    else if (s[i] === '{') {
+      depth--;
+      if (depth === 0) { a = i; break; }
+    }
+  }
+  return a < 0 ? '' : s.slice(a + 1, b);
 };
 const braces = (s) => (s.match(/{/g) || []).length - (s.match(/}/g) || []).length;
 
@@ -183,6 +196,10 @@ export function selfTest() {
     { name: 'ctx: в комментарии — не связь', src: '// ctx.channelPosts описание\n',       fn: (s) => [{ id: 'ctx', n: countCtxRefs(s) }], want: 0, id: null },
     { name: 'App.vue: делегат не логика',   src: 'methods: {\n    foo(a) {\n      return Mod.foo(a);\n    },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
     { name: 'App.vue: свой метод — логика', src: 'methods: {\n    foo(a) {\n      if (a) return 1;\n      return 2;\n    },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 1, id: 'own' },
+    // Параметр со значением по умолчанию-объектом (`opts = {}`) НЕ должен
+    // превращать делегата в «логику»: скобки тела ищем с конца.
+    { name: 'App.vue: делегат с opts = {} — не логика', src: 'methods: {\n    foo(p, opts = {}) { return Mod.foo(p, opts); },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
+    { name: 'App.vue: многострочный делегат с opts = {} — не логика', src: 'methods: {\n    foo(p, opts = {}) {\n      return Mod.foo(p, opts);\n    },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
   ];
   const fails = [];
   for (const c of cases) {
