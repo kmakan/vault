@@ -134,7 +134,7 @@ check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.
   check('saveCurrentHistory → saveHistory email,chatKey,messages', histStore['sh']&&histStore['sh'][0].id==='x');
 }
 
-check('msgTs ts优先', H.msgTs({ts:777})===777);
+check('msgTs: ts приоритетнее, чем date', H.msgTs({ts:777})===777);
 check('msgTs _pendingAt fallback', H.msgTs({_pendingAt:555})===555);
 check('msgTs 0 on пусто', H.msgTs({})===0);
 

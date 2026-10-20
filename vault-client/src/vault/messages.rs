@@ -291,6 +291,22 @@ mod tests {
         assert_eq!(store.messages_for("bob@x", None).len(), 1);
     }
 
+    /// store_incoming ОБЯЗАН вернуть false для дубля: вызывающий (Tauri cmd
+    /// store_incoming_message) по этому признаку знает, что письмо новое, и
+    /// только у нового шлёт событие о непрочитанном. Если результат всегда
+    /// true, уведомление о новом письме приходит на КАЖДУЮ переотправку.
+    /// Мутационный гейт Rust-ядра выловил отсутствие этой проверки.
+    #[test]
+    fn test_store_incoming_reports_duplicate() {
+        let mut store = MessageStore::default();
+        let env = sample_envelope();
+        let payload = r#"{"id":"msg-dup","text":"hi","name":"","avatar":""}"#;
+        let msg = MessageStore::parse_envelope(&env, payload).unwrap();
+        assert!(store.store_incoming("bob@x", None, msg.clone()));
+        assert!(!store.store_incoming("bob@x", None, msg));
+        assert_eq!(store.messages_for("bob@x", None).len(), 1);
+    }
+
     #[test]
     fn test_append_dedup() {
         let mut store = MessageStore::default();

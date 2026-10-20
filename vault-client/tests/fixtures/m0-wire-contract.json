@@ -118,6 +118,14 @@
       }
     },
     {
+      "name": "type НЕ call_* + call_id — тоже сообщение (тип важнее наличия call_id)",
+      "payload": "{\"vault\":1,\"id\":\"m5\",\"text\":\"x\",\"type\":\"message\",\"call_id\":\"c1\",\"key\":\"PUB\"}",
+      "expect": {
+        "js_parse_envelope": { "id": "m5", "text": "x", "key": "PUB" },
+        "rust_classify": { "kind": "message", "id": "m5", "chat_key": "alice@test.com" }
+      }
+    },
+    {
       "name": "poll — сообщение со своим подтипом, не сигнал управления",
       "payload": "{\"vault\":1,\"id\":\"poll-1\",\"text\":\"вопрос\",\"type\":\"poll\",\"poll\":{\"id\":\"p1\",\"question\":\"q?\",\"options\":[\"a\",\"b\"]},\"ts\":1}",
       "expect": {

@@ -50,8 +50,10 @@
     "smoke:recovery": "node scripts/recovery-smoke.mjs",
     "gate:options-dup": "node scripts/options-dup-gate.mjs",
     "gate:feature-coverage": "node scripts/feature-coverage-gate.mjs",
+    "gate:hygiene": "node scripts/hygiene-gate.mjs",
+    "gate:rust-mutations": "node scripts/rust-mutation-gate.mjs",
     "gate:mutations": "node scripts/mutation-gate.mjs",
-    "quality": "npm run build && npm run gate:mutations && npm run gate:feature-coverage",
+    "quality": "npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:hygiene && npm run gate:rust-mutations",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
     "smoke:send": "node scripts/send-smoke.mjs",
     "smoke:messages": "node scripts/messages-smoke.mjs"

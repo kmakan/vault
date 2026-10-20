@@ -587,6 +587,30 @@ mod voice_tests {
         let bad = "zz";
         assert!(derive_voice_key(bad, &gen_keys().1, None, b"info").is_err());
     }
+
+    /// Ключ строго 32 байта. Прежний тест проверял только «не hex» ("zz" не
+    /// декодируется вовсе) — проверки длины не было, поэтому принятие ключа
+    /// любой длины оставалось незамеченным.
+    #[test]
+    fn test_derive_voice_key_rejects_wrong_length() {
+        let (sk, pk) = gen_keys();
+        let short = &sk[..62]; // 31 байт в hex
+        assert!(derive_voice_key(short, &pk, None, b"info").is_err());
+        let short_peer = &pk[..62];
+        assert!(derive_voice_key(&sk, short_peer, None, b"info").is_err());
+    }
+
+    /// Ключ зависит от info (метка контекста): иначе один и тот же голосовой
+    /// ключ использовался бы в разных потоках и контекстах.
+    #[test]
+    fn test_derive_voice_key_depends_on_info() {
+        let (sk, pk) = gen_keys();
+        let k1 = derive_voice_key(&sk, &pk, None, b"call-1").unwrap();
+        let k2 = derive_voice_key(&sk, &pk, None, b"call-2").unwrap();
+        assert_ne!(k1, k2, "info (метка контекста) обязана менять ключ");
+        let k3 = derive_voice_key(&sk, &pk, None, b"call-1").unwrap();
+        assert_eq!(k1, k3, "при одинаковом info ключ детерминирован");
+    }
     #[test]
     fn test_encrypt_audio_frame_roundtrip() {
         let key = [0x42; 32];
@@ -642,6 +666,39 @@ mod tests {
         assert!(fp.contains("****"));
     }
 
+    /// Формат fingerprint — КОНТРАКТ с релей-сервером: он сверяет fp издателя
+    /// с fp, привязанным к read-токену. Несовпадение форматов = 403 «token
+    /// bound to another account» для того же самого ключа.
+    ///
+    /// Проверяем ТОЧНО: первые 8 байт ПУБЛИЧНОГО ключа в hex через «:» и
+    /// хвост «:****». Прежний тест проверял только «есть двоеточие и звёздочки»
+    /// — на этом зелёном держалась поломка «взяли 4 байта вместо 8» и
+    /// «склеили без разделителей». Мутационный гейт Rust-ядра это выловил.
+    #[test]
+    fn test_key_fingerprint_exact_format() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+        let pub_hex = crypto.public_key_hex().expect("public key");
+        let raw = hex::decode(&pub_hex).expect("hex public key");
+        let expected: String = raw[..8]
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(":");
+        assert_eq!(crypto.fingerprint(), format!("{}:****", expected));
+        // Ровно 8 байт (16 hex-символов) плюс разделители и хвост.
+        let fp = crypto.fingerprint();
+        assert_eq!(fp.split(':').count(), 9, "8 байт + хвост: {}", fp);
+    }
+
+    /// Без ключа fingerprint — это «no key», а не пустая строка: пустая уедет
+    /// в релей как fp пустого издателя.
+    #[test]
+    fn test_key_fingerprint_without_key_is_marker() {
+        let crypto = CryptoClient::new();
+        assert_eq!(crypto.fingerprint(), "no key");
+    }
+
     #[test]
     fn test_is_encrypted() {
         let mut crypto = CryptoClient::new();
@@ -650,6 +707,28 @@ mod tests {
         crypto.generate_keypair();
         let encrypted = crypto.encrypt("hello");
         assert!(crypto.is_encrypted(&encrypted));
+    }
+
+    /// Без ключа «похоже на зашифрованное» = false: иначе получатель пытается
+    /// расшифровать то, что расшифровать нечем, и письмо молча теряется.
+    #[test]
+    fn test_is_encrypted_requires_keys() {
+        let mut with_keys = CryptoClient::new();
+        with_keys.generate_keypair();
+        let encrypted = with_keys.encrypt("hello");
+        let without_keys = CryptoClient::new();
+        assert!(!without_keys.is_encrypted(&encrypted));
+    }
+
+    /// Слишком короткое base64 — не конверт: длина меньше nonce + тега +
+    /// минимума данных. Без этой проверки в роутер попадал бы любой мусор,
+    /// расшифровка падала бы, и письма «терялись» без следа.
+    #[test]
+    fn test_is_encrypted_rejects_short_body() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+        let short = BASE64.encode(b"too short");
+        assert!(!crypto.is_encrypted(&short));
     }
 
     #[test]

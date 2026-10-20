@@ -16,7 +16,7 @@ export default {
     { name: "профиль: непустое поле нового профиля затирается старым",
       pattern: "        if ((cur === undefined || cur === null || cur === '')\n          && val !== undefined && val !== null && val !== '') {",
       replacement: "        if (true) {" },
-    { name: "перенос профиля не сохран��ется в хранилище",
+    { name: "перенос профиля не сохраняется в хранилище",
       pattern: "    await db.kvSet('anon', 'profiles', JSON.stringify(profiles));",
       replacement: "    void 0;" },
     { name: "группы, где мы участник, не переименовываются",

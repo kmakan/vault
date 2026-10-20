@@ -479,7 +479,7 @@ const PHASES = [
       if (!modal || modal.error) {
         failed.push('проверка модалки не выполнилась (нет инстанса)');
       } else {
-        if (!modal.clicked) failed.push('кнопка настроек не найдена в DOM — проверка модалки не意义');
+        if (!modal.clicked) failed.push('кнопка настроек не найдена в DOM — проверка модалки не имеет смысла');
         else if (modal.after <= modal.before) {
           failed.push(`модалка НЕ открылась по клику (было ${modal.before}, стало ${modal.after}) — UI-состояние не реактивно (uiStore)`);
         }

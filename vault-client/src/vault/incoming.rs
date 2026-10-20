@@ -212,6 +212,17 @@ mod tests {
         assert_eq!(r.title.as_deref(), Some("Аня"));
     }
 
+    /// Пустое имя — это НЕ имя. В заголовок чата попадает только непустое,
+    /// иначе в шапке чата появляется пустая строка вместо адреса/имени.
+    /// Мутационный гейт Rust-ядра выловил, что на это правило теста не было.
+    #[test]
+    fn test_classify_empty_name_is_not_a_title() {
+        let plain = r#"{"vault":1,"id":"m9","text":"x","name":""}"#;
+        let r = classify(plain, "bob@test.com").unwrap();
+        assert_eq!(r.kind, ClassifyKind::Message);
+        assert_eq!(r.title, None);
+    }
+
     /// Письмо профиля — как его собирает `features/profiles.js`: `text:""`.
     #[test]
     fn test_classify_profile() {

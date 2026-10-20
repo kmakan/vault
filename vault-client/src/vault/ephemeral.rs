@@ -63,8 +63,23 @@ mod tests {
     #[test]
     fn huge_ttl_saturates_instead_of_overflowing() {
         // i64::MAX base + огромный TTL не должен перелиться в отрицательное.
-        let e = expire_at(i64::MAX, i64::MAX / 1000);
+        //
+        // ВАЖНО: TTL здесь именно i64::MAX, а не i64::MAX / 1000. Прежний
+        // вариант НЕ переполнял промежуточное умножение (i64::MAX/1000 * 1000
+        // помещается в i64), поэтому тест проходил и при обычном перемножении
+        // без насыщения — то есть ПРОВЕРЯЛ, НО НЕ ТО, ЧТО ЗАЯВЛЯЛ. Мутационный
+        // гейт Rust-ядра (scripts/rust-mutation-gate.mjs) выловил именно это:
+        // снятие `saturating_mul` оставалось зелёным.
+        let e = expire_at(i64::MAX, i64::MAX);
         assert!(e > 0);
+        assert_eq!(e, i64::MAX);
+    }
+
+    #[test]
+    fn huge_base_saturates_instead_of_overflowing() {
+        // Огромная база + умеренный TTL: сумма переполняется — результат
+        // обязан насытиться до i64::MAX, а не перелиться в минус.
+        let e = expire_at(i64::MAX - 10, 1_000_000);
         assert_eq!(e, i64::MAX);
     }
 
