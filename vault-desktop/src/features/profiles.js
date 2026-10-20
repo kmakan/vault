@@ -343,3 +343,54 @@ export function isRecentlySeen(lastSeenMap, email) {
   if (!t) return false;
   return Date.now() - t < 10 * 60 * 1000; // 10 минут
 }
+
+// ── Свой профиль: аватар, имя, био (ADR-005 W3, партия 8) ───────────────
+// Логика уехала из App.vue. Профили — у владельца контактов (contacts-store:
+// localProfiles) и в profiles (загружаются фичей), тосты — у uiStore.
+//
+// deps: { email(), displayName(), profiles(), setProfiles(), userAvatarUrl(),
+//         setUserAvatarUrl(), shrinkAvatar(url), alert(msg) }
+
+// Своё био: сохраняем в kv и держим в состоянии компонента.
+export async function setMyBio(deps, text) {
+  const v = await setBio({ email: deps.email(), text });
+  deps.setMyBio(v);
+  return v;
+}
+
+export async function onAvatarUpdate(deps, dataUrl) {
+  deps.setUserAvatarUrl(dataUrl);
+  // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
+  // контакты узнают ТОЛЬКО по «Сохранить» (единое письмо имя+аватар+статус).
+  // ts = Date.now() — СВОЁ действие (иначе guard tsNum=0 блокирует запись
+  const profiles = deps.profiles();
+  if (!profiles[deps.email()]) profiles[deps.email()] = {};
+  profiles[deps.email()].avatar = dataUrl || '';
+  await api.saveProfile(deps.email(), deps.displayName() || deps.email(), dataUrl || '', Date.now());
+}
+
+export async function onNameUpdate(deps, name) {
+  // Только локально; контакты узнают по «Сохранить» (единое письмо).
+  deps.setDisplayName(name || deps.email() || '');
+}
+
+// Файл аватара из input[type=file] → dataURL → сохранение.
+export function onAvatarFileSelect(deps, e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    deps.alert(uiStore.tr('err_file_too_big_2m'));
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    deps.setUserAvatarUrl(ev.target.result);
+    // Аватар — данные: sqlite kv_store, не localStorage.
+    api.setAvatar(deps.email(), ev.target.result).catch(() => {});
+    const profiles = deps.profiles();
+    if (!profiles[deps.email()]) profiles[deps.email()] = {};
+    profiles[deps.email()].avatar = ev.target.result;
+    deps.setShowAvatarUpload(false);
+  };
+  reader.readAsDataURL(file);
+}

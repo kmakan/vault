@@ -1916,6 +1916,19 @@ export default {
         showToast: (m, d) => uiStore.toast(m, d), t: uiStore.tr,
       };
     },
+    // Контракт фичи своего профиля (ADR-005 W3, партия 8): аватар, имя, био.
+    profileDeps() {
+      return {
+        email: () => this.email,
+        displayName: () => this.displayName,
+        setDisplayName: (v) => { this.displayName = v; },
+        profiles: () => this.profiles,
+        setUserAvatarUrl: (v) => { this.userAvatarUrl = v; },
+        setShowAvatarUpload: (v) => { this.showAvatarUpload = v; },
+        setMyBio: (v) => { this.myBio = v; },
+        alert: (msg) => { alert(msg); },
+      };
+    },
     // Контракт фичи звёзд (ADR-005 W3, партия 7).
     starsDeps() {
       return {
@@ -2816,7 +2829,7 @@ export default {
     saveLocalProfiles() { return ProfilesFeature.saveLocalProfiles({ email: this.email, localProfiles: this.localProfiles }); },
     async loadProfiles() { return ProfilesFeature.loadProfiles({ setProfiles: (v) => { this.profiles = v; } }); },
     async getBio() { return ProfilesFeature.getBio({ email: this.email }); },
-    async setBio(text) { this.myBio = await ProfilesFeature.setBio({ email: this.email, text }); },
+    async setBio(text) { return ProfilesFeature.setMyBio(this.profileDeps, text); },
     async onBioSave(text) { return ProfilesFeature.onBioSave({ email: this.email, showToast: (m) => uiStore.toast(m), t: uiStore.tr }, text); },
     async onProfileSave() { return ProfilesFeature.onProfileSave({ showToast: (m) => uiStore.toast(m), t: uiStore.tr, broadcastProfile: () => this.broadcastProfile() }); },
     async broadcastProfile() { return ProfilesFeature.broadcastProfile({ email: this.email, displayName: this.displayName, profiles: this.profiles, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys }); },
@@ -3842,19 +3855,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     clearUnread(chatKey) { return this.chat.clearUnread(chatKey); },
     clearAllUnread() { return this.chat.clearAllUnread(); },
     setUnread(map) { return this.chat.setUnread(map); },
-    async onAvatarUpdate(dataUrl) {
-      this.userAvatarUrl = dataUrl
-      // Локально: память + kv (переживёт перезапуск). НЕ шлём письмо —
-      // контакты узнают ТОЛЬКО по «Сохранить» (единое письмо имя+аватар+статус).
-      // ts = Date.now() — СВОЁ действие (иначе guard tsNum=0 блокирует запись
-      if (!this.profiles[this.email]) this.profiles[this.email] = {};
-      this.profiles[this.email].avatar = dataUrl || '';
-      await api.saveProfile(this.email, this.displayName || this.email, dataUrl || '', Date.now());
-    },
-    async onNameUpdate(name) {
-      // Только локально; контакты узнают по «Сохранить» (единое письмо).
-      this.displayName = name || this.email || '';
-    },
+    async onAvatarUpdate(dataUrl) { return ProfilesFeature.onAvatarUpdate(this.profileDeps, dataUrl); },
+    async onNameUpdate(name) { return ProfilesFeature.onNameUpdate(this.profileDeps, name); },
     // Профиль (имя/аватар) всем контактам с ключом: stealth-письмо
     // {vault:1, type:'profile', name, avatar}. Получатель сохраняет профиль
     // и не рендерит как сообщение (см. processIncoming).
@@ -4102,24 +4104,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async requestGroupAvatarHeal(groupId) {
       return GroupAvatarsFeature.requestHeal(this.groupAvatarsDeps, groupId);
     },
-    onAvatarFileSelect(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      if (file.size > 2 * 1024 * 1024) {
-        alert(uiStore.tr('err_file_too_big_2m'));
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        this.userAvatarUrl = ev.target.result;
-        // Аватар — данные: sqlite kv_store, не localStorage.
-        api.setAvatar(this.email, ev.target.result).catch(() => {});
-        if (!this.profiles[this.email]) this.profiles[this.email] = {};
-        this.profiles[this.email].avatar = ev.target.result;
-        this.showAvatarUpload = false;
-      };
-      reader.readAsDataURL(file);
-    },
+    onAvatarFileSelect(e) { return ProfilesFeature.onAvatarFileSelect(this.profileDeps, e); },
     // ── Отправка 1:1 (логика в features/send.js) — тонкий делегат ──
     // W2 партия 3 (ADR-005 R3): контракт `loadMessages` собирается здесь и
     // ЖИВЬЁМ на каждый вызов — модуль не читает компонент. Состояние чата,

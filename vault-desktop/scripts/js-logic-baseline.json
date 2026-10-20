@@ -2,7 +2,7 @@
   "measuredAt": "2026-10-19",
   "totals": {
     "ctxRefSites": 0,
-    "appVueOwn": 94,
+    "appVueOwn": 90,
     "appVueMethods": 349,
     "protocolSites": 49,
     "protocolFiles": 12
@@ -59,7 +59,6 @@
     "loadBodyCache",
     "cacheBody",
     "onPresenceEnabled",
-    "setBio",
     "presenceSetEnabled",
     "loadIgnoredUsers",
     "saveIgnoredUsers",
@@ -94,8 +93,6 @@
     "buildEnvelope",
     "sendGeoMessage",
     "refreshGroupFull",
-    "onAvatarUpdate",
-    "onNameUpdate",
     "onNewGroupAvatarSelected",
     "onRecoveryFilePicked",
     "onExperimentsCalls",
@@ -104,7 +101,6 @@
     "locateEscrow",
     "onGroupRename",
     "onGroupAvatarUpdate",
-    "onAvatarFileSelect",
     "searchMessages",
     "onKeysChanged",
     "addPeerKey",

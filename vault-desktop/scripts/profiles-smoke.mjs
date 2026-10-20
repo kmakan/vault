@@ -11,9 +11,12 @@ mkdirSync(MOCKS, { recursive: true });
 
 const apiMock = {
   sends: [],
+  saveProfileCalls: [],
   getProfilesAll: async () => apiMock.profilesStore,
   profilesStore: {},
   sendReadReceipt: async (peer, content) => { apiMock.sends.push({ peer, content }); },
+  saveProfile: async (email, name, avatar, ts) => { apiMock.saveProfileCalls.push({ email, name, avatar, ts }); },
+  setAvatar: async (email, avatar) => { apiMock.saveProfileCalls.push({ setAvatar: email, avatar }); },
 };
 const dbMock = {
   kv: new Map(),
@@ -358,6 +361,64 @@ console.log('6. Зелёная точка');
   check('isRecentlySeen: 1 мин назад → true', P.isRecentlySeen(fresh, 'a@x.ru') === true);
   check('isRecentlySeen: 11 мин назад → false (окно 10 мин)', P.isRecentlySeen(stale, 'a@x.ru') === false);
   check('isRecentlySeen: нет записи → false', P.isRecentlySeen({}, 'zz@x.ru') === false);
+}
+
+// ── ADR-005 W3 (партия 8): свой профиль — аватар, имя, био ──────────────
+console.log('Свой профиль: аватар, имя, био');
+{
+  const st = { alerts: [], uploaded: false, displayName: '', myBio: null, userAvatarUrl: '' };
+  const profiles = {};
+  const deps = {
+    email: () => 'me@x.ru',
+    displayName: () => st.displayName || 'me@x.ru',
+    setDisplayName: (v) => { st.displayName = v; },
+    profiles: () => profiles,
+    setUserAvatarUrl: (v) => { st.userAvatarUrl = v; },
+    setShowAvatarUpload: (v) => { st.uploaded = !v; },
+    setMyBio: (v) => { st.myBio = v; },
+    alert: (m) => { st.alerts.push(m); },
+  };
+
+  // 1. setMyBio: kv + состояние
+  await P.setMyBio(deps, 'Мой статус');
+  check('setMyBio: значение в kv', dbMock.kv.get('bio') === 'Мой статус', dbMock.kv.get('bio'));
+  check('setMyBio: состояние обновлено', st.myBio === 'Мой статус', st.myBio);
+
+  // 2. onAvatarUpdate: аватар в профиле + saveProfile
+  await P.onAvatarUpdate(deps, 'data:image/png;base64,AAA');
+  check('onAvatarUpdate: аватар в профиле', profiles['me@x.ru'].avatar === 'data:image/png;base64,AAA', profiles['me@x.ru']);
+  check('onAvatarUpdate: аватар в состоянии', st.userAvatarUrl === 'data:image/png;base64,AAA');
+  check('onAvatarUpdate: профиль сохранён', (apiMock.saveProfileCalls || []).length === 1, apiMock.saveProfileCalls);
+
+  // 3. onNameUpdate: имя, без рассылки
+  await P.onNameUpdate(deps, 'Моё имя');
+  check('onNameUpdate: имя обновлено', st.displayName === 'Моё имя', st.displayName);
+  check('onNameUpdate: письмо НЕ отправлено', (apiMock.saveProfileCalls || []).length === 1, apiMock.saveProfileCalls);
+
+  // 4. onNameUpdate: пустое имя → адрес
+  await P.onNameUpdate(deps, '');
+  check('onNameUpdate: пустое имя → email', st.displayName === 'me@x.ru', st.displayName);
+
+  // 5. onAvatarFileSelect: большой файл — отказ
+  const big = { size: 3 * 1024 * 1024 };
+  P.onAvatarFileSelect(deps, { target: { files: [big] } });
+  check('onAvatarFileSelect: большой файл → отказ', st.alerts.length === 1, st.alerts);
+
+  // 6. onAvatarFileSelect: нормальный файл → dataURL → профиль + закрытие
+  const uploaded = [];
+  const prevFileReader = globalThis.FileReader;
+  globalThis.FileReader = class {
+    readAsDataURL() {
+      this.onload({ target: { result: 'data:image/png;base64,BBB' } });
+    }
+  };
+  P.onAvatarFileSelect(deps, { target: { files: [{ size: 100 }] } });
+  globalThis.FileReader = prevFileReader;
+  check('onAvatarFileSelect: аватар в состоянии', st.userAvatarUrl === 'data:image/png;base64,BBB', st.userAvatarUrl);
+  check('onAvatarFileSelect: аватар в профиле', profiles['me@x.ru'].avatar === 'data:image/png;base64,BBB', profiles['me@x.ru']);
+  check('onAvatarFileSelect: окно загрузки закрыто', st.uploaded === true, st.uploaded);
+  check('onAvatarFileSelect: аватар записан в kv (setAvatar)',
+    (apiMock.saveProfileCalls || []).some((c) => c.setAvatar === 'me@x.ru'), apiMock.saveProfileCalls);
 }
 
 console.log('');
