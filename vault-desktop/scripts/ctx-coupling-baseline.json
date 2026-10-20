@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 306,
-  "totalFunctions": 311,
-  "functionsWithCtx": 91,
+  "totalCtxRefs": 258,
+  "totalFunctions": 312,
+  "functionsWithCtx": 86,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -146,8 +146,8 @@
       "ctxRefs": 0,
       "fields": [],
       "functions": 14,
-      "functionsWithCtx": 2,
-      "biggestCtxFn": "declineContactInvite"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/drafts.js": {
       "ctxRefs": 7,
@@ -388,29 +388,19 @@
       "functionsWithCtx": 0,
       "biggestCtxFn": null
     },
+    "src/features/invites-store.js": {
+      "ctxRefs": 0,
+      "fields": [],
+      "functions": 1,
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
+    },
     "src/features/invites.js": {
-      "ctxRefs": 48,
-      "fields": [
-        "contactPopupIndex",
-        "currentGroup",
-        "handledContactKeys",
-        "handledInviteKeys",
-        "invitePopupIndex",
-        "loadChannels",
-        "loadContacts",
-        "loadGroupMessages",
-        "loadGroups",
-        "loadProfiles",
-        "loadStoredPeerKeys",
-        "pendingContacts",
-        "pendingInvites",
-        "refreshGroupMembers",
-        "showContactPopup",
-        "showInvitePopup"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 4,
-      "functionsWithCtx": 3,
-      "biggestCtxFn": "acceptInvite"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/local-db-init.js": {
       "ctxRefs": 0,

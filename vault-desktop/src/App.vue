@@ -901,6 +901,7 @@ import api, { db } from './api.js';
 import { createChatStore } from './chat-store.js';
 import { createGroupsStore } from './features/groups-store.js';
 import { createSendingStore } from './features/sending-store.js';
+import { createInvitesStore } from './features/invites-store.js';
 import { sessionStore as sessionState, chatStore as chatState, uiStore } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
@@ -1118,6 +1119,11 @@ export default {
     const mailboxStore = reactive(mailboxState)
     // J.3a: singleton chatStore — state activeChat/currentGroup/activeChatType.
     const chatStore = reactive(chatState)
+    // ADR-005 W2 партия 4: владелец очереди инвайтов/запросов контакта
+    // (features/invites-store.js). Поля писали ДВА модуля (invites.js и
+    // contacts.js) — у поля должен быть владелец (ADR-004). Per-app: один
+    // экземпляр на окно, модулям передаётся в deps.
+    const invitesStore = reactive(createInvitesStore());
     // J.7: messages-store (ephemeral state) — reactive wrapper для re-render в шапке.
     const messagesStoreReact = reactive(messagesStore);
     const callSession = useSession();
@@ -1154,7 +1160,7 @@ export default {
       onMessagesScroll: () => this?.onMessagesScroll?.(),
       jumpToBottom: () => this?.jumpToBottom?.(),
     });
-    return { t, setLocale, availableLocales, currentLocale, chat, groupsStore, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession, uiStore };
+    return { t, setLocale, availableLocales, currentLocale, chat, groupsStore, sendingStore, sessionStore, relayStore, mailboxStore, chatStore, messagesStore: messagesStoreReact, notes, callSession, uiStore, invitesStore };
   },
   data() {
     return {
@@ -1343,16 +1349,10 @@ export default {
       // Group Settings
       // showGroupSettingsinj в uiStore.modalFlags (J.7):
       // Invite popup (приглашение в группу с согласием)
-      pendingInvites: [],
+      // pendingInvites/pendingContacts/handledInviteKeys/handledContactKeys —
+      // в invites-store (ADR-005 W2 партия 4): proxy на владельца ниже.
       // showInvitePopupinj в uiStore.modalFlags (J.7):
       // invitePopupIndexinj в uiStore.formState (J.5b):
-      pendingContacts: [],
-      // showContactPopupinj в uiStore.modalFlags (J.7):
-      // contactPopupIndexinj в uiStore.formState (J.5b):
-      // Инвайты/запросы в обработке: пока идёт медленный SMTP, поллинг не
-      // должен показать их повторно (ключи «group_id|uid» / «sender|uid»).
-      handledInviteKeys: [],
-      handledContactKeys: [],
       // Add-member popup (выбор контактов, мульти-выбор)
       // showAddMemberPopupinj в uiStore.modalFlags (J.7):
       // add-member form inj в uiStore.formState (J.5b).
@@ -1616,6 +1616,12 @@ export default {
     // Прокси во владельца чата (ADR-004 J.3a).
     activeChat: { get() { return this.chatStore.state.activeChat; }, set(v) { this.chatStore.state.activeChat = v ?? null; } },
     currentGroup: { get() { return this.chatStore.state.currentGroup; }, set(v) { this.chatStore.state.currentGroup = v ?? null; } },
+    // Прокси во владельца очереди инвайтов (ADR-005 W2 партия 4). Поля писали
+    // ДВА модуля (invites.js и contacts.js) — теперь у них есть владелец.
+    pendingInvites: { get() { return this.invitesStore.state.pendingInvites; }, set(v) { this.invitesStore.setPendingInvites(v); } },
+    pendingContacts: { get() { return this.invitesStore.state.pendingContacts; }, set(v) { this.invitesStore.setPendingContacts(v); } },
+    handledInviteKeys: { get() { return this.invitesStore.state.handledInviteKeys; }, set(v) { this.invitesStore.state.handledInviteKeys = v || []; } },
+    handledContactKeys: { get() { return this.invitesStore.state.handledContactKeys; }, set(v) { this.invitesStore.state.handledContactKeys = v || []; } },
     // myBioinj в session-store (J.3a):
     myBio: { get() { return this.sessionStore.state.myBio; }, set(v) { this.sessionStore.setBio(v); } },
     // J.3a: auth state inj session-store.state:
@@ -4906,7 +4912,21 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async inviteSelectedMembers() { return MembersFeature.inviteSelectedMembers(this); },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
     // ── Приглашения в группы (логика в features/invites.js) ──
-    async processInvites() { return InvitesFeature.processInvites(this); },
+    // ADR-005 W2 партия 4: контракт модуля — состояние у владельцев
+    // (`invites`: per-app экземпляр invites-store; флаги попапа — uiStore),
+    // эффекты — явный deps. Компонент модулю не виден.
+    async processInvites() {
+      return InvitesFeature.processInvites({
+        invites: this.invitesStore,
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
+        loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
+        refreshGroupMembers: () => this.refreshGroupMembers(),
+        loadStoredPeerKeys: () => this.loadStoredPeerKeys(),
+        loadContacts: () => this.loadContacts(),
+        loadProfiles: () => this.loadProfiles(),
+      });
+    },
     async refreshGroupMembers() {
       if (!this.currentGroup) return;
       try {
@@ -4916,34 +4936,39 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       }
     },
     async acceptInvite(inv) {
-      return InvitesFeature.acceptInvite(this, inv, {
+      return InvitesFeature.acceptInvite(inv, {
+        invites: this.invitesStore,
         decryptGroupKey: (...args) => crypto.decryptGroupKey(...args),
         kvSet: (...args) => db.kvSet(...args),
         showToast: (...args) => uiStore.toast(...args),
         t: (key) => uiStore.tr(key),
         loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
-        markInviteHandled: (key) => { if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key); },
-        unmarkInviteHandled: (key) => { const i = this.handledInviteKeys.indexOf(key); if (i >= 0) this.handledInviteKeys.splice(i, 1); },
         isCryptoReady: () => this.cryptoReady,
         groups: () => this.groups,
+        // Аватар пишет владелец groups-store (раньше был вызов на СПИСОК
+        // групп — TypeError и откат принятого инвайта).
+        setGroupAvatar: (id, av) => this.groupsStore.setGroupAvatar(id, av),
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
         showNextInvite: () => this.showNextInvite(),
       });
     },
     async declineInvite(inv) {
-      return InvitesFeature.declineInvite(this, inv, {
-        markInviteHandled: (key) => { if (!this.handledInviteKeys.includes(key)) this.handledInviteKeys.push(key); },
+      return InvitesFeature.declineInvite(inv, {
+        invites: this.invitesStore,
         showNextInvite: () => this.showNextInvite(),
       });
     },
     showNextInvite() {
-      return InvitesFeature.showNextInvite(this, {
+      return InvitesFeature.showNextInvite({
+        invites: this.invitesStore,
         clearNextTimer: () => clearTimeout(this._nextInviteTimer),
         setNextTimer: (fn, delay) => { clearTimeout(this._nextInviteTimer); this._nextInviteTimer = setTimeout(fn, delay); },
       });
     },
     // --- Контакты 1-на-1: принять/отклонить запрос (Session-модель) ---
     async acceptContactInvite(c) {
-      return ContactsFeature.acceptContactInvite(this, c, {
+      return ContactsFeature.acceptContactInvite(c, {
         loadPeerKeyEmails: () => api.loadPeerKeyEmails(),
         markAcceptedContact: (key) => api.markAcceptedContact(key),
         showToast: (...args) => uiStore.toast(...args),
@@ -4956,35 +4981,37 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         sendContactAccept: (email, pub) => api.sendContactAccept(email, pub),
         publicKey: () => this.publicKey,
         peerKeys: () => this.peerKeys,
-        markContactHandled: (key) => { if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key); },
-        unmarkContactHandled: (key) => { const i = this.handledContactKeys.indexOf(key); if (i >= 0) this.handledContactKeys.splice(i, 1); },
-        splicePendingContacts: () => { this.pendingContacts.splice(this.contactPopupIndex, 1); },
-        pushPendingContact: (c) => { this.pendingContacts.push(c); },
+        // Очередь запросов контакта и метки «в обработке» — владелец
+        // invites-store (ADR-005 W2 партия 4): писали их ДВА модуля.
+        markContactHandled: (key) => this.invitesStore.markContactHandled(key),
+        unmarkContactHandled: (key) => this.invitesStore.unmarkContactHandled(key),
+        splicePendingContacts: () => this.invitesStore.splicePendingContact(this.contactPopupIndex),
+        pushPendingContact: (c) => this.invitesStore.pushPendingContact(c),
         loadProfiles: () => this.loadProfiles(),
         loadContacts: () => this.loadContacts(),
         showNextContact: () => this.showNextContact(),
       });
     },
     async declineContactInvite(c) {
-      return ContactsFeature.declineContactInvite(this, c, {
-        markContactHandled: (key) => { if (!this.handledContactKeys.includes(key)) this.handledContactKeys.push(key); },
-        splicePendingContacts: () => { this.pendingContacts.splice(this.contactPopupIndex, 1); },
+      return ContactsFeature.declineContactInvite(c, {
+        markContactHandled: (key) => this.invitesStore.markContactHandled(key),
+        splicePendingContacts: () => this.invitesStore.splicePendingContact(this.contactPopupIndex),
         markDeclinedContact: (key) => api.markDeclinedContact(key),
         showNextContact: () => this.showNextContact(),
       });
     },
     showNextContact() {
-      return ContactsFeature.showNextContact(this, {
+      return ContactsFeature.showNextContact({
         clearNextContactTimer: () => clearTimeout(this._nextContactTimer),
         setNextContactTimer: (fn, delay) => { clearTimeout(this._nextContactTimer); this._nextContactTimer = setTimeout(fn, delay); },
-        pendingContacts: () => this.pendingContacts,
+        pendingContacts: () => this.invitesStore.getPendingContacts(),
         contactPopupIndex: () => this.contactPopupIndex,
         setContactPopupIndex: (v) => { this.contactPopupIndex = v; },
         setShowContactPopup: (v) => { this.showContactPopup = v; return this.showContactPopup; },
       });
     },
     async inviteContactById(email) {
-      return ContactsFeature.inviteContactById(this, email, {
+      return ContactsFeature.inviteContactById(email, {
         peerKeys: () => this.peerKeys,
         contacts: () => this.contacts,
         loadPeerKeyEmails: () => api.loadPeerKeyEmails(),

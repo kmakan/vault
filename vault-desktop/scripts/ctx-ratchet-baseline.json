@@ -128,24 +128,8 @@
     "history.js": [],
     "identity-store.js": [],
     "incoming.js": [],
-    "invites.js": [
-      "contactPopupIndex",
-      "currentGroup",
-      "handledContactKeys",
-      "handledInviteKeys",
-      "invitePopupIndex",
-      "loadChannels",
-      "loadContacts",
-      "loadGroupMessages",
-      "loadGroups",
-      "loadProfiles",
-      "loadStoredPeerKeys",
-      "pendingContacts",
-      "pendingInvites",
-      "refreshGroupMembers",
-      "showContactPopup",
-      "showInvitePopup"
-    ],
+    "invites-store.js": [],
+    "invites.js": [],
     "local-db-init.js": [],
     "mailbox-api.js": [],
     "mailbox-store.js": [],
@@ -279,24 +263,6 @@
     "pinnedPreview": [
       "groups.js"
     ],
-    "pendingInvites": [
-      "invites.js"
-    ],
-    "invitePopupIndex": [
-      "invites.js"
-    ],
-    "showInvitePopup": [
-      "invites.js"
-    ],
-    "pendingContacts": [
-      "invites.js"
-    ],
-    "contactPopupIndex": [
-      "invites.js"
-    ],
-    "showContactPopup": [
-      "invites.js"
-    ],
     "showAddMemberPopup": [
       "members.js"
     ],
@@ -350,8 +316,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 155,
-    "ctxRefSites": 345,
+    "ctxFields": 139,
+    "ctxRefSites": 297,
     "sharedWriteFields": 0
   }
 }

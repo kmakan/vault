@@ -1,14 +1,39 @@
 // Feature module: обработка входящих приглашений в группы (инвайт-попапы).
-// Этап 5 декомпозиции App.vue (ctx-паттерн). Вынесено из App.vue механически
-// (this.* -> ctx.*, поведение 1:1). Управляет очередью pendingInvites,
-// показом попапов, принятием/отклонением инвайтов (acceptGroupInvite/
-// declineGroupInvite), загрузкой ключей групп. loadGroups/loadGroupMessages/
-// loadChannels/loadContacts/loadProfiles/refreshGroupMembers/loadStoredPeerKeys
-// остаются в App.vue и вызываются через ctx.
+// ADR-005 W2 (`t_bcb8927a`), партия 4: модуль больше НЕ читает компонент.
+//
+// СОСТОЯНИЕ — У ВЛАДЕЛЬЦЕВ (ADR-004), ЭФФЕКТЫ — ЯВНЫЙ deps (ADR-005 R3):
+//   · очередь инвайтов/запросов и метки «в обработке» — владелец
+//     `invites-store` (per-app, приходит в deps: `deps.invites`). Поля писали
+//     ДВА модуля (этот и contacts.js) — значит у поля обязан быть владелец;
+//   · флаги попапа (`showInvitePopup`, `invitePopupIndex` и пара контактов) —
+//     UI-состояние, по ADR-003 §2 оно остаётся в компоненте; владелец флагов —
+//     uiStore (modalFlags/formState), и модуль берёт его напрямую;
+//   · `currentGroup` — владелец chatStore (ADR-004 J.3a);
+//   · перезагрузка данных (loadGroups/loadChannels/…) — эффекты, их зовёт
+//     компонент через deps.
+//
+// Поведение перенесено 1:1. Одно исправление: аватар группы после принятия
+// инвайта писался через `groups().setGroupAvatar(...)`, а `groups` — это
+// СПИСОК групп (App.vue data), а не стор: вызов падал TypeError, accept
+// уходил в catch (ошибка + откат инвайта). Теперь это `deps.setGroupAvatar` —
+// запись в владельца groups-store.
 
 import api from '../api.js';
+import { uiStore, chatStore } from './session-store.js';
 
-export async function processInvites(ctx) {
+// Флаги и индексы попапов — UI-состояние в uiStore (ADR-003 §2).
+const showInvitePopup = () => uiStore.getModal('showInvitePopup');
+const setShowInvitePopup = (v) => uiStore.setModal('showInvitePopup', v);
+const invitePopupIndex = () => uiStore.getFormField('invitePopupIndex');
+const setInvitePopupIndex = (v) => uiStore.setFormField('invitePopupIndex', v);
+const showContactPopup = () => uiStore.getModal('showContactPopup');
+const setShowContactPopup = (v) => uiStore.setModal('showContactPopup', v);
+const contactPopupIndex = () => uiStore.getFormField('contactPopupIndex');
+const setContactPopupIndex = (v) => uiStore.setFormField('contactPopupIndex', v);
+
+export async function processInvites(deps) {
+  const { invites, loadGroups, loadChannels, loadGroupMessages, refreshGroupMembers,
+          loadStoredPeerKeys, loadContacts, loadProfiles } = deps;
       // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
       // перечитывает письма заново — иначе новые инвайты/удаления не видны.
       api._handshakeCache = null;
@@ -19,11 +44,12 @@ export async function processInvites(ctx) {
       try {
         const accepts = await api.fetchPendingAccepts();
         if (accepts.length) {
-          await ctx.loadGroups();
-          try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
-          if (ctx.currentGroup) {
-            await ctx.loadGroupMessages(ctx.currentGroup.id);
-            await ctx.refreshGroupMembers();
+          await loadGroups();
+          try { await loadChannels(); } catch (e) { /* не критично */ }
+          const currentGroup = chatStore.state.currentGroup;
+          if (currentGroup) {
+            await loadGroupMessages(currentGroup.id);
+            await refreshGroupMembers();
           }
         }
       } catch (e) {
@@ -38,34 +64,34 @@ export async function processInvites(ctx) {
         const contactAccepts = await api.fetchPendingContactAccepts();
         if (contactAccepts.length) {
           // fetchPendingContactAccepts пишет ключи на диск (save_peer_key),
-          // но НЕ в ctx.peerKeys — перечитываем с диска, иначе selectChat
+          // но НЕ в peerKeys — перечитываем с диска, иначе selectChat
           // не найдёт ключ и предложит «добавить контакт».
-          await ctx.loadStoredPeerKeys();
-          await ctx.loadContacts();
-          await ctx.loadGroups();
-          try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
+          await loadStoredPeerKeys();
+          await loadContacts();
+          await loadGroups();
+          try { await loadChannels(); } catch (e) { /* не критично */ }
         }
       } catch (e) {
         console.error('processInvites: contact accepts failed:', e);
       }
       // Собираем непрочитанные инвайты для попапа согласия.
       try {
-        const invites = await api.fetchPendingInvites();
+        const invitesList = await api.fetchPendingInvites();
         // Вырезаем инвайты, которые уже обрабатываются (accept в полёте —
         // письмо ещё в ящике, а groups_import мог ещё не завершиться).
-        const fresh = invites.filter(
-          inv => !ctx.handledInviteKeys.includes(`${inv.group_id}|${inv.uid}`)
+        const fresh = invitesList.filter(
+          inv => !invites.isInviteHandled(`${inv.group_id}|${inv.uid}`)
         );
         if (fresh.length) {
           // Пока попап показан, очередью управляют accept/decline (splice) —
           // перезапись от поллинга сбивала invitePopupIndex посреди разбора.
-          if (!ctx.showInvitePopup) {
-            ctx.pendingInvites = fresh;
-            ctx.invitePopupIndex = 0;
-            ctx.showInvitePopup = true;
+          if (!showInvitePopup()) {
+            invites.setPendingInvites(fresh);
+            setInvitePopupIndex(0);
+            setShowInvitePopup(true);
           }
-        } else if (!ctx.showInvitePopup) {
-          ctx.pendingInvites = [];
+        } else if (!showInvitePopup()) {
+          invites.setPendingInvites([]);
         }
       } catch (e) {
         console.error('processInvites: invites failed:', e);
@@ -74,39 +100,40 @@ export async function processInvites(ctx) {
       try {
         const contacts = await api.fetchPendingContactInvites();
         const fresh = contacts.filter(
-          c => !ctx.handledContactKeys.includes(`${c.sender}|${c.uid}`)
+          c => !invites.isContactHandled(`${c.sender}|${c.uid}`)
         );
         if (fresh.length) {
-          if (!ctx.showContactPopup) {
-            ctx.pendingContacts = fresh;
+          if (!showContactPopup()) {
+            invites.setPendingContacts(fresh);
             // Групповой попап имеет приоритет; контактный покажем следом.
-            if (!ctx.showInvitePopup) {
-              ctx.contactPopupIndex = 0;
-              ctx.showContactPopup = true;
+            if (!showInvitePopup()) {
+              setContactPopupIndex(0);
+              setShowContactPopup(true);
             }
           }
-        } else if (!ctx.showContactPopup) {
-          ctx.pendingContacts = [];
+        } else if (!showContactPopup()) {
+          invites.setPendingContacts([]);
         }
       } catch (e) {
         console.error('processInvites: contact invites failed:', e);
       }
       try {
-        ctx.loadProfiles();
+        loadProfiles();
       } catch (e) {
         console.error('processInvites: loadProfiles failed:', e);
       }
 }
 
 // ── ADR-001 Этап 3 (invites): acceptInvite/declineInvite/showNextInvite вынесены из App.vue.
-// ctx-паттерн: this.* -> ctx.*; GroupsFeature — лениво (разрывает цикл);
-// deps: decryptGroupKey/kvSet/showToast/t/loadGroupMessages — инъекция из App.vue (ADR-001 pattern; smoke не мокает crypto/uiStore/db/groups).
-export async function acceptInvite(ctx, inv, deps) {
-  const { decryptGroupKey, kvSet, showToast, t, loadGroupMessages, markInviteHandled, unmarkInviteHandled, isCryptoReady, groups, showNextInvite } = deps;
+// deps: decryptGroupKey/kvSet/showToast/t/loadGroupMessages/… — инъекция из App.vue
+// (ADR-001 pattern; smoke не мокает crypto/uiStore/db/groups).
+export async function acceptInvite(inv, deps) {
+  const { invites, decryptGroupKey, kvSet, showToast, t, loadGroupMessages,
+          isCryptoReady, groups, setGroupAvatar, showNextInvite } = deps;
   const key = `${inv.group_id}|${inv.uid}`;
-  markInviteHandled(key);
-  ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
-  ctx.showInvitePopup = false;
+  invites.markInviteHandled(key);
+  invites.splicePendingInvite(invitePopupIndex());
+  setShowInvitePopup(false);
   try {
     if (groups().some(g => g.id === inv.group_id)) {
       showToast((t('already_in_groups') || 'Вы уже состоите в этой группе') + ': ' + (inv.group_name || inv.group_id), 3000);
@@ -122,27 +149,31 @@ export async function acceptInvite(ctx, inv, deps) {
     await api.acceptGroupInvite(inv.group_id, { ...inv, group_key: groupKey });
     if (inv.group_avatar) {
       await kvSet('anon', 'group-avatar:' + inv.group_id, inv.group_avatar);
-      groups().setGroupAvatar(inv.group_id, inv.group_avatar);
+      // Аватар пишет ВЛАДЕЛЕЦ groups-store. Раньше здесь был
+      // `groups().setGroupAvatar(...)`, а groups — это СПИСОК групп: вызов
+      // падал TypeError, и accept уходил в catch (ошибка + откат инвайта).
+      setGroupAvatar(inv.group_id, inv.group_avatar);
     }
-    await ctx.loadGroups();
-    try { await ctx.loadChannels(); } catch (e) { /* не критично */ }
-    if (ctx.currentGroup?.id === inv.group_id) {
+    await deps.loadGroups();
+    try { await deps.loadChannels(); } catch (e) { /* не критично */ }
+    const currentGroup = chatStore.state.currentGroup;
+    if (currentGroup && currentGroup.id === inv.group_id) {
       await loadGroupMessages(inv.group_id);
     }
   } catch (e) {
     alert('Failed to accept invite: ' + e.message);
-    unmarkInviteHandled(key);
-    ctx.pendingInvites.push(inv);
+    invites.unmarkInviteHandled(key);
+    invites.pushPendingInvite(inv);
   }
   showNextInvite();
 }
 
-export async function declineInvite(ctx, inv, deps) {
-  const { markInviteHandled, showNextInvite } = deps;
+export async function declineInvite(inv, deps) {
+  const { invites, showNextInvite } = deps;
   const key = `${inv.group_id}|${inv.uid}`;
-  markInviteHandled(key);
-  ctx.pendingInvites.splice(ctx.invitePopupIndex, 1);
-  ctx.showInvitePopup = false;
+  invites.markInviteHandled(key);
+  invites.splicePendingInvite(invitePopupIndex());
+  setShowInvitePopup(false);
   try {
     await api.declineGroupInvite(inv.group_id, inv.uid, inv.sender);
   } catch (e) {
@@ -151,22 +182,22 @@ export async function declineInvite(ctx, inv, deps) {
   showNextInvite();
 }
 
-export function showNextInvite(ctx, deps) {
-  const { clearNextTimer, setNextTimer } = deps;
+export function showNextInvite(deps) {
+  const { clearNextTimer, setNextTimer, invites } = deps;
   clearNextTimer();
-  if (ctx.pendingInvites.length > 0) {
-    if (ctx.invitePopupIndex >= ctx.pendingInvites.length) ctx.invitePopupIndex = 0;
+  if (invites.getPendingInvites().length > 0) {
+    if (invitePopupIndex() >= invites.getPendingInvites().length) setInvitePopupIndex(0);
     setNextTimer(() => {
-      if (ctx.pendingInvites.length && !ctx.showInvitePopup) {
-        ctx.showInvitePopup = true;
+      if (invites.getPendingInvites().length && !showInvitePopup()) {
+        setShowInvitePopup(true);
       }
     }, 1200);
   } else {
-    ctx.showInvitePopup = false;
-    if (ctx.pendingContacts.length) {
+    setShowInvitePopup(false);
+    if (invites.getPendingContacts().length) {
       setNextTimer(() => {
-        if (ctx.pendingContacts.length && !ctx.showContactPopup) {
-          ctx.showContactPopup = true;
+        if (invites.getPendingContacts().length && !showContactPopup()) {
+          setShowContactPopup(true);
         }
       }, 1200);
     }

@@ -19,7 +19,10 @@
 `chat-store` (`messages`, `pendingOutgoing`, `unreadCounts`, `newMessage`),
 `groups-store` (`groupKeys`, `groupAvatars`), `sending-store` (`sending`),
 `session-store` (`isLoggedIn`, `emails`), `relay-store` (`ecoMode`,
-`relayEnabled`, `relayDeliveryMode`), `notes-store` (заметки для себя).
+`relayEnabled`, `relayDeliveryMode`), `notes-store` (заметки для себя),
+`invites-store` (очередь инвайтов и запросов контакта + метки «в обработке» —
+ADR-005 W2 партия 4: эти четыре поля писали ДВА модуля, `invites.js` и
+`contacts.js`, и без владельца связь между ними была невидимой).
 
 Последний шаг (A15, `notes-store.js`) закрыл `loadNotes`. Он был одновременно
 ложным срабатыванием alias-эвристики гейта и настоящей связностью:

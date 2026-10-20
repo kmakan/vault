@@ -104,7 +104,9 @@ export function isPeerEncrypted(peerKeys, cryptoReady, activeChat) {
 // ADR-001 Etap 3b (contact-invites): acceptContactInvite/declineContactInvite/showNextContact
 // iz App.vue. deps-injection (kak invites.js): zavisimosti peredautsya yavno cherez deps,
 // NE staticheskie importy (smoke-gate contacts ne mokaet crypto/identityStore).
-export async function acceptContactInvite(ctx, c, deps) {
+// ADR-005 W2 (partiya 4): parametar ctx ubran — module ne poluchaet komponent
+// voobsche (on i tak nichego ne chital; component prisylalsya iz App.vue).
+export async function acceptContactInvite(c, deps) {
   const {
     loadPeerKeyEmails, markAcceptedContact, showToast, t, setPeerKey, markLoaded,
     savePeerKey, addContact, saveProfile, sendContactAccept, publicKey, peerKeys,
@@ -144,7 +146,7 @@ export async function acceptContactInvite(ctx, c, deps) {
   showNextContact();
 }
 
-export async function declineContactInvite(ctx, c, deps) {
+export async function declineContactInvite(c, deps) {
   const { markContactHandled, splicePendingContacts, markDeclinedContact, showNextContact } = deps;
   const key = `${c.sender}|${c.uid}`;
   markContactHandled(key);
@@ -153,7 +155,7 @@ export async function declineContactInvite(ctx, c, deps) {
   showNextContact();
 }
 
-export function showNextContact(ctx, deps) {
+export function showNextContact(deps) {
   const { clearNextContactTimer, setNextContactTimer, pendingContacts, contactPopupIndex, setContactPopupIndex, setShowContactPopup } = deps;
   clearNextContactTimer();
   if (pendingContacts().length > 0) {
@@ -168,7 +170,7 @@ export function showNextContact(ctx, deps) {
 
 // ADR-001 Etap 3c: inviteContactById iz App.vue (отправка инвайта контакту).
 // deps-injection: peerKeys/contacts/publicKey — getters; api/uiStore — callable deps.
-export async function inviteContactById(ctx, email, deps) {
+export async function inviteContactById(email, deps) {
   const { peerKeys, contacts, loadPeerKeyEmails, sendContactInvite, showToast, t, publicKey } = deps;
   const id = (email || '').trim();
   if (!id) return;
