@@ -316,3 +316,70 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
         if (!stale()) deps.chat.clear();
       }
 }
+
+// ── Закрепление сообщения в группе (ADR-005 W3, партия 6) ───────────────
+// Логика уехала из App.vue. Хранилище — sqlite kv ('pinned:<gid>'), форма
+// pin-письма — примитив group-pin-wire (ADR-003 партия 13).
+//
+// deps: { readPinned(gid), setPinned(msgId, preview), isGroupAdmin(),
+//         currentGroup(), groupKeys, pinnedMsgId(), pinGroupMessage(msg),
+//         getMessageListEl(), jumpToBottom() }
+
+export async function setPinnedState(deps, groupId, pin) {
+  if (pin && pin.msg_id) {
+    await db.kvSet('anon', 'pinned:' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
+    deps.setPinned(pin.msg_id, pin.preview || '');
+  } else {
+    await db.kvDelete('anon', 'pinned:' + groupId);
+    deps.setPinned(null, '');
+  }
+}
+
+// Последний по дате pin-письмо авторитетно (unpin = пустой pin.msg_id).
+export async function applyPinFromWire(deps, groupId, pin) {
+  const cur = await deps.readPinned(groupId);
+  if (pin.ts && cur && cur.ts && Number(pin.ts) < Number(cur.ts)) return;
+  if (!pin.msg_id) {
+    await setPinnedState(deps, groupId, null);
+  } else {
+    await setPinnedState(deps, groupId, { msg_id: pin.msg_id, preview: pin.preview, ts: pin.ts });
+  }
+}
+
+export async function pinGroupMessage(deps, msg) {
+  if (!deps.isGroupAdmin() || !deps.currentGroup() || !msg || !msg.id) return;
+  const gid = deps.currentGroup().id;
+  const currentlyPinned = await deps.readPinned(gid);
+  // Форма pin-письма и её разбор — в features/group-pin-wire.js (ADR-003
+  // партия 13). Раньше отправитель писал форму здесь, а приёмник читал её
+  // в features/groups.js: две рукописные копии без общей проверки, и
+  // расхождение заменялось бы ТИХО — 'op' вместо 'action' превращал бы
+  // открепление в закрепление, без исключения и без записи в журнал.
+  const decision = PinWire.buildPinDecision(msg, currentlyPinned);
+  // Оптимистично применяем локально (SMTP-круг займёт десятки секунд).
+  await setPinnedState(deps, gid,
+    decision.action === PinWire.PIN_ACTION.PIN ? decision : null);
+  try {
+    const groupKey = deps.groupKeys[gid] || (await api.getMyGroupKey(gid))?.group_key;
+    if (!groupKey) return;
+    const content = await crypto.encryptWithGroupKey(
+      JSON.stringify(PinWire.buildPinWirePayload(decision)), groupKey);
+    await api.sendGroupMeta(gid, content);
+  } catch (e) {
+    console.error('pinGroupMessage failed:', e);
+  }
+}
+
+export function unpinGroupMessage(deps) {
+  if (!deps.isGroupAdmin() || !deps.currentGroup()) return;
+  deps.pinGroupMessage({ id: deps.pinnedMsgId(), content: '' });
+}
+
+// Прокрутка к закреплённому сообщению (UI-эффект).
+export function scrollPinnedToView(deps) {
+  const el = deps.getMessageListEl();
+  if (!el) return;
+  const t = el.querySelector('[data-msg-id="' + CSS.escape(deps.pinnedMsgId()) + '"]');
+  if (!t) { deps.jumpToBottom(); return; }
+  el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
+}

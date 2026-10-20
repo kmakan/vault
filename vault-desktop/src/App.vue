@@ -991,6 +991,7 @@ import * as GroupAvatarsFeature from './features/group-avatars.js';
 import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
+import * as NotesFeature from './features/notes.js';
 import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
@@ -1279,9 +1280,9 @@ export default {
       messageMenu: null,
       // replyTo/reactionPickerMsgId — в uiStore (ADR-005 W3, партия 3).
       // Перетаскивание заметок (__notes__): ид заметки и цель drop.
-      draggedNoteId: null,
-      dragOverNoteId: null,
-      dragOverPos: null, // 'before' | 'after'
+      // draggedNoteId — в uiStore (ADR-005 W3, партия 6).
+      // dragOverNoteId — в uiStore (ADR-005 W3, партия 6).
+      // dragOverPos — в uiStore (ADR-005 W3, партия 6). // 'before' | 'after'
       // Закреплённое сообщение группы (админ): id + превью для баннера.
       pinnedMsgId: null,
       pinnedPreview: '',
@@ -1877,6 +1878,51 @@ export default {
         setProcessedUnreadIds: (v) => { this.processedUnreadIds = v; },
         unreadOf: (k) => this.unreadOf(k),
         clearUnread: (k) => this.clearUnread(k),
+      };
+    },
+    // ADR-005 W3 (партия 6): перетаскивание заметок — у владельца форм.
+    draggedNoteId: {
+      get() { return uiStore.getFormField('draggedNoteId'); },
+      set(v) { uiStore.setFormField('draggedNoteId', v); },
+    },
+    dragOverNoteId: {
+      get() { return uiStore.getFormField('dragOverNoteId'); },
+      set(v) { uiStore.setFormField('dragOverNoteId', v); },
+    },
+    dragOverPos: {
+      get() { return uiStore.getFormField('dragOverPos'); },
+      set(v) { uiStore.setFormField('dragOverPos', v); },
+    },
+    // Контракт фичи закрепления (ADR-005 W3, партия 6): хранилище — sqlite kv,
+    // состояние баннера — в компоненте (deps), DOM — тоже через deps.
+    pinsDeps() {
+      return {
+        readPinned: (id) => this.readPinned(id),
+        setPinned: (msgId, preview) => { this.pinnedMsgId = msgId; this.pinnedPreview = preview; },
+        isGroupAdmin: () => this.isGroupAdmin,
+        currentGroup: () => this.currentGroup,
+        groupKeys: this.groupKeys,
+        pinnedMsgId: () => this.pinnedMsgId,
+        pinGroupMessage: (msg) => this.pinGroupMessage(msg),
+        getMessageListEl: () => (this.$refs.messageList && this.$refs.messageList.container) || null,
+        jumpToBottom: () => this.jumpToBottom(),
+      };
+    },
+    // Контракт фичи заметок (ADR-005 W3, партия 6).
+    notesDeps() {
+      return {
+        chat: this.chat,
+        loadNotes: () => this.loadNotes(),
+        saveNotes: (list) => this.saveNotes(list),
+        bumpLoadSeq: () => { this.loadSeq++; },
+        openMobileChat: () => this.openMobileChat(),
+        scrollToBottom: (v) => this.scrollToBottom(v),
+        draggedNoteId: () => uiStore.getFormField('draggedNoteId'),
+        setDraggedNoteId: (v) => { uiStore.setFormField('draggedNoteId', v); },
+        dragOverNoteId: () => uiStore.getFormField('dragOverNoteId'),
+        setDragOverNoteId: (v) => { uiStore.setFormField('dragOverNoteId', v); },
+        dragOverPos: () => uiStore.getFormField('dragOverPos'),
+        setDragOverPos: (v) => { uiStore.setFormField('dragOverPos', v); },
       };
     },
     // Контракт фичи эфемерных сообщений (ADR-005 W4): правило времени жизни —
@@ -3468,61 +3514,11 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // под групповым ключом (stealth, пустая тема — единый проход
     // loadGroupMessages классифицирует по содержимому).
     async readPinned(groupId) { return MsgStore.readPinned(groupId); },
-    async setPinnedState(groupId, pin) {
-      if (pin && pin.msg_id) {
-        await db.kvSet('anon', 'pinned:' + groupId, JSON.stringify({ msg_id: pin.msg_id, preview: pin.preview || '', ts: pin.ts || Date.now() }));
-        this.pinnedMsgId = pin.msg_id;
-        this.pinnedPreview = pin.preview || '';
-      } else {
-        await db.kvDelete('anon', 'pinned:' + groupId);
-        this.pinnedMsgId = null;
-        this.pinnedPreview = '';
-      }
-    },
-    async applyPinFromWire(groupId, pin) {
-      // Последний по дате pin-письмо авторитетно (unpin = пустой pin.msg_id).
-      const cur = await this.readPinned(groupId);
-      if (pin.ts && cur && cur.ts && Number(pin.ts) < Number(cur.ts)) return;
-      if (!pin.msg_id) {
-        await this.setPinnedState(groupId, null);
-      } else {
-        await this.setPinnedState(groupId, { msg_id: pin.msg_id, preview: pin.preview, ts: pin.ts });
-      }
-    },
-    async pinGroupMessage(msg) {
-      if (!this.isGroupAdmin || !this.currentGroup || !msg || !msg.id) return;
-      const gid = this.currentGroup.id;
-      const currentlyPinned = await this.readPinned(gid);
-      // Форма pin-письма и её разбор — в features/group-pin-wire.js (ADR-003
-      // партия 13). Раньше отправитель писал форму здесь, а приёмник читал её
-      // в features/groups.js: две рукописные копии без общей проверки, и
-      // расхождение заменялось бы ТИХО — 'op' вместо 'action' превращал бы
-      // открепление в закрепление, без исключения и без записи в журнал.
-      const decision = PinWire.buildPinDecision(msg, currentlyPinned);
-      // Оптимистично применяем локально (SMTP-круг займёт десятки секунд).
-      await this.setPinnedState(gid,
-        decision.action === PinWire.PIN_ACTION.PIN ? decision : null);
-      try {
-        const groupKey = this.groupKeys[gid] || (await api.getMyGroupKey(gid))?.group_key;
-        if (!groupKey) return;
-        const content = await crypto.encryptWithGroupKey(
-          JSON.stringify(PinWire.buildPinWirePayload(decision)), groupKey);
-        await api.sendGroupMeta(gid, content);
-      } catch (e) {
-        console.error('pinGroupMessage failed:', e);
-      }
-    },
-    unpinGroupMessage() {
-      if (!this.isGroupAdmin || !this.currentGroup) return;
-      this.pinGroupMessage({ id: this.pinnedMsgId, content: '' });
-    },
-    scrollPinnedToView() {
-      const el = this.$refs.messageList && this.$refs.messageList.container;
-      if (!el) return;
-      const t = el.querySelector('[data-msg-id="' + CSS.escape(this.pinnedMsgId) + '"]');
-      if (!t) { this.jumpToBottom(); return; }
-      el.scrollTo({ top: t.offsetTop - 24, behavior: 'smooth' });
-    },
+    async setPinnedState(groupId, pin) { return GroupsFeature.setPinnedState(this.pinsDeps, groupId, pin); },
+    async applyPinFromWire(groupId, pin) { return GroupsFeature.applyPinFromWire(this.pinsDeps, groupId, pin); },
+    async pinGroupMessage(msg) { return GroupsFeature.pinGroupMessage(this.pinsDeps, msg); },
+    unpinGroupMessage() { return GroupsFeature.unpinGroupMessage(this.pinsDeps); },
+    scrollPinnedToView() { return GroupsFeature.scrollPinnedToView(this.pinsDeps); },
     async selectGroup(group) {
       this.saveDraft(); // черновик прошлого чата
       this.chat.set([]);
@@ -3592,57 +3588,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     saveNotes(list) {
       return this.notes.save(this.email, list);
     },
-    selectNotes() {
-      this.chat.set(this.loadNotes());
-      this.loadSeq++;
-      this.activeChat = '__notes__';
-      this.activeChatType = 'chat';
-      this.currentGroup = null;
-      this.openMobileChat();
-      this.scrollToBottom(true);
-    },
+    selectNotes() { return NotesFeature.selectNotes(this.notesDeps); },
     // --- Перетаскивание заметок (__notes__): ручной порядок ---
-    onNoteDragStart(e, msg) {
-      this.draggedNoteId = msg.id;
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', msg.id);
-    },
-    onNoteDragOver(e, msg) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      if (!this.draggedNoteId || msg.id === this.draggedNoteId) {
-        this.dragOverNoteId = null;
-        this.dragOverPos = null;
-        return;
-      }
-      const rect = e.currentTarget.getBoundingClientRect();
-      this.dragOverNoteId = msg.id;
-      this.dragOverPos = (e.clientY - rect.top) < rect.height / 2 ? 'before' : 'after';
-    },
-    onNoteDragLeave(e, msg) {
-      if (this.dragOverNoteId === msg.id) {
-        this.dragOverNoteId = null;
-        this.dragOverPos = null;
-      }
-    },
-    onNoteDrop(e, msg) {
-      e.preventDefault();
-      const id = this.draggedNoteId || e.dataTransfer.getData('text/plain');
-      this.draggedNoteId = null;
-      const overId = this.dragOverNoteId;
-      const pos = this.dragOverPos;
-      this.dragOverNoteId = null;
-      this.dragOverPos = null;
-      if (!id || !overId || id === overId) return;
-      const list = this.loadNotes();
-      const from = list.findIndex(n => n.id === id);
-      if (from < 0) return;
-      const [moved] = list.splice(from, 1);
-      const to = list.findIndex(n => n.id === overId);
-      if (to < 0) { list.splice(from, 0, moved); return; }
-      list.splice(pos === 'after' ? to + 1 : to, 0, moved);
-      if (this.saveNotes(list)) this.chat.set(list);
-    },
+    onNoteDragStart(e, msg) { return NotesFeature.onNoteDragStart(this.notesDeps, e, msg); },
+    onNoteDragOver(e, msg) { return NotesFeature.onNoteDragOver(this.notesDeps, e, msg); },
+    onNoteDragLeave(e, msg) { return NotesFeature.onNoteDragLeave(this.notesDeps, e, msg); },
+    onNoteDrop(e, msg) { return NotesFeature.onNoteDrop(this.notesDeps, e, msg); },
     // Parse message content — detect vault_attachment JSON and extract preview
     isTextMime(type, name) { return MsgFormat.isTextMime(type, name); },
     parseMessageContent(content) { return MsgFormat.parseMessageContent(content); },

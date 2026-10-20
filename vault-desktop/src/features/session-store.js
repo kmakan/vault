@@ -127,6 +127,10 @@ export function defaultUiState() {
     reactionPickerMsgId: null,
     // ADR-005 W3 (партия 4): правка сообщения — UI-flow, состояние у владельца форм.
     editingMessage: null,
+    // ADR-005 W3 (партия 6): перетаскивание заметок — UI-flow.
+    draggedNoteId: null,
+    dragOverNoteId: null,
+    dragOverPos: null,
     },
     // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
     modals: {

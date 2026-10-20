@@ -16,6 +16,9 @@ import { createChatStore } from '../src/chat-store.js';
 import { createSendingStore } from '../src/features/sending-store.js';
 import { createGroupsStore } from '../src/features/groups-store.js';
 
+// CSS.escape — браузерный глобал; в Node его нет, а модуль им пользуется.
+if (typeof globalThis.CSS === 'undefined') globalThis.CSS = { escape: (s) => String(s) };
+
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
@@ -28,12 +31,15 @@ const apiMock = {
   getGroupMessages: async (id, emails, force) => { apiMock.calls.push(['getGroupMessages', id, force]); return apiMock.groupMessages; },
   getMyGroupKey: async (id) => { apiMock.calls.push(['getMyGroupKey', id]); return apiMock.myGroupKey; },
   saveProfile: (...a) => { apiMock.calls.push(['saveProfile', ...a]); },
+  sendGroupMeta: async (...a) => { apiMock.calls.push(['sendGroupMeta', ...a]); return { ok: true }; },
 };
-const dbMock = { kv: {}, kvGet: async (ns, k) => (dbMock.kv[k] ?? null), kvSet: async (ns, k, v) => { dbMock.kv[k] = v; } };
+const dbMock = { kv: {}, kvGet: async (ns, k) => (dbMock.kv[k] ?? null), kvSet: async (ns, k, v) => { dbMock.kv[k] = v; }, kvDelete: async (ns, k) => { delete dbMock.kv[k]; } };
 const cryptoMock = {
   isEncrypted: (s) => typeof s === 'string' && s.startsWith('ENC:'),
   decryptWithGroupKey: null, // назначается тестом
   setPeerPublicKey: () => {},
+  encryptWithGroupKey: async (plain, key) => { cryptoMock.encryptCalls.push([plain, key]); return 'ENC(' + key + ')'; },
+  encryptCalls: [],
 };
 
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
@@ -86,6 +92,10 @@ function resetWorld(over = {}) {
   apiMock.calls = [];
   state.calls = [];
   state.pinned = null;
+  state.isAdmin = true;
+  state.currentGroup = { id: 'G1', name: 'Группа' };
+  state.groupKeys = { G1: 'GK1' };
+  state.messageListEl = null;
   globalThis.__presCalls = [];
   globalThis.__chatMock.state.activeChat = 'group:G1';
   globalThis.__mailboxMock.state.emails = [];
@@ -124,6 +134,14 @@ function makeDeps(over = {}) {
     saveCurrentHistory: (chatKey) => { state.calls.push('saveCurrentHistory'); },
     sendReadReceipts: (ids) => { state.calls.push('sendReadReceipts:' + ids.length); },
     noteSeen: (e, ts) => { state.calls.push('noteSeen:' + e); },
+    // ADR-005 W3 (партия 6): закрепление сообщения.
+    isGroupAdmin: () => state.isAdmin,
+    currentGroup: () => state.currentGroup,
+    groupKeys: state.groupKeys,
+    pinnedMsgId: () => (state.pinned && state.pinned.msg_id) || null,
+    pinGroupMessage: async (msg) => { state.calls.push('pinGroupMessage:' + (msg && msg.id)); },
+    getMessageListEl: () => state.messageListEl,
+    jumpToBottom: () => { state.calls.push('jumpToBottom'); },
   };
   return Object.assign(deps, over);
 }
@@ -352,6 +370,82 @@ console.log('12. конверт с gavatar → аватар группы леч�
   await G.loadGroupMessages(d, 'G1');
   check('healGroupAvatarFromMessage вызван для G1', state.calls.includes('healGroupAvatar:G1'), state.calls);
   check('сообщение при этом отрисовано', d.chat.state.messages.length === 1, d.chat.state.messages);
+}
+
+// ── ADR-005 W3 (партия 6): закрепление сообщения в группе ───────────
+console.log('Закрепление сообщения');
+{
+  const d = makeDeps();
+
+  // 1. Закрепить: состояние + kv
+  resetWorld();
+  await G.setPinnedState(d, 'G1', { msg_id: 'm1', preview: 'текст', ts: 5 });
+  check('закрепление: состояние обновлено', state.pinned && state.pinned.msg_id === 'm1', state.pinned);
+  check('закрепление: записано в kv', dbMock.kv['pinned:G1'] && JSON.parse(dbMock.kv['pinned:G1']).msg_id === 'm1', dbMock.kv['pinned:G1']);
+
+  // 2. Открепить: kv удаляется, состояние сброшено
+  resetWorld();
+  dbMock.kv['pinned:G1'] = '{"msg_id":"m1"}';
+  await G.setPinnedState(d, 'G1', null);
+  check('открепление: kv удалён', dbMock.kv['pinned:G1'] === undefined, dbMock.kv['pinned:G1']);
+  check('открепление: состояние сброшено', state.pinned && state.pinned.msg_id === null, state.pinned);
+
+  // 3. applyPinFromWire: более старый pin игнорируется
+  resetWorld();
+  state.pinned = { msg_id: 'old', preview: 'старый', ts: 100 };
+  dbMock.kv['pinned:G1'] = JSON.stringify(state.pinned);
+  await G.applyPinFromWire(d, 'G1', { msg_id: 'new', preview: 'новый', ts: 50 });
+  check('старый pin не применяется', state.pinned.msg_id === 'old', state.pinned);
+
+  // 4. applyPinFromWire: более новый — применяется
+  resetWorld();
+  state.pinned = { msg_id: 'old', preview: 'старый', ts: 50 };
+  dbMock.kv['pinned:G1'] = JSON.stringify(state.pinned);
+  await G.applyPinFromWire(d, 'G1', { msg_id: 'new', preview: 'новый', ts: 100 });
+  check('новый pin применяется', state.pinned.msg_id === 'new', state.pinned);
+
+  // 5. applyPinFromWire: пустой msg_id = открепление
+  resetWorld();
+  state.pinned = { msg_id: 'old', preview: 'старый', ts: 50 };
+  dbMock.kv['pinned:G1'] = JSON.stringify(state.pinned);
+  await G.applyPinFromWire(d, 'G1', { msg_id: '', ts: 100 });
+  check('пустой msg_id → открепление', state.pinned.msg_id === null, state.pinned);
+
+  // 6. pinGroupMessage: не админ — ничего
+  resetWorld();
+  state.isAdmin = false;
+  await G.pinGroupMessage(d, { id: 'm1', content: 'текст' });
+  check('не админ → закрепление не применяется', state.calls.length === 0, state.calls);
+
+  // 7. pinGroupMessage: админ — решение применено и письмо ушло
+  resetWorld();
+  apiMock.myGroupKey = { group_key: 'GK_FROM_API' };
+  await G.pinGroupMessage(d, { id: 'm1', content: 'текст' });
+  check('админ → закрепление применено', state.pinned && state.pinned.msg_id === 'm1', state.pinned);
+  check('админ → pin-письмо отправлено', apiMock.calls.some((c) => c[0] === 'sendGroupMeta'), apiMock.calls);
+
+  // 8. unpinGroupMessage — вызывает pinGroupMessage с пустым содержимым
+  resetWorld();
+  state.pinned = { msg_id: 'm1', preview: 'p' };
+  await G.unpinGroupMessage(d);
+  check('открепление вызывает pinGroupMessage', state.calls.some((c) => c.startsWith('pinGroupMessage')), state.calls);
+
+  // 9. scrollPinnedToView: без списка — ничего
+  resetWorld();
+  G.scrollPinnedToView(d);
+  check('без списка сообщений — без прокрутки', !state.calls.includes('jumpToBottom'), state.calls);
+
+  // 10. scrollPinnedToView: сообщения нет — прокрутка вниз
+  resetWorld();
+  state.messageListEl = { querySelector: () => null, scrollTo: () => { state.calls.push('scrollTo'); } };
+  G.scrollPinnedToView(d);
+  check('закреплённого нет → вниз', state.calls.includes('jumpToBottom'), state.calls);
+
+  // 11. scrollPinnedToView: сообщение найдено — прокрутка к нему
+  resetWorld();
+  state.messageListEl = { querySelector: () => ({ offsetTop: 100 }), scrollTo: (o) => { state.calls.push('scrollTo:' + o.top); } };
+  G.scrollPinnedToView(d);
+  check('найдено → прокрутка к сообщению', state.calls.some((c) => c.startsWith('scrollTo:')), state.calls);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
