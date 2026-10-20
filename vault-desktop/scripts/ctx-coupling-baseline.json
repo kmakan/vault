@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 92,
+  "totalCtxRefs": 80,
   "totalFunctions": 313,
-  "functionsWithCtx": 66,
+  "functionsWithCtx": 65,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -167,20 +167,11 @@
       "biggestCtxFn": null
     },
     "src/features/emails.js": {
-      "ctxRefs": 12,
-      "fields": [
-        "email",
-        "emails",
-        "loadCursors",
-        "processIncoming",
-        "processInvites",
-        "saveCursors",
-        "sendDeliveredReceipts",
-        "syncGroupAvatarsFromMeta"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "loadEmails"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/envelope-id.js": {
       "ctxRefs": 0,

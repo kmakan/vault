@@ -1,9 +1,13 @@
 // Feature module: загрузка/мерж/персист списка писем (инкрементальный фетч).
-// Этап 5 декомпозиции App.vue — изоляция фич-доменов (ctx-паттерн).
 // ADR-001 домен 2 (под-домен «загрузка писем»): loadEmails — вне критического
-// пути ОТПРАВКИ, downstream-обработчики (processIncoming/processInvites/
-// syncGroupAvatarsFromMeta/sendDeliveredReceipts) остаются в App.vue и
-// вызываются через ctx. Курсоры (loadCursors/saveCursors) — тоже ctx.
+// пути ОТПРАВКИ.
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 10: модуль больше НЕ читает компонент.
+// Список писем, флаги загрузки и ошибки — владелец mailbox-store (ADR-004
+// J.2b/J.3c); email аккаунта — владелец session-store; курсоры
+// (loadCursors/saveCursors) и downstream-обработчики (processIncoming/
+// processInvites/syncGroupAvatarsFromMeta/sendDeliveredReceipts) — эффекты в
+// deps: это оркестрация, а не состояние.
 //
 // Инварианты:
 //  - this.emails НЕ сбрасывается в начале (пока фетч идёт — старый список в UI);
@@ -15,24 +19,26 @@
 //  - «Not connected» пробрасывается наверх (mounted() переспросит пароль).
 
 import api, { db } from '../api.js';
+import { mailboxState } from './mailbox-store.js';
+import { sessionStore } from './session-store.js';
 
-export async function loadEmails(ctx, silent = false) {
+export async function loadEmails(deps, silent = false) {
   if (!silent) {
-    ctx.emailsLoading = true;
-    ctx.emailError = '';
+    mailboxState.setEmailsLoading(true);
+    mailboxState.setEmailError('');
   }
   try {
     const accounts = await api.getEmailAccounts();
-    // Не сбрасываем ctx.emails в начале: пока фетч идёт (или падает),
+    // Не сбрасываем mailboxState.state.emails в начале: пока фетч идёт (или падает),
     // старый список остаётся в UI — клик по чату не видит пустоту.
-    // ПЕРСИСТ: ctx.emails восстанавливается из sqlite при входе
+    // ПЕРСИСТ: mailboxState.state.emails восстанавливается из sqlite при входе
     // (первый вызов в сессии) — иначе письма ниже курсоров терялись при
     // перезапуске и чаты без истории были пустыми.
-    if (!silent && ctx.emails.length === 0) {
+    if (!silent && mailboxState.state.emails.length === 0) {
       try {
-        const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (ctx.email || 'anon'));
+        const stored = await db.emailsLoad(accounts[0] ? accounts[0].id : (sessionStore.getCurrentEmail() || 'anon'));
         if (Array.isArray(stored) && stored.length) {
-          ctx.setEmails(stored.map(e => ({
+          mailboxState.setEmails(stored.map(e => ({
             uid: e.uid,
             id: e.uid,
             from: e.from,
@@ -58,13 +64,13 @@ export async function loadEmails(ctx, silent = false) {
         // sqlite надёжны, история в sqlite — источник чатов.
         // Принудительный полный скан с пустыми курсорами ломал INBOX
         // на больших ящиках (UID SEARCH ALL падал в imap 2.4.1).
-        const cursors = ctx.loadCursors(account.id);
+        const cursors = deps.loadCursors(account.id);
         const res = await api.fetchEmailsIncremental(account.id, cursors);
         fetched.push(...(res.messages || []));
-        ctx.saveCursors(account.id, res.cursors);
+        deps.saveCursors(account.id, res.cursors);
       } catch (e) {
         console.error('Failed to fetch emails for account:', e);
-        if (!silent) ctx.emailError = 'fetch: ' + (e && e.message || e);
+        if (!silent) mailboxState.setEmailError('fetch: ' + (e && e.message || e));
         // Re-throw "Not connected" so mounted() can ask for the password again
         if (String(e && e.message || e).toLowerCase().includes('not connected')) {
           throw e;
@@ -74,7 +80,7 @@ export async function loadEmails(ctx, silent = false) {
     // Мержим новые письма со старым списком (полный рескан больше не
     // делается — старые остаются в памяти, новые добавляются сверху).
     // Дедуп по uid+папка; cap 2000 — старые конверты уходят.
-    const merged = [...ctx.emails];
+    const merged = [...mailboxState.state.emails];
     const seen = new Set(merged.map(m => m.uid + '|' + (m.folder || 'INBOX')));
     // Кросс-папочные копии: письмо могло быть проиндексировано из INBOX,
     // а потом провайдер перенёс его в Спам — старая ссылка (INBOX, uid)
@@ -105,15 +111,15 @@ export async function loadEmails(ctx, silent = false) {
     }
     merged.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     if (merged.length > 2000) merged.length = 2000;
-    ctx.setEmails(merged);
+    mailboxState.setEmails(merged);
     // Источник метаданных для fetchAllHandshake (в памяти: без гонки
     // на fire-and-forget emailsSave ниже).
-    api.setEmailsSource(ctx.emails);
+    api.setEmailsSource(mailboxState.state.emails);
     // ПЕРСИСТ: envelope cache в sqlite — при перезапуске письма
     // восстанавливаются без полного IMAP-скана (курсоры согласованы).
     try {
-      const acc = accounts[0] ? accounts[0].id : (ctx.email || 'anon');
-      db.emailsSave(acc, JSON.stringify(ctx.emails.map(m => ({
+      const acc = accounts[0] ? accounts[0].id : (sessionStore.getCurrentEmail() || 'anon');
+      db.emailsSave(acc, JSON.stringify(mailboxState.state.emails.map(m => ({
         uid: String(m.uid ?? m.id ?? ''),
         folder: m.folder || 'INBOX',
         from: m.from || '',
@@ -126,27 +132,27 @@ export async function loadEmails(ctx, silent = false) {
     } catch (e) {
       console.warn('loadEmails: sqlite save failed:', e);
     }
-    console.log(`[Emails] loaded ${ctx.emails.length} messages (${fetched.length} new)`);
+    console.log(`[Emails] loaded ${mailboxState.state.emails.length} messages (${fetched.length} new)`);
     // Непрочитанные + PUSH-уведомления: каждый fetched-батч
     // классифицируем (счётчики непрочитанных — всегда; уведомления —
     // только при silent=true, и только для свежих писем).
-    if (fetched.length) await ctx.processIncoming(fetched, { notify: silent });
+    if (fetched.length) await deps.processIncoming(fetched, { notify: silent });
     // После поллинга разбираем инвайты/подтверждения групп (попап согласия).
-    await ctx.processInvites();
+    await deps.processInvites();
     // Аватары групп: meta-письма (VaultGroupMeta) разбираем здесь же, а не
     // только при открытии группы — иначе участник, не открывавший группу,
     // новый аватар админа не увидит никогда.
-    await ctx.syncGroupAvatarsFromMeta();
+    await deps.syncGroupAvatarsFromMeta();
     // Квитанции «доставлено»: шлём {delivered:1} сразу при получении писем.
-    await ctx.sendDeliveredReceipts(fetched);
+    await deps.sendDeliveredReceipts(fetched);
   } catch (error) {
     // let "Not connected" propagate to the caller (app restart re-login)
     if (String(error && error.message || error).toLowerCase().includes('not connected')) {
       throw error;
     }
     console.error('Failed to load emails:', error);
-    if (!silent) ctx.emailError = 'load: ' + (error && error.message || error);
+    if (!silent) mailboxState.setEmailError('load: ' + (error && error.message || error));
   } finally {
-    if (!silent) ctx.emailsLoading = false;
+    if (!silent) mailboxState.setEmailsLoading(false);
   }
 }

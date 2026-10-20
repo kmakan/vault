@@ -1794,6 +1794,19 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракт фичи писем (ADR-005 W2, партия 10): список писем и флаги
+    // загрузки — у владельца mailbox-store (модуль берёт их сам), курсоры и
+    // downstream-обработчики — эффекты.
+    emailsDeps() {
+      return {
+        loadCursors: (id) => this.loadCursors(id),
+        saveCursors: (id, cursors) => this.saveCursors(id, cursors),
+        processIncoming: (fetched, opts) => this.processIncoming(fetched, opts),
+        processInvites: () => this.processInvites(),
+        syncGroupAvatarsFromMeta: () => this.syncGroupAvatarsFromMeta(),
+        sendDeliveredReceipts: (fetched) => this.sendDeliveredReceipts(fetched),
+      };
+    },
     // Контракт фичи duress (ADR-005 W2, партия 9): состояние замка — узкие
     // доступы (спред ...duressState() копирует значения в data(), поэтому
     // модулю нужен геттер/сеттер, а не сам объект), ключи пиров и email модуль
@@ -2301,7 +2314,7 @@ export default {
           try { if (await PresenceFeature.isEnabled(this.email)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
-          EmailsFeature.loadEmails(this).catch(e => {
+          EmailsFeature.loadEmails(this.emailsDeps).catch(e => {
             if (String(e && e.message || e).toLowerCase().includes('not connected')) {
               this.showRestoreFailure();
             }
@@ -2976,7 +2989,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         this.startPolling()
         if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
         else this.idleLoop(); // Rust-монитор IDLE — доставка звонков/писем
-        EmailsFeature.loadEmails(this).catch(e => {
+        EmailsFeature.loadEmails(this.emailsDeps).catch(e => {
           if (String(e && e.message || e).toLowerCase().includes('not connected')) {
             this.loginError = e.message;
           }
@@ -3070,7 +3083,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
         this.startPolling();
         this.idleLoop();
-        EmailsFeature.loadEmails(this).catch(() => {});
+        EmailsFeature.loadEmails(this.emailsDeps).catch(() => {});
         // Сообщаем контактам новый адрес: broadcast-письмо несёт name/avatar
         // и key (тот же fingerprint) — получатели обновят адрес контакта.
         try { await this.broadcastProfile(); } catch (e) { console.error('[change-email] broadcast failed:', e); }
@@ -3415,7 +3428,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.
       if (this.emails.length === 0) {
         try {
-          await EmailsFeature.loadEmails(this, true);
+          await EmailsFeature.loadEmails(this.emailsDeps, true);
         } catch (e) { /* Not connected — тихий фолбэк */ }
       }
       await this.loadMessages(email);
@@ -4039,7 +4052,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         loadContacts: () => this.loadContacts(),
         loadGroups: () => this.loadGroups(),
         loadChannels: () => this.loadChannels(),
-        loadEmails: () => EmailsFeature.loadEmails(this),
+        loadEmails: () => EmailsFeature.loadEmails(this.emailsDeps),
         startPolling: (ms) => this.startPolling(ms),
         startRelayTicker: () => this.startRelayTicker(),
         idleLoop: () => this.idleLoop(),

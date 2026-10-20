@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 106,
+    "ctxRefSites": 86,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
@@ -10,7 +10,6 @@
   "ctxByFile": {
     "features/channels.js": 6,
     "features/drafts.js": 9,
-    "features/emails.js": 20,
     "features/folders.js": 11,
     "features/group-avatars.js": 4,
     "features/group-meta.js": 11,
@@ -32,19 +31,6 @@
       "email",
       "newMessage",
       "setDraft"
-    ],
-    "features/emails.js": [
-      "email",
-      "emailError",
-      "emails",
-      "emailsLoading",
-      "loadCursors",
-      "processIncoming",
-      "processInvites",
-      "saveCursors",
-      "sendDeliveredReceipts",
-      "setEmails",
-      "syncGroupAvatarsFromMeta"
     ],
     "features/folders.js": [
       "chatFolderNewName",

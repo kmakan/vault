@@ -30,17 +30,7 @@
     ],
     "duress.js": [],
     "edits.js": [],
-    "emails.js": [
-      "email",
-      "emailError",
-      "emailsLoading",
-      "loadCursors",
-      "processIncoming",
-      "processInvites",
-      "saveCursors",
-      "sendDeliveredReceipts",
-      "syncGroupAvatarsFromMeta"
-    ],
+    "emails.js": [],
     "envelope-id.js": [],
     "folders-store.js": [],
     "folders.js": [
@@ -133,12 +123,6 @@
     "channelById": [
       "channels.js"
     ],
-    "emailsLoading": [
-      "emails.js"
-    ],
-    "emailError": [
-      "emails.js"
-    ],
     "folderDialogOpen": [
       "folders.js"
     ],
@@ -162,8 +146,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 50,
-    "ctxRefSites": 106,
+    "ctxFields": 41,
+    "ctxRefSites": 86,
     "sharedWriteFields": 0
   }
 }
