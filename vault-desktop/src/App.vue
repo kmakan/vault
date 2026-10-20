@@ -994,6 +994,7 @@ import * as EditsFeature from './features/edits.js';
 import * as NotesFeature from './features/notes.js';
 import * as StarsFeature from './features/stars.js';
 import * as KeysFeature from './features/keys.js';
+import * as ChatUiFeature from './features/chat-ui.js';
 import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
@@ -1187,7 +1188,7 @@ export default {
       // Мобильная навигация: на узком экране
       // видна ОДНА панель — список чатов ИЛИ открытый чат на весь экран.
       // mobileChatOpen=true — показан чат (main-area), кнопка «назад» в шапке.
-      mobileChatOpen: false,
+      // mobileChatOpen — в uiStore (ADR-005 W3, партия 10).
       // Счётчики непрочитанных по чатам (email | 'group:<id>' → число).
       // Источник данных — chat-store (ADR-004 A11); сбрасываются при открытии чата.
       // флаги чатов email|'group:<id>' →
@@ -1279,7 +1280,7 @@ export default {
       // ADR-005 W2 партия 3: контракт MessagesFeature.loadMessages — в
       // одноимённом делегаторе (ниже в methods), собран живьём на каждый вызов.
       // Контекстное меню сообщения (копирование)
-      messageMenu: null,
+      // messageMenu — в uiStore (ADR-005 W3, партия 10).
       // replyTo/reactionPickerMsgId — в uiStore (ADR-005 W3, партия 3).
       // Перетаскивание заметок (__notes__): ид заметки и цель drop.
       // draggedNoteId — в uiStore (ADR-005 W3, партия 6).
@@ -1633,6 +1634,36 @@ export default {
     // Прокси во владельца контактов (ADR-004 J.5a):
     // contacts/contactAliases вынесены inject data() в contacts-store.
     // presence.js/profiles.js читают через ctx.lastSeenMap (computed proxy).
+    // ADR-005 W3 (партия 10): навигация по чату — у владельца форм.
+    messageMenu: {
+      get() { return uiStore.getFormField('messageMenu'); },
+      set(v) { uiStore.setFormField('messageMenu', v); },
+    },
+    mobileChatOpen: {
+      get() { return uiStore.getModal('mobileChatOpen'); },
+      set(v) { uiStore.setModal('mobileChatOpen', v); },
+    },
+    // Контракт фичи навигации по чату (ADR-005 W3, партия 10).
+    chatUiDeps() {
+      return {
+        isMobile: this.isMobile,
+        setMobileChatOpen: (v) => { this.mobileChatOpen = v; },
+        mobileChatOpen: () => this.mobileChatOpen,
+        getMessageListEl: () => (this.$refs.messageList && this.$refs.messageList.container) || null,
+        getMessageMenuEl: () => document.querySelector('.message-menu'),
+        nextTick: (cb) => this.$nextTick(cb),
+        nextTickAsync: () => this.$nextTick(),
+        setShowJumpToBottom: (v) => { this.showJumpToBottom = v; },
+        setChatMenu: (v) => { this.chatMenu = v; },
+        setMessageMenu: (v) => { this.messageMenu = v; },
+        getMenuState: (key) => (key === 'chatMenu' ? this.chatMenu : this.messageMenu),
+        setMenuState: (key, v) => { if (key === 'chatMenu') this.chatMenu = v; else this.messageMenu = v; },
+        copyText: (t) => this.copyText(t),
+        activeChat: () => this.activeChat,
+        activeChatType: () => this.activeChatType,
+        alert: (m) => { alert(m); },
+      };
+    },
     // ADR-005 W3 (партия 9): своя крипто-пара и отпечаток — у владельца
     // идентичности (identity-store), раньше это были поля data().
     publicKey: {
@@ -2968,13 +2999,9 @@ export default {
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() { return RelayFeature.relayExplainDelivery({ relayDeliveryMode: () => this.relayDeliveryMode }); },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
-    openMobileChat() {
-      if (this.isMobile) this.mobileChatOpen = true;
-    },
+    openMobileChat() { return ChatUiFeature.openMobileChat(this.chatUiDeps); },
     // Вернуться к списку чатов (кнопка «назад» в шапке чата).
-    closeMobileChat() {
-      this.mobileChatOpen = false;
-    },
+    closeMobileChat() { return ChatUiFeature.closeMobileChat(this.chatUiDeps); },
     // Плюрализация «участник/участника/участников» по текущей локали.
     // Вызывается из шаблона рядом со счётчиком участников.
     membersLabel(n) {
@@ -3456,30 +3483,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
     // своя отправка); force=false — только если пользователь уже у низа
     // (поллинг не должен выдёргивать из чтения истории).
-    scrollToBottom(force = false) {
-      this.$nextTick(() => {
-        const el = this.$refs.messageList && this.$refs.messageList.container;
-        if (!el) return;
-        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-        if (force || nearBottom) {
-          el.scrollTop = el.scrollHeight;
-        }
-      });
-    },
+    scrollToBottom(force = false) { return ChatUiFeature.scrollToBottom(this.chatUiDeps, force); },
     // Стрелка «вниз к последним сообщениям»: показываем, когда пользователь
     // ушёл от низа чата больше чем на 200px (поллинг/свои отправки его не
     // выдёргивают — только клик по стрелке).
-    onMessagesScroll() {
-      const el = this.$refs.messageList && this.$refs.messageList.container;
-      if (!el) return;
-      this.showJumpToBottom = el.scrollHeight - el.scrollTop - el.clientHeight > 200;
-    },
-    jumpToBottom() {
-      const el = this.$refs.messageList && this.$refs.messageList.container;
-      if (!el) return;
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-      this.showJumpToBottom = false;
-    },
+    onMessagesScroll() { return ChatUiFeature.onMessagesScroll(this.chatUiDeps); },
+    jumpToBottom() { return ChatUiFeature.jumpToBottom(this.chatUiDeps); },
     // --- Закрепление сообщения в группе (только админ) ---
     // Хранится в sqlite kv_store (pinned:<groupId>; последнее по дате — как
     // meta-аватар) + бродкастится письмом {pin:1, msg_id, action, preview}
@@ -4129,9 +4138,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         sendChannelPost: () => this.sendChannelPost(),
       });
     },
-    searchMessages() {
-      alert('Search coming soon!');
-    },
+    searchMessages() { return ChatUiFeature.searchMessages(this.chatUiDeps); },
     async onKeysChanged() { return KeysFeature.onKeysChanged(this.keysDeps); },
     async addPeerKey(payload) { return KeysFeature.addPeerKey(this.keysDeps, payload); },
     // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
@@ -4222,18 +4229,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.
-    chatVisible(chatKey) {
-      // Мобильная навигация: кнопка «назад» возвращает к списку чатов
-      // (mobileChatOpen=false), но activeChat/activeChatType ещё хранят
-      // прошлый чат. Без проверки mobileChatOpen для групп новые групповые
-      // сообщения считались «видимыми» — ни бейджа, ни уведомления.
-      if (chatKey.indexOf('group:') === 0) {
-        return this.activeChatType === 'group' && this.activeChat === chatKey &&
-          (!this.isMobile || this.mobileChatOpen);
-      }
-      return this.activeChatType === 'chat' && this.activeChat === chatKey &&
-        (!this.isMobile || this.mobileChatOpen);
-    },
+    chatVisible(chatKey) { return ChatUiFeature.chatVisible(this.chatUiDeps, chatKey); },
     unreadOf(chatKey) {
       return this.chat.unreadOf(chatKey);
     },
@@ -4277,27 +4273,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         console.warn('[autoclean] failed:', e);
       }
     },
-    openChatMenu(target, e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
-      let y = Math.max(8, Math.min(e.clientY, window.innerHeight - 130));
-      // На Android WebView долгое нажатие часто присылает contextmenu с
-      // clientX/Y=0 — берём координаты элемента, иначе меню липнет к верху
-      // экрана и прячется под статус-бар.
-      if (!e.clientX && !e.clientY && e.target && e.target.getBoundingClientRect) {
-        const r = e.target.closest('.contact-item') || e.target;
-        const rr = r.getBoundingClientRect();
-        y = Math.max(8, Math.min(rr.bottom + 4, window.innerHeight - 130));
-      }
-      this.chatMenu = { show: true, target, x, y };
-      // Финальный клампинг по фактическому размеру меню (оценка выше —
-      // статическая, реальных пунктов может быть больше/меньше).
-      this.clampMenuAfterRender('chatMenu', x, y);
-    },
-    closeChatMenu() {
-      this.chatMenu = { show: false, target: null };
-    },
+    openChatMenu(target, e) { return ChatUiFeature.openChatMenu(this.chatUiDeps, target, e); },
+    closeChatMenu() { return ChatUiFeature.closeChatMenu(this.chatUiDeps); },
     async toggleArchive() {
       const key = this.flagKey(this.chatMenu.target);
       const f = { ...foldersStore.flagOf(key) };
@@ -4478,51 +4455,17 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     // --- Копирование сообщений ---
     linkify(text) { return MsgFormat.linkify(text); },
-    onMessageTextClick(e) {
-      const urlEl = e.target.closest('a[data-url]');
-      if (urlEl) { e.preventDefault(); openExternal(urlEl.dataset.url).catch(() => {}); return; }
-      const phoneEl = e.target.closest('a[data-phone]');
-      if (phoneEl) { e.preventDefault(); this.copyText(phoneEl.dataset.phone); }
-    },
+    onMessageTextClick(e) { return ChatUiFeature.onMessageTextClick(this.chatUiDeps, e); },
     // ADR-003 Этап 3: извлечение телефонов и ссылок — в message-format.js.
     // Регулярка телефона теперь ОДНА на этот метод и linkify: копии в App.vue
     // и в модуле разъехались бы, и в меню попадал бы другой набор номеров,
     // чем в тексте сообщения.
-    openMessageMenu(event, msg) {
-      // меню открывается, шаблон прячет неприменимое по msg.callEvent.
-      const content = msg.callEvent ? '' : (msg.content || '');
-      const { phones, urls } = MsgFormat.extractPhonesAndUrls(content);
-      // Android WebView при долгом нажатии иногда присылает clientX/Y=0
-      // (как в openChatMenu) — берём координаты пузыря, иначе меню в углу.
-      let x = event.clientX, y = event.clientY;
-      if (!x && !y && event.target && event.target.getBoundingClientRect) {
-        const r = event.target.getBoundingClientRect();
-        x = r.left + 12;
-        y = r.bottom + 4;
-      }
-      this.messageMenu = { x, y, msg, phones, urls };
-      // Клампинг по фактическому размеру (после рендера): без него меню
-      // уходит за нижний/правый край — последнее сообщение при полном
-      // экране на десктопе, на телефоне — за оба края.
-      this.clampMenuAfterRender('messageMenu', x, y);
-    },
+    openMessageMenu(event, msg) { return ChatUiFeature.openMessageMenu(this.chatUiDeps, event, msg); },
     // Измерить отрендеренное .message-menu и втянуть в экран. Меню
     // динамическое (пункты скрываются), поэтому размер берём из DOM,
     // а не оцениваем. Оверлей один на экране (v-if + inset:0 перехватывает
     // ввод), так что querySelector находит именно открытое меню.
-    async clampMenuAfterRender(key, x, y) {
-      await this.$nextTick();
-      const mm = this[key];
-      if (!mm || mm.x !== x || mm.y !== y || (key === 'chatMenu' && !mm.show)) return;
-      const el = document.querySelector('.message-menu');
-      if (!el) return;
-      const M = 8;
-      const w = el.offsetWidth + 2;  // + границы
-      const h = el.offsetHeight + 2;
-      const nx = Math.max(M, Math.min(x, window.innerWidth - w - M));
-      const ny = Math.max(M, Math.min(y, window.innerHeight - h - M));
-      if (nx !== x || ny !== y) this[key] = { ...mm, x: nx, y: ny };
-    },
+    async clampMenuAfterRender(key, x, y) { return ChatUiFeature.clampMenuAfterRender(this.chatUiDeps, key, x, y); },
     // Клик по логотипу в шапке → сайт приложения (когда появится, M4).
     // Пока APP_SITE_URL пустой — клик ничего не делает.
     openAppSite() { return ExtLinks.openAppSite(); },

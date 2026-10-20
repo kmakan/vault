@@ -127,6 +127,8 @@ export function defaultUiState() {
     reactionPickerMsgId: null,
     // ADR-005 W3 (партия 4): правка сообщения — UI-flow, состояние у владельца форм.
     editingMessage: null,
+    // ADR-005 W3 (партия 10): меню сообщения — UI-flow.
+    messageMenu: null,
     // ADR-005 W3 (партия 6): перетаскивание заметок — UI-flow.
     draggedNoteId: null,
     dragOverNoteId: null,
@@ -152,6 +154,8 @@ export function defaultUiState() {
     showMembersList: false,
     // ADR-005 W2 (партия 14): диалог создания папки.
     folderDialogOpen: false,
+    // ADR-005 W3 (партия 10): мобильный чат открыт/закрыт.
+    mobileChatOpen: false,
     showCreateGroup: false,
     showEmojiPicker: false,
     showSettings: false,
