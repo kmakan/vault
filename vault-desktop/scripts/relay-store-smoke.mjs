@@ -37,5 +37,35 @@ check('setRelayMode("relay")', s1.setRelayMode('relay') === 'relay');
 check('deliveryMode() читает', s1.deliveryMode() === 'relay');
 check('setRelayMode("email") возвращает email', s1.setRelayMode('email') === 'email');
 
+// ── Счётчики отказов реле (resilience) ──────────────────────────────────
+{
+  const r = createRelayStore();
+  check('relayFails стартует 0', r.state.relayFails === 0);
+  check('bumpRelayFails увеличивает', r.bumpRelayFails() === 1 && r.bumpRelayFails() === 2);
+  check('setRelayFails ставит значение', (r.setRelayFails(7), r.state.relayFails === 7));
+  check('resetRelayFails обнуляет', (r.resetRelayFails(), r.state.relayFails === 0));
+  check('bumpRelayFails после reset снова 1', r.bumpRelayFails() === 1);
+}
+
+// ── Эко-автономность (авто-fallback) ───────────────────────────────────
+{
+  const r = createRelayStore();
+  check('ecoAutonomous стартует false', r.state.ecoAutonomous === false);
+  check('setEcoAutonomous(true) пишет', r.setEcoAutonomous(true) === true);
+  check('isEcoAutonomous читает', r.isEcoAutonomous() === true);
+  check('setEcoAutonomous(0) → false (логическое приведение)', r.setEcoAutonomous(0) === false);
+  check('isEcoAutonomous после сброса', r.isEcoAutonomous() === false);
+}
+
+// ── Момент обрыва связи и здоровье реле ────────────────────────────────
+{
+  const r = createRelayStore();
+  check('relayOfflineSince стартует null', r.state.relayOfflineSince === null);
+  check('setRelayOfflineSince пишет метку', (r.setRelayOfflineSince(1700000000000), r.getRelayOfflineSince() === 1700000000000));
+  check('lastRelayHealth стартует null', r.getLastRelayHealth() === null);
+  check('setLastRelayHealth пишет', (r.setLastRelayHealth({ ok: true }), r.getLastRelayHealth().ok === true));
+  check('getRelayOfflineSince читает то же', r.getRelayOfflineSince() === 1700000000000);
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
