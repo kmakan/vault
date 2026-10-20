@@ -2,7 +2,7 @@
   "measuredAt": "2026-10-19",
   "totals": {
     "ctxRefSites": 0,
-    "appVueOwn": 131,
+    "appVueOwn": 126,
     "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
@@ -70,7 +70,6 @@
     "loadLocalProfiles",
     "loadProfiles",
     "setBio",
-    "noteSeen",
     "presenceSetEnabled",
     "forwardDeps",
     "loadIgnoredUsers",
@@ -117,10 +116,6 @@
     "onNoteDrop",
     "buildEnvelope",
     "sendGeoMessage",
-    "startEditMessage",
-    "cancelEdit",
-    "deleteMessage",
-    "deleteMessageForMe",
     "isStarred",
     "toggleStar",
     "loadStarredFor",

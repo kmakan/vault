@@ -339,15 +339,18 @@ console.log('5. shrinkAvatar/compressImage');
 // ── 6. Presence ────────────────────────────────────────────────
 console.log('6. Зелёная точка');
 {
-  // ADR-001: noteSeen/isRecentlySeen — чистые (возвращают значение).
+  // ADR-005 W3 (партия 4): noteSeen/isRecentlySeen — чистые (возвращают значение).
+  // Контракт deps: карта «видели» у владельца контактов → геттер/сеттер.
   let map = {};
-  map = P.noteSeen(map, 'a@x.ru', 1000);
+  const seenDeps = (get, set) => ({ lastSeenMap: () => get(), setLastSeenMap: (v) => set(v) });
+  const seen = (m, e, ts) => P.noteSeen(seenDeps(() => m, (v) => { m = v; }), e, ts);
+  map = seen(map, 'a@x.ru', 1000);
   check('noteSeen: фиксирует ts', map['a@x.ru'] === 1000);
-  map = P.noteSeen(map, 'a@x.ru', 500); // старее — не откатывает
+  map = seen(map, 'a@x.ru', 500); // старее — не откатывает
   check('noteSeen: старый ts не откатывает', map['a@x.ru'] === 1000);
-  map = P.noteSeen(map, 'no-at-sign', 9999);
+  map = seen(map, 'no-at-sign', 9999);
   check('noteSeen: не-email — игнор', map['no-at-sign'] === undefined);
-  let map2 = P.noteSeen({}, 'b@x.ru');
+  let map2 = seen({}, 'b@x.ru');
   check('noteSeen: без ts → Date.now', typeof map2['b@x.ru'] === 'number' && Math.abs(Date.now() - map2['b@x.ru']) < 5000);
   // isRecentlySeen
   const fresh = { 'a@x.ru': Date.now() - 60 * 1000 };

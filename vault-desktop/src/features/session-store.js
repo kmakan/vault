@@ -125,6 +125,8 @@ export function defaultUiState() {
     // — у владельца форм (раньше это были поля data() компонента).
     replyTo: null,
     reactionPickerMsgId: null,
+    // ADR-005 W3 (партия 4): правка сообщения — UI-flow, состояние у владельца форм.
+    editingMessage: null,
     },
     // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
     modals: {

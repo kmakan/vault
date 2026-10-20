@@ -131,5 +131,115 @@ for(const fn of converted){
 }
 check('Регрессия: нет ctx в переведённых', clean);
 
+// ── ADR-005 W3 (партия 4): правка и удаление (логика ушла из App.vue) ──
+{
+  const edits = E;   // копия модуля уже поднята выше
+  const ui = await import(`${ROOT}/session-store.js`).catch(() => null);
+  if (!edits) { console.log('  ~ модуль правок не поднят — пропуск'); }
+  else {
+    const uiStore = ui.uiStore;
+    const calls = { tomb: [], mid: [], edits: [], mails: [], hist: [], cache: [], focused: 0, nextTick: 0, confirm: true };
+    const chat = {
+      state: { messages: [] },
+      set: (m) => { chat.state.messages = m; },
+      // НАСТОЯЩИЙ chat-store.splice на месте (не замена массива): от этого
+      // зависит, что в кэш уходит массив БЕЗ удалённого сообщения.
+      removeById: (id) => {
+        const i = chat.state.messages.findIndex((m) => m.id === id);
+        if (i < 0) return false;
+        chat.state.messages.splice(i, 1);
+        return true;
+      },
+    };
+    const notes = { load: () => [{ id: 'n1', content: 'заметка' }], removeById: () => { notes.removed = true; } };
+    const deps = {
+      email: () => 'me@x.ru',
+      activeChat: () => calls.activeChat,
+      activeChatType: () => calls.activeChatType || 'chat',
+      currentGroup: () => calls.currentGroup || null,
+      chat,
+      notes,
+      addTombstone: (id) => calls.tomb.push(id),
+      addMidTombstone: (mid) => calls.mid.push(mid),
+      recordLocalEdit: (k, id, t, a) => calls.edits.push([k, id, t, a]),
+      sendEditEmail: (id, t, a) => { calls.mails.push([id, t, a]); return Promise.resolve(); },
+      saveCurrentHistory: (k) => calls.hist.push(k),
+      saveChatCache: (k, l) => calls.cache.push([k, (l || []).length]),
+      editingMessage: () => uiStore.getFormField('editingMessage'),
+      setEditingMessage: (v) => uiStore.setFormField('editingMessage', v),
+      setReplyTo: (v) => uiStore.setFormField('replyTo', v),
+      setNewMessage: (v) => { chat.state.newMessage = v; },
+      focusInput: () => { calls.focused++; },
+      nextTick: (cb) => { calls.nextTick++; if (cb) cb(); },
+      confirm: () => calls.confirm,
+    };
+    const reset = () => {
+      calls.tomb = []; calls.mid = []; calls.edits = []; calls.mails = []; calls.hist = []; calls.cache = [];
+      calls.focused = 0; calls.nextTick = 0; calls.confirm = true;
+      calls.activeChat = 'peer@x.ru'; calls.activeChatType = 'chat'; calls.currentGroup = null;
+      chat.state.messages = [{ id: 'm1', from: 'me', content: 'привет' }];
+      chat.state.newMessage = '';
+      uiStore.setFormField('editingMessage', null);
+      uiStore.setFormField('replyTo', null);
+    };
+
+    // 1. startEditMessage: только свои, без вложений
+    reset();
+    uiStore.setFormField('replyTo', { id: 'r1', content: 'прежний ответ' });
+    edits.startEditMessage(deps, { id: 'm1', from: 'me', content: '> цитата\nтекст' });
+    check('startEditMessage: прежний ответ сброшен', !uiStore.getFormField('replyTo'));
+    check('startEditMessage: своё сообщение → редактирование', !!uiStore.getFormField('editingMessage'));
+    check('startEditMessage: в композер — тело без цитаты', chat.state.newMessage === 'текст', chat.state.newMessage);
+    check('startEditMessage: фокус в поле ввода', calls.focused === 1 && calls.nextTick === 1);
+    reset();
+    edits.startEditMessage(deps, { id: 'm2', from: 'peer@x.ru', content: 'чужое' });
+    // setFormField приводит null к '' (для UI эквивалентно — проверяем на «пусто»)
+    check('startEditMessage: чужое сообщение → не редактируем', !uiStore.getFormField('editingMessage'));
+    reset();
+    edits.startEditMessage(deps, { id: 'm3', from: 'me', attachment: { name: 'f.png' } });
+    check('startEditMessage: вложение → не редактируем', !uiStore.getFormField('editingMessage'));
+
+    // 2. cancelEdit
+    reset();
+    edits.startEditMessage(deps, { id: 'm1', from: 'me', content: 'текст' });
+    edits.cancelEdit(deps);
+    check('cancelEdit: правка снята, композер очищен',
+      !uiStore.getFormField('editingMessage') && chat.state.newMessage === '');
+
+    // 3. deleteMessage: подтверждение, tombstone, письмо удаления
+    reset();
+    const msg = { id: 'm1', mid: 'mid1', from: 'me', content: 'текст' };
+    chat.state.messages = [msg];
+    await edits.deleteMessage(deps, msg);
+    check('deleteMessage: tombstone + mid-tombstone', calls.tomb[0] === 'm1' && calls.mid[0] === 'mid1', calls);
+    check('deleteMessage: письмо удаления ушло', calls.mails.length === 1 && calls.mails[0][2] === 'delete', calls.mails);
+    check('deleteMessage: локальная правка записана', calls.edits.length === 1 && calls.edits[0][3] === 'delete', calls.edits);
+    check('deleteMessage: помечено удалённым локально', msg.deleted === true && msg.content === '');
+
+    // 3b. Без подтверждения — ничего не происходит
+    reset();
+    calls.confirm = false;
+    await edits.deleteMessage(deps, { id: 'm1', from: 'me', content: 'x' });
+    check('deleteMessage: без подтверждения → не удаляем', calls.tomb.length === 0 && calls.mails.length === 0);
+
+    // 3c. Заметка для себя удаляется полностью (без писем)
+    reset();
+    calls.activeChat = '__notes__';
+    await edits.deleteMessage(deps, { id: 'n1', from: 'me', content: 'заметка' });
+    check('deleteMessage: заметка удаляется без письма', notes.removed === true && calls.mails.length === 0, calls.mails);
+
+    // 4. deleteMessageForMe: tombstone без письма
+    reset();
+    const msg2 = { id: 'm5', mid: 'mid5', from: 'peer@x.ru', content: 'чужое' };
+    chat.state.messages = [msg2];
+    await edits.deleteMessageForMe(deps, msg2);
+    check('deleteMessageForMe: tombstone, но письма НЕТ', calls.tomb[0] === 'm5' && calls.mails.length === 0, calls);
+    check('deleteMessageForMe: история и кэш сохранены', calls.hist.length === 1 && calls.cache.length === 1, calls);
+    check('deleteMessageForMe: сообщение убрано из списка', chat.state.messages.length === 0, chat.state.messages);
+    check('deleteMessageForMe: кэш сохранён БЕЗ удалённого',
+      calls.cache[0] && calls.cache[0][1] === 0, calls.cache);
+  }
+}
+
 console.log('\n=== ИТОГО: '+passed+' pass, '+failed+' fail ===');
 if(failed)process.exit(1);

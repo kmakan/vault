@@ -13,6 +13,8 @@
 import api, { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
+import * as MsgFormat from '../message-format.js';
+import { uiStore } from './session-store.js';
 
 // ── Хранилище wire-правок ─────────────────────────────────────────────────
 // ADR-001: зависимости в сигнатуре — email вместо ctx целиком.
@@ -186,4 +188,78 @@ export function sendEditEmail({ activeChat, activeChatType, currentGroup, groupK
       console.error('Failed to send edit email:', e);
     }
   })();
+}
+
+// ── Правка и удаление сообщений (ADR-005 W3, партия 4) ───────────────────
+// Логика ушла из App.vue. Состояние правки — у владельца форм (uiStore),
+// сообщения — у чат-владельца (per-app), tombstone-кеш — у компонента
+// (через deps).
+//
+// deps: { email(), activeChat(), activeChatType(), currentGroup(), chat, notes,
+//         addTombstone(id), addMidTombstone(mid), recordLocalEdit(k,id,t,a),
+//         sendEditEmail(id,t,a), saveCurrentHistory(k), saveChatCache(k,list),
+//         editingMessage(), setEditingMessage(v), setReplyTo(v),
+//         setNewMessage(v), focusInput(), nextTick(cb), confirm(msg) }
+
+export function startEditMessage(deps, msg) {
+  if (!msg || msg.from !== 'me' || msg.deleted) return;
+  // Вложения редактировать нельзя — только текст.
+  if (msg.attachment) return;
+  deps.setEditingMessage(msg);
+  deps.setReplyTo(null);
+  // Редактируем только тело ответа; цитата "> ..." остаётся нетронутой
+  deps.setNewMessage(MsgFormat.replyBody(msg.content || ''));
+  deps.nextTick(() => { deps.focusInput(); });
+}
+
+export function cancelEdit(deps) {
+  deps.setEditingMessage(null);
+  deps.setNewMessage('');
+}
+
+export async function deleteMessage(deps, msg) {
+  if (!msg || msg.from !== 'me' || msg.deleted) return;
+  const email = deps.email();
+  // Заметки для себя: удаляем заметку ПОЛНОСТЬЮ (никаких писем по почте
+  // и «воскрешения» поллингом — заметки не читаются из IMAP).
+  if (deps.activeChat() === '__notes__') {
+    const ok = await deps.confirm(uiStore.tr('delete_message_confirm') || 'Удалить заметку?');
+    if (!ok) return;
+    deps.notes.removeById(email, msg.id);
+    deps.chat.set(deps.notes.load(email));
+    return;
+  }
+  const ok = await deps.confirm(uiStore.tr('delete_message_confirm') || 'Удалить сообщение у всех?');
+  if (!ok) return;
+  // Оптимистично помечаем удалённым локально + tombstone (поллинг
+  // не «воскресит» сообщение: письмо-оригинал и история фильтруются).
+  deps.addTombstone(msg.id);
+  deps.addMidTombstone(msg.mid);
+  msg.deleted = true;
+  msg.content = '';
+  // (у получателей — после доставки delete-письма).
+  const list = deps.chat.state.messages;
+  const idx = list.indexOf(msg);
+  if (idx !== -1) deps.chat.removeById(list[idx].id);
+  const chatKey = deps.activeChatType() === 'group' && deps.currentGroup()
+    ? 'group:' + deps.currentGroup().id
+    : deps.activeChat();
+  deps.recordLocalEdit(chatKey, msg.id, null, 'delete');
+  await deps.sendEditEmail(msg.id, null, 'delete');
+}
+
+export async function deleteMessageForMe(deps, msg) {
+  if (!msg || !msg.id) return;
+  const chatKey = deps.activeChatType() === 'group' && deps.currentGroup()
+    ? 'group:' + deps.currentGroup().id
+    : deps.activeChat();
+  if (!chatKey || chatKey === '__notes__') return;
+  deps.addTombstone(msg.id);
+  deps.addMidTombstone(msg.mid);
+  const list = deps.chat.state.messages;
+  const idx = list.indexOf(msg);
+  if (idx !== -1) deps.chat.removeById(list[idx].id);
+  deps.saveCurrentHistory(chatKey);
+  // chat-cache тоже обновляем: loadChatCache не фильтрует tombstones,
+  deps.saveChatCache(chatKey, list);
 }

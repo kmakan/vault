@@ -324,11 +324,16 @@ export function compressImage(dataUrl, maxSide, quality) {
 // ── Presence: зелёная точка ────────────────────────────────────
 // ADR-001: чистые функции — возвращают новое значение map/boolean,
 // состояние принадлежит компоненту.
-export function noteSeen(lastSeenMap, email, ts) {
+// deps: { lastSeenMap(), setLastSeenMap(v) } — карта «видели» у владельца
+// контактов (contacts-store, ADR-004 J.5a).
+export function noteSeen(deps, email, ts) {
+  const lastSeenMap = deps.lastSeenMap();
   if (!email || typeof email !== 'string' || !email.includes('@')) return lastSeenMap;
   const t = Number(ts) || Date.now();
   if (((lastSeenMap || {})[email] || 0) < t) {
-    return { ...lastSeenMap, [email]: t };
+    const next = { ...lastSeenMap, [email]: t };
+    deps.setLastSeenMap(next);
+    return next;
   }
   return lastSeenMap;
 }

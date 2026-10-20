@@ -1286,7 +1286,7 @@ export default {
       // Стрелка «вниз к последним сообщениям» в длинных чатах.
       // showJumpToBottominj в uiStore.modalFlags (J.7):
       // Сообщение, которое сейчас редактируется (только своё).
-      editingMessage: null,
+      // editingMessage — в uiStore (ADR-005 W3, партия 4).
       // showSettings/showMembersinj в uiStore.modalFlags (J.7):
       // showMembersinj в uiStore.modalFlags (J.7):
       // restoringSessioninj в session-store.state (J.3a).
@@ -1857,6 +1857,43 @@ export default {
         cryptoReady: () => this.cryptoReady,
         healGroupAvatarFromMessage: (id, av) => this.healGroupAvatarFromMessage(id, av),
         replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
+      };
+    },
+    // ADR-005 W3 (партия 4): правка сообщения — у владельца форм.
+    editingMessage: {
+      get() { return uiStore.getFormField('editingMessage'); },
+      set(v) { uiStore.setFormField('editingMessage', v); },
+    },
+    // Контракт фичи правок/удаления (ADR-005 W3, партия 4).
+    editsDeps() {
+      return {
+        email: () => this.email,
+        activeChat: () => this.activeChat,
+        activeChatType: () => this.activeChatType,
+        currentGroup: () => this.currentGroup,
+        chat: this.chat,
+        notes: this.notes,
+        addTombstone: (id) => this.addTombstone(id),
+        addMidTombstone: (mid) => this.addMidTombstone(mid),
+        recordLocalEdit: (k, id, t, a) => this.recordLocalEdit(k, id, t, a),
+        sendEditEmail: (id, t, a) => this.sendEditEmail(id, t, a),
+        saveCurrentHistory: (k) => this.saveCurrentHistory(k),
+        saveChatCache: (k, list) => this.saveChatCache(k, list),
+        editingMessage: () => uiStore.getFormField('editingMessage'),
+        setEditingMessage: (v) => { uiStore.setFormField('editingMessage', v); },
+        setReplyTo: (v) => { uiStore.setFormField('replyTo', v); },
+        setNewMessage: (v) => { this.chat.setDraft(v); },
+        focusInput: () => { const i = this.$refs.messageInput; if (i && i.focus) i.focus(); },
+        nextTick: (cb) => this.$nextTick(cb),
+        confirm: (msg) => window.confirm(msg),
+      };
+    },
+    // Контракт отметки «видели» (ADR-005 W3, партия 4): карта — у владельца
+    // контактов (contacts-store).
+    presenceDeps() {
+      return {
+        lastSeenMap: () => this.lastSeenMap,
+        setLastSeenMap: (v) => { this.lastSeenMap = v; },
       };
     },
     // ADR-005 W3 (партия 3): ответ на сообщение и пикер реакций — у
@@ -2678,7 +2715,7 @@ export default {
     resetContactEdit() { return ProfilesFeature.resetContactEdit(this.profilesDeps); },
     async shrinkAvatar(dataUrl) { return ProfilesFeature.shrinkAvatar(dataUrl); },
     compressImage(dataUrl, maxSide, quality) { return ProfilesFeature.compressImage(dataUrl, maxSide, quality); },
-    noteSeen(email, ts) { this.lastSeenMap = ProfilesFeature.noteSeen(this.lastSeenMap, email, ts); },
+    noteSeen(email, ts) { return ProfilesFeature.noteSeen(this.presenceDeps, email, ts); },
     isRecentlySeen(email) { return ProfilesFeature.isRecentlySeen(this.lastSeenMap, email); },
     // ── Presence (t_e858bdb9) — heartbeat-зелёная точка; логика в
     // features/presence.js. Тумблер живёт в настройках (Приватность).
@@ -3680,71 +3717,16 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     setReply(msg) { return uiStore.setFormField('replyTo', msg); },
     cancelReply() { return uiStore.setFormField('replyTo', null); },
     // --- Редактирование/удаление сообщений (только свои) ---
-    startEditMessage(msg) {
-      if (!msg || msg.from !== 'me' || msg.deleted) return;
-      // Вложения редактировать нельзя — только текст.
-      if (msg.attachment) return;
-      this.editingMessage = msg;
-      this.replyTo = null;
-      // Редактируем только тело ответа; цитата "> ..." остаётся нетронутой
-      this.newMessage = this.replyBody(msg.content || '');
-      this.$nextTick(() => {
-        const input = this.$refs.messageInput;
-        if (input && input.focus) input.focus();
-      });
-    },
-    cancelEdit() {
-      this.editingMessage = null;
-      this.newMessage = '';
-    },
-    async deleteMessage(msg) {
-      if (!msg || msg.from !== 'me' || msg.deleted) return;
-      // Заметки для себя: удаляем заметку ПОЛНОСТЬЮ (никаких писем по почте
-      // и «воскрешения» поллингом — заметки не читаются из IMAP).
-      if (this.activeChat === '__notes__') {
-        const ok = await confirm(uiStore.tr('delete_message_confirm') || 'Удалить заметку?');
-        if (!ok) return;
-        this.notes.removeById(this.email, msg.id);
-        this.chat.set(this.notes.load(this.email));
-        return;
-      }
-      const ok = await confirm(uiStore.tr('delete_message_confirm') || 'Удалить сообщение у всех?');
-      if (!ok) return;
-      // Оптимистично помечаем удалённым локально + tombstone (поллинг
-      // не «воскресит» сообщение: письмо-оригинал и история фильтруются).
-      this.addTombstone(msg.id);
-      this.addMidTombstone(msg.mid);
-      msg.deleted = true;
-      msg.content = '';
-      // (у получателей — после доставки delete-письма).
-      const idx = this.messages.indexOf(msg);
-      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      this.recordLocalEdit(chatKey, msg.id, null, 'delete');
-      await this.sendEditEmail(msg.id, null, 'delete');
-    },
+    startEditMessage(msg) { return EditsFeature.startEditMessage(this.editsDeps, msg); },
+    cancelEdit() { return EditsFeature.cancelEdit(this.editsDeps); },
+    async deleteMessage(msg) { return EditsFeature.deleteMessage(this.editsDeps, msg); },
     // «Удалить у меня»: убрать сообщение ТОЛЬКО со своего
     // устройства — свои и ЧУЖИЕ сообщения, а также пилюли звонков. У
     // собеседника остаётся. Механизм тот же tombstone (msg.id + Message-ID),
     // что у «удалить у всех»/ephemeral: mergeHistory/mergePending/поллинг
     // отфильтруют его навсегда, воскрешение из письма/All Mail невозможно.
     // Никаких писем не отправляется.
-    async deleteMessageForMe(msg) {
-      if (!msg || !msg.id) return;
-      const chatKey = this.activeChatType === 'group' && this.currentGroup
-        ? 'group:' + this.currentGroup.id
-        : this.activeChat;
-      if (!chatKey || chatKey === '__notes__') return;
-      this.addTombstone(msg.id);
-      this.addMidTombstone(msg.mid);
-      const idx = this.messages.indexOf(msg);
-      if (idx !== -1) this.chat.removeById(this.messages[idx].id);
-      this.saveCurrentHistory(chatKey);
-      // chat-cache тоже обновляем: loadChatCache не фильтрует tombstones,
-      this.saveChatCache(chatKey, this.messages);
-    },
+    async deleteMessageForMe(msg) { return EditsFeature.deleteMessageForMe(this.editsDeps, msg); },
     // ── Избранное ────────────────────────────────
     // Пометка сообщений только локально (как «Удалить у меня»): собеседнику
     // не видно, по почте не синхронизируется. Персист в sqlite kv_store под
