@@ -94,16 +94,7 @@
     ],
     "profiles.js": [],
     "reactions.js": [],
-    "receipts.js": [
-      "cacheBody",
-      "cryptoReady",
-      "email",
-      "emailBodyCache",
-      "parseEnvelope",
-      "peerKeys",
-      "peerPqKeys",
-      "senderEmail"
-    ],
+    "receipts.js": [],
     "recovery-escrow.js": [],
     "recovery-session.js": [],
     "recovery.js": [],
@@ -146,8 +137,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 41,
-    "ctxRefSites": 86,
+    "ctxFields": 33,
+    "ctxRefSites": 69,
     "sharedWriteFields": 0
   }
 }

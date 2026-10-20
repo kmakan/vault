@@ -23,7 +23,7 @@ const cryptoMock = {
   decryptVault: async (body) => {
     const uid = body.replace('ENC:', '');
     if (uid === 'bad') throw new Error('decrypt fail');
-    return JSON.stringify({ id: 'msg-' + uid, vault: 1 });
+    return JSON.stringify({ id: 'msg-' + uid, vault: 1, text: 't' });
   },
   encryptVault: async (content) => 'ENC:' + content,
 };
@@ -48,65 +48,77 @@ prepareModuleCopy(
 );
 const { sendDeliveredReceipts } = await import(MOCKS + '/receipts.mjs');
 
+// ADR-005 W2 (партия 11): состояние — у владельцев. Смоук берёт ТЕ ЖЕ
+// синглтоны, что импортирует копия модуля, — иначе проверял бы не тот объект.
+const { sessionStore } = await import(ROOT + '/src/features/session-store.js');
+const { identityStore } = await import(ROOT + '/src/features/identity-store.js');
+const { mailboxState } = await import(ROOT + '/src/features/mailbox-store.js');
+
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
-function makeCtx(over = {}) {
-  const c = {
+function makeWorld(over = {}) {
+  const w = Object.assign({
     isLoggedIn: true,
     cryptoReady: true,
     email: 'me@x.ru',
     peerKeys: { 'a@x.ru': 'PUB' },
     peerPqKeys: {},
     emailBodyCache: {},
-    senderEmail: (from) => from,
-    parseEnvelope: (txt) => { try { return JSON.parse(txt); } catch { return null; } },
-  };
-  c.cacheBody = (k, v) => { c.emailBodyCache[k] = v; };
-  return Object.assign(c, over);
+  }, over);
+  sessionStore.state.isLoggedIn = w.isLoggedIn;
+  sessionStore.setCurrentEmail(w.email);
+  identityStore.state.peerKeys = w.peerKeys;
+  identityStore.state.peerPqKeys = w.peerPqKeys;
+  mailboxState.state.emailBodyCache = w.emailBodyCache;
+  const deps = { cryptoReady: () => w.cryptoReady };
+  return { w, deps };
 }
 let ctx;
 
 // 1. Не залогинен / не cryptoReady / пусто → no-op
 apiMock.receiptCalls.length = 0;
-await sendDeliveredReceipts(makeCtx({ isLoggedIn: false }), [{ from: 'a@x.ru' }]);
-await sendDeliveredReceipts(makeCtx({ cryptoReady: false }), [{ from: 'a@x.ru' }]);
-await sendDeliveredReceipts(makeCtx(), []);
+await sendDeliveredReceipts(makeWorld({ isLoggedIn: false }).deps, [{ from: 'a@x.ru' }]);
+await sendDeliveredReceipts(makeWorld({ cryptoReady: false }).deps, [{ from: 'a@x.ru' }]);
+await sendDeliveredReceipts(makeWorld().deps, []);
 check('не залогинен / не cryptoReady / пусто → no-op', apiMock.receiptCalls.length === 0);
 
 // 2. Нет ключа у отправителя → пропускаем
-await sendDeliveredReceipts(makeCtx(), [{ from: 'unknown@x.ru', uid: 1, folder: 'INBOX' }]);
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'unknown@x.ru', uid: 1, folder: 'INBOX' }]);
 check('нет ключа отправителя → пропускаем', apiMock.receiptCalls.length === 0);
 
 // 2b. Своё письмо → пропускаем
-await sendDeliveredReceipts(makeCtx(), [{ from: 'me@x.ru', uid: 2, folder: 'INBOX' }]);
+// Ключ СЕБЕ есть — иначе письмо отсеклось бы фильтром «нет ключа», и гвард
+// «своё письмо» ничего не проверял бы.
+await sendDeliveredReceipts(makeWorld({ peerKeys: { 'a@x.ru': 'PUB', 'me@x.ru': 'MYPUB' } }).deps,
+  [{ from: 'me@x.ru', uid: 2, folder: 'INBOX' }]);
 check('своё письмо → пропускаем', apiMock.receiptCalls.length === 0);
 
 // 3. Настоящее vault-письмо → квитанция отправляется
 _kv.clear(); apiMock.receiptCalls.length = 0;
-ctx = makeCtx();
-await sendDeliveredReceipts(ctx, [{ from: 'a@x.ru', uid: 10, folder: 'INBOX' }]);
+ctx = makeWorld();
+await sendDeliveredReceipts(ctx.deps, [{ from: 'a@x.ru', uid: 10, folder: 'INBOX' }]);
 check('vault-письмо → sendReadReceipt вызван', apiMock.receiptCalls.length === 1);
 check('квитанция содержит msg_ids', JSON.parse(apiMock.receiptCalls[0][1].replace('ENC:', '')).msg_ids.length === 1);
 check('delivered-sent записан в kv', _kv.has('delivered-sent'));
 
 // 4. Дедуп: уже отправленная квитанция не повторяется
 apiMock.receiptCalls.length = 0;
-await sendDeliveredReceipts(makeCtx(), [{ from: 'a@x.ru', uid: 10, folder: 'INBOX' }]);
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'a@x.ru', uid: 10, folder: 'INBOX' }]);
 check('дедуп: повторная квитанция НЕ отправлена', apiMock.receiptCalls.length === 0);
 
 // 5. Не vault-письмо (нет env.id) → пропускаем
 apiMock.receiptCalls.length = 0;
-const ctx5 = makeCtx({ peerKeys: { 'b@x.ru': 'PUB' } });
-cryptoMock.decryptVault = async () => JSON.stringify({ vault: 1 }); // нет id
-await sendDeliveredReceipts(ctx5, [{ from: 'b@x.ru', uid: 20, folder: 'INBOX' }]);
+const ctx5 = makeWorld({ peerKeys: { 'b@x.ru': 'PUB' } });
+cryptoMock.decryptVault = async () => JSON.stringify({ vault: 1, text: 't' }); // нет id
+await sendDeliveredReceipts(ctx5.deps, [{ from: 'b@x.ru', uid: 20, folder: 'INBOX' }]);
 check('не vault-письмо (нет env.id) → пропускаем', apiMock.receiptCalls.length === 0);
 
 // 6. Ошибка расшифровки → пропускаем
-cryptoMock.decryptVault = async (body) => { const u = body.replace('ENC:', ''); if (u === 'bad') throw new Error('fail'); return JSON.stringify({ id: 'm' }); };
-await sendDeliveredReceipts(makeCtx(), [{ from: 'a@x.ru', uid: 'bad', folder: 'INBOX' }]);
+cryptoMock.decryptVault = async (body) => { const u = body.replace('ENC:', ''); if (u === 'bad') throw new Error('fail'); return JSON.stringify({ id: 'm', vault: 1, text: 't' }); };
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'a@x.ru', uid: 'bad', folder: 'INBOX' }]);
 check('ошибка расшифровки → пропускаем', apiMock.receiptCalls.length === 0);
 
 // 7. Cap 500: создаём 501 запись, после вызова остаётся 500
@@ -114,12 +126,31 @@ _kv.clear(); apiMock.receiptCalls.length = 0;
 const bigMap = {};
 for (let i = 0; i < 501; i++) bigMap['old-' + i] = i;
 _kv.set('delivered-sent', JSON.stringify(bigMap));
-cryptoMock.decryptVault = async (body) => JSON.stringify({ id: 'msg-' + body.replace('ENC:', ''), vault: 1 });
-await sendDeliveredReceipts(makeCtx(), [{ from: 'a@x.ru', uid: 99, folder: 'INBOX' }]);
+cryptoMock.decryptVault = async (body) => JSON.stringify({ id: 'msg-' + body.replace('ENC:', ''), vault: 1, text: 't' });
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'a@x.ru', uid: 99, folder: 'INBOX' }]);
 // kvSet в модуле fire-and-forget (.catch) — ждём, пока промисс выполнится.
 await new Promise(r => setTimeout(r, 200));
 const after = JSON.parse(_kv.get('delivered-sent'));
 check('cap 500: после вызова записей = 500', Object.keys(after).length === 500, Object.keys(after).length);
+
+// 8. Тип квитанки — delivered (не read/прочее)
+_kv.clear(); apiMock.receiptCalls.length = 0;
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'a@x.ru', uid: 30, folder: 'INBOX' }]);
+const ackBody = apiMock.receiptCalls.length
+  ? JSON.parse(apiMock.receiptCalls[0][1].replace('ENC:', '')) : {};
+check('квитанка типа delivered с msg_ids',
+  ackBody.delivered === 1 && Array.isArray(ackBody.msg_ids) && ackBody.msg_ids.length === 1, ackBody);
+
+// 9. Падение SMTP → метка снимается, чтобы квитанция ПОВТОРИЛАСЬ позже
+_kv.clear(); apiMock.receiptCalls.length = 0;
+const origSend = apiMock.sendReadReceipt;
+apiMock.sendReadReceipt = async () => { throw new Error('SMTP down'); };
+await sendDeliveredReceipts(makeWorld().deps, [{ from: 'a@x.ru', uid: 40, folder: 'INBOX' }]);
+apiMock.sendReadReceipt = origSend;
+await new Promise((r) => setTimeout(r, 50));
+const sentMap = JSON.parse(_kv.get('delivered-sent') || '{}');
+check('при падении SMTP метка снята (квитанция повторится позже)',
+  !Object.values(sentMap).some((v) => v === undefined) && !('msg-40' in sentMap), sentMap);
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

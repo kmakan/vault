@@ -1,19 +1,28 @@
 // Feature module: отправка квитанций о доставке (delivered receipts).
-// Этап 5 декомпозиции App.vue (ctx-паттерн). Вынесено из App.vue механически
-// (this.* -> ctx.*, поведение 1:1). Сканирует fetched-письма от известных
-// пиров, расшифровывает, собирает acks (sender -> [msg_id]) и отправляет
-// квитанции через api.sendReadReceipt. Дедуп в sqlite kv (delivered-sent),
-// cap 500 самых свежих записей.
+// ADR-001 домен 2. Сканирует fetched-письма от известных пиров, расшифровывает,
+// собирает acks (sender -> [msg_id]) и отправляет квитанции через
+// api.sendReadReceipt. Дедуп в sqlite kv (delivered-sent), cap 500 самых свежих
+// записей.
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 11: модуль больше НЕ читает компонент.
+// Ключи пиров — владелец identity-store; кэш тел — владелец mailbox-store;
+// email и «залогинен» — владелец session-store; разбор конверта и адреса
+// отправителя — чистые функции message-format.js. В deps остаётся одно:
+// `cryptoReady` (признак компонента, а не состояние фичи).
 
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
+import * as MsgFormat from '../message-format.js';
+import { identityStore } from './identity-store.js';
+import { mailboxState } from './mailbox-store.js';
+import { sessionStore } from './session-store.js';
 
-export async function sendDeliveredReceipts(ctx, fetched) {
-      if (!ctx.isLoggedIn || !ctx.cryptoReady || !fetched || !fetched.length) return;
-      const myEmail = (ctx.email || '').toLowerCase();
+export async function sendDeliveredReceipts(deps, fetched) {
+      if (!sessionStore.state.isLoggedIn || !deps.cryptoReady() || !fetched || !fetched.length) return;
+      const myEmail = (sessionStore.getCurrentEmail() || '').toLowerCase();
       if (!myEmail) return;
       // Дедуп в sqlite kv_store (НЕ localStorage — он может переполниться;
-      const acc = ctx.email || 'anon';
+      const acc = sessionStore.getCurrentEmail() || 'anon';
       let sentMap = {};
       try {
         const raw = await db.kvGet(acc, 'delivered-sent');
@@ -21,9 +30,9 @@ export async function sendDeliveredReceipts(ctx, fetched) {
       } catch (e) { sentMap = {}; }
       // Кандидаты: входящие от известных пиров (есть ключ — можно расшифровать).
       const candidates = fetched.filter(m => {
-        const sender = ctx.senderEmail(m.from);
+        const sender = MsgFormat.senderEmail(m.from);
         if (!sender || sender.includes(myEmail)) return false;
-        return !!ctx.peerKeys[sender];
+        return !!identityStore.state.peerKeys[sender];
       });
       if (!candidates.length) return;
       const byFolder = {};
@@ -33,24 +42,24 @@ export async function sendDeliveredReceipts(ctx, fetched) {
       }
       const acks = {}; // sender -> [msg_id]
       for (const [folder, msgs] of Object.entries(byFolder)) {
-        const missing = msgs.filter(m => ctx.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
+        const missing = msgs.filter(m => mailboxState.state.emailBodyCache[`${folder}:${m.uid || m.id}`] === undefined);
         if (missing.length) {
           try {
             const bodies = await api.fetchBodiesDbFirst(folder, missing.map(m => m.uid || m.id));
             for (const m of missing) {
               const b = bodies ? bodies[String(m.uid || m.id)] : undefined;
-              if (b) ctx.cacheBody(`${folder}:${m.uid || m.id}`, b);
+              if (b) mailboxState.cacheBody(`${folder}:${m.uid || m.id}`, b);
             }
           } catch (e) { continue; }
         }
         for (const m of msgs) {
-          const body = ctx.emailBodyCache[`${folder}:${m.uid || m.id}`] || '';
+          const body = mailboxState.state.emailBodyCache[`${folder}:${m.uid || m.id}`] || '';
           if (!body || !crypto.isEncrypted(body)) continue;
-          const sender = ctx.senderEmail(m.from);
+          const sender = MsgFormat.senderEmail(m.from);
           try {
-            crypto.setPeerPublicKey(ctx.peerKeys[sender], ctx.peerPqKeys && ctx.peerPqKeys[sender]);
+            crypto.setPeerPublicKey(identityStore.state.peerKeys[sender], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[sender]);
             const text = await crypto.decryptVault(body);
-            const env = ctx.parseEnvelope(text);
+            const env = MsgFormat.parseEnvelope(text);
             // Только настоящие сообщения (envelope с id): квитанции/правки/
             // реакции/legacy — не сообщения, на них квитанция не положена.
             if (!env || !env.id) continue;
@@ -63,7 +72,7 @@ export async function sendDeliveredReceipts(ctx, fetched) {
       if (!Object.keys(acks).length) return;
       for (const [sender, ids] of Object.entries(acks)) {
         try {
-          crypto.setPeerPublicKey(ctx.peerKeys[sender], ctx.peerPqKeys && ctx.peerPqKeys[sender]);
+          crypto.setPeerPublicKey(identityStore.state.peerKeys[sender], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[sender]);
           const content = await crypto.encryptVault(JSON.stringify({ delivered: 1, msg_ids: ids }));
           await api.sendReadReceipt(sender, content);
         } catch (e) {

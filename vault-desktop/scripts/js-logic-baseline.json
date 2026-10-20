@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 86,
+    "ctxRefSites": 69,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
@@ -15,8 +15,7 @@
     "features/group-meta.js": 11,
     "features/members.js": 16,
     "features/migrate.js": 1,
-    "features/presence.js": 11,
-    "features/receipts.js": 17
+    "features/presence.js": 11
   },
   "ctxFieldsByFile": {
     "features/channels.js": [
@@ -76,17 +75,6 @@
       "isLoggedIn",
       "peerKeys",
       "peerPqKeys"
-    ],
-    "features/receipts.js": [
-      "cacheBody",
-      "cryptoReady",
-      "email",
-      "emailBodyCache",
-      "isLoggedIn",
-      "parseEnvelope",
-      "peerKeys",
-      "peerPqKeys",
-      "senderEmail"
     ]
   },
   "protocolByFile": {

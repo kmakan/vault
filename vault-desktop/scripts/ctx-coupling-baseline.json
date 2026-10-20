@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 80,
+  "totalCtxRefs": 63,
   "totalFunctions": 313,
-  "functionsWithCtx": 65,
+  "functionsWithCtx": 64,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -447,21 +447,11 @@
       "biggestCtxFn": null
     },
     "src/features/receipts.js": {
-      "ctxRefs": 17,
-      "fields": [
-        "cacheBody",
-        "cryptoReady",
-        "email",
-        "emailBodyCache",
-        "isLoggedIn",
-        "parseEnvelope",
-        "peerKeys",
-        "peerPqKeys",
-        "senderEmail"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "sendDeliveredReceipts"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/recovery-escrow.js": {
       "ctxRefs": 0,

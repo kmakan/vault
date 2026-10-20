@@ -1794,6 +1794,15 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракт фичи квитанций (ADR-005 W2, партия 11): состояние у
+    // владельцев (identity-store/mailbox-store/session-store), разбор конверта
+    // и адреса — чистые функции message-format.js. В deps остаётся одно:
+    // cryptoReady (признак компонента).
+    receiptsDeps() {
+      return {
+        cryptoReady: () => this.cryptoReady,
+      };
+    },
     // Контракт фичи писем (ADR-005 W2, партия 10): список писем и флаги
     // загрузки — у владельца mailbox-store (модуль берёт их сам), курсоры и
     // downstream-обработчики — эффекты.
@@ -4792,7 +4801,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Групповые письма здесь не обрабатываются (шифр групповым ключом —
     // decryptVault с пир-ключом не пройдёт); для групп статусы — как прежде.
     // ── Квитанции о доставке (логика в features/receipts.js) ──
-    async sendDeliveredReceipts(fetched) { return ReceiptsFeature.sendDeliveredReceipts(this, fetched); },
+    async sendDeliveredReceipts(fetched) { return ReceiptsFeature.sendDeliveredReceipts(this.receiptsDeps, fetched); },
     // (tombstonesCache/midTombstonesCache/cursorsCache и прочие поля состояния
     //  перенесены в data() — в methods Vue 3 игнорирует не-функции.)
     // Инициализация локальной БД: загрузить tombstones и курсоры из sqlite.
