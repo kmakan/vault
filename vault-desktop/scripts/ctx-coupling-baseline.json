@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 47,
+  "totalCtxRefs": 0,
   "totalFunctions": 313,
-  "functionsWithCtx": 63,
+  "functionsWithCtx": 53,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -88,12 +88,8 @@
       "biggestCtxFn": null
     },
     "src/features/channels.js": {
-      "ctxRefs": 6,
-      "fields": [
-        "channelById",
-        "noteChannelHello",
-        "noteChannelPost"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 16,
       "functionsWithCtx": 3,
       "biggestCtxFn": "sendChannelPost"
@@ -134,16 +130,11 @@
       "biggestCtxFn": null
     },
     "src/features/drafts.js": {
-      "ctxRefs": 7,
-      "fields": [
-        "activeChat",
-        "activeChatType",
-        "currentGroup",
-        "email"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 3,
-      "functionsWithCtx": 2,
-      "biggestCtxFn": "draftRun"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/duress/state.js": {
       "ctxRefs": 0,
@@ -195,16 +186,10 @@
       "biggestCtxFn": null
     },
     "src/features/folders.js": {
-      "ctxRefs": 11,
-      "fields": [
-        "chatFolderNewName",
-        "chatMenu",
-        "closeChatMenu",
-        "email",
-        "folderDialogOpen"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 7,
-      "functionsWithCtx": 7,
+      "functionsWithCtx": 3,
       "biggestCtxFn": "sortedFolderNames"
     },
     "src/features/forward/state.js": {
@@ -222,14 +207,11 @@
       "biggestCtxFn": null
     },
     "src/features/group-avatars.js": {
-      "ctxRefs": 2,
-      "fields": [
-        "cryptoReady",
-        "groupKeys"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 5,
-      "functionsWithCtx": 5,
-      "biggestCtxFn": "replyHeal"
+      "functionsWithCtx": 3,
+      "biggestCtxFn": "groupKeyOf"
     },
     "src/features/group-meta-broadcast.js": {
       "ctxRefs": 0,
@@ -239,19 +221,11 @@
       "biggestCtxFn": "buildRenameMetaFields"
     },
     "src/features/group-meta.js": {
-      "ctxRefs": 9,
-      "fields": [
-        "cryptoReady",
-        "emails",
-        "groupKeys",
-        "groups",
-        "healGroupAvatarFromMessage",
-        "isLoggedIn",
-        "replyGroupAvatarHeal"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "syncGroupAvatarsFromMeta"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/group-pin-wire.js": {
       "ctxRefs": 0,
@@ -380,10 +354,8 @@
       "biggestCtxFn": null
     },
     "src/features/migrate.js": {
-      "ctxRefs": 1,
-      "fields": [
-        "migrateOwnProfile"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
       "functionsWithCtx": 0,
       "biggestCtxFn": null
@@ -410,14 +382,8 @@
       "biggestCtxFn": "castPollVote"
     },
     "src/features/presence.js": {
-      "ctxRefs": 11,
-      "fields": [
-        "_presenceSending",
-        "cryptoReady",
-        "isLoggedIn",
-        "peerKeys",
-        "peerPqKeys"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 8,
       "functionsWithCtx": 5,
       "biggestCtxFn": "isEnabled"
@@ -517,7 +483,7 @@
       "ctxRefs": 0,
       "fields": [],
       "functions": 5,
-      "functionsWithCtx": 2,
+      "functionsWithCtx": 1,
       "biggestCtxFn": "createUiStore"
     },
     "src/features/video.js": {

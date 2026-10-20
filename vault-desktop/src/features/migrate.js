@@ -1,11 +1,13 @@
 // Feature module: миграция localStorage при смене email (identity migration).
-// Этап 5 декомпозиции App.vue (ctx-паттерн). Вынесено из App.vue механически
-// (this.* -> ctx.*, поведение 1:1). Переносит заметки/квитанции/реакции/правки/
-// томбстоуны со старого email-ключа на новый, с дедупликацией (arrays — по id,
-// объекты — merge, цель побеждает). Пост-миграционный аудит (warn-only).
-// this.migrateOwnProfile остаётся в App.vue и вызывается через ctx.
+// ADR-001 домен 2. Переносит заметки/квитанции/реакции/правки/томбстоуны со
+// старого email-ключа на новый, с дедупликацией (arrays — по id, объекты —
+// merge, цель побеждает). Пост-миграционный аудит (warn-only).
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 13: модуль больше НЕ читает компонент.
+// Перенос профиля (migrateOwnProfile) остаётся в App.vue (он трогает
+// локальные хранилища аккаунта) — это эффект, приходит в deps.
 
-export async function migrateLocalStores(ctx, oldEmail, newEmail) {
+export async function migrateLocalStores(deps, oldEmail, newEmail) {
       if (!oldEmail || !newEmail || oldEmail === newEmail) return;
       // isArray: хранилище — JSON-массив (заметки), иначе JSON-объект.
       // Аудит 09.10: других АКТИВНЫХ email-ключевых localStorage нет —
@@ -106,5 +108,5 @@ export async function migrateLocalStores(ctx, oldEmail, newEmail) {
           if (olds.some(o => o && k.includes(o))) console.warn('[identity] LEFT BEHIND: ' + k);
         }
       } catch (e) { /* аудит не должен ломать миграцию */ }
-      await ctx.migrateOwnProfile(oldEmail, newEmail);
+      await deps.migrateOwnProfile(oldEmail, newEmail);
 }

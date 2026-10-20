@@ -12,47 +12,23 @@
     "call-watchdog.js": [],
     "calls.js": [],
     "channels-store.js": [],
-    "channels.js": [
-      "channelById",
-      "noteChannelHello",
-      "noteChannelPost"
-    ],
+    "channels.js": [],
     "chat.js": [],
     "contacts-delete.js": [],
     "contacts-load.js": [],
     "contacts-store.js": [],
     "contacts.js": [],
-    "drafts.js": [
-      "activeChat",
-      "activeChatType",
-      "currentGroup",
-      "email"
-    ],
+    "drafts.js": [],
     "duress.js": [],
     "edits.js": [],
     "emails.js": [],
     "envelope-id.js": [],
     "folders-store.js": [],
-    "folders.js": [
-      "chatFolderNewName",
-      "chatMenu",
-      "closeChatMenu",
-      "email",
-      "folderDialogOpen"
-    ],
+    "folders.js": [],
     "forward.js": [],
-    "group-avatars.js": [
-      "cryptoReady",
-      "groupKeys"
-    ],
+    "group-avatars.js": [],
     "group-meta-broadcast.js": [],
-    "group-meta.js": [
-      "cryptoReady",
-      "groupKeys",
-      "groups",
-      "healGroupAvatarFromMessage",
-      "replyGroupAvatarHeal"
-    ],
+    "group-meta.js": [],
     "group-pin-wire.js": [],
     "groups-clone.js": [],
     "groups-create.js": [],
@@ -71,17 +47,10 @@
     "members.js": [],
     "messages-store.js": [],
     "messages.js": [],
-    "migrate.js": [
-      "migrateOwnProfile"
-    ],
+    "migrate.js": [],
     "notes-store.js": [],
     "poll.js": [],
-    "presence.js": [
-      "_presenceSending",
-      "cryptoReady",
-      "peerKeys",
-      "peerPqKeys"
-    ],
+    "presence.js": [],
     "profiles.js": [],
     "reactions.js": [],
     "receipts.js": [],
@@ -100,23 +69,10 @@
     "video.js": [],
     "api.js": []
   },
-  "fieldWriters": {
-    "channelById": [
-      "channels.js"
-    ],
-    "folderDialogOpen": [
-      "folders.js"
-    ],
-    "chatFolderNewName": [
-      "folders.js"
-    ],
-    "_presenceSending": [
-      "presence.js"
-    ]
-  },
+  "fieldWriters": {},
   "totals": {
-    "ctxFields": 24,
-    "ctxRefSites": 53,
+    "ctxFields": 0,
+    "ctxRefSites": 0,
     "sharedWriteFields": 0
   }
 }

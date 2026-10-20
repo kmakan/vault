@@ -111,14 +111,19 @@ ok('ingest post → kind post', m.ingestChannelEnvelope(ctx, post, 'owner@x.y') 
 ok('ingest вызвал noteChannelPost', calls.posts.length === 1 && calls.posts[0].sender === 'owner@x.y');
 ok('ingest meta → kind meta', m.ingestChannelEnvelope(ctx, meta, 'owner@x.y') === 'meta');
 const ownHello = JSON.parse(m.buildHelloPayload('chn_1'));
-const mkCtx = (owner) => {
+const mkDeps = (owner) => {   // ADR-005 W2 (партия 13): контракт deps
   const c = { channels: [{ id: 'chn_1', is_owner: owner }], noteChannelPost: ctx.noteChannelPost, noteChannelHello: ctx.noteChannelHello };
   c.channelById = (id) => c.channels.find(x => x.id === id) || null; // без замыкания на внешний ctx
   return c;
 };
-ok('hello чужому каналу (не владелец) → null', m.ingestChannelEnvelope(mkCtx(false), ownHello, 'sub@x.y') === null);
-ok('hello СВОЕМУ каналу → hello', m.ingestChannelEnvelope(mkCtx(true), ownHello, 'sub@x.y') === 'hello');
+ok('hello чужому каналу (не владелец) → null', m.ingestChannelEnvelope(mkDeps(false), ownHello, 'sub@x.y') === null);
+ok('hello СВОЕМУ каналу → hello', m.ingestChannelEnvelope(mkDeps(true), ownHello, 'sub@x.y') === 'hello');
 ok('не-канальный конверт → null', m.ingestChannelEnvelope(ctx, { vault: 1, text: 'hi' }, 'a@x.y') === null);
+// Конверт с полем chan, но БЕЗ channel:1 — обычное сообщение, не канальное:
+// гвард isChannelEnvelope обязан его отбросить. Без этой проверки гварда
+// (мутация) такое письмо применилось бы как пост канала.
+ok('конверт с chan, но без channel:1 → null (не канальный)',
+  m.ingestChannelEnvelope(ctx, { vault: 1, chan: 'chn_1', post: { body: 'x' } }, 'a@x.y') === null);
 ok('канал не подписан → null', m.ingestChannelEnvelope(ctx, { ...post, chan: 'chn_unknown' }, 'a@x.y') === null);
 
 // ── relay channel tokens: parity с Rust (golden vectors из tokens.rs) ──

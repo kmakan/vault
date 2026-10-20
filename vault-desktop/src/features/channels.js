@@ -170,11 +170,12 @@ export function isChannelEnvelope(obj) {
 
 // Apply a channel envelope to app state. Returns a short kind string or
 // null when nothing applied (bad envelope / unknown channel).
-// ctx: { channels, channelById(id), noteChannelPost(id, ts), notifyChannel(...) }
-export function ingestChannelEnvelope(ctx, payload, senderEmail) {
+// ADR-005 W2 (`t_bcb8927a`), партия 13: вместо ctx — узкий контракт deps
+// (channelById/noteChannelPost/noteChannelHello).
+export function ingestChannelEnvelope(deps, payload, senderEmail) {
   if (!isChannelEnvelope(payload)) return null;
   const chId = payload.chan || '';
-  const ch = ctx.channelById && ctx.channelById(chId);
+  const ch = deps.channelById && deps.channelById(chId);
   if (!ch) return null; // not subscribed to this channel — ignore
   if (payload.meta === 1) {
     // meta update from the owner (name/about/avatar)
@@ -192,14 +193,14 @@ export function ingestChannelEnvelope(ctx, payload, senderEmail) {
     if (Date.now() - (Number(payload.ts) || 0) < 0) return null; // future-dated
     const ts = Math.min(Number(payload.ts) || Date.now(), Date.now());
     updateChannel(chId, { last_ts: ts }).catch(() => {});
-    ctx.noteChannelPost && ctx.noteChannelPost(chId, ts, payload, senderEmail);
+    deps.noteChannelPost && deps.noteChannelPost(chId, ts, payload, senderEmail);
     return 'post';
   }
   if (payload.hello === 1) {
     // owner side: a subscriber said hello -> remember as known (email dup)
     if (ch.is_owner && senderEmail) {
       addKnownSubscriber(chId, senderEmail).catch(() => {});
-      ctx.noteChannelHello && ctx.noteChannelHello(chId, senderEmail);
+      deps.noteChannelHello && deps.noteChannelHello(chId, senderEmail);
       return 'hello';
     }
     return null;

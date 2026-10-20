@@ -11,6 +11,7 @@
 import { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import { foldersStore } from './folders-store.js';
+import { uiStore, sessionStore } from './session-store.js';
 
 // Состояние фичи — в ./folders/state.js (чистый модуль без импортов: его
 // поднимает check-template.cjs для резолва спреда `...foldersState()`).
@@ -32,55 +33,61 @@ export function flagKey(target) {
 }
 
 // Flags object of a chat key (always an object, may be empty).
-export function chatFlagOf(ctx, key) {
+export function chatFlagOf(key) {
   return foldersStore.flagOf(key);
 }
 
 // Load chat flags + folder names from sqlite kv (chat-flags, chat-folders).
 // J.7: пишем в owner, не в ctx.
-export async function loadChatFlags(ctx) {
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 14: модуль больше НЕ читает компонент.
+// email — владелец session-store; состояние меню и диалога папок (chatMenu,
+// chatFolderNewName, folderDialogOpen) — владелец форм/модалок uiStore; закрыть
+// меню — эффект в deps.
+export async function loadChatFlags(deps) {
   try {
-    const raw = await db.kvGet(await accountNamespace(ctx.email), 'chat-flags');
+    const raw = await db.kvGet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-flags');
     const flags = raw ? JSON.parse(raw) : {};
     foldersStore.loadFromRaw(flags, foldersStore.state.chatFoldersNames);
   } catch (e) { foldersStore.loadFromRaw({}, foldersStore.state.chatFoldersNames); }
   try {
-    const fr = await db.kvGet(await accountNamespace(ctx.email), 'chat-folders');
+    const fr = await db.kvGet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-folders');
     const names = fr ? JSON.parse(fr) : [];
     foldersStore.loadFromRaw(foldersStore.state.chatFlags, names);
   } catch (e) { /* блоб пуст — имена остаются */ }
 }
 
 // Persist chat flags to sqlite kv (folder/archive/mute of all chats).
-export async function saveChatFlags(ctx) {
+export async function saveChatFlags(deps) {
   try {
-    await db.kvSet(await accountNamespace(ctx.email), 'chat-flags',
+    await db.kvSet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-flags',
       JSON.stringify(foldersStore.state.chatFlags));
   } catch (e) { /* kv недоступен — флаги живут в памяти до перезапуска */ }
 }
 
 // Assign the chat from the open chat-menu to a folder ('' removes it).
-export async function setChatFolder(ctx, name) {
+export async function setChatFolder(deps, name) {
   // Guard: меню могло быть уже закрыто (двойной вызов из шаблона/таймера) —
   // бесшумный no-op вместо падения на target=null.
-  if (!ctx.chatMenu || !ctx.chatMenu.target) return;
-  const key = foldersStore.flagKey(ctx.chatMenu.target);
+  const menu = uiStore.getFormField('chatMenu');
+  if (!menu || !menu.target) return;
+  const key = foldersStore.flagKey(menu.target);
   const f = { ...foldersStore.flagOf(key) };
   if (name) f.folder = name.slice(0, 24);
   else delete f.folder;
   foldersStore.setFlag(key, f);
-  ctx.closeChatMenu();
-  await saveChatFlags(ctx);
+  deps.closeChatMenu();
+  await saveChatFlags(deps);
 }
 
 // Create a folder from the dialog input and assign the chat to it.
-export async function createChatFolder(ctx) {
-  const name = (ctx.chatFolderNewName || '').trim().slice(0, 24);
+export async function createChatFolder(deps) {
+  const name = String(uiStore.getFormField('chatFolderNewName') || '').trim().slice(0, 24);
   if (!name) return;
   foldersStore.addFolderName(name);
-  await db.kvSet(await accountNamespace(ctx.email), 'chat-folders',
+  await db.kvSet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-folders',
     JSON.stringify(foldersStore.state.chatFoldersNames));
-  await setChatFolder(ctx, name);
-  ctx.folderDialogOpen = false;
-  ctx.chatFolderNewName = '';
+  await setChatFolder(deps, name);
+  uiStore.setModal('folderDialogOpen', false);
+  uiStore.setFormField('chatFolderNewName', '');
 }

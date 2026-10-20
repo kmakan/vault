@@ -1,18 +1,23 @@
 // Feature module: сканирование meta-писем групп (аватар/имя из VaultGroupMeta).
-// Этап 5 декомпозиции App.vue (ctx-паттерн). Вынесено из App.vue механически
-// (this.* -> ctx.*, поведение 1:1). Ищет meta-письма среди последних писем
-// участников группы (до 10), применяет аватар (kv group-avatar:<gid>) и
-// имя (invoke groups_rename). healGroupAvatarFromMessage/replyGroupAvatarHeal
-// остаются в App.vue и вызываются через ctx.
+// ADR-001 домен 2. Ищет meta-письма среди последних писем участников группы
+// (до 10), применяет аватар (kv group-avatar:<gid>) и имя (invoke
+// groups_rename).
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 14: модуль больше НЕ читает компонент.
+// «Залогинен» — владелец session-store, письма — mailbox-store, ключи и
+// аватары групп — владелец groups-store (per-app экземпляр, приходит в
+// deps); список групп и два эффекта (heal/reply) — тоже deps.
 
 import { invoke } from '@tauri-apps/api/core';
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
+import { sessionStore } from './session-store.js';
+import { mailboxState } from './mailbox-store.js';
 
-export async function syncGroupAvatarsFromMeta(ctx) {
-      if (!ctx.isLoggedIn || !ctx.groups || !ctx.groups.length) return;
-      const emails = ctx.emails || [];
-      for (const g of ctx.groups) {
+export async function syncGroupAvatarsFromMeta(deps) {
+      if (!sessionStore.state.isLoggedIn || !deps.groups || !deps.groups.length) return;
+      const emails = mailboxState.state.emails || [];
+      for (const g of deps.groups) {
         if (!g || !g.id) continue;
         // STEALTH: тема пустая, поэтому meta-письмо ищем по
         // отправителю — участнику группы (как getGroupMessages).
@@ -38,12 +43,12 @@ export async function syncGroupAvatarsFromMeta(ctx) {
         for (const latest of memberMails) {
           const appliedSig = String(latest.uid) + '@' + (latest.folder || 'INBOX');
           if (alreadyApplied.has(appliedSig)) continue;
-          let groupKey = ctx.groupKeys[g.id];
-          if (!groupKey && ctx.cryptoReady) {
+          let groupKey = deps.groupStore.state.groupKeys[g.id];
+          if (!groupKey && deps.cryptoReady()) {
             try {
               const kd = await api.getMyGroupKey(g.id);
               if (kd && kd.group_key) {
-                ctx.setGroupKey(g.id, kd.group_key);
+                deps.groupStore.setGroupKey(g.id, kd.group_key);
                 groupKey = kd.group_key;
               }
             } catch (e) { /* ключ не загрузился — группу пропускаем */ }
@@ -61,7 +66,7 @@ export async function syncGroupAvatarsFromMeta(ctx) {
               // Ответ ТОЛЬКО если ещё не отвечали на это письмо; помечаем
               // applied-sig УСПЕШНОЙ ответ (replyHeal → true) — при ошибке
               // uid остаётся в обходе и поллинг повторит.
-              const answered = await ctx.replyGroupAvatarHeal(g.id);
+              const answered = await deps.replyGroupAvatarHeal(g.id);
               if (answered && !alreadyApplied.has(appliedSig)) {
                 alreadyApplied.add(appliedSig);
                 await db.kvSet('anon', appliedKey, [...alreadyApplied].join(','));
@@ -70,12 +75,12 @@ export async function syncGroupAvatarsFromMeta(ctx) {
             }
             // gavatar-heal: конверт сообщения нёс gavatar — лечим kv (guard
             // на непустое/изменение внутри healGroupAvatarFromMessage).
-            if (obj && obj.gavatar) await ctx.healGroupAvatarFromMessage(g.id, obj.gavatar);
+            if (obj && obj.gavatar) await deps.healGroupAvatarFromMessage(g.id, obj.gavatar);
             if (obj && obj.meta === 1 && (obj.avatar || obj.name)) {
               // Аватар группы — отдельный kv.
               if (obj.avatar && (await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
                 await db.kvSet('anon', 'group-avatar:' + g.id, obj.avatar);
-                ctx.setGroupAvatar(g.id, obj.avatar);
+                deps.groupStore.setGroupAvatar(g.id, obj.avatar);
               }
               // Имя группы: применяем если пришло.
               if (obj.name && g.name !== obj.name) {

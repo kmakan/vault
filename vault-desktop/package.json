@@ -44,6 +44,7 @@
     "smoke:invites": "node scripts/invites-smoke.mjs",
     "smoke:invites-store": "node scripts/invites-store-smoke.mjs",
     "smoke:duress": "node scripts/duress-smoke.mjs",
+    "smoke:folders": "node scripts/folders-smoke.mjs",
     "smoke:groups": "node scripts/groups-smoke.mjs",
     "smoke:recovery": "node scripts/recovery-smoke.mjs",
     "gate:options-dup": "node scripts/options-dup-gate.mjs",

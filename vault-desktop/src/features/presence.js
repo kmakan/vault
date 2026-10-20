@@ -1,4 +1,9 @@
 // Feature module: presence (зелёная точка онлайн, t_e858bdb9).
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 13: модуль больше НЕ читает компонент.
+// «Залогинен» — владелец session-store, ключи пиров — identity-store,
+// cryptoReady — в deps. Флаг «отправка идёт» — модульная переменная (не
+// состояние приложения): он защищает от повторной отправки, а не отображается.
 // Активные heartbeat-письма по почте — тот же сигнальный канал, что реакции
 // и голосования: {presence:1, ts} шифруется на peer-ключе (encryptVault),
 // уходит с ПУСТОЙ темой (stealth), получатель роутером ветит в noteSeen.
@@ -14,12 +19,20 @@ import api, { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import crypto from '../crypto.js';
 import { invoke } from '@tauri-apps/api/core';
+import { sessionStore } from './session-store.js';
+import { identityStore } from './identity-store.js';
 
 export const PRESENCE_INTERVAL_MS = 5 * 60 * 1000;   // отправка heartbeat
+// Флаг «отправка heartbeat идёт» — внутренняя деталь модуля.
+let presenceSending = false;
+
 export const PRESENCE_ONLINE_MS = 11 * 60 * 1000;    // окно «онлайн» (2× + буфер)
 
-const HB_TIMER = '_presenceHbTimer';
-const HB_SENT_AT = '_presenceHbSentAt';
+// Таймер heartbeat и метка «когда последний раз отправляли» — ВНУТРЕННИЕ
+// детали модуля, а не состояние компонента (ADR-005 W2, партия 13): раньше
+// они висели на ctx под строковыми ключами.
+let HB_TIMER = null;
+let HB_SENT_AT = 0;
 
 // ── Тумблер (kv 'presence-enabled', per-account) ──────────────
 
@@ -41,40 +54,40 @@ export async function setEnabled(email, on, { startHeartbeats, stopHeartbeats })
 // Одно письмо каждому контакту с peer-ключом. Ролей у presence нет:
 // получатель просто отмечает «видел активность сейчас». Ошибки одного
 // адресата не останавливают остальных (как sendGroupReact).
-export async function sendHeartbeat(ctx) {
-  if (!ctx.isLoggedIn || !ctx.cryptoReady) return;
-  const peers = Object.keys(ctx.peerKeys || {}).filter(Boolean);
+export async function sendHeartbeat(deps) {
+  if (!sessionStore.state.isLoggedIn || !deps.cryptoReady()) return;
+  const peers = Object.keys(identityStore.state.peerKeys || {}).filter(Boolean);
   if (!peers.length) return;
   const payload = JSON.stringify({ presence: 1, ts: Date.now() });
   for (const peer of peers) {
     try {
-      crypto.setPeerPublicKey(ctx.peerKeys[peer], ctx.peerPqKeys && ctx.peerPqKeys[peer]);
+      crypto.setPeerPublicKey(identityStore.state.peerKeys[peer], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[peer]);
       const content = await crypto.encryptVault(payload);
       await api.sendReaction(peer, content); // stealth-письмо с пустой темой
     } catch (e) {
       console.warn('[presence] heartbeat to', peer, 'failed:', e && e.message || e);
     }
   }
-  ctx[HB_SENT_AT] = Date.now();
+  HB_SENT_AT = Date.now();
 }
 
-export function startHeartbeats(ctx) {
+export function startHeartbeats(deps) {
   stopHeartbeats(ctx);
-  if (!ctx.isLoggedIn) return;
-  ctx[HB_TIMER] = setInterval(() => {
+  if (!sessionStore.state.isLoggedIn) return;
+  HB_TIMER = setInterval(() => {
     // Анти-наложение: пропускаем тик, если предыдущий ещё пишется
-    if (ctx._presenceSending) return;
-    ctx._presenceSending = true;
-    sendHeartbeat(ctx).catch(() => {}).finally(() => { ctx._presenceSending = false; });
+    if (presenceSending) return;
+    presenceSending = true;
+    sendHeartbeat(deps).catch(() => {}).finally(() => { presenceSending = false; });
   }, PRESENCE_INTERVAL_MS);
   // Первый heartbeat сразу — точка у собеседников загорается без 5-минутного
   // ожидания после включения тумблера.
   sendHeartbeat(ctx).catch(() => {});
 }
 
-export function stopHeartbeats(ctx) {
-  if (ctx[HB_TIMER]) { clearInterval(ctx[HB_TIMER]); ctx[HB_TIMER] = null; }
-  ctx._presenceSending = false;
+export function stopHeartbeats(deps) {
+  if (HB_TIMER) { clearInterval(HB_TIMER); HB_TIMER = null; }
+  presenceSending = false;
 }
 
 // ── Приём ──────────────────────────────────────────────────────

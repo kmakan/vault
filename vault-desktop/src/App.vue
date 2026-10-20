@@ -1200,7 +1200,10 @@ export default {
       // Персист в sqlite kv 'ignored-users'.
       // showArchivedinj в uiStore.modalFlags (J.7):
       // Контекстное меню чата (долгое нажатие / правый клик в списке).
-      chatMenu: { show: false, target: null },
+      // chatMenu/chatFolderNewName/folderDialogOpen — в uiStore
+      // (ADR-005 W2, партия 14): folderDialogOpen и chatFolderNewName вообще
+      // НЕ были объявлены в data() — присваивание из шаблона нереактивно,
+      // и диалог «Новая папка» открывался только при СЛЕДУЮЩЕЙ перерисовке.
       // Избранное: помеченные сообщения чата.
       // chatKey → массив msg.id; персист в sqlite kv_store ('starred:<chatKey>').
       // Локально, как «Удалить у меня»: собеседнику не видно, по почте не
@@ -1794,6 +1797,58 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракты мелких фич (ADR-005 W2, партия 13): состояние у владельцев,
+    // эффекты — явным списком. Модули больше не получают компонент.
+    migrateDeps() {
+      return {
+        migrateOwnProfile: (oldEmail, newEmail) => this.migrateOwnProfile(oldEmail, newEmail),
+      };
+    },
+    presenceDeps() {
+      return {
+        cryptoReady: () => this.cryptoReady,
+      };
+    },
+    groupAvatarsDeps() {
+      return {
+        groups: this.groupsStore,
+        cryptoReady: () => this.cryptoReady,
+      };
+    },
+    channelsDeps() {
+      return {
+        channelById: (id) => this.channelById(id),
+        noteChannelPost: (id, ts, payload, from) => this.noteChannelPost(id, ts, payload, from),
+        noteChannelHello: (id, from) => this.noteChannelHello(id, from),
+      };
+    },
+    draftsDeps() {
+      return {
+        chat: this.chat,
+      };
+    },
+    // ADR-005 W2 (партия 14): меню чата и диалог папок — у владельца форм.
+    chatMenu: { get() { return uiStore.getFormField('chatMenu'); }, set(v) { uiStore.setFormField('chatMenu', v); } },
+    chatFolderNewName: { get() { return uiStore.getFormField('chatFolderNewName'); }, set(v) { uiStore.setFormField('chatFolderNewName', v); } },
+    folderDialogOpen: { get() { return uiStore.getModal('folderDialogOpen'); }, set(v) { uiStore.setModal('folderDialogOpen', v); } },
+    // Контракт фичи папок (ADR-005 W2, партия 14): состояние меню/формы — у
+    // uiStore, закрытие меню — эффект.
+    foldersDeps() {
+      return {
+        closeChatMenu: () => this.closeChatMenu(),
+      };
+    },
+    // Контракт фичи meta-писем групп (ADR-005 W2, партия 14): список групп и
+    // два эффекта (heal/reply) — deps; ключи и аватары — владелец groups-store.
+    groupMetaDeps() {
+      return {
+        groups: this.groups,
+        groupStore: this.groupsStore,
+        cryptoReady: () => this.cryptoReady,
+        healGroupAvatarFromMessage: (id, av) => this.healGroupAvatarFromMessage(id, av),
+        replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
+      };
+    },
     // Контракт фичи участников (ADR-005 W2, партия 12): текущая группа —
     // владелец chatStore, форма «добавить участника» — владелец uiStore
     // (модуль берёт их сам), остальное — эффекты.
@@ -2331,7 +2386,7 @@ export default {
           else this.idleLoop();
           // Presence (M2): heartbeat-таймер, если тумблер включён (kv,
           // per-account). Восстанавливается на входе, глушится на выходе.
-          try { if (await PresenceFeature.isEnabled(this.email)) PresenceFeature.startHeartbeats(this); } catch (e) { /* kv */ }
+          try { if (await PresenceFeature.isEnabled(this.email)) PresenceFeature.startHeartbeats(this.presenceDeps); } catch (e) { /* kv */ }
           // Не блокируем вход: письма догружаются асинхронно (поллинг уже
           // запущен — он подхватит). Ошибки IMAP не роняют вход.
           EmailsFeature.loadEmails(this.emailsDeps).catch(e => {
@@ -2618,8 +2673,8 @@ export default {
     isOnline(email) { return PresenceFeature.isOnline(this.lastSeenMap, email); },
     presenceSetEnabled(on) {
       PresenceFeature.setEnabled(this.email, on, {
-        startHeartbeats: () => PresenceFeature.startHeartbeats(this),
-        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this),
+        startHeartbeats: () => PresenceFeature.startHeartbeats(this.presenceDeps),
+        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this.presenceDeps),
       }).catch(e =>
         console.warn('[presence] setEnabled failed:', e && e.message || e));
     },
@@ -2644,12 +2699,12 @@ export default {
     // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
     // грузит единый kv-блоб (flags + folder names), архив/mute меняются
     // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
-    async loadChatFlags() { return FoldersFeature.loadChatFlags(this); },
-    async saveChatFlags() { return FoldersFeature.saveChatFlags(this); },
+    async loadChatFlags() { return FoldersFeature.loadChatFlags(this.foldersDeps); },
+    async saveChatFlags() { return FoldersFeature.saveChatFlags(this.foldersDeps); },
     flagKey(target) { return FoldersFeature.flagKey(target); },
-    chatFlagOf(key) { return FoldersFeature.chatFlagOf(this, key); },
-    async setChatFolder(name) { return FoldersFeature.setChatFolder(this, name); },
-    async createChatFolder() { return FoldersFeature.createChatFolder(this); },
+    chatFlagOf(key) { return FoldersFeature.chatFlagOf(key); },
+    async setChatFolder(name) { return FoldersFeature.setChatFolder(this.foldersDeps, name); },
+    async createChatFolder() { return FoldersFeature.createChatFolder(this.foldersDeps); },
     // ── Ignore-лист (E2E-честная блокировка отправителя). Логика — здесь,
     // не в features/: точек интеграции мало, а data-инвариант (объект
     // email→ts) связан с тремя путями доставки (почта/релей/история).
@@ -2701,8 +2756,8 @@ export default {
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
     // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
     draftRun(fn) { return DraftsFeature.draftRun(fn); },
-    saveDraft() { return DraftsFeature.saveDraft(this); },
-    restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this, chatKey); },
+    saveDraft() { return DraftsFeature.saveDraft(this.draftsDeps); },
+    restoreDraft(chatKey) { return DraftsFeature.restoreDraft(this.draftsDeps, chatKey); },
     // ── Duress-замок — логика в features/duress.js; LockScreen-события
     // (unlock/duress/panic) приходят из шаблона в эти обёртки.
     async checkDuressLock() { return DuressFeature.checkDuressLock(this.duressDeps); },
@@ -3022,7 +3077,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     async handleLogout() {
       this.stopPolling();
-      PresenceFeature.stopHeartbeats(this); // M2: heartbeat больше не отправляем
+      PresenceFeature.stopHeartbeats(this.presenceDeps); // M2: heartbeat больше не отправляем
       try { await api.logout(); } catch (e) { /* ignore */ }
       // Сбрасываем всё состояние сессии к экрану логина.
       this.isLoggedIn = false;
@@ -3149,7 +3204,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Отсутствие источника — норма (не ошибка). Каждый префикс в своём
     // try/catch: повреждённый JSON одного хранилища не блокирует остальные;
     // битый JSON источника — просто удаляем источник, цель не трогаем.
-    async migrateLocalStores(oldEmail, newEmail) { return MigrateFeature.migrateLocalStores(this, oldEmail, newEmail); },
+    async migrateLocalStores(oldEmail, newEmail) { return MigrateFeature.migrateLocalStores(this.migrateDeps, oldEmail, newEmail); },
     // Смена СВОЕЙ почты: копируем свой профиль {name, avatar, bio, _ts,
     // local_name} в kv-профили (namespace 'anon', ключ 'profiles', ключи
     // lowercase — см. api.js saveProfile/getProfilesAll). Старый ключ НЕ
@@ -3944,7 +3999,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // подтягиваются по одному. Применённый uid кэшируем в localStorage,
     // чтобы не перечитывать одно и то же письмо на каждом поллинге.
     // ── Meta-сканирование групп (логика в features/group-meta.js) ──
-    async syncGroupAvatarsFromMeta() { return GroupMetaFeature.syncGroupAvatarsFromMeta(this); },
+    async syncGroupAvatarsFromMeta() { return GroupMetaFeature.syncGroupAvatarsFromMeta(this.groupMetaDeps); },
     // Тонкие прокси во владельца группового состояния (ADR-004 Этап A9).
     // features/* вызывают ctx.setGroupKey — адресуем во владельца.
     setGroupKey(id, key) { return this.groupsStore.setGroupKey(id, key); },
@@ -4291,13 +4346,13 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (изоляция фичи, правило t_7c3929d2: новые фичи не размазывать по
     // App.vue — здесь только обёртки-делегаты, зависимости через this=ctx).
     async healGroupAvatarFromMessage(groupId, gavatar) {
-      return GroupAvatarsFeature.healFromMessage(this, groupId, gavatar);
+      return GroupAvatarsFeature.healFromMessage(this.groupAvatarsDeps, groupId, gavatar);
     },
     async replyGroupAvatarHeal(groupId) {
-      return GroupAvatarsFeature.replyHeal(this, groupId);
+      return GroupAvatarsFeature.replyHeal(this.groupAvatarsDeps, groupId);
     },
     async requestGroupAvatarHeal(groupId) {
-      return GroupAvatarsFeature.requestHeal(this, groupId);
+      return GroupAvatarsFeature.requestHeal(this.groupAvatarsDeps, groupId);
     },
     onAvatarFileSelect(e) {
       const file = e.target.files[0];
@@ -4543,7 +4598,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         chatVisible: (k) => this.chatVisible(k),
         isMuted: (k) => this.isMuted(k),
         incUnread: (k) => this.incUnread(k),
-        ingestChannelEnvelope: (obj, from) => ChannelsFeature.ingestChannelEnvelope(this, obj, from),
+        ingestChannelEnvelope: (obj, from) => ChannelsFeature.ingestChannelEnvelope(this.channelsDeps, obj, from),
         isBounceMessage: BounceFeature.isBounceMessage,
         bounceRecipients: BounceFeature.bounceRecipients,
         bounceReason: BounceFeature.bounceReason,

@@ -49,8 +49,14 @@ function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
-function makeCtx(over = {}) {
-  const ctx = Object.assign({
+// ADR-005 W2 (партия 14): состояние — у владельцев. Смоук берёт ТЕ ЖЕ
+// синглтоны, что импортирует копия модуля: «залогинен» — session-store,
+// письма — mailbox-store, ключи/аватары групп — владелец groups-store.
+const { sessionStore } = await import(ROOT + '/src/features/session-store.js');
+const { mailboxState } = await import(ROOT + '/src/features/mailbox-store.js');
+
+function makeDeps(over = {}) {
+  const w = Object.assign({
     isLoggedIn: true,
     groups: [],
     emails: [],
@@ -58,20 +64,31 @@ function makeCtx(over = {}) {
     groupAvatars: {},
     cryptoReady: true,
     replyGroupAvatarHeal: async () => true,
+    healGroupAvatarFromMessage: async () => {},
   }, over);
-  // Методы-обёртки над groupKeys/groupAvatars (ADR-004 Этап A9).
-  // Замыкание на ctx — единственный надёжный способ в Object.assign
-  // контексте: method shorthand внутри литерала терял бы this.
-  ctx.setGroupKey = (id, key) => { ctx.groupKeys[id] = key; return key; };
-  ctx.setGroupAvatar = (id, avatar) => { ctx.groupAvatars[id] = avatar; return avatar; };
-  return ctx;
+  sessionStore.state.isLoggedIn = w.isLoggedIn;
+  mailboxState.state.emails = w.emails;
+  // Владелец групп: state + методы (ADR-004 Этап A9).
+  const groupStore = {
+    state: { groupKeys: w.groupKeys, groupAvatars: w.groupAvatars },
+    setGroupKey(id, key) { this.state.groupKeys[id] = key; return key; },
+    setGroupAvatar(id, avatar) { this.state.groupAvatars[id] = avatar; return avatar; },
+  };
+  const deps = {
+    groups: w.groups,
+    groupStore,
+    cryptoReady: () => w.cryptoReady,
+    replyGroupAvatarHeal: (id) => w.replyGroupAvatarHeal(id),
+    healGroupAvatarFromMessage: (id, av) => w.healGroupAvatarFromMessage(id, av),
+  };
+  return { w, deps };
 }
 
 // 1. Не залогинен / нет групп → no-op
 apiMock.fetchCalls.length = 0;
 _kv.clear(); invokeMock.calls.length = 0;
-await syncGroupAvatarsFromMeta(makeCtx({ isLoggedIn: false }));
-await syncGroupAvatarsFromMeta(makeCtx({ groups: [] }));
+await syncGroupAvatarsFromMeta(makeDeps({ isLoggedIn: false }).deps);
+await syncGroupAvatarsFromMeta(makeDeps({ groups: [] }).deps);
 check('не залогинен / нет групп — no-op', apiMock.fetchCalls.length === 0);
 
 // 2. Meta-письмо с аватаром → kv обновлётся
@@ -79,22 +96,22 @@ _kv.clear();
 apiMock.groupKey = 'GK';
 apiMock.emailBody = 'ENC:meta';
 cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ meta: 1, avatar: 'AVATAR123', name: 'NewName' });
-const ctx = makeCtx({
+const { deps } = makeDeps({
   groups: [{ id: 'G1', name: 'OldName', members: [{ email: 'a@x.ru' }] }],
   emails: [{ from: 'a@x.ru', uid: 10, folder: 'INBOX', date: '2026-01-01' }],
 });
-await syncGroupAvatarsFromMeta(ctx);
+await syncGroupAvatarsFromMeta(deps);
 check('meta → аватар записан в kv', _kv.get('group-avatar:G1') === 'AVATAR123');
 check('meta → имя применено (groups_rename)', invokeMock.calls.length === 1 && invokeMock.calls[0][1].newName === 'NewName');
 check('meta → applied-ключ записан', _kv.get('group-meta-applied:G1') === '10@INBOX');
 
 // 3. Уже applied → не обрабатываем повторно
 apiMock.fetchCalls.length = 0;
-await syncGroupAvatarsFromMeta(makeCtx({
+await syncGroupAvatarsFromMeta(makeDeps({
   groups: [{ id: 'G1', name: 'NewName', members: [{ email: 'a@x.ru' }] }],
   emails: [{ from: 'a@x.ru', uid: 10, folder: 'INBOX', date: '2026-01-01' }],
   groupKeys: { G1: 'GK' },
-}));
+}).deps);
 check('уже applied → fetchEmailBody не звался', apiMock.fetchCalls.length === 0);
 
 // 4. hav-запрос → replyGroupAvatarHeal вызывается
@@ -102,23 +119,51 @@ _kv.clear();
 apiMock.emailBody = 'ENC:hav';
 cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ hav: 1 });
 let healCalled = false;
-const ctx4 = makeCtx({
+const { deps: deps4 } = makeDeps({
   groups: [{ id: 'G1', members: [{ email: 'a@x.ru' }] }],
   emails: [{ from: 'a@x.ru', uid: 20, folder: 'INBOX' }],
   groupKeys: { G1: 'GK' },
   replyGroupAvatarHeal: async () => { healCalled = true; return true; },
 });
-await syncGroupAvatarsFromMeta(ctx4);
+await syncGroupAvatarsFromMeta(deps4);
 check('hav → replyGroupAvatarHeal вызван', healCalled === true);
 
 // 5. Нет ключа → группа пропускается
 apiMock.groupKey = null;
 apiMock.fetchCalls.length = 0;
-await syncGroupAvatarsFromMeta(makeCtx({
+await syncGroupAvatarsFromMeta(makeDeps({
   groups: [{ id: 'G1', members: [{ email: 'a@x.ru' }] }],
   emails: [{ from: 'a@x.ru', uid: 30, folder: 'INBOX' }],
-}));
+}).deps);
 check('нет ключа → fetchEmailBody не звался', apiMock.fetchCalls.length === 0);
+
+// 6. Не залогинен, но группы ЕСТЬ → всё равно no-op
+{
+  _kv.clear(); apiMock.fetchCalls.length = 0; invokeMock.calls.length = 0;
+  await syncGroupAvatarsFromMeta(makeDeps({
+    isLoggedIn: false,
+    groups: [{ id: 'G1', members: [{ email: 'a@x.ru' }] }],
+    emails: [{ from: 'a@x.ru', uid: 40, folder: 'INBOX' }],
+    groupKeys: { G1: 'GK' },   // ключ есть — иначе скан не дойдёт до тела и ничего не проверит
+  }).deps);
+  check('не залогинен (группы есть) → no-op', apiMock.fetchCalls.length === 0, apiMock.fetchCalls);
+}
+
+// 7. Ключ группы отсутствует в сторе, но есть в api → догружается и применяется
+{
+  _kv.clear(); apiMock.fetchCalls.length = 0; invokeMock.calls.length = 0;
+  apiMock.groupKey = 'GK_FROM_API';
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ meta: 1, avatar: 'AVA', name: 'N' });
+  const { deps: deps7 } = makeDeps({
+    groups: [{ id: 'G1', name: 'Old', members: [{ email: 'a@x.ru' }] }],
+    emails: [{ from: 'a@x.ru', uid: 50, folder: 'INBOX', date: '2026-01-01' }],
+    groupKeys: {},   // в сторе ключа нет
+  });
+  await syncGroupAvatarsFromMeta(deps7);
+  check('ключ догружен из api и применён (meta обработана)',
+    deps7.groupStore.state.groupKeys.G1 === 'GK_FROM_API'
+    && _kv.get('group-avatar:G1') === 'AVA', { keys: deps7.groupStore.state.groupKeys, avatar: _kv.get('group-avatar:G1') });
+}
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

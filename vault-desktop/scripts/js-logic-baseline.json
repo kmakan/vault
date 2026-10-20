@@ -1,70 +1,14 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 53,
+    "ctxRefSites": 0,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
   },
-  "ctxByFile": {
-    "features/channels.js": 6,
-    "features/drafts.js": 9,
-    "features/folders.js": 11,
-    "features/group-avatars.js": 4,
-    "features/group-meta.js": 11,
-    "features/migrate.js": 1,
-    "features/presence.js": 11
-  },
-  "ctxFieldsByFile": {
-    "features/channels.js": [
-      "channelById",
-      "noteChannelHello",
-      "noteChannelPost"
-    ],
-    "features/drafts.js": [
-      "activeChat",
-      "activeChatType",
-      "currentGroup",
-      "email",
-      "newMessage",
-      "setDraft"
-    ],
-    "features/folders.js": [
-      "chatFolderNewName",
-      "chatMenu",
-      "closeChatMenu",
-      "email",
-      "folderDialogOpen"
-    ],
-    "features/group-avatars.js": [
-      "cryptoReady",
-      "groupKeys",
-      "setGroupAvatar",
-      "setGroupKey"
-    ],
-    "features/group-meta.js": [
-      "cryptoReady",
-      "emails",
-      "groupKeys",
-      "groups",
-      "healGroupAvatarFromMessage",
-      "isLoggedIn",
-      "replyGroupAvatarHeal",
-      "setGroupAvatar",
-      "setGroupKey"
-    ],
-    "features/migrate.js": [
-      "migrateOwnProfile"
-    ],
-    "features/presence.js": [
-      "_presenceSending",
-      "cryptoReady",
-      "isLoggedIn",
-      "peerKeys",
-      "peerPqKeys"
-    ]
-  },
+  "ctxByFile": {},
+  "ctxFieldsByFile": {},
   "protocolByFile": {
     "features/attachments.js": {
       "envelope-parse": 1,

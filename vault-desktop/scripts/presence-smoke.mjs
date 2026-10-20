@@ -15,9 +15,9 @@ const db = {
   kvGet: async (ns, key) => globalThis.__pv ?? '0',
   kvSet: async () => {},
 };
-writeFileSync(`${MOCKS}/api.js`, `let getImpl = async (ns,key) => (globalThis.__pvGet ? globalThis.__pvGet(ns,key) : (globalThis.__pv ?? null));\nexport const db = { kvGet: getImpl, kvSet: async () => {} };\nexport default { db };\n`);
+writeFileSync(`${MOCKS}/api.js`, `let getImpl = async (ns,key) => (globalThis.__pvGet ? globalThis.__pvGet(ns,key) : (globalThis.__pv ?? null));\nexport const db = { kvGet: getImpl, kvSet: async () => {} };\nexport default { db, sendReaction: async (peer, content) => { (globalThis.__hb = globalThis.__hb || []).push([peer, content]); } };\n`);
 writeFileSync(`${MOCKS}/identity.js`, 'export async function accountNamespace(email){ return "ns"; }\n');
-writeFileSync(`${MOCKS}/crypto.js`, 'export default { encryptVault: async()=>"", setPeerPublicKey: ()=>{} };\n');
+writeFileSync(`${MOCKS}/crypto.js`, 'export default { encryptVault: async (p) => { (globalThis.__enc = globalThis.__enc || []).push(p); return "ENC:" + p; }, setPeerPublicKey: (k) => { (globalThis.__pk = globalThis.__pk || []).push(k); } };\n');
 writeFileSync(`${MOCKS}/tauri.js`, 'export async function invoke(){}\n');
 
 writeFileSync(`${MOCKS}/features/presence.js`,
@@ -62,6 +62,33 @@ check('setEnabled(true) starts heartbeat', started === 1 && stopped === 0);
 started = 0; stopped = 0;
 await setEnabled('u@x.org', false, { startHeartbeats: () => { started++; }, stopHeartbeats: () => { stopped++; } });
 check('setEnabled(false) stops heartbeat', started === 0 && stopped === 1);
+
+// 9. heartbeat: письмо каждому пиру с ключом (M2)
+// ADR-005 W2 (партия 13): модуль берёт «залогинен» у session-store, ключи —
+// у identity-store, cryptoReady — в deps. Здесь проверяется САМ путь отправки
+// (раньше он не был покрыт вовсе: смоук трогал только setEnabled).
+{
+  const { sessionStore } = await import('/home/maksim/whisper/vault-desktop/src/features/session-store.js');
+  const { identityStore } = await import('/home/maksim/whisper/vault-desktop/src/features/identity-store.js');
+  const { sendHeartbeat } = mod;
+  globalThis.__hb = []; globalThis.__enc = []; globalThis.__pk = [];
+  identityStore.state.peerKeys = { 'a@x.org': 'KA', 'b@x.org': 'KB' };
+  identityStore.state.peerPqKeys = {};
+  sessionStore.state.isLoggedIn = true;
+  await sendHeartbeat({ cryptoReady: () => true });
+  check('heartbeat: письмо каждому пиру с ключом (2)', globalThis.__hb.length === 2, globalThis.__hb);
+  const payload = globalThis.__enc.length ? JSON.parse(globalThis.__enc[0]) : {};
+  check('heartbeat: конверт presence:1', payload.presence === 1 && typeof payload.ts === 'number', payload);
+  check('heartbeat: ключ пира установлен перед шифрованием', globalThis.__pk.length === 2, globalThis.__pk);
+  globalThis.__hb = [];
+  sessionStore.state.isLoggedIn = false;
+  await sendHeartbeat({ cryptoReady: () => true });
+  check('heartbeat: не залогинен → не отправляется', globalThis.__hb.length === 0, globalThis.__hb);
+  sessionStore.state.isLoggedIn = true;
+  globalThis.__hb = [];
+  await sendHeartbeat({ cryptoReady: () => false });
+  check('heartbeat: crypto не готов → не отправляется', globalThis.__hb.length === 0, globalThis.__hb);
+}
 
 console.log('\nИТОГО: ' + p + ' pass, ' + f + ' fail');
 if (f) process.exit(1);

@@ -114,7 +114,13 @@ export function defaultUiState() {
     imapPort: '',
     smtpServer: '',
     smtpPort: '',
-      mailProvider: '',
+    mailProvider: '',
+    // ADR-005 W2 (партия 14): меню чата и имя новой папки — форма. ДО этого
+    // поля жили в data() компонента, а folderDialogOpen/chatFolderNewName вообще
+    // НЕ были объявлены: присваивание из шаблона нереактивно, и диалог
+    // «Новая папка» открывался только при СЛЕДУЮЩЕЙ перерисовке.
+    chatMenu: { show: false, target: null },
+    chatFolderNewName: '',
     },
     // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
     modals: {
@@ -134,6 +140,8 @@ export function defaultUiState() {
     showContactPopup: false,
     showAddMemberPopup: false,
     showMembersList: false,
+    // ADR-005 W2 (партия 14): диалог создания папки.
+    folderDialogOpen: false,
     showCreateGroup: false,
     showEmojiPicker: false,
     showSettings: false,

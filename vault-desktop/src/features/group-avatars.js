@@ -1,6 +1,10 @@
 // Feature module: аватары групп — самовосстановление (heal-протокол).
 // Изоляция фичи (правило канбан t_7c3929d2): новая фича = отдельный модуль,
-// App.vue — только тонкие обёртки-делегаты; все зависимости явные (ctx).
+// App.vue — только тонкие обёртки-делегаты.
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 13: модуль больше НЕ читает компонент.
+// Ключи и аватары групп — владелец groups-store (per-app экземпляр, приходит
+// в deps); cryptoReady — признак компонента, тоже в deps.
 //
 // Данные: аватар = kv `group-avatar:<gid>` (namespace 'anon', НЕ email-keyed —
 // смена почты аккаунта его не трогает).
@@ -26,12 +30,12 @@ async function rateLimitExpired(flagKey) {
   return !last || Date.now() - last >= DAY_MS;
 }
 
-async function groupKeyOf(ctx, groupId) {
-  let groupKey = ctx.groupKeys[groupId];
-  if (!groupKey && ctx.cryptoReady) {
+async function groupKeyOf(deps, groupId) {
+  let groupKey = deps.groups.state.groupKeys[groupId];
+  if (!groupKey && deps.cryptoReady()) {
     try {
       const kd = await api.getMyGroupKey(groupId);
-      if (kd && kd.group_key) { ctx.setGroupKey(groupId, kd.group_key); groupKey = kd.group_key; }
+      if (kd && kd.group_key) { deps.groups.setGroupKey(groupId, kd.group_key); groupKey = kd.group_key; }
     } catch (e) { console.log('[group] avatar-heal keyload failed:', groupId, String(e)); }
   }
   return groupKey || null;
@@ -39,19 +43,19 @@ async function groupKeyOf(ctx, groupId) {
 
 // Приём gavatar из конверта: пусто/не-строка НИКОГДА не пишется (guard —
 // пустое значение не может затереть существующий аватар).
-export async function healFromMessage(ctx, groupId, gavatar) {
+export async function healFromMessage(deps, groupId, gavatar) {
   if (!gavatar || typeof gavatar !== 'string') return;
   const cur = await db.kvGet('anon', AVATAR_P + groupId);
   if (cur !== gavatar) {
     await db.kvSet('anon', AVATAR_P + groupId, gavatar);
-    ctx.setGroupAvatar(groupId, gavatar);
+    deps.groups.setGroupAvatar(groupId, gavatar);
     console.log('[group] avatar healed from message:', groupId);
   }
 }
 
 // Ответ на {hav:1}: у меня есть аватар группы → шлю meta{1,avatar}
 // всем участникам (rate-limit 24ч на группу).
-export async function replyHeal(ctx, groupId) {
+export async function replyHeal(deps, groupId) {
   try {
     const my = await db.kvGet('anon', AVATAR_P + groupId);
     if (!my) return; // у меня пусто — не отвечаем (защита от петли)
@@ -71,7 +75,7 @@ export async function replyHeal(ctx, groupId) {
 
 // Запрос {hav:1}: мой kv этой группы пуст → прошу участников прислать
 // аватар. Вызывается fire-and-forget из loadGroups (guard'ы внутри).
-export async function requestHeal(ctx, groupId) {
+export async function requestHeal(deps, groupId) {
   try {
     const flagKey = SENT_P + groupId;
     if (!(await rateLimitExpired(flagKey))) return; // 24ч rate-limit
