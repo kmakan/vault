@@ -210,14 +210,31 @@ const C = await import(MOCKS + '/features/calls.js');
 // состояние принадлежит компоненту. Если бы кто-то вернул мутацию ctx,
 // этот блок перестал бы видеть смену значения — и стал бы красным.
 {
-  check('toggleCallMute(false) → true и НЕ мутирует вход',
-    C.toggleCallMute({ callMuted: false, currentCall: null }) === true);
-  check('toggleCallMute(true) → false',
-    C.toggleCallMute({ callMuted: true, currentCall: null }) === false);
-  check('toggleSpeaker(false) → true',
-    C.toggleSpeaker({ callSpeaker: false, currentCall: null }) === true);
-  check('toggleSpeaker(true) → false',
-    C.toggleSpeaker({ callSpeaker: true, currentCall: null }) === false);
+  // ADR-005 W3 п.1: контракт стал «владельцем» — фича САМА пишет новое
+  // значение в call-session через deps.setMuted/setSpeaker. Проверяем и
+  // значение, и факт записи владельцу (раньше писал компонент).
+  const muteDeps = (muted, sink) => ({
+    callMuted: () => muted,
+    currentCall: () => null,
+    setMuted: (v) => { sink.push(v); },
+  });
+  const spkDeps = (spk, sink) => ({
+    callSpeaker: () => spk,
+    currentCall: () => null,
+    setSpeaker: (v) => { sink.push(v); },
+  });
+  const muteSink = [];
+  check('toggleCallMute(false) → true и пишет в владельца',
+    C.toggleCallMute(muteDeps(false, muteSink)) === true && muteSink.length === 1 && muteSink[0] === true, muteSink);
+  const muteSink2 = [];
+  check('toggleCallMute(true) → false и пишет в владельца',
+    C.toggleCallMute(muteDeps(true, muteSink2)) === false && muteSink2[0] === false, muteSink2);
+  const spkSink = [];
+  check('toggleSpeaker(false) → true и пишет в владельца',
+    C.toggleSpeaker(spkDeps(false, spkSink)) === true && spkSink[0] === true, spkSink);
+  const spkSink2 = [];
+  check('toggleSpeaker(true) → false и пишет в владельца',
+    C.toggleSpeaker(spkDeps(true, spkSink2)) === false && spkSink2[0] === false, spkSink2);
 
   // Часы теперь — владелец call-session.startCallClock/stopCallClock (ADR-004 E).
 

@@ -215,6 +215,9 @@ function makeCtx(over = {}) {
   // чтобы вызовы в смоуке читались как раньше: C.handleCallSignal(ctx.deps, …).
   ctx.deps = {
     chat: ctx.chat,
+    // Видео гасится фичей вместе со звонком (ADR-005 W3 п.1): без этого
+    // камера оставалась бы включённой после отклонения/таймаута.
+    stopVideo: () => { ctx.videoStops = (ctx.videoStops || 0) + 1; },
     isIgnored: (e) => ctx.isIgnored(e),
     incUnread: (k) => ctx.incUnread(k),
     saveUnreadCounts: () => ctx.saveUnreadCounts(),
@@ -431,6 +434,7 @@ console.log('5. lifecycle');
   check('hangup: полный сброс состояния', hu.session.callState === 'idle' && hu.session.currentCall === null && hu.session.callMuted === false && hu.session.connLostTimer === null);
   check('hangup: ended-пилюля с длительностью 03:24', hu.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'ended' && m.callEvent.duration === 204));
   check('hangup: mediaClose + звук конца', apiMock.calls.some(c => c[0] === 'close' && c[1] === 'h1') && apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'end'));
+  check('hangup: видео гасится (камера не остаётся включённой)', (hu.videoStops || 0) >= 1, hu.videoStops);
   histMock.store = {};
 }
 
@@ -472,15 +476,25 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   const ctx = makeCtx({ currentCall: { call_id: 'q1', peer: 'peer@x.ru' } });
   // ADR-001: переключатели возвращают новое значение, App.vue его присваивает.
   // Раньше фича писала в ctx сама — проверка читала ctx.session.callMuted.
-  const muteDeps = () => ({ callMuted: ctx.session.callMuted, currentCall: ctx.session.currentCall });
-  const spkDeps = () => ({ callSpeaker: ctx.session.callSpeaker, currentCall: ctx.session.currentCall });
+  // ADR-005 W3 п.1: переключатель получает ВЛАДЕЛЬЦА (call-session) через
+  // deps и сам пишет в него — состояние не возвращается «наружу».
+  const muteDeps = () => ({
+    callMuted: () => ctx.session.callMuted,
+    currentCall: () => ctx.session.currentCall,
+    setMuted: (v) => ctx.session.setMuted(v),
+  });
+  const spkDeps = () => ({
+    callSpeaker: () => ctx.session.callSpeaker,
+    currentCall: () => ctx.session.currentCall,
+    setSpeaker: (v) => ctx.session.setSpeaker(v),
+  });
   // mute
-  ctx.session.setMuted(C.toggleCallMute(muteDeps()));
+  C.toggleCallMute(muteDeps());
   check('toggleCallMute → mediaSetMuted(true)', ctx.session.callMuted === true && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === true));
-  ctx.session.setMuted(C.toggleCallMute(muteDeps()));
+  C.toggleCallMute(muteDeps());
   check('повторный mute → false', ctx.session.callMuted === false && apiMock.calls.some(c => c[0] === 'setMuted' && c[2] === false));
   // speaker
-  ctx.session.setSpeaker(C.toggleSpeaker(spkDeps()));
+  C.toggleSpeaker(spkDeps());
   check('toggleSpeaker → mediaSetSpeaker(true)', ctx.session.callSpeaker === true && apiMock.calls.some(c => c[0] === 'setSpeaker' && c[2] === true));
   // startSignalResend: тик 10с, повтор пока не connected
   ctx.session.setCallState('active');

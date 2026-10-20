@@ -909,7 +909,6 @@ import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } 
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
-import * as Video from './features/video.js';
 import { useI18n } from './i18n.js';
 import SettingsPage from './components/SettingsPage.vue';
 import CallOverlay from './components/CallOverlay.vue';
@@ -996,6 +995,7 @@ import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
+import * as CallVideoFeature from './features/call-video.js';
 // S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
 // не был готов — очередь применяется к следующему call_request.
 import { setPendingNativeCallDecision } from './features/calls.js';
@@ -1859,6 +1859,17 @@ export default {
         replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
       };
     },
+    // Контракт фичи видео звонка (ADR-005 W3, партия 1): DOM-эффекты,
+    // которых не знает модуль, — через deps.
+    callVideoDeps() {
+      return {
+        nextTick: () => this.$nextTick(),
+        getRemoteCanvas: () => {
+          const overlay = this.$refs.callOverlay;
+          return overlay ? overlay.getRemoteVideoEl() : null;
+        },
+      };
+    },
     // Контракт фичи участников (ADR-005 W2, партия 12): текущая группа —
     // владелец chatStore, форма «добавить участника» — владелец uiStore
     // (модуль берёт их сам), остальное — эффекты.
@@ -1927,6 +1938,15 @@ export default {
     callsDeps() {
       return {
         chat: this.chat,
+        // Переключатели звонка (W3 п.1): состояние — у владельца
+        // call-session, а «переключатель» сам пишет в него.
+        callMuted: () => this.callMuted,
+        callSpeaker: () => this.callSpeaker,
+        currentCall: () => this.currentCall,
+        setMuted: (v) => { this.callMuted = v; },
+        setSpeaker: (v) => { this.callSpeaker = v; },
+        // Видео гасится в фиче вместе с завершением звонка (W3 п.1).
+        stopVideo: () => this.stopCallVideo(),
         isIgnored: (e) => this.isIgnored(e),
         incUnread: (k) => this.incUnread(k),
         saveUnreadCounts: () => this.saveUnreadCounts(),
@@ -2231,7 +2251,7 @@ export default {
       if (!this.callVideoOn) {
         try { await this.startCallVideo(); } catch (e) { console.warn('[video] auto-start failed:', e); return; }
       }
-      Video.decodeFrame(p);
+      CallVideoFeature.decodeFrame(p);
     }).catch(e => console.warn('[video] listen frame failed:', e));
     // Rust IDLE-монитор: «mail-changed» приходит из tokio-таска
     // НЕ от JS-цикла — доставка писем/звонков живёт даже при замершем WebView.
@@ -2435,8 +2455,7 @@ export default {
     if (this._connLostTimer) { clearTimeout(this._connLostTimer); this._connLostTimer = null; }
     // M3: видеотракт — камера и remote-декодер не должны пережить
     // размонтирование (иначе энкодер держит USB/камеру после закрытия UI).
-    Video.stopCamera();
-    Video.stopRemoteVideo();
+    CallVideoFeature.stopVideoTracks();
   },
   methods: {
     // ── Голосования (poll) — логика в features/poll.js; обёртки держат
@@ -2577,14 +2596,8 @@ export default {
     async startCall() { return CallsFeature.startCall(this.callsDeps); },
     async acceptCall() { return CallsFeature.acceptCall(this.callsDeps); },
     async rejectCall() { return CallsFeature.rejectCall(this.callsDeps); },
-    async endCall() {
-      this.stopCallVideo();
-      return CallsFeature.endCall(this.callsDeps);
-    },
-    async hangup(reason) {
-      this.stopCallVideo();
-      return CallsFeature.hangup(this.callsDeps, reason);
-    },
+    async endCall() { return CallsFeature.endCall(this.callsDeps); },
+    async hangup(reason) { return CallsFeature.hangup(this.callsDeps, reason); },
     async cancelCall(reason) { return CallsFeature.cancelCall(this.callsDeps, reason); },
     async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this.callsDeps, peer, kind, ts, durationSec, callId); },
     callEventLabel(msg) { return CallsFeature.callEventLabel(this.t, msg); },
@@ -2594,62 +2607,19 @@ export default {
       callState: this.callState, expCalls: this.expCalls, peerKeys: this.peerKeys,
     }, msg); },
     callBack() { return CallsFeature.callBack(this.callsDeps); },
-    toggleCallMute() { this.callMuted = CallsFeature.toggleCallMute({ callMuted: this.callMuted, currentCall: this.currentCall }); },
-    toggleSpeaker() { this.callSpeaker = CallsFeature.toggleSpeaker({ callSpeaker: this.callSpeaker, currentCall: this.currentCall }); },
-    // M3: видео живёт в features/video.js — здесь только тонкая
+    toggleCallMute() { return CallsFeature.toggleCallMute(this.callsDeps); },
+    toggleSpeaker() { return CallsFeature.toggleSpeaker(this.callsDeps); },
+    // M3: видео живёт в features/call-video.js — здесь только тонкая
     // точка сборки (reactive-флаг + вызов фичи), как у mute/speaker.
-    toggleCallVideo() {
-      if (!this.currentCall || !this.callMediaConnected) return;
-      if (this.callVideoOn) { this.stopCallVideo(); } else { this.startCallVideo(); }
-    },
-    async startCallVideo() {
-      const c = this.currentCall;
-      if (!c || this.callVideoOn) return;
-      const cid = c.call_id;
-      // Сначала поднимаем флаг: canvas рендерится по v-if=videoOn,
-      // и только когда DOM готов — стартуем remote-декодер.
-      this.callVideoOn = true;
-      await this.$nextTick();
-      const overlay = this.$refs.callOverlay;
-      const canvasEl = overlay ? overlay.getRemoteVideoEl() : null;
-      try {
-        const ok = await Video.startRemoteVideo(cid, canvasEl);
-        if (!ok) {
-          this.callVideoOn = false;
-          uiStore.toast(uiStore.tr('video_unavailable') || 'Видео недоступно в этом WebView', 3000);
-          return;
-        }
-        await api.mediaVideoStart(cid);
-      } catch (e) {
-        console.error('[video] remote start failed:', e);
-        this.callVideoOn = false;
-        Video.stopRemoteVideo();
-        uiStore.toast(uiStore.tr('video_start_failed') || 'Не удалось включить видео', 3000);
-        return;
-      }
-      // Локальная камера: кадры → Rust → собеседник (превью нет — air).
-      try {
-        await Video.startCamera(cid);
-      } catch (e) {
-        // Камера недоступна/отказала — remote-видео собеседника всё равно
-        // работает; переключатель остается «вкл», звонок не роняем.
-        console.warn('[video] camera unavailable, remote-only:', e && e.message || e);
-        uiStore.toast(uiStore.tr('video_camera_off') || 'Камера недоступна — видно только собеседника', 3000);
-      }
-    },
-    stopCallVideo() {
-      if (!this.currentCall) return;
-      Video.stopCamera();
-      Video.stopRemoteVideo();
-      this.callVideoOn = false;
-      api.mediaVideoStop(this.currentCall.call_id).catch((e) => console.warn('[video] stop failed:', e));
-    },
+    toggleCallVideo() { return CallVideoFeature.toggleCallVideo(this.callVideoDeps); },
+    async startCallVideo() { return CallVideoFeature.startCallVideo(this.callVideoDeps); },
+    stopCallVideo() { return CallVideoFeature.stopCallVideo(this.callVideoDeps); },
     startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this.callsDeps, peer, payload, call_id); },
     stopSignalResend() { return CallsFeature.stopSignalResend(this.callsDeps); },
     sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this.callsDeps, peer, type, call_id); },
     armMediaFallback() { return CallsFeature.armMediaFallback(this.callsDeps); },
-    startCallClock() { this.callSession.startCallClock(); },
-    stopCallClock() { this.callSession.stopCallClock(); },
+    startCallClock() { return this.callSession.startCallClock(); },
+    stopCallClock() { return this.callSession.stopCallClock(); },
     startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop(), this.callSession.callIdleMonitorUp); },
     stopFastPolling() { return CallsFeature.stopFastPolling(); },
     playCallSound(name, looped) { return CallsFeature.playCallSound(this.callsDeps, name, looped); },

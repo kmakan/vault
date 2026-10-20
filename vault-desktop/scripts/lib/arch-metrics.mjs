@@ -111,9 +111,14 @@ export const ctxFields = (src) =>
   [...new Set([...stripComments(src).matchAll(/ctx\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))].sort();
 
 // ── Инвентарь App.vue ──────────────────────────────────────────────────
-// Делегат — метод, тело которого РОВНО `return <модуль>.<фн>(<аргументы>);`.
-// Правило совпадает с `appvue-inventory.mjs`. Всё остальное — логика в монолите.
-const DELEG_RE = /^\s*return\s+[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([^;]*\);\s*$/;
+// Делегат — метод, тело которого РОВНО `return <вызов>(<аргументы>);`.
+// Цепочка свойств допускается: `return this.callSession.startCallClock();` —
+// это ТОЖЕ делегат (вызов у владельца), а не логика в монолите. Раньше
+// регулярка допускала только одно свойство (`X.y(...)`), и делегаты вида
+// `this.<владелец>.<метод>()` попадали в «логику» (найдено на живом App.vue
+// 20.10: startCallClock/stopCallClock и прокси login).
+// Правило совпадает с `appvue-inventory.mjs`. Всё остальное — логика.
+const DELEG_RE = /^\s*return\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\([^;]*\);\s*$/;
 const METHOD_RE = /^\s{4}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^()]*)\)\s*\{/;
 // Тело метода — между СКОБКАМИ тела. Скобки ищем С КОНЦА: иначе параметр со
 // значением по умолчанию вида `opts = {}` даёт «первую» `{` не ту, и тело
@@ -200,6 +205,10 @@ export function selfTest() {
     // превращать делегата в «логику»: скобки тела ищем с конца.
     { name: 'App.vue: делегат с opts = {} — не логика', src: 'methods: {\n    foo(p, opts = {}) { return Mod.foo(p, opts); },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
     { name: 'App.vue: многострочный делегат с opts = {} — не логика', src: 'methods: {\n    foo(p, opts = {}) {\n      return Mod.foo(p, opts);\n    },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
+    // Делегат через цепочку свойств (вызов у владельца) — тоже не логика.
+    { name: 'App.vue: делегат this.владелец.метод() — не логика', src: 'methods: {\n    foo() { return this.callSession.startCallClock(); },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 0, id: null },
+    // Присваивание в data — это логика (не делегат).
+    { name: 'App.vue: присваивание — логика', src: 'methods: {\n    foo(v) { return this.x = v; },\n}', fn: (s) => [{ id: 'own', n: appVueInventory(s).own }], want: 1, id: 'own' },
   ];
   const fails = [];
   for (const c of cases) {

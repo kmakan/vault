@@ -705,6 +705,10 @@ export async function endCall(deps) {
 
 // Локальный сброс состояния (после сигнала, отмены или таймаута).
 export async function hangup(deps, reason) {
+  // Видео гасим ЗДЕСЬ, а не только в UI-пути App.vue: раньше внутренние
+  // вызовы (отклонение/таймаут/ошибка собеседника) оставляли камеру включённой
+  // — это приватность, а не косметика.
+  if (deps.stopVideo) deps.stopVideo();
   const c = useSession().currentCall;
   const callId = c ? c.call_id : null;
   const wasActive = useSession().callState === 'active';
@@ -954,23 +958,30 @@ export function callBack(deps) {
 // ADR-001: переключатели возвращают НОВОЕ значение, а не пишут в ctx.
 // Мутация состояния — на стороне App.vue: так видно, что состояние
 // принадлежит компоненту, а фича его только вычисляет.
-export function toggleCallMute({ callMuted, currentCall }) {
-  const muted = !callMuted;
-  if (currentCall) {
-    api.mediaSetMuted(currentCall.call_id, muted)
+// deps: { callMuted(), currentCall(), setMuted(v) } — состояние звонка у
+// владельца call-session, поэтому «переключатель» сам и пишет в него.
+export function toggleCallMute(deps) {
+  const muted = !deps.callMuted();
+  const c = deps.currentCall();
+  if (c) {
+    api.mediaSetMuted(c.call_id, muted)
       .catch((e) => console.error('[call] set muted failed:', e));
   }
+  deps.setMuted(muted);
   return muted;
 }
 
 // Динамик: Android — speakerphone (earpiece ↔ динамик)
 // desktop — no-op в Rust (вывод и так на динамики).
-export function toggleSpeaker({ callSpeaker, currentCall }) {
-  const speaker = !callSpeaker;
-  if (currentCall) {
-    api.mediaSetSpeaker(currentCall.call_id, speaker)
+// deps: { callSpeaker(), currentCall(), setSpeaker(v) }
+export function toggleSpeaker(deps) {
+  const speaker = !deps.callSpeaker();
+  const c = deps.currentCall();
+  if (c) {
+    api.mediaSetSpeaker(c.call_id, speaker)
       .catch((e) => console.error('[call] set speaker failed:', e));
   }
+  deps.setSpeaker(speaker);
   return speaker;
 }
 

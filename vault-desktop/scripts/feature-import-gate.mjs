@@ -40,6 +40,7 @@ const PRIMITIVES = new Set([
   'call-terminal',   // только factory createTerminalSender() — состояние внутри created-объекта.
   'recovery-session', // чистые функции над localStorage-маркером: storage инъектируется параметром. Нет feature-семантики, только durable-флаг.
   'contacts-load',   // loadContacts(email): чистая функция, возвращает {contacts, contactAliases}, не мутирует ctx. Инкапсулирует правило «один ключ — несколько адресов».
+  'video',           // движок медиаканала (WebRTC/WebCodecs): startCamera/stopCamera/startRemoteVideo/stopRemoteVideo/decodeFrame. Ни feature-семантики, ни feature-состояния — обёртка над платформенным каналом; состояние видео — у владельца call-session (callVideoOn). ADR-005 W3 п.1: call-video.js → video.js.
   'presence',        // heartbeat-signal format + чистые ingestSignal/isOnline. Приём: ingestSignal(noteSeen, robj, …) — связанная функция отметки, а не ctx (ADR-005 R3). Состояние отправки — в ctx (HB_TIMER как string-key, а не переменная). Инфраструктурный модуль presence-сигналов.
 ]);
 
