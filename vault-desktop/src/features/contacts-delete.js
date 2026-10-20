@@ -56,3 +56,31 @@ export function contactRemovalState(email, state = {}) {
     reload: true,
   };
 }
+// ── ADR-005 W3 (партия 11): поток удаления контакта из UI ──────────────
+// Подтверждение, снос ключа, применение состояния (закрытый чат),
+// перечитывание списка контактов и сообщение об ошибке — логика диалога
+// уехала из App.vue; UI-эффекты приходят deps'ами.
+//
+// ПОДТВЕРЖДЕНИЕ — ДО удаления. Если спросить после, то отказ диалога уже
+// удалил контакт.
+export async function deleteContactFlow(email, deps) {
+  const {
+    confirmDelete, removePeerKey, removalState, applyRemovalState,
+    loadContacts, onError,
+  } = deps;
+  if (!(await confirmDelete())) return false;
+  try {
+    // Четыре шага и их порядок — в deleteContactLocally (см. шапку модуля):
+    // снести ключ, пометить старые handshake по uid, снять наше приглашение,
+    // убрать stub. Отказ любого шага останавливает остальные.
+    await deleteContactLocally(email);
+    removePeerKey(email);
+    applyRemovalState(removalState(email));
+    await loadContacts();
+    return true;
+  } catch (e) {
+    // Состояние НЕ применяется: ключ мог снестись, а запись остаться.
+    onError(e);
+    return false;
+  }
+}

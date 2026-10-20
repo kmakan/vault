@@ -114,5 +114,50 @@ reset();
 r = await GC.createGroup({ name: '  Моя группа  ', avatar: '', cryptoReady: false });
 ok('имя обрезано от пробелов', r.group.name === 'Моя группа');
 
+// 8. Поток из UI (ADR-005 W3, партия 11): createGroupFlow.
+// Проверка имени, применение состояния, сохранение ключа, сброс полей
+// диалога и сообщение об ошибке — в модуле; компонент только вызывает.
+console.log('\n8. createGroupFlow (поток из UI)');
+{
+  const calls = [];
+  const deps = {
+    cryptoReady: true,
+    applyCreated: (x) => calls.push(['applyCreated', x.group.id]),
+    saveGroupKey: (id, key) => calls.push(['saveGroupKey', id, key]),
+    resetDialog: () => calls.push(['resetDialog']),
+    onError: (e) => calls.push(['onError', e.message]),
+  };
+  reset();
+  let r = await GC.createGroupFlow(deps, { name: '  Работа  ', avatar: 'AV' });
+  ok('поток: группа создана', r && r.id === 'g1');
+  ok('поток: состояние применено', calls.some((c) => c[0] === 'applyCreated' && c[1] === 'g1'), calls);
+  ok('поток: ключ сохранён', calls.some((c) => c[0] === 'saveGroupKey' && c[2] === 'GK1'), calls);
+  ok('поток: поля диалога сброшены', calls.some((c) => c[0] === 'resetDialog'), calls);
+  ok('поток: порядок — применение, потом ключ, потом сброс диалога',
+    calls.map((c) => c[0]).join(',') === 'applyCreated,saveGroupKey,resetDialog', calls.map((c) => c[0]));
+
+  // Пустое имя — группа не создаётся, диалог не трогается.
+  reset();
+  calls.length = 0;
+  r = await GC.createGroupFlow(deps, { name: '   ', avatar: '' });
+  ok('поток: пустое имя → ничего не создано', r === null);
+  ok('поток: при пустом имени нет ни одного эффекта', calls.length === 0, calls);
+
+  // Сбой создания — ошибка в onError, состояние НЕ применяется.
+  reset();
+  state.failCreate = true;
+  calls.length = 0;
+  r = await GC.createGroupFlow(deps, { name: 'Работа', avatar: '' });
+  ok('поток: сбой → onError, а не исключение наружу', r === null && calls.some((c) => c[0] === 'onError'), calls);
+  ok('поток: при сбое диалог НЕ сбрасывается (пользователь может повторить)',
+    !calls.some((c) => c[0] === 'resetDialog'), calls);
+
+  // Без криптографии ключа нет — и сохранять нечего.
+  reset();
+  calls.length = 0;
+  await GC.createGroupFlow({ ...deps, cryptoReady: false }, { name: 'Работа', avatar: '' });
+  ok('поток: без cryptoReady ключ не сохраняется', !calls.some((c) => c[0] === 'saveGroupKey'), calls);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

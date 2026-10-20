@@ -1700,6 +1700,74 @@ export default {
         prompt: (msg) => { return window.prompt(msg); },
       };
     },
+    // Контракт фичи групп (ADR-005 W3, партия 11): создание, клонирование,
+    // переименование. UI-эффекты — deps'ами (ADR-003 §5.1): компонент остаётся
+    // источником состояния, но не владельцем ПОРЯДКА шагов.
+    groupDeps() {
+      return {
+        cryptoReady: () => this.cryptoReady,
+        email: () => this.email,
+        peerKeys: () => this.peerKeys,
+        publicKey: () => this.publicKey,
+        groupKeys: () => this.groupKeys,
+        // Применение созданной/клонированной группы — как было в App.vue.
+        applyCreated: ({ group: g, avatar: av }) => {
+          if (av) this.groupsStore.setGroupAvatar(g.id, av);
+          this.groups.push(g);
+          this.currentGroup = g;
+          if (g.group_key) this.groupsStore.setGroupKey(g.id, g.group_key);
+        },
+        saveGroupKey: (id, key) => this.groupsStore.setGroupKey(id, key),
+        resetDialog: () => {
+          this.newGroupAvatar = '';
+          this.showGroupSettings = true;
+          this.newGroupName = '';
+        },
+        onError: (error) => {
+          console.error('Failed to create group:', error);
+          alert('Failed to create group: ' + error.message);
+        },
+        promptName: (def) => window.prompt(
+          uiStore.tr('group_clone_prompt') || 'Имя новой группы (клон)', def),
+        closeSettings: () => { this.showGroupSettings = false; },
+        onDone: (invited, skipped) => {
+          const msg = (uiStore.tr('group_clone_done') || 'Клон создан')
+            + (invited.length ? ': ' + uiStore.tr('group_clone_invited') + ' ' + invited.join(', ') : '')
+            + (skipped.length ? '\n' + (uiStore.tr('group_clone_skipped') || 'пропущены (нет ключа)') + ': ' + skipped.join(', ') : '');
+          alert(msg);
+        },
+        onCloneError: (e) => {
+          console.error('cloneGroup failed:', e);
+          alert((uiStore.tr('group_clone_failed') || 'Не удалось создать клон') + ': ' + e.message);
+        },
+        applyLocalName: (groupId, name) => {
+          const g = this.groups.find(x => x.id === groupId);
+          if (g) g.name = name;
+          if (this.currentGroup && this.currentGroup.id === groupId) this.currentGroup.name = name;
+        },
+        logSent: (groupId, name) => console.log('[group] renamed', groupId, '→', name),
+        logNoKey: (groupId) => console.warn('[group] rename broadcast skipped, no group key:', groupId),
+        logFailed: (groupId, error) => console.warn('[group] rename broadcast failed:', error),
+      };
+    },
+    // Контракт удаления контакта (ADR-005 W3, партия 11).
+    contactsDeleteDeps() {
+      return {
+        confirmDelete: () => confirm(uiStore.tr('contact_delete_confirm')
+          || 'Удалить контакт? Его ключ шифрования будет удалён.'),
+        removePeerKey: (email) => identityStore.removePeerKey(email),
+        removalState: (email) => ContactsDelete.contactRemovalState(email, {
+          activeChat: this.activeChat, activeChatType: this.activeChatType,
+        }),
+        applyRemovalState: (st) => {
+          if (!st.closeChat) return;
+          this.activeChat = null;
+          this.activeChatType = st.activeChatType;
+        },
+        loadContacts: () => this.loadContacts(),
+        onError: (e) => { alert('Failed to delete contact: ' + e.message); },
+      };
+    },
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
     // identity-store. calls.js/forward.js читают через ctx.peerKeys (computed).
@@ -3999,31 +4067,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Переименование группы: создатель/админ меняет имя. Обновляем
     // локально + рассылаем meta-письмо {meta:1, name} участникам — они
     // применяют при syncGroupMeta (как аватар).
-    async onGroupRename({ groupId, name }) {
-      const g = this.groups.find(x => x.id === groupId);
-      if (g) g.name = name;
-      if (this.currentGroup && this.currentGroup.id === groupId) this.currentGroup.name = name;
-      // Локальное имя применено ДО рассылки и не откатывается при её отказе —
-      // так было и раньше, поведение сохранено. Читать av и слать — в
-      // features/group-meta-broadcast.js (ADR-003 Этап 3, партия 11).
-      try {
-        const curAv = await GroupMetaBroadcast.loadGroupAvatar(groupId);
-        const fields = GroupMetaBroadcast.buildRenameMetaFields(name, curAv);
-        const r = await GroupMetaBroadcast.broadcastGroupMeta(groupId, fields,
-          { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady });
-        if (r.sent) console.log('[group] renamed', groupId, '→', name);
-        else if (r.reason === 'no-group-key') {
-          // Раньше здесь был молчаливый return, и это стоило дефекта: ключ не
-          // загружен, пока группу не открыли в чате, поэтому ПЕРЕИМЕНОВАНИЕ из
-          // настроек без открытия чата не рассылалось вообще. Тот же баг был
-          // исправлен рядом, в onGroupAvatarUpdate, — теперь правило одно.
-          console.warn('[group] rename broadcast skipped, no group key:', groupId);
-        } else {
-          console.warn('[group] rename broadcast failed:', r.error);
-        }
-      } catch (e) {
-        console.warn('[group] rename broadcast failed:', e);
-      }
+    async onGroupRename(payload) {
+      return GroupMetaBroadcast.renameGroupFlow(this.groupDeps, payload);
     },
     async onGroupAvatarUpdate({ groupId, avatar }) {
       this.groupsStore.setGroupAvatar(groupId, avatar);
@@ -4505,25 +4550,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ключа группа существовала бы на Rust-стороне, но не появилась бы в UI —
     // и пользователь увидел бы «не удалось создать» для существующей группы.
     async createGroup() {
-      if (!this.newGroupName.trim()) return;
-      try {
-        const { group, groupKey } = await GroupsCreate.createGroup({
-          name: this.newGroupName, avatar: this.newGroupAvatar, cryptoReady: this.cryptoReady,
-          onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groupsStore.setGroupAvatar(g.id, av);
-            this.groups.push(g);
-            this.currentGroup = g;
-          },
-        });
-        if (groupKey) this.groupsStore.setGroupKey(group.id, groupKey);
-        // Одноразовый аватар диалога больше не нужен.
-        this.newGroupAvatar = '';
-        this.showGroupSettings = true;
-        this.newGroupName = '';
-      } catch (error) {
-        console.error('Failed to create group:', error);
-        alert('Failed to create group: ' + error.message);
-      }
+      return GroupsCreate.createGroupFlow(this.groupDeps, {
+        name: this.newGroupName, avatar: this.newGroupAvatar,
+      });
     },
     createGroupAndClose() {
       this.createGroup();
@@ -4540,31 +4569,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Порядок сохранён: состояние клона применяется ДО рассылки приглашений,
     // как в оригинале — иначе клон появлялся бы в списке с задержкой.
     async cloneGroup() {
-      const src = this.currentGroup;
-      if (!src || src.created_by !== this.email) return;
-      const base = (src.name || 'Группа').trim();
-      const name = prompt(uiStore.tr('group_clone_prompt') || 'Имя новой группы (клон)', base + ' 2');
-      if (!name || !name.trim()) return;
-      this.showGroupSettings = false;
-      try {
-        // group и avatar не деструктурируем: они уже применены в onCreated.
-        const { invited, skipped } = await GroupsClone.cloneGroup({
-          src, name, email: this.email, peerKeys: this.peerKeys, publicKey: this.publicKey,
-          onCreated: ({ group: g, avatar: av }) => {
-            if (av) this.groupsStore.setGroupAvatar(g.id, av);
-            this.groups.push(g);
-            this.currentGroup = g;
-            if (g.group_key) this.groupsStore.setGroupKey(g.id, g.group_key);
-          },
-        });
-        const msg = (uiStore.tr('group_clone_done') || 'Клон создан')
-          + (invited.length ? ': ' + uiStore.tr('group_clone_invited') + ' ' + invited.join(', ') : '')
-          + (skipped.length ? '\n' + (uiStore.tr('group_clone_skipped') || 'пропущены (нет ключа)') + ': ' + skipped.join(', ') : '');
-        alert(msg);
-      } catch (e) {
-        console.error('cloneGroup failed:', e);
-        alert((uiStore.tr('group_clone_failed') || 'Не удалось создать клон') + ': ' + e.message);
-      }
+      return GroupsClone.cloneGroupFlow(this.groupDeps, { src: this.currentGroup });
     },
     removeMember(email) {
       if (!this.currentGroup) return;
@@ -4788,26 +4793,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       });
     },
     async deleteContact(email) {
-      if (!(await confirm(uiStore.tr('contact_delete_confirm') || 'Удалить контакт? Его ключ шифрования будет удалён.'))) return;
-      try {
-        // Четыре шага и их порядок — в features/contacts-delete.js (ADR-003
-        // Этап 3, партия 14). Порядок содержателен: снести ключ, пометить старые
-        // handshake по uid (НОВЫЕ приглашения должны доходить), снять наше
-        // приглашение, убрать stub. Отказ любого шага останавливает остальные —
-        // полуудалённый контакт хуже неудалённого.
-        await ContactsDelete.deleteContactLocally(email);
-        // Удаление — через владельца identity (ADR-004 J.6).
-        identityStore.removePeerKey(email);
-        const st = ContactsDelete.contactRemovalState(email, this);
-        if (st.closeChat) {
-          this.activeChat = null;
-          this.activeChatType = st.activeChatType;
-        }
-        await this.loadContacts();
-      } catch (e) {
-        // Состояние НЕ применяется: ключ мог снестись, а запись остаться.
-        alert('Failed to delete contact: ' + e.message);
-      }
+      return ContactsDelete.deleteContactFlow(email, this.contactsDeleteDeps);
     },
     // --- Профили (имя/аватар отправителей в групповых чатах) ---
     // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —

@@ -101,5 +101,48 @@ st = D.contactRemovalState('a@b.ru', { activeChat: 'a@b.ru', activeChatType: 'ch
 ok('при сбросе чата тип принудительно становится chat, а не сохраняется',
   st.activeChatType === 'chat');
 
+// ── Поток из UI (ADR-005 W3, партия 11): deleteContactFlow ──
+// Подтверждение ДО удаления; отказ диалога не удаляет; при ошибке состояние
+// НЕ применяется (ключ мог снестись, а запись остаться).
+console.log('\nПоток удаления контакта (deleteContactFlow)');
+{
+  reset(); // сбросить __failAt от предыдущих сценариев
+  const calls = [];
+  const deps = {
+    confirmDelete: async () => { calls.push(['confirm']); return true; },
+    removePeerKey: (e) => calls.push(['removePeerKey', e]),
+    removalState: (e) => ({ closeChat: true, activeChatType: 'chat', reload: true }),
+    applyRemovalState: (st) => calls.push(['applyRemoval', st.closeChat]),
+    loadContacts: async () => { calls.push(['loadContacts']); },
+    onError: (e) => calls.push(['onError', e.message]),
+  };
+  let r = await D.deleteContactFlow('a@b.ru', deps);
+  ok('поток: контакт удалён', r === true);
+  ok('поток: подтверждение спрошено ДО удаления',
+    calls.findIndex((c) => c[0] === 'confirm') === 0, calls.map((c) => c[0]));
+  ok('поток: ключ снесён', calls.some((c) => c[0] === 'removePeerKey' && c[1] === 'a@b.ru'), calls);
+  ok('поток: состояние чата применено', calls.some((c) => c[0] === 'applyRemoval'), calls);
+  ok('поток: контакты перечитаны', calls.some((c) => c[0] === 'loadContacts'), calls);
+  ok('поток: порядок — подтверждение, удаление, состояние, перечитывание',
+    calls.map((c) => c[0]).join(',') === 'confirm,removePeerKey,applyRemoval,loadContacts', calls.map((c) => c[0]));
+
+  // Отказ в диалоге — ничего не удаляется.
+  calls.length = 0;
+  r = await D.deleteContactFlow('a@b.ru', { ...deps, confirmDelete: async () => false });
+  ok('поток: отказ в диалоге → удаления нет', r === false && calls.length === 0, calls);
+
+  // Ошибка удаления — состояние НЕ применяется, контакты НЕ перечитываются.
+  calls.length = 0;
+  r = await D.deleteContactFlow('a@b.ru', {
+    ...deps,
+    removePeerKey: (e) => { calls.push(['removePeerKey', e]); throw new Error('сбой'); },
+  });
+  ok('поток: ошибка → onError', r === false && calls.some((c) => c[0] === 'onError'), calls);
+  ok('поток: при ошибке состояние чата НЕ применяется',
+    !calls.some((c) => c[0] === 'applyRemoval'), calls);
+  ok('поток: при ошибке контакты НЕ перечитываются',
+    !calls.some((c) => c[0] === 'loadContacts'), calls);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

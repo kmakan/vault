@@ -93,3 +93,30 @@ export async function broadcastGroupMeta(groupId, fields, { groupKeys, cryptoRea
 export async function loadGroupAvatar(groupId) {
   return db.kvGet('anon', 'group-avatar:' + groupId);
 }
+// ── ADR-005 W3 (партия 11): поток переименования группы из UI ──────────
+// Локальное имя применяется СРАЗУ и не откатывается при отказе рассылки —
+// так было и в App.vue, поведение сохранено. Разбор результата рассылки
+// (отправлено / нет ключа / ошибка) — тоже здесь: компонент только вызывает.
+//
+// ПРАВИЛО ОДНО И ДЛЯ АВАТАРА, И ДЛЯ ИМЕНИ: отсутствие ключа группы НЕ
+// повод молчать. Ключ не загружен, пока группу не открыли в чате, поэтому
+// переименование из настроек без открытия чата раньше не рассылалось вовсе.
+// Здесь это явный warn, а не тихий выход.
+export async function renameGroupFlow(deps, { groupId, name }) {
+  const {
+    applyLocalName, groupKeys, cryptoReady, logSent, logNoKey, logFailed,
+  } = deps;
+  applyLocalName(groupId, name);
+  try {
+    const curAv = await loadGroupAvatar(groupId);
+    const fields = buildRenameMetaFields(name, curAv);
+    const r = await broadcastGroupMeta(groupId, fields, { groupKeys, cryptoReady });
+    if (r.sent) logSent(groupId, name);
+    else if (r.reason === 'no-group-key') logNoKey(groupId);
+    else logFailed(groupId, r.error);
+    return r;
+  } catch (e) {
+    logFailed(groupId, e);
+    return { sent: false, reason: 'send-failed', error: e };
+  }
+}

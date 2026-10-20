@@ -137,5 +137,54 @@ r = await GC.cloneGroup(base({
 ok('ключ найден по адресу в нижнем регистре (A@X → a@x)', r.invited.join(',') === 'A@X', r.invited);
 ok('участник с другим регистром реально приглашён', state.order.includes('invite:A@X'), state.order);
 
+// 10. Поток из UI (ADR-005 W3, партия 11): cloneGroupFlow.
+// Только создатель клонирует; имя спрашивается диалогом; настройки закрываются
+// ДО рассылки; отчёт — по приглашённым и пропущенным.
+console.log('\n10. cloneGroupFlow (поток из UI)');
+{
+  const calls = [];
+  const deps = {
+    email: 'me@bk.ru',
+    peerKeys: { 'a@x': 'PA' },
+    publicKey: 'MYPUB',
+    promptName: (def) => { calls.push(['prompt', def]); return 'Клон'; },
+    closeSettings: () => calls.push(['closeSettings']),
+    applyCreated: (x) => calls.push(['applyCreated', x.group.id]),
+    onDone: (inv, skip) => calls.push(['onDone', inv.join(','), skip.join(',')]),
+    onError: (e) => calls.push(['onError', e.message]),
+  };
+  reset();
+  let r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [{ email: 'a@x', role: 'Member' }] } });
+  ok('поток: клон создан', r && r.invited.join(',') === 'a@x', r);
+  ok('поток: имя спрошено с подсказкой «Оригинал 2»',
+    calls.some((c) => c[0] === 'prompt' && c[1] === 'Оригинал 2'), calls);
+  ok('поток: настройки закрыты (вызов был)',
+    calls.some((c) => c[0] === 'closeSettings'), calls.map((c) => c[0]));
+  ok('поток: настройки закрыты ДО рассылки',
+    calls.findIndex((c) => c[0] === 'closeSettings') >= 0
+    && calls.findIndex((c) => c[0] === 'closeSettings') < calls.findIndex((c) => c[0] === 'onDone'), calls.map((c) => c[0]));
+  ok('поток: состояние применено', calls.some((c) => c[0] === 'applyCreated'), calls);
+  ok('поток: отчёт по приглашённым', calls.some((c) => c[0] === 'onDone' && c[1] === 'a@x'), calls);
+
+  // Не создатель — клона нет, диалог не открывается.
+  reset();
+  calls.length = 0;
+  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Чужая', created_by: 'other@bk.ru', members: [] } });
+  ok('поток: не создатель не клонирует', r === null && calls.length === 0, calls);
+
+  // Пустое имя из диалога — клона нет.
+  reset();
+  calls.length = 0;
+  r = await GC.cloneGroupFlow({ ...deps, promptName: () => '   ' }, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
+  ok('поток: пустое имя → клона нет', r === null && !calls.some((c) => c[0] === 'closeSettings'), calls);
+
+  // Сбой создания — onError, наружу не выходит.
+  reset();
+  state.failCreate = true;
+  calls.length = 0;
+  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
+  ok('поток: сбой → onError, не исключение', r === null && calls.some((c) => c[0] === 'onError'), calls);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

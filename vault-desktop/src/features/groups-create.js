@@ -50,3 +50,28 @@ export async function createGroup({ name, avatar, cryptoReady, onCreated }) {
   }
   return { group, groupKey };
 }
+// ── ADR-005 W3 (партия 11): поток создания группы из UI ────────────────
+// Логика диалога (проверка имени, применение состояния, сохранение ключа,
+// сброс полей, сообщение об ошибке) уехала из App.vue. UI-эффекты приходят
+// deps'ами (ADR-003 §5.1): компонент остаётся источником состояния, но не
+// владельцем ПОРЯДКА шагов.
+//
+// ПОРЯДОК СОХРАНЁН: состояние применяется ДО генерации ключа (см. шапку
+// модуля) — иначе группа существовала бы на Rust-стороне, но не появилась бы
+// в UI.
+export async function createGroupFlow(deps, { name, avatar }) {
+  const { cryptoReady, applyCreated, saveGroupKey, resetDialog, onError } = deps;
+  if (!name || !name.trim()) return null;
+  try {
+    const { group, groupKey } = await createGroup({
+      name, avatar, cryptoReady,
+      onCreated: applyCreated,
+    });
+    if (groupKey) saveGroupKey(group.id, groupKey);
+    resetDialog();
+    return group;
+  } catch (error) {
+    onError(error);
+    return null;
+  }
+}

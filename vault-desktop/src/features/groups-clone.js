@@ -54,3 +54,29 @@ export async function cloneGroup({ src, name, email, peerKeys, publicKey, onCrea
   // локальный members-массив — только для отображения invited-статуса.
   return { group, invited, skipped };
 }
+// ── ADR-005 W3 (партия 11): поток клонирования из UI ────────────────────
+// Диалог (prompt имени), применение состояния, отчёт о приглашённых и
+// пропущенных — в App.vue остались только вызовы. Клонировать может только
+// создатель оригинала — проверка здесь, не в компоненте.
+export async function cloneGroupFlow(deps, { src }) {
+  const {
+    email, peerKeys, publicKey, promptName, closeSettings, applyCreated,
+    onDone, onError,
+  } = deps;
+  if (!src || src.created_by !== email) return null;
+  const base = (src.name || 'Группа').trim();
+  const name = promptName(base + ' 2');
+  if (!name || !name.trim()) return null;
+  closeSettings();
+  try {
+    const { invited, skipped } = await cloneGroup({
+      src, name, email, peerKeys, publicKey,
+      onCreated: applyCreated,
+    });
+    onDone(invited, skipped);
+    return { invited, skipped };
+  } catch (e) {
+    onError(e);
+    return null;
+  }
+}

@@ -36,6 +36,7 @@ writeFileSync(MOCKS + '/api.js', `
 const st = globalThis.__st;
 const db = {
   kvGet: async (ns, key) => {
+    if (st.failKvGet) throw new Error('kvGet недоступен');
     const gid = String(key).replace(/^group-avatar:/, '');
     return Object.prototype.hasOwnProperty.call(st.kvAvatars, gid) ? st.kvAvatars[gid] : null;
   },
@@ -75,7 +76,7 @@ const M = await import(MOCKS + '/gmb.mjs');
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } else { fail++; console.log('  ✗ ПРОВАЛ:', name); } };
 const reset = () => {
-  state.kvAvatars = {}; state.keyOf = {}; state.getKeyCalls = [];
+  state.kvAvatars = {}; state.keyOf = {}; state.getKeyCalls = []; state.failKvGet = false;
   state.sent = []; state.failSend = false; state.failGetKey = false; state.failEncrypt = false;
 };
 // Разбирает отправленный payload обратно в объект, минуя шифрование.
@@ -186,6 +187,56 @@ ok('переименование без чата: имя дошло', p.name ===
 ok('переименование без чата: аватар приложен, получатель обновит профиль',
   p.avatar === 'AV');
 ok('и meta:1 на месте', p.meta === 1);
+
+// ── Поток переименования из UI (ADR-005 W3, партия 11) ────────────────
+// Локальное имя применяется СРАЗУ и не откатывается при отказе рассылки;
+// отсутствие ключа группы — явный warn, а не тихий выход.
+console.log('\nПоток переименования (renameGroupFlow)');
+{
+  const calls = [];
+  const deps = {
+    applyLocalName: (id, n) => calls.push(['applyLocal', id, n]),
+    groupKeys: state.keyOf,
+    cryptoReady: true,
+    logSent: (id, n) => calls.push(['sent', id, n]),
+    logNoKey: (id) => calls.push(['noKey', id]),
+    logFailed: (id, e) => calls.push(['failed', id]),
+  };
+  state.keyOf.G1 = 'K1';
+  calls.length = 0;
+  let r = await M.renameGroupFlow(deps, { groupId: 'G1', name: 'Новое имя' });
+  ok('поток: локальное имя применено', calls.some((c) => c[0] === 'applyLocal' && c[2] === 'Новое имя'), calls);
+  ok('поток: рассылка состоялась', r && r.sent === true && calls.some((c) => c[0] === 'sent'), calls);
+  ok('поток: локальное имя применено ДО рассылки',
+    calls.findIndex((c) => c[0] === 'applyLocal') < calls.findIndex((c) => c[0] === 'sent'), calls.map((c) => c[0]));
+
+  // Без ключа группы — явный warn (не тихий выход): иначе переименование из
+  // настроек без открытия чата не рассылалось вообще.
+  calls.length = 0;
+  // Ключа нет НИ В КЭШЕ, НИ НА ДИСКЕ (мок getMyGroupKey смотрит в state.keyOf)
+  // — иначе модуль догрузит его, и сценарий «нет ключа» не состоялся бы.
+  state.keyOf = {};
+  r = await M.renameGroupFlow({ ...deps, groupKeys: {} }, { groupId: 'G1', name: 'Ещё раз' });
+  ok('поток: без ключа — не «отправлено», причина видна', r && r.sent === false && r.reason === 'no-group-key', r);
+  ok('поток: без ключа — warn записан', calls.some((c) => c[0] === 'noKey'), calls);
+
+  // Ошибка рассылки — локальное имя остаётся (не откатывается).
+  calls.length = 0;
+  r = await M.renameGroupFlow({ ...deps, cryptoReady: false }, { groupId: 'G1', name: 'Третий раз' });
+  ok('поток: при ошибке локальное имя НЕ откатывается',
+    calls.some((c) => c[0] === 'applyLocal' && c[2] === 'Третий раз'), calls);
+
+  // Сбой чтения аватара (kv недоступен) — ошибка ВИДНА (logFailed), а не
+  // проглатывается молча: иначе переименование выглядит как «рассылка молчит».
+  calls.length = 0;
+  state.failKvGet = true;
+  r = await M.renameGroupFlow(deps, { groupId: 'G1', name: 'Четвёртый раз' });
+  state.failKvGet = false;
+  ok('поток: сбой чтения аватара → ошибка залогирована',
+    calls.some((c) => c[0] === 'failed'), calls);
+  ok('поток: сбой не бросается наружу (переименование не ломает UI)',
+    r && r.sent === false, r);
+}
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);
