@@ -401,6 +401,38 @@ mod tests {
         assert!(invite.one_time);
     }
 
+    /// ИСПОЛЬЗОВАННЫЙ инвайт больше не валиден: ссылка одноразовая, иначе
+    /// получатель мог бы передать её кому угодно (инвайт в группу = доступ).
+    /// Мутационный гейт Rust-ядра выловил, что на это правило теста не было.
+    #[test]
+    fn test_used_invite_is_not_valid() {
+        let mut invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
+        assert!(invite.is_valid());
+        invite.mark_used().unwrap();
+        assert!(invite.used, "инвайт помечен использованным");
+        assert!(!invite.is_valid(), "использованный инвайт недействителен");
+        assert!(invite.mark_used().is_err(), "повторное использование — ошибка");
+    }
+
+    /// ИСТЁКШИЙ инвайт недействителен: срок действия — не украшение.
+    #[test]
+    fn test_expired_invite_is_not_valid() {
+        let mut invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
+        // Срок в прошлом.
+        invite.expires_at = 1;
+        assert!(!invite.is_valid(), "истёкший инвайт недействителен");
+        assert!(invite.time_until_expiry().is_none(), "у истёкшего нет остатка времени");
+        assert!(invite.mark_used().is_err(), "истёкшим инвайтом нельзя воспользоваться");
+    }
+
+    /// Отозванный (revoked) инвайт недействителен.
+    #[test]
+    fn test_revoked_invite_is_not_valid() {
+        let mut invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);
+        invite.status = InviteStatus::Revoked;
+        assert!(!invite.is_valid(), "отозванный инвайт недействителен");
+    }
+
     #[test]
     fn test_invite_link_roundtrip_self_contained() {
         let invite = Invite::new("alice@example.com", "bob@example.com", "04a1b2c3d4", 24);

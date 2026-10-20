@@ -69,6 +69,10 @@ for (const f of featureFiles) {
 }
 
 // Наборы мутаций: каждый должен ссылаться на существующие смоук и файл.
+// ОТДЕЛЬНО ЖИВУТ наборы для RUST-ядра (scripts/rust-mutations/sets/): у них
+// путь к файлу от корня РЕПОЗИТОРИЯ, а «смоук» — команда cargo. Их
+// проверяет собственный гейт (scripts/rust-mutation-gate.mjs), а этот —
+// считает только JS-наборы (пути и смоуки у них другие).
 const setFiles = readdirSync(SETS).filter((f) => f.endsWith('.mjs'));
 const mutationSmokes = new Set();
 for (const f of setFiles) {

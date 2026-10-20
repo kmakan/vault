@@ -294,6 +294,39 @@ mod tests {
         assert!(r2.warning.unwrap().contains("Only the original editor"));
     }
 
+    /// ОКНО ПРАВКИ: спустя срок сообщение править нельзя (правило «правка в
+    /// течение N часов»). Мутационный гейт Rust-ядра выловил, что на это
+    /// правило теста не было — при отключённой проверке сообщение правилось
+    /// бы вечно.
+    #[test]
+    fn test_edit_window_expires() {
+        let (mut mgr, _dir) = temp_manager();
+        mgr.set_edit_window(3600); // час на правку
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        // Отматываем время ПЕРВОЙ правки на два часа назад: окно истекло.
+        // (Ставить окно в 0 недостаточно: проверка строгая на «больше», и
+        // правка в ту же секунду ещё попадает в окно.)
+        if let Some(rec) = mgr.edits.get_mut("msg1") {
+            rec.edited_at = rec.edited_at - chrono::Duration::hours(2);
+        }
+        let r2 = mgr.edit_message("msg1", "alice@test.com", "v2").unwrap();
+        assert!(!r2.success, "после истечения окна правка невозможна");
+        assert!(r2.warning.unwrap().contains("Edit window expired"));
+    }
+
+    /// Откат ПЕРВОЙ правки удаляет запись целиком: сообщение перестаёт быть
+    /// «исправленным» (иначе в чате остаётся метка «изменено» при исходном
+    /// тексте). Мутационный гейт выловил отсутствие этой проверки.
+    #[test]
+    fn test_undo_first_edit_removes_record() {
+        let (mut mgr, _dir) = temp_manager();
+        mgr.edit_message("msg1", "alice@test.com", "v1").unwrap();
+        assert!(mgr.is_edited("msg1"));
+        assert!(mgr.undo_last_edit("msg1").unwrap());
+        assert!(!mgr.is_edited("msg1"), "откат первой правки убирает отметку «изменено»");
+        assert_eq!(mgr.count(), 0);
+    }
+
     #[test]
     fn test_get_latest() {
         let (mut mgr, _dir) = temp_manager();
