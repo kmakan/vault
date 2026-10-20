@@ -33,6 +33,11 @@ export function createIdentityStore() {
     peerPqKeys: {},
     peerKeyInput: '',
     peerKeysLoaded: {},
+    // Своя крипто-пара и отпечаток (ADR-005 W3, партия 9): раньше это были
+    // поля data() компонента, а состояние идентичности живёт у владельца.
+    publicKey: null,
+    cryptoReady: false,
+    fingerprint: null,
   };
   return {
     state,
@@ -81,6 +86,9 @@ export function createIdentityStore() {
       return had;
     },
     setPeerKeyInput(v) { this.state.peerKeyInput = v ?? ''; },
+    setPublicKey(v) { this.state.publicKey = v ?? null; return this.state.publicKey; },
+    setCryptoReady(v) { this.state.cryptoReady = !!v; return this.state.cryptoReady; },
+    setFingerprint(v) { this.state.fingerprint = v ?? null; return this.state.fingerprint; },
     markLoaded(email) { this.state.peerKeysLoaded[_normalizeKey(email)] = true; },
     // 2995/3030/3184 read-through (dedup)
     hasPeerKey(email) {

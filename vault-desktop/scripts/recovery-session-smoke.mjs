@@ -25,7 +25,60 @@ const ROOT = import.meta.dirname + '/..';
 const MOCKS = '/tmp/recovery-session-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 // Мок крипто-модуля, на который перенаправляется import из api.js.
-writeFileSync(MOCKS + '/crypto.js', 'export default globalThis.__CRYPTO__;');
+// Мок крипты: ЖИВОЙ (читает глобал в момент вызова), иначе модуль,
+// поднятый раньше, схватил бы undefined и проверки шли бы мимо.
+writeFileSync(MOCKS + '/crypto.js', `
+const M = (name, ...a) => globalThis.__CRYPTO__[name](...a);
+export default {
+  initFromStorage: (...a) => M('initFromStorage', ...a),
+  generateKeypair: (...a) => M('generateKeypair', ...a),
+  saveToStorage: (...a) => M('saveToStorage', ...a),
+  fingerprint: (...a) => M('fingerprint', ...a),
+  setPeerPublicKey: () => {},
+  savePeerKey: async () => {},
+  loadPeerKeys: async () => [],
+  removePeerKey: async () => {},
+};
+`);
+// Моки для features/keys.js (ADR-005 W3, партия 9): Tauri-мост invoke и
+// сброс/пересчёт namespace аккаунта.
+writeFileSync(MOCKS + '/core-mock.mjs', 'export const invoke = async () => undefined;\n');
+// .mjs (в /tmp .js парсится как CommonJS, а моки используют ESM-синтаксис).
+writeFileSync(MOCKS + '/crypto-mock.mjs', `
+const M = (name, ...a) => globalThis.__CRYPTO__[name](...a);
+export default {
+  initFromStorage: (...a) => M('initFromStorage', ...a),
+  generateKeypair: (...a) => M('generateKeypair', ...a),
+  saveToStorage: (...a) => M('saveToStorage', ...a),
+  fingerprint: (...a) => M('fingerprint', ...a),
+  setPeerPublicKey: () => {},
+  savePeerKey: async () => {},
+  loadPeerKeys: async () => [],
+  removePeerKey: async () => {},
+};
+`);
+writeFileSync(MOCKS + '/api-mock.mjs',
+  'export const db = { kvGet: async () => null, kvSet: async () => {} };\n'
+  + 'export default { removeContact: async () => {}, sendContactInvite: async () => {} };\n');
+writeFileSync(MOCKS + '/identity-mock.mjs',
+  'export const resetAccountNamespaceCache = () => {};\n'
+  + 'export const ensureAccountNamespace = async () => "ns:me";\n'
+  + 'export const accountNamespace = async () => "ns:me";\n');
+// Фича ключей (ADR-005 W3, партия 9) — поднимаем один раз на весь смоук:
+// политика allowCreate проверяется НА НЕЙ, а не на методе App.vue (делегате).
+const KEYS_FILE = MOCKS + '/features-keys.mjs';
+prepareModuleCopy(
+  ROOT + '/src/features/keys.js',
+  KEYS_FILE,
+  {
+    '@tauri-apps/api/core': 'core-mock.mjs',
+    '../api.js': 'api-mock.mjs',
+    '../crypto.js': 'crypto-mock.mjs',
+    '../identity.js': 'identity-mock.mjs',
+  },
+  MOCKS,
+);
+const { initCrypto: initCryptoFeature } = await import('file://' + KEYS_FILE);
 let pass = 0, fail = 0;
 function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
@@ -710,22 +763,31 @@ const APP_SRC = readFileSync(ROOT + '/src/App.vue', 'utf8');
   const compiled = compileScript(descriptor, { id: 'app' });
   const body = extractInitCryptoBody(compiled.content);
   check('App.vue: метод initCrypto найден компилятором', !!body);
+  // ADR-005 W3 (партия 9): политика генерации переехала в features/keys.js,
+  // App.vue — делегат. Проверяем И делегата (статически), И саму политику
+  // (на настоящей фиче, с моками).
+  check('App.vue: initCrypto — тонкий делегат фичи',
+    /return\s+KeysFeature\.initCrypto\(/ .test(body || ''), (body || '').slice(0, 120));
   if (body) {
     // Вырезанный метод использует инъектированные в замыкание символы: crypto,
     // invoke, resetAccountNamespaceCache, ensureAccountNamespace и this.*
     // (loadStoredPeerKeys/cryptoReady/fingerprint). Передаём их параметрами +
     // self-контекстом, чтобы вызвать РЕАЛЬНЫЙ метод App.vue как функцию.
-    const makeInitCrypto = new Function('crypto', 'invoke', 'resetAccountNamespaceCache', 'ensureAccountNamespace',
-      'return async function initCrypto({ allowCreate = false } = {})' + body);
     const runInit = async (cryptoMock, opts, self) => {
-      // Мутируем переданный self на месте (this внутри метода = этот объект),
-      // чтобы вызывающий видел выставленный this.publicKey.
+      // Политика — в фиче; состояние — через deps (владелец идентичности).
+      globalThis.__CRYPTO__ = cryptoMock;
       self.publicKey = self.publicKey === undefined ? null : self.publicKey;
       self.cryptoReady = self.cryptoReady === undefined ? false : self.cryptoReady;
       self.fingerprint = self.fingerprint === undefined ? null : self.fingerprint;
-      if (typeof self.loadStoredPeerKeys !== 'function') self.loadStoredPeerKeys = async () => {};
-      const noopInvoke = async () => undefined;
-      return await makeInitCrypto(cryptoMock, noopInvoke, () => {}, async () => {}).call(self, opts);
+      const deps = {
+        email: () => self.email || 'me@x.invalid',
+        setPublicKey: (v) => { self.publicKey = v; },
+        setCryptoReady: (v) => { self.cryptoReady = v; },
+        setFingerprint: (v) => { self.fingerprint = v; },
+        fingerprint: () => self.fingerprint,
+        loadStoredPeerKeys: async () => {},
+      };
+      return await initCryptoFeature(deps, opts);
     };
     // startup/load: нет ключа → false, БЕЗ генерации.
     {
@@ -865,26 +927,15 @@ console.log('\nApp.initCrypto — политика генерации (живо�
 {
   const { descriptor } = sfcParse(APP_SRC, { filename: 'App3' });
   const compiled = compileScript(descriptor, { id: 'app3' });
-  const sig = 'initCrypto({ allowCreate = false } = {})';
-  const s = compiled.content.indexOf(sig);
-  check('App.initCrypto: сигнатура содержит allowCreate (фикс применён)', s >= 0);
-  // Тело метода: от «{» ПОСЛЕ закрывающей скобки параметров. indexOf('{', s)
-  // уткнулся бы в деструктуризацию { allowCreate = false }, поэтому стартуем
-  // от парной «)» сигнатуры.
-  let body = null;
-  if (s >= 0) {
-    const afterParams = compiled.content.indexOf(')', s);
-    const open = afterParams >= 0 ? compiled.content.indexOf('{', afterParams) : -1;
-    let depth = 0, i = open, q = null;
-    for (; i < compiled.content.length; i++) {
-      const c = compiled.content[i];
-      if (q) { if (c === '\\') { i++; continue; } if (c === q) q = null; continue; }
-      if (c === "'" || c === '"' || c === '`') { q = c; continue; }
-      if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { body = compiled.content.slice(open, i + 1); break; } }
-    }
-  }
-  check('App.initCrypto: тело извлечено', !!body && /initFromStorage/.test(body));
+  // ADR-005 W3 (партия 9): политика allowCreate живёт в features/keys.js,
+  // App.vue — делегат. Поэтому ищем вызов фичи, а не сигнатуру метода.
+  const s = compiled.content.indexOf('KeysFeature.initCrypto');
+  check('App.initCrypto: политика вынесена в фичу (allowCreate — там)', s >= 0);
+  // Тело метода — делегат: проверяем по ИСХОДНИКУ App.vue (скомпилированный
+  // SFC переставляет/переименовывает методы, извлекать тело оттуда — хрупко).
+  const appSrc = readFileSync(ROOT + '/src/App.vue', 'utf8');
+  const isDelegate = /initCrypto\(opts\)\s*\{\s*return\s+KeysFeature\.initCrypto\(this\.keysDeps,\s*opts\);\s*\},/.test(appSrc);
+  check('App.initCrypto: тело метода — делегат', isDelegate);
 
   // Собираем исполняемый метод. Заглушки модульных зависимостей, которые
   // дёргает хвост метода (fingerprint/backfill/peers/namespace).
@@ -919,15 +970,21 @@ console.log('\nApp.initCrypto — политика генерации (живо�
       resetAccountNamespaceCache: () => {},
       ensureAccountNamespace: async () => {},
     };
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('crypto', 'invoke', 'resetAccountNamespaceCache', 'ensureAccountNamespace', 'opts',
-      'return (async function(){ var allowCreate=false; if(opts&&opts.allowCreate)allowCreate=true;'
-      + body.replace(/^\{\s*/, '').replace(/\s*\}$/, '')
-      + ' }).call(this);');
+    // Политика — на настоящей фиче (ADR-005 W3, партия 9).
+    const deps = {
+      email: () => app.email || 'me@x.invalid',
+      setPublicKey: (v) => { app.publicKey = v; },
+      setCryptoReady: (v) => { app.cryptoReady = v; },
+      setFingerprint: (v) => { app.fingerprint = v; },
+      fingerprint: () => app.fingerprint,
+      loadStoredPeerKeys: async () => {},
+    };
     return {
       gen,
-      run: (opts) => fn.call(app,
-        g.crypto, g.invoke, g.resetAccountNamespaceCache, g.ensureAccountNamespace, opts),
+      run: async (opts) => {
+        globalThis.__CRYPTO__ = g.crypto;
+        return await initCryptoFeature(deps, opts);
+      },
     };
   }
 

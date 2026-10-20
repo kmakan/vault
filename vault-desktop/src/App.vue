@@ -993,6 +993,7 @@ import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as NotesFeature from './features/notes.js';
 import * as StarsFeature from './features/stars.js';
+import * as KeysFeature from './features/keys.js';
 import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
@@ -1309,9 +1310,9 @@ export default {
       // теперь mergePending подмешивает их обратно, пока копия письма не
       // придёт из Sent/All Mail — тогда реальное письмо заменяет запись.
       // Теперь во владельце sending-store (ADR-004, A10).
-      cryptoReady: false,
-      publicKey: null,
-      fingerprint: null,
+      // cryptoReady — в identity-store (ADR-005 W3, партия 9).
+      // publicKey — в identity-store (ADR-005 W3, партия 9).
+      // fingerprint — в identity-store (ADR-005 W3, партия 9).
       // §1 company.md: индикатор канала доставки в шапке чата.
       // 'relay' (по умолчанию, не показываем) | 'email' (релей недоступен
       // или суточный лимит исчерпан — показываем конверт).
@@ -1632,6 +1633,42 @@ export default {
     // Прокси во владельца контактов (ADR-004 J.5a):
     // contacts/contactAliases вынесены inject data() в contacts-store.
     // presence.js/profiles.js читают через ctx.lastSeenMap (computed proxy).
+    // ADR-005 W3 (партия 9): своя крипто-пара и отпечаток — у владельца
+    // идентичности (identity-store), раньше это были поля data().
+    publicKey: {
+      get() { return identityStore.state.publicKey; },
+      set(v) { identityStore.setPublicKey(v); },
+    },
+    cryptoReady: {
+      get() { return identityStore.state.cryptoReady; },
+      set(v) { identityStore.setCryptoReady(v); },
+    },
+    fingerprint: {
+      get() { return identityStore.state.fingerprint; },
+      set(v) { identityStore.setFingerprint(v); },
+    },
+    // Контракт фичи ключей (ADR-005 W3, партия 9).
+    keysDeps() {
+      return {
+        email: () => this.email,
+        activeChat: () => this.activeChat,
+        publicKey: () => this.publicKey,
+        cryptoReady: () => this.cryptoReady,
+        fingerprint: () => this.fingerprint,
+        setPublicKey: (v) => { this.publicKey = v; },
+        setCryptoReady: (v) => { this.cryptoReady = v; },
+        setFingerprint: (v) => { this.fingerprint = v; },
+        loadStoredPeerKeys: () => this.loadStoredPeerKeys(),
+        openChatByKey: (k) => this.openChatByKey(k),
+        isMobile: this.isMobile,
+        setMobileChatOpen: (v) => { this.mobileChatOpen = v; },
+        contacts: () => this.contacts,
+        loadContacts: () => this.loadContacts(),
+        setShowQRCode: (v) => { this.showQRCode = v; },
+        alert: (msg) => { alert(msg); },
+        prompt: (msg) => { return window.prompt(msg); },
+      };
+    },
     // Прокси во владельца идентичности (ADR-004 J.6):
     // peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded вынесены из data() в
     // identity-store. calls.js/forward.js читают через ctx.peerKeys (computed).
@@ -3028,88 +3065,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     //   • после import_backup в recovery → allowCreate:false (перезагрузка
     //     восстановленного ключа; нет ключа = ошибка recovery_missing_keys);
     //   • обычный логин → allowCreate:true (новому пользователю нужна пара).
-    async initCrypto({ allowCreate = false } = {}) {
-      try {
-        const result = await crypto.initFromStorage();
-        if (result.loaded) {
-          this.publicKey = result.keypair.public_key;
-        } else if (allowCreate) {
-          const keypair = await crypto.generateKeypair();
-          this.publicKey = keypair.public_key;
-          await crypto.saveToStorage();
-        } else {
-          // Ключа нет, а генерировать нельзя: сбрасываем готовность и НЕ
-          // создаём пару. Вызывающий обязан показать форму входа/восстановления.
-          console.warn('[crypto] нет сохранённого ключа, генерация запрещена (allowCreate=false)');
-          this.cryptoReady = false;
-          this.publicKey = null;
-          return false;
-        }
-        this.fingerprint = await crypto.fingerprint();
-        // Fire-and-forget: заполняем свой fingerprint у участников групп, которые
-        // ещё никто не открывал в UI (там fp заполняется лениво при открытии) —
-        // иначе fp-only фильтр «моих групп» их не находит. Вход не блокируем.
-        invoke('groups_backfill_my_fingerprint', {
-          email: this.email || '',
-          fingerprint: String(this.fingerprint || ''),
-        }).catch(() => {});
-        this.cryptoReady = true;
-        await this.loadStoredPeerKeys();
-        // Ключ теперь есть → пересчитываем namespace на fp:<fingerprint> и
-        // ОДИН раз переносим накопленные email-строки. Без сброса кэша
-        // резолвер остался бы на legacy-емейле (fp закэширован как '' до
-        // загрузки ключа), и весь трек fp-идентичности был бы мёртвым.
-        resetAccountNamespaceCache();
-        if (this.email) {
-          try { await ensureAccountNamespace(this.email); }
-          catch (e) { console.warn('[identity] namespace bootstrap failed:', e); }
-        }
-        return true;
-      } catch (error) {
-        console.error('Crypto init failed:', error);
-        this.cryptoReady = false;
-        return false;
-      }
-    },
-    async loadStoredPeerKeys() {
-      try {
-        // Сбрасываем перед загрузкой: удалённые в Rust ключи должны
-        // пропасть из памяти.
-        identityStore.clearPeerKeys();
-        const stored = await crypto.loadPeerKeys();
-        identityStore.loadPeerKeys(stored);
-        // M2.4: отложенные ntfy-клики (холодный старт) — ключи загружены,
-        // можно открывать чаты. Drain также доступен глобально (__vaultOpenChat).
-        try {
-          window.__VAULT_DRAIN = () => {
-            const q = window.__VAULT_CHAT_QUEUE || [];
-            // Холодный старт: Kotlin держит выбранный чат в native-мосте
-            // VaultDeepLink.take() (localStorage мог быть недоступен до
-            // загрузки страницы). Забираем его оттуда...
-            try {
-              const native = window.VaultDeepLink && window.VaultDeepLink.take && window.VaultDeepLink.take();
-              if (native) q.push(native);
-            } catch (e) { /* не Android / моста нет */ }
-            // ...и из localStorage (запасной путь).
-            try {
-              const pending = localStorage.getItem('vault-pending-chat');
-              if (pending) {
-                localStorage.removeItem('vault-pending-chat');
-                q.push(pending);
-              }
-            } catch (e) { /* ignore */ }
-            while (q.length) {
-              const chat = q.shift();
-              this.openChatByKey(chat);
-              if (this.isMobile) this.mobileChatOpen = true;
-            }
-          };
-          window.__VAULT_DRAIN();
-        } catch (e) { /* ignore */ }
-      } catch (error) {
-        console.error('Failed to load peer keys:', error);
-      }
-    },
+    async initCrypto(opts) { return KeysFeature.initCrypto(this.keysDeps, opts); },
+    async loadStoredPeerKeys() { return KeysFeature.loadStoredPeerKeys(this.keysDeps); },
     // Авто-вход не удался: показываем форму входа с понятным сообщением и
     // предзаполняем email + сохранённые серверы (провайдер мог сменить
     // IMAP/SMTP — пользователь может исправить их в «Настройках сервера»).
@@ -3380,12 +3337,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Канонический адрес: какой контакт показывается для этого ключа
     // (после дедупликации в loadContacts). Если email — алиас, возвращаем
     // показываемый адрес (самый новый по added_at).
-    canonicalOf(email) {
-      const key = this.peerKeys[email || ''] || this.peerKeys[String(email || '').toLowerCase()];
-      if (!key) return email;
-      const shown = this.contacts.find(c => c.public_key === key);
-      return shown ? shown.email : email;
-    },
+    canonicalOf(email) { return KeysFeature.canonicalOf(this.keysDeps, email); },
     // Смена почты: переносим историю чата со старого адреса на новый.
     // Вызывается при fingerprint-матчинге у ПОЛУЧАТЕЛЯ (поллинг/loadMessages).
     // ADR-003 Этап 3: переезд истории чата — в migrations.js. Ключ чата
@@ -3434,19 +3386,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // инкремент непрочитанных.
     noteChannelPost(chId, ts, payload, senderEmail) { return ChannelsFeature.noteChannelPost(chId, ts, payload, senderEmail); },
     noteChannelHello(chId, senderEmail) { return ChannelsFeature.noteChannelHello(chId, senderEmail); },
-    setPeerKey(email, key, pq = null) {
-      // Запись — через владельца identity (ADR-004 J.6).
-      identityStore.setPeerKey(email, key, pq);
-      crypto.setPeerPublicKey(key, this.peerPqKeys && this.peerPqKeys[email]);
-      crypto.savePeerKey(email, key, null, pq || undefined).catch(err => {
-        console.error('Failed to save peer key:', err);
-      });
-    },
-    setPeerKeyFromInput() {
-      if (!this.peerKeyInput || !this.activeChat) return;
-      this.setPeerKey(this.activeChat, this.peerKeyInput);
-      identityStore.setPeerKeyInput('');
-    },
+    setPeerKey(email, key, pq = null) { return KeysFeature.setPeerKey(this.keysDeps, email, key, pq); },
+    setPeerKeyFromInput() { return KeysFeature.setPeerKeyFromInput(this.keysDeps); },
     async selectChat(email) {
       // Vault chat requires a peer key — without it there is nothing (and nothing
       // encrypted) to show. Contacts without keys are already hidden from the list;
@@ -4191,66 +4132,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     searchMessages() {
       alert('Search coming soon!');
     },
-    async onKeysChanged() {
-      if (this.cryptoReady) {
-        this.fingerprint = await crypto.fingerprint();
-      }
-      await this.loadStoredPeerKeys();
-    },
-    async addPeerKey(payload) {
-      try {
-        // QRCodePanel шлёт {publicKey, email} (email из QR v2); старый формат —
-        // просто hex-строка (ручная вставка ключа без email).
-        const publicKeyHex = typeof payload === 'string' ? payload : (payload && payload.publicKey) || '';
-        const knownEmail = (typeof payload === 'object' && payload && payload.email) ? String(payload.email).trim().toLowerCase() : '';
-        if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) {
-          alert('Invalid public key format');
-          return;
-        }
-        // QR v2 несёт email контакта — ручной ввод не нужен. Для голого ключа
-        // (вставка hex) спрашиваем email: peerKeys индексируется по email.
-        let email = knownEmail;
-        if (!email || !email.includes('@')) {
-          email = await prompt('Email контакта?');
-        }
-        if (!email || !email.includes('@')) {
-          alert(uiStore.tr('err_enter_email'));
-          return;
-        }
-        const normalized = email.trim().toLowerCase();
-        await crypto.savePeerKey(normalized, publicKeyHex, null);
-        // ДЕДУП: тот же ключ уже известен под другим адресом (собеседник
-        // сменил почту) — удаляем старую запись, чтобы контакт не
-        // продублировался (QR от контакта, сменившего почту: одна запись).
-        const oldSame = Object.keys(this.peerKeys).find(
-          k => String(k).toLowerCase() !== normalized && this.peerKeys[k] === publicKeyHex
-        );
-        if (oldSame) {
-          // Удаление — через владельца identity (ADR-004 J.6).
-          identityStore.removePeerKey(oldSame);
-          try { await crypto.removePeerKey(oldSame); } catch {}
-          api.removeContact(oldSame);
-        }
-        // Запись — через владельца identity (ADR-004 J.6).
-        identityStore.setPeerKey(normalized, publicKeyHex);
-        identityStore.markLoaded(normalized);
-        // ВЗАИМНОСТЬ: после QR-сканирования/вставки ключа отправляем
-        // приглашение обратно — иначе у собеседника контакт не появится
-        // (мы сохранили его ключ, а он наш — нет).
-        if (normalized !== String(this.email || '').toLowerCase()) {
-          try {
-            await api.sendContactInvite(normalized, this.publicKey);
-            console.log('[contact] mutual invite sent to', normalized);
-          } catch (e) {
-            console.warn('[contact] mutual invite failed:', e);
-          }
-        }
-        await this.loadContacts(); // список чатов обновится из load_peer_keys
-        this.showQRCode = false;
-      } catch (error) {
-        alert('Failed to add peer key: ' + error.message);
-      }
-    },
+    async onKeysChanged() { return KeysFeature.onKeysChanged(this.keysDeps); },
+    async addPeerKey(payload) { return KeysFeature.addPeerKey(this.keysDeps, payload); },
     // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
     // (initLocalDb загружает их в cursorsCache при входе) — localStorage
     imapCursorsKey(accountId) { return MsgFormat.imapCursorsKey(accountId); },
