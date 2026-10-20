@@ -393,6 +393,45 @@ mod tests {
         mgr.promote_member(&group.id, "user@test.com").unwrap();
     }
 
+    /// Legacy-роль Moderator при повышении становится обычным участником, а НЕ
+    /// админом: иначе участник, которому раньше дали «среднюю» роль, молча
+    /// получил бы права администратора группы. Мутационный гейт Rust-ядра
+    /// выловил, что на это правило теста не было.
+    #[test]
+    fn test_promote_legacy_moderator_becomes_member() {
+        let mut mgr = test_mgr();
+        let group = mgr.create_group("Test", "admin@test.com").unwrap();
+        mgr.add_member(&group.id, "user@test.com").unwrap();
+        // Выставляем legacy-роль напрямую (в БД она осталась от старых сборок).
+        mgr.groups
+            .get_mut(&group.id)
+            .unwrap()
+            .members
+            .iter_mut()
+            .find(|m| m.email == "user@test.com")
+            .unwrap()
+            .role = GroupRole::Moderator;
+        mgr.promote_member(&group.id, "user@test.com").unwrap();
+        let g = mgr.get_group(&group.id).unwrap();
+        let m = g.members.iter().find(|m| m.email == "user@test.com").unwrap();
+        assert!(matches!(m.role, GroupRole::Member), "legacy Moderator → Member, не Admin");
+    }
+
+    /// Новый участник НЕ имеет общего ключа группы: ключ он получит отдельным
+    /// сообщением. Флаг `key_shared` означает «ключ уже отдан», и по нему
+    /// приложение решает, можно ли шифровать ему сообщение. Если флаг сразу
+    /// true, приложение попытается зашифровать для участника, который ключа
+    /// ещё не получил.
+    #[test]
+    fn test_new_member_has_no_group_key() {
+        let mut mgr = test_mgr();
+        let group = mgr.create_group("Test", "admin@test.com").unwrap();
+        mgr.add_member(&group.id, "user@test.com").unwrap();
+        let g = mgr.get_group(&group.id).unwrap();
+        let m = g.members.iter().find(|m| m.email == "user@test.com").unwrap();
+        assert!(!m.key_shared, "у только что добавленного участника ключа быть не может");
+    }
+
     #[test]
     fn test_demote_member() {
         let mut mgr = test_mgr();
