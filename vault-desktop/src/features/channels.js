@@ -8,12 +8,21 @@
 // envelope (XChaCha20-Poly1305, AAD="VAULT", empty stealth subject);
 // the receiver's router branches on the `channel:1` payload marker.
 //
-// This module owns the pure logic (link build/parse, envelope payloads);
-// persistence goes through the channels_* tauri commands, UI wiring lives
-// in App.vue / a dedicated panel.
+// This module owns the pure logic (link build/parse, envelope payloads) and,
+// since ADR-005 W3 (batch 2), the UI orchestration (select/send/create/join/
+// rename/delete) — App.vue is left with calls only. Persistence goes through
+// the channels_* tauri commands; the state lives in the owners (mailbox-store:
+// the channel list, channels-store: posts/counters/avatars, uiStore: forms
+// and modals, chatStore: the active chat).
 
 import { invoke } from '@tauri-apps/api/core';
 import { db } from '../api.js';
+import crypto from '../crypto.js';
+import { accountNamespace } from '../identity.js';
+import * as MsgFormat from '../message-format.js';
+import { uiStore, chatStore, sessionStore } from './session-store.js';
+import { channelsStore } from './channels-store.js';
+import { mailboxState } from './mailbox-store.js';
 
 // Id helper: window.crypto — NOT the imported crypto module (App.vue pattern).
 function newId(prefix) {
@@ -206,4 +215,213 @@ export function ingestChannelEnvelope(deps, payload, senderEmail) {
     return null;
   }
   return null;
+}
+
+// ── UI-оркестрация каналов (ADR-005 W3, партия 2) ────────────────────────
+// Логика ушла из App.vue (было 13 методов с логикой). Состояние — у
+// владельцев: список каналов — mailbox-store, посты/счётчики/аватары/активный
+// канал — channels-store, формы и модалки — uiStore, активный чат — chatStore.
+// Эффекты, которых не знает модуль, — в deps: per-app владелец чата, DOM,
+// ввод (confirm/prompt/clipboard) и счётчик загрузки.
+//
+// deps: { chat, saveDraft, cancelReply, openMobileChat, setShowStarredOnly,
+//         bumpLoadSeq, fingerprint, confirm, prompt, writeClipboard, closeChatMenu }
+
+export function channelPostsToMessages(ch) {
+  // kv-лог постов → формат MessageItem (own = наш пост/эхо).
+  const posts = channelsStore.state.channelPosts[ch.id] || [];
+  const myEmail = sessionStore.getCurrentEmail();
+  return posts.map(p => ({
+    id: p.id || ('post-' + p.ts),
+    content: p.body || '',
+    from: (p.sender && p.sender === (ch.owner || myEmail)) || (!p.sender && ch.is_owner) ? 'me' : p.sender,
+    sender_id: p.sender || ch.owner || '',
+    time: MsgFormat.formatTimeLabel(p.ts),
+    ts: p.ts,
+    encrypted: true,
+    vault: true,
+  }));
+}
+
+export async function selectChannel(ch, deps) {
+  deps.saveDraft();
+  deps.chat.set([]);
+  deps.chat.setDraft('');
+  deps.cancelReply();
+  chatStore.setActiveChat('channel:' + ch.id);
+  chatStore.setActiveChatType('channel');
+  channelsStore.setCurrentChannel(ch);
+  chatStore.setCurrentGroup(null);
+  deps.setShowStarredOnly(false);
+  deps.bumpLoadSeq();
+  deps.chat.set(channelPostsToMessages(ch));
+  channelsStore.setUnread(ch.id, 0); // канал открыт — сбрасываем счётчик
+  // last_ts монотонный (Rust-гейт): пишем максимум visible-постов,
+  // иначе последующие непрочитанные перестанут считаться.
+  const maxTs = (channelsStore.state.channelPosts[ch.id] || []).reduce((m, p) => Math.max(m, p.ts || 0), 0);
+  if (maxTs) updateChannel(ch.id, { last_ts: maxTs }).catch(() => {});
+  deps.openMobileChat();
+  await deps.nextTick();
+  uiStore.scrollToBottom(true);
+}
+
+// Список каналов + локальные посты/счётчики/аватары (бывший App.vue loadChannels).
+export async function syncChannels(deps) {
+  try {
+    const list = await loadChannels();
+    mailboxState.state.channels = list;
+    // last_ts > 0 у подписчика = есть непрочитанное (считаем по post-логу kv)
+    const ns = await accountNamespace(sessionStore.getCurrentEmail());
+    for (const ch of list) {
+      const posts = JSON.parse((await db.kvGet(ns, 'channel-posts:' + ch.id)) || '[]');
+      channelsStore.setChannelPosts(ch.id, posts);
+      channelsStore.setUnread(ch.id, posts.filter(p => p.ts > (ch.last_ts || 0)).length);
+      channelsStore.setChannelAvatar(ch.id, (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '');
+    }
+  } catch (e) { console.error('Failed to load channels:', e); }
+}
+
+export async function createChannelAndClose(deps) {
+  const name = String(uiStore.getFormField('newChannelName') || '').trim();
+  const about = String(uiStore.getFormField('newChannelAbout') || '').trim();
+  if (!name || uiStore.getModal('postingChannel')) return;
+  uiStore.setModal('postingChannel', true);
+  try {
+    const ch = await createChannel(name, about, sessionStore.getCurrentEmail() || '', deps.fingerprint() || '');
+    await syncChannels(deps);
+    uiStore.setModal('showCreateChannel', false);
+    uiStore.setFormField('newChannelName', '');
+    uiStore.setFormField('newChannelAbout', '');
+    const fresh = (mailboxState.state.channels || []).find(c => c.id === ch.id) || ch;
+    await selectChannel(fresh, deps);
+    uiStore.toast(uiStore.tr('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
+  } catch (e) {
+    console.error('[channels] create:', e);
+    uiStore.toast(uiStore.tr('channel_create_failed') || 'Не удалось создать канал', 3000);
+  } finally { uiStore.setModal('postingChannel', false); }
+}
+
+export async function joinChannelAndClose(deps) {
+  const parsed = parseJoinLink(String(uiStore.getFormField('joinChannelLink') || '').trim());
+  if (!parsed) {
+    uiStore.toast(uiStore.tr('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
+    return;
+  }
+  try {
+    await importChannel(parsed.id, parsed.name, parsed.key, parsed.owner, parsed.ownerFpr);
+    await syncChannels(deps);
+    uiStore.setModal('showJoinChannel', false);
+    uiStore.setFormField('joinChannelLink', '');
+    const ch = (mailboxState.state.channels || []).find(c => c.id === parsed.id);
+    if (ch) await selectChannel(ch, deps);
+  } catch (e) {
+    console.error('[channels] join:', e);
+    uiStore.toast(uiStore.tr('channel_join_failed') || 'Не удалось подписаться', 3000);
+  }
+}
+
+export function copyChannelLink(deps) {
+  const ch = channelsStore.state.currentChannel;
+  if (!ch) return;
+  const link = buildJoinLink(ch);
+  try {
+    deps.writeClipboard(link);
+    uiStore.toast(uiStore.tr('channel_link_copied') || 'Ссылка на канал скопирована', 2500);
+  } catch (e) { console.warn('[channels] clipboard:', e); }
+}
+
+export function copyChannelLinkById(deps, id) {
+  const ch = channelById(id);
+  deps.closeChatMenu();
+  if (!ch) return;
+  try {
+    deps.writeClipboard(buildJoinLink(ch));
+    uiStore.toast(uiStore.tr('channel_link_copied') || 'Ссылка на канал скопирована', 2500);
+  } catch (e) { console.warn('[channels] clipboard:', e); }
+}
+
+// Публикация поста в канал (UI-часть; протокол — sendChannelPost ниже).
+export async function publishChannelPost(deps) {
+  const ch = channelsStore.state.currentChannel;
+  const text = String(deps.chat.state.newMessage || '').trim();
+  if (!ch || !ch.is_owner || !text || uiStore.getModal('postingChannel')) return;
+  uiStore.setModal('postingChannel', true);
+  try {
+    const payload = buildPostPayload(ch.id, text, []);
+    const content = await crypto.encryptWithGroupKey(payload, ch.key);
+    const env = JSON.parse(payload);
+    // optimistic local (владельческое эхо-письмо может и не вернуться)
+    noteChannelPost(ch.id, env.ts, env, sessionStore.getCurrentEmail());
+    channelsStore.setUnread(ch.id, 0); // собственный пост — не «непрочитанное»
+    deps.chat.set(channelPostsToMessages(ch));
+    deps.chat.setDraft('');
+    await deps.nextTick();
+    uiStore.scrollToBottom(true);
+    const res = await sendChannelPost(ch, content, env, sessionStore.getCurrentEmail());
+    updateChannel(ch.id, { last_ts: env.ts }).catch(() => {});
+    if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+      uiStore.toast(uiStore.tr('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+    }
+  } catch (e) {
+    console.error('[channels] post:', e);
+    uiStore.toast(uiStore.tr('channel_post_failed') || 'Пост не отправлен', 3000);
+  } finally { uiStore.setModal('postingChannel', false); }
+}
+
+export async function deleteChannelConfirmed(deps) {
+  const menu = uiStore.getFormField('chatMenu');
+  const t2 = menu && menu.target;
+  if (!t2 || t2.type !== 'channel') return;
+  if (!deps.confirm(uiStore.tr('channel_delete_confirm') || 'Удалить канал и всю его локальную историю?')) return;
+  deps.closeChatMenu();
+  try {
+    await deleteChannel(t2.id);
+    if (chatStore.state.activeChat === 'channel:' + t2.id) {
+      chatStore.setActiveChat('');
+      chatStore.setActiveChatType('chat');
+      channelsStore.setCurrentChannel(null);
+      deps.chat.set([]);
+    }
+    await syncChannels(deps);
+  } catch (e) { console.error('[channels] delete:', e); }
+}
+
+export async function renameChannel(deps, id) {
+  const ch = channelById(id);
+  deps.closeChatMenu();
+  if (!ch || !ch.is_owner) return;
+  const name = deps.prompt(uiStore.tr('channel_rename_prompt') || 'Новое название канала', ch.name || '');
+  if (!name || !name.trim() || name.trim() === ch.name) return;
+  ch.name = name.trim();
+  try {
+    await updateChannel(id, { name: ch.name });
+    const res = await sendChannelMeta(ch, sessionStore.getCurrentEmail());
+    if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
+      uiStore.toast(uiStore.tr('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
+    }
+  } catch (e) { console.error('[channels] rename:', e); }
+}
+
+export function channelById(id) {
+  return (mailboxState.state.channels || []).find(c => c.id === id) || null;
+}
+
+export function noteChannelPost(chId, ts, payload, senderEmail) {
+  const ch = channelById(chId);
+  if (!ch) return;
+  const posts = channelsStore.state.channelPosts[chId] || [];
+  const body = (payload && payload.post && payload.post.body) || '';
+  const images = (payload && payload.post && payload.post.images) || [];
+  if (posts.some(p => p.id === payload.id)) return; // дедуп post.id
+  posts.push({ id: payload.id, ts, body, images, sender: senderEmail || '' });
+  posts.sort((a, b) => a.ts - b.ts);
+  channelsStore.setChannelPosts(chId, posts.slice(-200)); // локальный лог компактный
+  channelsStore.setUnread(chId, (channelsStore.state.channelUnread[chId] || 0) + 1);
+  accountNamespace(sessionStore.getCurrentEmail()).then(ns =>
+    db.kvSet(ns, 'channel-posts:' + chId, JSON.stringify(channelsStore.state.channelPosts[chId])).catch(() => {})
+  );
+}
+
+export function noteChannelHello(chId, senderEmail) {
+  console.log('[channel] hello from', senderEmail, '→ chan', chId);
 }

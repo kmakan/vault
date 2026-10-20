@@ -21,6 +21,10 @@ export const relayChannelPublish = async (ch, env, body) => { pubs.push({ ch: ch
 writeFileSync(path.join(MOCKS, 'crypto.js'), `
 export default { encryptWithGroupKey: async (plain, key) => 'ENC(' + key.slice(0, 4) + ')' + plain };
 `);
+// identity-мок (accountNamespace — чистая функция namespace'а)
+writeFileSync(path.join(MOCKS, 'identity.js'), `
+export async function accountNamespace(email){ return 'ns:' + String(email || '').toLowerCase(); }
+`);
 // tauri core-мок (invoke)
 // Мок invoke. channels_tokens — НЕ заглушка: считаем токены независимой
 // реализацией на node:crypto. Это отдельный оракул — если клиентский Rust,
@@ -43,6 +47,13 @@ function channelTokensOracle(keyHex) {
   return [pack(0x63, rd), pack(0x43, wr)]; // 'c' read, 'C' write
 }
 export const invoke = async (cmd, args) => {
+  // Перехватчик сценария (ADR-005 W3 п.2): apiMock заморожен, а сценарии
+  // UI-части грузят/создают/удаляют каналы — их ответы задаёт globalThis.
+  const over = globalThis.__invokeOverride;
+  if (over) {
+    const r = await over(cmd, args);
+    if (r !== undefined) return r;
+  }
   if (cmd === 'channels_load') return [];
   if (cmd === 'channels_tokens') return channelTokensOracle(args.keyHex);
   throw new Error('unexpected invoke ' + cmd);
@@ -58,6 +69,17 @@ src = src.replace("from '../api.js'", 'from "/tmp/channels-smoke-mocks/api.js"')
 src = src.replace("import('../api.js')", 'import("/tmp/channels-smoke-mocks/api.js")');
 src = src.replace("import('../relay-client.js')", 'import("/tmp/channels-smoke-mocks/relay-client.js")');
 src = src.replace("import('../crypto.js')", 'import("/tmp/channels-smoke-mocks/crypto.js")');
+// ADR-005 W3 п.2: UI-оркестрация каналов переехала в фичу — она тянет
+// владельцев (session-store/channels-store/mailbox-store) и примитивы
+// (crypto/identity/message-format). Владельцы и message-format — НАСТОЯЩИЕ
+// (мок-владелец проверял бы не тот объект); crypto и identity — моки.
+const SRC = path.resolve(import.meta.dirname, '..', 'src');
+src = src.replace("from '../crypto.js'", 'from "/tmp/channels-smoke-mocks/crypto.js"');
+src = src.replace("from '../identity.js'", 'from "/tmp/channels-smoke-mocks/identity.js"');
+src = src.replace("from '../message-format.js'", 'from "' + SRC + '/message-format.js"');
+src = src.replace("from './session-store.js'", 'from "' + SRC + '/features/session-store.js"');
+src = src.replace("from './channels-store.js'", 'from "' + SRC + '/features/channels-store.js"');
+src = src.replace("from './mailbox-store.js'", 'from "' + SRC + '/features/mailbox-store.js"');
 writeFileSync('/tmp/channels-smoke-feature.mjs', src);
 
 const m = await import('/tmp/channels-smoke-feature.mjs');
@@ -166,6 +188,263 @@ const ctxMeta = { channels: [chSub], channelById: (id) => chSub.id === id ? chSu
 const metaPayload = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'New', about: 'Desc', avatar: 'data:img', key_version: 1 }));
 ok('ingest meta: kind + мгновенный мутейт', m.ingestChannelEnvelope(ctxMeta, metaPayload, 'o@x.y') === 'meta' && chSub.name === 'New' && chSub.about === 'Desc');
 ok('ingest meta: avatar → kv channel-avatar:', avatarKv.some(([a, k, v]) => a === 'anon' && k === 'channel-avatar:chn_1' && v === 'data:img'));
+
+// ── ADR-005 W3 п.2: UI-оркестрация каналов (было 13 методов в App.vue) ──
+// Проверяем на НАСТОЯЩИХ владельцах (channels-store/mailbox-store/uiStore/
+// chatStore) — мок-владелец проверял бы не тот объект.
+{
+  const { channelsStore } = await import(SRC + '/features/channels-store.js');
+  const { mailboxState } = await import(SRC + '/features/mailbox-store.js');
+  const { uiStore, chatStore, sessionStore } = await import(SRC + '/features/session-store.js');
+
+  const chatStub = {
+    state: { newMessage: '' },
+    set(next) { this.state.messages = next; },
+    setDraft(t) { this.state.newMessage = t == null ? '' : String(t); },
+  };
+  const calls = { saved: 0, reply: 0, mobile: 0, seq: 0, starred: null, closed: 0, clip: [], confirm: true, prompt: '', toasts: [], updates: [], errors: [] };
+  uiStore.setShowToast((msg) => { calls.toasts.push(msg); });
+  // Ловим console.error: гвард «плохая ссылка» отличается от «исключение
+  // внутри try» именно ОШИБКОЙ В КОНСОЛИ (catch её глотает и показывает тот
+  // же тост) — без этого два пути неразличимы.
+  const realError = console.error;
+  console.error = (...a) => { calls.errors.push(a.map(String).join(' ').slice(0, 120)); };
+  const deps = {
+    chat: chatStub,
+    saveDraft: () => { calls.saved++; },
+    cancelReply: () => { calls.reply++; },
+    openMobileChat: () => { calls.mobile++; },
+    setShowStarredOnly: (v) => { calls.starred = v; },
+    bumpLoadSeq: () => { calls.seq++; },
+    fingerprint: () => 'FP1',
+    nextTick: async () => {},
+    confirm: () => calls.confirm,
+    prompt: () => calls.prompt,
+    writeClipboard: (t) => { calls.clip.push(t); },
+    closeChatMenu: () => { calls.closed++; },
+  };
+  const resetUi = () => {
+    globalThis.__invokeOverride = null;
+    channelsStore.reset();
+    mailboxState.state.channels = [];
+    sessionStore.setCurrentEmail('me@x.ru');
+    uiStore.setFormField('newChannelName', '');
+    uiStore.setFormField('newChannelAbout', '');
+    uiStore.setFormField('joinChannelLink', '');
+    uiStore.setModal('showCreateChannel', false);
+    uiStore.setModal('showJoinChannel', false);
+    uiStore.setModal('postingChannel', false);
+    chatStore.setActiveChat(null);
+    chatStore.setActiveChatType('chat');
+    chatStore.setCurrentGroup(null);
+    calls.saved = calls.reply = calls.mobile = calls.seq = calls.closed = 0;
+    calls.starred = null; calls.clip = []; calls.confirm = true; calls.prompt = '';
+    calls.toasts = []; calls.updates = []; calls.errors = [];
+    chatStub.state.newMessage = '';
+    chatStub.state.messages = [];
+  };
+
+  // 1. channelById — поиск по списку владельца
+  resetUi();
+  mailboxState.state.channels = [{ id: 'chn_1', name: 'C1' }];
+  ok('channelById: находит по id', m.channelById('chn_1') && m.channelById('chn_1').name === 'C1');
+  ok('channelById: неизвестный → null', m.channelById('chn_x') === null);
+
+  // 2. noteChannelPost: дедуп по id, сортировка по ts, счётчик, запись в kv
+  resetUi();
+  mailboxState.state.channels = [{ id: 'chn_1', name: 'C1' }];
+  m.noteChannelPost('chn_1', 100, { id: 'p2', post: { body: 'B2' } }, 'peer@x.ru');
+  m.noteChannelPost('chn_1', 50, { id: 'p1', post: { body: 'B1' } }, 'peer@x.ru');
+  m.noteChannelPost('chn_1', 150, { id: 'p2', post: { body: 'B2' } }, 'peer@x.ru'); // дубль
+  const posts = channelsStore.state.channelPosts.chn_1 || [];
+  ok('noteChannelPost: дедуп по post.id', posts.length === 2, posts);
+  ok('noteChannelPost: сортировка по ts', posts[0].ts === 50 && posts[1].ts === 100);
+  ok('noteChannelPost: счётчик непрочитанных', channelsStore.state.channelUnread.chn_1 === 2, channelsStore.state.channelUnread);
+  await new Promise((r) => setTimeout(r, 50)); // запись в kv — асинхронная (then)
+  ok('noteChannelPost: пост сохранён в kv (с namespace аккаунта)',
+    avatarKv.some(([a, k]) => k === 'channel-posts:chn_1' && a === 'ns:me@x.ru'), avatarKv);
+
+  // 3. channelPostsToMessages: формат и «свой пост»
+  resetUi();
+  mailboxState.state.channels = [{ id: 'chn_1', name: 'C1', owner: 'own@x.ru', is_owner: true }];
+  m.noteChannelPost('chn_1', 100, { id: 'p1', post: { body: 'B1' } }, 'own@x.ru');
+  m.noteChannelPost('chn_1', 200, { id: 'p2', post: { body: 'B2' } }, 'peer@x.ru');
+  const msgs = m.channelPostsToMessages(mailboxState.state.channels[0]);
+  ok('channelPostsToMessages: свой пост → from=me', msgs[0].from === 'me', msgs);
+  ok('channelPostsToMessages: чужой пост → отправитель', msgs[1].from === 'peer@x.ru');
+  ok('channelPostsToMessages: тело/время/метки', msgs[0].content === 'B1' && msgs[0].encrypted === true && msgs[0].vault === true && !!msgs[0].time);
+
+  // 4. syncChannels: список + посты + счётчики + аватары
+  resetUi();
+  apiMock.db.kvGet = async (acc, k) => {
+    if (k === 'channel-posts:chn_1') return JSON.stringify([{ id: 'p1', ts: 5, body: 'B' }]);
+    if (String(k).startsWith('channel-avatar:')) return 'AV';
+    return null;
+  };
+  const chList = [{ id: 'chn_1', name: 'C1', last_ts: 0 }];
+  globalThis.__invokeOverride = async (cmd) => (cmd === 'channels_load' ? chList : undefined);
+  await m.syncChannels(deps);
+  ok('syncChannels: список в owner', mailboxState.state.channels.length === 1);
+  ok('syncChannels: посты загружены', (channelsStore.state.channelPosts.chn_1 || []).length === 1);
+  ok('syncChannels: счётчик непрочитанных посчитан', channelsStore.state.channelUnread.chn_1 === 1, channelsStore.state.channelUnread);
+  ok('syncChannels: аватар загружен', channelsStore.state.channelAvatars.chn_1 === 'AV');
+
+  // 5. selectChannel: переключение чата, сброс счётчика, сообщения
+  resetUi();
+  mailboxState.state.channels = [{ id: 'chn_1', name: 'C1', is_owner: true }];
+  channelsStore.setChannelPosts('chn_1', [{ id: 'p1', ts: 5, body: 'B', sender: 'peer@x.ru' }]);
+  channelsStore.setUnread('chn_1', 7);
+  globalThis.__invokeOverride = async (cmd, args) => {
+    if (cmd === 'channels_update') { calls.updates.push(args); return true; }
+    return undefined;
+  };
+  await m.selectChannel(mailboxState.state.channels[0], deps);
+  ok('selectChannel: last_ts записан (монотонность непрочитанных)',
+    calls.updates.some((a) => a.patch && a.patch.last_ts === 5), calls.updates);
+  ok('selectChannel: активный чат = channel:chn_1', chatStore.state.activeChat === 'channel:chn_1', chatStore.state);
+  ok('selectChannel: тип чата = channel', chatStore.state.activeChatType === 'channel');
+  ok('selectChannel: активный канал в owner', channelsStore.state.currentChannel && channelsStore.state.currentChannel.id === 'chn_1');
+  ok('selectChannel: счётчик сброшен', channelsStore.state.channelUnread.chn_1 === 0);
+  ok('selectChannel: сообщения показаны', Array.isArray(chatStub.state.messages) && chatStub.state.messages.length === 1);
+  ok('selectChannel: черновик сохранён и очищен', calls.saved === 1 && chatStub.state.newMessage === '');
+  ok('selectChannel: мобильный чат открыт, звёзды сняты', calls.mobile === 1 && calls.starred === false);
+
+  // 6. publishChannelPost: пост уходит, эхо локально, черновик очищен
+  resetUi();
+  const ownerCh = { id: 'chn_1', key: 'k'.repeat(64), is_owner: true, name: 'C1', known_subscribers: [] };
+  mailboxState.state.channels = [ownerCh];
+  channelsStore.setCurrentChannel(ownerCh);
+  chatStub.state.newMessage = '  привет  ';
+  rcMock.pubs.length = 0;
+  await m.publishChannelPost(deps);
+  ok('publishChannelPost: пост ушёл в транспорт', rcMock.pubs.length === 1, rcMock.pubs);
+  ok('publishChannelPost: локальное эхо появилось', (channelsStore.state.channelPosts.chn_1 || []).length === 1);
+  ok('publishChannelPost: черновик очищен', chatStub.state.newMessage === '');
+  ok('publishChannelPost: флаг posting снят', uiStore.getModal('postingChannel') === false);
+
+  // 6b. Пустой текст — пост не отправляется
+  resetUi();
+  const emptyCh = { id: 'chn_3', key: 'k'.repeat(64), is_owner: true, name: 'C3', known_subscribers: [] };
+  mailboxState.state.channels = [emptyCh];
+  channelsStore.setCurrentChannel(emptyCh);
+  chatStub.state.newMessage = '   ';
+  rcMock.pubs.length = 0;
+  await m.publishChannelPost(deps);
+  ok('publishChannelPost: пустой текст → не отправляется', rcMock.pubs.length === 0);
+
+  // 6c. Не владелец — пост не отправляется
+  resetUi();
+  const subCh = { id: 'chn_2', key: 'k'.repeat(64), is_owner: false, name: 'C2', known_subscribers: [] };
+  mailboxState.state.channels = [subCh];
+  channelsStore.setCurrentChannel(subCh);
+  chatStub.state.newMessage = 'нельзя';
+  rcMock.pubs.length = 0;
+  await m.publishChannelPost(deps);
+  ok('publishChannelPost: не владелец → не отправляется', rcMock.pubs.length === 0);
+
+  // 7. createChannelAndClose: канал создан, форма очищена, канал открыт
+  resetUi();
+  globalThis.__invokeOverride = async (cmd, args) => {
+    if (cmd === 'channels_create') return { id: 'chn_new', name: args.name, key: 'k'.repeat(64), is_owner: true, owner_fpr: 'FP1' };
+    if (cmd === 'channels_load') return [{ id: 'chn_new', name: 'Мой канал', key: 'k'.repeat(64), is_owner: true }];
+    return undefined;
+  };
+  uiStore.setFormField('newChannelName', '  Мой канал  ');
+  uiStore.setFormField('newChannelAbout', ' про канал ');
+  uiStore.setModal('showCreateChannel', true);
+  await m.createChannelAndClose(deps);
+  ok('createChannelAndClose: канал создан и выбран', chatStore.state.activeChat === 'channel:chn_new', chatStore.state);
+  ok('createChannelAndClose: модалка закрыта', uiStore.getModal('showCreateChannel') === false);
+  ok('createChannelAndClose: форма очищена', uiStore.getFormField('newChannelName') === '' && uiStore.getFormField('newChannelAbout') === '');
+  ok('createChannelAndClose: флаг posting снят', uiStore.getModal('postingChannel') === false);
+
+  // 8. joinChannelAndClose: плохая ссылка — тост, ничего не импортируем
+  resetUi();
+  uiStore.setFormField('joinChannelLink', 'не-ссылка');
+  let threw = null;
+  let importCalled = false;
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_import') { importCalled = true; return true; } return undefined; };
+  try { await m.joinChannelAndClose(deps); } catch (e) { threw = e; }
+  ok('joinChannelAndClose: плохая ссылка → без исключения', threw === null, threw && String(threw));
+  ok('joinChannelAndClose: плохая ссылка → модалка не закрыта', uiStore.getModal('showJoinChannel') === false);
+  ok('joinChannelAndClose: плохая ссылка → тост и НЕ импорт',
+    calls.toasts.length === 1 && importCalled === false, { toasts: calls.toasts, importCalled });
+  ok('joinChannelAndClose: плохая ссылка → БЕЗ ошибки в консоли (гвард, а не исключение)',
+    calls.errors.length === 0, calls.errors);
+
+  // 8b. Валидная ссылка → импорт выполнен, модалка закрыта
+  resetUi();
+  uiStore.setFormField('joinChannelLink', 'vault://join-channel?c=chn_j&k=' + 'a'.repeat(64) + '&n=J&o=FP');
+  uiStore.setModal('showJoinChannel', true);
+  let imported = null;
+  globalThis.__invokeOverride = async (cmd, args) => {
+    if (cmd === 'channels_import') { imported = args; return true; }
+    if (cmd === 'channels_load') return [];
+    return undefined;
+  };
+  await m.joinChannelAndClose(deps);
+  ok('joinChannelAndClose: канал импортирован по ссылке', !!imported && imported.channelId === 'chn_j', imported);
+  ok('joinChannelAndClose: модалка закрыта, поле очищено',
+    uiStore.getModal('showJoinChannel') === false && uiStore.getFormField('joinChannelLink') === '');
+
+  // 9. copyChannelLink / copyChannelLinkById: ссылка в буфер
+  resetUi();
+  const linkCh = { id: 'chn_1', key: 'k'.repeat(64), name: 'C1', owner_fpr: 'FP1' };
+  mailboxState.state.channels = [linkCh];
+  channelsStore.setCurrentChannel(linkCh);
+  m.copyChannelLink(deps);
+  ok('copyChannelLink: ссылка скопирована', calls.clip.length === 1 && calls.clip[0].startsWith('vault://join-channel?c=chn_1'), calls.clip);
+  m.copyChannelLinkById(deps, 'chn_1');
+  ok('copyChannelLinkById: ссылка скопирована, меню закрыто', calls.clip.length === 2 && calls.closed === 1);
+
+  // 10. deleteChannelConfirmed: подтверждение → удаление
+  resetUi();
+  uiStore.setFormField('chatMenu', { show: true, target: { type: 'channel', id: 'chn_1' } });
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_delete') return true; if (cmd === 'channels_load') return []; return undefined; };
+  await m.deleteChannelConfirmed(deps);
+  ok('deleteChannelConfirmed: канал удалён, меню закрыто', calls.closed === 1);
+
+  // 10b. Без подтверждения — НЕ удаляем
+  resetUi();
+  uiStore.setFormField('chatMenu', { show: true, target: { type: 'channel', id: 'chn_1' } });
+  calls.confirm = false;
+  let deleted = false;
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_delete') { deleted = true; return true; } return undefined; };
+  await m.deleteChannelConfirmed(deps);
+  ok('deleteChannelConfirmed: без подтверждения → не удаляется', deleted === false);
+
+  // 10c. Удаление ОТКРЫТОГО канала — активный чат сбрасывается
+  resetUi();
+  chatStore.setActiveChat('channel:chn_1');
+  chatStore.setActiveChatType('channel');
+  channelsStore.setCurrentChannel({ id: 'chn_1' });
+  uiStore.setFormField('chatMenu', { show: true, target: { type: 'channel', id: 'chn_1' } });
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_delete') return true; if (cmd === 'channels_load') return []; return undefined; };
+  await m.deleteChannelConfirmed(deps);
+  ok('deleteChannelConfirmed: открытый канал закрыт (активный чат сброшен)',
+    chatStore.state.activeChat === '' && chatStore.state.activeChatType === 'chat' && channelsStore.state.currentChannel === null,
+    { activeChat: chatStore.state.activeChat, type: chatStore.state.activeChatType, current: channelsStore.state.currentChannel });
+
+  // 11. renameChannel: новое имя → обновление
+  resetUi();
+  const renCh = { id: 'chn_1', key: 'k'.repeat(64), name: 'Старое', is_owner: true, known_subscribers: [] };
+  mailboxState.state.channels = [renCh];
+  calls.prompt = '  Новое  ';
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_update') return true; return undefined; };
+  await m.renameChannel(deps, 'chn_1');
+  ok('renameChannel: имя обрезано и применено', renCh.name === 'Новое', renCh.name);
+
+  // 11b. Переименование не владельцем — запрещено
+  resetUi();
+  const notOwner = { id: 'chn_1', key: 'k'.repeat(64), name: 'Чужой', is_owner: false, known_subscribers: [] };
+  mailboxState.state.channels = [notOwner];
+  calls.prompt = 'Взлом';
+  globalThis.__invokeOverride = async (cmd) => { if (cmd === 'channels_update') return true; return undefined; };
+  await m.renameChannel(deps, 'chn_1');
+  ok('renameChannel: не владелец → имя не меняется', notOwner.name === 'Чужой', notOwner.name);
+
+  console.error = realError;
+}
 
 console.log(fail ? `\n${fail} FAILED, ${pass} passed` : `\nALL ${pass} passed`);
 process.exit(fail ? 1 : 0);

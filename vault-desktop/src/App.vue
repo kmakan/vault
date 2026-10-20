@@ -1859,6 +1859,25 @@ export default {
         replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
       };
     },
+    // Контракт фичи каналов (ADR-005 W3, партия 2): per-app владелец чата,
+    // DOM и ввод (confirm/prompt/clipboard) — через deps; состояние — у
+    // владельцев (mailbox-store/channels-store/uiStore/chatStore).
+    channelsDeps() {
+      return {
+        chat: this.chat,
+        saveDraft: () => this.saveDraft(),
+        cancelReply: () => this.cancelReply(),
+        openMobileChat: () => this.openMobileChat(),
+        setShowStarredOnly: (v) => { this.showStarredOnly = v; },
+        bumpLoadSeq: () => { this.loadSeq++; },
+        fingerprint: () => this.fingerprint,
+        nextTick: () => this.$nextTick(),
+        confirm: (msg) => window.confirm(msg),
+        prompt: (msg, def) => window.prompt(msg, def),
+        writeClipboard: (text) => navigator.clipboard.writeText(text),
+        closeChatMenu: () => this.closeChatMenu(),
+      };
+    },
     // Контракт фичи видео звонка (ADR-005 W3, партия 1): DOM-эффекты,
     // которых не знает модуль, — через deps.
     callVideoDeps() {
@@ -3237,193 +3256,26 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       for (const c of r.newContacts) this.contacts.push(c);
     },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
-    channelPostsToMessages(ch) {
-      // kv-лог постов → формат MessageItem (own = наш пост/эхо).
-      const posts = this.channelPosts[ch.id] || [];
-      return posts.map(p => ({
-        id: p.id || ('post-' + p.ts),
-        content: p.body || '',
-        from: (p.sender && p.sender === (ch.owner || this.email)) || (!p.sender && ch.is_owner) ? 'me' : p.sender,
-        sender_id: p.sender || ch.owner || '',
-        time: MsgFormat.formatTimeLabel(p.ts),
-        ts: p.ts,
-        encrypted: true,
-        vault: true,
-      }));
-    },
-    async selectChannel(ch) {
-      this.saveDraft();
-      this.chat.set([]);
-      this.newMessage = '';
-      this.cancelReply();
-      this.activeChat = 'channel:' + ch.id;
-      this.activeChatType = 'channel';
-      // channelsStore — МОДУЛЬНЫЙ импорт (App.vue:973), а не setup-локаль:
-      // в инстанс он не отдаётся, поэтому `this.channelsStore` был undefined
-      // (TypeError на каждый клик по каналу). Голое имя здесь и есть верный
-      // доступ — так же он читается в computed выше.
-      channelsStore.setCurrentChannel(ch);
-      this.currentGroup = null;
-      this.showStarredOnly = false;
-      this.loadSeq++;
-      this.chat.set(this.channelPostsToMessages(ch));
-      this.channelUnread[ch.id] = 0; // канал открыт — сбрасываем счётчик
-      // last_ts монотонный (Rust-гейт): пишем максимум visible-постов,
-      // иначе последующие непрочитанные перестанут считаться.
-      const maxTs = (this.channelPosts[ch.id] || []).reduce((m, p) => Math.max(m, p.ts || 0), 0);
-      if (maxTs) ChannelsFeature.updateChannel(ch.id, { last_ts: maxTs }).catch(() => {});
-      this.openMobileChat();
-      await this.$nextTick();
-      this.scrollToBottom(true);
-    },
-    async createChannelAndClose() {
-      const name = this.newChannelName.trim();
-      if (!name || this.postingChannel) return;
-      this.postingChannel = true;
-      try {
-        const ch = await ChannelsFeature.createChannel(name, this.newChannelAbout.trim(), this.email || '', this.fingerprint || '');
-        await this.loadChannels();
-        this.showCreateChannel = false;
-        this.newChannelName = '';
-        this.newChannelAbout = '';
-        const fresh = this.channels.find(c => c.id === ch.id) || ch;
-        await this.selectChannel(fresh);
-        uiStore.toast(uiStore.tr('channel_created') || 'Канал создан — поделитесь ссылкой', 4000);
-      } catch (e) {
-        console.error('[channels] create:', e);
-        uiStore.toast(uiStore.tr('channel_create_failed') || 'Не удалось создать канал', 3000);
-      } finally { this.postingChannel = false; }
-    },
-    async joinChannelAndClose() {
-      const parsed = ChannelsFeature.parseJoinLink(this.joinChannelLink.trim());
-      if (!parsed) {
-        uiStore.toast(uiStore.tr('channel_join_bad_link') || 'Ссылка канала не распознана', 3000);
-        return;
-      }
-      try {
-        await ChannelsFeature.importChannel(parsed.id, parsed.name, parsed.key, parsed.owner, parsed.ownerFpr);
-        await this.loadChannels();
-        this.showJoinChannel = false;
-        this.joinChannelLink = '';
-        const ch = this.channels.find(c => c.id === parsed.id);
-        if (ch) await this.selectChannel(ch);
-      } catch (e) {
-        console.error('[channels] join:', e);
-        uiStore.toast(uiStore.tr('channel_join_failed') || 'Не удалось подписаться', 3000);
-      }
-    },
-    copyChannelLink() {
-      const ch = this.currentChannel;
-      if (!ch) return;
-      const link = ChannelsFeature.buildJoinLink(ch);
-      try { navigator.clipboard.writeText(link); uiStore.toast(uiStore.tr('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
-      catch (e) { console.warn('[channels] clipboard:', e); }
-    },
-    copyChannelLinkById(id) {
-      const ch = this.channelById(id);
-      this.closeChatMenu();
-      if (!ch) return;
-      try { navigator.clipboard.writeText(ChannelsFeature.buildJoinLink(ch)); uiStore.toast(uiStore.tr('channel_link_copied') || 'Ссылка на канал скопирована', 2500); }
-      catch (e) { console.warn('[channels] clipboard:', e); }
-    },
+    channelPostsToMessages(ch) { return ChannelsFeature.channelPostsToMessages(ch); },
+    async selectChannel(ch) { return ChannelsFeature.selectChannel(ch, this.channelsDeps); },
+    async createChannelAndClose() { return ChannelsFeature.createChannelAndClose(this.channelsDeps); },
+    async joinChannelAndClose() { return ChannelsFeature.joinChannelAndClose(this.channelsDeps); },
+    copyChannelLink() { return ChannelsFeature.copyChannelLink(this.channelsDeps); },
+    copyChannelLinkById(id) { return ChannelsFeature.copyChannelLinkById(this.channelsDeps, id); },
     // Отправка поста владельцем (composer → post-конверт). Тело шифруется
     // broadcast-ключом канала (тот же симметричный путь, что группы).
-    async sendChannelPost() {
-      const ch = this.currentChannel;
-      const text = this.newMessage.trim();
-      if (!ch || !ch.is_owner || !text || this.postingChannel) return;
-      this.postingChannel = true;
-      try {
-        const payload = ChannelsFeature.buildPostPayload(ch.id, text, []);
-        const content = await crypto.encryptWithGroupKey(payload, ch.key);
-        const env = JSON.parse(payload);
-        // optimistic local (владельческое эхо-письмо может и не вернуться)
-        this.noteChannelPost(ch.id, env.ts, env, this.email);
-        this.channelUnread[ch.id] = 0; // собственный пост — не «непрочитанное»
-        this.chat.set(this.channelPostsToMessages(ch));
-        this.newMessage = '';
-        await this.$nextTick();
-        this.scrollToBottom(true);
-        const res = await ChannelsFeature.sendChannelPost(ch, content, env, this.email);
-        ChannelsFeature.updateChannel(ch.id, { last_ts: env.ts }).catch(() => {});
-        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
-          uiStore.toast(uiStore.tr('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
-        }
-      } catch (e) {
-        console.error('[channels] post:', e);
-        uiStore.toast(uiStore.tr('channel_post_failed') || 'Пост не отправлен', 3000);
-      } finally { this.postingChannel = false; }
-    },
-    async deleteChannelConfirmed() {
-      const t2 = this.chatMenu.target;
-      if (!t2 || t2.type !== 'channel') return;
-      if (!confirm(uiStore.tr('channel_delete_confirm') || 'Удалить канал и всю его локальную историю?')) return;
-      this.closeChatMenu();
-      try {
-        await ChannelsFeature.deleteChannel(t2.id);
-        if (this.activeChat === 'channel:' + t2.id) {
-          this.activeChat = '';
-          this.activeChatType = 'chat';
-          this.currentChannel = null;
-          this.chat.set([]);
-        }
-        await this.loadChannels();
-      } catch (e) { console.error('[channels] delete:', e); }
-    },
-    async loadChannels() {
-      try {
-        this.channels = await ChannelsFeature.loadChannels();
-        // last_ts > 0 у подписчика = есть непрочитанное (считаем по post-логу kv)
-        for (const ch of this.channels) {
-          const posts = JSON.parse((await db.kvGet(await accountNamespace(this.email), 'channel-posts:' + ch.id)) || '[]');
-          this.channelPosts[ch.id] = posts;
-          this.channelUnread[ch.id] = posts.filter(p => p.ts > (ch.last_ts || 0)).length;
-          // Тоже модульный импорт (см. selectChannel): `this.channelsStore`
-          // бросал TypeError ВНУТРИ цикла, и посты/счётчики всех каналов после
-          // первого не загружались — ошибка тонула в catch рядом.
-          channelsStore.setChannelAvatar(ch.id, (await db.kvGet('anon', 'channel-avatar:' + ch.id)) || '');
-        }
-      } catch (e) { console.error('Failed to load channels:', e); }
-    },
+    async sendChannelPost() { return ChannelsFeature.publishChannelPost(this.channelsDeps); },
+    async deleteChannelConfirmed() { return ChannelsFeature.deleteChannelConfirmed(this.channelsDeps); },
+    async loadChannels() { return ChannelsFeature.syncChannels(this.channelsDeps); },
     // Владелец переименовывает канал: локальный патч + meta-конверт
     // подписчикам (name/about летят тем же транспортом, что посты).
-    async renameChannel(id) {
-      const ch = this.channelById(id);
-      this.closeChatMenu();
-      if (!ch || !ch.is_owner) return;
-      const name = prompt(uiStore.tr('channel_rename_prompt') || 'Новое название канала', ch.name || '');
-      if (!name || !name.trim() || name.trim() === ch.name) return;
-      ch.name = name.trim();
-      try {
-        await ChannelsFeature.updateChannel(id, { name: ch.name });
-        const res = await ChannelsFeature.sendChannelMeta(ch, this.email);
-        if (!res.relayOk && res.mailSent === 0 && (ch.known_subscribers || []).length) {
-          uiStore.toast(uiStore.tr('channel_post_email_only') || 'Релей недоступен — пост ушёл только известным подписчикам', 4000);
-        }
-      } catch (e) { console.error('[channels] rename:', e); }
-    },
+    async renameChannel(id) { return ChannelsFeature.renameChannel(this.channelsDeps, id); },
     // Router helpers (features/incoming.js вызывает через ctx)
-    channelById(id) { return this.channels.find(c => c.id === id) || null; },
+    channelById(id) { return ChannelsFeature.channelById(id); },
     // Новый пост канала: сохраняем в kv-лог (аналог истории, только локально),
     // инкремент непрочитанных.
-    noteChannelPost(chId, ts, payload, senderEmail) {
-      const ch = this.channelById(chId);
-      if (!ch) return;
-      const posts = this.channelPosts[chId] || [];
-      const body = (payload && payload.post && payload.post.body) || '';
-      const images = (payload && payload.post && payload.post.images) || [];
-      if (posts.some(p => p.id === payload.id)) return; // дедуп post.id
-      posts.push({ id: payload.id, ts, body, images, sender: senderEmail || '' });
-      posts.sort((a, b) => a.ts - b.ts);
-      this.channelPosts[chId] = posts.slice(-200); // локальный лог компактный
-      this.channelUnread[chId] = (this.channelUnread[chId] || 0) + 1;
-      accountNamespace(this.email).then(ns =>
-        db.kvSet(ns, 'channel-posts:' + chId, JSON.stringify(this.channelPosts[chId])).catch(() => {})
-      );
-    },
-    noteChannelHello(chId, senderEmail) {
-      console.log('[channel] hello from', senderEmail, '→ chan', chId);
-    },
+    noteChannelPost(chId, ts, payload, senderEmail) { return ChannelsFeature.noteChannelPost(chId, ts, payload, senderEmail); },
+    noteChannelHello(chId, senderEmail) { return ChannelsFeature.noteChannelHello(chId, senderEmail); },
     setPeerKey(email, key, pq = null) {
       // Запись — через владельца identity (ADR-004 J.6).
       identityStore.setPeerKey(email, key, pq);
