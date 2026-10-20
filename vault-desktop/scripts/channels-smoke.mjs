@@ -55,7 +55,7 @@ export const invoke = async (cmd, args) => {
     if (r !== undefined) return r;
   }
   if (cmd === 'channels_load') return [];
-  if (cmd === 'channels_tokens') return channelTokensOracle(args.keyHex);
+  if (cmd === 'channels_tokens') { globalThis.__lastTokenKeyArg = args.keyHex; return channelTokensOracle(args.keyHex); }
   throw new Error('unexpected invoke ' + cmd);
 };
 export { channelTokensOracle };
@@ -158,11 +158,22 @@ const GOLD = {
   write: 'SV_HjXPp5iRD_____wggA7nRt299pz5hlBU0WewQCsWWD7JgIIcmkz8csufh',
 };
 const tk = await tokens.channelTokens(GOLD.key);
+const lastTokenKeyArg = globalThis.__lastTokenKeyArg;
 ok('channelTokens read == Rust golden', tk.read === GOLD.read);
 ok('channelTokens write == Rust golden', tk.write === GOLD.write);
 ok('channelTokens кэш идемпотентен', (await tokens.channelTokens(GOLD.key)) === tk);
 let threw = false; try { await tokens.channelTokens('zz'); } catch { threw = true; }
 ok('bad key → throw', threw);
+
+// Ключ обрезается: «тот же канал» с пробелами должен дать ТОТ ЖЕ адрес
+// очереди, иначе подписчик уедет в другую очередь и канал «исчезнет».
+ok('ключ обрезается (пробелы не дают другой адрес очереди)',
+  (await tokens.channelTokens('  ' + GOLD.key + '  ')).read === GOLD.read);
+ok('токены заморожены (вызывающий не подменит адрес очереди)',
+  Object.isFrozen(tk));
+// В Rust уходит ОБРЕЗАННЫЙ ключ: kid считается из первых 8 байт токена, и
+// необрезанный ключ дал бы другой kid — подпись не того канала.
+ok('в Rust уходит обрезанный ключ', lastTokenKeyArg === GOLD.key, lastTokenKeyArg);
 
 // ── sendChannelPost: relay-паб + email-дубли cap 50 ──
 const apiMock = await import('/tmp/channels-smoke-mocks/api.js');

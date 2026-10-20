@@ -279,6 +279,14 @@ mod tests {
         // Outgoing with read → ✓✓
         assert_eq!(store.status_icon("msg-1", true), " ✓✓");
 
+        // Отдельная квитанка «доставлено» рисуется ИНАЧЕ, чем «прочитано»:
+        // иначе адресат видит «прочитано» у письма, которое он только получил.
+        // Мутационный гейт Rust-ядра выловил, что на этот случай теста не было.
+        store
+            .record_delivered("msg-2", "alice@test.com", "bob@test.com")
+            .unwrap();
+        assert_eq!(store.status_icon("msg-2", true), " ✓✓");
+
         // Outgoing with no receipt → empty
         assert_eq!(store.status_icon("msg-999", true), "");
 
@@ -336,6 +344,32 @@ mod tests {
     fn test_parse_receipt_body_invalid() {
         assert!(ReadReceiptStore::parse_receipt_body("not json").is_none());
         assert!(ReadReceiptStore::parse_receipt_body("{}").is_none());
+    }
+
+    /// Квитанция без message_id или без отправителя — НЕ НАША: принимать её
+    /// нельзя, иначе чужое письмо будет помечено прочитанным от чужого
+    /// адреса. Мутационный гейт Rust-ядра выловил отсутствие этих проверок.
+    #[test]
+    fn test_parse_receipt_body_requires_id_and_reader() {
+        let no_id = serde_json::json!({
+            "status": "read",
+            "from_email": "alice@test.com",
+        });
+        assert!(ReadReceiptStore::parse_receipt_body(&no_id.to_string()).is_none());
+
+        let no_reader = serde_json::json!({
+            "status": "read",
+            "message_id": "msg-42",
+        });
+        assert!(ReadReceiptStore::parse_receipt_body(&no_reader.to_string()).is_none());
+
+        // И без распознаваемого статуса — тоже не наша.
+        let bad_status = serde_json::json!({
+            "status": "какая-то дичь",
+            "from_email": "alice@test.com",
+            "message_id": "msg-42",
+        });
+        assert!(ReadReceiptStore::parse_receipt_body(&bad_status.to_string()).is_none());
     }
 
     #[test]

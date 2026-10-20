@@ -371,6 +371,31 @@ mod tests {
         panic!("Could not find payload to tamper");
     }
 
+    /// ОБРЕЗАННЫЙ конверт должен отвергаться, а не «расшифровываться в
+    /// пустоту». Проверка длины payload (nonce + тег + ключ) — единственное,
+    /// что отличает обрезанный конверт от валидного; без неё код падал бы
+    /// с невнятной ошибкой разбора. Мутационный гейт Rust-ядра выловил
+    /// отсутствие этой проверки.
+    #[test]
+    fn test_truncated_payload_rejects() {
+        let enc = Encryptor::new();
+        let encrypted = enc.encrypt_text("secret message");
+        let lines: Vec<&str> = encrypted.lines().collect();
+        // Обрезаем полезную нагрузку: оставляем только начало base64.
+        let mut cut = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.len() > 100 && !line.starts_with("---") {
+                cut.push_str(&line[..20]);
+            } else {
+                cut.push_str(line);
+            }
+            cut.push('\n');
+            let _ = i;
+        }
+        let result = enc.decrypt(&cut);
+        assert!(result.is_err(), "обрезанный конверт должен отвергаться");
+    }
+
     #[test]
     fn test_format_output_structure() {
         let enc = Encryptor::new();
