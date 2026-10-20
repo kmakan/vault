@@ -221,6 +221,60 @@ console.log('2b. докачка тел: fetchBodiesDbFirst → cacheBody');
   check('письмо расшифровано из докачанного тела', d.chat.state.messages[0] && d.chat.state.messages[0].content === 'из ящика');
 }
 
+// ── 2a. Без ключа пира — чат пуст (нечего расшифровывать) ────────────────
+console.log('2a. без ключа пира чат пуст');
+{
+  cryptoMock.decryptVault = async () => JSON.stringify({ vault: 1, id: 'x1', text: 'секрет' });
+  const m1 = mail('ENC:1', 'peer@x.ru', '<p@x>', 1);
+  resetWorld({ emails: [m1] });
+  withBody(m1, 'ENC:1');
+  // Убираем ключ пира: без него расшифровать нечего, чат должен быть пуст.
+  identityStore.state.peerKeys = {};
+  const d = makeDeps();
+  await M.loadMessages(d, 'peer@x.ru');
+  check('без ключа пира чат пуст (ничего не расшифровано)', d.chat.state.messages.length === 0, d.chat.state.messages);
+}
+
+// ── 2b. Дубль конверта в двух папках — одно сообщение ─────────────────────
+console.log('2b. дубль по id конверта отсекается');
+{
+  // Копии РАЗНЫЕ (тело/папка): иначе «какая копия выжила» не различимо и
+  // мутация дедупа не наблюдаема — сообщение одно и то же.
+  cryptoMock.decryptVault = async (body) => JSON.stringify(
+    body === 'ENC:d2' ? { vault: 1, id: 'dup-1', text: 'копия из спама' }
+                        : { vault: 1, id: 'dup-1', text: 'оригинал' });
+  const inInbox = mail('ENC:d', 'peer@x.ru', '<d@x>', 5);
+  const inSpam = { ...mail('ENC:d2', 'peer@x.ru', '<d@x>', 5), folder: 'Spam' };
+  resetWorld({ emails: [inInbox, inSpam] });
+  withBody(inInbox, 'ENC:d'); withBody(inSpam, 'ENC:d2');
+  const d = makeDeps();
+  await M.loadMessages(d, 'peer@x.ru');
+  const dupes = d.chat.state.messages.filter((m) => m.id === 'dup-1');
+  check('дубль конверта (две папки) → одно сообщение', dupes.length === 1, d.chat.state.messages.map((m) => m.id));
+  check('дубль: осталась ПЕРВАЯ копия (оригинал, не спам)',
+    dupes.length === 1 && dupes[0].content === 'оригинал', dupes[0] && dupes[0].content);
+}
+
+// ── 2c. Статус своего сообщения: квитанция о прочтении → read ────────────
+console.log('2c. статус своего сообщения: read/delivered');
+{
+  cryptoMock.decryptVault = async (body) => {
+    if (body === 'ENC:mine') return JSON.stringify({ vault: 1, id: 'mine-1', text: 'моё сообщение' });
+    if (body === 'ENC:ack') return JSON.stringify({ read: 1, msg_ids: ['mine-1'] });
+    return null;
+  };
+  // Своё ИСХОДЯЩЕЕ: отправитель — мы, получатель — собеседник (to!).
+  const mine = { ...mail('ENC:mine', 'me@x.ru', '<mine@x>', 10), to: 'peer@x.ru' };
+  const ack = mail('ENC:ack', 'peer@x.ru', '<ack@x>', 11);
+  resetWorld({ emails: [mine, ack] });
+  withBody(mine, 'ENC:mine'); withBody(ack, 'ENC:ack');
+  const d = makeDeps();
+  await M.loadMessages(d, 'peer@x.ru');
+  const own = d.chat.state.messages.find((m) => m.from === 'me');
+  check('своё сообщение отрисовано', !!own, d.chat.state.messages);
+  check('квитанция о прочтении → статус read', own && own.status === 'read', own && own.status);
+}
+
 // ── 3. классификация: реакция/квитанция НЕ рендерятся ─────────
 console.log('3. реакция/квитанция/edit/call НЕ рендерятся как сообщения');
 {

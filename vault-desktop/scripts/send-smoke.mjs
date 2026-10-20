@@ -25,7 +25,7 @@ mkdirSync(MOCKS, { recursive: true });
 
 const apiMock = {
   sent: [],
-  sendMessage: async (to, content) => { apiMock.sent.push(['msg', to, content]); },
+  sendMessage: async (to, content) => { apiMock.sent.push(['msg', to, content]); (globalThis.__order || []).push('send'); },
   sendGroupMessage: async (gid, content) => { apiMock.sent.push(['grp', gid, content]); },
 };
 const cryptoMock = {
@@ -137,10 +137,16 @@ function makeDeps(over = {}) {
     markPendingCalls: [],
     markPending: (...a) => { deps.markPendingCalls.push(a); },
     historyCalls: [],
-    saveCurrentHistory: (...a) => { deps.historyCalls.push(a); },
+    // ПОРЯДОК вызовов: «история сохранена» не отличает оптимистичное
+    // сохранение (ДО отправки — ради этого оно и нужно) от сохранения после
+    // успешной отправки. Без порядка мутация одной из точек замаскируется
+    // другой.
+    order: [],
+    saveCurrentHistory: (...a) => { deps.historyCalls.push(a); deps.order.push('history'); },
     recordLocalEdit: () => {},
     sendEditEmail: async () => {},
-    scheduleEphemeral: () => {},
+    scheduleEphemeralCalls: [],
+    scheduleEphemeral: (...a) => { deps.scheduleEphemeralCalls.push(a); return Promise.resolve(); },
     sendChannelPost: () => {},
     ...over,
   };
@@ -197,6 +203,7 @@ console.log('3. 1:1: конверт→шифр→api.sendMessage→статус 
   apiMock.sent.length = 0;
   resetWorld();
   const d = makeDeps();
+  globalThis.__order = d.order;     // журнал порядка для apiMock.sendMessage
   d.chat.setDraft('тест');
   await S.sendMessage(d);
   // оптимистичный предпросмотр должен появиться СРАЗУ (до await api.sendMessage)
@@ -210,7 +217,16 @@ console.log('3. 1:1: конверт→шифр→api.sendMessage→статус 
   check('pending + история по ключу чата из владельца',
     d.markPendingCalls.length === 1 && d.historyCalls.length >= 1 && d.historyCalls[0][0] === 'peer@x.ru',
     [d.markPendingCalls.length, d.historyCalls]);
+
   await tick(); // даём fire-and-forget api.sendMessage разрешиться
+  // ОПТИМИСТИЧНОЕ сохранение обязано быть ДО отправки: иначе при падении
+  // SMTP своё сообщение пропало бы из истории (а после отправки — поздно).
+  check('история сохранена ДО отправки (оптимистично)',
+    d.order.indexOf('history') !== -1 && d.order.indexOf('history') < d.order.indexOf('send'), d.order);
+  // После УСПЕШНОЙ отправки история пересохраняется: статус изменился на
+  // 'sent' — иначе в персисте остался бы 'sending'.
+  check('после отправки история пересохранена (статус sent)',
+    d.historyCalls.length >= 2, d.historyCalls.length);
   check('api.sendMessage вызван с шифротекстом (ENC(...))',
     apiMock.sent.length === 1 && apiMock.sent[0][0] === 'msg' && String(apiMock.sent[0][2]).startsWith('ENC('));
   check('статус предпросмотра → sent', d.chat.list()[0].status === 'sent');
@@ -267,7 +283,20 @@ console.log('5. сбой api.sendMessage → статус failed');
   await tick();
   check('предпросмотр статус failed при сбое', d.chat.list()[0] && d.chat.list()[0].status === 'failed');
   // restore
-  apiMock.sendMessage = async (to, content) => { apiMock.sent.push(['msg', to, content]); };
+  apiMock.sendMessage = async (to, content) => { apiMock.sent.push(['msg', to, content]); (globalThis.__order || []).push('send'); };
+}
+
+// ── Исчезающие сообщения: TTL из kv → таймер взводится ────────────────────
+console.log('исчезающее сообщение: TTL → таймер');
+{
+  const d = makeDeps();
+  globalThis.__order = d.order;
+  globalThis.__ttl = () => 300;                 // чат с TTL
+  d.chat.state.newMessage = 'исчезающий текст';
+  await S.sendMessage(d);
+  globalThis.__ttl = () => 0;                  // возвращаем как было
+  check('исчезающее: таймер взведён (scheduleEphemeral)',
+    d.scheduleEphemeralCalls.length === 1, d.scheduleEphemeralCalls);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

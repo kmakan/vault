@@ -41,7 +41,6 @@
     "mailbox-api-deps-smoke.mjs",
     "mailbox-store-smoke.mjs",
     "merge-emails-smoke.mjs",
-    "messages-smoke.mjs",
     "messages-store-smoke.mjs",
     "migrations-smoke.mjs",
     "poll-smoke.mjs",
@@ -54,7 +53,6 @@
     "relay-store-smoke.mjs",
     "report-content-smoke.mjs",
     "restore-failure-smoke.mjs",
-    "send-smoke.mjs",
     "sending-store-smoke.mjs",
     "session-store-smoke.mjs",
     "video-smoke.mjs"
