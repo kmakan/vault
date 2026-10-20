@@ -1,5 +1,20 @@
 // Feature module: звонки (сигнализация конвертами call_* + state machine).
-// Этап 5 декомпозиции App.vue — изоляция фич-доменов (ctx-паттерн).
+// ADR-005 W2 (`t_bcb8927a`), партия 7: модуль больше НЕ читает компонент.
+//
+// СОСТОЯНИЕ — У ВЛАДЕЛЬЦЕВ (ADR-004), ЭФФЕКТЫ — ЯВНЫЙ deps (ADR-005 R3):
+//   · `peerKeys`/`peerPqKeys` — владелец identity-store;
+//   · `activeChat`/`activeChatType` — владелец chatStore (J.3a);
+//   · состояние звонка (callState/currentCall/callStartedAt) — владелец
+//     call-session (`useSession()`; это SINGLETON, обёрнутый reactive() на
+//     уровне модуля, поэтому записи из фичи реактивны);
+//   · `chat` — per-app экземпляр чат-владельца (в deps: он создаётся в
+//     setup() компонента);
+//   · остальное (isIgnored/incUnread/save*/chatVisible/canonicalOf/msgTs/
+//     idleLoop/isAndroid/callPeerName) — эффекты, явный список в deps.
+//
+// Таймеры и колбэки (armRingTimer, ретраи, watchdog) держат ССЫЛКУ на deps:
+// deps — это набор функций, а не снимок состояния, поэтому значения читаются
+// живо (активный чат, ключи пира) — как раньше через ctx.
 //
 // Срезы домена:
 //  - дедуп: isCallSeen/rememberCallSeen (persist kv 'call-seen', 100 id);
@@ -31,7 +46,8 @@ import { delay, later } from './timing.js';
 import { fastFetcher, connLostGuard } from './call-idle.js';
 import { useSession } from './call-session.js';
 import { callResender, callRequestResender } from './call-resend.js';
-import { sessionStore, uiStore } from './session-store.js';
+import { sessionStore, uiStore, chatStore } from './session-store.js';
+import { identityStore } from './identity-store.js';
 const terminalSender = createTerminalSender();
 
 // ── Ретрансляция сигналов: ЗАТУХАЮЩАЯ, с КОНЕЧНЫМ числом повторов ──
@@ -113,10 +129,10 @@ const ringTimer = createRingTimer();
 // затем (асинхронно) уточняется реальной настройкой. Гонка учтена:
 // если за это время звонок уже снят/принят (callRingTimer !== null
 // меняется на null) — переставлять таймер нельзя.
-function armRingTimer(ctx, fallbackMs = DEFAULT_RING_MS) {
+function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
   const start = (ms) => {
     if (!useSession().currentCall || useSession().callState !== 'incoming_ringing') return;
-    useSession().setCallRingTimer(ringTimer.start(ms, () => cancelCall(ctx, 'timeout')));
+    useSession().setCallRingTimer(ringTimer.start(ms, () => cancelCall(deps, 'timeout')));
   };
   start(fallbackMs);
   fetchRingDurationMs().then((ms) => {
@@ -161,7 +177,7 @@ export async function mediaCallJoinBridge(callId, participantKeys) {
 }
 
 // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
-export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
+export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
   const body = {
     vault: 1,
     id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
@@ -212,7 +228,7 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
       // Раньше это было видно только по косвенным метрикам релея.
       let peerFp = null;
       try {
-        const publicKey = ctx.peerKeys[peer];
+        const publicKey = identityStore.state.peerKeys[peer];
         if (publicKey) {
           peerFp = await relay.fingerprintOf(publicKey);
         }
@@ -270,12 +286,12 @@ export async function sendCallEnvelope(ctx, peer, payload, opts = {}) {
 }
 
 // Входящий сигнал → state machine. MVP: один звонок одновременно.
-export async function handleCallSignal(ctx, sig, from) {
+export async function handleCallSignal(deps, sig, from) {
   const { call_id, type } = sig;
   if (!call_id || !from) return;
   // Ignore-лист: звонки заблокированного гасятся до state machine —
   // ни рингтона, ни оверлея, ни «пропущенного» в истории.
-  if (ctx.isIgnored(from)) return;
+  if (deps.isIgnored(from)) return;
   console.log('[call] signal', type, call_id, 'from', from, 'state=' + useSession().callState,
     'current=' + (useSession().currentCall ? useSession().currentCall.call_id : 'null'));
   // M2.4: call-конверт несёт tok отправителя (адрес его relay-очереди).
@@ -293,7 +309,7 @@ export async function handleCallSignal(ctx, sig, from) {
           // Add peerFp if available
           let peerFp = null;
           try {
-            const publicKey = ctx.peerKeys[from];
+            const publicKey = identityStore.state.peerKeys[from];
             if (publicKey) {
               peerFp = await relay.fingerprintOf(publicKey);
             }
@@ -325,7 +341,7 @@ export async function handleCallSignal(ctx, sig, from) {
     // чата. Только при ПЕРВОМ появлении call_id (alreadySeen=false) —
     // иначе повторный фетч Спада после рестарта плодил дубли пилюль.
     if (type === 'call_request' && !alreadySeen) {
-      await recordCallEvent(ctx, from, 'missed', sig.ts, 0, call_id);
+      await recordCallEvent(deps, from, 'missed', sig.ts, 0, call_id);
     }
     return;
   }
@@ -344,9 +360,9 @@ export async function handleCallSignal(ctx, sig, from) {
   // Чужой звонок во время активного — отвечаем занято (call_reject).
   if (useSession().callState !== 'idle' && useSession().currentCall
       && useSession().currentCall.call_id !== call_id && type === 'call_request') {
-    await sendCallEnvelope(ctx, from, { type: 'call_reject', call_id });
+    await sendCallEnvelope(deps, from, { type: 'call_reject', call_id });
     // Пропущенные вызовы: мы говорили по другому звонку
-    await recordCallEvent(ctx, from, 'missed', sig.ts, 0, call_id);
+    await recordCallEvent(deps, from, 'missed', sig.ts, 0, call_id);
     return;
   }
   switch (type) {
@@ -360,7 +376,7 @@ export async function handleCallSignal(ctx, sig, from) {
       // machine зависла в ringing от старого конверта без currentCall.
       if (useSession().callState !== 'idle' && useSession().callState !== 'active') {
         console.warn('[call] forcing reset before new request (state=' + useSession().callState + ')');
-        await hangup(ctx, 'preempt');
+        await hangup(deps, 'preempt');
       }
       if (useSession().callState !== 'idle') return;
       // OFFER В call_request: звонящий создаёт offer ДО набора
@@ -375,30 +391,30 @@ export async function handleCallSignal(ctx, sig, from) {
       useSession().setLastCallId(call_id);
       useSession().setCallState('incoming_ringing');
       useSession().setMuted(false);
-      ctx.callStartedAt = Date.now();
+      useSession().state.callStartedAt = Date.now();
       console.log('[call] incoming_ringing SET for', call_id, 'from', from);
       // Звук входящего: WAV-рингтон «кристальный чайм».
       // Desktop — cpal в Rust (слышен при свёрнутом окне).
       // Android: в фоне/закрытом WebView HTML5-Audio глохнет — рингтон там
       // нативный MediaPlayer (showIncomingCall). В ВИДИМОМ WebView (приложение
       // открыто) нативный звонок подавлен — HTML5 работает, играем сами.
-      if (!ctx.isAndroid || document.visibilityState === 'visible') {
-        playCallSound(ctx, 'incoming', true);
+      if (!deps.isAndroid() || document.visibilityState === 'visible') {
+        playCallSound(deps, 'incoming', true);
       }
       // Full-screen уведомление: Android — системный звонок поверх локскрина.
       // При ОТКРЫТОМ приложении UI = CallOverlay (свайпы) — системное
       // уведомление не поднимаем (контракт A), иначе дубль с оверлеем.
       // Desktop — no-op. Снимается в hangup().
-      if (!(ctx.isAndroid && document.visibilityState === 'visible')) {
-        api.mediaShowIncomingCall(ctx.callPeerName || from);
+      if (!(deps.isAndroid() && document.visibilityState === 'visible')) {
+        api.mediaShowIncomingCall(deps.callPeerName() || from);
       }
-      startFastPolling(() => ctx.idleLoop(), useSession().callIdleMonitorUp);
+      startFastPolling(() => deps.idleLoop(), useSession().callIdleMonitorUp);
       // Таймер гудка: длительность из настроек (SettingsPage → kv
       // 'call-ring-duration', секунды). Читаем АСИНХРОННО и НЕ блокируем
       // state machine: если kv не ответил — дефолт 180с (было хардкодом).
       // 180с вместо прежних 90с: call_accept/answer по почте идут долго
       // (SMTP+доставка+IMAP), звонок «сгорал» до ответа собеседника.
-      armRingTimer(ctx, DEFAULT_RING_MS);
+      armRingTimer(deps, DEFAULT_RING_MS);
       // S5-2 (контракт C): юзер уже нажал «Ответить»/«Отклонить» в
       // уведомлении, пока приложение поднималось. Звонок только что
       // появился в incoming_ringing — применяем накопленное решение один
@@ -408,8 +424,8 @@ export async function handleCallSignal(ctx, sig, from) {
         const act = pendingNativeCallDecision;
         pendingNativeCallDecision = null;
         console.log('[call] applying native button decision:', act, 'for', call_id);
-        if (act === 'accept') await acceptCall(ctx);
-        else await rejectCall(ctx);
+        if (act === 'accept') await acceptCall(deps);
+        else await rejectCall(deps);
       }
       break;
     }
@@ -424,13 +440,13 @@ export async function handleCallSignal(ctx, sig, from) {
         callRequestResender.stop();
         // Гудки исходящего → чайм соединения. stop не нужен
         // play сам останавливает предыдущий звук (Rust/HTML5).
-        playCallSound(ctx, 'connect', false);
+        playCallSound(deps, 'connect', false);
         useSession().setCallState('active');
         // Таймер НЕ запускаем: ждём событие call-media-connected
         // из Rust (реальный звук). Предохранитель 120с — если событие
         // потерялось, показываем таймер хоть когда-нибудь.
         useSession().setCallMediaConnected(false);
-        armMediaFallback(ctx);
+        armMediaFallback(deps);
         // OFFER В call_request: если мы создали offer при наборе
         // (hasLocalOffer) — sdp в call_accept это ANSWER: ставим remote,
         // DTLS-SRTP устанавливается. Fallback (старая схема): sdp это
@@ -445,15 +461,15 @@ export async function handleCallSignal(ctx, sig, from) {
             }
           } else {
             try {
-              const r = await api.mediaAcceptIncoming(call_id, sig.sdp, ctx.peerKeys[from] || '', sig.kemct || null, true);
+              const r = await api.mediaAcceptIncoming(call_id, sig.sdp, identityStore.state.peerKeys[from] || '', sig.kemct || null, true);
               console.log('[call] callee offer accepted, answer created,', (r.sdp || '').length, 'bytes');
               const answerPayload = { type: 'call_sdp', call_id, sdp: r.sdp, role: 'answer' };
-              await sendCallEnvelope(ctx, from, answerPayload);
+              await sendCallEnvelope(deps, from, answerPayload);
               console.log('[call] answer sent OK — waiting for DTLS');
               // Ретрансляция answer: если письмо потеряется
               // принимающий зависнет в «Соединение…». Повторяем каждые
               // 10с до соединения медиа.
-              startSignalResend(ctx, from, answerPayload, call_id);
+              startSignalResend(deps, from, answerPayload, call_id);
             } catch (e) {
               console.error('[call] media accept failed:', e && e.message || e);
             }
@@ -473,10 +489,10 @@ export async function handleCallSignal(ctx, sig, from) {
       if (useSession().currentCall && useSession().currentCall.call_id === call_id) {
         // remote_reject — отдельно от remote: звонящий увидит
         // «Вызов отклонён», а не «Нет ответа».
-        hangup(ctx, type === 'call_reject' ? 'remote_reject' : 'remote');
+        hangup(deps, type === 'call_reject' ? 'remote_reject' : 'remote');
       } else if (useSession().lastCallId === call_id && useSession().callState === 'idle') {
         console.log('[call] remote end after local hangup — ensuring cleanup');
-        hangup(ctx, 'remote_late');
+        hangup(deps, 'remote_late');
       }
       // ЗАПОМНИТЬ ТЕРМИНАЛЬНЫЙ call_id ВСЕГДА
       // доставки (INBOX/All Mail/Спам — разные копии, порядок не
@@ -518,19 +534,19 @@ export async function handleCallSignal(ctx, sig, from) {
 
 // ── Lifecycle ──────────────────────────────────────────────────
 // Кнопка «Позвонить» в шапке чата (1:1, есть ключ собеседника).
-export async function startCall(ctx) {
-  const peer = ctx.activeChat;
-  if (!peer || peer === '__notes__' || ctx.activeChatType !== 'chat') return;
-  if (useSession().callState !== 'idle' || !ctx.peerKeys[peer]) return;
+export async function startCall(deps) {
+  const peer = chatStore.state.activeChat;
+  if (!peer || peer === '__notes__' || chatStore.state.activeChatType !== 'chat') return;
+  if (useSession().callState !== 'idle' || !identityStore.state.peerKeys[peer]) return;
   const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   useSession().setCurrentCall({ call_id, peer });
   useSession().setLastCallId(call_id);
   useSession().setCallState('outgoing_ringing');
   useSession().setMuted(false);
-  startFastPolling(() => ctx.idleLoop(), useSession().callIdleMonitorUp);
+  startFastPolling(() => deps.idleLoop(), useSession().callIdleMonitorUp);
   // для call_accept может превысить 180с, и звонок сгорал до ответа;
   // окончательно решает call_reject/call_cancel от собеседника).
-  useSession().setCallRingTimer(ringTimer.start(300000, () => cancelCall(ctx, 'timeout')));
+  useSession().setCallRingTimer(ringTimer.start(300000, () => cancelCall(deps, 'timeout')));
   // ВАЖНО: сигнал call_request отправляем ДО гудков. cpal-гудок
   // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
   // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не
@@ -546,7 +562,7 @@ export async function startCall(ctx) {
   // старую схему (offer принимающего внутри call_accept).
   let offerSdp = null;
   try {
-    const r = await api.mediaStartOutgoing(call_id, ctx.peerKeys[peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[peer]) || null, true);
+    const r = await api.mediaStartOutgoing(call_id, identityStore.state.peerKeys[peer] || '', (identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[peer]) || null, true);
     offerSdp = r.sdp;
     // PQ: kemct из SdpResult — поедет в call_request-конверте
     // принимающий передаст в mediaAcceptIncoming для гибридного ключа.
@@ -564,10 +580,10 @@ export async function startCall(ctx) {
   // в тишине и не понимал, идёт ли звонок. Релей-копия уходит за ~1с
   // (relayPublish в sendCallEnvelope не блокирует), SMTP-письмо —
   // медленный дублирующий канал, пусть идёт в фоне.
-  playCallSound(ctx, 'outgoing', true);
+  playCallSound(deps, 'outgoing', true);
   try {
     // PQ: kemct/sender_ek из mediaStartOutgoing → в конверт.
-    await sendCallEnvelope(ctx, peer, {
+    await sendCallEnvelope(deps, peer, {
       type: 'call_request', call_id, sdp: offerSdp,
       kemct: useSession().pendingKemct || undefined,
       sender_ek: useSession().pendingSenderEk || undefined,
@@ -575,7 +591,7 @@ export async function startCall(ctx) {
     useSession().setPendingKemct(null); useSession().setPendingSenderEk(null);
   } catch (e) {
     console.error('call_request failed:', e);
-    hangup(ctx, 'error');
+    hangup(deps, 'error');
     return;
   }
   // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
@@ -590,7 +606,7 @@ export async function startCall(ctx) {
   callRequestResender.start(
     () => useSession().callState === 'outgoing_ringing' && !!useSession().currentCall
       && useSession().currentCall.call_id === call_id,
-    () => sendCallEnvelope(ctx, peer, {
+    () => sendCallEnvelope(deps, peer, {
       type: 'call_request', call_id, sdp: offerSdp,
       kemct: useSession().pendingKemct || undefined,
       sender_ek: useSession().pendingSenderEk || undefined,
@@ -601,21 +617,21 @@ export async function startCall(ctx) {
   );
 }
 
-export async function acceptCall(ctx) {
+export async function acceptCall(deps) {
   const c = useSession().currentCall;
   if (!c || useSession().callState !== 'incoming_ringing') return;
   // Ответили — рингтон и таймер отмены в сторону, чайм соединения.
   // stop не нужен: play сам останавливает предыдущий звук.
   ringTimer.stop();
   useSession().setCallRingTimer(null);
-  playCallSound(ctx, 'connect', false);
+  playCallSound(deps, 'connect', false);
   // что вызов жив. Гудим исходящим гудком (зацикленно) до media-connected
   // Задержка 1.2с перед запуском исходящего гудка — даёт время установиться
   // media-каналу (иначе гудок зациклен 3с и слышен артефакт). Fire-and-forget
   // через timing.js → в calls.js нет bare setTimeout (ADR-004 G).
   later(() => {
     if (useSession().callState === 'active' && !useSession().callMediaConnected) {
-      playCallSound(ctx, 'outgoing', true);
+      playCallSound(deps, 'outgoing', true);
     }
   }, 1200);
   useSession().setCallState('active');
@@ -629,7 +645,7 @@ export async function acceptCall(ctx) {
   // Таймер НЕ запускаем: ждём событие call-media-connected
   // из Rust (реальный звук). Предохранитель 120с — см. armMediaFallback.
   useSession().setCallMediaConnected(false);
-  armMediaFallback(ctx);
+  armMediaFallback(deps);
   // OFFER В call_request: если offer звонящего пришёл в первом
   // письме — сразу создаём ANSWER и шлём его внутри call_accept. После
   // accept+offer → answer). Fallback (старая версия звонящего без
@@ -637,43 +653,43 @@ export async function acceptCall(ctx) {
   try {
     let acceptPayload;
     if (c.offerSdp) {
-      const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, ctx.peerKeys[c.peer] || '', c.kemct || null, true);
+      const r = await api.mediaAcceptIncoming(c.call_id, c.offerSdp, identityStore.state.peerKeys[c.peer] || '', c.kemct || null, true);
       console.log('[call] caller offer accepted, answer created,', (r.sdp || '').length, 'bytes, sending in call_accept');
       acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp, role: 'answer' };
     } else {
-      const r = await api.mediaStartOutgoing(c.call_id, ctx.peerKeys[c.peer] || '', (ctx.peerPqKeys && ctx.peerPqKeys[c.peer]) || null, true);
+      const r = await api.mediaStartOutgoing(c.call_id, identityStore.state.peerKeys[c.peer] || '', (identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[c.peer]) || null, true);
       console.log('[call] offer (callee fallback) created,', (r.sdp || '').length, 'bytes, sending in call_accept');
       acceptPayload = { type: 'call_accept', call_id: c.call_id, sdp: r.sdp };
     }
-    await sendCallEnvelope(ctx, c.peer, acceptPayload);
+    await sendCallEnvelope(deps, c.peer, acceptPayload);
     console.log('[call] call_accept + sdp sent OK');
     // Ретрансляция call_accept: письмо может потеряться
     // тогда звонящий будет гудеть вечно. Повторяем каждые 10с, пока
     // медиа не соединится (stopSignalResend в media-connected/hangup).
-    startSignalResend(ctx, c.peer, acceptPayload, c.call_id);
+    startSignalResend(deps, c.peer, acceptPayload, c.call_id);
   } catch (e) {
     console.error('[call] media start (callee) failed:', e);
     // Медиа не поднялось, но звонок всё равно принимаем — сигнал важнее.
     // показываем ошибку в UI — на Android иначе не
     // увидеть, почему webrtc-rs не поднимает медиа (logcat недоступен).
     uiStore.toast('media start failed: ' + (e && e.message || e), 10000);
-    try { await sendCallEnvelope(ctx, c.peer, { type: 'call_accept', call_id: c.call_id }); }
+    try { await sendCallEnvelope(deps, c.peer, { type: 'call_accept', call_id: c.call_id }); }
     catch (e2) { console.error('call_accept failed:', e2); }
   }
 }
 
-export async function rejectCall(ctx) {
+export async function rejectCall(deps) {
   const c = useSession().currentCall;
   if (c) {
     // Повтор call_reject — см. sendTerminalRepeat.
-    sendTerminalRepeat(ctx, c.peer, 'call_reject', c.call_id);
+    sendTerminalRepeat(deps, c.peer, 'call_reject', c.call_id);
     // Фаза 3: решение монитору-владельцу (нет missed поверх).
     api.reportCallState(c.call_id, 'reject');
   }
-  hangup(ctx, 'reject');
+  hangup(deps, 'reject');
 }
 
-export async function endCall(ctx) {
+export async function endCall(deps) {
   const c = useSession().currentCall;
   if (c && useSession().callState === 'active') {
     // «hangup» по WebRTC DataChannel
@@ -682,13 +698,13 @@ export async function endCall(ctx) {
     api.mediaSendHangup(c.call_id);
     // Email-сигнал остаётся как fallback (DC мог не открыться):
     // 3 попытки: сразу, +3с, +7с.
-    sendTerminalRepeat(ctx, c.peer, 'call_end', c.call_id);
+    sendTerminalRepeat(deps, c.peer, 'call_end', c.call_id);
   }
-  hangup(ctx, 'end');
+  hangup(deps, 'end');
 }
 
 // Локальный сброс состояния (после сигнала, отмены или таймаута).
-export async function hangup(ctx, reason) {
+export async function hangup(deps, reason) {
   const c = useSession().currentCall;
   const callId = c ? c.call_id : null;
   const wasActive = useSession().callState === 'active';
@@ -719,14 +735,14 @@ export async function hangup(ctx, reason) {
       else if (reason === 'remote' || reason === 'remote_late') kind = 'no_answer';
       else if (reason === 'cancel') kind = 'canceled';
     }
-    if (kind) recordCallEvent(ctx, c.peer, kind, Date.now(), dur, callId);
+    if (kind) recordCallEvent(deps, c.peer, kind, Date.now(), dur, callId);
   }
   ringTimer.stop();
   useSession().setCallRingTimer(null);
   // Ретрансляция call_request — тоже останавливаем (callRequestResender).
   callRequestResender.stop();
   // Ретрансляция call_accept/answer (callResender).
-  stopSignalResend(ctx);
+  stopSignalResend(deps);
   // Предохранитель «Соединение…» (watchdog 90с — owner mediaWatchdog).
   mediaWatchdog.stop();
   // Grace-таймер ICE disconnected (fire-and-forget из timing.js).
@@ -750,15 +766,15 @@ export async function hangup(ctx, reason) {
   // (Rust/HTML5), поэтому отдельный stop перед play не вызываем —
   // только если звука не будет вовсе.
   if (wasActive) {
-    playCallSound(ctx, 'end', false);
+    playCallSound(deps, 'end', false);
   } else if (wasIncoming && (reason === 'timeout' || reason === 'reject'
       || reason === 'cancel' || reason === 'remote' || reason === 'preempt')) {
-    playCallSound(ctx, 'missed', false);
+    playCallSound(deps, 'missed', false);
   } else if (wasOutgoing && (reason === 'remote' || reason === 'timeout')) {
     // Звонящий: собеседник отклонил/отменил или гудки сгорели — отбой.
-    playCallSound(ctx, 'end', false);
+    playCallSound(deps, 'end', false);
   } else {
-    stopCallSound(ctx);
+    stopCallSound(deps);
   }
   // Фаза 2: закрываем медиа-канал (webrtc-rs PeerConnection).
   if (callId) {
@@ -766,7 +782,7 @@ export async function hangup(ctx, reason) {
   }
 }
 
-export async function cancelCall(ctx, reason) {
+export async function cancelCall(deps, reason) {
   const c = useSession().currentCall;
   // таймер гудка (ringing)
   // может сработать ПОЗЖЕ, чем call_accept дошёл по почте (SMTP с
@@ -784,9 +800,9 @@ export async function cancelCall(ctx, reason) {
   // Повтор сигнала: 3 попытки — см. sendTerminalRepeat.
   if (c) {
     const type = useSession().callState === 'active' ? 'call_end' : 'call_cancel';
-    sendTerminalRepeat(ctx, c.peer, type, c.call_id);
+    sendTerminalRepeat(deps, c.peer, type, c.call_id);
   }
-  hangup(ctx, reason || 'cancel');
+  hangup(deps, reason || 'cancel');
 }
 
 // ── Отбой письма (DSN/bounce): гасим висящий исходящий вызов ──────────
@@ -805,7 +821,7 @@ export async function cancelCall(ctx, reason) {
 //
 // recipients: адреса, которым НЕ доставили (может быть пусто — неизвестный
 // формат). reason: текст ошибки SMTP (для тоста и логов).
-export async function onMailBounce(ctx, recipients = [], reason = '') {
+export async function onMailBounce(deps, recipients = [], reason = '') {
   const c = useSession().currentCall;
   // Реагируем только на ВИСЯЩИЙ ИСХОДЯЩИЙ вызов: живой разговор отбой
   // письма не касается, входящий звонок — тем более.
@@ -817,7 +833,7 @@ export async function onMailBounce(ctx, recipients = [], reason = '') {
     return false;
   }
   const canon = (v) => {
-    try { return String(ctx.canonicalOf(v) || v || '').toLowerCase(); }
+    try { return String(deps.canonicalOf(v) || v || '').toLowerCase(); }
     catch (e) { return String(v || '').toLowerCase(); }
   };
   const peer = canon(c.peer);
@@ -838,7 +854,7 @@ export async function onMailBounce(ctx, recipients = [], reason = '') {
   } catch (e) { /* тост не критичен */ }
   // cancelCall: шлём собеседнику call_cancel (если он всё-таки получил
   // конверт релеем) и записываем пилюлю 'undeliverable'.
-  await cancelCall(ctx, 'bounce');
+  await cancelCall(deps, 'bounce');
   return true;
 }
 
@@ -847,9 +863,9 @@ export async function onMailBounce(ctx, recipients = [], reason = '') {
 // Пилюля — обычное сообщение с полем callEvent; персистится в sqlite
 // вместе с историей (saveCurrentHistory) и в chat-cache (slim-маппер
 // сохраняет callEvent). Текст рендерится через t() — язык из настроек.
-export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) {
+export async function recordCallEvent(deps, peer, kind, ts, durationSec, callId) {
   if (!peer || !callId) return;
-  const chatKey = ctx.canonicalOf(peer) || peer;
+  const chatKey = deps.canonicalOf(peer) || peer;
   const tsNum = Number(ts) || Date.now();
   const msg = {
     id: 'call-' + callId,
@@ -862,12 +878,12 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
     callEvent: { kind, duration: Number(durationSec) || 0, call_id: callId },
   };
   // Дедуп: один call_id — одна пилюля (повторный фетч/ретрансляция).
-  const exists = ctx.chat.state.messages.some(m => m && m.id === msg.id);
-  if (!exists && ctx.activeChat === chatKey && ctx.activeChatType === 'chat') {
-    ctx.chat.append(msg);
-    ctx.chat.sortBy((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
-    ctx.saveCurrentHistory(chatKey);
-    ctx.saveChatCache(chatKey, ctx.chat.state.messages);
+  const exists = deps.chat.state.messages.some(m => m && m.id === msg.id);
+  if (!exists && chatStore.state.activeChat === chatKey && chatStore.state.activeChatType === 'chat') {
+    deps.chat.append(msg);
+    deps.chat.sortBy((a, b) => deps.msgTs(a) - deps.msgTs(b));
+    deps.saveCurrentHistory(chatKey);
+    deps.saveChatCache(chatKey, deps.chat.state.messages);
     uiStore.scrollToBottom(true);
   } else if (!exists) {
     // Чат не открыт — дописываем пилюлю в сохранённую историю напрямую,
@@ -879,16 +895,16 @@ export async function recordCallEvent(ctx, peer, kind, ts, durationSec, callId) 
       const hist = (await loadHistory(sessionStore.getCurrentEmail(), chatKey)) || [];
       if (!hist.some(m => m && m.id === msg.id)) {
         hist.push(msg);
-        hist.sort((a, b) => ctx.msgTs(a) - ctx.msgTs(b));
+        hist.sort((a, b) => deps.msgTs(a) - deps.msgTs(b));
         await saveHistory(sessionStore.getCurrentEmail(), chatKey, hist);
       }
     } catch (e) { /* sqlite недоступен — не критично */ }
   }
   // Бейдж непрочитанных: пропущенный входящий — как непрочитанное
   // сообщение, если чат сейчас не виден.
-  if (kind === 'missed' && !ctx.chatVisible(chatKey)) {
-    ctx.incUnread(chatKey);
-    await ctx.saveUnreadCounts();
+  if (kind === 'missed' && !deps.chatVisible(chatKey)) {
+    deps.incUnread(chatKey);
+    await deps.saveUnreadCounts();
   }
 }
 
@@ -928,8 +944,8 @@ export function canCallBack({ expCalls, callState, activeChatType, peerKeys, act
       && peerKeys[activeChat]);
 }
 
-export function callBack(ctx) {
-  startCall(ctx);
+export function callBack(deps) {
+  startCall(deps);
 }
 
 // ── Микрофон/динамик ───────────────────────────────────────────
@@ -965,7 +981,7 @@ export function toggleSpeaker({ callSpeaker, currentCall }) {
 // сбрасывается»). Дубликаты безопасны: приёмник игнорирует их по
 // состоянию (call_accept — только в outgoing_ringing, call_sdp —
 // только в active с тем же call_id).
-export function startSignalResend(ctx, peer, payload, call_id) {
+export function startSignalResend(deps, peer, payload, call_id) {
   if (!useSession().currentCall || useSession().currentCall.call_id !== call_id) return;
   // Таймер/попытки — callResender (createCallResender, call-resend.js).
   // shouldContinue гасит ресенд при смене звонка/call_state/media-connected.
@@ -974,12 +990,12 @@ export function startSignalResend(ctx, peer, payload, call_id) {
       && useSession().callState === 'active' && !useSession().callMediaConnected,
     // Релей-копия уже доставлена первым отправлением — повтор только
     // почтой (лимит + лишние пуши).
-    () => sendCallEnvelope(ctx, peer, payload, { viaRelay: false })
+    () => sendCallEnvelope(deps, peer, payload, { viaRelay: false })
       .then(() => console.log('[call] signal retransmitted:', payload.type, call_id))
   );
 }
 
-export function stopSignalResend(ctx) {
+export function stopSignalResend(deps) {
   callResender.stop();
 }
 
@@ -987,7 +1003,7 @@ export function stopSignalResend(ctx) {
 // если письмо потеряется, собеседник останется с поднятой трубкой
 // навсегда. Ещё 2 попытки через 3с и 7с (fire-and-forget). Дубликаты
 // у приёмника безопасны (ветка remote_late / guard по state).
-export function sendTerminalRepeat(ctx, peer, type, call_id) {
+export function sendTerminalRepeat(deps, peer, type, call_id) {
   // ПЕРВОЕ отправление — и в релей, и почтой. Раньше здесь стоял
   // viaRelay:false с комментарием «релей-копия ушла первым отправлением»,
   // но первого отправления через релей НЕ БЫЛО вообще: все три попытки
@@ -995,11 +1011,11 @@ export function sendTerminalRepeat(ctx, peer, type, call_id) {
   // 15-60с (жалоба: «на десктопе долго идут гудки после отбоя на
   // телефоне»). wake=false и так стоит — терминальный сигнал не должен
   // поднимать уведомление на том конце.
-  sendCallEnvelope(ctx, peer, { type, call_id }).catch(() => {});
+  sendCallEnvelope(deps, peer, { type, call_id }).catch(() => {});
   // Повторы — только почтой: релей-копия уже лежит в очереди получателя,
   // повтор на релей жёг бы суточный лимит издателя.
-  terminalSender.repeat(3000, () => sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
-  terminalSender.repeat(7000, () => sendCallEnvelope(ctx, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
+  terminalSender.repeat(3000, () => sendCallEnvelope(deps, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
+  terminalSender.repeat(7000, () => sendCallEnvelope(deps, peer, { type, call_id }, { viaRelay: false }).catch(() => {}));
 }
 
 // ── Watchdog + часы ────────────────────────────────────────────
@@ -1012,7 +1028,7 @@ export function sendTerminalRepeat(ctx, peer, type, call_id) {
 // через mediaWatchdog.stop() (см. hangup выше).
 const mediaWatchdog = createMediaWatchdog();
 
-export function armMediaFallback(ctx) {
+export function armMediaFallback(deps) {
   const onTimeout = () => {
     if (useSession().callState !== 'active' || useSession().callMediaConnected) return;
     console.warn('[call] media not connected in 90s — auto hangup');
@@ -1020,8 +1036,8 @@ export function armMediaFallback(ctx) {
     // Сообщаем собеседнику, чтобы у него тоже легла трубка
     // (он может висеть в таком же «Соединение…»).
     const c = useSession().currentCall;
-    if (c) sendTerminalRepeat(ctx, c.peer, 'call_end', c.call_id);
-    hangup(ctx, 'connect_timeout');
+    if (c) sendTerminalRepeat(deps, c.peer, 'call_end', c.call_id);
+    hangup(deps, 'connect_timeout');
   };
   useSession().setMediaFallbackTimer(mediaWatchdog.start(onTimeout));
 }
@@ -1050,7 +1066,7 @@ export function stopFastPolling() {
 // и this.isAndroid() бросает TypeError. Синхронный бросок рвал
 // acceptCall ДО отправки call_accept. Плюс: функция НИКОГДА не
 // должна бросать — звук вторичен, сигнализация звонка важнее.)
-export function playCallSound(ctx, name, looped) {
+export function playCallSound(deps, name, looped) {
   try {
     // Настройки звонков: пользователь мог выбрать другой рингтон
     // (Настройки → Звонки). Маппим incoming/outgoing на выбранный вариант.
@@ -1058,8 +1074,8 @@ export function playCallSound(ctx, name, looped) {
     const ringOut = useSession().callRingtoneOutgoing || 'outgoing';
     if (name === 'incoming') name = ringIn;
     else if (name === 'outgoing') name = ringOut;
-    if (ctx.isAndroid) {
-      stopCallSound(ctx);
+    if (deps.isAndroid()) {
+      stopCallSound(deps);
       const el = new Audio('/sounds/ring_' + name + '.wav');
       el.loop = !!looped;
       el.volume = 0.85;
@@ -1078,13 +1094,13 @@ export function playCallSound(ctx, name, looped) {
   }
 }
 
-export function stopCallSound(ctx) {
+export function stopCallSound(deps) {
   try {
     if (useSession().callSoundEl) {
       try { useSession().callSoundEl.pause(); } catch (_) {}
       useSession().setSoundEl(null);
     }
-    if (!ctx.isAndroid) {
+    if (!deps.isAndroid()) {
       api.mediaSoundStop().catch(() => {});
     }
   } catch (e) {

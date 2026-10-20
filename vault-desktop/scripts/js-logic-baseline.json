@@ -1,14 +1,13 @@
 {
   "measuredAt": "2026-10-19",
   "totals": {
-    "ctxRefSites": 208,
+    "ctxRefSites": 169,
     "appVueOwn": 193,
     "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
   },
   "ctxByFile": {
-    "features/calls.js": 39,
     "features/channels.js": 6,
     "features/drafts.js": 9,
     "features/duress.js": 26,
@@ -23,25 +22,6 @@
     "features/receipts.js": 17
   },
   "ctxFieldsByFile": {
-    "features/calls.js": [
-      "activeChat",
-      "activeChatType",
-      "callPeerName",
-      "callStartedAt",
-      "canonicalOf",
-      "chat",
-      "chatVisible",
-      "idleLoop",
-      "incUnread",
-      "isAndroid",
-      "isIgnored",
-      "msgTs",
-      "peerKeys",
-      "peerPqKeys",
-      "saveChatCache",
-      "saveCurrentHistory",
-      "saveUnreadCounts"
-    ],
     "features/channels.js": [
       "channelById",
       "noteChannelHello",

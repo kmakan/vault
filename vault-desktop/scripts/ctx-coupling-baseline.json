@@ -1,7 +1,7 @@
 {
-  "totalCtxRefs": 187,
+  "totalCtxRefs": 153,
   "totalFunctions": 313,
-  "functionsWithCtx": 85,
+  "functionsWithCtx": 74,
   "modules": {
     "src/features/attachments.js": {
       "ctxRefs": 0,
@@ -74,26 +74,10 @@
       "biggestCtxFn": null
     },
     "src/features/calls.js": {
-      "ctxRefs": 34,
-      "fields": [
-        "activeChat",
-        "activeChatType",
-        "callPeerName",
-        "callStartedAt",
-        "canonicalOf",
-        "chatVisible",
-        "idleLoop",
-        "isAndroid",
-        "isIgnored",
-        "msgTs",
-        "peerKeys",
-        "peerPqKeys",
-        "saveChatCache",
-        "saveCurrentHistory",
-        "saveUnreadCounts"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 33,
-      "functionsWithCtx": 25,
+      "functionsWithCtx": 14,
       "biggestCtxFn": "startCall"
     },
     "src/features/channels-store.js": {

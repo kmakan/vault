@@ -5,7 +5,8 @@ import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createCallSession, callSession } from '../src/features/call-session.js';
 import { createCallResender, callResender, callRequestResender } from '../src/features/call-resend.js';
-import { createUiStore, uiStore } from '../src/features/session-store.js';
+import { createUiStore, uiStore, chatStore } from '../src/features/session-store.js';
+import { identityStore } from '../src/features/identity-store.js';
 // семя callSession из перегруженных полей makeCtx (ADR-004 C/D)
 const CALL_SEED_KEYS = [
   'callState', 'currentCall', 'lastCallId', 'callMuted', 'callSpeaker',
@@ -75,6 +76,9 @@ const relayMock = {
 };
 const cryptoMock = {
   encVault: [],
+  // Ключ, которым реально шифровали: без этого «зашифровано не тем ключом»
+  // неотличимо от «зашифровано правильным» (мутация ключа была невидима).
+  peerKeyUsed: null,
   encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:' + p; },
 };
 const histMock = {
@@ -84,7 +88,9 @@ const histMock = {
 };
 
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
-writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => null; export const hasPeerToken = async () => false;');
+// fingerprintOf возвращает САМ ключ: иначе «релей опубликовал с отпечатком
+// чужого ключа» неотличимо от «с правильным» (мутация ключа была невидима).
+writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => "fp:" + k; export const hasPeerToken = async () => false;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
@@ -179,13 +185,14 @@ function makeCtx(over = {}) {
     // ctx.chat.set/append/sortBy/clear, а читает через ctx.chat.state.messages.
     chat: createChatStore(),
     unreadCounts: {},
+    savedHistory: [],
     expCalls: true,
     // методы-контракты
     isIgnored: () => false,
     canonicalOf: (e) => e,
     chatVisible: () => false,
     msgTs: (m) => m.ts || 0,
-    saveCurrentHistory: () => {},
+    saveCurrentHistory: (k) => { ctx.savedHistory.push(k); },
     saveChatCache: () => {},
     scrollToBottom: () => {},
     saveUnreadCounts: async () => {},
@@ -198,6 +205,28 @@ function makeCtx(over = {}) {
   ctx.incUnread = (k) => { ctx.unreadCounts[k] = (ctx.unreadCounts[k] || 0) + 1; return ctx.unreadCounts[k]; };
   ctx.unreadOf = (k) => ctx.unreadCounts[k] || 0;
   ctx.clearUnread = (k) => { delete ctx.unreadCounts[k]; return ctx.unreadCounts; };
+  // ADR-005 W2 (партия 7): состояние — у владельцев, модуль берёт их САМ.
+  // Смоук сеет владельцев тем же, что раньше лежало в ctx.
+  identityStore.state.peerKeys = ctx.peerKeys;
+  identityStore.state.peerPqKeys = ctx.peerPqKeys;
+  chatStore.state.activeChat = ctx.activeChat;
+  chatStore.state.activeChatType = ctx.activeChatType;
+  // Контракт deps — ровно то, что собирает App.vue:callsDeps. Лежит на ctx,
+  // чтобы вызовы в смоуке читались как раньше: C.handleCallSignal(ctx.deps, …).
+  ctx.deps = {
+    chat: ctx.chat,
+    isIgnored: (e) => ctx.isIgnored(e),
+    incUnread: (k) => ctx.incUnread(k),
+    saveUnreadCounts: () => ctx.saveUnreadCounts(),
+    saveChatCache: (k, l) => ctx.saveChatCache(k, l),
+    saveCurrentHistory: (k) => ctx.saveCurrentHistory(k),
+    chatVisible: (k) => ctx.chatVisible(k),
+    canonicalOf: (e) => ctx.canonicalOf(e),
+    msgTs: (m) => ctx.msgTs(m),
+    idleLoop: () => ctx.idleLoop(),
+    isAndroid: () => ctx.isAndroid,
+    callPeerName: () => ctx.callPeerName,
+  };
   return ctx;
 }
 const toasts = [];
@@ -240,9 +269,11 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   apiMock.calls.length = 0;
   cryptoMock.encVault.length = 0;
   const ctx = makeCtx();
-  await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_request', call_id: 'c1', sdp: 'SDP1', kemct: 'K', sender_ek: 'E' });
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c1', sdp: 'SDP1', kemct: 'K', sender_ek: 'E' });
   await new Promise(r => process.nextTick(r));
   check('релей-копия ушла (wake=true для call_request)', relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === true);
+  check('релей ушёл с отпечатком КЛЮЧА ПИРА (не пустым/чужим)',
+    relayMock.pubs.length === 1 && relayMock.pubs[0].opts.peerFp === 'fp:PUB', relayMock.pubs[0] && relayMock.pubs[0].opts);
   const body = JSON.parse(cryptoMock.encVault[0]);
   check('тело: vault:1 + id + type + call_id + ts + sdp + kemct + sender_ek',
     body.vault === 1 && body.id && body.type === 'call_request' && body.call_id === 'c1' && typeof body.ts === 'number' && body.sdp === 'SDP1' && body.kemct === 'K' && body.sender_ek === 'E');
@@ -253,31 +284,31 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   relayMock.pubs.length = 0;
   const ctxRelayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r1', peer: 'peer@x.ru' } });
   relayMock.result = { ok: true };
-  await C.sendCallEnvelope(ctxRelayed, 'peer@x.ru', { type: 'call_request', call_id: 'r1' });
+  await C.sendCallEnvelope(ctxRelayed.deps, 'peer@x.ru', { type: 'call_request', call_id: 'r1' });
   await new Promise(r => process.nextTick(r));
   check('успешный релей → currentCall.relayDelivered', ctxRelayed.session.currentCall.relayDelivered === true);
   // Провал публикации (нет peer-token / лимит): флаг НЕ ставится — баунс
   // почты по-прежнему считается доказательством недоставки.
   const ctxFailed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'r2', peer: 'peer@x.ru' } });
   relayMock.result = { ok: false, why: 'no-peer-token' };
-  await C.sendCallEnvelope(ctxFailed, 'peer@x.ru', { type: 'call_request', call_id: 'r2' });
+  await C.sendCallEnvelope(ctxFailed.deps, 'peer@x.ru', { type: 'call_request', call_id: 'r2' });
   await new Promise(r => process.nextTick(r));
   check('провал релей → relayDelivered не выставлен', !ctxFailed.session.currentCall.relayDelivered);
   relayMock.result = { ok: true };
   // viaRelay=false → только почта
   relayMock.pubs.length = 0;
-  await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_end', call_id: 'c1' }, { viaRelay: false });
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_end', call_id: 'c1' }, { viaRelay: false });
   check('viaRelay=false → релей НЕ публикует, wake не важен', relayMock.pubs.length === 0);
   // терминальный сигнал: wake=false
   relayMock.pubs.length = 0;
-  await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_reject', call_id: 'c1' });
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_reject', call_id: 'c1' });
   check('терминальный сигнал → wake=false', relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === false);
   // SMTP-ретраи: 3 попытки с паузами 3с (фоновая задача)
   apiMock.calls.length = 0;
   const origSend = apiMock.sendReadReceipt;
   let fails = 0;
   apiMock.sendReadReceipt = async () => { if (fails++ < 2) throw new Error('SMTP down'); };
-  await C.sendCallEnvelope(ctx, 'peer@x.ru', { type: 'call_request', call_id: 'c2' });
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c2' });
   await new Promise(r => process.nextTick(r));
   // фоновая задача: 1-я попытка упала, ждёт setTimeout 3с
   const retryTimers = [...timers.values()].filter(t => t.kind === 't' && t.ms === 3000);
@@ -297,55 +328,55 @@ console.log('4. handleCallSignal (роутер входящих)');
   // 4a. stale-конверт (>10 мин): игнор + remember + missed-пилюля
   const ctx = makeCtx(); // activeChat=peer@x.ru (чат открыт) → пилюля в messages
   const oldTs = Date.now() - 700000;
-  await C.handleCallSignal(ctx, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
+  await C.handleCallSignal(ctx.deps, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
   check('stale: звонок не поднят', ctx.session.callState === 'idle');
   check('stale: call_id запомнен', (await C.isCallSeen(seenEmail(ctx), 'stale1')) === true);
   check('stale call_request → missed-пилюля в messages', ctx.chat.state.messages.some(m => m.id === 'call-stale1' && m.callEvent.kind === 'missed'));
   histMock.store = {};
   // повторный stale того же call_id — НЕ дублирует пилюлю
-  await C.handleCallSignal(ctx, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
+  await C.handleCallSignal(ctx.deps, { vault: 1, type: 'call_request', call_id: 'stale1', ts: oldTs }, 'peer@x.ru');
   check('повторный stale — пилюля не задвоена', ctx.chat.state.messages.filter(m => m.id === 'call-stale1').length === 1);
   // 4b. игнор-лист
   const ig = makeCtx({ isIgnored: () => true });
-  await C.handleCallSignal(ig, { vault: 1, type: 'call_request', call_id: 'ig1', ts: Date.now() }, 'peer@x.ru');
+  await C.handleCallSignal(ig.deps, { vault: 1, type: 'call_request', call_id: 'ig1', ts: Date.now() }, 'peer@x.ru');
   check('ignored: звонок погашен до state machine', ig.session.callState === 'idle');
   // 4c. новый call_request: полный подъём
   const ctx2 = makeCtx();
   apiMock.calls.length = 0;
-  await C.handleCallSignal(ctx2, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now(), sdp: 'OFFER', kemct: 'K', sender_ek: 'E' }, 'peer@x.ru');
+  await C.handleCallSignal(ctx2.deps, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now(), sdp: 'OFFER', kemct: 'K', sender_ek: 'E' }, 'peer@x.ru');
   check('call_request → incoming_ringing + currentCall', ctx2.session.callState === 'incoming_ringing' && ctx2.session.currentCall.call_id === 'new1');
   check('offer/kemct/senderEk сохранены', ctx2.session.currentCall.offerSdp === 'OFFER' && ctx2.session.currentCall.kemct === 'K' && ctx2.session.currentCall.senderEk === 'E');
   check('ринг-таймер 180с', timers.get(ctx2.session.callRingTimer) && timers.get(ctx2.session.callRingTimer).ms === 180000);
   check('звук входящего (desktop) + системный оверлей', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming' && c[2] === true) && apiMock.calls.some(c => c[0] === 'showIncoming'));
   check('call-seen запомнен при подъёме', (await C.isCallSeen(seenEmail(ctx2), 'new1')) === true);
   // ретрансляция того же call_id при живом звонке — дубль, гасится
-  await C.handleCallSignal(ctx2, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now() }, 'peer@x.ru');
+  await C.handleCallSignal(ctx2.deps, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now() }, 'peer@x.ru');
   check('ретрансляция живого call_id — игнор', ctx2.session.currentCall && ctx2.session.currentCall.call_id === 'new1' && ctx2.session.callState === 'incoming_ringing');
   // 4d. дедуп после отклонения: юзер уже решил — гасим
-  await C.hangup(ctx2, 'reject');
-  await C.handleCallSignal(ctx2, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now() }, 'peer@x.ru');
+  await C.hangup(ctx2.deps, 'reject');
+  await C.handleCallSignal(ctx2.deps, { vault: 1, type: 'call_request', call_id: 'new1', ts: Date.now() }, 'peer@x.ru');
   check('call_request после отклонения — гасится (юзер решил)', ctx2.session.callState === 'idle');
   // 4e. чужой звонок во время активного — занято
   const busy = makeCtx({ callState: 'active', currentCall: { call_id: 'mine', peer: 'peer@x.ru' } });
   relayMock.pubs.length = 0;
   cryptoMock.encVault.length = 0;
-  await C.handleCallSignal(busy, { vault: 1, type: 'call_request', call_id: 'other', ts: Date.now() }, 'peer@x.ru');
+  await C.handleCallSignal(busy.deps, { vault: 1, type: 'call_request', call_id: 'other', ts: Date.now() }, 'peer@x.ru');
   const rejBody = cryptoMock.encVault.map(p => { try { return JSON.parse(p); } catch (e) { return null; } }).filter(b => b && b.type === 'call_reject');
   check('чужой звонок в active → call_reject + missed-пилюля', rejBody.length === 1 && rejBody[0].call_id === 'other' && busy.chat.state.messages.some(m => m.id === 'call-other'));
   histMock.store = {};
   // 4f. call_accept при исходящем (hasLocalOffer) — mediaSetRemote
   const out = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'o1', peer: 'peer@x.ru', hasLocalOffer: true } });
   apiMock.calls.length = 0;
-  await C.handleCallSignal(out, { vault: 1, type: 'call_accept', call_id: 'o1', ts: Date.now(), sdp: 'ANSWER' }, 'peer@x.ru');
+  await C.handleCallSignal(out.deps, { vault: 1, type: 'call_accept', call_id: 'o1', ts: Date.now(), sdp: 'ANSWER' }, 'peer@x.ru');
   check('call_accept → active + setRemote(answer)', out.session.callState === 'active' && apiMock.calls.some(c => c[0] === 'setRemote' && c[2] === 'ANSWER'));
   check('ринг-таймер снят, watchdog взведён (90с)', out.session.callRingTimer === null && timers.get(out.session.mediaFallbackTimer) && timers.get(out.session.mediaFallbackTimer).ms === 90000);
   // 4g. call_sdp-гвард: не-active → дроп
   apiMock.calls.length = 0;
-  await C.handleCallSignal(makeCtx(), { vault: 1, type: 'call_sdp', call_id: 'o1', ts: Date.now(), role: 'answer', sdp: 'A' }, 'peer@x.ru');
+  await C.handleCallSignal(makeCtx().deps, { vault: 1, type: 'call_sdp', call_id: 'o1', ts: Date.now(), role: 'answer', sdp: 'A' }, 'peer@x.ru');
   check('call_sdp вне active — дроп (guard)', !apiMock.calls.some(c => c[0] === 'setRemote'));
   // 4h. терминальный call_end: трубка кладётся
   const act = makeCtx({ callState: 'active', currentCall: { call_id: 'a1', peer: 'peer@x.ru' } });
-  await C.handleCallSignal(act, { vault: 1, type: 'call_end', call_id: 'a1', ts: Date.now() }, 'peer@x.ru');
+  await C.handleCallSignal(act.deps, { vault: 1, type: 'call_end', call_id: 'a1', ts: Date.now() }, 'peer@x.ru');
   check('call_end → hangup(remote) → idle + ended-пилюля', act.session.callState === 'idle' && act.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'ended'));
   check('терминал запомнен', (await C.isCallSeen(seenEmail(act), 'a1')) === true);
   histMock.store = {};
@@ -360,7 +391,7 @@ console.log('5. lifecycle');
   apiMock.calls.length = 0;
   // startCall: гудки ДО отправки, offer при наборе, ретрансляция 15с
   const ctx = makeCtx();
-  await C.startCall(ctx);
+  await C.startCall(ctx.deps);
   const cid = ctx.session.currentCall && ctx.session.currentCall.call_id;
   check('startCall → outgoing_ringing + hasLocalOffer', ctx.session.callState === 'outgoing_ringing' && ctx.session.currentCall.hasLocalOffer === true);
   check('call_request ушел с offer+kemct', cryptoMock.encVault.some(p => { try { const b = JSON.parse(p); return b.type === 'call_request' && b.sdp === 'OFFER_SDP' && b.kemct === 'KEMCT'; } catch (e) { return false; } }));
@@ -375,16 +406,28 @@ console.log('5. lifecycle');
   histMock.store = {};
   // startCall без ключа пира — no-op
   const nokey = makeCtx({ peerKeys: {} });
-  await C.startCall(nokey);
-  check('без peer-ключа — no-op', nokey.session.callState === 'idle');
+  await C.startCall(nokey.deps);
+  // Проверка СРАЗУ после своего сценария: владельцы (identity-store/chatStore/
+  // callSession) — СИНГЛТОНЫ, и следующий makeCtx пересеет их. Проверка,
+  // отложенная за следующим сценарием, читала бы ЧУЖОЕ состояние и была бы
+  // зелёной всегда (такая ложно-зелёная проверка нашлась и в
+  // recovery-session-smoke).
+  check('без peer-ключа — no-op', nokey.session.callState === 'idle', nokey.session.callState);
+  // Групповой чат: звонок 1-на-1 не начинается (в группе — другой сценарий).
+  // Ключ группы в peerKeys ЕСТЬ — иначе гвард «нет ключа пира» отработал бы
+  // раньше и сценарий не проверял бы ничего.
+  const grp = makeCtx({ activeChat: 'group:g1', activeChatType: 'group', peerKeys: { 'group:g1': 'PUB' } });
+  await C.startCall(grp.deps);
+  check('групповой чат → звонок не начинается',
+    grp.session.callState === 'idle', grp.session.callState);
   // stale ring timeout при active — не рвёт живой звонок
   const alive = makeCtx({ callState: 'active', currentCall: { call_id: 'z', peer: 'peer@x.ru' } });
-  await C.cancelCall(alive, 'timeout');
+  await C.cancelCall(alive.deps, 'timeout');
   check('stale ring timeout в active — игнор', alive.session.callState === 'active');
   // hangup: сброс всего
   apiMock.calls.length = 0;
   const hu = makeCtx({ callState: 'active', currentCall: { call_id: 'h1', peer: 'peer@x.ru' }, callClockSec: 204, _connLostTimer: setTimeout(() => {}, 9999) });
-  await C.hangup(hu, 'end');
+  await C.hangup(hu.deps, 'end');
   check('hangup: полный сброс состояния', hu.session.callState === 'idle' && hu.session.currentCall === null && hu.session.callMuted === false && hu.session.connLostTimer === null);
   check('hangup: ended-пилюля с длительностью 03:24', hu.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'ended' && m.callEvent.duration === 204));
   check('hangup: mediaClose + звук конца', apiMock.calls.some(c => c[0] === 'close' && c[1] === 'h1') && apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'end'));
@@ -397,16 +440,18 @@ console.log('6. Пилюли пропущенных');
   histMock.store = {};
   // чат не открыт → запись напрямую в историю
   const ctx = makeCtx({ activeChat: 'other@x.ru', unreadCounts: {}, chatVisible: () => false });
-  await C.recordCallEvent(ctx, 'peer@x.ru', 'missed', Date.now(), 0, 'm1');
+  await C.recordCallEvent(ctx.deps, 'peer@x.ru', 'missed', Date.now(), 0, 'm1');
   check('чат закрыт → пилюля в sqlite-истории', histMock.store['peer@x.ru'] && histMock.store['peer@x.ru'].length === 1);
+
   check('missed + чат невидим → unread-бейдж', ctx.unreadCounts['peer@x.ru'] === 1);
   // чат открыт → в messages + сортировка
   const open = makeCtx({ activeChat: 'peer@x.ru' });
   open.chat.state.messages = [{ id: 'old', ts: 1 }];
-  await C.recordCallEvent(open, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
+  await C.recordCallEvent(open.deps, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
   check('чат открыт → messages (отсортировано)', open.chat.state.messages.length === 2 && open.chat.state.messages[0].id === 'old' && open.chat.state.messages[1].id === 'call-m2');
+  check('история чата сохранена (saveCurrentHistory вызван)', open.savedHistory.length >= 1, open.savedHistory);
   // дедуп пилюли
-  await C.recordCallEvent(open, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
+  await C.recordCallEvent(open.deps, 'peer@x.ru', 'ended', Date.now(), 65, 'm2');
   check('повторный call_id — пилюля не задвоена', open.chat.state.messages.length === 2);
   // лейблы
   check('лейбл ended с длительностью 01:05', C.callEventLabel(labelFn(open), { callEvent: { kind: 'ended', duration: 65 } }) === 'T:call_ended · 01:05');
@@ -441,7 +486,7 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   ctx.session.setCallState('active');
   ctx.session.setCallMediaConnected(false);
   apiMock.calls.length = 0;
-  C.startSignalResend(ctx, 'peer@x.ru', { type: 'call_accept', call_id: 'q1' }, 'q1');
+  C.startSignalResend(ctx.deps, 'peer@x.ru', { type: 'call_accept', call_id: 'q1' }, 'q1');
   const st = timers.get(callResender.timer);
   check('resend-таймер: 1-я пауза 5с', st && st.ms === 5000);
   check('лест revпов: [5с,15с,45с,120с] — не больше 4 писем на вызов',
@@ -458,7 +503,7 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   const cap = makeCtx({ currentCall: { call_id: 'cap1', peer: 'peer@x.ru' }, callState: 'active', callMediaConnected: false });
   callResender.stop();
   apiMock.calls.length = 0;
-  C.startSignalResend(cap, 'peer@x.ru', { type: 'call_accept', call_id: 'cap1' }, 'cap1');
+  C.startSignalResend(cap.deps, 'peer@x.ru', { type: 'call_accept', call_id: 'cap1' }, 'cap1');
   const delays = [];
   for (let i = 0; i < 6 && callResender.timer; i++) {
     delays.push(timers.get(callResender.timer).ms);
@@ -472,7 +517,7 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   timers.clear();
   apiMock.calls.length = 0;
   relayMock.pubs.length = 0;
-  C.sendTerminalRepeat(ctx, 'peer@x.ru', 'call_end', 'q1');
+  C.sendTerminalRepeat(ctx.deps, 'peer@x.ru', 'call_end', 'q1');
   const t3 = [...timers.entries()].find(([, t]) => t.ms === 3000);
   const t7 = [...timers.entries()].find(([, t]) => t.ms === 7000);
   await fireTimer(t3[0]); await fireTimer(t7[0]);
@@ -505,31 +550,31 @@ console.log('8. playCallSound/stopCallSound');
   apiMock.calls.length = 0;
   // desktop: cpal через api
   const d = makeCtx();
-  C.playCallSound(d, 'incoming', true);
+  C.playCallSound(d.deps, 'incoming', true);
   check('desktop: mediaSoundPlay(incoming, loop)', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'incoming' && c[2] === true));
   // маппинг рингтонов из настроек
   apiMock.calls.length = 0;
-  C.playCallSound(makeCtx({ callRingtoneIncoming: 'classic' }), 'incoming', true);
+  C.playCallSound(makeCtx({ callRingtoneIncoming: 'classic' }).deps, 'incoming', true);
   check('маппинг выбранного рингтона', apiMock.calls.some(c => c[0] === 'soundPlay' && c[1] === 'classic'));
   // Android: HTML5 Audio
   const a = makeCtx({ isAndroid: true });
-  C.playCallSound(a, 'incoming', true);
+  C.playCallSound(a.deps, 'incoming', true);
   check('Android: Audio(/sounds/ring_incoming.wav), loop, vol 0.85', audioInstances.length === 1 && audioInstances[0].src === '/sounds/ring_incoming.wav' && audioInstances[0].loop === true && audioInstances[0].volume === 0.85);
-  C.playCallSound(a, 'end', false);
+  C.playCallSound(a.deps, 'end', false);
   check('Android одноразовый: старый остановлен, новый без loop', audioInstances[0].paused === true && audioInstances[1].loop === false);
   // звук никогда не бросает
   const origPlay = apiMock.mediaSoundPlay;
   apiMock.mediaSoundPlay = () => { throw new Error('cpal boom'); };
-  C.playCallSound(makeCtx(), 'incoming', true); // не бросает
+  C.playCallSound(makeCtx().deps, 'incoming', true); // не бросает
   check('звук не бросает (state machine важнее)', true);
   apiMock.mediaSoundPlay = origPlay;
   // stopCallSound
   apiMock.calls.length = 0;
   const s = makeCtx({ isAndroid: true, callSoundEl: audioInstances[1] });
-  C.stopCallSound(s);
+  C.stopCallSound(s.deps);
   check('stopCallSound: Audio.pause + (desktop) mediaSoundStop', audioInstances[1].paused === true && s.session.callSoundEl === null);
   const s2 = makeCtx();
-  C.stopCallSound(s2);
+  C.stopCallSound(s2.deps);
   check('stopCallSound desktop → mediaSoundStop', apiMock.calls.some(c => c[0] === 'soundStop'));
 }
 
@@ -541,7 +586,7 @@ console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
   // отбито провайдером.
   const ctx = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b1', peer: 'peer@x.ru' } });
   toasts.length = 0;
-  const hit = await C.onMailBounce(ctx, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  const hit = await C.onMailBounce(ctx.deps, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
   check('баунс про собеседника → вызов отменён', hit === true && ctx.session.callState === 'idle', { state: ctx.session.callState });
   check('тост с причиной показан', toasts.length === 1, toasts);
   check('пилюля undeliverable (не «нет ответа»)', ctx.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'undeliverable'), ctx.chat.state.messages.map(m => m.callEvent));
@@ -554,29 +599,29 @@ console.log('9. onMailBounce (DSN: письмо-вызов не дошло)');
   // Теперь при relayDelivered баунс дубля игнорируется: вызов живёт.
   const relayed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b6', peer: 'peer@x.ru', relayDelivered: true } });
   toasts.length = 0;
-  const relayedHit = await C.onMailBounce(relayed, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
+  const relayedHit = await C.onMailBounce(relayed.deps, ['peer@x.ru'], '554 5.7.1 Message rejected under suspicion of SPAM');
   check('relayDelivered → баунс НЕ гасит вызов', relayedHit === false && relayed.callState === 'outgoing_ringing', { state: relayed.callState });
   check('relayDelivered → нет ложного тоста «письмо не доставлено»', toasts.length === 0, toasts);
 
   // Регистр и алиасы: адрес в DSN может быть в другом регистре.
   const up = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b2', peer: 'Peer@X.ru' } });
-  const upHit = await C.onMailBounce(up, ['PEER@x.ru'], '550 5.1.1 User unknown');
+  const upHit = await C.onMailBounce(up.deps, ['PEER@x.ru'], '550 5.1.1 User unknown');
   check('регистр адреса не мешает', upHit === true && up.session.callState === 'idle');
 
   // Чужой адресат: баунс не про наш звонок — НЕ гасим живой вызов.
   const other = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b3', peer: 'peer@x.ru' } });
-  const otherHit = await C.onMailBounce(other, ['someone@ya.ru'], '550');
+  const otherHit = await C.onMailBounce(other.deps, ['someone@ya.ru'], '550');
   check('чужой получатель → вызов не тронут', otherHit === false && other.session.callState === 'outgoing_ringing');
 
   // Адрес не распознали (незнакомый провайдер): тоже не гасим — ложная
   // отмена живого вызова хуже лишних минут гудков.
   const unparsed = makeCtx({ callState: 'outgoing_ringing', currentCall: { call_id: 'b4', peer: 'peer@x.ru' } });
-  const unparsedHit = await C.onMailBounce(unparsed, [], '');
+  const unparsedHit = await C.onMailBounce(unparsed.deps, [], '');
   check('пустой recipients → не гасим', unparsedHit === false && unparsed.session.callState === 'outgoing_ringing');
 
   // Живой разговор баунсами не рвём.
   const live = makeCtx({ callState: 'active', currentCall: { call_id: 'b5', peer: 'peer@x.ru' } });
-  check('active-звонок не рвём', (await C.onMailBounce(live, ['peer@x.ru'], '')) === false && live.session.callState === 'active');
+  check('active-звонок не рвём', (await C.onMailBounce(live.deps, ['peer@x.ru'], '')) === false && live.session.callState === 'active');
 
   timers.clear(); toasts.length = 0;
 }

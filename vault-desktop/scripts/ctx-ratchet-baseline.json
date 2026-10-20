@@ -10,23 +10,7 @@
     "call-session.js": [],
     "call-terminal.js": [],
     "call-watchdog.js": [],
-    "calls.js": [
-      "activeChat",
-      "activeChatType",
-      "callPeerName",
-      "callStartedAt",
-      "canonicalOf",
-      "chatVisible",
-      "idleLoop",
-      "isAndroid",
-      "isIgnored",
-      "msgTs",
-      "peerKeys",
-      "peerPqKeys",
-      "saveChatCache",
-      "saveCurrentHistory",
-      "saveUnreadCounts"
-    ],
+    "calls.js": [],
     "channels-store.js": [],
     "channels.js": [
       "channelById",
@@ -168,9 +152,6 @@
     "api.js": []
   },
   "fieldWriters": {
-    "callStartedAt": [
-      "calls.js"
-    ],
     "channelById": [
       "channels.js"
     ],
@@ -245,8 +226,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 85,
-    "ctxRefSites": 208,
+    "ctxFields": 70,
+    "ctxRefSites": 169,
     "sharedWriteFields": 0
   }
 }

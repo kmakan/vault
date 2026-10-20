@@ -71,7 +71,14 @@ writeFileSync(`${MOCKS}/vue-stub.js`, 'export const reactive = (o) => o;\n');
 await stub(
   'features/session-store.js',
   'export const sessionStore = { getCurrentEmail: () => "me@x.ru", state: { isLoggedIn: true } };\n'
-  + 'export const uiStore = { toast: () => {}, scrollToBottom: () => {}, tr: (k) => k };\n',
+  + 'export const uiStore = { toast: () => {}, scrollToBottom: () => {}, tr: (k) => k };\n'
+  // ADR-005 W2 (партия 7): calls.js берёт активный чат у владельца chatStore.
+  + 'export const chatStore = { state: { activeChat: null, activeChatType: "chat", currentGroup: null } };\n',
+);
+// ADR-005 W2 (партия 7): ключи пиров — у владельца identity-store.
+await stub(
+  'features/identity-store.js',
+  'export const identityStore = { state: { peerKeys: {}, peerPqKeys: {} } };\n',
 );
 writeFileSync(`${MOCKS}/features/call-clock.js`, readFileSync(CALL_CLOCK, 'utf8'));
 // ADR-001: calls.js тянет invoke из @tauri-apps/api/core (M2.3 bridge) —
@@ -151,9 +158,15 @@ const C = await import(MOCKS + '/features/calls.js');
     }
     return null;
   };
+  // ADR-005 W2 (партия 7): к списку добавились функции, которые раньше брали
+  // ctx целиком (звонки). Проверка «в теле нет ctx» теперь накрывает их.
   const converted = ['isCallSeen', 'rememberCallSeen', 'callEventLabel', 'canCallBack',
     'startFastPolling', 'stopFastPolling',
-    'toggleCallMute', 'toggleSpeaker'];
+    'toggleCallMute', 'toggleSpeaker',
+    'sendCallEnvelope', 'handleCallSignal', 'startCall', 'acceptCall', 'rejectCall',
+    'endCall', 'hangup', 'cancelCall', 'onMailBounce', 'recordCallEvent', 'callBack',
+    'startSignalResend', 'stopSignalResend', 'sendTerminalRepeat', 'armMediaFallback',
+    'playCallSound', 'stopCallSound'];
   for (const fn of converted) {
     const body = bodyOf(fn);
     check(`${fn}: функция найдена`, !!body);

@@ -1788,6 +1788,27 @@ export default {
     isAndroid() {
       return /android/i.test(navigator.userAgent || '');
     },
+    // Контракт фичи звонков (ADR-005 W2, партия 7): состояние — у
+    // владельцев (identity-store/chatStore/call-session — модуль берёт их сам),
+    // здесь только ЭФФЕКТЫ и per-app чат-владелец. Живёт в computed, а не в
+    // methods: это разводка (набор функций), а не логика — и методы с логикой
+    // в App.vue считает ратчет.
+    callsDeps() {
+      return {
+        chat: this.chat,
+        isIgnored: (e) => this.isIgnored(e),
+        incUnread: (k) => this.incUnread(k),
+        saveUnreadCounts: () => this.saveUnreadCounts(),
+        saveChatCache: (k, l) => this.saveChatCache(k, l),
+        saveCurrentHistory: (k) => this.saveCurrentHistory(k),
+        chatVisible: (k) => this.chatVisible(k),
+        canonicalOf: (e) => this.canonicalOf(e),
+        msgTs: (m) => this.msgTs(m),
+        idleLoop: () => this.idleLoop(),
+        isAndroid: () => this.isAndroid,
+        callPeerName: () => this.callPeerName,
+      };
+    },
     // Карточка контакта (тап по аватару в шапке)
     contactCardBio() {
       if (!this.contactCardEmail) return '';
@@ -2419,29 +2440,29 @@ export default {
     async isCallSeen(callId) { return CallsFeature.isCallSeen(this.email, callId); },
     async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this.email, callId); },
     parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
-    async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this, peer, payload, opts); },
-    async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this, sig, from); },
-    async onMailBounce(recipients, reason) { return CallsFeature.onMailBounce(this, recipients, reason); },
-    async startCall() { return CallsFeature.startCall(this); },
-    async acceptCall() { return CallsFeature.acceptCall(this); },
-    async rejectCall() { return CallsFeature.rejectCall(this); },
+    async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this.callsDeps, peer, payload, opts); },
+    async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this.callsDeps, sig, from); },
+    async onMailBounce(recipients, reason) { return CallsFeature.onMailBounce(this.callsDeps, recipients, reason); },
+    async startCall() { return CallsFeature.startCall(this.callsDeps); },
+    async acceptCall() { return CallsFeature.acceptCall(this.callsDeps); },
+    async rejectCall() { return CallsFeature.rejectCall(this.callsDeps); },
     async endCall() {
       this.stopCallVideo();
-      return CallsFeature.endCall(this);
+      return CallsFeature.endCall(this.callsDeps);
     },
     async hangup(reason) {
       this.stopCallVideo();
-      return CallsFeature.hangup(this, reason);
+      return CallsFeature.hangup(this.callsDeps, reason);
     },
-    async cancelCall(reason) { return CallsFeature.cancelCall(this, reason); },
-    async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this, peer, kind, ts, durationSec, callId); },
+    async cancelCall(reason) { return CallsFeature.cancelCall(this.callsDeps, reason); },
+    async recordCallEvent(peer, kind, ts, durationSec, callId) { return CallsFeature.recordCallEvent(this.callsDeps, peer, kind, ts, durationSec, callId); },
     callEventLabel(msg) { return CallsFeature.callEventLabel(this.t, msg); },
     callPillIcon(msg) { return CallsFeature.callPillIcon(msg); },
     canCallBack(msg) { return CallsFeature.canCallBack({
       activeChat: this.activeChat, activeChatType: this.activeChatType,
       callState: this.callState, expCalls: this.expCalls, peerKeys: this.peerKeys,
     }, msg); },
-    callBack() { return CallsFeature.callBack(this); },
+    callBack() { return CallsFeature.callBack(this.callsDeps); },
     toggleCallMute() { this.callMuted = CallsFeature.toggleCallMute({ callMuted: this.callMuted, currentCall: this.currentCall }); },
     toggleSpeaker() { this.callSpeaker = CallsFeature.toggleSpeaker({ callSpeaker: this.callSpeaker, currentCall: this.currentCall }); },
     // M3: видео живёт в features/video.js — здесь только тонкая
@@ -2492,16 +2513,16 @@ export default {
       this.callVideoOn = false;
       api.mediaVideoStop(this.currentCall.call_id).catch((e) => console.warn('[video] stop failed:', e));
     },
-    startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this, peer, payload, call_id); },
-    stopSignalResend() { return CallsFeature.stopSignalResend(this); },
-    sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this, peer, type, call_id); },
-    armMediaFallback() { return CallsFeature.armMediaFallback(this); },
+    startSignalResend(peer, payload, call_id) { return CallsFeature.startSignalResend(this.callsDeps, peer, payload, call_id); },
+    stopSignalResend() { return CallsFeature.stopSignalResend(this.callsDeps); },
+    sendTerminalRepeat(peer, type, call_id) { return CallsFeature.sendTerminalRepeat(this.callsDeps, peer, type, call_id); },
+    armMediaFallback() { return CallsFeature.armMediaFallback(this.callsDeps); },
     startCallClock() { this.callSession.startCallClock(); },
     stopCallClock() { this.callSession.stopCallClock(); },
     startFastPolling() { return CallsFeature.startFastPolling(() => this.idleLoop(), this.callSession.callIdleMonitorUp); },
     stopFastPolling() { return CallsFeature.stopFastPolling(); },
-    playCallSound(name, looped) { return CallsFeature.playCallSound(this, name, looped); },
-    stopCallSound() { return CallsFeature.stopCallSound(this); },
+    playCallSound(name, looped) { return CallsFeature.playCallSound(this.callsDeps, name, looped); },
+    stopCallSound() { return CallsFeature.stopCallSound(this.callsDeps); },
     // ── Профили контактов (логика в features/profiles.js) ──
     aliasesOf(email) { return ProfilesFeature.aliasesOf(this.peerKeys, email); },
     profileOf(email) { return ProfilesFeature.profileOf(this.profiles, email); },
