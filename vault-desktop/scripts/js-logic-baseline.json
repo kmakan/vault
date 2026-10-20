@@ -2,7 +2,7 @@
   "measuredAt": "2026-10-19",
   "totals": {
     "ctxRefSites": 0,
-    "appVueOwn": 138,
+    "appVueOwn": 131,
     "appVueMethods": 351,
     "protocolSites": 67,
     "protocolFiles": 13
@@ -64,8 +64,6 @@
   },
   "appVueOwnNames": [
     "pollDeps",
-    "toggleReactionPicker",
-    "addReaction",
     "loadBodyCache",
     "cacheBody",
     "onPresenceEnabled",
@@ -119,11 +117,6 @@
     "onNoteDrop",
     "buildEnvelope",
     "sendGeoMessage",
-    "hasReplyQuote",
-    "replyQuote",
-    "replyBody",
-    "setReply",
-    "cancelReply",
     "startEditMessage",
     "cancelEdit",
     "deleteMessage",

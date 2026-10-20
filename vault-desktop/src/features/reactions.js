@@ -83,20 +83,29 @@ export function sendReactionEmail({ activeChatType, currentGroup, groupKeys, pee
   })();
 }
 
-export function toggleReactionPicker({ chat, reactionPickerMsgId }, msgId) {
+// deps: { chat, reactionPickerMsgId(), setReactionPickerMsgId(v) }
+// Состояние пикера — у владельца форм (uiStore), ADR-005 W3 п.3.
+export function toggleReactionPicker(deps, msgId) {
+  const chat = deps.chat;
+  const current = deps.reactionPickerMsgId();
   // Пилюли звонков — не сообщения: реакции на них не нужны.
   // chat.byId возвращает null/undefined вне активного чата — optional access.
   const m = chat && typeof chat.byId === 'function' ? chat.byId(msgId) : null;
-  if (m && m.callEvent) return reactionPickerMsgId;
+  if (m && m.callEvent) return current;
   // Если пользователь выделял текст (копирование) — клик не открывает пикер.
   try {
     const sel = window.getSelection && window.getSelection();
-    if (sel && String(sel).length > 0) return reactionPickerMsgId;
+    if (sel && String(sel).length > 0) return current;
   } catch (e) { /* ignore */ }
-  return reactionPickerMsgId === msgId ? null : msgId;
+  return current === msgId ? null : msgId;
 }
 
-export function addReaction({ email, chat, activeChat, sendReactionEmail, setReactionPickerMsgId }, msgId, emoji) {
+// deps: { email(), chat, activeChat(), sendReactionEmail, setReactionPickerMsgId(v) }
+export function addReaction(deps, msgId, emoji) {
+  const email = deps.email();
+  const chat = deps.chat;
+  const activeChat = deps.activeChat();
+  const { sendReactionEmail, setReactionPickerMsgId } = deps;
   if (chat && typeof chat.patch === 'function') {
     chat.patch(msgId, (msg) => {
       if (!msg.reactions) msg.reactions = [];

@@ -121,6 +121,10 @@ export function defaultUiState() {
     // «Новая папка» открывался только при СЛЕДУЮЩЕЙ перерисовке.
     chatMenu: { show: false, target: null },
     chatFolderNewName: '',
+    // ADR-005 W3 (партия 3): UI-flow ответа на сообщение и пикера реакций
+    // — у владельца форм (раньше это были поля data() компонента).
+    replyTo: null,
+    reactionPickerMsgId: null,
     },
     // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
     modals: {

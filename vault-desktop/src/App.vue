@@ -1275,7 +1275,7 @@ export default {
       // одноимённом делегаторе (ниже в methods), собран живьём на каждый вызов.
       // Контекстное меню сообщения (копирование)
       messageMenu: null,
-      replyTo: null,
+      // replyTo/reactionPickerMsgId — в uiStore (ADR-005 W3, партия 3).
       // Перетаскивание заметок (__notes__): ид заметки и цель drop.
       draggedNoteId: null,
       dragOverNoteId: null,
@@ -1382,7 +1382,7 @@ export default {
       // Emoji
       // showEmojiPickerinj в uiStore.modalFlags (J.7):
       // Reactions
-      reactionPickerMsgId: null,
+      // reactionPickerMsgId — в uiStore (ADR-005 W3, партия 3).
       // quickReactionsinj в session-store.state (J.7):
       // Search in chat
       // chatSearchQueryinj в uiStore.formState (J.5b).
@@ -1857,6 +1857,28 @@ export default {
         cryptoReady: () => this.cryptoReady,
         healGroupAvatarFromMessage: (id, av) => this.healGroupAvatarFromMessage(id, av),
         replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
+      };
+    },
+    // ADR-005 W3 (партия 3): ответ на сообщение и пикер реакций — у
+    // владельца форм.
+    replyTo: {
+      get() { return uiStore.getFormField('replyTo'); },
+      set(v) { uiStore.setFormField('replyTo', v); },
+    },
+    reactionPickerMsgId: {
+      get() { return uiStore.getFormField('reactionPickerMsgId'); },
+      set(v) { uiStore.setFormField('reactionPickerMsgId', v); },
+    },
+    // Контракт фичи реакций (ADR-005 W3, партия 3): состояние пикера — у
+    // владельца форм, per-app чат — владелец, письмо-сигнал — эффект.
+    reactionsDeps() {
+      return {
+        email: () => this.email,
+        chat: this.chat,
+        activeChat: () => this.activeChat,
+        reactionPickerMsgId: () => uiStore.getFormField('reactionPickerMsgId'),
+        setReactionPickerMsgId: (v) => { uiStore.setFormField('reactionPickerMsgId', v); },
+        sendReactionEmail: (m, e, a) => this.sendReactionEmail(m, e, a),
       };
     },
     // Контракт фичи каналов (ADR-005 W3, партия 2): per-app владелец чата,
@@ -2512,17 +2534,8 @@ export default {
         activeChat: this.activeChat,
       }, msgId, emoji, action);
     },
-    toggleReactionPicker(msgId) {
-      this.reactionPickerMsgId = ReactionsFeature.toggleReactionPicker({ chat: this.chat, reactionPickerMsgId: this.reactionPickerMsgId }, msgId);
-      return this.reactionPickerMsgId;
-    },
-    addReaction(msgId, emoji) {
-      return ReactionsFeature.addReaction({
-        email: this.email, chat: this.chat, activeChat: this.activeChat,
-        sendReactionEmail: (m,e,a) => this.sendReactionEmail(m,e,a),
-        setReactionPickerMsgId: v => { this.reactionPickerMsgId = v; },
-      }, msgId, emoji);
-    },
+    toggleReactionPicker(msgId) { return ReactionsFeature.toggleReactionPicker(this.reactionsDeps, msgId); },
+    addReaction(msgId, emoji) { return ReactionsFeature.addReaction(this.reactionsDeps, msgId, emoji); },
     toggleReaction(msgId, emoji) {
       return ReactionsFeature.toggleReaction({
         email: this.email, chat: this.chat, activeChat: this.activeChat,
@@ -3653,15 +3666,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
     // Split a message into its reply-quote portion (leading "> " lines) and body.
     splitReply(content) { return MsgFormat.splitReply(content); },
-    hasReplyQuote(content) {
-      return this.splitReply(content).quote !== '';
-    },
-    replyQuote(content) {
-      return this.splitReply(content).quote;
-    },
-    replyBody(content) {
-      return this.splitReply(content).body;
-    },
+    hasReplyQuote(content) { return MsgFormat.hasReplyQuote(content); },
+    replyQuote(content) { return MsgFormat.replyQuote(content); },
+    replyBody(content) { return MsgFormat.replyBody(content); },
     // Short excerpt used for the reply bar and for the "> " quote prefix.
     replyPreview(msg) {
       return MsgFormat.replyPreview(msg && (msg.content || msg.text) || '');
@@ -3670,12 +3677,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     statusTitle(msg) {
       return MsgFormat.statusTitle(msg, (k) => uiStore.tr(k));
     },
-    setReply(msg) {
-      this.replyTo = msg;
-    },
-    cancelReply() {
-      this.replyTo = null;
-    },
+    setReply(msg) { return uiStore.setFormField('replyTo', msg); },
+    cancelReply() { return uiStore.setFormField('replyTo', null); },
     // --- Редактирование/удаление сообщений (только свои) ---
     startEditMessage(msg) {
       if (!msg || msg.from !== 'me' || msg.deleted) return;

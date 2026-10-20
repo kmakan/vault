@@ -187,6 +187,15 @@ ok('statusTitle failed + failedTo', M.statusTitle({ status: 'failed', failedTo: 
 ok('parseEnvelopeSafe valid', M.parseEnvelopeSafe('{"a":1}').a === 1);
 ok('parseEnvelopeSafe invalid → null', M.parseEnvelopeSafe('nope') === null);
 
+// ADR-005 W3 (партия 3): реплай-хелперы вынесены из App.vue в формат.
+const replyText = '> цитата\n> вторая\nновый текст';
+ok('hasReplyQuote: цитата есть', M.hasReplyQuote(replyText) === true);
+ok('hasReplyQuote: цитаты нет', M.hasReplyQuote('без цитаты') === false);
+ok('replyQuote: цитата отделена', M.replyQuote(replyText) === 'цитата\nвторая');
+ok('replyQuote: без цитаты → пусто', M.replyQuote('без цитаты') === '');
+ok('replyBody: тело без цитаты', M.replyBody(replyText) === 'новый текст');
+ok('replyBody: без цитаты → весь текст', M.replyBody('без цитаты') === 'без цитаты');
+
 // formatTimeLabel (чистый «HH:MM»)
 const ts = new Date();
 ok('formatTimeLabel корректный HH:MM', /^\d{2}:\d{2}$/.test(M.formatTimeLabel(ts.getTime())));

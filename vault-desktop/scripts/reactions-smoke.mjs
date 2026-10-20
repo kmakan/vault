@@ -43,25 +43,38 @@ check('loadStoredReactions пусто по умолчанию', JSON.stringify(R
   check('sendReactionEmail group без ключа — no-op', apiCalls.length===0);
 }
 
+// Контракт deps (ADR-005 W3, партия 3): состояние пикера — у владельца форм,
+// поэтому фича получает геттер/сеттер, а не значение.
+// deps: { chat, reactionPickerMsgId(), setReactionPickerMsgId(v), email(),
+//         activeChat(), sendReactionEmail }
+const rdeps = (o = {}) => ({
+  chat: o.chat,
+  reactionPickerMsgId: () => (o.reactionPickerMsgId === undefined ? null : o.reactionPickerMsgId),
+  setReactionPickerMsgId: o.setReactionPickerMsgId || (() => {}),
+  email: () => (o.email === undefined ? 'a@b.c' : o.email),
+  activeChat: () => (o.activeChat === undefined ? 'b@y.z' : o.activeChat),
+  sendReactionEmail: o.sendReactionEmail || (() => {}),
+});
+
 // toggleReactionPicker
 {
   const chat={byId:(id)=>id==='call'?{callEvent:true}:null};
-  check('toggleReactionPicker default open', R.toggleReactionPicker({chat,reactionPickerMsgId:null},'m1')==='m1');
-  check('toggleReactionPicker callEvent skip', R.toggleReactionPicker({chat,reactionPickerMsgId:'prev'},'call')==='prev');
-  check('toggleReactionPicker toggle back to null', R.toggleReactionPicker({chat,reactionPickerMsgId:'m1'},'m1')===null);
+  check('toggleReactionPicker default open', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:null}),'m1')==='m1');
+  check('toggleReactionPicker callEvent skip', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:'prev'}),'call')==='prev');
+  check('toggleReactionPicker toggle back to null', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:'m1'}),'m1')===null);
   globalThis.window.getSelection=()=>({toString:()=> 'select'});
-  check('toggleReactionPicker selected text skip', R.toggleReactionPicker({chat:{byId:()=>null},reactionPickerMsgId:'p'},'m1')==='p');
+  check('toggleReactionPicker selected text skip', R.toggleReactionPicker(rdeps({chat:{byId:()=>null},reactionPickerMsgId:'p'}),'m1')==='p');
   globalThis.window.getSelection=()=>null;
 }
 
 // addReaction
 {
-  for(const k in ls) delete ls[k]; apiCalls.length=0; let picked=null;
+  for(const k in ls) delete ls[k]; apiCalls.length=0; let picked='SENTINEL';
   const msgs=[{id:'m1',reactions:['👍']}];
   const chat={patch:(id,fn)=>{fn(msgs[0])}};
-  R.addReaction({email:'a@b.c',chat,activeChat:'b@y.z',
+  R.addReaction(rdeps({email:'a@b.c',chat,activeChat:'b@y.z',
     sendReactionEmail:(m,e,a)=>api.sendReaction('b@y.z',m,e,a,),
-    setReactionPickerMsgId:v=>{picked=v}}, 'm1','❤');
+    setReactionPickerMsgId:v=>{picked=v}}), 'm1','❤');
   await new Promise(r=>setTimeout(r,0));
   check('addReaction chat.patch добавил эмодзи', msgs[0].reactions.includes('❤'));
   check('addReaction storage (key=email)', ls['vault-reactions-a@b.c']&&JSON.parse(ls['vault-reactions-a@b.c'])['b@y.z'].m1.some(r=>r.emoji==='❤'));

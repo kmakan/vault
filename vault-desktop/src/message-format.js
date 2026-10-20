@@ -36,6 +36,18 @@ export function parseEnvelope(decrypted) {
   return null;
 }
 
+// Ответ на сообщение: цитата/тело. Раньше эти три функции жили методами в
+// App.vue (ADR-005 W3, партия 3) — формат сообщения belongs к формату.
+export function hasReplyQuote(content) {
+  return splitReply(content).quote !== '';
+}
+export function replyQuote(content) {
+  return splitReply(content).quote;
+}
+export function replyBody(content) {
+  return splitReply(content).body;
+}
+
 export function splitReply(content) {
   if (!content || typeof content !== 'string' || content.indexOf('>') !== 0) {
     return { quote: '', body: content || '' };
