@@ -130,5 +130,27 @@ ok('нет НИ ОДНОГО импорта — модуль не зависит
 ok('нет доступа к ctx', !/\bctx\b/.test(body.replace(/\/\/.*$/gm, '')));
 ok('нет доступа к api, crypto, invoke', !/\b(api|crypto|invoke)\s*\./.test(body));
 
+// ── Счётчики непрочитанных и черновик (владелец чата) ──────────────────
+{
+  const st = createChatStore();
+  st.incUnread('c1');
+  st.incUnread('c1');
+  st.incUnread('c2');
+  ok('incUnread: счётчик растёт', st.unreadOf('c1') === 2 && st.unreadOf('c2') === 1, st.state.unreadCounts);
+  st.clearUnread('c1');
+  ok('clearUnread: счётчик обнулён', st.unreadOf('c1') === 0 && st.unreadOf('c2') === 1, st.state.unreadCounts);
+  // Ключ должен ИСЧЕЗНУТЬ, а не остаться с нулём: иначе карта счётчиков
+  // растёт и «нулевые» чаты светятся в разметке.
+  ok('clearUnread: ключ чата удалён из карты', !('c1' in st.state.unreadCounts), Object.keys(st.state.unreadCounts));
+  st.clearAllUnread();
+  ok('clearAllUnread: все счётчики обнулены', st.unreadOf('c2') === 0, st.state.unreadCounts);
+  st.setUnread({ c3: 5 });
+  ok('setUnread: карта заменена', st.unreadOf('c3') === 5, st.state.unreadCounts);
+  st.setDraft('черновик');
+  ok('setDraft/getDraft: черновик сохранён', st.getDraft() === 'черновик', st.getDraft());
+  st.clearDraft();
+  ok('clearDraft: черновик очищен', st.getDraft() === '', st.getDraft());
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

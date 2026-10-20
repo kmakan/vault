@@ -85,5 +85,27 @@ check('setSending возвращает установленное значени
 const retBucket = store.setPendingOutgoing('c3', { id: 'm3', text: 'x' });
 check('setPendingOutgoing возвращает bucket', retBucket === store.state.pendingOutgoing['c3']);
 
+// 15. mergePendingOutgoing ЗАМЕЩАЕТ бакет (а не сливает): старые pending,
+// которых нет в remaining, должны исчезнуть.
+{
+  const st = createSendingStore();
+  st.setPendingOutgoing('c9', { id: 'old1' });
+  st.setPendingOutgoing('c9', { id: 'old2' });
+  st.mergePendingOutgoing('c9', { fresh: { id: 'fresh' } });
+  check('mergePendingOutgoing: бакет ЗАМЕЩЁН (старые исчезли)',
+    !!st.state.pendingOutgoing.c9.fresh && !st.state.pendingOutgoing.c9.old1 && !st.state.pendingOutgoing.c9.old2,
+    Object.keys(st.state.pendingOutgoing.c9 || {}));
+}
+
+// 16. dropBucket: бакет чата удаляется целиком
+{
+  const st = createSendingStore();
+  st.setPendingOutgoing('cA', { id: 'x' });
+  st.setPendingOutgoing('cB', { id: 'y' });
+  st.dropBucket('cA');
+  check('dropBucket: бакет чата удалён, чужой не тронут',
+    !st.state.pendingOutgoing.cA && !!st.state.pendingOutgoing.cB, Object.keys(st.state.pendingOutgoing));
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

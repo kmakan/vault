@@ -52,5 +52,23 @@ ok('нет НИ ОДНОГО импорта — модуль не зависит
 ok('нет доступа к ctx', !/\bctx\b/.test(body.replace(/\/\/.*$/gm, '')));
 ok('нет доступа к api, crypto, invoke', !/\b(api|crypto|invoke)\s*\./.test(body));
 
+// ── Очистка и слияние (владелец состояния групп) ─────────────────────────
+{
+  const st = createGroupsStore();
+  st.setGroupKey('g1', 'K1');
+  st.setGroupKey('g2', 'K2');
+  st.setGroupAvatar('g1', 'A1');
+  st.setGroupIcon('g1', 'I1');
+  st.clearGroupKeys();
+  // Проверяем, что карта ПУСТА: «ключа g1 нет» не означает, что не осталось других.
+  ok('clearGroupKeys: карта ключей пуста', Object.keys(st.state.groupKeys).length === 0, st.state.groupKeys);
+  ok('clearGroupKeys: аватары НЕ тронуты', st.getGroupAvatar('g1') === 'A1');
+  st.clearGroupAvatars();
+  ok('clearGroupAvatars: аватары очищены', st.getGroupAvatar('g1') === undefined);
+  st.mergeGroupKeys({ g3: 'K3' });
+  st.mergeGroupAvatars({ g3: 'A3' });
+  ok('mergeGroupKeys/mergeGroupAvatars: значения залиты', st.getGroupKey('g3') === 'K3' && st.getGroupAvatar('g3') === 'A3');
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);
