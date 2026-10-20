@@ -248,4 +248,47 @@ mod tests {
     fn test_from_email_body_garbage() {
         assert!(VaultMessage::from_email_body("обычное письмо без конверта").is_none());
     }
+
+    /// Заголовки конверта — ЧАСТЬ ФОРМАТА, а не украшение: по X-Vault-From
+    /// получатель знает, кто прислал, по X-Vault-ID — дедуплицирует. Раньше
+    /// это не проверялось, и подмена на пустую строку оставалась зелёной.
+    #[test]
+    fn test_to_email_body_headers() {
+        let msg = VaultMessage::new("alice@test.com", "bob@test.com", "msg-7", "payload");
+        let body = msg.to_email_body();
+        assert!(body.starts_with("X-Vault-Encrypted: 1\n"), "{}", body);
+        assert!(body.contains("X-Vault-Type: message\n"), "{}", body);
+        assert!(body.contains("X-Vault-ID: msg-7\n"), "{}", body);
+        assert!(body.contains("X-Vault-From: alice@test.com\n"), "{}", body);
+        assert!(body.contains("X-Vault-Reply-To: \n"), "{}", body);
+    }
+
+    /// Конверт БЕЗ payload — не конверт: расшифровывать нечего, и принять
+    /// такое — значит потом получить «пустое сообщение» вместо ошибки.
+    /// Мутационный гейт Rust-ядра выловил, что этого правила в тестах не было.
+    #[test]
+    fn test_from_email_body_without_payload_rejects() {
+        let msg = VaultMessage::new("a@test.com", "b@test.com", "m4", "payload");
+        // Обрезаем всё после envelope_json — остаётся заголовок + json.
+        let body = msg.to_email_body();
+        let cut = body
+            .split_once("\n\n")
+            .map(|(_, rest)| rest.split_once('\n').map(|(j, _)| j.to_string()))
+            .flatten()
+            .unwrap_or_default();
+        let with_json_only = format!("X-Vault-Encrypted: 1\n\n{}", cut);
+        assert!(
+            VaultMessage::from_email_body(&with_json_only).is_none(),
+            "конверт без payload приниматься не должен"
+        );
+    }
+
+    /// Payload может содержать переводы строк (шифротекст base64 разбит на
+    /// строки) — поэтому берётся ОСТАТОК целиком, а не первая строка.
+    #[test]
+    fn test_from_email_body_keeps_multiline_payload() {
+        let msg = VaultMessage::new("a@test.com", "b@test.com", "m3", "line1\nline2\nline3");
+        let parsed = VaultMessage::from_email_body(&msg.to_email_body()).expect("roundtrip");
+        assert_eq!(parsed.encrypted_payload, "line1\nline2\nline3");
+    }
 }

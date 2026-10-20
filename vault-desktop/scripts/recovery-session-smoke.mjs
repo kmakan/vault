@@ -206,6 +206,31 @@ console.log('\napi.login — обычный вход и режим восста�
     (calls.counters.save_credentials || 0) === 1);
 }
 {
+  // «Запомнить меня» ВЫКЛЮЧЕНО — учётные данные НЕ сохраняются: иначе пароль
+  // пользователя останется на диске, хотя он этого не просил. Мутационный
+  // гейт выловил, что на это правило теста не было.
+  freshStore();
+  const { mod, calls } = await loadApi({});
+  const api = new mod.ApiClient();
+  const unmute = mute();
+  await api.login('a@b.invalid', 'pw', { remember: false });
+  unmute();
+  check('обычный вход remember:false → save_credentials НЕ вызывается',
+    (calls.counters.save_credentials || 0) === 0, calls.counters);
+  check('обычный вход remember:false → durable-токен всё равно записан',
+    localStorage.getItem('vault-token') === 'serverless-a@b.invalid');
+}
+{
+  // commit БЕЗ сессии в памяти — ошибка, а не тихий «успех»: иначе
+  // восстановление отметится выполненным, а durable-состояние не появится.
+  freshStore();
+  const { mod } = await loadApi({});
+  const api = new mod.ApiClient();
+  let threw = false;
+  try { await api.commitRecoveryLogin(); } catch (e) { threw = true; }
+  check('commitRecoveryLogin без сессии в памяти → ошибка, а не «успех»', threw === true);
+}
+{
   freshStore();
   const { mod, calls } = await loadApi({});
   const api = new mod.ApiClient();
