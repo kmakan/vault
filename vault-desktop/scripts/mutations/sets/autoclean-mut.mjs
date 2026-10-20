@@ -1,0 +1,32 @@
+// Набор мутаций: autoclean-mut
+// Цель: убедиться, что смоук autoclean-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'autoclean-mut',
+  file: 'src/features/autoclean.js',
+  smoke: 'autoclean-smoke.mjs',
+  mutations: [
+    { name: "период \"off\" начинает чистить (365 дней)",
+      pattern: "export const PERIOD_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365 };",
+      replacement: "export const PERIOD_DAYS = { '1d': 1, '7d': 7, '30d': 30, '365d': 365, 'off': 365 };" },
+    { name: "неизвестный период означает чистку за день, а не отключение",
+      pattern: "  return PERIOD_DAYS[period] || 0;",
+      replacement: "  return PERIOD_DAYS[period] || 1;" },
+    { name: "письма на границе отсечения попадают в удаление",
+      pattern: "    if (!(t < cutoff)) continue;",
+      replacement: "    if (t > cutoff) continue;" },
+    { name: "ключ без идентификатора не отбрасывается",
+      pattern: "    if (k.endsWith(':')) continue;",
+      replacement: "    void 0;" },
+    { name: "очистка не убирает письма из зеркала",
+      pattern: "    emails: (state.emails || []).filter((m) => !staleSet.has(messageKeyOf(m))),",
+      replacement: "    emails: (state.emails || []).slice()," },
+    { name: "кэш тел не чистится",
+      pattern: "  for (const k of keys) delete emailBodyCache[k];",
+      replacement: "  void 0;" },
+    { name: "purge вызывается даже при пустом списке",
+      pattern: "  if (!keys.length) return { purged: 0, keys, applied: null };",
+      replacement: "  if (false) return { purged: 0, keys, applied: null };" },
+  ],
+};

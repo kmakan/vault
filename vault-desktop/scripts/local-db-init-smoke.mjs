@@ -25,6 +25,7 @@ const state = {
   cursors: null,
   cursorsThrow: false,
   nsCalls: [],
+  cursorCalls: [],
 };
 globalThis.__st = state;
 
@@ -37,6 +38,7 @@ const db = {
     return st.tombs;
   },
   cursorsLoad: async (account) => {
+    st.cursorCalls.push(account);
     if (st.cursorsThrow) throw new Error('cursorsLoad недоступен');
     return st.cursors;
   },
@@ -94,6 +96,10 @@ ok('тумбстоуны грузятся из namespace аккаунта (fp:<�
   state.nsCalls[0] === 'fp:me@bk.ru');
 ok('разбиение применено', r.tombstones.join(',') === 'm1' && r.midTombstones.join(',') === 'a1');
 ok('курсоры загружены', r.cursors.INBOX === '42');
+// Курсоры живут в пространстве 'local' — это id аккаунта из getEmailAccounts,
+// а НЕ namespace почты: перенос на отпечаток его не касается.
+ok('курсоры запрошены из пространства local (не namespace аккаунта)',
+  state.cursorCalls.length === 1 && state.cursorCalls[0] === 'local', state.cursorCalls);
 
 reset();
 r = await M.loadLocalCaches(null);

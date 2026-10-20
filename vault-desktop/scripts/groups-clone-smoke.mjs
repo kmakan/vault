@@ -123,5 +123,19 @@ let threw = false;
 try { await GC.cloneGroup(base()); } catch (e) { threw = true; }
 ok('сбой groups_create пробрасывается (его ловит UI, не модуль)', threw === true);
 
+// 9. РЕГИСТР адреса: участник написан заглавными, ключ в карте — в нижнем
+// регистре. Поиск обязан идти по нормализованному адресу, иначе участник
+// молча выпадает из клона (и остаётся в старой группе без приглашения).
+reset();
+r = await GC.cloneGroup(base({
+  src: { id: 'g1', name: 'Оригинал', members: [
+    { email: 'me@bk.ru', role: 'Admin' },
+    { email: 'A@X', role: 'Member' },
+  ] },
+  peerKeys: { 'a@x': 'PA' },
+}));
+ok('ключ найден по адресу в нижнем регистре (A@X → a@x)', r.invited.join(',') === 'A@X', r.invited);
+ok('участник с другим регистром реально приглашён', state.order.includes('invite:A@X'), state.order);
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

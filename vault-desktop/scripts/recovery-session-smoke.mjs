@@ -363,6 +363,14 @@ console.log('\nrecovery-session.js (pure маркер):');
   RS.clearRecoveryPending();
   check('после clear — не pending, blockMessage null',
     RS.isRecoveryPending() === false && RS.recoveryBlockMessage((k) => 'x') === null);
+  // Значение маркера сверяется: только '1' означает «восстановление прервано».
+  // Любое другое значение (в т.ч. '0') — обычное состояние, вход разрешён.
+  freshStore();
+  localStorage.setItem(RS.RECOVERY_MARKER_KEY, '0');
+  check('маркер со значением "0" — не прерванное восстановление', RS.isRecoveryPending() === false);
+  check('при "0" вход не блокируется', RS.recoveryBlockMessage((k) => 'x') === null);
+  localStorage.setItem(RS.RECOVERY_MARKER_KEY, 'да');
+  check('маркер с посторонним значением — не прерванное восстановление', RS.isRecoveryPending() === false);
 }
 
 // ══════════════════════════════════════════════════════════════════
