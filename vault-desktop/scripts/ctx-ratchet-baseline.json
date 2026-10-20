@@ -95,36 +95,7 @@
     "groups-load.js": [],
     "groups-migrate.js": [],
     "groups-store.js": [],
-    "groups.js": [
-      "activeChat",
-      "applyEdits",
-      "applyPinFromWire",
-      "applyPollVotes",
-      "applyReactions",
-      "cryptoReady",
-      "filterDeleted",
-      "groupKeys",
-      "healGroupAvatarFromMessage",
-      "isIgnored",
-      "isOwnSender",
-      "loadProfiles",
-      "loadSeq",
-      "mergeHistory",
-      "mergePending",
-      "noteSeen",
-      "parseEnvelope",
-      "parseMessageContent",
-      "parsePollEnvelope",
-      "pinnedMsgId",
-      "pinnedPreview",
-      "readPinned",
-      "replyGroupAvatarHeal",
-      "saveChatCache",
-      "saveCurrentHistory",
-      "scheduleEphemeral",
-      "sendReadReceipts",
-      "showHistoryFirst"
-    ],
+    "groups.js": [],
     "history.js": [],
     "identity-store.js": [],
     "incoming.js": [],
@@ -257,12 +228,6 @@
     "chatFolderNewName": [
       "folders.js"
     ],
-    "pinnedMsgId": [
-      "groups.js"
-    ],
-    "pinnedPreview": [
-      "groups.js"
-    ],
     "showAddMemberPopup": [
       "members.js"
     ],
@@ -316,8 +281,8 @@
     ]
   },
   "totals": {
-    "ctxFields": 139,
-    "ctxRefSites": 297,
+    "ctxFields": 111,
+    "ctxRefSites": 252,
     "sharedWriteFields": 0
   }
 }

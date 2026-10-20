@@ -1,32 +1,47 @@
-// Node-смоук features/groups.js — под-домен «групповые сообщения» (ADR-001 домен 2).
-// Мокаем api/crypto/db через tmp-модули, ctx-методы — в makeCtx. Без Vue/Tauri.
-// Цель: застраховать ВЫНЕСЕННУЮ из App.vue логику loadGroupMessages:
-// no-group-key путь, классификацию (реакция/правка/квитанция/pin/poll/presence/
-// meta/hav не рендерятся как сообщения), дедуп по id конверта, crypto-фильтр.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+// Node-смоук features/groups.js — под-домен «групповые сообщения».
+//
+// ADR-005 W2 партия 5: модуль не читает компонент. Состояние — у владельцев
+// (`chat`/`sending`/`groups` — per-app экземпляры; `activeChat` — chatStore,
+// `emails` — mailboxState), эффекты — явный deps. Смоук собирает тот же
+// контракт, что App.vue:loadGroupMessages.
+//
+// Цель: застраховать логику loadGroupMessages — no-group-key путь,
+// классификацию (реакция/правка/квитанция/pin/poll/presence/meta/hav не
+// рендерятся как сообщения), дедуп по id конверта, crypto-фильтр, stale-guard,
+// ленивую догрузку ключа группы, запись аватара и пина в ВЛАДЕЛЬЦЕВ.
+import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { createChatStore } from '../src/chat-store.js';
+import { createSendingStore } from '../src/features/sending-store.js';
+import { createGroupsStore } from '../src/features/groups-store.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
+// ── Моки ───────────────────────────────────────────────────────────────────
 const apiMock = {
   groupMessages: [],
   myGroupKey: null,
-  getGroupMessages: async () => apiMock.groupMessages,
-  getMyGroupKey: async () => apiMock.myGroupKey,
+  calls: [],
+  getGroupMessages: async (id, emails, force) => { apiMock.calls.push(['getGroupMessages', id, force]); return apiMock.groupMessages; },
+  getMyGroupKey: async (id) => { apiMock.calls.push(['getMyGroupKey', id]); return apiMock.myGroupKey; },
+  saveProfile: (...a) => { apiMock.calls.push(['saveProfile', ...a]); },
 };
 const dbMock = { kv: {}, kvGet: async (ns, k) => (dbMock.kv[k] ?? null), kvSet: async (ns, k, v) => { dbMock.kv[k] = v; } };
-// crypto-мок: управляем расшифровкой per-тест
 const cryptoMock = {
   isEncrypted: (s) => typeof s === 'string' && s.startsWith('ENC:'),
   decryptWithGroupKey: null, // назначается тестом
+  setPeerPublicKey: () => {},
 };
 
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
+// chatStore (activeChat) и mailboxState (emails) — владельцы, их состояние
+// общее для модуля и стенда, поэтому кладём на globalThis.
+writeFileSync(MOCKS + '/session-store.js', 'export const chatStore = globalThis.__chatMock = { state: { activeChat: null } };\n');
+writeFileSync(MOCKS + '/mailbox-store.js', 'export const mailboxState = globalThis.__mailboxMock = { state: { emails: [] } };\n');
 writeFileSync(MOCKS + '/presence.js',
   // Контракт приёма heartbeat (ADR-005 R3): связанная функция отметки
   // (НЕ компонент) + решение «это presence?» внутри presence.js.
@@ -46,10 +61,11 @@ prepareModuleCopy(
   ROOT + '/src/features/groups.js',
   MOCKS + '/groups.mjs',
   {
-    '@tauri-apps/api/core': 'core.js',
     '../api.js': 'api.js',
     '../crypto.js': 'crypto.js',
     './presence.js': 'presence.js',
+    './session-store.js': 'session-store.js',
+    './mailbox-store.js': 'mailbox-store.js',
   },
   MOCKS,
 );
@@ -60,81 +76,93 @@ function check(name, cond, extra) {
   if (cond) { pass++; console.log('  ✓ ' + name); }
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
-function makeCtx(over = {}) {
-  const ctx = Object.assign({
-    loadSeq: 1, activeChat: 'group:G1', emails: [], cryptoReady: true,
-    groupKeys: {}, groupAvatars: {}, pendingOutgoing: {},
-    // Модуль-владелец переписки (ADR-004, Этап A1). groups.js пишет через
-    // ctx.chat.set/append/clear, а читает через ctx.chat.state.messages.
-    chat: createChatStore(),
-    pinnedMsgId: null, pinnedPreview: '',
+
+// Стенд на каждый сценарий: счётчики предыдущего не должны «доказывать» следующий.
+const state = { calls: [], pinned: null };
+
+function resetWorld(over = {}) {
+  apiMock.groupMessages = [];
+  apiMock.myGroupKey = null;
+  apiMock.calls = [];
+  state.calls = [];
+  state.pinned = null;
+  globalThis.__presCalls = [];
+  globalThis.__chatMock.state.activeChat = 'group:G1';
+  globalThis.__mailboxMock.state.emails = [];
+}
+
+// Контракт deps — ровно то, что собирает App.vue:loadGroupMessages.
+function makeDeps(over = {}) {
+  const chat = createChatStore();
+  const sending = createSendingStore();
+  const groups = createGroupsStore();
+  const deps = {
+    chat,
+    sending,
+    groups,
+    loadSeq: 1,
+    getLoadSeq: () => deps.loadSeq,
+    cryptoReady: true,
+    readPinned: async () => state.pinned,
+    setPinned: (msgId, preview) => { state.pinned = { msg_id: msgId, preview }; state.calls.push('setPinned'); },
+    showHistoryFirst: async () => { state.calls.push('showHistoryFirst'); },
     isOwnSender: (sid) => sid === 'me@x.ru',
     isIgnored: () => false,
-    readPinned: async () => null,
-    applyPinFromWire: async () => {},
-    showHistoryFirst: async () => {},
-    mergeHistory: async (chat, list) => list,
-    applyReactions: () => {}, applyEdits: () => {}, applyPollVotes: () => {},
-    filterDeleted: (l) => l, mergePending: (chat, l) => l,
-    parseMessageContent: (raw) => ({ text: typeof raw === 'string' ? raw : String(raw), attachment: null }),
-    parseEnvelope: (t) => { try { const o = JSON.parse(t); return (o && o.vault === 1) ? o : null; } catch (e) { return null; } },
+    applyPinFromWire: async (id, wire) => { state.calls.push('applyPinFromWire:' + id); },
+    replyGroupAvatarHeal: async (id) => { state.calls.push('replyGroupAvatarHeal:' + id); },
+    healGroupAvatarFromMessage: async (id, av) => { state.calls.push('healGroupAvatar:' + id); },
     parsePollEnvelope: () => null,
-    scheduleEphemeral: () => {}, saveChatCache: () => {},
-    saveCurrentHistory: () => {}, sendReadReceipts: () => {},
-    noteSeen: () => {}, healGroupAvatarFromMessage: () => {},
-    replyGroupAvatarHeal: async () => {}, loadProfiles: () => {},
-  }, over);
-  // Методы-обёртки над groupKeys/groupAvatars (ADR-004 Этап A9).
-  // Замыкание на ctx — единственный надёжный способ в Object.assign
-  // контексте: method shorthand внутри литерала терял бы this.
-  ctx.setGroupKey = (id, key) => { ctx.groupKeys[id] = key; return key; };
-  ctx.setGroupAvatar = (id, avatar) => { ctx.groupAvatars[id] = avatar; return avatar; };
-  ctx.mergeGroupKeys = (map) => Object.assign(ctx.groupKeys, map);
-  ctx.mergeGroupAvatars = (map) => Object.assign(ctx.groupAvatars, map);
-  // sending-store stubs (ADR-004 Этап A10) — для backward-compat с features,
-  // которые используют ctx.sending/ctx.pendingOutgoing в makeCtx.
-  ctx.setSending = (val) => { ctx.sending = !!val; return ctx.sending; };
-  ctx.getSending = () => ctx.sending;
-  ctx.setPendingOutgoing = (chatId, msg) => {
-    const b = ctx.pendingOutgoing[chatId] || {};
-    if (msg && msg.id) b[msg.id] = msg; else Object.assign(b, msg || {});
-    ctx.pendingOutgoing[chatId] = b;
-    return b;
+    loadProfiles: () => { state.calls.push('loadProfiles'); },
+    mergeHistory: async (chatKey, list) => list,
+    mergePending: (chatKey, list) => list,
+    filterDeleted: (l) => l,
+    applyReactions: (list, chatKey, wire) => { state.calls.push('applyReactions'); },
+    applyEdits: (list, chatKey, wire) => { state.calls.push('applyEdits'); },
+    applyPollVotes: (list, wire) => { state.calls.push('applyPollVotes'); },
+    scheduleEphemeral: () => { state.calls.push('scheduleEphemeral'); },
+    saveChatCache: (chatKey, list) => { state.calls.push('saveChatCache'); },
+    saveCurrentHistory: (chatKey) => { state.calls.push('saveCurrentHistory'); },
+    sendReadReceipts: (ids) => { state.calls.push('sendReadReceipts:' + ids.length); },
+    noteSeen: (e, ts) => { state.calls.push('noteSeen:' + e); },
   };
-  ctx.getPendingOutgoingBucket = (chatId) => ctx.pendingOutgoing[chatId] || (ctx.pendingOutgoing[chatId] = {});
-  ctx.mergePendingOutgoing = (chatId, bucket) => { ctx.pendingOutgoing[chatId] = bucket || {}; return ctx.pendingOutgoing[chatId]; };
-  ctx.dropBucket = (chatId) => { delete ctx.pendingOutgoing[chatId]; return ctx.pendingOutgoing; };
-  return ctx;
+  return Object.assign(deps, over);
 }
-const gmail = (content, senderId, mid, createdAt) => ({ content, sender_id: senderId, message_id: mid || '<m@x>', created_at: createdAt || '2026-01-01T00:00:00Z', is_read: false, is_sent: false });
+
+const gmail = (content, senderId, mid, createdAt) => ({
+  content, sender_id: senderId, message_id: mid || '<m@x>',
+  created_at: createdAt || '2026-01-01T00:00:00Z', is_read: false, is_sent: false,
+});
 
 // ── 1. No group key → показ как есть (unencrypted) ─────────────
 console.log('1. нет группового ключа → unencrypted-рендер');
 {
+  resetWorld();
   cryptoMock.decryptWithGroupKey = null;
-  apiMock.myGroupKey = null;
   apiMock.groupMessages = [gmail('привет', 'peer@x.ru', '<a@x>', '2026-01-02T00:00:00Z')];
-  const ctx = makeCtx({ groupKeys: {}, cryptoReady: false });
-  await G.loadGroupMessages(ctx, 'G1');
+  const d = makeDeps({ cryptoReady: false });
+  await G.loadGroupMessages(d, 'G1');
   check('сообщение отрисовано, from=them, encrypted=false',
-    ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0].from === 'them' && ctx.chat.state.messages[0].encrypted === false);
+    d.chat.state.messages.length === 1 && d.chat.state.messages[0].from === 'them'
+    && d.chat.state.messages[0].encrypted === false, d.chat.state.messages);
 }
 
 // ── 2. crypto-фильтр: не расшифровалось = не из группы ─────────
 console.log('2. crypto-фильтр: чужие/1:1 письма отбрасываются');
 {
+  resetWorld();
   apiMock.myGroupKey = { group_key: 'GK' };
   apiMock.groupMessages = [gmail('ENC:foreign', 'peer@x.ru', '<f@x>')];
   cryptoMock.decryptWithGroupKey = async () => { throw new Error('AAD mismatch'); };
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' } });
-  await G.loadGroupMessages(ctx, 'G1');
-  check('не расшифровалось → не рендерится (список пуст)', ctx.chat.state.messages.length === 0);
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('не расшифровалось → не рендерится (список пуст)', d.chat.state.messages.length === 0);
 }
 
 // ── 3. классификация: реакция/правка/квитанция НЕ рендерятся ────
 console.log('3. классификация wire-событий (не рендерятся как сообщения)');
 {
-  apiMock.myGroupKey = null;
+  resetWorld();
   apiMock.groupMessages = [
     gmail('ENC:r', 'peer@x.ru', '<r@x>'),   // реакция
     gmail('ENC:e', 'peer@x.ru', '<e@x>'),   // правка
@@ -147,13 +175,13 @@ console.log('3. классификация wire-событий (не ренде�
     return null;
   };
   const seen = { react: null, edit: null };
-  const ctx = makeCtx({
-    groupKeys: { G1: 'GK' },
-    applyReactions: (list, chat, wire) => { seen.react = wire; },
-    applyEdits: (list, chat, wire) => { seen.edit = wire; },
+  const d = makeDeps({
+    applyReactions: (list, chatKey, wire) => { seen.react = wire; },
+    applyEdits: (list, chatKey, wire) => { seen.edit = wire; },
   });
-  await G.loadGroupMessages(ctx, 'G1');
-  check('реакция/правка/квитанция НЕ в messages (0 карточек)', ctx.chat.state.messages.length === 0);
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('реакция/правка/квитанция НЕ в messages (0 карточек)', d.chat.state.messages.length === 0);
   check('реакция ушла в applyReactions (msg_id X)', seen.react && seen.react['X'] && seen.react['X'][0].emoji === '👍');
   check('правка ушла в applyEdits (msg_id Y)', seen.edit && seen.edit['Y'] && seen.edit['Y'][0].text === 'new');
 }
@@ -161,58 +189,170 @@ console.log('3. классификация wire-событий (не ренде�
 // ── 4. реальное сообщение: конверт + дедуп по id ───────────────
 console.log('4. сообщение из конверта + дедуп по id (N-1 копий отправителя)');
 {
-  apiMock.myGroupKey = null;
-  // две копии одного конверта (id=ev1) + одно разные
+  resetWorld();
   apiMock.groupMessages = [
     gmail('ENC:1', 'peer@x.ru', '<c1@x>', '2026-01-03T00:00:00Z'),
     gmail('ENC:2', 'peer@x.ru', '<c2@x>', '2026-01-03T00:00:01Z'),
     gmail('ENC:3', 'peer@x.ru', '<c3@x>', '2026-01-04T00:00:00Z'),
   ];
+  // Копии ОДНОГО конверта (id=ev1) с РАЗНЫМ текстом: при дедупе должен
+  // остаться ПЕРВЫЙ (иначе видно последнюю копию — а это уже другой текст).
   cryptoMock.decryptWithGroupKey = async (content) => {
-    if (content === 'ENC:1' || content === 'ENC:2') return JSON.stringify({ vault: 1, id: 'ev1', text: 'одно и то же' });
+    if (content === 'ENC:1') return JSON.stringify({ vault: 1, id: 'ev1', text: 'первая копия' });
+    if (content === 'ENC:2') return JSON.stringify({ vault: 1, id: 'ev1', text: 'вторая копия' });
     if (content === 'ENC:3') return JSON.stringify({ vault: 1, id: 'ev2', text: 'другое' });
     return null;
   };
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' } });
-  await G.loadGroupMessages(ctx, 'G1');
-  check('дедуп по id конверта: 2 уникальных сообщения (не 3)', ctx.chat.state.messages.length === 2);
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('дедуп по id конверта: 2 уникальных сообщения (не 3)', d.chat.state.messages.length === 2,
+    d.chat.state.messages.map((m) => m.id));
   check('содержимое конверта (env.text), from=them, encrypted=true',
-    ctx.chat.state.messages.some(m => m.content === 'одно и то же' && m.encrypted === true));
+    d.chat.state.messages.some((m) => m.content === 'первая копия' && m.encrypted === true),
+    d.chat.state.messages.map((m) => m.content));
+  check('история и кэш сохранены, квитанции «просмотрено» отправлены',
+    state.calls.includes('saveChatCache') && state.calls.includes('saveCurrentHistory')
+    && state.calls.includes('sendReadReceipts:2'), state.calls);
 }
 
 // ── 5. stale-guard: переключение чата отменяет запись ──────────
 console.log('5. stale-guard: активный чат сменился → messages не трогаем');
 {
-  apiMock.myGroupKey = null;
+  resetWorld();
+  globalThis.__chatMock.state.activeChat = 'group:OTHER';
   apiMock.groupMessages = [gmail('ENC:x', 'peer@x.ru', '<x@x>')];
   cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ vault: 1, id: 'evX', text: 't' });
-  // activeChat != 'group:G1' → stale с первого вызова → ранний return
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, activeChat: 'group:OTHER' });
-  ctx.chat.state.messages = ['KEEP'];
-  await G.loadGroupMessages(ctx, 'G1');
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  d.chat.state.messages = ['KEEP'];
+  await G.loadGroupMessages(d, 'G1');
   check('stale → messages не перезаписаны (KEEP сохранён)',
-    Array.isArray(ctx.chat.state.messages) && ctx.chat.state.messages.length === 1 && ctx.chat.state.messages[0] === 'KEEP');
+    Array.isArray(d.chat.state.messages) && d.chat.state.messages.length === 1 && d.chat.state.messages[0] === 'KEEP');
+  check('и запись в чат не делалась (saveChatCache не вызван)', !state.calls.includes('saveChatCache'), state.calls);
 }
 
-// ── 6. presence-сигнал: ingestSignal(noteSeen,...) без ReferenceError ──
-console.log('6. presence-сигнал через ingestSignal(noteSeen) — регресс this→ctx');
+// ── 5b. stale по ТОКЕНУ загрузки (пользователь переключился) ────
+console.log('5b. stale по токену загрузки → результат не применяется');
 {
-  apiMock.myGroupKey = null;
+  resetWorld();
+  apiMock.groupMessages = [gmail('ENC:x', 'peer@x.ru', '<x@x>')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ vault: 1, id: 'evX', text: 't' });
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  d.chat.state.messages = ['KEEP2'];
+  // Токен растёт ПОСЛЕ старта загрузки — гонка переключения чата.
+  // (Возвращать 99 всегда нельзя: тогда seq == getLoadSeq() и гонки нет.)
+  let seq = 1;
+  d.getLoadSeq = () => seq;
+  d.showHistoryFirst = async () => { seq = 99; };
+  await G.loadGroupMessages(d, 'G1');
+  check('токен вырос → messages не тронуты (KEEP2)',
+    d.chat.state.messages.length === 1 && d.chat.state.messages[0] === 'KEEP2', d.chat.state.messages);
+}
+
+// ── 6. presence-сигнал: ingestSignal(noteSeen,...) ──────────────
+console.log('6. presence-сигнал через ingestSignal(noteSeen)');
+{
+  resetWorld();
   apiMock.groupMessages = [gmail('ENC:p', 'peer@x.ru', '<p@x>')];
   cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ presence: 1, ts: Date.now() });
   const seen = [];
-  const ctx = makeCtx({ groupKeys: { G1: 'GK' }, noteSeen: (e, ts) => { seen.push([e, ts]); } });
+  const d = makeDeps({ noteSeen: (e, ts) => { seen.push([e, ts]); } });
+  d.groups.setGroupKey('G1', 'GK');
   globalThis.__presCalls = [];
   let threw = null;
-  try { await G.loadGroupMessages(ctx, 'G1'); } catch (e) { threw = e; }
+  try { await G.loadGroupMessages(d, 'G1'); } catch (e) { threw = e; }
   const call = globalThis.__presCalls[0];
   check('presence без ReferenceError, ingestSignal получил функцию отметки (не ctx, не this)',
-    threw === null && !!call && typeof call.noteSeen === 'function' && ctx.chat.state.messages.length === 0,
-    { threw: threw && String(threw), call: !!call, msgs: ctx.chat.state.messages.length });
-  check('отметка активности ушла в ctx.noteSeen (связанная функция)',
+    threw === null && !!call && typeof call.noteSeen === 'function' && d.chat.state.messages.length === 0,
+    { threw: threw && String(threw), call: !!call, msgs: d.chat.state.messages.length });
+  check('отметка активности ушла в noteSeen (связанная функция)',
     seen.length === 1 && seen[0][0] === 'peer@x.ru', seen);
 }
 
+// ── 7. ПИН: закреплённое сообщение пишется в UI-состояние ───────
+console.log('7. пин: readPinned → setPinned (баннер закреплённого)');
+{
+  resetWorld();
+  state.pinned = { msg_id: 'pin1', preview: 'закреплено' };
+  apiMock.groupMessages = [];
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('пин прочитан и записан в UI-состояние',
+    state.calls.includes('setPinned') && state.pinned.msg_id === 'pin1', { calls: state.calls, pinned: state.pinned });
+}
+
+// ── 8. Ленивая догрузка ключа группы — в ВЛАДЕЛЬЦА ─────────────
+console.log('8. ленивая догрузка ключа группы → владелец groups-store');
+{
+  resetWorld();
+  apiMock.myGroupKey = { group_key: 'GK2' };
+  apiMock.groupMessages = [gmail('ENC:k', 'peer@x.ru', '<k@x>')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ vault: 1, id: 'evK', text: 'после догрузки' });
+  const d = makeDeps();
+  // Ключа в памяти нет — модуль должен догрузить его через api и положить
+  // во ВЛАДЕЛЬЦА (иначе следующий вызов расшифрует тем же ключом заново).
+  await G.loadGroupMessages(d, 'G1');
+  check('ключ догружен из api и записан во владельца',
+    d.groups.state.groupKeys['G1'] === 'GK2', d.groups.state.groupKeys);
+  check('после догрузки сообщение расшифровано', d.chat.state.messages.length === 1, d.chat.state.messages);
+}
+
+// ── 9. meta-аватар группы → владелец групп ─────────────────────
+console.log('9. meta-письмо с аватаром → аватар записан во владельца');
+{
+  resetWorld();
+  apiMock.groupMessages = [gmail('ENC:m', 'peer@x.ru', '<m@x>', '2026-01-05T00:00:00Z')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ meta: 1, avatar: 'data:image/png;base64,AAA' });
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('аватар записан во владельца групп', d.groups.state.groupAvatars['G1'] === 'data:image/png;base64,AAA',
+    d.groups.state.groupAvatars);
+  check('meta не рендерится как сообщение', d.chat.state.messages.length === 0);
+}
+
+// ── 10. hav-запрос аватарки → ответ владельцу группы ───────────
+console.log('10. hav-запрос: ответ группе, а не сообщение');
+{
+  resetWorld();
+  apiMock.groupMessages = [gmail('ENC:h', 'peer@x.ru', '<h@x>')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ hav: 1 });
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('replyGroupAvatarHeal вызван для G1', state.calls.includes('replyGroupAvatarHeal:G1'), state.calls);
+  check('hav не рендерится как сообщение', d.chat.state.messages.length === 0);
+}
+
+// ── 11. Ignore-лист участника: не расшифровываем и не рендерим ──
+console.log('11. ignore-лист: письма заблокированного участника не расшифровываются');
+{
+  resetWorld();
+  apiMock.groupMessages = [gmail('ENC:ig', 'blocked@x.ru', '<ig@x>')];
+  let decryptCalls = 0;
+  cryptoMock.decryptWithGroupKey = async () => { decryptCalls++; return JSON.stringify({ vault: 1, id: 'evIg', text: 'x' }); };
+  const d = makeDeps({ isIgnored: (e) => e === 'blocked@x.ru' });
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('письмо заблокированного не расшифровывалось (фильтр ДО расшифровки)', decryptCalls === 0, decryptCalls);
+  check('и в чат не попало', d.chat.state.messages.length === 0, d.chat.state.messages);
+}
+
+// ── 12. gavatar в конверте → лечим аватар группы ───────────────
+console.log('12. конверт с gavatar → аватар группы лечится');
+{
+  resetWorld();
+  apiMock.groupMessages = [gmail('ENC:gv', 'peer@x.ru', '<gv@x>')];
+  cryptoMock.decryptWithGroupKey = async () => JSON.stringify({ vault: 1, id: 'evGv', text: 'привет', gavatar: 'data:image/png;base64,BBB' });
+  const d = makeDeps();
+  d.groups.setGroupKey('G1', 'GK');
+  await G.loadGroupMessages(d, 'G1');
+  check('healGroupAvatarFromMessage вызван для G1', state.calls.includes('healGroupAvatar:G1'), state.calls);
+  check('сообщение при этом отрисовано', d.chat.state.messages.length === 1, d.chat.state.messages);
+}
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

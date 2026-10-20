@@ -3521,7 +3521,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         }
       }
 
-      await GroupsFeature.loadGroupMessages(this, group.id, false);
+      await this.loadGroupMessages(group.id, false);
       this.scrollToBottom(true);
     },
     // --- Заметки для себя
@@ -3807,11 +3807,47 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // (INBOX+Junk) и восстанавливает пропущенные сообщения.
     async refreshGroupFull() {
       if (!this.currentGroup) return;
-      await GroupsFeature.loadGroupMessages(this, this.currentGroup.id, true);
+      await this.loadGroupMessages(this.currentGroup.id, true);
       this.scrollToBottom(false);
     },
     // ── Групповые сообщения (логика в features/groups.js) — тонкий делегат ──
-    // ADR-001 Etap 2: call-site direct -> GroupsFeature.loadGroupMessages(this, groupId, forceRescan). Delegate removed.
+    // ADR-005 W2 партия 5: контракт модуля собирается здесь и ЖИВЬЁМ на
+    // каждый вызов — модуль компонент не читает. Состояние — у владельцев
+    // (chat/sending/groups — per-app экземпляры; activeChat и emails — у
+    // chatStore/mailboxState), эффекты — явный список.
+    async loadGroupMessages(groupId, forceRescan = false) {
+      return GroupsFeature.loadGroupMessages({
+        chat: this.chat,
+        sending: this.sendingStore,
+        groups: this.groupsStore,
+        getLoadSeq: () => this.loadSeq,
+        cryptoReady: this.cryptoReady,
+        readPinned: (id) => this.readPinned(id),
+        // Без точек с запятой внутри: тело делегата должно остаться ОДНИМ
+        // return-выражением, иначе ратчет «методов с логикой в App.vue» считает
+        // делегат логикой.
+        setPinned: (msgId, preview) => Object.assign(this, { pinnedMsgId: msgId, pinnedPreview: preview }),
+        showHistoryFirst: (chatKey, stale) => this.showHistoryFirst(chatKey, stale),
+        isOwnSender: (id) => this.isOwnSender(id),
+        isIgnored: (e) => this.isIgnored(e),
+        applyPinFromWire: (id, wire) => this.applyPinFromWire(id, wire),
+        replyGroupAvatarHeal: (id) => this.replyGroupAvatarHeal(id),
+        healGroupAvatarFromMessage: (id, av) => this.healGroupAvatarFromMessage(id, av),
+        parsePollEnvelope: (env) => this.parsePollEnvelope(env),
+        loadProfiles: () => this.loadProfiles(),
+        mergeHistory: (chatKey, list) => this.mergeHistory(chatKey, list),
+        mergePending: (chatKey, list) => this.mergePending(chatKey, list),
+        filterDeleted: (list) => this.filterDeleted(list),
+        applyReactions: (list, chatKey, wire) => this.applyReactions(list, chatKey, wire),
+        applyEdits: (list, chatKey, wire) => this.applyEdits(list, chatKey, wire),
+        applyPollVotes: (list, wire) => this.applyPollVotes(list, wire),
+        scheduleEphemeral: (m, chatKey) => this.scheduleEphemeral(m, chatKey),
+        saveChatCache: (chatKey, list) => this.saveChatCache(chatKey, list),
+        saveCurrentHistory: (chatKey) => this.saveCurrentHistory(chatKey),
+        sendReadReceipts: (ids) => this.sendReadReceipts(ids),
+        noteSeen: (e, ts) => this.noteSeen(e, ts),
+      }, groupId, forceRescan);
+    },
     // Мета-письма групп (VaultGroupMeta: <id>, аватар от админа) — для ВСЕХ
     // групп, где мы участники, а не только для открытой. Вызывается из
     // loadEmails (поллинг): участник, не открывавший группу после смены
@@ -4935,7 +4971,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         invites: this.invitesStore,
         loadGroups: () => this.loadGroups(),
         loadChannels: () => this.loadChannels(),
-        loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
+        loadGroupMessages: (id) => this.loadGroupMessages(id, false),
         refreshGroupMembers: () => this.refreshGroupMembers(),
         loadStoredPeerKeys: () => this.loadStoredPeerKeys(),
         loadContacts: () => this.loadContacts(),
@@ -4957,7 +4993,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         kvSet: (...args) => db.kvSet(...args),
         showToast: (...args) => uiStore.toast(...args),
         t: (key) => uiStore.tr(key),
-        loadGroupMessages: (id) => GroupsFeature.loadGroupMessages(this, id, false),
+        loadGroupMessages: (id) => this.loadGroupMessages(id, false),
         isCryptoReady: () => this.cryptoReady,
         groups: () => this.groups,
         // Аватар пишет владелец groups-store (раньше был вызов на СПИСОК

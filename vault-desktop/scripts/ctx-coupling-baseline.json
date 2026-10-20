@@ -1,6 +1,6 @@
 {
-  "totalCtxRefs": 258,
-  "totalFunctions": 312,
+  "totalCtxRefs": 222,
+  "totalFunctions": 313,
   "functionsWithCtx": 86,
   "modules": {
     "src/features/attachments.js": {
@@ -330,42 +330,11 @@
       "biggestCtxFn": null
     },
     "src/features/groups.js": {
-      "ctxRefs": 36,
-      "fields": [
-        "activeChat",
-        "applyEdits",
-        "applyPinFromWire",
-        "applyPollVotes",
-        "applyReactions",
-        "cryptoReady",
-        "emails",
-        "filterDeleted",
-        "groupKeys",
-        "healGroupAvatarFromMessage",
-        "isIgnored",
-        "isOwnSender",
-        "loadProfiles",
-        "loadSeq",
-        "mergeHistory",
-        "mergePending",
-        "noteSeen",
-        "parseEnvelope",
-        "parseMessageContent",
-        "parsePollEnvelope",
-        "pendingOutgoing",
-        "pinnedMsgId",
-        "pinnedPreview",
-        "readPinned",
-        "replyGroupAvatarHeal",
-        "saveChatCache",
-        "saveCurrentHistory",
-        "scheduleEphemeral",
-        "sendReadReceipts",
-        "showHistoryFirst"
-      ],
+      "ctxRefs": 0,
+      "fields": [],
       "functions": 1,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "loadGroupMessages"
+      "functionsWithCtx": 0,
+      "biggestCtxFn": null
     },
     "src/features/history.js": {
       "ctxRefs": 0,
@@ -640,9 +609,9 @@
     "src/features/session-store.js": {
       "ctxRefs": 0,
       "fields": [],
-      "functions": 4,
-      "functionsWithCtx": 1,
-      "biggestCtxFn": "createSessionStore"
+      "functions": 5,
+      "functionsWithCtx": 2,
+      "biggestCtxFn": "createUiStore"
     },
     "src/features/video.js": {
       "ctxRefs": 0,

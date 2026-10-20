@@ -1,10 +1,18 @@
 // Feature module: групповые сообщения — загрузка/расшифровка/классификация/мерж.
-// Этап 5 декомпозиции App.vue (ctx-паттерн). ADR-001 домен 2 (под-домен
-// «групповые сообщения»). Вынесено из App.vue механически (this.* -> ctx.*),
-// поведение 1:1. Состояние/downstream (readPinned/showHistoryFirst/mergeHistory/
-// applyReactions/Edits/PollVotes/filterDeleted/mergePending/parseMessageContent/
-// scheduleEphemeral/sendReadReceipts/isIgnored/isOwnSender/loadProfiles/...)
-// остаются в App.vue и вызываются через ctx.
+// ADR-001 домен 2 (под-домен «групповые сообщения»). Поведение — как было.
+//
+// ADR-005 W2 (`t_bcb8927a`), партия 5: модуль больше НЕ читает компонент.
+// Состояние — у владельцев (ADR-004), эффекты — явный deps (ADR-005 R3):
+//   · `chat`/`sending`/`groups` — per-app экземпляры владельцев (чаты,
+//     pendingOutgoing, ключи/аватары групп): создаются в setup();
+//   · `activeChat` — владелец chatStore, `emails` — владелец mailboxState;
+//   · разбор конверта и содержимого — чистые функции message-format.js;
+//   · закреплённое сообщение (баннер) — UI-состояние, по ADR-003 §2 остаётся
+//     в компоненте: модуль получает `readPinned` (эффект) и `setPinned`
+//     (запись);
+//   · остальное (mergeHistory/applyReactions/Edits/PollVotes/filterDeleted/
+//     mergePending/scheduleEphemeral/saveChatCache/saveCurrentHistory/
+//     sendReadReceipts/isIgnored/isOwnSender/loadProfiles/…) — эффекты.
 //
 // STEALTH-группы: тема писем пустая → subject-фильтрации нет; единый проход
 // классифицирует реакцию/правку/квитанцию/pin/poll/presence/meta/hav/сообщение.
@@ -12,43 +20,45 @@ import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
 import * as PinWire from './group-pin-wire.js';
+import * as MsgFormat from '../message-format.js';
+import { chatStore } from './session-store.js';
+import { mailboxState } from './mailbox-store.js';
 
-export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
+export async function loadGroupMessages(deps, groupId, forceRescan = false) {
       // Токен загрузки — см. loadMessages (защита от гонки переключения).
-      const seq = ctx.loadSeq;
+      // Читается ВНУТРИ stale() — живьём: рост токена посреди загрузки
+      // означает «пользователь переключился» (снимок на входе сбил бы гонку).
+      const seq = deps.getLoadSeq();
       const chat = 'group:' + groupId;
-      const stale = () => seq !== ctx.loadSeq || ctx.activeChat !== chat;
+      const stale = () => seq !== deps.getLoadSeq() || chatStore.state.activeChat !== chat;
       // СВЯЗАННАЯ функция отметки активности: presence.js принимает эффект,
-      // а не компонент (ADR-005 R3). Лямбда замыкает ctx — одна ссылка на
-      // ctx.noteSeen на весь модуль (а не по ссылке на каждый вызов), и `this`
-      // внутри метода компонента остаётся компонентом.
-      const markSeen = (email, ts) => ctx.noteSeen(email, ts);
+      // а не компонент (ADR-005 R3).
+      const markSeen = (email, ts) => deps.noteSeen(email, ts);
       // Закреплённое сообщение группы — баннер виден сразу (без ожидания
       // поллинга), потом pin-письма из цикла ниже обновят его по дате.
       if (!stale()) {
-        const pin = await ctx.readPinned(groupId);
-        ctx.pinnedMsgId = (pin && pin.msg_id) || null;
-        ctx.pinnedPreview = (pin && pin.preview) || '';
+        const pin = await deps.readPinned(groupId);
+        deps.setPinned((pin && pin.msg_id) || null, (pin && pin.preview) || '');
       }
       // ВАЖНО: await — история должна загрузиться ДО мержа, иначе
       // гонка с loadGroupMessages: merged=[] без истории и saveCurrentHistory
       // затирал сохранённую историю → сообщения «пропадали» (kmakan).
-      await ctx.showHistoryFirst(chat, stale);
+      await deps.showHistoryFirst(chat, stale);
       try {
-        const raw = await api.getGroupMessages(groupId, ctx.emails, !!forceRescan);
+        const raw = await api.getGroupMessages(groupId, mailboxState.state.emails, !!forceRescan);
         if (stale()) return;
-        let groupKey = ctx.groupKeys[groupId];
+        let groupKey = deps.groups.state.groupKeys[groupId];
         // Гонка инициализации: группа могла открыться (или восстановиться
         // из кэша) до того, как crypto завершил initCrypto() — тогда в
         // selectGroup загрузка ключа была пропущена (guard `cryptoReady`),
         // и в памяти ключа нет, хотя группы.json уже содержит его. Догружаем
         // ключ прямо здесь, чтобы групповые сообщения не рендерились
         // шифротекстом.
-        if (!groupKey && ctx.cryptoReady) {
+        if (!groupKey && deps.cryptoReady) {
           try {
             const kd = await api.getMyGroupKey(groupId);
             if (kd && kd.group_key) {
-              ctx.setGroupKey(groupId, kd.group_key);
+              deps.groups.setGroupKey(groupId, kd.group_key);
               groupKey = kd.group_key;
             }
           } catch (e) {
@@ -75,7 +85,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             // Ignore-лист: сообщения заблокированного УЧАСТНИКА не
             // расшифровываем и не рендерим в группе (фильтр до расшифровки —
             // по sender_id письма, он приходит из заголовка From).
-            if (!ctx.isOwnSender(msg.sender_id) && ctx.isIgnored(msg.sender_id)) continue;
+            if (!deps.isOwnSender(msg.sender_id) && deps.isIgnored(msg.sender_id)) continue;
             let plaintext;
             try {
               plaintext = await crypto.decryptWithGroupKey(msg.content, groupKey);
@@ -115,7 +125,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             // открепление в закрепление.
             const pinWire = PinWire.parsePinWire(obj, Date.parse(msg.created_at || 0) || 0);
             if (pinWire) {
-              await ctx.applyPinFromWire(groupId, pinWire);
+              await deps.applyPinFromWire(groupId, pinWire);
               continue;
             }
             // Голос голосования: {poll:1, poll_id, option} — сигнальное
@@ -147,15 +157,15 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             // групповым ключом), не рендерится. Отвечаем meta-письмом, если
             // аватар есть у нас (24ч rate-limit + защита от петли внутри).
             if (obj && obj.hav === 1) {
-              await ctx.replyGroupAvatarHeal(groupId);
+              await deps.replyGroupAvatarHeal(groupId);
               continue; // hav не рендерится как сообщение
             }
             // Сообщение: конверт {vault:1,id,text,name,avatar} или legacy-текст.
-            const env = ctx.parseEnvelope(plaintext);
+            const env = MsgFormat.parseEnvelope(plaintext);
             if (env) {
               // Самовосстановление аватарки группы: конверт сообщения нёс
               // gavatar — кладём в kv (guard на непустое/изменение внутри).
-              if (env.gavatar) await ctx.healGroupAvatarFromMessage(groupId, env.gavatar);
+              if (env.gavatar) await deps.healGroupAvatarFromMessage(groupId, env.gavatar);
               if ((env.name || env.avatar) && msg.sender_id) {
                 api.saveProfile(msg.sender_id, env.name, env.avatar, env.ts || 0);
               }
@@ -163,14 +173,14 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
               // До этого env.poll выбрасывался в `plaintext = env.text`, и
               // poll-конверт рендерился текстом вопроса без карточки/кнопок.
               if (env.type === 'poll') {
-                const p = ctx.parsePollEnvelope(env);
+                const p = deps.parsePollEnvelope(env);
                 if (p) {
                   const gPollTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
                   decrypted.push({
                     id: p.id || msg.message_id || '',
                     content: p.question,
                     attachment: null,
-                    from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+                    from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
                     time: new Date(msg.created_at).toLocaleTimeString(),
                     status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
                     encrypted: true,
@@ -195,8 +205,8 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
                 } catch (e) { /* не dod */ }
               }
             }
-            const { text, attachment } = ctx.parseMessageContent(plaintext);
-            if (env && !ctx.isOwnSender(msg.sender_id)) {
+            const { text, attachment } = MsgFormat.parseMessageContent(plaintext);
+            if (env && !deps.isOwnSender(msg.sender_id)) {
               markSeen(msg.sender_id, new Date(msg.created_at).getTime());
             }
             const gMailTs = new Date(msg.created_at || msg.date || Date.now()).getTime() || Date.now();
@@ -205,7 +215,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
               ...msg,
               content: text,
               attachment,
-              from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+              from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: true,
@@ -219,9 +229,9 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           // Мета-обновления группы (аватар): последнее по дате — авторитетно.
           if (metaLatest && metaLatest.avatar !== (await db.kvGet('anon', 'group-avatar:' + groupId))) {
             await db.kvSet('anon', 'group-avatar:' + groupId, metaLatest.avatar);
-            ctx.setGroupAvatar(groupId, metaLatest.avatar);
+            deps.groups.setGroupAvatar(groupId, metaLatest.avatar);
           }
-          ctx.loadProfiles();
+          deps.loadProfiles();
           // Дедупликация по id конверта: sendGroupMessage шлёт каждому
           // участнику отдельное письмо, поэтому в Sent отправителя лежит
           // N−1 копий одного сообщения — все расшифровываются в один
@@ -242,7 +252,7 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           // pending-записи отправителя (свою копию он не получает — живут
           // только в pendingOutgoing): квитанции {read:1} участников снимают
           // 'failed'/'sent' → 'read'.
-          const pb = ctx.pendingOutgoing[chat] || {};
+          const pb = deps.sending.state.pendingOutgoing[chat] || {};
           for (const [pid, pmsg] of Object.entries(pb)) {
             const ack = wireAcks[pid];
             if (ack && Object.keys(ack).length) pmsg.status = 'read';
@@ -250,8 +260,8 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
           // История — основа чата, письма добавляют новое (mergeHistory).
           // Статусы/реакции/правки — к итоговому списку (в истории старые
           // статусы, письмо приносит свежий).
-          const hadMessages = ctx.chat.state.messages.length > 0;
-          const merged0 = await ctx.mergeHistory(chat, list);
+          const hadMessages = deps.chat.state.messages.length > 0;
+          const merged0 = await deps.mergeHistory(chat, list);
           const statusById = new Map();
           for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
           for (const m of merged0) {
@@ -268,29 +278,29 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
             const acks = wireAcks[m.id];
             if (acks && Object.keys(acks).length) m.status = 'read';
           }
-          ctx.applyReactions(merged0, chat, wireReactions);
-          ctx.applyEdits(merged0, chat, wireEdits);
-          ctx.applyPollVotes(merged0, wirePollVotes);
-          const merged = ctx.filterDeleted(ctx.mergePending(chat, merged0));
+          deps.applyReactions(merged0, chat, wireReactions);
+          deps.applyEdits(merged0, chat, wireEdits);
+          deps.applyPollVotes(merged0, wirePollVotes);
+          const merged = deps.filterDeleted(deps.mergePending(chat, merged0));
           if (!merged.length && hadMessages && !stale()) {
             return;
           }
-          ctx.chat.set(merged);
-          for (const m of ctx.chat.state.messages) if (m.expireAt) ctx.scheduleEphemeral(m, chat);
-          ctx.saveChatCache(chat, ctx.chat.state.messages);
+          deps.chat.set(merged);
+          for (const m of deps.chat.state.messages) if (m.expireAt) deps.scheduleEphemeral(m, chat);
+          deps.saveChatCache(chat, deps.chat.state.messages);
           // Локальная история (IndexedDB) — полный архив группы.
-          ctx.saveCurrentHistory(chat);
+          deps.saveCurrentHistory(chat);
           // Открыли группу — шлём участникам квитанции «просмотрено» по входящим.
-          const incoming = ctx.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
-          ctx.sendReadReceipts(incoming);
+          const incoming = deps.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
+          deps.sendReadReceipts(incoming);
         } else {
           // No group key — show as-is (unencrypted)
-          ctx.chat.set(raw.map(msg => {
-            const { text, attachment } = ctx.parseMessageContent(msg.content);
+          deps.chat.set(raw.map(msg => {
+            const { text, attachment } = MsgFormat.parseMessageContent(msg.content);
             return {
               ...msg,
               content: text,
-              from: ctx.isOwnSender(msg.sender_id) ? 'me' : 'them',
+              from: deps.isOwnSender(msg.sender_id) ? 'me' : 'them',
               time: new Date(msg.created_at).toLocaleTimeString(),
               status: msg.is_read ? 'read' : msg.is_sent ? 'delivered' : 'sent',
               encrypted: false,
@@ -300,6 +310,6 @@ export async function loadGroupMessages(ctx, groupId, forceRescan = false) {
         }
       } catch (error) {
         console.error('Failed to load group messages:', error);
-        if (!stale()) ctx.chat.clear();
+        if (!stale()) deps.chat.clear();
       }
 }
