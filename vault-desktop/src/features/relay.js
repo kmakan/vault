@@ -490,3 +490,14 @@ export function onRelayEnabled(ctx, on) {
   // (syncEcoWithRelay выключит eco → foreground-служба + IDLE).
   syncEcoWithRelay(ctx, true).catch(() => {});
 }
+
+// Объяснить пользователю, почему доставка идёт по почте (релей недоступен
+// или лимит исчерпан). ADR-005 W3 (партия 7): логика уехала из App.vue.
+//
+// deps: { relayDeliveryMode() } — тост у uiStore (владелец форм), как и
+// остальные тосты этого модуля.
+export function relayExplainDelivery(deps) {
+  if (deps.relayDeliveryMode() === 'email') {
+    uiStore.toast(uiStore.tr('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
+  }
+}

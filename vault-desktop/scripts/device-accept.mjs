@@ -118,6 +118,21 @@ const PROBES = {
       await sleep(300);
     }
 
+    // Чат заметок (W3 партия 6): открывается по «Заметки для себя».
+    {
+      const notes = Array.from(document.querySelectorAll('.contact-item'))
+        .find((el) => /Заметки|Notes/i.test(el.innerText || ''));
+      if (notes) {
+        notes.click();
+        await sleep(1200);
+        const p2 = app._container._vnode.component.proxy;
+        step('чат заметок открыт (activeChat = __notes__)', p2.activeChat === '__notes__', { activeChat: p2.activeChat });
+        step('в шапке есть поле ввода (композер)', !!document.querySelector('input.message-field'));
+      } else {
+        report.steps.push({ name: 'чат заметок открыт', pass: null, extra: 'пункт «Заметки для себя» не найден' });
+      }
+    }
+
     // Полный путь «Новая папка…» (баг 20.10: папка создавалась БЕЗ ИМЕНИ).
     // Меню закрываем заранее: проба должна быть идемпотентной (предыдущий
     // прогон мог оставить меню открытым — тогда следующий клик по «Создать»

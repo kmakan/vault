@@ -992,6 +992,7 @@ import * as IncomingFeature from './features/incoming.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as NotesFeature from './features/notes.js';
+import * as StarsFeature from './features/stars.js';
 import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
@@ -1211,7 +1212,7 @@ export default {
       // Локально, как «Удалить у меня»: собеседнику не видно, по почте не
       // синхронизируется. showStarredOnly — режим «показать только избранные»
       // в шапке открытого чата (сам чат при открытии показывается как обычно).
-      starredMap: {},
+      // starredMap — в uiStore (ADR-005 W3, партия 7).
       showStarredOnly: false,
       // Идемпотентность счётчиков: uid|folder уже обработанных писем
       // (персист в kv 'unread-seen') — каждое письмо считается один раз.
@@ -1379,7 +1380,7 @@ export default {
       // Список участников группы (модалка по клику на счётчик)
       // showMembersListinj в uiStore.modalFlags (J.7):
       // Полноэкранный просмотр изображения-вложения
-      viewingImage: null,
+      // viewingImage — в uiStore (ADR-005 W3, партия 7).
       // Profile cache (имя/аватар из настроек)
       profiles: {},
       // Emoji
@@ -1878,6 +1879,51 @@ export default {
         setProcessedUnreadIds: (v) => { this.processedUnreadIds = v; },
         unreadOf: (k) => this.unreadOf(k),
         clearUnread: (k) => this.clearUnread(k),
+      };
+    },
+    // ADR-005 W3 (партия 7): звёзды и просмотр картинки — у владельца форм.
+    starredMap: {
+      get() { return uiStore.getFormField('starredMap'); },
+      set(v) { uiStore.setFormField('starredMap', v || {}); },
+    },
+    viewingImage: {
+      get() { return uiStore.getFormField('viewingImage'); },
+      set(v) { uiStore.setFormField('viewingImage', v); },
+    },
+    // Контракты фич голосований и пересылки (ADR-005 W3, партия 7): перенесены
+    // из methods в computed — как ВСЕ остальные контракты (один стиль).
+    pollDeps() {
+      return {
+        email: this.email, activeChat: this.activeChat,
+        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
+        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
+        cryptoReady: this.cryptoReady, displayName: this.displayName,
+        newMessageId: this.newMessageId, setSending: v => this.setSending(v),
+        chat: this.chat, scrollToBottom: uiStore.scrollToBottom,
+        saveCurrentHistory: k => this.saveCurrentHistory(k), t: uiStore.tr,
+      };
+    },
+    forwardDeps() {
+      return {
+        forwardTo: this.forwardTo, displayName: this.displayName, email: this.email,
+        nameOf: this.nameOf, activeChat: this.activeChat,
+        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
+        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
+        ephemeralTtlOf: this.ephemeralTtlOf, buildEnvelope: this.buildEnvelope,
+        setSending: v => this.setSending(v),
+        setForwardTo: v => this.forwardTo = v,
+        markPending: (k, m) => this.markPending(k, m),
+        showToast: (m, d) => uiStore.toast(m, d), t: uiStore.tr,
+      };
+    },
+    // Контракт фичи звёзд (ADR-005 W3, партия 7).
+    starsDeps() {
+      return {
+        email: () => this.email,
+        currentChatKey: () => this.currentChatKey,
+        starredMap: () => this.starredMap,
+        setStarredMap: (v) => { this.starredMap = v; },
+        starredSet: () => this.starredSet,
       };
     },
     // ADR-005 W3 (партия 6): перетаскивание заметок — у владельца форм.
@@ -2624,17 +2670,7 @@ export default {
     async sendPoll(question, options) { return PollFeature.sendPoll(this.pollDeps(), question, options); },
     applyPollVotes(list, wirePollVotes) { return PollFeature.applyPollVotes(list, wirePollVotes, this.email); },
     // ADR-001: явные deps для оркестраторов poll (без this целиком).
-    pollDeps() {
-      return {
-        email: this.email, activeChat: this.activeChat,
-        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
-        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
-        cryptoReady: this.cryptoReady, displayName: this.displayName,
-        newMessageId: this.newMessageId, setSending: v => this.setSending(v),
-        chat: this.chat, scrollToBottom: uiStore.scrollToBottom,
-        saveCurrentHistory: k => this.saveCurrentHistory(k), t: uiStore.tr,
-      };
-    },
+
     // ── Реакции (логика в features/reactions.js) ──
     // ── Reactions (features/reactions.js → explicit deps) ──
     reactionsStorageKey() { return ReactionsFeature.reactionsStorageKey(this.email); },
@@ -2809,19 +2845,7 @@ export default {
     startForward(msg) { return ForwardFeature.startForward({ setForwardTo: v => this.forwardTo = v }, msg); },
     doForward(key) { return ForwardFeature.doForward(this.forwardDeps(), key); },
     // ADR-001: явный депс для doForward (без this целиком).
-    forwardDeps() {
-      return {
-        forwardTo: this.forwardTo, displayName: this.displayName, email: this.email,
-        nameOf: this.nameOf, activeChat: this.activeChat,
-        activeChatType: this.activeChatType, currentGroup: this.currentGroup,
-        groupKeys: this.groupKeys, peerKeys: this.peerKeys, peerPqKeys: this.peerPqKeys,
-        ephemeralTtlOf: this.ephemeralTtlOf, buildEnvelope: this.buildEnvelope,
-        setSending: v => this.setSending(v),
-        setForwardTo: v => this.forwardTo = v,
-        markPending: (k, m) => this.markPending(k, m),
-        showToast: (m, d) => uiStore.toast(m, d), t: uiStore.tr,
-      };
-    },
+
     // ── Папки чатов (folders) — логика в features/folders.js; loadChatFlags
     // грузит единый kv-блоб (flags + folder names), архив/mute меняются
     // toggleArchive/toggleMute ниже (чат-меню) через общий saveChatFlags.
@@ -2892,11 +2916,7 @@ export default {
     async onLockPanic() { return DuressFeature.onLockPanic(this.duressDeps); },
     async sendDuressSos() { return DuressFeature.sendDuressSos(this.duressDeps); },
     // §1: пояснение индикатора доставки человеческим языком.
-    relayExplainDelivery() {
-      if (this.relayDeliveryMode === 'email') {
-        uiStore.toast(uiStore.tr('relay_limit_toast') || 'Релей недоступен или лимит исчерпан — доставка идёт по почте, ничего не теряется.', 4000);
-      }
-    },
+    relayExplainDelivery() { return RelayFeature.relayExplainDelivery({ relayDeliveryMode: () => this.relayDeliveryMode }); },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
     openMobileChat() {
       if (this.isMobile) this.mobileChatOpen = true;
@@ -2969,9 +2989,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         uiStore.tr('report_content_subject') || 'Жалоба на контент — Vault', lines);
       await this.openExternalUrl(url);
     },
-    closeImageViewer() {
-      this.viewingImage = null;
-    },
+    closeImageViewer() { return uiStore.setFormField('viewingImage', null); },
     onAppIconChanged(id) {
       this.appIconId = id;
       // Persist so the chosen icon survives restarts and is reflected everywhere.
@@ -3714,31 +3732,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // не видно, по почте не синхронизируется. Персист в sqlite kv_store под
     // ключом 'starred:<chatKey>' — переживает перезапуск и рескан из писем,
     // т.к. фильтр идёт по msg.id при рендере (звёздочка + режим избранного).
-    isStarred(msg) {
-      return !!(msg && msg.id && this.starredSet.has(msg.id));
-    },
-    async toggleStar(msg) {
-      if (!msg || !msg.id) return;
-      const key = this.currentChatKey;
-      if (!key || key === '__notes__') return;
-      const list = new Set(this.starredMap[key] || []);
-      if (list.has(msg.id)) list.delete(msg.id);
-      else list.add(msg.id);
-      // Реактивность: новый объект массива, иначе Vue не увидит изменение.
-      this.starredMap = { ...this.starredMap, [key]: Array.from(list) };
-      try {
-        if (list.size) await db.kvSet(await accountNamespace(this.email), 'starred:' + key, JSON.stringify(Array.from(list)));
-        else await db.kvDelete(await accountNamespace(this.email), 'starred:' + key);
-      } catch (e) { /* kv недоступен — живёт в памяти до перезапуска */ }
-    },
-    async loadStarredFor(chatKey) {
-      if (!chatKey || chatKey === '__notes__') return;
-      try {
-        const raw = await db.kvGet(await accountNamespace(this.email), 'starred:' + chatKey);
-        const arr = raw ? JSON.parse(raw) : [];
-        this.starredMap = { ...this.starredMap, [chatKey]: Array.isArray(arr) ? arr : [] };
-      } catch (e) { /* тихо */ }
-    },
+    isStarred(msg) { return StarsFeature.isStarred(this.starsDeps, msg); },
+    async toggleStar(msg) { return StarsFeature.toggleStar(this.starsDeps, msg); },
+    async loadStarredFor(chatKey) { return StarsFeature.loadStarredFor(this.starsDeps, chatKey); },
     // ── Сообщения 1:1 (логика в features/messages.js) — тонкий делегат ──
     // ADR-005 W2 партия 3: вызов идёт через делегатор this.loadMessages(email)
     // (контракт модуля собирается там, модуль компонент не читает).
