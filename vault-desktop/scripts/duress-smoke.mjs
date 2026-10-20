@@ -145,6 +145,21 @@ console.log('2b. checkDuressLock: lock_enabled без хеша → не блок
   check('без хеша пароля замок не поднят', state.locked === false, state);
 }
 
+// ── 2c. Android: свой замок не показываем (нативный LockActivity) ──────
+console.log('2c. checkDuressLock: Android-ветка — свой замок не поднимаем');
+{
+  resetWorld({ lock_enabled: true, lock_hash: 'HASH' });
+  // Android WebView: userAgent с 'Android'.
+  const realNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/120' },
+    configurable: true,
+  });
+  await checkDuressLock(makeDeps());
+  Object.defineProperty(globalThis, 'navigator', { value: realNavigator, configurable: true });
+  check('на Android свой замок не показывается', state.locked === false, state);
+}
+
 // ── 3. Пере-арм при возврате в приложение (visibilitychange) ────────────
 console.log('3. relock: уход в фон снимает «разблокирован в сессии», возврат — армит');
 {
@@ -168,8 +183,11 @@ console.log('4. onLockDuress: декой-режим + отправка SOS');
 {
   resetWorld({ lock_enabled: true, lock_hash: 'HASH', sos_recipients: ['peer@x.ru'], sos_text: 'SOS {coords}' });
   identityStore.state.peerKeys = { 'peer@x.ru': 'PUB' };
+  // Замок УЖЕ поднят (пользователь на экране блокировки) — иначе «снят» нечего
+  // проверять: состояние по умолчанию false.
+  state.locked = true;
   onLockDuress(makeDeps());
-  check('замок снят (декой — как обычный вход)', state.locked === false);
+  check('замок снят (декой — как обычный вход)', state.locked === false, state);
   check('SOS помечен как pending', state.pending === true);
   await new Promise((r) => setTimeout(r, 20));
   check('SOS-письмо отправлено получателю',

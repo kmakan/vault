@@ -80,6 +80,22 @@ check('setEnabled(false) stops heartbeat', started === 0 && stopped === 1);
   const payload = globalThis.__enc.length ? JSON.parse(globalThis.__enc[0]) : {};
   check('heartbeat: конверт presence:1', payload.presence === 1 && typeof payload.ts === 'number', payload);
   check('heartbeat: ключ пира установлен перед шифрованием', globalThis.__pk.length === 2, globalThis.__pk);
+  // Ошибка ОДНОГО адресата не должна останавливать остальных (как
+  // sendGroupReact): шифрование первого падает — второй всё равно получает
+  // heartbeat.
+  globalThis.__hb = []; globalThis.__enc = []; globalThis.__pk = [];
+  identityStore.state.peerKeys = { 'a@x.org': 'KA', 'b@x.org': 'KB' };
+  const realEncrypt = cryptoMock.encryptVault;
+  let encCalls = 0;
+  cryptoMock.encryptVault = async (p) => {
+    encCalls++;
+    if (encCalls === 1) throw new Error('encrypt failed for first peer');
+    return realEncrypt(p);
+  };
+  await sendHeartbeat({ cryptoReady: () => true });
+  cryptoMock.encryptVault = realEncrypt;
+  check('heartbeat: ошибка одного адресата не мешает остальным',
+    globalThis.__hb.length === 1 && globalThis.__hb[0][0] === 'b@x.org', globalThis.__hb);
   globalThis.__hb = [];
   sessionStore.state.isLoggedIn = false;
   await sendHeartbeat({ cryptoReady: () => true });

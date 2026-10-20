@@ -102,6 +102,7 @@ const { deps } = makeDeps({
 });
 await syncGroupAvatarsFromMeta(deps);
 check('meta → аватар записан в kv', _kv.get('group-avatar:G1') === 'AVATAR123');
+check('meta → аватар в owner (groups-store)', deps.groupStore.state.groupAvatars.G1 === 'AVATAR123', deps.groupStore.state.groupAvatars);
 check('meta → имя применено (groups_rename)', invokeMock.calls.length === 1 && invokeMock.calls[0][1].newName === 'NewName');
 check('meta → applied-ключ записан', _kv.get('group-meta-applied:G1') === '10@INBOX');
 

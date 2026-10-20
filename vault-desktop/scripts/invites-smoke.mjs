@@ -129,13 +129,17 @@ function makeDeps(over = {}) {
   };
 }
 
-// ── 1. Пусто → ничего не делает ───────────────────────────────────────────
-console.log('1. пусто — очередь пуста, попап скрыт');
+// ── 1. Пусто → очередь ОЧИЩАЕТСЯ (призрачные инвайты) ───────────────────
+console.log('1. пусто — очередь очищается, попап скрыт');
 {
   resetWorld();
+  // Старая очередь НЕ пуста: иначе «очистилась» нечего было проверять —
+  // именно так ловятся мутации вида «очередь не очищается».
+  state.invites.setPendingInvites([{ group_id: 'G-OLD', uid: '9' }]);
   await processInvites(makeDeps());
-  check('очередь инвайтов пуста, попап скрыт',
-    state.invites.getPendingInvites().length === 0 && ui.getModal('showInvitePopup') === false);
+  check('очередь инвайтов очищена, попап скрыт',
+    state.invites.getPendingInvites().length === 0 && ui.getModal('showInvitePopup') === false,
+    state.invites.getPendingInvites());
   check('loadProfiles вызван (профили обновляются каждый проход)',
     state.calls.includes('loadProfiles'), state.calls);
 }

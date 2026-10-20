@@ -1,0 +1,41 @@
+// Набор мутаций: folders-mut
+// Цель: убедиться, что смоук folders-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'folders-mut',
+  file: 'src/features/folders.js',
+  smoke: 'folders-smoke.mjs',
+  mutations: [
+    { name: "флаги не грузятся из kv",
+      pattern: "    const raw = await db.kvGet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-flags');",
+      replacement: "    const raw = null;" },
+    { name: "битый kv роняет загрузку флагов",
+      pattern: "  } catch (e) { foldersStore.loadFromRaw({}, foldersStore.state.chatFoldersNames); }",
+      replacement: "  } catch (e) { throw e; }" },
+    { name: "флаги не сохраняются в kv",
+      pattern: "    await db.kvSet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-flags',\n      JSON.stringify(foldersStore.state.chatFlags));",
+      replacement: "    void 0;" },
+    { name: "папка не назначается чату",
+      pattern: "  foldersStore.setFlag(key, f);",
+      replacement: "  void 0;" },
+    { name: "меню не закрывается после назначения папки",
+      pattern: "  deps.closeChatMenu();",
+      replacement: "  void 0;" },
+    { name: "без цели назначаем папку (порча состояния)",
+      pattern: "  if (!menu || !menu.target) return;",
+      replacement: "  if (false) return;" },
+    { name: "имя папки не обрезается до 24",
+      pattern: "  const name = String(uiStore.getFormField('chatFolderNewName') || '').trim().slice(0, 24);",
+      replacement: "  const name = String(uiStore.getFormField('chatFolderNewName') || '').trim();" },
+    { name: "имя папки не обрезается от пробелов",
+      pattern: "  const name = String(uiStore.getFormField('chatFolderNewName') || '').trim().slice(0, 24);",
+      replacement: "  const name = String(uiStore.getFormField('chatFolderNewName') || '').slice(0, 24);" },
+    { name: "новая папка не добавляется в список",
+      pattern: "  foldersStore.addFolderName(name);",
+      replacement: "  void 0;" },
+    { name: "диалог не закрывается после создания",
+      pattern: "  uiStore.setModal('folderDialogOpen', false);",
+      replacement: "  void 0;" },
+  ],
+};
