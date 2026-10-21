@@ -31,6 +31,17 @@ function localTagCommit(tag) {
 }
 
 function remoteTagCommit(remote, tag) {
+  // Рассылка тега на зеркале не мгновенна: сразу после пуша ls-remote может
+  // отдать старое состояние. Пробуем несколько раз.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const sha = remoteTagCommitOnce(remote, tag);
+    if (sha) return sha;
+    try { execFileSync('sleep', ['2']); } catch (e) { /* нет sleep — идём дальше */ }
+  }
+  return null;
+}
+
+function remoteTagCommitOnce(remote, tag) {
   try {
     const out = git(['ls-remote', '--tags', remote, `refs/tags/${tag}`, `refs/tags/${tag}^{}`]);
     const lines = out.split('\n').filter(Boolean);
