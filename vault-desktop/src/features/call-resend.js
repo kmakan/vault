@@ -39,7 +39,9 @@ export function createCallResender() {
       attempt += 1;
       timer = setTimeout(async () => {
         timer = null;
-        if (!shouldContinue()) return stop();
+        // Предикат может быть асинхронным (решение «идёт ли разговор»
+        // принимает ядро, а мост асинхронен) — ждём его.
+        if (!(await shouldContinue())) return stop();
         try {
           await send();
         } catch (e) {

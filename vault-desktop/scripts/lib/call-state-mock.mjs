@@ -46,7 +46,8 @@ export function installCallStateMock(invokeMock) {
       case 'send_dc_hangup':
       case 'ignore_stale_timeout':
       case 'apply_sdp':
-      case 'media_fallback': return current === 'active';
+      case 'media_fallback':
+      case 'call_active': return current === 'active';
       default: return false;
     }
   }

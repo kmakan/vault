@@ -1044,9 +1044,13 @@ export function startSignalResend(deps, peer, payload, call_id) {
   if (!useSession().currentCall || useSession().currentCall.call_id !== call_id) return;
   // Таймер/попытки — callResender (createCallResender, call-resend.js).
   // shouldContinue гасит ресенд при смене звонка/call_state/media-connected.
+  // Предикат продолжения ресенда — асинхронный: «идёт ли разговор» решает
+  // ядро (call_state::can / CallQuestion::CallActive), а мост асинхронен.
+  // Сам ресендер и так вызывает предикат из async-таймера, поэтому ожидание
+  // здесь не меняет порядок событий.
   callResender.start(
-    () => useSession().currentCall && useSession().currentCall.call_id === call_id
-      && useSession().callState === 'active' && !useSession().callMediaConnected,
+    async () => useSession().currentCall && useSession().currentCall.call_id === call_id
+      && await callCan(useSession().callState, 'call_active') && !useSession().callMediaConnected,
     // Релей-копия уже доставлена первым отправлением — повтор только
     // почтой (лимит + лишние пуши).
     () => sendCallEnvelope(deps, peer, payload, { viaRelay: false })
