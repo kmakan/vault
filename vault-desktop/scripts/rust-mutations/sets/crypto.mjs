@@ -38,5 +38,11 @@ export default {
     { name: 'ключ голоса не зависит от ML-KEM-секрета (гибрид вырождается в X25519)',
       pattern: '    if let Some(ss) = mlkem_ss_bytes {\n        ikm.extend_from_slice(ss);\n    }',
       replacement: '    if let Some(_ss) = mlkem_ss_bytes {\n    }' },
+    { name: "продовый конверт теряет префикс PQ1 (получатель перестаёт понимать отправителя)",
+      pattern: "                return Ok(format!(\"PQ1:{kemct}|{pq_ek_out}|{wire}\"));",
+      replacement: "                return Ok(format!(\"PQ2:{kemct}|{pq_ek_out}|{wire}\"));" },
+    { name: "продовый конверт теряет разделитель полей (поля слиплись)",
+      pattern: "                return Ok(format!(\"PQ1:{kemct}|{pq_ek_out}|{wire}\"));",
+      replacement: "                return Ok(format!(\"PQ1:{kemct}{pq_ek_out}{wire}\"));" },
   ],
 };

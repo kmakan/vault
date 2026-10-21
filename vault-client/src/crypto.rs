@@ -629,6 +629,67 @@ impl Default for CryptoClient {
 mod tests {
     use super::*;
 
+    /// ФОРМАТ ТЕЛА PQ-конверта — контракт Rust↔JS.
+    ///
+    /// Проверяем у ИСТОЧНИКА: берём продовый `encrypt_vault` (не копию правила)
+    /// и сверяем его вывод с общей фикстурой `tests/fixtures/pq-body-contract.json`.
+    /// Раньше формат был скопирован в JS-смоук, и расхождение с продовой
+    /// сборкой проходило незамеченным — а этот формат ломает приём сообщений
+    /// ПОЛНОСТЬЮ и МОЛЧА (инцидент 12.10.2026: получатель переставал понимать
+    /// отправителя, как только у того появлялся PQ-ключ).
+    #[test]
+    fn test_pq_hybrid_body_matches_contract_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/pq-body-contract.json"
+            ))
+            .expect("фикстура контракта PQ-тела читается"),
+        )
+        .expect("фикстура контракта PQ-тела — валидный JSON");
+        let prefix = fixture["prefix"].as_str().expect("prefix в фикстуре");
+        let separator = fixture["separator"].as_str().expect("separator в фикстуре");
+        let field_count = fixture["field_count"].as_u64().expect("field_count в фикстуре") as usize;
+
+        // Мы — отправитель: своя пара ключей + PQ-сид, у пира — его пара и PQ-ek.
+        let mut sender = CryptoClient::new();
+        let (_sender_pub, _sender_priv) = sender.generate_keypair();
+        let mut peer = CryptoClient::new();
+        let (peer_pub_hex, _peer_priv_hex) = peer.generate_keypair();
+        sender.peer_pq_ek_b64 = peer.pq_ek_b64.clone();
+        sender.last_peer_pub_hex = Some(peer_pub_hex);
+
+        let body = sender.encrypt_vault("привет").expect("гибридное шифрование");
+        assert!(
+            body.starts_with(prefix),
+            "продовый encrypt_vault должен давать тело с префиксом {} (получено {})",
+            prefix,
+            &body[..body.len().min(20)]
+        );
+        let fields = body[prefix.len()..].split(separator).count();
+        assert_eq!(
+            fields, field_count,
+            "в теле должно быть {} полей, разделенных '{}' (получено {})",
+            field_count, separator, fields
+        );
+        // И главное: тело, которое ПРОДАКШН собрал, читается обратно.
+        // KEMCT зашифрован ДЛЯ ПОЛУЧАТЕЛЯ, поэтому читает его получатель, у
+        // которого свой PQ-сид и публичный ключ отправителя.
+        let mut receiver = CryptoClient::new();
+        let (receiver_pub_hex, _receiver_priv_hex) = receiver.generate_keypair();
+
+        let mut sender2 = CryptoClient::new();
+        let (sender_pub_hex, _sender_priv_hex) = sender2.generate_keypair();
+        sender2.peer_pq_ek_b64 = receiver.pq_ek_b64.clone();
+        sender2.last_peer_pub_hex = Some(receiver_pub_hex);
+        let body2 = sender2.encrypt_vault("привет").expect("гибридное шифрование");
+
+        receiver.peer_pq_ek_b64 = sender2.pq_ek_b64.clone();
+        receiver.last_peer_pub_hex = Some(sender_pub_hex);
+        let plain = receiver.decrypt_vault(&body2).expect("гибридное расшифрование");
+        assert_eq!(plain, "привет", "round-trip гибридного конверта");
+    }
+
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let mut crypto = CryptoClient::new();

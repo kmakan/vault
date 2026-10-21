@@ -1,0 +1,10 @@
+{
+  "why": "Формат ТЕЛА гибридного PQ-конверта — контраст Rust↔JS. Собирает его ПРОДОВЫЙ encrypt_vault (vault-client/src/crypto.rs), читает JS (vault-desktop/src/crypto.js, isEncrypted). Раньше формат был СКОПИРОВАН в JS-смоук, и расхождение с продовой сборкой проходило незамеченным: тест проверял копию правила, а не правило. Теперь обе стороны сверяются с этой фикстурой, а Rust-тест берёт её же — правка формата ломает обе проверки сразу.",
+  "producer": "vault-client/src/crypto.rs::CryptoClient::encrypt_vault (ветка PQ)",
+  "consumer": "vault-desktop/src/crypto.js::CryptoClient.isEncrypted",
+  "prefix": "PQ1:",
+  "separator": "|",
+  "fields": ["kemct", "sender_ek", "wire"],
+  "field_count": 3,
+  "sample_parts": ["A1B2C3", "D4E5F6", "V0FSRVhF"]
+}

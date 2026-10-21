@@ -65,11 +65,18 @@ console.log('3. PQ-гибрид "PQ1:<kemct>|<sender_ek>|<wire>"');
 // ── 4. формат, который реально шлёт lib.rs ───────────────────
 console.log('4. сверка с форматом lib.rs::encrypt_vault_message');
 {
-  // Ровно то, что собирает Rust: format!("PQ1:{kemct}|{pq}|{wire}")
-  const kemct = 'A1B2C3', pq = 'D4E5F6', wire = 'WIREBASE64==';
-  const hybrid = `PQ1:${kemct}|${pq}|${wire}`;
+  // ФОРМАТ БЕРЁТСЯ ИЗ ОБЩЕЙ ФИКСТУРЫ, а не копируется здесь: раньше формат
+  // был продублирован в этом смоуке, и расхождение с продовой сборкой Rust
+  // проходило незамеченным (тест проверял копию правила). Теперь правка
+  // формата в Rust ломает и его тест, и этот.
+  const fixture = JSON.parse(readFileSync(
+    ROOT + '/../../vault-client/tests/fixtures/pq-body-contract.json', 'utf8'));
+  const [kemct, pq, wire] = fixture.sample_parts;
+  const hybrid = fixture.prefix + [kemct, pq, wire].join(fixture.separator);
   check('формат Rust распознаётся', c.isEncrypted(hybrid) === true);
-  check('3 поля по разделителю', hybrid.split('|').length === 3);
+  check('поля по разделителю из фикстуры',
+    hybrid.slice(fixture.prefix.length).split(fixture.separator).length === fixture.field_count);
+  check('префикс фикстуры — тот же, что у Rust', hybrid.startsWith(fixture.prefix));
 }
 
 // ── 5. пэйдинг base64 (decode_quoted_printable съедал '=') ──────
