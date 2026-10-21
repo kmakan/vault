@@ -59,3 +59,8 @@ __pycache__/
 # загружаются прямо в консоль RuStore/Play. feature-graphic тоже здесь, чтобы
 # ассеты лежали одним местом.
 store-assets/
+
+# Логи сессий hermes/opencode (NDJSON на сотни МБ) — мусор, не источник
+2026*_*.jsonl
+2026*_*_*
+.opencode/
