@@ -16,12 +16,15 @@
 #   core    vault-core                     cargo test            (lib, 26)
 #   client  vault-client                   cargo test            (lib+bin+tests/*)
 #   desktop vault-desktop/src-tauri        cargo test --lib      (151)
-#   android vault-android/src-tauri        cargo test --lib      (20)
+#   (android-крейт жил в удалённой копии vault-android/ — каталог удалён
+#    21.10.2026, сборка Android — только из vault-desktop; его тесты теперь
+#    в крейте desktop)
 #
 # Не покрыто (нужны живой аккаунт/устройство, см. docs/testing/):
 #   vault-client/tests/*_e2e.rs — помечены #[ignore]; запуск:
 #     cargo test --test email_e2e -- --ignored
 #   Android target (NDK): . scripts/android-env.sh && cargo check --target aarch64-linux-android
+#   (цель сборки — vault-desktop: заброшенная копия vault-android/ удалена)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,7 +32,7 @@ LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vault-test-all.XXXXXX")"
 
 WANT=("$@")
 if [ ${#WANT[@]} -eq 0 ]; then
-    WANT=(core client desktop android)
+    WANT=(core client desktop)
 fi
 
 fail=0
@@ -68,7 +71,6 @@ run_suite() {
 run_suite core    vault-core              test
 run_suite client  vault-client            test
 run_suite desktop vault-desktop/src-tauri test --lib
-run_suite android vault-android/src-tauri test --lib
 
 printf '\n\033[1m=== Итог\033[0m\n'
 for line in "${SUMMARY[@]}"; do

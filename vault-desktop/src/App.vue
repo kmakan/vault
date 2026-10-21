@@ -1005,6 +1005,7 @@ import * as ContactsFeature from './features/contacts.js';
 import * as IgnoredUsersFeature from './features/ignored-users.js';
 import * as BlockUserFeature from './features/block-user.js';
 import * as ClipboardExportFeature from './features/clipboard-export.js';
+import * as GroupMembersFeature from './features/group-members.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2009,6 +2010,25 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт управления участниками группы (ADR-005 W3): правила состава и
+    // ролей — в фиче features/group-members.js; компонент отдаёт что открыто,
+    // поля формы (uiStore) и эффекты (алерт, тост, перечитывание состава).
+    groupMembersDeps() {
+      return {
+        group: () => this.currentGroup,
+        isGroupAdmin: () => this.isGroupAdmin,
+        api,
+        refreshGroupMembers: () => this.refreshGroupMembers(),
+        getFormField: (name) => uiStore.getFormField(name),
+        setFormField: (name, v) => uiStore.setFormField(name, v),
+        setModal: (name, v) => uiStore.setModal(name, v),
+        openAddMemberPopup: () => this.openAddMemberPopup(),
+        alert: (msg) => window.alert(msg),
+        toast: (msg) => uiStore.toast(msg),
+        tr: (key) => uiStore.tr(key),
+        createGroup: () => this.createGroup(),
       };
     },
     // Контракт копирования и экспорта (ADR-005 W3): операции над данными — в
@@ -4499,10 +4519,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         name: this.newGroupName, avatar: this.newGroupAvatar,
       });
     },
-    createGroupAndClose() {
-      this.createGroup();
-      this.showCreateGroup = false;
-    },
+    createGroupAndClose() { return GroupMembersFeature.createGroupAndClose(this.groupMembersDeps); },
     // клон группы — новый чат с тем же
     // составом участников, но пустой историей (например, «Работа» →
     // «Работа — проект X»). Инвайты уходят автоматически: ключ новой
@@ -4516,60 +4533,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async cloneGroup() {
       return GroupsClone.cloneGroupFlow(this.groupDeps, { src: this.currentGroup });
     },
-    removeMember(email) {
-      if (!this.currentGroup) return;
-      // Защита от обхода UI: удаление участников — только у админов.
-      if (!this.isGroupAdmin) return;
-      const member = this.currentGroup.members.find(m => m.email === email);
-      if (!member) return;
-      // Создатель неприкосновенен — может только выйти сам; себя через
-      // «Покинуть группу», а не удалением.
-      if (email === this.currentGroup.created_by) {
-        alert(uiStore.tr('cannot_remove_creator') || 'Создателя группы нельзя удалить');
-        return;
-      }
-      api.removeGroupMember(this.currentGroup.id, email)
-        .then(() => this.refreshGroupMembers())
-        .catch(e => console.error('removeMember failed:', e));
-    },
-    async changeMemberRole(email, role) {
-      if (!this.currentGroup) return;
-      // Смена ролей — только у админов (участники всем пользуются в чате,
-      // но ролями и составом не управляют).
-      if (!this.isGroupAdmin) return;
-      try {
-        await api.setGroupMemberRole(this.currentGroup.id, email, role);
-        const m = this.currentGroup.members.find(m => m.email === email);
-        if (m) m.role = role;
-      } catch (e) {
-        alert('Failed to set role: ' + e.message);
-      }
-    },
-    async addMember(email) {
-      // Основной UX добавления участника — попап выбора контактов.
-      this.openAddMemberPopup();
-    },
-    openAddMemberPopup() {
-      this.addMemberQuery = '';
-      this.addMemberSelected = [];
-      this.showAddMemberPopup = true;
-    },
-    toggleAddMember(email) {
-      const i = this.addMemberSelected.indexOf(email);
-      if (i >= 0) this.addMemberSelected.splice(i, 1);
-      else this.addMemberSelected.push(email);
-    },
-    addManualEmail() {
-      // Ввод email вручную: добавляем в выборку, отправка — кнопкой «Пригласить».
-      const email = (this.addMemberQuery || '').trim();
-      if (!email || !email.includes('@')) return;
-      if ((this.currentGroup?.members || []).some(m => m.email === email)) {
-        alert(uiStore.tr('already_in_group') || 'Этот участник уже в группе');
-        return;
-      }
-      if (!this.addMemberSelected.includes(email)) this.addMemberSelected.push(email);
-      this.addMemberQuery = '';
-    },
+    async removeMember(email) { return GroupMembersFeature.removeMember(this.groupMembersDeps, email); },
+    async changeMemberRole(email, role) { return GroupMembersFeature.changeMemberRole(this.groupMembersDeps, email, role); },
+    async addMember(email) { return GroupMembersFeature.addMember(this.groupMembersDeps, email); },
+    openAddMemberPopup() { return GroupMembersFeature.openAddMemberPopup(this.groupMembersDeps); },
+    toggleAddMember(email) { return GroupMembersFeature.toggleAddMember(this.groupMembersDeps, email); },
+    addManualEmail() { return GroupMembersFeature.addManualEmail(this.groupMembersDeps); },
     // Один fingerprint у двух адресов? (смена почты: старый/новый в peer_keys
     // ссылаются на один публичный ключ — см. aliasesOf)
     emailSharesFingerprint(emailA, emailB) {
