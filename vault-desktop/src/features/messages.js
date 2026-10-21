@@ -172,55 +172,60 @@ export async function loadMessages(deps, email) {
               if (callSig) return null; // не сообщение
               // 1) Реакция: {react:1, msg_id, emoji, action} — в чат не
               //    показываем, накапливаем для applyReactions.
-              try {
-                const robj = JSON.parse(text);
-                if (robj && robj.react === 1 && robj.msg_id && robj.emoji) {
-                  (wireReactions[robj.msg_id] = wireReactions[robj.msg_id] || []).push({
-                    emoji: robj.emoji,
+              // РОУТЕР СЕРВИСНЫХ СИГНАЛОВ — В RUST (ADR-005 R1 / W4): «что это за
+              // письмо — реакция, правка, квитанция, голос или presence» решает
+              // ядро (vault::signals::parse_signal). Раньше JS разбирал это сам,
+              // и в личных чатах и в группах — местами разными правилами.
+              const sig = await WireSignalRule.parseSignal(text);
+              if (sig) {
+                // Реакция: {react:1, msg_id, emoji, action?} — в чат не
+                // показываем, накапливаем для applyReactions.
+                if (sig.kind === 'reaction') {
+                  (wireReactions[sig.msg_id] = wireReactions[sig.msg_id] || []).push({
+                    emoji: sig.emoji,
                     user: resolvePeerSender(isOut, email, myEmail()),
-                    action: robj.action === 'remove' ? 'remove' : 'add',
+                    action: sig.action,
                   });
                   return null; // не сообщение
                 }
-                // 1б) Правка: {edit:1, msg_id, text?, action:'edit'|'delete'} —
-                //     накапливаем для applyEdits, в чат не показываем.
-                if (robj && robj.edit === 1 && robj.msg_id) {
-                  (wireEdits[robj.msg_id] = wireEdits[robj.msg_id] || []).push({
-                    text: robj.text || '',
-                    action: robj.action === 'delete' ? 'delete' : 'edit',
-                    date: robj.ts || m.date || 0,
-                    sender: robj.sender || resolveEventSender(isOut, email, m.from || ''),
+                // Правка: {edit:1, msg_id, text?, action:'edit'|'delete'} —
+                // накапливаем для applyEdits, в чат не показываем.
+                if (sig.kind === 'edit') {
+                  (wireEdits[sig.msg_id] = wireEdits[sig.msg_id] || []).push({
+                    text: sig.text,
+                    action: sig.action,
+                    date: sig.ts || m.date || 0,
+                    sender: sig.sender || resolveEventSender(isOut, email, m.from || ''),
                   });
                   return null; // не сообщение
                 }
-                // 1в) Квитанции получателя: {delivered:1|read:1, msg_ids:[...]} —
-                //     его клиент обработал (доставлено) / открыл (просмотрено)
-                //     наши сообщения; накапливаем для меток статуса.
-                if (robj && (robj.read === 1 || robj.delivered === 1) && Array.isArray(robj.msg_ids)) {
-                  const level = robj.read === 1 ? 'read' : 'delivered';
-                  for (const rid of robj.msg_ids) {
-                    (wireAcks[rid] = wireAcks[rid] || {})[level] = true;
+                // Квитанции получателя: {delivered:1|read:1, msg_ids:[...]} —
+                // его клиент обработал (доставлено) / открыл (просмотрено)
+                // наши сообщения; накапливаем для меток статуса.
+                if (sig.kind === 'ack') {
+                  for (const rid of sig.msg_ids) {
+                    (wireAcks[rid] = wireAcks[rid] || {})[sig.level] = true;
                   }
                   return null; // не сообщение
                 }
-                // 1г) Голос голосования: {poll:1, poll_id, option} — сигнальное
-                //     письмо (как реакция), агрегируется в карточку опроса.
-                if (robj && robj.poll === 1 && robj.poll_id) {
-                  (wirePollVotes[robj.poll_id] = wirePollVotes[robj.poll_id] || []).push({
+                // Голос голосования: {poll:1, poll_id, option} — сигнальное
+                // письмо (как реакция), агрегируется в карточку опроса.
+                if (sig.kind === 'poll_vote') {
+                  (wirePollVotes[sig.poll_id] = wirePollVotes[sig.poll_id] || []).push({
                     voter: resolvePeerSender(isOut, email, myEmail()),
-                    option: Number(robj.option) || 0,
+                    option: sig.option,
                   });
                   return null; // не сообщение
                 }
-                // 1д) Presence: {presence:1, ts} — heartbeat-сигнал собеседника
-                //     («я онлайн»); отмечаем активность, в чат не показываем.
-                //     Решение «это presence?» — в presence.js (ADR-005 R1: тип
-                //     конверта решает не JS-модуль); сюда приходит только
-                //     связанная функция отметки — компонент модуль не видит.
-                if (PresenceFeature.ingestSignal(deps.noteSeen, robj, resolvePeerSender(isOut, email, myEmail()), new Date(m.date || Date.now()).getTime())) {
+                // Presence: {presence:1, ts} — heartbeat-сигнал собеседника
+                // («я онлайн»); отмечаем активность, в чат не показываем.
+                // Тип уже решил Rust — здесь только последствие (связанная
+                // функция отметки; компонент модуль не видит).
+                if (sig.kind === 'presence') {
+                  PresenceFeature.noteHeartbeat(deps.noteSeen, resolvePeerSender(isOut, email, myEmail()), new Date(m.date || Date.now()).getTime());
                   return null; // не сообщение
                 }
-              } catch (e) { /* не JSON — продолжаем как сообщение */ }
+              }
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
               const env = await MsgFormat.parseEnvelope(text);

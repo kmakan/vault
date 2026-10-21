@@ -25,8 +25,16 @@ export default {
     // Статус применяется в ТРЁХ местах (список, merged через statusById,
     // merged напрямую) — мутация одной точки маскируется остальными. Поэтому
     // бьём ИСТОЧНИК: квитанции не собираются вовсе.
+    // Роутер сигналов теперь в Rust (ADR-005 W4): квитанцию определяет ядро,
+    // JS только исполняет. Мутация бьёт по ветке исполнения.
     { name: "квитанции о прочтении не собираются (статус всегда delivered)",
-      pattern: "                if (robj && (robj.read === 1 || robj.delivered === 1) && Array.isArray(robj.msg_ids)) {",
+      pattern: "                if (sig.kind === 'ack') {",
+      replacement: "                if (false) {" },
+    { name: "реакции не собираются (реакция уходит в чат сообщением)",
+      pattern: "                if (sig.kind === 'reaction') {",
+      replacement: "                if (false) {" },
+    { name: "правки не собираются (правка уходит в чат сообщением)",
+      pattern: "                if (sig.kind === 'edit') {",
       replacement: "                if (false) {" },
   ],
 };

@@ -33,6 +33,23 @@ export async function parseCallSignal(decrypted) {
   }
 }
 
+// ── Роутер сервисных сигналов ───────────────────────────────────────────
+// Возвращает { kind: 'reaction'|'edit'|'ack'|'poll_vote'|'presence'|'group_meta'|
+// 'group_avatar_heal', ... } или null — это не сигнал (обычное письмо).
+//
+// Правило целиком в Rust (vault::signals::parse_signal): порядок проверок
+// (реакция → правка → квитанция → голос → presence → meta → hav) зафиксирован
+// там же. JS только исполняет то, что решило ядро.
+export async function parseSignal(plain) {
+  if (!plain || typeof plain !== 'string') return null;
+  try {
+    return await invoke('vault_parse_signal', { plain });
+  } catch (e) {
+    console.error('[signal] Rust-роутер сигналов недоступен:', e && e.message || e);
+    return null;
+  }
+}
+
 // ── Data-письмо (download-on-demand) ────────────────────────────────────
 // Возвращает { ref, data } или null — это не data-письмо.
 export async function parseDodData(plain) {

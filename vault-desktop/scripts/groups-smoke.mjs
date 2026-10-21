@@ -54,13 +54,12 @@ writeFileSync(MOCKS + '/session-store.js', 'export const chatStore = globalThis.
 writeFileSync(MOCKS + '/mailbox-store.js', 'export const mailboxState = globalThis.__mailboxMock = { state: { emails: [] } };\n');
 writeFileSync(MOCKS + '/presence.js',
   // Контракт приёма heartbeat (ADR-005 R3): связанная функция отметки
-  // (НЕ компонент) + решение «это presence?» внутри presence.js.
-  'export const ingestSignal = (noteSeen, robj, senderEmail, mailTs) => {' +
-  '  globalThis.__presCalls.push({ noteSeen, robj, senderEmail, mailTs });' +
-  '  if (!robj || robj.presence !== 1) return false;' +
+  // (НЕ компонент). Решение «это presence?» теперь в Rust — роутер сигналов
+  // (vault::signals::parse_signal), ADR-005 W4; здесь только последствие.
+  'export const noteHeartbeat = (noteSeen, senderEmail, mailTs) => {' +
+  '  globalThis.__presCalls.push({ noteSeen, senderEmail, mailTs });' +
   '  noteSeen(senderEmail, mailTs);' +
-  '  return true;' +
-  '}');
+  '};');
 
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
@@ -276,8 +275,8 @@ console.log('5b. stale по токену загрузки → результат
     d.chat.state.messages.length === 1 && d.chat.state.messages[0] === 'KEEP2', d.chat.state.messages);
 }
 
-// ── 6. presence-сигнал: ingestSignal(noteSeen,...) ──────────────
-console.log('6. presence-сигнал через ingestSignal(noteSeen)');
+// ── 6. presence-сигнал: последствие (noteHeartbeat) ─────────────
+console.log('6. presence-сигнал: тип решил Rust, отметка — через noteHeartbeat');
 {
   resetWorld();
   apiMock.groupMessages = [gmail('ENC:p', 'peer@x.ru', '<p@x>')];
@@ -289,7 +288,7 @@ console.log('6. presence-сигнал через ingestSignal(noteSeen)');
   let threw = null;
   try { await G.loadGroupMessages(d, 'G1'); } catch (e) { threw = e; }
   const call = globalThis.__presCalls[0];
-  check('presence без ReferenceError, ingestSignal получил функцию отметки (не ctx, не this)',
+  check('presence без ReferenceError, в presence ушла связанная функция отметки (не ctx, не this)',
     threw === null && !!call && typeof call.noteSeen === 'function' && d.chat.state.messages.length === 0,
     { threw: threw && String(threw), call: !!call, msgs: d.chat.state.messages.length });
   check('отметка активности ушла в noteSeen (связанная функция)',

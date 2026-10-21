@@ -94,71 +94,85 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
             } catch (e) {
               continue; // расшифровка не прошла — письмо не из этой группы
             }
-            let obj = null;
-            try { obj = JSON.parse(plaintext); } catch { /* не JSON */ }
-            if (obj && obj.react === 1 && obj.msg_id && obj.emoji) {
-              (wireReactions[obj.msg_id] = wireReactions[obj.msg_id] || []).push({
-                emoji: obj.emoji,
-                user: msg.sender_id,
-                action: obj.action === 'remove' ? 'remove' : 'add',
-              });
-              continue; // реакция не рендерится как сообщение
-            }
-            if (obj && obj.edit === 1 && obj.msg_id) {
-              (wireEdits[obj.msg_id] = wireEdits[obj.msg_id] || []).push({
-                text: obj.text || '',
-                action: obj.action === 'delete' ? 'delete' : 'edit',
-                date: obj.ts || msg.created_at || 0,
-                sender: obj.sender || msg.sender_id || '',
-              });
-              continue; // правка не рендерится как сообщение
-            }
-            if (obj && obj.read === 1 && Array.isArray(obj.msg_ids)) {
-              for (const rid of obj.msg_ids) {
-                (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
-              }
-              continue; // квитанция не рендерится как сообщение
-            }
-            // 1г) Закрепление — форма письма описана в PinWire; здесь она только
+            // Закрепление — форма письма описана в PinWire; здесь она только
             //     разбирается. Последнее по ts авторитетно; не рендерится.
-            // Разбор формы — PinWire.parsePinWire, тот же модуль строит её на
-            // отправке (ADR-003 партия 13). Раньше форма читалась здесь вручную
-            // и писалась в App.vue: опечатка в имени действия тихо превращала
-            // открепление в закрепление.
+            //     Разбор формы — PinWire.parsePinWire, тот же модуль строит её на
+            //     отправке (ADR-003 партия 13). Раньше форма читалась здесь вручную
+            //     и писалась в App.vue: опечатка в имени действия тихо превращала
+            //     открепление в закрепление.
+            //     Сырой объект письма разбирает Rust (ADR-005 W4).
+            const obj = await WireSignalRule.envelopeObject(plaintext);
             const pinWire = PinWire.parsePinWire(obj, Date.parse(msg.created_at || 0) || 0);
             if (pinWire) {
               await deps.applyPinFromWire(groupId, pinWire);
               continue;
             }
+            // РОУТЕР СЕРВИСНЫХ СИГНАЛОВ — В RUST (ADR-005 R1 / W4): «что это за
+            // письмо — реакция, правка, квитанция, голос, presence или служебное
+            // групповое» решает ядро (vault::signals::parse_signal). Раньше JS
+            // разбирал это сам — и в группах, и в личных чатах разными
+            // правилами: квитанцию о доставке личные чаты скрывали, а группы
+            // показывали как обычный текст.
+            const sig = await WireSignalRule.parseSignal(plaintext);
+            if (sig && sig.kind === 'reaction') {
+              (wireReactions[sig.msg_id] = wireReactions[sig.msg_id] || []).push({
+                emoji: sig.emoji,
+                user: msg.sender_id,
+                action: sig.action,
+              });
+              continue; // реакция не рендерится как сообщение
+            }
+            if (sig && sig.kind === 'edit') {
+              (wireEdits[sig.msg_id] = wireEdits[sig.msg_id] || []).push({
+                text: sig.text,
+                action: sig.action,
+                date: sig.ts || msg.created_at || 0,
+                sender: sig.sender || msg.sender_id || '',
+              });
+              continue; // правка не рендерится как сообщение
+            }
+            if (sig && sig.kind === 'ack') {
+              // Отмечаем ПРОЧТЕНИЕ: у групповой структуры есть только
+              // отправитель, без уровня. Квитанция о доставке тоже не
+              // рендерится как сообщение — раньше она падала в чат сырым JSON.
+              if (sig.level === 'read') {
+                for (const rid of sig.msg_ids) {
+                  (wireAcks[rid] = wireAcks[rid] || {})[msg.sender_id] = true;
+                }
+              }
+              continue; // квитанция не рендерится как сообщение
+            }
             // Голос голосования: {poll:1, poll_id, option} — сигнальное
-            // письмо (как реакции). В групповом проходе классификации не
-            // было: голоса участников падали в чат сырым JSON.
-            if (obj && obj.poll === 1 && obj.poll_id) {
-              (wirePollVotes[obj.poll_id] = wirePollVotes[obj.poll_id] || []).push({
+            //     письмо (как реакции). В групповом проходе классификации не
+            //     было: голоса участников падали в чат сырым JSON.
+            if (sig && sig.kind === 'poll_vote') {
+              (wirePollVotes[sig.poll_id] = wirePollVotes[sig.poll_id] || []).push({
                 voter: msg.sender_id,
-                option: Number(obj.option) || 0,
+                option: sig.option,
               });
               continue; // голос не рендерится как сообщение
             }
             // Presence: {presence:1, ts} — heartbeat участника; активность
-            // без карточки в чате (группы: peer-ключ есть только у 1:1, но
-            // сигнал может прийти и по групповому каналу от старых клиентов).
-            // В presence.js уходит СВЯЗАННАЯ функция отметки, а не ctx
-            // (ADR-005 R3): модуль пока ctx-based, поэтому лямбда markSeen
-            // замыкает ctx.
-            if (PresenceFeature.ingestSignal(markSeen, obj, msg.sender_id, new Date(msg.created_at || Date.now()).getTime())) {
+            //     без карточки в чате (группы: peer-ключ есть только у 1:1, но
+            //     сигнал может прийти и по групповому каналу от старых клиентов).
+            //     В presence.js уходит СВЯЗАННАЯ функция отметки, а не ctx
+            //     (ADR-005 R3): модуль пока ctx-based, поэтому лямбда markSeen
+            //     замыкает ctx. Тип решил Rust — здесь только последствие.
+            if (sig && sig.kind === 'presence') {
+              PresenceFeature.noteHeartbeat(markSeen, msg.sender_id, new Date(msg.created_at || Date.now()).getTime());
               continue; // presence не рендерится как сообщение
             }
-            if (obj && obj.meta === 1 && obj.avatar) {
+            // Мета группы (аватар): {meta:1, avatar} — не рендерится.
+            if (sig && sig.kind === 'group_meta') {
               if (!metaLatest || new Date(msg.created_at) >= new Date(metaLatest.created_at)) {
-                metaLatest = { avatar: obj.avatar, created_at: msg.created_at };
+                metaLatest = { avatar: sig.avatar, created_at: msg.created_at };
               }
               continue; // meta (аватар) не рендерится как сообщение
             }
-            // hav-запрос аватарки группы {hav:1}: сервис-письмо (шифровано
-            // групповым ключом), не рендерится. Отвечаем meta-письмом, если
-            // аватар есть у нас (24ч rate-limit + защита от петли внутри).
-            if (obj && obj.hav === 1) {
+            // hav-запрос аватарки группы {hav:1}: сервисное письмо (шифровано
+            //     групповым ключом), не рендерится. Отвечаем meta-письмом, если
+            //     аватар есть у нас (24ч rate-limit + защита от петли внутри).
+            if (sig && sig.kind === 'group_avatar_heal') {
               await deps.replyGroupAvatarHeal(groupId);
               continue; // hav не рендерится как сообщение
             }

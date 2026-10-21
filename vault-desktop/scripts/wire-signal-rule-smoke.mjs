@@ -76,6 +76,28 @@ const argsOf = () => lastCall()[1] || {};
     (await R.parseCallSignal('{"vault":1}')) === null);
 }
 
+// ── Роутер сервисных сигналов ───────────────────────────────────────────
+{
+  reset();
+  state.answer = { kind: 'reaction', msg_id: 'm1', emoji: 'x', action: 'add' };
+  const sig = await R.parseSignal('{"react":1,"msg_id":"m1","emoji":"x"}');
+  ok('parseSignal зовёт vault_parse_signal', cmdOf() === 'vault_parse_signal', lastCall());
+  ok('parseSignal передаёт плейнтекст', argsOf().plain === '{"react":1,"msg_id":"m1","emoji":"x"}', argsOf());
+  ok('parseSignal возвращает разобранный сигнал', sig && sig.kind === 'reaction', sig);
+}
+{
+  reset();
+  ok('parseSignal: пустой вход → null и мост НЕ зовётся',
+    (await R.parseSignal('')) === null && state.calls.length === 0, state.calls);
+  ok('parseSignal: не-строка → null', (await R.parseSignal(null)) === null);
+}
+{
+  reset();
+  state.fail = true;
+  ok('parseSignal: отказ моста → null (не «null» строкой)',
+    (await R.parseSignal('{"react":1,"msg_id":"m1","emoji":"x"}')) === null);
+}
+
 // ── Data-письмо ─────────────────────────────────────────────────────────
 {
   reset();

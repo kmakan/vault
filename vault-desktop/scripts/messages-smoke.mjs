@@ -72,13 +72,14 @@ writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; exp
 // функция отметки (не компонент), решение «это presence?» — внутри presence.js.
 // Мок повторяет решение честно: без него «поглощение» сигнала проверять
 // нечем, а тест-обманка (mock всегда true) ничего не застраховывает.
+// Решение «это presence?» теперь в Rust (роутер сигналов, ADR-005 W4) — мок
+// отдаёт только ПОСЛЕДСТВИЕ (связанная функция отметки). Проверять «признал ли
+// presence» здесь нечего: это правило ядра, его проверяет rust-мутационный гейт.
 writeFileSync(MOCKS + '/presence.js',
-  'export const ingestSignal = (noteSeen, robj, senderEmail, mailTs) => {' +
-  '  globalThis.__presCalls.push({ noteSeen, robj, senderEmail, mailTs });' +
-  '  if (!robj || robj.presence !== 1) return false;' +
+  'export const noteHeartbeat = (noteSeen, senderEmail, mailTs) => {' +
+  '  globalThis.__presCalls.push({ noteSeen, senderEmail, mailTs });' +
   '  noteSeen(senderEmail, mailTs);' +
-  '  return true;' +
-  '}');
+  '};');
 globalThis.__apiMock = apiMock; globalThis.__dbMock = dbMock; globalThis.__cryptoMock = cryptoMock;
 globalThis.__presCalls = [];
 
@@ -288,21 +289,23 @@ console.log('3. реакция/квитанция/edit/call НЕ рендеря�
   cryptoMock.decryptVault = async (body) => {
     if (body === 'ENC:r') return JSON.stringify({ react: 1, msg_id: 'X', emoji: '🔥' });
     if (body === 'ENC:k') return JSON.stringify({ read: 1, msg_ids: ['Y'] });
+    if (body === 'ENC:e') return JSON.stringify({ edit: 1, msg_id: 'Z', text: 'правка' });
     if (body === 'ENC:c') return JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c1' });
     return null;
   };
   const m1 = mail('ENC:r', 'peer@x.ru', '<r@x>', 1);
   const m2 = mail('ENC:k', 'peer@x.ru', '<k@x>', 2);
   const m3 = mail('ENC:c', 'peer@x.ru', '<c@x>', 3);
-  resetWorld({ emails: [m1, m2, m3] });
-  withBody(m1, 'ENC:r'); withBody(m2, 'ENC:k'); withBody(m3, 'ENC:c');
+  const m4 = mail('ENC:e', 'peer@x.ru', '<e@x>', 4);
+  resetWorld({ emails: [m1, m2, m3, m4] });
+  withBody(m1, 'ENC:r'); withBody(m2, 'ENC:k'); withBody(m3, 'ENC:c'); withBody(m4, 'ENC:e');
   const d = makeDeps({
     parseCallSignal: (t) => {
       try { const o = JSON.parse(t); return (o && o.type === 'call_request') ? o : null; } catch (e) { return null; }
     },
   });
   await M.loadMessages(d, 'peer@x.ru');
-  check('реакция/квитанция/call не дали карточек (список пуст)', d.chat.state.messages.length === 0);
+  check('реакция/квитанция/правка/call не дали карточек (список пуст)', d.chat.state.messages.length === 0);
 }
 
 // ── 4. stale-guard ────────────────────────────────────────────
@@ -370,7 +373,7 @@ console.log('6. presence-heartbeat: поглощён, активность от�
   check('активность отмечена: noteSeen получил отправителя',
     seen.length === 1 && seen[0][0] === 'peer@x.ru', seen);
   check('в presence ушла связанная функция отметки, а не компонент (нет ctx)',
-    !!call && typeof call.noteSeen === 'function' && call.robj && call.robj.presence === 1);
+    !!call && typeof call.noteSeen === 'function' && call.senderEmail === 'peer@x.ru', call && Object.keys(call));
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

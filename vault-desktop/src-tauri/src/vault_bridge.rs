@@ -119,6 +119,18 @@ pub fn vault_parse_dod_data(plain: String) -> Option<vault_client::vault::signal
     vault_client::vault::signals::parse_dod_data(&plain)
 }
 
+/// Разобрать сервисный сигнал (реакция/правка/квитанция/голос/presence/мета) —
+/// ADR-005 R1 / W4.
+///
+/// РОУТЕР В ЯДРЕ: «что это за письмо — сообщение или служебный сигнал» решает
+/// Rust (vault::signals::parse_signal). Раньше JS разбирал это сам, одинаково
+/// в личных чатах и группах, и местами РАЗНЫМИ правилами (квитанцию о
+/// доставке личные чаты скрывали, а групповые показывали как обычный текст).
+#[tauri::command]
+pub fn vault_parse_signal(plain: String) -> Option<vault_client::vault::signals::SignalEnvelope> {
+    vault_client::vault::signals::parse_signal(&plain)
+}
+
 /// Собрать data-письмо (download-on-demand) — ADR-005 R1 / W4.
 #[tauri::command]
 pub fn vault_build_dod_data(reference: String, data: String) -> String {
