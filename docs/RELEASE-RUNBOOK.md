@@ -1,0 +1,219 @@
+# Релизный runbook — Vault (21.10.2026)
+
+Пошаговый порядок выпуска версии. Собран из того, что реально ломалось;
+каждый шаг — с проверкой, потому что «собралось» и «доехало» — разные вещи.
+
+**Урок, из-за которого этот документ:** 21.10.2026 четыре релиза
+(0.1.243/244/246/247) показывали «Source code» чужого коммита. На GitHub с
+17.09 лежал один «хвостовой» тег, и из-за него КАЖДЫЙ следующий пуш тега
+версии отклонялся («метка уже существует») — а это сообщение выглядит как
+мелочь. Теперь это гейт: `vault-desktop/scripts/release-tag-check.mjs`.
+
+---
+
+## 0. Что где лежит (карта)
+
+```
+~/whisper/
+├── vault-desktop/            # Tauri 2.0 (Rust + Vue 3) — ЕДИНСТВЕННЫЙ источник APK
+│   ├── src/                  # фронт (App.vue, features/*.js, адаптеры правил)
+│   ├── src-tauri/            # мост Rust (команды vault_*)
+│   ├── scripts/              # смоуки, гейты, скрипты сборки и приёмки
+│   └── src-tauri/target/     # кэш сборки Rust (debug 23 ГБ, aarch64 2.5 ГБ, release 4.7 ГБ)
+├── vault-client/             # Rust-ядро (CLI + e2e) — общие крейты
+├── docs/                     # ADR, стратегия тестирования, этот runbook
+└── graphify-out/             # граф знаний (пересобирается graphify update .)
+
+/home/maksim/vault-site/      # сайты: vault-msg.ru (RU) и vault-msg.tech (EN)
+/home/maksim/Notes/Projects/mailcipher/   # STATUS.md + next.md (журнал проекта)
+```
+
+**Удалено 21.10.2026:** `vault-android/` — заброшенная копия 0.1.20 (26 ГБ,
+в APK не поставлялась, но выглядела как вторая сборка Android). Плюс
+неиспользуемые ABI-таргеты сборки (x86_64/i686/armv7 — APK собирается только
+под aarch64, 10.5 ГБ) и старые ассеты на сайте (оставлены последние версии).
+
+**Правило:** APK собирается **только** из `vault-desktop/src`. Если где-то
+появился второй Android-проект — это мусор, а не запасной вариант.
+
+---
+
+## 1. Подготовка
+
+```bash
+cd ~/whisper
+git status --short          # должно быть пусто (иначе — сначала закоммитить)
+git rev-list --left-right --count github/refactor/adr001-stage4...HEAD   # 0 0
+git rev-list --left-right --count gitverse/refactor/adr001-stage4...HEAD # 0 0
+```
+
+## 2. Проверки (обязательно перед сборкой)
+
+```bash
+cd ~/whisper/vault-desktop
+npm run quality             # build + мутации JS + покрытие + гигиена + плотность + Rust-мутации (~4 мин)
+npm run audit:arch          # метрики ADR-005: ctx, решения о протоколе, методы App.vue
+cd ~/whisper && ./scripts/test-all.sh   # крейты: core + client + desktop
+```
+
+Гейты, которые обязаны быть зелёными: `js-logic-ratchet` (потолок не
+распускается), `mutation-density` (каждый модуль >40 строк имеет набор
+мутаций; дыры только сокращаются), `feature-import-gate` (фича не знает про
+фичу), `feature-coverage-gate` (у каждой фичи есть смоук).
+
+## 3. Версия
+
+```bash
+# versionCode = major*1e6 + minor*1e3 + patch  (напр. 0.1.250 → 1249+1)
+python3 - <<'EOF'
+p='vault-desktop/src-tauri/tauri.conf.json'
+s=open(p,encoding='utf-8').read()
+s=s.replace('"version": "0.1.249"','"version": "0.1.250"',1)
+open(p,'w',encoding='utf-8').write(s)
+EOF
+```
+
+**Версия на телефоне должна быть СТРОГО ниже** — иначе `install -r` молча
+оставит старую, и приёмка проверит старый код.
+
+```bash
+adb shell dumpsys package com.vault.vault | grep versionName
+```
+
+## 4. Сборка APK
+
+```bash
+cd ~/whisper/vault-desktop
+./scripts/build-android-apk.sh     # ~9 мин (компиляция Rust под aarch64)
+# артефакт: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
+
+## 5. Приёмка на устройстве
+
+```bash
+# Устройство: IP:порт меняется. Если не подключается — ищи по mDNS:
+adb devices | grep adb-tls
+cd ~/whisper/vault-desktop
+VAULT_SER="<host:port>" ./scripts/device-accept-apk.sh
+```
+
+Скрипт: подпись (md5 APK vs keystore) → `install -r` → запуск → крэш-маркеры →
+рестарты ×3 → CDP-приёмка (19 проверок, `scripts/device-accept.mjs`).
+
+Плюс отдельная проверка консоли WebView (ошибки JS = «тихий» дефект):
+
+```bash
+PID=$(adb -s "$SER" shell pidof com.vault.vault | tr -d '\r')
+adb -s "$SER" forward tcp:9224 localabstract:webview_devtools_remote_$PID
+node scripts/device-accept.mjs 2>&1 | tail -3
+```
+
+**Публиковать только ПРИНЯТУЮ на устройстве версию.**
+
+## 6. Сборка десктопа
+
+```bash
+cd ~/whisper/vault-desktop && npx tauri build --bundles deb
+# артефакт: src-tauri/target/release/bundle/deb/Vault_<версия>_amd64.deb
+```
+
+## 7. Сайты
+
+```bash
+cd /home/maksim/vault-site
+# 1) положить ассеты
+cp ~/whisper/vault-desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+   releases/vault-<версия>.apk
+cp releases/vault-<версия>.apk releases/vault-<версия>-arm64.apk
+# 2) tar.gz с десктопом
+cd ~/whisper/vault-desktop/src-tauri/target/release
+rm -rf /tmp/pkg && mkdir -p /tmp/pkg/vault-<версия>-linux-x86_64
+cp vault-desktop /tmp/pkg/vault-<версия>-linux-x86_64/
+cd /tmp/pkg && tar czf /home/maksim/vault-site/releases/vault-desktop-<версия>-linux-x86_64.tar.gz vault-<версия>-linux-x86_64
+# 3) latest.json / latest-en.json / index.html (версия + дата)
+# 4) выкладка (rsync С -R, иначе ломается структура каталогов)
+rsync -R -avz index.html latest.json latest-en.json \
+  releases/vault-<версия>.apk releases/vault-<версия>-arm64.apk \
+  releases/vault-desktop-<версия>-linux-x86_64.tar.gz server:sites/vault-msg/ru/
+rsync -avz en/index.html server:sites/vault-msg/en/
+rsync -avz latest-en.json server:sites/vault-msg/en/latest.json
+# 5) сверка живыми curl'ами (CDN кэширует по имени — добавляй ?cb=)
+curl -sI "https://vault-msg.ru/releases/vault-<версия>.apk?cb=$(date +%s)" | grep -i content-length
+curl -s "https://vault-msg.ru/releases/vault-<версия>.apk?cb=$(date +%s)" | sha256sum
+sha256sum releases/vault-<версия>.apk
+```
+
+**EN-сайт = корень `vault-msg.tech`** (без `/en/` — `/en/` даёт 404).
+
+## 8. GitHub-релиз
+
+```bash
+cd ~/whisper
+git tag -a v<версия> -m "Vault <версия> — <суть>"
+git push gitverse v<версия>
+git push github  v<версия>      # если скажет «метка уже существует» — ЭТО ОШИБКА, см. п.9
+```
+
+Релиз создаётся скриптом (сырое тело — multipart ломает файл):
+
+```bash
+python3 /tmp/opencode/gh_release.py <версия>   # body берётся из /tmp/opencode/release_body_<версия>.md
+```
+
+Ассеты: APK, tar.gz десктопа, .deb. Проверка: скачать и сверить sha256 с
+локальной сборкой.
+
+## 9. Проверка тегов (обязательно)
+
+```bash
+cd ~/whisper/vault-desktop && node scripts/release-tag-check.mjs
+```
+
+Если тег расходится с коммитом релиза:
+
+```bash
+git push <remote> :refs/tags/<tag>     # удалить неверный
+git push <remote> <tag>                # поставить правильный
+# и пересоздать релиз на GitHub (старый «отвалится» в untagged-… и потеряет
+# ассеты) — скрипт gh_release.py это умеет
+```
+
+## 10. Хозяйство после релиза
+
+```bash
+cd ~/whisper
+# документация: ADR-005 / docs/testing / журнал / STATUS — в том же коммите, что и код
+hermes kanban --board vault comment t_XXXXXXXX "…доказательства…"
+# graphify и OpenViking
+graphify update . --force
+env -u PYTHONPATH ~/.openviking-venv/bin/ov add-resource <файл> \
+  --parent viking://resources --tags project=vault,topic=…,date=…
+# коммит + push в оба ремоута
+git add -A docs vault-desktop vault-client && git commit -m "…"
+git push github refactor/adr001-stage4 && git push gitverse refactor/adr001-stage4
+```
+
+---
+
+## Чего НЕ делать (уроки)
+
+1. **Не публиковать непроверенную на устройстве версию.** Приёмка — часть
+   релиза, а не «после».
+2. **Не поднимать версию на телефоне раньше, чем в `tauri.conf.json`.**
+   `install -r` при равной версии молча ничего не делает.
+3. **«hint: метка уже существует» — это ошибка, а не успех.** Тег указывает на
+   чужой коммит → «Source code» в релизе ведёт не туда.
+4. **Не поднимать `version` в конфиге, не подняв её в `latest.json`** (и
+   наоборот) — сайт и релиз должны называть одну версию.
+5. **Не заливать ассеты multipart'ом** — GitHub API принимает СЫРОЕ тело, иначе
+   в файл попадает мусор (урок 0.1.243).
+6. **Не публиковать sha, не сверив скачанный файл** — CDN кэширует по имени,
+   сверять с `?cb=`.
+7. **Не «чинить» метрику, подгоняя прибор.** Уточнять прибор можно и нужно,
+   но только когда уточнение делает его честнее (урок с двойным счётом
+   протокольного долга) — и с записью в ADR, почему.
+8. **Не оставлять рядом две сборки Android.** Одна — `vault-desktop`.
+9. **Не удалять «старые» каталоги, не проверив, что они не нужны** — сначала
+   `git ls-files <путь>` и `du -sh`, потом удаление, потом коммит.
+10. **Не запускать `cargo clean` в рабочем `target`** без нужды: там 23 ГБ
+    инкрементального кэша, и его пересборка стоит минут пять каждый раз.
