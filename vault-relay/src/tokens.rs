@@ -5,6 +5,7 @@
 //! Выдача — CLI (bin/gen_token.rs), валидация — без БД.
 //! В самом токене нет email: сервер знает только opaque-строку.
 
+use serde::{Deserialize, Serialize};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -100,7 +101,7 @@ impl Kind {
 /// Тариф подписки в v2-токене (design §2.3). `#[repr(u8)]` — сырой байт в
 /// токене. Маппинг неизвестного значения → Free (fail-open по тарифу,
 /// fail-closed по HMAC: MAC всё равно проверяется по сырому байту).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Plan {
     Free = 0,

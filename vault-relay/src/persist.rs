@@ -88,6 +88,11 @@ pub struct Subscription {
     /// Тариф: "free" | "pro" (см. vault_relay::tokens::Plan).
     #[serde(default)]
     pub plan: String,
+    /// fingerprint покупателя: по нему проверяется «у этого аккаунта уже есть
+    /// активная подписка» (второй чекаут не нужен) и что верифицирующий чекаут
+    /// — свой, а не чужой.
+    #[serde(default)]
+    pub fp: String,
     /// unix-сек, до какого оплачен план (0 = без срока).
     #[serde(default)]
     pub paid_until: u64,
@@ -347,6 +352,7 @@ mod tests {
             "checkout-77".to_string(),
             Subscription {
                 plan: "pro".to_string(),
+                fp: "fp-alice".to_string(),
                 paid_until: 1_800_000_000,
                 revoked: false,
             },
@@ -396,6 +402,7 @@ mod tests {
             "checkout-9".to_string(),
             Subscription {
                 plan: "pro".to_string(),
+                fp: "fp-alice".to_string(),
                 paid_until: 1_800_000_000,
                 revoked: true,
             },

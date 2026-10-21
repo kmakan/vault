@@ -26,6 +26,26 @@ jobs:
         working-directory: vault-client
         run: cargo test
 
+  check-relay:
+    name: Check Relay
+    runs-on: ubuntu-22.04
+    # Релей — продовый сервис доставки (пуши, каналы, будилки FCM/ntfy).
+    # До 22.10 его тесты гонялись ТОЛЬКО локально: регресс в нём доезжал до
+    # прода без единого красного сигнала в CI. Здесь он проверяется наравне с
+    # клиентом и десктопом.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: vault-relay -> target
+      - name: Check
+        working-directory: vault-relay
+        run: cargo check
+      - name: Test
+        working-directory: vault-relay
+        run: cargo test
+
   check-desktop:
     name: Check Desktop
     runs-on: ubuntu-22.04
