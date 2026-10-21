@@ -55,6 +55,7 @@
     "vault-desktop/src/features/channels.js": 30,
     "vault-desktop/src/features/chat-ui.js": 16,
     "vault-desktop/src/features/chat.js": 4,
+    "vault-desktop/src/features/clipboard-export.js": 9,
     "vault-desktop/src/features/contacts-delete.js": 11,
     "vault-desktop/src/features/contacts-load.js": 4,
     "vault-desktop/src/features/contacts-store.js": 3,

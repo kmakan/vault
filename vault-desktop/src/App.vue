@@ -1004,6 +1004,7 @@ import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
 import * as IgnoredUsersFeature from './features/ignored-users.js';
 import * as BlockUserFeature from './features/block-user.js';
+import * as ClipboardExportFeature from './features/clipboard-export.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2008,6 +2009,23 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт копирования и экспорта (ADR-005 W3): операции над данными — в
+    // фиче features/clipboard-export.js; компонент отдаёт буфер обмена,
+    // переводы, сборку выгрузки и сохранение файла.
+    clipboardExportDeps() {
+      return {
+        copyTextToClipboard: (text) => Clipboard.copyTextToClipboard(text),
+        alert: (msg) => window.alert(msg),
+        tr: (key) => uiStore.tr(key),
+        replyBody: (content) => this.replyBody(content),
+        messages: () => this.messages,
+        activeChat: () => this.activeChat,
+        exportChatJSON: (msgs, chat) => exportChatJSON(msgs, chat),
+        exportChatTXT: (msgs, chat) => exportChatTXT(msgs, chat),
+        downloadFile: (data, name, mime) => downloadFile(data, name, mime),
+        closeExportMenu: () => { this.showExportMenu = false; },
       };
     },
     // Контракт блокировки отправителя (ADR-005 W3): правила — в фиче
@@ -4091,9 +4109,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // синглтон, на инстансе его нет (`this.uiStore === undefined`) →
     // `TypeError: Cannot read properties of undefined (reading 'setToastMessage')`
     // при каждом вызове. Нашлось на живой приёмке 19.10 (t_e66389bd).
-    showToast(message, ms = 5000) {
-      uiStore.toast(message, ms);
-    },
+    showToast(message, ms = 5000) { return uiStore.toast(message, ms); },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
     async onRecoveryCreated({ mnemonic }) {
       console.log('[recovery] onRecoveryCreated, words len =', mnemonic ? mnemonic.split(/\s+/).length : 0);
@@ -4467,32 +4483,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // недоступен без фокуса — тогда через временный textarea).
     // ADR-003 Этап 3: сама попытка копирования — в clipboard.js, алерты здесь.
     // Так фолбэк через execCommand проверяется тестом, а не подделкой UI.
-    async copyText(text) {
-      if (await Clipboard.copyTextToClipboard(text)) {
-        alert(uiStore.tr('copied') || 'Скопировано');
-      } else {
-        alert(uiStore.tr('copy_failed') || 'Не удалось скопировать');
-      }
-    },
-    copyMessageText(msg) {
-      if (!msg) return;
-      this.copyText(this.replyBody(msg.content || ''));
-    },
-    copyMessageAll(msg) {
-      if (!msg) return;
-      this.copyText(msg.content || '');
-    },
+    async copyText(text) { return ClipboardExportFeature.copyText(this.clipboardExportDeps, text); },
+    async copyMessageText(msg) { return ClipboardExportFeature.copyMessageText(this.clipboardExportDeps, msg); },
+    async copyMessageAll(msg) { return ClipboardExportFeature.copyMessageAll(this.clipboardExportDeps, msg); },
     // Export
-    exportAsJSON() {
-      const json = exportChatJSON(this.messages, this.activeChat)
-      downloadFile(json, `vault-${this.activeChat}-${Date.now()}.json`, 'application/json')
-      this.showExportMenu = false
-    },
-    exportAsTXT() {
-      const txt = exportChatTXT(this.messages, this.activeChat)
-      downloadFile(txt, `vault-${this.activeChat}-${Date.now()}.txt`, 'text/plain')
-      this.showExportMenu = false
-    },
+    exportAsJSON() { return ClipboardExportFeature.exportAsJSON(this.clipboardExportDeps); },
+    exportAsTXT() { return ClipboardExportFeature.exportAsTXT(this.clipboardExportDeps); },
     // Group management
     // ADR-003 Этап 3: оркестрация — в features/groups-create.js, UI здесь.
     // Порядок сохранён: группа применяется ДО генерации ключа, иначе при сбое
