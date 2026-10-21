@@ -1009,6 +1009,8 @@ import * as GroupMembersFeature from './features/group-members.js';
 import * as GroupManagementFeature from './features/group-management.js';
 import * as ChatNavigationFeature from './features/chat-navigation.js';
 import * as AuthFlowFeature from './features/auth-flow.js';
+import * as RecoveryUiFeature from './features/recovery-ui.js';
+import * as SettingsUiFeature from './features/settings-ui.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2013,6 +2015,46 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт экрана восстановления (ADR-005 W3): выбор файла, разбор
+    // причины отказа, отправка эскроу — в фиче features/recovery-ui.js.
+    recoveryUiDeps() {
+      return {
+        email: () => this.email,
+        apiEmail: () => api.email,
+        tr: (key) => uiStore.tr(key),
+        toast: (msg, ms) => uiStore.toast(msg, ms),
+        setEmail: (v) => { this.email = v; },
+        setLoginError: (v) => { this.loginError = v; },
+        setImapServer: (v) => { this.imapServer = v; },
+        setImapPort: (v) => { this.imapPort = v; },
+        setSmtpServer: (v) => { this.smtpServer = v; },
+        setSmtpPort: (v) => { this.smtpPort = v; },
+        setShowServerSettings: (v) => { this.showServerSettings = v; },
+        setMailProvider: (v) => { this.mailProvider = v; },
+        setRecoveryFileJson: (v) => { this.recoveryFileJson = v; },
+        setRecoveryFileName: (v) => { this.recoveryFileName = v; },
+        buildRestoreFailureState: () => RestoreFailure.buildRestoreFailureState(
+          api.lastRestoreError, api.savedConfig, (k) => uiStore.tr(k)),
+        sendEscrowEmail: (email, mnemonic, key) => RecoveryEscrow.sendEscrowEmail(email, mnemonic, key),
+        locateEscrow: (json) => this.locateEscrow(json),
+      };
+    },
+    // Контракт настроек (ADR-005 W3): провайдер, иконка, эксперименты — в
+    // фиче features/settings-ui.js.
+    settingsUiDeps() {
+      return {
+        mailProvider: () => this.mailProvider,
+        setMailProvider: (v) => { this.mailProvider = v; },
+        setImapServer: (v) => { this.imapServer = v; },
+        setImapPort: (v) => { this.imapPort = v; },
+        setSmtpServer: (v) => { this.smtpServer = v; },
+        setSmtpPort: (v) => { this.smtpPort = v; },
+        setAppIconId: (v) => { this.appIconId = v; },
+        setExpCalls: (v) => { this.expCalls = v; },
+        storage: () => (typeof localStorage !== 'undefined' ? localStorage : null),
+        document: () => (typeof document !== 'undefined' ? document : null),
       };
     },
     // Контракт входа и смены почты (ADR-005 W3): длинные сценарии — в фиче
@@ -3490,15 +3532,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       await this.openExternalUrl(url);
     },
     closeImageViewer() { return uiStore.setFormField('viewingImage', null); },
-    onAppIconChanged(id) {
-      this.appIconId = id;
-      // Persist so the chosen icon survives restarts and is reflected everywhere.
-      localStorage.setItem('vault-icon', id);
-      const favicon = document.querySelector("link[rel='icon']");
-      if (favicon) favicon.href = `/icons/vault-${id}.svg`;
-      // Update the native window icon (waybar/dock).
-      api.setAppIcon(id).catch(() => { /* ignore window icon failures */ });
-    },
+    onAppIconChanged(id) { return SettingsUiFeature.onAppIconChanged(this.settingsUiDeps, id); },
     // Инициализация крипто-состояния. Возвращает true, если рабочий ключ
     // (загруженный ИЛИ созданный) на месте, и false, если ключа нет и создавать
     // нельзя (allowCreate:false) или инициализация упала.
@@ -3520,44 +3554,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Авто-вход не удался: показываем форму входа с понятным сообщением и
     // предзаполняем email + сохранённые серверы (провайдер мог сменить
     // IMAP/SMTP — пользователь может исправить их в «Настройках сервера»).
-    showRestoreFailure() {
-      this.email = api.email || this.email;
-      // Раскладка причины отказа и сохранённой конфигурации — в
-      // features/restore-failure.js (ADR-003 Этап 3, партия 16). Там же правило
-      // про порты-строки и про то, что секцию настроек показывают только если
-      // есть что показывать.
-      const st = RestoreFailure.buildRestoreFailureState(
-        api.lastRestoreError, api.savedConfig, (k) => uiStore.tr(k));
-      this.loginError = st.loginError;
-      this.imapServer = st.imapServer;
-      this.imapPort = st.imapPort;
-      this.smtpServer = st.smtpServer;
-      this.smtpPort = st.smtpPort;
-      this.showServerSettings = st.showServerSettings;
-      this.mailProvider = st.mailProvider;
-    },
+    showRestoreFailure() { return RecoveryUiFeature.showRestoreFailure(this.recoveryUiDeps); },
     // Заполнить поля IMAP/SMTP из каталога провайдеров. Вызывается при выборе
     // провайдера в селекте и при автоподборе по домену email (watch: email).
-    applyMailProvider(id) {
-      this.mailProvider = id;
-      const p = findProvider(id);
-      if (!p) return; // 'custom' или пусто — поля остаются как есть
-      this.imapServer = p.imap_server;
-      this.imapPort = String(p.imap_port);
-      this.smtpServer = p.smtp_server;
-      this.smtpPort = String(p.smtp_port);
-    },
+    applyMailProvider(id) { return SettingsUiFeature.applyMailProvider(this.settingsUiDeps, id); },
     // Обработчик селекта: «Другой (вручную)» очищает поля для ручного ввода.
-    onMailProviderChange() {
-      if (this.mailProvider === CUSTOM_PROVIDER_ID) {
-        this.imapServer = '';
-        this.imapPort = '';
-        this.smtpServer = '';
-        this.smtpPort = '';
-      } else {
-        this.applyMailProvider(this.mailProvider);
-      }
-    },
+    onMailProviderChange() { return SettingsUiFeature.onMailProviderChange(this.settingsUiDeps); },
     async login() { return AuthFlowFeature.login(this.authFlowDeps); },
     async handleLogout() {
       return LogoutFeature.logoutFlow(this.logoutDeps);
@@ -3961,12 +3963,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // написаны вручную, совпадение держалось на удачу.
     async onNewGroupAvatarSelected(e) { return GroupManagementFeature.onNewGroupAvatarSelected(this.groupManagementDeps, e); },
     // Файл резервной копии выбран — держим его в памяти до нажатия «Восстановить».
-    async onRecoveryFilePicked(e) {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      this.recoveryFileJson = await file.text();
-      this.recoveryFileName = file.name;
-    },
+    async onRecoveryFilePicked(e) { return RecoveryUiFeature.onRecoveryFilePicked(this.recoveryUiDeps, e); },
     // Восстановление: логин обязателен (доступ к ящику для эскроу-письма),
     // слова — обязательны; файл — опционален.
     // Изоляция фичи (t_7c3929d2) + устойчивость (fix/recovery-resilience):
@@ -3980,10 +3977,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // --- Качество медиа: 'high' (по умолч.) / 'low' / 'original'
     async mediaQuality() { return MsgStore.mediaQuality(); },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
-    async onExperimentsCalls(on) {
-      this.expCalls = !!on;
-      try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) {}
-    },
+    async onExperimentsCalls(on) { return SettingsUiFeature.onExperimentsCalls(this.settingsUiDeps, on); },
     // M2.4: тумблер релея в настройках — живое обновление кэша
     // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
     // --- Исчезающие сообщения
@@ -4009,25 +4003,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // при каждом вызове. Нашлось на живой приёмке 19.10 (t_e66389bd).
     showToast(message, ms = 5000) { return uiStore.toast(message, ms); },
     // Отправка эскроу-письма СЕБЕ после создания ключа восстановления.
-    async onRecoveryCreated({ mnemonic }) {
-      console.log('[recovery] onRecoveryCreated, words len =', mnemonic ? mnemonic.split(/\s+/).length : 0);
-      try {
-        // Отправка и проверка результата — в features/recovery-escrow.js
-        // (ADR-003 Этап 3, партия 15). Ключ ТОСТА ТАМ ЖЕ БЫЛ ЗАВЕДЁН НО НЕ
-        // ЧИТАЛСЯ: русский текст был продублирован прямо здесь, и англоязычные
-        // с китайскими получали по-русски самое важное предупреждение
-        // приложения — про то, что через месяц ключ удалят вместе со спамом.
-        const r = await RecoveryEscrow.sendEscrowEmail(this.email, mnemonic, 'recovery_spam_toast');
-        // Провайдеры кладут служебные письма в Спам, а Gmail удаляет спам
-        // через ~30 дней — тогда эскроу пропадёт.
-        uiStore.toast(uiStore.tr(r.spamToastKey), 10000);
-        // Фоново определяем фактическую папку письма и предупреждаем точечно.
-        this.locateEscrow(r.wrappedJson);
-      } catch (e) {
-        console.error('escrow send failed:', e);
-        uiStore.toast((uiStore.tr('recovery_escrow_failed') || 'Не удалось отправить эскроу-письмо: ') + (e.message || e));
-      }
-    },
+    async onRecoveryCreated(payload) { return RecoveryUiFeature.onRecoveryCreated(this.recoveryUiDeps, payload); },
     // Ищем только что отправленное эскроу-письмо (совпадение salt+nonce+wrapped)
     // и сообщаем, где оно лежит.
     async locateEscrow(wrappedJson, attempt = 0) {
