@@ -321,6 +321,48 @@ mod tests {
         assert!(results[0].relevance > results[1].relevance);
     }
 
+    /// Релевантность ограничена единицей: письмо, совпавшее по нескольким
+    /// полям, не «перевешивает» тему. Без ограничения порядок результатов
+    /// едет (важное уходит вниз). Мутационный гейт Rust-ядра выловил, что на
+    /// это правило теста не было.
+    #[test]
+    fn test_search_relevance_is_capped() {
+        let (mut idx, _dir) = temp_index();
+        // Совпадение сразу по теме, отправителю, получателю и телу.
+        idx.index_message(make_entry("m1", "secret@x", "secret", "secret"))
+            .unwrap();
+        let results = idx.search("secret");
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].relevance <= 1.0,
+            "релевантность ограничена единицей, а не 3.0"
+        );
+        assert!(results[0].relevance > 0.9, "сильное совпадение — близко к единице");
+    }
+
+    /// Порядок результатов: сначала по релевантности, при равенстве — по
+    /// времени (свежие выше).
+    #[test]
+    fn test_search_orders_by_relevance_then_time() {
+        let (mut idx, _dir) = temp_index();
+        // Совпадение только по телу — слабее, и оно СВЕЖЕЕ.
+        let mut weak = make_entry("m1", "a@t.com", "Subject", "secret info");
+        weak.timestamp = Utc::now();
+        idx.index_message(weak).unwrap();
+        // Совпадение по теме — сильнее, но СТАРОЕ: сортировка по времени
+        // поставила бы его вниз, и проверка на порядок по релевантности стала
+        // бы случайной (зависела бы от того, что проиндексировано позже).
+        let mut strong = make_entry("m2", "b@t.com", "secret plan", "other");
+        strong.timestamp = Utc::now() - chrono::Duration::hours(1);
+        idx.index_message(strong).unwrap();
+        let results = idx.search("secret");
+        assert_eq!(
+            results[0].entry.message_id, "m2",
+            "более релевантное выше, даже если оно старше"
+        );
+        assert!(results[0].relevance > results[1].relevance);
+    }
+
     #[test]
     fn test_search_in_folder() {
         let (mut idx, _dir) = temp_index();

@@ -40,6 +40,19 @@ const EXEMPT = new Map([
   ['vault-client/src/cli/commands/mod.rs', 'диспетчер команд CLI — маршрутизация без решений'],
   ['vault-client/src/cli/commands/attachments.rs', 'команды CLI вложений — обвязка транспорта'],
   ['vault-client/src/cli/main.rs', 'точка входа CLI — разбор аргументов'],
+  ['vault-client/src/cli/commands/encrypt.rs', 'тонкая обёртка над crypto::Encryptor (ядро покрыто набором encryptor)'],
+  ['vault-client/src/cli/commands/decrypt.rs', 'тонкая обёртка над crypto::Encryptor (ядро покрыто набором encryptor)'],
+  ['vault-client/src/cli/commands/convert.rs', 'конвертер форматов файлов CLI — не путь приложения'],
+  ['vault-client/src/cli/output.rs', 'оформление вывода CLI (баннер, цвета) — косметика'],
+  ['vault-client/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
+  ['vault-client/src/main.rs', 'точка входа CLI — разбор аргументов'],
+  ['vault-client/src/vault/mod.rs', 'список модулей фичи и реэкспорты — без логики'],
+  ['vault-desktop/src/main.js', 'точка входа фронтенда — сборка приложения'],
+  ['vault-desktop/src/fonts.js', 'каталог шрифтов — данные, а не логика'],
+  ['vault-client/src/api/email.rs', 'IMAP/SMTP-клиент: проверяется e2e-сценарием tests/email_e2e.rs (нужен живой сервер)'],
+  ['vault-client/src/api/client.rs', 'тонкий HTTP-обвязка (23 строки) — решений нет'],
+  ['vault-client/src/listen.rs', 'IMAP-listener: нужен живой сервер, проверяется e2e'],
+  ['vault-client/src/storage/sqlite.rs', 'хранилище SQLite: проверяется e2e-сценариями (нужен файл БД)'],
 ]);
 
 const MIN_LOC = 40;   // модули короче — не сигнал (обычно это константы/структуры)

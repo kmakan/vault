@@ -71,7 +71,10 @@ function dialog(opts) {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'vault-dialog-cancel';
     cancelBtn.textContent = opts.cancelText || 'Отмена';
-    cancelBtn.addEventListener('click', () => finish(null));
+    // «Отмена» ведёт себя как Escape: у confirm это false (Web-API),
+    // у prompt — null. Раньше здесь было всегда null — подмена переставала
+    // быть drop-in для confirm (код вида `confirm(...) === false` сломался бы).
+    cancelBtn.addEventListener('click', () => finish(inputEl ? null : false));
 
     const okBtn = document.createElement('button');
     okBtn.className = 'vault-dialog-ok';

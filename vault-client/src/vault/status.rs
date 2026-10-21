@@ -108,6 +108,38 @@ mod tests {
         assert_eq!(format!("{}", MessageStatus::Read), "✓✓");
     }
 
+    /// Проводные значения (as_str) — КОНТРАКТ с JS-стороной: она разбирает
+    /// статус из письма-квитанции этими строками. Изменение регистра или
+    /// написания сделает квитанции нечитаемыми — а разбор начнёт молча отдавать
+    /// «доставлено» вместо «прочитано». Мутационный гейт Rust-ядра выловил,
+    /// что на это правило теста не было.
+    #[test]
+    fn test_status_wire_strings() {
+        assert_eq!(MessageStatus::Sent.as_str(), "sent");
+        assert_eq!(MessageStatus::Delivered.as_str(), "delivered");
+        assert_eq!(MessageStatus::Read.as_str(), "read");
+        // Round-trip: разбор строки даёт то же состояние.
+        for st in [MessageStatus::Sent, MessageStatus::Delivered, MessageStatus::Read] {
+            assert_eq!(MessageStatus::from_str(st.as_str()), Some(st));
+        }
+    }
+
+    /// Цвет статуса различает состояния (вывод в терминале/UI).
+    #[test]
+    fn test_status_colors_differ() {
+        assert_eq!(MessageStatus::Sent.color(), "gray");
+        assert_eq!(MessageStatus::Delivered.color(), "white");
+        assert_eq!(MessageStatus::Read.color(), "blue");
+        let mut colors = vec![
+            MessageStatus::Sent.color(),
+            MessageStatus::Delivered.color(),
+            MessageStatus::Read.color(),
+        ];
+        colors.sort();
+        colors.dedup();
+        assert_eq!(colors.len(), 3, "цвета статусов различаются");
+    }
+
     #[test]
     fn test_status_from_str() {
         assert_eq!(MessageStatus::from_str("sent"), Some(MessageStatus::Sent));

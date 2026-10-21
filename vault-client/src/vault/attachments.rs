@@ -407,6 +407,58 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// КОНВЕРТ ФАЙЛА разбирается СТРОГО: без «Type: file» — это не файл
+    /// (текстовое письмо с таким же телом не должно сохраняться как файл);
+    /// без «Version:» — формат неизвестен; без разделителя «---» между
+    /// заголовком и телом разбор невозможен.
+    /// Мутационный гейт Rust-ядра выловил, что на эти отказы тестов не было —
+    /// а значит, «Type: text» принимался как файл.
+    #[test]
+    fn test_envelope_parse_rejects_wrong_type() {
+        let env = "---BEGIN VAULT ENCRYPTED---\nVersion: 1\nType: text\n\n---\nPAYLOAD\nSIG\n---END VAULT ENCRYPTED---";
+        let err = EncryptedEnvelope::parse(env).unwrap_err();
+        assert!(
+            err.to_string().contains("Type: file"),
+            "конверт не-файла отвергается: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_envelope_parse_requires_version() {
+        let env = "---BEGIN VAULT ENCRYPTED---\nType: file\n\n---\nPAYLOAD\nSIG\n---END VAULT ENCRYPTED---";
+        let err = EncryptedEnvelope::parse(env).unwrap_err();
+        assert!(
+            err.to_string().contains("Version"),
+            "конверт без версии отвергается: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_envelope_parse_requires_separator() {
+        let env = "---BEGIN VAULT ENCRYPTED---\nVersion: 1\nType: file\nPAYLOAD\nSIG\n---END VAULT ENCRYPTED---";
+        let err = EncryptedEnvelope::parse(env).unwrap_err();
+        assert!(
+            err.to_string().contains("separator"),
+            "конверт без разделителя заголовка и тела отвергается: {}",
+            err
+        );
+    }
+
+    /// Признак конверта файла — строгий: без «Type: file» это не конверт файла
+    /// (иначе текстовое письмо сохранилось бы файлом).
+    #[test]
+    fn test_is_file_envelope_requires_type_file() {
+        let text_env = "---BEGIN VAULT ENCRYPTED---\nVersion: 1\nType: text\n\n---\nP\nS\n---END VAULT ENCRYPTED---";
+        assert!(
+            !EncryptedEnvelope::is_file_envelope(text_env),
+            "конверт без Type: file не считается файловым"
+        );
+        let file_env = "---BEGIN VAULT ENCRYPTED---\nVersion: 1\nType: file\n\n---\nP\nS\n---END VAULT ENCRYPTED---";
+        assert!(EncryptedEnvelope::is_file_envelope(file_env));
+    }
+
     #[test]
     fn test_download_file_roundtrip() {
         // Use the Encryptor to produce a real encrypted envelope, then

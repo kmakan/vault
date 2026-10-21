@@ -169,6 +169,57 @@ mod tests {
         assert_eq!(thread.unread_count, 0);
     }
 
+    /// Участник не добавляется в список повторно (иначе «3 участника» при
+    /// двух собеседниках).
+    #[test]
+    fn test_thread_participants_dedup() {
+        let mut thread = MessageThread::new("t1", "Hello");
+        thread.add_message(make_msg("m1", None, "alice"));
+        thread.add_message(make_msg("m2", None, "alice"));
+        thread.add_message(make_msg("m3", None, "bob"));
+        assert_eq!(thread.participants.len(), 2, "alice и bob — два участника");
+        assert!(thread.participants.contains(&"alice".to_string()));
+        assert!(thread.participants.contains(&"bob".to_string()));
+    }
+
+    /// Корневое сообщение — то, у которого нет parent_id (первое в треде).
+    #[test]
+    fn test_thread_root_is_the_message_without_parent() {
+        let mut thread = MessageThread::new("t1", "Hello");
+        thread.add_message(make_msg("m1", None, "alice"));
+        thread.add_message(make_msg("m2", Some("m1"), "bob"));
+        let root = thread.root().expect("корневое сообщение есть");
+        assert_eq!(root.message_id, "m1", "корнем является сообщение без parent_id");
+    }
+
+    /// Ответы ищутся по parent_id: «ответ на ответ» не попадает в ответы на
+    /// корневое сообщение.
+    #[test]
+    fn test_thread_replies_are_direct_children() {
+        let mut thread = MessageThread::new("t1", "Hello");
+        thread.add_message(make_msg("m1", None, "alice"));
+        thread.add_message(make_msg("m2", Some("m1"), "bob"));
+        thread.add_message(make_msg("m3", Some("m2"), "charlie"));
+        assert_eq!(thread.replies_to("m1").len(), 1, "прямой ответ на m1 один");
+        assert_eq!(thread.replies_to("m2").len(), 1, "ответ на ответ — отдельный");
+    }
+
+    /// Треды сортируются по последней активности (свежие сверху).
+    #[test]
+    fn test_thread_manager_sorts_by_activity() {
+        let mut mgr = ThreadManager::new();
+        mgr.find_or_create_thread("Hello", "t1");
+        mgr.find_or_create_thread("World", "t2");
+        let sorted = mgr.sorted_threads();
+        assert_eq!(sorted.len(), 2);
+        // Порядок детерминирован по last_activity; проверяем, что он совпадает
+        // с сортировкой по убыванию активности.
+        let by_activity: Vec<_> = sorted.iter().map(|t| t.last_activity.clone()).collect();
+        let mut expect = by_activity.clone();
+        expect.sort_by(|a, b| b.cmp(a));
+        assert_eq!(by_activity, expect, "треды отсортированы по активности");
+    }
+
     #[test]
     fn test_thread_manager() {
         let mut mgr = ThreadManager::new();
