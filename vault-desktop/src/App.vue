@@ -1003,6 +1003,7 @@ import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
 import * as IgnoredUsersFeature from './features/ignored-users.js';
+import * as BlockUserFeature from './features/block-user.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2007,6 +2008,25 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт блокировки отправителя (ADR-005 W3): правила — в фиче
+    // features/block-user.js; компонент отдаёт правила ignore-листа, что
+    // открыто, и эффекты (тост, перерисовка, закрытие меню).
+    blockUserDeps() {
+      return {
+        isIgnored: (email) => this.isIgnored(email),
+        ignoreUser: (email) => this.ignoreUser(email),
+        unignoreUser: (email) => this.unignoreUser(email),
+        activeChat: () => this.activeChat,
+        activeChatType: () => this.activeChatType,
+        currentGroup: () => this.currentGroup,
+        chatMenuTarget: () => (this.chatMenu.target && this.chatMenu.target.email) || '',
+        msgSenderEmail: (msg) => this.msgSenderEmail(msg),
+        loadMessages: (chat) => this.loadMessages(chat),
+        toast: (msg) => uiStore.toast(msg),
+        tr: (key) => uiStore.tr(key),
+        closeChatMenu: () => this.closeChatMenu(),
       };
     },
     // Контракт локального хранилища (ADR-005 W3): курсоры и отметки
@@ -4355,53 +4375,12 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Ignore-лист из chat-меню (1:1-чат): блокировка E2E-честная — скрывает
     // новые сообщения/звонки у получателя, серверу невидим. После разблока
     // прошлое НЕ возвращается (его не было в истории).
-    async toggleIgnoreContact() {
-      const email = this.chatMenu.target && this.chatMenu.target.email;
-      if (!email) return;
-      const wasIgnored = this.isIgnored(email);
-      if (wasIgnored) {
-        await this.unignoreUser(email);
-        uiStore.toast(uiStore.tr('ignore_off_toast') || 'Разблокирован');
-      } else {
-        await this.ignoreUser(email);
-        // Открытый чат с ним: чистим экран от НОВЫХ (старые остаются),
-        // иначе выглядело бы, что блок не работает.
-        if (this.activeChatType === 'chat' && this.activeChat === email) {
-          await this.loadMessages(this.activeChat);
-        }
-        uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
-      }
-      this.closeChatMenu();
-    },
+    async toggleIgnoreContact() { return BlockUserFeature.toggleIgnoreContact(this.blockUserDeps); },
     // Разблок из баннера открытого чата: новые сообщения снова показываются.
-    async unblockActiveChat() {
-      if (this.activeChatType !== 'chat' || !this.activeChat) return;
-      await this.unignoreUser(this.activeChat);
-      uiStore.toast(uiStore.tr('ignore_off_toast') || 'Разблокирован');
-      // Подтягиваем письма, пришедшие за время блока? НЕТ — их не было в
-      // истории (фильтр до расшифровки), возвращать их нечем. Просто
-      // перерисовываем: баннер уходит, новые сообщения начинают приходить.
-      await this.loadMessages(this.activeChat);
-    },
+    async unblockActiveChat() { return BlockUserFeature.unblockActiveChat(this.blockUserDeps); },
     // Ignore из меню сообщения: 1:1 — адрес чата, группа — sender_id автора
     // (msgSenderEmail). Тост объясняет, что именно произошло.
-    async blockSenderOfMessage(msg) {
-      if (!msg || msg.from === 'me') return;
-      const sender = this.msgSenderEmail(msg)
-        || (this.activeChatType === 'chat' ? this.activeChat : '');
-      if (!sender) return;
-      if (this.isIgnored(sender)) {
-        await this.unignoreUser(sender);
-        uiStore.toast(uiStore.tr('ignore_off_toast') || 'Разблокирован');
-      } else {
-        await this.ignoreUser(sender);
-        // Перестраиваем чат, если открыт с ним (1:1) — новые уже скрыты.
-        if (this.activeChatType === 'chat' && this.activeChat === sender) {
-          await this.loadMessages(this.activeChat);
-        }
-        uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован');
-      }
-    },
+    async blockSenderOfMessage(msg) { return BlockUserFeature.blockSenderOfMessage(this.blockUserDeps, msg); },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // Emoji
     insertEmoji(emoji) {
@@ -4769,16 +4748,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ── Ignore-лист в GroupSettings: с 0.1.165 «заблокированные» группы —
     // это глобальный ignore-лист получателя (E2E-модель), а не декоративный
     // group.blocked (который никто не читал и который не персистился).
-    async blockUser(email) {
-      if (!this.currentGroup || !email) return;
-      await this.ignoreUser(email);
-      uiStore.toast(uiStore.tr('ignore_on_toast') || 'Заблокирован: новые сообщения и звонки скрыты');
-    },
-    async unblockUser(email) {
-      if (!email) return;
-      await this.unignoreUser(email);
-      uiStore.toast(uiStore.tr('ignore_off_toast') || 'Разблокирован');
-    },
+    async blockUser(email) { return BlockUserFeature.blockUser(this.blockUserDeps, email); },
+    async unblockUser(email) { return BlockUserFeature.unblockUser(this.blockUserDeps, email); },
     async leaveGroup() {
       if (!this.currentGroup) return;
       const gid = this.currentGroup.id;

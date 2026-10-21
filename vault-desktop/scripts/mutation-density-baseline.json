@@ -40,6 +40,7 @@
     "vault-desktop/src/external-links.js": 7,
     "vault-desktop/src/features/attachments.js": 3,
     "vault-desktop/src/features/autoclean.js": 12,
+    "vault-desktop/src/features/block-user.js": 8,
     "vault-desktop/src/features/bounce.js": 8,
     "vault-desktop/src/features/call-clock.js": 5,
     "vault-desktop/src/features/call-idle.js": 1,
