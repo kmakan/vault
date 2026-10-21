@@ -1002,6 +1002,8 @@ import * as EphemeralFeature from './features/ephemeral.js';
 import * as UnreadFeature from './features/unread.js';
 import * as HistoryFeature from './features/history.js';
 import * as ContactsFeature from './features/contacts.js';
+import * as IgnoredUsersFeature from './features/ignored-users.js';
+import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
 import * as CallVideoFeature from './features/call-video.js';
@@ -1989,6 +1991,34 @@ export default {
     foldersDeps() {
       return {
         closeChatMenu: () => this.closeChatMenu(),
+      };
+    },
+    // Контракт ignore-листа (ADR-005 W3): хранение и правило — в фиче
+    // features/ignored-users.js; компонент отдаёт владельцев и ключи.
+    ignoredUsersDeps() {
+      return {
+        email: this.email,
+        peerKeys: this.peerKeys,
+        contactsStore,
+        db,
+        accountNamespace,
+        // Чистые правила карты — из features/contacts.js: фича не знает про
+        // фичу (ADR-004), поэтому зависимость идёт через контракт.
+        isIgnored: ContactsFeature.isIgnored,
+        addIgnored: ContactsFeature.addIgnored,
+        removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт локального хранилища (ADR-005 W3): курсоры и отметки
+    // «прочитано» — в фиче features/local-store.js; владелец кэша курсоров
+    // остаётся у компонента (это его состояние на время сессии).
+    localStoreDeps() {
+      return {
+        email: this.email,
+        getCursors: () => this.cursorsCache,
+        setCursors: (c) => { this.cursorsCache = c; },
+        db,
+        storage: (typeof localStorage !== 'undefined') ? localStorage : null,
       };
     },
     // Контракт фичи meta-писем групп (ADR-005 W2, партия 14): список групп и
@@ -3147,17 +3177,8 @@ export default {
     // email→ts) связан с тремя путями доставки (почта/релей/история).
     // Загрузка из sqlite kv 'ignored-users' (вызывается при входе рядом с
     // loadChatFlags). Повреждённый блоб — тихо пустой список.
-    async loadIgnoredUsers() {
-      try {
-        const raw = await db.kvGet(await accountNamespace(this.email), 'ignored-users');
-        contactsStore.setIgnored(raw ? (JSON.parse(raw) || {}) : {});
-      } catch (e) { contactsStore.clearIgnored(); }
-    },
-    async saveIgnoredUsers() {
-      try {
-        await db.kvSet(await accountNamespace(this.email), 'ignored-users', JSON.stringify(contactsStore.state.ignoredUsers));
-      } catch (e) { /* kv недоступен — список живёт в памяти до перезапуска */ }
-    },
+    async loadIgnoredUsers() { return IgnoredUsersFeature.loadIgnoredUsers(this.ignoredUsersDeps); },
+    async saveIgnoredUsers() { return IgnoredUsersFeature.saveIgnoredUsers(this.ignoredUsersDeps); },
     // Заблокирован ли отправитель для НАС (смена почты не помогает:
     // проверяем и сам email, и все алиасы того же peer-ключа).
     // ADR-001: контактовые утилиты вынесены в features/contacts.js (чистые fn).
@@ -3167,29 +3188,11 @@ export default {
     // Заблокировать отправителя: с этого момента его новые сообщения,
     // звонки и уведомления скрыты у получателя. Возвращает false, если
     // email пустой или это наш собственный адрес.
-    async ignoreUser(email) {
-      const key = String(email || '').toLowerCase().trim();
-      if (!key || key === (this.email || '').toLowerCase()) return false;
-      if (!this.isIgnored(key)) {
-        // Карта строится в features/contacts.js (чистая fn) и отдаётся владельцу
-        // contactsStore: запись в обход setIgnored обошла бы ADR-004.
-        contactsStore.setIgnored(
-          ContactsFeature.addIgnored(contactsStore.state.ignoredUsers, key, Date.now()),
-        );
-        await this.saveIgnoredUsers();
-      }
-      return true;
-    },
+    async ignoreUser(email) { return IgnoredUsersFeature.ignoreUser(this.ignoredUsersDeps, email); },
     // Снять блокировку: новые сообщения снова показываются. Прошлое (то,
     // что скрылось, пока блок был активен) не возвращается — его не было
     // в истории. Снимаем и сам адрес, и алиасы того же ключа.
-    async unignoreUser(email) {
-      if (!String(email || '').trim()) return;
-      contactsStore.setIgnored(
-        ContactsFeature.removeIgnored(contactsStore.state.ignoredUsers, email, this.peerKeys),
-      );
-      await this.saveIgnoredUsers();
-    },
+    async unignoreUser(email) { return IgnoredUsersFeature.unignoreUser(this.ignoredUsersDeps, email); },
     // ── Черновики (drafts) — логика в features/drafts.js; очередь сериализации
     // kv-блоба (гонка save/restore) — на статике модуля, не компонента.
     draftRun(fn) { return DraftsFeature.draftRun(fn); },
@@ -4232,19 +4235,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Per-folder UID-курсоры для инкрементального фетча. Хранятся в sqlite
     // (initLocalDb загружает их в cursorsCache при входе) — localStorage
     imapCursorsKey(accountId) { return MsgFormat.imapCursorsKey(accountId); },
-    loadCursors(accountId) {
-      return this.cursorsCache || {};
-    },
-    saveCursors(accountId, cursors) {
-      try {
-        if (cursors && Object.keys(cursors).length) {
-          this.cursorsCache = cursors;
-          db.cursorsSave(accountId, JSON.stringify(cursors));
-        }
-      } catch (e) {
-        console.error('saveCursors failed:', e);
-      }
-    },
+    loadCursors(accountId) { return LocalStoreFeature.loadCursors(this.localStoreDeps, accountId); },
+    saveCursors(accountId, cursors) { return LocalStoreFeature.saveCursors(this.localStoreDeps, accountId, cursors); },
     // ── Загрузка писем (логика в features/emails.js) — тонкий делегат. ──
     // ADR-001 Etap 2: call-site direct -> EmailsFeature.loadEmails(this, silent). Delegate removed.
     // ── Непрочитанные + PUSH-уведомления ─────────
@@ -4443,23 +4435,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // msg_ids:[...]} (1-на-1: encryptVault с пустой темой; группа:
     // encryptWithGroupKey письмами VaultGroupRead: <id>). Храним уже отосланные
     // msg_id по каждому чату, чтобы не слать повторно при каждом поллинге.
-    readsSentStorageKey() {
-      return 'vault-reads-sent-' + (this.email || 'anon');
-    },
-    loadSentReads() {
-      try {
-        return JSON.parse(localStorage.getItem(this.readsSentStorageKey()) || '{}');
-      } catch (e) {
-        return {};
-      }
-    },
-    saveSentReads(data) {
-      try {
-        localStorage.setItem(this.readsSentStorageKey(), JSON.stringify(data));
-      } catch (e) {
-        console.error('Failed to save read receipts:', e);
-      }
-    },
+    readsSentStorageKey() { return LocalStoreFeature.readsSentStorageKey(this.localStoreDeps); },
+    loadSentReads() { return LocalStoreFeature.loadSentReads(this.localStoreDeps); },
+    saveSentReads(data) { return LocalStoreFeature.saveSentReads(this.localStoreDeps, data); },
     // Отправить квитанцию «просмотрено» по входящим сообщениям текущего чата.
     // Вызывается после рендера сообщений (открытие чата и поллинг).
     async sendReadReceipts(incomingIds) {
