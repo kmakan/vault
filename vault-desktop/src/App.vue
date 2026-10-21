@@ -1011,6 +1011,9 @@ import * as ChatNavigationFeature from './features/chat-navigation.js';
 import * as AuthFlowFeature from './features/auth-flow.js';
 import * as RecoveryUiFeature from './features/recovery-ui.js';
 import * as SettingsUiFeature from './features/settings-ui.js';
+import * as ChatUiFeature2 from './features/chat-ui.js';
+import * as AccountLoadFeature from './features/account-load.js';
+import * as EnvelopeBuildFeature from './features/envelope-build.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2015,6 +2018,74 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт мелких правил чата (ADR-005 W3): множественное число и эмодзи.
+    chatUiRulesDeps() {
+      return {
+        newMessage: () => this.newMessage,
+        setNewMessage: (v) => { this.newMessage = v; },
+        setShowEmojiPicker: (v) => { this.showEmojiPicker = v; },
+      };
+    },
+    // Контракт жалобы на контент (ADR-005 W3): тип, сборка письма, открытие.
+    reportContentDeps() {
+      return {
+        tr: (key) => uiStore.tr(key),
+        prompt: (msg, def) => window.prompt(msg, def),
+        activeChat: () => this.activeChat,
+        activeChatType: () => this.activeChatType,
+        msgSenderEmail: (msg) => this.msgSenderEmail(msg),
+        openExternalUrl: (url) => this.openExternalUrl(url),
+      };
+    },
+    // Контракт загрузки данных аккаунта (ADR-005 W3): контакты, группы,
+    // профиль, локальные кэши.
+    accountLoadDeps() {
+      return {
+        email: () => this.email,
+        fingerprint: () => this.fingerprint,
+        aliasesOf: (e) => this.aliasesOf(e),
+        contacts: () => this.contacts,
+        groupsStore: this.groupsStore,
+        profiles: () => this.profiles,
+        userAvatarUrl: () => this.userAvatarUrl,
+        contactsStore,
+        setContacts: (v) => { this.contacts = v; },
+        setContactAliases: (v) => { this.contactAliases = v; },
+        setGroups: (v) => { this.groups = v; },
+        setUserAvatarUrl: (v) => { this.userAvatarUrl = v; },
+        setTombstonesCache: (v) => { this.tombstonesCache = v; },
+        setMidTombstonesCache: (v) => { this.midTombstonesCache = v; },
+        setCursorsCache: (v) => { this.cursorsCache = v; },
+        loadGroupsData: (opts) => GroupsLoad.loadGroups(opts),
+        migrateOwnProfileData: (a, b) => Migrations.migrateOwnProfile(a, b),
+        loadLocalCaches: (email) => LocalDbInit.loadLocalCaches(email),
+      };
+    },
+    // Контракт сбора данных для конверта (ADR-005 W3): имя, аватар, gavatar,
+    // ключи, TTL. САМА сборка — в ядре (vault::envelope::build).
+    envelopeBuildDeps() {
+      return {
+        email: () => this.email,
+        displayName: () => this.displayName,
+        profiles: () => this.profiles,
+        activeChatType: () => this.activeChatType,
+        currentGroup: () => this.currentGroup,
+        newMessageId: () => this.newMessageId(),
+        shrinkAvatar: (a) => this.shrinkAvatar(a),
+        buildEnvelope: (payload) => EnvelopeRule.buildEnvelope(payload),
+      };
+    },
+    // Контракт гео-сообщения (ADR-005 W3): координаты и вставка в поле.
+    geoMessageDeps() {
+      return {
+        tr: (key) => uiStore.tr(key),
+        toast: (msg, ms) => uiStore.toast(msg, ms),
+        setNewMessage: (v) => { this.newMessage = v; },
+        focusMessageInput: () => {
+          this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
+        },
       };
     },
     // Контракт экрана восстановления (ADR-005 W3): выбор файла, разбор
@@ -3469,16 +3540,7 @@ export default {
     closeMobileChat() { return ChatUiFeature.closeMobileChat(this.chatUiDeps); },
     // Плюрализация «участник/участника/участников» по текущей локали.
     // Вызывается из шаблона рядом со счётчиком участников.
-    membersLabel(n) {
-      const locale = String(this.currentLocale || 'en').slice(0, 2);
-      if (locale === 'ru') {
-        const m10 = n % 10, m100 = n % 100;
-        if (m10 === 1 && m100 !== 11) return 'участник';
-        if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'участника';
-        return 'участников';
-      }
-      return n === 1 ? 'member' : 'members';
-    },
+    membersLabel(n) { return ChatUiFeature2.membersLabel(this.currentLocale, n); },
     // ── Вложения (логика в features/attachments.js) — тонкие делегаты,
     // имена сохранены для шаблонных биндингов (гейт check-template). ──
     downloadAttachment(attachment) { return AttachmentsFeature.downloadAttachment(attachment); },
@@ -3517,20 +3579,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3, партия 12: сборка текста жалобы — в features/report-content.js.
     // Диалог ввода и открытие ссылки остаются здесь: это UI, а текст письма
     // уходит с устройства и потому тоже контракт, а не черновик.
-    async reportMessageContent(msg) {
-      const type = await prompt(
-        uiStore.tr('report_content_prompt') || 'Тип жалобы (спам / оскорбления / другое):',
-        'спам');
-      if (type === null) return; // отмена
-      const sender = this.msgSenderEmail(msg)
-        || (this.activeChatType === 'chat' ? this.activeChat : '')
-        || '-';
-      const tr = (k) => uiStore.tr(k);
-      const lines = ReportContent.buildReportLines({ type, msg, sender }, tr);
-      const url = ReportContent.buildReportMailto(
-        uiStore.tr('report_content_subject') || 'Жалоба на контент — Vault', lines);
-      await this.openExternalUrl(url);
-    },
+    async reportMessageContent(msg) { return ReportContent.reportMessageContent(this.reportContentDeps, msg); },
     closeImageViewer() { return uiStore.setFormField('viewingImage', null); },
     onAppIconChanged(id) { return SettingsUiFeature.onAppIconChanged(this.settingsUiDeps, id); },
     // Инициализация крипто-состояния. Возвращает true, если рабочий ключ
@@ -3574,12 +3623,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3: логика склейки адресов — в features/contacts-load.js.
     // contactAliases при ошибке НЕ затирается (там привязка истории чата):
     // ради этого функция возвращает null, а не пустой объект.
-    async loadContacts() {
-      // ADR-004 J.5a: proxy на contactsStore singleton owner.
-      await contactsStore.loadContacts(this.email);
-      this.contacts = contactsStore.state.contacts;
-      this.contactAliases = contactsStore.state.contactAliases;
-    },
+    async loadContacts() { return AccountLoadFeature.loadContacts(this.accountLoadDeps); },
     // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
     // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по
     // префиксу (chat-cache/unread-/accepted-/…) — терялись черновики,
@@ -3610,12 +3654,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // удаляем: аватар может лежать под старым адресом как алиас.
     // ADR-003 Этап 3: перенос профиля — в migrations.js. Модуль возвращает
     // ключ и профиль, шапку обновляем здесь: логика и отображение слипаться не должны.
-    async migrateOwnProfile(oldEmail, newEmail) {
-      const r = await Migrations.migrateOwnProfile(oldEmail, newEmail);
-      if (!r) return;
-      if (this.profiles && typeof this.profiles === 'object') this.profiles[r.key] = r.profile;
-      this.userAvatarUrl = (r.profile || {}).avatar || this.userAvatarUrl;
-    },
+    async migrateOwnProfile(oldEmail, newEmail) { return AccountLoadFeature.migrateOwnProfile(this.accountLoadDeps, oldEmail, newEmail); },
     // Все адреса, привязанные к тому же ключу, что и email (алиасы).
     // Контакт мог сменить почту — старый и новый адреса имеют одинаковый ключ.
     // Используется в loadMessages (фильтр писем) и isOut (определение отправителя).
@@ -3636,20 +3675,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3: сбор и применение разнесены (features/groups-load.js).
     // Присваивания идут ПОСЛЕ сбора, и groups применяется только если invoke
     // отработал: иначе поле осталось бы прежним, как и в оригинале.
-    async loadGroups() {
-      const r = await GroupsLoad.loadGroups({
-        email: this.email,
-        fingerprint: this.fingerprint,
-        aliasesOf: this.aliasesOf,
-        contacts: this.contacts,
-        requestGroupAvatarHeal: this.requestGroupAvatarHeal,
-      });
-      if (r.groups) this.groups = r.groups;
-      this.groupsStore.mergeGroupKeys(r.keys || {});
-      this.groupsStore.mergeGroupAvatars(r.avatars || {});
-      this.groupsStore.mergeGroupIcons(r.icons);
-      for (const c of r.newContacts) this.contacts.push(c);
-    },
+    async loadGroups() { return AccountLoadFeature.loadGroups(this.accountLoadDeps); },
     // M2: broadcast-каналы — хранение через tauri channels.rs (channels.json).
     channelPostsToMessages(ch) { return ChannelsFeature.channelPostsToMessages(ch); },
     async selectChannel(ch) { return ChannelsFeature.selectChannel(ch, this.channelsDeps); },
@@ -3729,70 +3755,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // если сжатие не удалось/не помогло — отправляем оригинал (письмо стерпит
     // 200KB, а вот пустой аватар = собеседник никогда не увидит картинку).
     // Обернуть текст в конверт перед шифрованием.
-    async buildEnvelope(text, ttl = 0) {
-      const dn = this.displayName || (await api.getDisplayName()) || '';
-      // Не слать email как имя: получатель считает name==email «нет имени»
-      // (см. nameOf) — иначе он перезаписывает настоящее имя почтой.
-      const name = dn && dn !== this.email ? dn : '';
-      // Актуальный аватар из kv — this.profiles
-      // в памяти может отставать; иначе сообщение уходит со СТАРЫМ аватаром
-      // и получатель перезаписывает новый.
-      let avatar = (this.profiles[this.email] || {}).avatar || '';
-      try {
-        const kvProfiles = JSON.parse((await db.kvGet('anon', 'profiles')) || '{}');
-        const kp = kvProfiles[String(this.email).toLowerCase()];
-        if (kp && kp.avatar) avatar = kp.avatar;
-      } catch (e) { /* ignore */ }
-      const rawLen = avatar.length;
-      avatar = await this.shrinkAvatar(avatar);
-      // Самовосстановление аватарки группы: конверт несёт gavatar — аватар
-      // ТЕКУЩЕЙ группы (групповое сообщение шлётся только в активной группе).
-      // Только для группового чата (иначе gavatar отсутствует). Пустой kv —
-      // пустая строка (на приёме пусто игнорируется, guard там). Конверт
-      // группы шифруется групповым ключом — это не раскрытие членства.
-      let gavatar = '';
-      if (this.activeChatType === 'group' && this.currentGroup) {
-        try { gavatar = (await db.kvGet('anon', 'group-avatar:' + this.currentGroup.id)) || ''; }
-        catch (e) { gavatar = ''; }
-      }
-      // PQ: свой ML-KEM ek — получатель сохранит контакт и сможет
-      // ответить гибридом (конверт несёт оба публичных ключа).
-      const pqEk = crypto.pqEk || null;
-      // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
-      // адрес моей очереди. Получатель молча сохранит его и сможет
-      // слать мне мгновенные пуши. Пользователь ничего не вводит.
-      // Гейт this.relayEnabled СНЯТ (как в calls.js sendCallEnvelope):
-      // адрес нашей очереди нужен собеседнику независимо от нашего
-      // переключателя — иначе выключенный релей у одного ломает обмен.
-      let tok = null;
-      try {
-        const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
-        tok = ((relays[active] || relays[0]) || {}).myToken || null;
-      } catch (e) { /* релей опционален */ }
-      // ФОРМАТ КОНВЕРТА — В RUST (ADR-005 W4): какие поля входят и при каких
-      // условиях, решает ядро (vault_client::vault::envelope). Здесь — только
-      // данные. Пока сборка жила здесь, а разбор — в Rust (incoming::classify),
-      // формат был описан в двух местах, и правка одной стороны ломала другую.
-      // ttl — в секундах от момента ПРОСМОТРА получателем (0 = обычное
-      // сообщение, получатель не ставит таймер удаления).
-      const envelope = await EnvelopeRule.buildEnvelope({
-        id: this.newMessageId(),
-        text,
-        name,
-        avatar,
-        gavatar: gavatar || null,
-        key: crypto.publicKey || '',
-        pqEk,
-        tok,
-        ttlSecs: Number(ttl) || 0,
-        tsMs: Date.now(),
-      });
-      // Мост недоступен → конверта нет. Отправлять «null» нельзя: получатель
-      // не разберёт и письмо исчезнет у обоих молча. Явная ошибка — её поймает
-      // вызывающий и покажет тост.
-      if (!envelope) throw new Error('envelope: Rust-сборка конверта недоступна');
-      return envelope;
-    },
+    async buildEnvelope(text, ttl = 0) { return EnvelopeBuildFeature.buildEnvelope(this.envelopeBuildDeps, text, ttl); },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
     async parseEnvelope(decrypted) { return MsgFormat.parseEnvelope(decrypted); },
     // ── Гео-сообщение ──────────────────────────────────────────────
@@ -3801,15 +3764,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // ADR-003 Этап 3, партия 13: получение координат и сборка текста — в geo.js.
     // Там же таймаут с защитой от двойного разрешения: без него поздний ответ
     // геолокации записал бы поле ввода ПОСЛЕ того, как показано «недоступна».
-    async sendGeoMessage() {
-      const coords = await Geo.resolveCurrentCoords();
-      if (!coords) {
-        uiStore.toast(uiStore.tr('geo_err') || 'Геолокация недоступна', 3000);
-        return;
-      }
-      this.newMessage = Geo.buildGeoMessage(uiStore.tr('geo_im_here') || 'Я здесь:', coords);
-      this.$nextTick(() => this.$refs.messageInput && this.$refs.messageInput.focus());
-    },
+    async sendGeoMessage() { return Geo.sendGeoMessage(this.geoMessageDeps); },
     // ── Пересылка (forward) ────────────────────────────────────────
     // Переслать: пере-шифровка текста для выбранного чата с пометкой.
     // (логика в features/forward.js; обёртки см. в блоке poll-обёрток выше)
@@ -4243,10 +4198,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async blockSenderOfMessage(msg) { return BlockUserFeature.blockSenderOfMessage(this.blockUserDeps, msg); },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // Emoji
-    insertEmoji(emoji) {
-      this.newMessage += emoji
-      this.showEmojiPicker = false
-    },
+    insertEmoji(emoji) { return ChatUiFeature2.insertEmoji(this.chatUiRulesDeps, emoji); },
     // ── Аудио/файлы-вложения (логика в features/attachments.js) ──
     async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), hideAudioRecorder: () => (this.showAudioRecorder = false) }, audioData); },
     async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), compressImage: (d, s, q) => this.compressImage(d, s, q) }, event); },
@@ -4301,12 +4253,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // удалась, и пустой массив там, где загрузилось и там правда пусто. Спутать
     // эти состояния — значит при одном отказе Rust стереть то, что было
     // загружено раньше: удалённые письма перестали бы помечаться навсегда.
-    async initLocalDb() {
-      const r = await LocalDbInit.loadLocalCaches(this.email);
-      if (r.tombstones) this.tombstonesCache = r.tombstones;
-      if (r.midTombstones) this.midTombstonesCache = r.midTombstones;
-      if (r.cursors) this.cursorsCache = r.cursors;
-    },
+    async initLocalDb() { return AccountLoadFeature.initLocalDb(this.accountLoadDeps); },
     // --- Копирование сообщений ---
     linkify(text) { return MsgFormat.linkify(text); },
     onMessageTextClick(e) { return ChatUiFeature.onMessageTextClick(this.chatUiDeps, e); },

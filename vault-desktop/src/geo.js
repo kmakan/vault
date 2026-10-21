@@ -83,3 +83,15 @@ export function resolveCurrentCoords({
     }
   });
 }
+
+// Отправить своё местоположение: подставляем в поле ввода готовое сообщение.
+// Если геолокация недоступна — честно говорим об этом, а не молчим.
+export async function sendGeoMessage(deps) {
+  const coords = await resolveCurrentCoords(deps.geoDeps());
+  if (!coords) {
+    deps.toast(deps.tr('geo_err') || 'Геолокация недоступна', 3000);
+    return;
+  }
+  deps.setNewMessage(buildGeoMessage(deps.tr('geo_im_here') || 'Я здесь:', coords));
+  deps.focusMessageInput();
+}

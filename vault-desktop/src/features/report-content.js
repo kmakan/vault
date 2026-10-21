@@ -43,3 +43,20 @@ export function buildReportMailto(subject, lines) {
   return 'mailto:support@vault-msg.ru?subject=' + encodeURIComponent(subject)
     + '&body=' + encodeURIComponent(lines.join('\n'));
 }
+
+// Поток жалобы на контент: спрашиваем тип, собираем письмо и открываем
+// почтовое приложение. Отмена пользователя (null из prompt) — не ошибка.
+export async function reportMessageContent(deps, msg) {
+  const type = await deps.prompt(
+    deps.tr('report_content_prompt') || 'Тип жалобы (спам / оскорбления / другое):',
+    'спам');
+  if (type === null) return; // отмена
+  const sender = deps.msgSenderEmail(msg)
+    || (deps.activeChatType() === 'chat' ? deps.activeChat() : '')
+    || '-';
+  const tr = (k) => deps.tr(k);
+  const lines = buildReportLines({ type, msg, sender }, tr);
+  const url = buildReportMailto(
+    deps.tr('report_content_subject') || 'Жалоба на контент — Vault', lines);
+  await deps.openExternalUrl(url);
+}

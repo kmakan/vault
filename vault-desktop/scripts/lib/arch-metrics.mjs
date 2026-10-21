@@ -156,7 +156,7 @@ export const ctxFields = (src) =>
 // Теперь аргументы разбираются по балансу скобок: `;` внутри вложенной стрелки
 // допустим, а тело по-прежнему должно быть РОВНО одним выражением.
 const CALL_HEAD_RE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
-function isDelegateBody(body) {
+export function isDelegateBody(body) {
   const t = String(body).trim();
   if (!t.startsWith('return ') || !t.endsWith(';')) return false;
   const inner = t.slice(7, -1);
