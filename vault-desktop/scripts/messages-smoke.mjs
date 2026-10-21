@@ -10,6 +10,7 @@
 // голос опроса не рендерятся), envelope→text, дедуп, stale-guard.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createSendingStore } from '../src/features/sending-store.js';
 import * as ContactsFeature from '../src/features/contacts.js';
@@ -22,6 +23,9 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/messages-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок формата wire-конверта (ADR-005 W4): правила — в Rust, здесь их
+// тестовый двойник (scripts/lib/wire-envelope-mock.mjs + envelope-mock.mjs).
+await installEnvelopeMock(MOCKS);
 
 // ADR-004: contacts-store грузит contacts-load.js, который на импорте читает
 // localStorage. Стаб обязан стоять ДО его загрузки → импорт динамический.
@@ -83,6 +87,8 @@ prepareModuleCopy(
   MOCKS + '/messages.mjs',
   {
     '../api.js': 'api.js',
+  '../message-format.js': 'message-format.js',
+    '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
     './presence.js': 'presence.js',
   },

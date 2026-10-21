@@ -13,6 +13,22 @@
 // получатель не разберёт, и оно исчезнет у обоих молча. Лучше явная ошибка.
 import { invoke } from '@tauri-apps/api/core';
 
+// Разобрать wire-конверт: null — это НЕ наш конверт (legacy-текст, чужой
+// JSON, битый JSON). Правила разбора — в Rust (ADR-005 W4): какие поля берутся,
+// что считается «не нашим», как устроен подконверт голосования.
+//
+// Отказ моста не путаем с «не наш конверт»: при отказе возвращаем null и
+// сообщаем в консоль — иначе письмо молча выглядело бы как мусор.
+export async function parseEnvelope(plain) {
+  if (!plain || typeof plain !== 'string') return null;
+  try {
+    return await invoke('vault_parse_envelope', { plain });
+  } catch (e) {
+    console.error('[envelope] Rust-разбор конверта недоступен:', e && e.message || e);
+    return null;
+  }
+}
+
 // input: { id, text, name, avatar, gavatar, key, pqEk, tok, ttlSecs, tsMs }
 export async function buildEnvelope(input) {
   const i = input || {};

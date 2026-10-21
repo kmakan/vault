@@ -210,7 +210,7 @@ async function routeLetter(deps, m, from) {
         return null; // не сообщение, не уведомление
       }
       const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-        ? deps.parseEnvelope(plain)
+        ? await deps.parseEnvelope(plain)
         : null;
       if (env) {
         // env.id — ключ кросс-канального дедупа (relay-копия и
@@ -299,7 +299,7 @@ async function routeLetter(deps, m, from) {
             return null;
           }
           const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-            ? deps.parseEnvelope(plain)
+            ? await deps.parseEnvelope(plain)
             : null;
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.
@@ -433,7 +433,7 @@ async function routeLetter(deps, m, from) {
           return null;
         }
         const env = cls && (cls.kind === 'message' || cls.kind === 'profile')
-          ? deps.parseEnvelope(plain)
+          ? await deps.parseEnvelope(plain)
           : null;
         if (env) {
           // Самовосстановление аватарки группы из конверта сообщения

@@ -184,7 +184,7 @@ export async function fetchDodAttachment(deps, msg, attachment) {
       peerKeys: identityStore.state.peerKeys, peerPqKeys: identityStore.state.peerPqKeys, crypto,
     });
     if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
-    const env = parseEnvelope(plain);
+    const env = await parseEnvelope(plain);
     const raw = env ? env.text : plain;
     const obj = JSON.parse(raw);
     if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');

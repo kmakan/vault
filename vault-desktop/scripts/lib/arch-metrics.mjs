@@ -59,8 +59,21 @@ export const CRYPTO_MARKERS = [
 // арифметика TTL. Декларации (`function parseEnvelope(`) исключены
 // lookbehind'ом: определение функции — не решение о формате.
 export const PROTOCOL_MARKERS = [
-  { id: 'envelope-parse',
-    re: /(?<!function )\b(?:parseEnvelope|parseEnvelopeSafe)\s*\(/g,
+  // РАЗБОР конверта: долг — это когда JS САМ разбирает wire-конверт
+  // (JSON.parse ответа и разбор полей), а не когда он ВЫЗЫВАЕТ разборщик.
+  // После переезда правил в Rust (vault_client::vault::envelope::parse) вызов
+  // `parseEnvelope(...)` — это транспорт (как `invoke('vault_call_...')` в
+  // правиле звонка), и штрафовать его нельзя: иначе пришлось бы дублировать
+  // разбор в JS ради «красивого» счётчика — ровно то, чего мы убирали.
+  //
+  // Маркер смотрит на САМ разбор (JSON.parse по плейнтексту/конверту): имя
+  // переменной покрывает «decrypted», «plain», «env», «envelope», «wire».
+  //
+  // ВИД ОСТАЛСЯ envelope-json (а не envelope-parse): переименование вида
+  // раatchet принял бы за РОСТ долга, хотя код не менялся. Смысл тот же —
+  // это JSON.parse по конверту.
+  { id: 'envelope-json',
+    re: /JSON\.parse\s*\(\s*[^)\n]{0,80}?\b(?:env|envelope|wire|plain|plaintext|decrypted|cipher|signed)\b/gi,
     why: 'разбор wire-конверта в JS: решение «что это за конверт» — в Rust' },
   // СБОРКА конверта: долг — это когда JS САМ собирает формат (литерал с
   // `vault:`), а не когда он ВЫЗЫВАЕТ сборщик. После переезда формата в Rust
@@ -71,9 +84,9 @@ export const PROTOCOL_MARKERS = [
   { id: 'envelope-build',
     re: /JSON\.stringify\s*\(\s*\{[^)]{0,240}?\bvault\s*:/g,
     why: 'сборка wire-конверта в JS: формат принадлежит Rust' },
-  { id: 'envelope-json',
-    re: /JSON\.parse\s*\(\s*[^)\n]{0,60}?\b(?:env|envelope|wire|plain|plaintext|decrypted)\b/gi,
-    why: 'JSON.parse по конверту/плейнтексту: разбор протокола в JS' },
+  // ВИД envelope-parse УБРАН: он считал ВЫЗОВЫ разборщика (parseEnvelope(…)),
+  // а это транспорт, а не долг. Разбор как таковой считает envelope-json
+  // (JSON.parse по конверту) — шире по именам переменных.
   { id: 'call-state',
     re: /\b(?:setCallState\s*\(\s*|callState\s*(?:===|!==|==|!=|=)\s*)['"](?:idle|ringing|active|ended|declined|missed|cancelled|busy)['"]/g,
     why: 'переход состояния звонка в JS: машина состояний — в Rust (W4)' },
@@ -241,7 +254,8 @@ export function selfTest() {
     { name: 'crypto: pbkdf2 пойман',        src: "await pbkdf2(pass, salt);",           fn: cryptoHits, want: 1, id: 'pbkdf' },
     { name: 'crypto: isCryptoReady чист',   src: 'if (isCryptoReady()) { return; }',     fn: cryptoHits, want: 0, id: null },
     // (2) конверт: вызов ловится, объявление функции — нет.
-    { name: 'envelope: разбор пойман',      src: 'const env = parseEnvelope(text);',     fn: protocolHits, want: 1, id: 'envelope-parse' },
+    { name: 'envelope: разбор в JS пойман', src: 'const obj = JSON.parse(decrypted);',      fn: protocolHits, want: 1, id: 'envelope-json' },
+    { name: 'envelope: вызов разборщика — транспорт', src: 'const env = await MsgFormat.parseEnvelope(text);', fn: protocolHits, want: 0, id: null },
     // Сборка формата в JS — долг; ВЫЗОВ сборщика (транспорт) — чист.
     { name: 'envelope: сборка в JS поймана', src: 'const env = JSON.stringify({ vault: 1, id: x });', fn: protocolHits, want: 1, id: 'envelope-build' },
     { name: 'envelope: вызов сборщика — транспорт', src: 'const env = await buildEnvelope(payload);', fn: protocolHits, want: 0, id: null },

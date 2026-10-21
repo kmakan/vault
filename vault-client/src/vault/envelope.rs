@@ -112,6 +112,127 @@ pub fn build(input: &EnvelopeInput) -> String {
     serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Разобранный wire-конверт: те же поля, что отдаёт JS-парсер (паритет).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EnvelopeFields {
+    pub id: String,
+    pub text: String,
+    pub name: String,
+    pub avatar: String,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub ts: i64,
+    pub key: String,
+    pub pq: String,
+    pub ttl: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bio: Option<String>,
+    pub tok: String,
+    pub gavatar: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll: Option<PollFields>,
+}
+
+/// Подконверт голосования (poll) — проверяется в features/poll.js.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PollFields {
+    pub id: String,
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+/// Разобрать wire-конверт сообщения.
+///
+/// `None` — это НЕ наш конверт: нет метки `vault: 1` или `text` не строка
+/// (`text: null` / `text: 123` конвертами не являются — разбор такого «конверта»
+/// дал бы пустое сообщение).
+///
+/// Правила полей (те же, что были в JS message-format.js#parseEnvelope):
+///   * `id`, `name`, `avatar`, `type`, `key`, `tok`, `gavatar` — строка, иначе
+///     пустая строка;
+///   * `ts` — число (0 при отсутствии), `ttl` — число секунд (0 при отсутствии);
+///   * `pq` — строка (пустая при отсутствии);
+///   * `bio` — строка или НЕТ поля (в JS было `undefined`);
+///   * `poll` — объект; его `id` берётся из `poll.id`, а при отсутствии — из
+///     `id` конверта; `options` — массив строк.
+pub fn parse(plain: &str) -> Option<EnvelopeFields> {
+    if plain.is_empty() {
+        return None;
+    }
+    let obj: serde_json::Value = serde_json::from_str(plain).ok()?;
+    if !obj.is_object() {
+        return None;
+    }
+    let is_vault = obj.get("vault").and_then(|v| v.as_i64()) == Some(1);
+    let text_is_string = obj.get("text").map(|v| v.is_string()).unwrap_or(false);
+    if !(is_vault && text_is_string) {
+        return None;
+    }
+
+    let text = obj.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = string_field(&obj, "id");
+    let mut fields = EnvelopeFields {
+        id: id.clone(),
+        text,
+        name: string_field(&obj, "name"),
+        avatar: string_field(&obj, "avatar"),
+        msg_type: string_field(&obj, "type"),
+        ts: obj.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
+        key: string_field(&obj, "key"),
+        pq: string_field(&obj, "pq"),
+        ttl: obj
+            .get("ttl")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+            .unwrap_or(0),
+        bio: obj.get("bio").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        tok: string_field(&obj, "tok"),
+        gavatar: string_field(&obj, "gavatar"),
+        poll: None,
+    };
+
+    if let Some(poll) = obj.get("poll") {
+        if poll.is_object() {
+            let pid = poll
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.clone());
+            let question = poll
+                .get("question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let options = poll
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|o| match o {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            fields.poll = Some(PollFields {
+                id: pid,
+                question,
+                options,
+            });
+        }
+    }
+
+    Some(fields)
+}
+
+fn string_field(obj: &serde_json::Value, key: &str) -> String {
+    obj.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +333,81 @@ mod tests {
             assert!(pos >= last, "порядок нарушен на {}", k);
             last = pos;
         }
+    }
+
+    #[test]
+    fn parse_reads_all_fields() {
+        let plain = r#"{"vault":1,"id":"m1","text":"привет","name":"Аня","avatar":"AV","type":"note","ts":1700000000,"key":"PUB","pq":"PQ","ttl":3600,"bio":"bio","tok":"TOK","gavatar":"GAV"}"#;
+        let f = parse(plain).expect("конверт разобран");
+        assert_eq!(f.id, "m1");
+        assert_eq!(f.text, "привет");
+        assert_eq!(f.name, "Аня");
+        assert_eq!(f.avatar, "AV");
+        assert_eq!(f.msg_type, "note");
+        assert_eq!(f.ts, 1700000000);
+        assert_eq!(f.key, "PUB");
+        assert_eq!(f.pq, "PQ");
+        assert_eq!(f.ttl, 3600);
+        assert_eq!(f.bio.as_deref(), Some("bio"));
+        assert_eq!(f.tok, "TOK");
+        assert_eq!(f.gavatar, "GAV");
+        assert!(f.poll.is_none());
+    }
+
+    #[test]
+    fn parse_rejects_not_our_envelope() {
+        assert!(parse("").is_none());
+        assert!(parse("не json").is_none());
+        assert!(parse("[]").is_none());
+        assert!(parse(r#"{"vault":2,"text":"x"}"#).is_none());
+        assert!(parse(r#"{"text":"x"}"#).is_none(), "без метки vault — не наш конверт");
+        assert!(parse(r#"{"vault":1,"text":null}"#).is_none(), "text не строка — не конверт");
+        assert!(parse(r#"{"vault":1,"text":123}"#).is_none());
+    }
+
+    #[test]
+    fn parse_missing_fields_become_empty() {
+        let f = parse(r#"{"vault":1,"text":"x"}"#).expect("разобран");
+        assert_eq!(f.id, "");
+        assert_eq!(f.name, "");
+        assert_eq!(f.avatar, "");
+        assert_eq!(f.msg_type, "");
+        assert_eq!(f.key, "");
+        assert_eq!(f.pq, "");
+        assert_eq!(f.tok, "");
+        assert_eq!(f.gavatar, "");
+        assert_eq!(f.ts, 0);
+        assert_eq!(f.ttl, 0);
+        assert!(f.bio.is_none(), "bio нет — поля нет");
+    }
+
+    #[test]
+    fn parse_reads_poll_subenvelope() {
+        let plain = r#"{"vault":1,"id":"m1","text":"x","poll":{"id":"p1","question":"Q?","options":["a","b"]}}"#;
+        let f = parse(plain).expect("разобран");
+        let poll = f.poll.expect("poll разобран");
+        assert_eq!(poll.id, "p1");
+        assert_eq!(poll.question, "Q?");
+        assert_eq!(poll.options, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_poll_id_falls_back_to_envelope_id() {
+        let plain = r#"{"vault":1,"id":"m1","text":"x","poll":{"question":"Q?","options":[]}}"#;
+        let f = parse(plain).expect("разобран");
+        assert_eq!(f.poll.unwrap().id, "m1");
+    }
+
+    #[test]
+    fn parse_ignores_non_object_poll() {
+        let plain = r#"{"vault":1,"id":"m1","text":"x","poll":"не объект"}"#;
+        let f = parse(plain).expect("разобран");
+        assert!(f.poll.is_none());
+        // poll: null — тоже не голосование (иначе получатель увидит пустой
+        // опрос вместо обычного сообщения).
+        let null_poll = r#"{"vault":1,"id":"m1","text":"x","poll":null}"#;
+        let f2 = parse(null_poll).expect("разобран");
+        assert!(f2.poll.is_none(), "poll:null — не голосование");
     }
 
     #[test]

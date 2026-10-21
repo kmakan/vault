@@ -3825,7 +3825,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
       return envelope;
     },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
-    parseEnvelope(decrypted) { return MsgFormat.parseEnvelope(decrypted); },
+    async parseEnvelope(decrypted) { return MsgFormat.parseEnvelope(decrypted); },
     // ── Гео-сообщение ──────────────────────────────────────────────
     // Текущая точка → текст с OSM-ссылкой (кликабельна у всех
     // получателей через linkify; никакой специфики конверта не нужно).

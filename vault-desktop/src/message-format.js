@@ -1,3 +1,4 @@
+import * as EnvelopeRule from './envelope-rule.js';
 export function isTextMime(type, name) {
   if (type && (type.startsWith('text/') || /^(application\/(json|xml|javascript|x-sh)|application\/(x-)?(yaml|csv|markdown))$/.test(type))) return true;
   const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -16,24 +17,18 @@ export function newMessageId() {
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
-export function parseEnvelope(decrypted) {
-  if (!decrypted || typeof decrypted !== 'string') return null;
-  try {
-    const obj = JSON.parse(decrypted);
-    if (obj && obj.vault === 1 && typeof obj.text === 'string') {
-      const env = { id: obj.id || '', text: obj.text, name: obj.name || '', avatar: obj.avatar || '', type: obj.type || '', ts: obj.ts || 0, key: obj.key || '', pq: typeof obj.pq === 'string' ? obj.pq : '', ttl: Number(obj.ttl) || 0, bio: typeof obj.bio === 'string' ? obj.bio : undefined, tok: typeof obj.tok === 'string' ? obj.tok : '', gavatar: typeof obj.gavatar === 'string' ? obj.gavatar : '' };
-      // Голосование: poll-подконверт (валидация в features/poll.js).
-      if (obj.poll && typeof obj.poll === 'object') {
-        env.poll = {
-          id: String(obj.poll.id || obj.id || ''),
-          question: typeof obj.poll.question === 'string' ? obj.poll.question : '',
-          options: Array.isArray(obj.poll.options) ? obj.poll.options.map(o => String(o)) : [],
-        };
-      }
-      return env;
-    }
-  } catch { /* not an envelope — legacy plaintext */ }
-  return null;
+// Разбор wire-конверта.
+//
+// ПРАВИЛА РАЗБОРА — В RUST (ADR-005 R1 / W4): какие поля берутся, что
+// считается «не нашим конвертом» (нет `vault: 1` или `text` не строка) и как
+// устроен подконверт голосования. Здесь — только транспорт.
+//
+// ФУНКЦИЯ СТАЛА ASYNC: разбор идёт через мост (invoke), а мост асинхронен.
+// Вызывающие обязаны ждать результат.
+//
+// ПАРИТЕТ: null на выходе означает «не наш конверт» — как и раньше.
+export async function parseEnvelope(decrypted) {
+  return EnvelopeRule.parseEnvelope(decrypted);
 }
 
 // Ответ на сообщение: цитата/тело. Раньше эти три функции жили методами в

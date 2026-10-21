@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-19",
+  "measuredAt": "2026-10-21",
   "totals": {
     "ctxRefSites": 0,
     "appVueOwn": 71,
@@ -11,7 +11,6 @@
   "ctxFieldsByFile": {},
   "protocolByFile": {
     "features/attachments.js": {
-      "envelope-parse": 1,
       "envelope-build": 6
     },
     "features/calls.js": {
@@ -29,25 +28,19 @@
       "envelope-json": 1
     },
     "features/groups.js": {
-      "envelope-parse": 1,
       "envelope-json": 2
     },
     "features/incoming.js": {
-      "envelope-parse": 3,
       "envelope-json": 3
     },
     "features/messages.js": {
-      "envelope-parse": 3,
       "envelope-json": 1
     },
-    "features/receipts.js": {
-      "envelope-parse": 1
-    },
+    "features/receipts.js": {},
     "features/relay.js": {
       "call-state": 1
     },
     "features/send.js": {
-      "envelope-parse": 1,
       "envelope-build": 1,
       "envelope-json": 1
     },

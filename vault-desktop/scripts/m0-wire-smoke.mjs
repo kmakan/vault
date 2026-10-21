@@ -17,7 +17,18 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { parseEnvelope } from '../src/message-format.js';
+// Разбор wire-конверта живёт в Rust (ADR-005 W4) → в node нужен мок моста
+// (scripts/lib/wire-envelope-mock.mjs): правила — в ядре, здесь их двойник.
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
+import { writeFileSync } from 'node:fs';
+const _mocks = '/tmp/m0-wire-smoke-mocks';
+await installEnvelopeMock(_mocks);
+// message-format.js тянет адаптер — копия с мок-мостом. Импорт ДИНАМИЧЕСКИЙ:
+// статический импорт поднялся бы ДО того, как файл записан.
+writeFileSync(_mocks + '/message-format.js',
+  readFileSync(new URL('../src/message-format.js', import.meta.url), 'utf8'));
+const { parseEnvelope } = await import(_mocks + '/message-format.js');
+
 
 const FIXTURE = '../../vault-client/tests/fixtures/m0-wire-contract.json';
 
@@ -63,7 +74,7 @@ function ok(label, cond) {
 for (const c of cases) {
   console.log('\n' + c.name);
   const want = c.expect.js_parse_envelope;
-  const env = parseEnvelope(c.payload);
+  const env = await parseEnvelope(c.payload);
 
   if (want === null) {
     ok('не конверт-сообщение (parseEnvelope → null)', env === null);

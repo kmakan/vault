@@ -222,7 +222,7 @@ export async function loadMessages(deps, email) {
               } catch (e) { /* не JSON — продолжаем как сообщение */ }
               // 2) Конверт {vault:1,id,text,name,avatar}: имя/аватар
               //    отправителя и стабильный id (для реакций).
-              const env = MsgFormat.parseEnvelope(text);
+              const env = await MsgFormat.parseEnvelope(text);
               // Download-on-demand: data-письмо — ТРАНСПОРТ, не сообщение.
               // Его содержимое (десятки МБ) подтянется по клику с карточки
               // мета-вложения (fetchDodAttachment по Message-ID из меты).
@@ -474,7 +474,7 @@ export async function loadMessages(deps, email) {
               // тост был эфемерным (8с) и SOS терялся, если его не увидели.
               {
                 const envCheck = msg.content && crypto.isEncrypted(msg.content)
-                  ? MsgFormat.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
+                  ? await MsgFormat.parseEnvelope(await crypto.decryptVault(msg.content).catch(() => null)) : null;
                 if (envCheck && envCheck.type === 'sos') {
                   uiStore.toast('🚨 ' + (envCheck.name || chatUi.activeChat) + ': ' + envCheck.text, 8000);
                   return {
@@ -499,7 +499,7 @@ export async function loadMessages(deps, email) {
               if (crypto.isEncrypted(msg.content)) {
                 try {
                   const text = await crypto.decryptVault(msg.content);
-                  const env = MsgFormat.parseEnvelope(text);
+                  const env = await MsgFormat.parseEnvelope(text);
                   if (env && env.type === 'sos') {
                     // SOS (duress): тоже в чат (см. выше) — тост как дубль-уведомление.
                     uiStore.toast('🚨 ' + (env.name || chatUi.activeChat) + ': ' + env.text, 8000);

@@ -59,7 +59,7 @@ export async function sendDeliveredReceipts(deps, fetched) {
           try {
             crypto.setPeerPublicKey(identityStore.state.peerKeys[sender], identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[sender]);
             const text = await crypto.decryptVault(body);
-            const env = MsgFormat.parseEnvelope(text);
+            const env = await MsgFormat.parseEnvelope(text);
             // Только настоящие сообщения (envelope с id): квитанции/правки/
             // реакции/legacy — не сообщения, на них квитанция не положена.
             if (!env || !env.id) continue;

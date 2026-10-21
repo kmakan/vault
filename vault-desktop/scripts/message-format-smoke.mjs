@@ -11,13 +11,31 @@
 // опечатка в регулярке выглядит как обычный код и проходит ревью глазом.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/message-format-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-// message-format.js не имеет импортов — копия идёт как есть, подменять нечего.
-writeFileSync(MOCKS + '/message-format.mjs', readFileSync(ROOT + '/src/message-format.js', 'utf8'));
+// Адаптер разбора/сборки wire-конверта (ADR-005 W4) — правила живут в Rust,
+// здесь их тестовый двойник (scripts/lib/envelope-mock.mjs).
+globalThis.__invokeMock = (await import('./lib/envelope-mock.mjs')).installEnvelopeMock(async () => null);
+writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
+// Адаптер — копия настоящего файла, подменён только Tauri-вызов.
+writeFileSync(
+  MOCKS + '/envelope-rule.js',
+  readFileSync(ROOT + '/src/envelope-rule.js', 'utf8').replaceAll(
+    "from '@tauri-apps/api/core'",
+    "from './tauri-core.js'",
+  ),
+);
+// message-format.js тянет адаптер — копия идёт через prepareModuleCopy.
+prepareModuleCopy(
+  ROOT + '/src/message-format.js',
+  MOCKS + '/message-format.mjs',
+  { './envelope-rule.js': 'envelope-rule.js' },
+  MOCKS,
+);
 const M = await import(MOCKS + '/message-format.mjs');
 
 let pass = 0, fail = 0;
@@ -26,17 +44,17 @@ const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } e
 console.log('\nADR-003 Этап 3 · чистые функции формата сообщений');
 
 // ── parseEnvelope ─────────────────────────────────────────────────────
-const env = M.parseEnvelope(JSON.stringify({
+const env = await M.parseEnvelope(JSON.stringify({
   vault: 1, id: 'm1', text: 'привет', name: 'Аня', ts: 1700000000, ttl: 60,
   poll: { id: 'p1', question: '?', options: ['a', 'b'] },
 }));
 ok('конверт разобран', env && env.id === 'm1' && env.text === 'привет');
 ok('ttl приведён к числу', env.ttl === 60);
 ok('poll-подконверт поднят', !!(env.poll && env.poll.options.length === 2));
-ok('не-конверт → null', M.parseEnvelope('просто текст') === null);
-ok('мусор → null (без исключения)', M.parseEnvelope('{не json') === null);
-ok('null → null', M.parseEnvelope(null) === null);
-ok('vault без text → null', M.parseEnvelope(JSON.stringify({ vault: 1, id: 'x' })) === null);
+ok('не-конверт → null', await M.parseEnvelope('просто текст') === null);
+ok('мусор → null (без исключения)', await M.parseEnvelope('{не json') === null);
+ok('null → null', await M.parseEnvelope(null) === null);
+ok('vault без text → null', await M.parseEnvelope(JSON.stringify({ vault: 1, id: 'x' })) === null);
 
 // ── splitReply ────────────────────────────────────────────────────────
 const r1 = M.splitReply('> цитата\n> вторая\nновый текст');

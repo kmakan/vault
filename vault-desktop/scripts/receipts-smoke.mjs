@@ -2,11 +2,15 @@
 // Мокаем api/crypto/db + ctx. Без Vue/Tauri.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/receipts-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок формата wire-конверта (ADR-005 W4): правила — в Rust, здесь их
+// тестовый двойник (scripts/lib/wire-envelope-mock.mjs + envelope-mock.mjs).
+await installEnvelopeMock(MOCKS);
 
 const apiMock = {
   fetchBodiesDbFirst: async (folder, uids) => {
@@ -42,6 +46,8 @@ prepareModuleCopy(
   MOCKS + '/receipts.mjs',
   {
     '../api.js': 'api.js',
+  '../message-format.js': 'message-format.js',
+    '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
   },
   MOCKS,

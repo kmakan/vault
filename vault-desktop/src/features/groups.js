@@ -162,7 +162,7 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
               continue; // hav не рендерится как сообщение
             }
             // Сообщение: конверт {vault:1,id,text,name,avatar} или legacy-текст.
-            const env = MsgFormat.parseEnvelope(plaintext);
+            const env = await MsgFormat.parseEnvelope(plaintext);
             if (env) {
               // Самовосстановление аватарки группы: конверт сообщения нёс
               // gavatar — кладём в kv (guard на непустое/изменение внутри).

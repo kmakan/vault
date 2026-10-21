@@ -103,6 +103,23 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
     (await R.buildEnvelope({ id: 'm1', text: 'x' })) === '{"vault":1,"id":"m1"}');
 }
 
+// ── Разбор: ответ моста доезжает до вызывающего ─────────────────────────
+{
+  reset();
+  state.answer = { id: 'm1', text: 'привет', name: 'Аня', type: 'sos' };
+  const env = await R.parseEnvelope('{"vault":1,"id":"m1","text":"привет"}');
+  ok('parseEnvelope: поля разбора доехали', env && env.id === 'm1' && env.text === 'привет', env);
+}
+{
+  reset();
+  state.answer = null;
+  ok('parseEnvelope: «не наш конверт» → null', (await R.parseEnvelope('просто текст')) === null);
+  ok('parseEnvelope: не-строка → null', (await R.parseEnvelope(null)) === null);
+  reset();
+  ok('parseEnvelope: пустой плейнтекст → null и мост НЕ зовётся',
+    (await R.parseEnvelope('')) === null && state.calls.length === 0, state.calls);
+}
+
 // ── Отказ моста → null (не отправляем письмо без конверта) ───────────────
 {
   reset();
@@ -110,6 +127,8 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
   const out = await R.buildEnvelope({ id: 'm1', text: 'x' });
   ok('при отказе моста → null (письмо без конверта не отправляем)', out === null, out);
   ok('при отказе моста вызов всё равно состоял (ошибка не бросается наружу)', true);
+  const parsed = await R.parseEnvelope('{"vault":1,"text":"x"}');
+  ok('при отказе моста разбор → null (не «null» строкой)', parsed === null, parsed);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

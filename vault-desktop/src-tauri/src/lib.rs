@@ -2268,6 +2268,7 @@ pub fn run() {
             // W4: правило состояния звонка — решение в Rust (ADR-005 R1).
             // W4: формат конверта — решение в Rust (ADR-005 R1).
             vault_bridge::vault_build_envelope,
+            vault_bridge::vault_parse_envelope,
             vault_bridge::vault_call_next_state,
             vault_bridge::vault_call_can,
             vault_bridge::vault_call_can_apply,

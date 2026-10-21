@@ -5,6 +5,7 @@
 // лимиты провайдера, заметки) после декомпозиции.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 // Владельцы состояния (ADR-004): модуль читает их напрямую, поэтому стенд
 // настраивает состояние ими же. absolutizeImports ведёт импорты копии в эти
@@ -19,6 +20,9 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/attachments-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок формата wire-конверта (ADR-005 W4): правила — в Rust, здесь их
+// тестовый двойник (scripts/lib/wire-envelope-mock.mjs + envelope-mock.mjs).
+await installEnvelopeMock(MOCKS);
 
 // ── Моки зависимостей attachments.js ───────────────────────────
 // invoke (@tauri-apps/api/core): voicenote_* + email_fetch_body
@@ -81,6 +85,8 @@ prepareModuleCopy(
   {
     '@tauri-apps/api/core': 'core.js',
     '../api.js': 'api.js',
+  '../message-format.js': 'message-format.js',
+    '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
     '../chatExport.js': 'chatExport.js',
     '../mailProviders.js': 'mailProviders.js',

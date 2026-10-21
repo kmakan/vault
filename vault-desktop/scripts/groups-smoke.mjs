@@ -12,6 +12,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createSendingStore } from '../src/features/sending-store.js';
 import { createGroupsStore } from '../src/features/groups-store.js';
@@ -22,6 +23,9 @@ if (typeof globalThis.CSS === 'undefined') globalThis.CSS = { escape: (s) => Str
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок формата wire-конверта (ADR-005 W4): правила — в Rust, здесь их
+// тестовый двойник (scripts/lib/wire-envelope-mock.mjs + envelope-mock.mjs).
+await installEnvelopeMock(MOCKS);
 
 // ── Моки ───────────────────────────────────────────────────────────────────
 const apiMock = {
@@ -68,6 +72,8 @@ prepareModuleCopy(
   MOCKS + '/groups.mjs',
   {
     '../api.js': 'api.js',
+  '../message-format.js': 'message-format.js',
+    '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
     './presence.js': 'presence.js',
     './session-store.js': 'session-store.js',

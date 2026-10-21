@@ -110,6 +110,19 @@ pub fn vault_call_next_state(current: String, event: String) -> String {
     }
 }
 
+/// Разобрать wire-конверт сообщения (ADR-005 R1 / W4).
+///
+/// ПРАВИЛА РАЗБОРА — В ЯДРЕ: какие поля берутся, что считается «не наш
+/// конвертом» (нет метки `vault: 1` или `text` не строка) и как устроен
+/// подконверт голосования. JS получает готовые поля.
+///
+/// `None` — письмо не наш конверт (legacy-текст, чужой JSON, битый JSON).
+#[tauri::command]
+pub fn vault_parse_envelope(plain: String) -> Option<serde_json::Value> {
+    use vault_client::vault::envelope::parse;
+    parse(&plain).map(|fields| serde_json::to_value(fields).unwrap_or(serde_json::Value::Null))
+}
+
 /// Собрать wire-конверт сообщения (ADR-005 R1 / W4).
 ///
 /// ФОРМАТ КОНВЕРТА — В ЯДРЕ: какие поля входят и при каких условиях.
