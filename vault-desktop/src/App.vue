@@ -1011,7 +1011,7 @@ import * as ChatNavigationFeature from './features/chat-navigation.js';
 import * as AuthFlowFeature from './features/auth-flow.js';
 import * as RecoveryUiFeature from './features/recovery-ui.js';
 import * as SettingsUiFeature from './features/settings-ui.js';
-import * as ChatUiFeature2 from './features/chat-ui.js';
+import * as ChatUiRulesFeature from './features/chat-ui-rules.js';
 import * as AccountLoadFeature from './features/account-load.js';
 import * as EnvelopeBuildFeature from './features/envelope-build.js';
 import * as LocalStoreFeature from './features/local-store.js';
@@ -3540,7 +3540,7 @@ export default {
     closeMobileChat() { return ChatUiFeature.closeMobileChat(this.chatUiDeps); },
     // Плюрализация «участник/участника/участников» по текущей локали.
     // Вызывается из шаблона рядом со счётчиком участников.
-    membersLabel(n) { return ChatUiFeature2.membersLabel(this.currentLocale, n); },
+    membersLabel(n) { return ChatUiRulesFeature.membersLabel(this.currentLocale, n); },
     // ── Вложения (логика в features/attachments.js) — тонкие делегаты,
     // имена сохранены для шаблонных биндингов (гейт check-template). ──
     downloadAttachment(attachment) { return AttachmentsFeature.downloadAttachment(attachment); },
@@ -4198,7 +4198,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async blockSenderOfMessage(msg) { return BlockUserFeature.blockSenderOfMessage(this.blockUserDeps, msg); },
     // (логика в features/folders.js; обёртки см. в блоке feature-обёрток выше)
     // Emoji
-    insertEmoji(emoji) { return ChatUiFeature2.insertEmoji(this.chatUiRulesDeps, emoji); },
+    insertEmoji(emoji) { return ChatUiRulesFeature.insertEmoji(this.chatUiRulesDeps, emoji); },
     // ── Аудио/файлы-вложения (логика в features/attachments.js) ──
     async sendAudioMessage(audioData) { return AttachmentsFeature.sendAudioMessage({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), hideAudioRecorder: () => (this.showAudioRecorder = false) }, audioData); },
     async handleFileSelect(event) { return AttachmentsFeature.handleFileSelect({ resolveChatKey: ChatFeature.resolveChatKey, notes: this.notes, chat: this.chat, groupKeys: this.groupKeys, cryptoReady: this.cryptoReady, buildEnvelope: (p) => this.buildEnvelope(p), markPending: (k, m) => this.markPending(k, m), saveCurrentHistory: (k) => this.saveCurrentHistory(k), compressImage: (d, s, q) => this.compressImage(d, s, q) }, event); },
