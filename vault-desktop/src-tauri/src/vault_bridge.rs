@@ -119,6 +119,16 @@ pub fn vault_parse_dod_data(plain: String) -> Option<vault_client::vault::signal
     vault_client::vault::signals::parse_dod_data(&plain)
 }
 
+/// Идентификатор сообщения из конверта — ADR-005 R1 / W4.
+///
+/// Правило «как вытащить id» — в ядре (envelope::id_of): значение поля `id`
+/// возвращается как есть (нулевой id валиден), отсутствие поля или null —
+/// пустая строка.
+#[tauri::command]
+pub fn vault_envelope_id(text: String) -> Option<serde_json::Value> {
+    vault_client::vault::envelope::id_of(&text)
+}
+
 /// Разобрать сервисный сигнал (реакция/правка/квитанция/голос/presence/мета) —
 /// ADR-005 R1 / W4.
 ///

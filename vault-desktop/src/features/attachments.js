@@ -277,7 +277,7 @@ export async function encryptAttachmentEnvelope(payload, {
     const groupKey = groupKeys[currentGroup.id];
     if (groupKey) {
       const envelope = await buildEnvelope(payload);
-      envelopeId = envelopeIdOf(envelope);
+      envelopeId = await envelopeIdOf(envelope);
       wire = await crypto.encryptWithGroupKey(envelope, groupKey);
     }
   } else if (cryptoReady && peerKeys[activeChat]) {

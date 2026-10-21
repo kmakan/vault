@@ -8,7 +8,7 @@
     "vault-client/src/vault/call.rs": 5,
     "vault-client/src/vault/contacts.rs": 7,
     "vault-client/src/vault/edit.rs": 5,
-    "vault-client/src/vault/envelope.rs": 18,
+    "vault-client/src/vault/envelope.rs": 20,
     "vault-client/src/vault/ephemeral.rs": 6,
     "vault-client/src/vault/filter.rs": 8,
     "vault-client/src/vault/folders.rs": 5,
@@ -70,7 +70,7 @@
     "vault-desktop/src/features/forward/state.js": 2,
     "vault-desktop/src/features/group-avatars.js": 11,
     "vault-desktop/src/features/group-meta-broadcast.js": 6,
-    "vault-desktop/src/features/group-meta.js": 4,
+    "vault-desktop/src/features/group-meta.js": 5,
     "vault-desktop/src/features/group-pin-wire.js": 4,
     "vault-desktop/src/features/groups-clone.js": 11,
     "vault-desktop/src/features/groups-create.js": 10,
@@ -128,7 +128,7 @@
     "vault-desktop/src/relay-client.js": 13,
     "vault-desktop/src/themes.js": 4,
     "vault-desktop/src/ui.js": 7,
-    "vault-desktop/src/wire-signal-rule.js": 9
+    "vault-desktop/src/wire-signal-rule.js": 11
   },
   "gaps": []
 }

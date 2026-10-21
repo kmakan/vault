@@ -99,9 +99,21 @@ export function signalParse(plain) {
     return { kind: 'poll_vote', poll_id: str('poll_id'), option: Number(obj.option) || 0 };
   }
   if (isOne('presence')) return { kind: 'presence', ts: Number(obj.ts) || 0 };
-  if (isOne('meta') && str('avatar')) return { kind: 'group_meta', avatar: str('avatar'), ts: Number(obj.ts) || 0 };
+  if (isOne('meta')) return { kind: 'group_meta', avatar: str('avatar'), name: str('name'), ts: Number(obj.ts) || 0 };
   if (isOne('hav')) return { kind: 'group_avatar_heal' };
   return null;
+}
+
+// ── Идентификатор из конверта (vault::envelope::id_of) ───────────────────
+// Значение поля id — как есть (нулевой id валиден); нет поля или null —
+// пустая строка.
+export function envelopeIdOf(text) {
+  if (!text || typeof text !== 'string') return '';
+  let obj;
+  try { obj = JSON.parse(text); } catch { return ''; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
+  if (obj.id === undefined || obj.id === null) return '';
+  return obj.id;
 }
 
 // ── Диспетчер мостовых команд ───────────────────────────────────────────
@@ -109,6 +121,7 @@ export function wireSignalHandler(cmd, args) {
   const a = args || {};
   if (cmd === 'call_parse_signal') return callSignalParse(a.decrypted);
   if (cmd === 'vault_parse_signal') return signalParse(a.plain);
+  if (cmd === 'vault_envelope_id') return envelopeIdOf(a.text);
   if (cmd === 'vault_parse_dod_data') return dodParse(a.plain);
   if (cmd === 'vault_build_dod_data') return dodBuild(a.reference, a.data);
   if (cmd === 'vault_envelope_object') return envelopeRawObject(a.text);

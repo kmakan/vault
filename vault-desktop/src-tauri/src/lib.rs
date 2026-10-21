@@ -2271,6 +2271,7 @@ pub fn run() {
             vault_bridge::vault_parse_envelope,
             // W4: сигнальные форматы (data-письмо, объект конверта) — в Rust.
             vault_bridge::vault_parse_signal,
+            vault_bridge::vault_envelope_id,
             vault_bridge::vault_parse_dod_data,
             vault_bridge::vault_build_dod_data,
             vault_bridge::vault_envelope_object,

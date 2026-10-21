@@ -7,6 +7,10 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/group-meta-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок форматов wire-конверта и сервисных сигналов (ADR-005 W4): правила —
+// в Rust, здесь их тестовый двойник.
+const { installEnvelopeMock } = await import('./lib/wire-envelope-mock.mjs');
+await installEnvelopeMock(MOCKS);
 
 const apiMock = {
   groupKey: null,
@@ -37,6 +41,7 @@ prepareModuleCopy(
   MOCKS + '/group-meta.mjs',
   {
     '@tauri-apps/api/core': 'core.js',
+    '../wire-signal-rule.js': 'wire-signal-rule.js',
     '../api.js': 'api.js',
     '../crypto.js': 'crypto.js',
   },

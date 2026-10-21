@@ -48,7 +48,7 @@ export async function doForward({
     if (typeof setSending === 'function') setSending(true);
     const ttl = await ephemeralTtlOf(key);
     const envelope = await buildEnvelope(fwdText, ttl);
-    const envelopeId = EnvelopeId.envelopeIdOf(envelope);
+    const envelopeId = await EnvelopeId.envelopeIdOf(envelope);
     const pendingMsg = {
       id: envelopeId || EnvelopeId.pendingIdOf(),
       content: fwdText,

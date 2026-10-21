@@ -226,6 +226,25 @@ pub fn parse(plain: &str) -> Option<EnvelopeFields> {
     Some(fields)
 }
 
+/// Идентификатор из произвольного JSON-объекта (без требования «это конверт»).
+///
+/// Правило прежнее (JS features/envelope-id.js): вернуть значение поля `id`
+/// как есть; если поля нет или оно null — пустая строка. Нулевой id валиден,
+/// поэтому возвращаем именно значение (число остаётся числом).
+pub fn id_of(text: &str) -> Option<serde_json::Value> {
+    if text.is_empty() {
+        return None;
+    }
+    let obj: serde_json::Value = serde_json::from_str(text).ok()?;
+    if !obj.is_object() {
+        return None;
+    }
+    match obj.get("id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => Some(v.clone()),
+    }
+}
+
 /// Сырой объект конверта — без разбора полей.
 ///
 /// Нужен там, где требуется ИМЕННО объект (релей-дубль отправки), а не
@@ -425,6 +444,22 @@ mod tests {
         let null_poll = r#"{"vault":1,"id":"m1","text":"x","poll":null}"#;
         let f2 = parse(null_poll).expect("разобран");
         assert!(f2.poll.is_none(), "poll:null — не голосование");
+    }
+
+    #[test]
+    fn id_of_reads_id_verbatim() {
+        assert_eq!(id_of(r#"{"id":"msg-42","x":1}"#).unwrap(), serde_json::json!("msg-42"));
+        // Нулевой id валиден — возвращаем именно его (не «пусто»).
+        assert_eq!(id_of(r#"{"id":0}"#).unwrap(), serde_json::json!(0));
+    }
+
+    #[test]
+    fn id_of_missing_or_null_id_is_none() {
+        assert!(id_of("").is_none());
+        assert!(id_of("не json").is_none());
+        assert!(id_of("[1]").is_none(), "массив — не объект");
+        assert!(id_of(r#"{"x":1}"#).is_none(), "поля id нет");
+        assert!(id_of(r#"{"id":null}"#).is_none(), "id = null — как его отсутствие");
     }
 
     #[test]

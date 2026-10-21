@@ -76,6 +76,35 @@ const argsOf = () => lastCall()[1] || {};
     (await R.parseCallSignal('{"vault":1}')) === null);
 }
 
+// ── Идентификатор сообщения из конверта ─────────────────────────────────
+{
+  reset();
+  state.answer = 'msg-42';
+  const id = await R.envelopeId('{"vault":1,"id":"msg-42"}');
+  ok('envelopeId зовёт vault_envelope_id', cmdOf() === 'vault_envelope_id', lastCall());
+  ok('envelopeId передаёт текст конверта', argsOf().text === '{"vault":1,"id":"msg-42"}', argsOf());
+  ok('envelopeId возвращает id', id === 'msg-42', id);
+}
+{
+  reset();
+  state.answer = 0;
+  // Нулевой id валиден: возвращаем значение как есть, а не «пусто».
+  ok('envelopeId: нулевой id не превращается в пустой',
+    (await R.envelopeId('{"id":0}')) === 0);
+}
+{
+  reset();
+  ok('envelopeId: пустой текст → пустая строка и мост НЕ зовётся',
+    (await R.envelopeId('')) === '' && state.calls.length === 0, state.calls);
+  ok('envelopeId: не-строка → пустая строка', (await R.envelopeId(null)) === '');
+}
+{
+  reset();
+  state.answer = null;
+  ok('envelopeId: id отсутствует у ядра → пустая строка',
+    (await R.envelopeId('{"x":1}')) === '');
+}
+
 // ── Роутер сервисных сигналов ───────────────────────────────────────────
 {
   reset();

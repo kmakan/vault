@@ -31,6 +31,8 @@
 
 // Префикс заглушки. СИМВОЛИЧЕСКИ ВЫБРАН: настоящие идентификаторы такого вида
 // не порождают, поэтому любая проверка по префиксу однозначна.
+import * as WireSignalRule from '../wire-signal-rule.js';
+
 export const PENDING_PREFIX = 'pending-';
 
 // Сколько ждать настоящее письмо, прежде чем считать заглушку неотправленной.
@@ -40,17 +42,13 @@ export const PENDING_MATCH_WINDOW_MS = 3 * 60 * 1000;
 // разобран; это НЕ ошибка, а штатный случай, и вызывающий обязан решать сам.
 // Раньше здесь стояло try { JSON.parse(envelope).id } catch { return '' } —
 // в шести местах, с разными отступами и комментариями.
-export function envelopeIdOf(envelope) {
-  try {
-    const obj = JSON.parse(envelope);
-    if (!obj || obj.id === undefined || obj.id === null) return '';
-    // НЕ `|| ''`: нулевой идентификатор — валидный, а `0 || ''` дал бы пустую
-    // строку и подставил заглушку вместо настоящего id. Первая версия модуля
-    // проверяла это не сразу и проглотила нулевой id молча.
-    return obj.id;
-  } catch (e) {
-    return '';
-  }
+export async function envelopeIdOf(envelope) {
+  // Правило «как вытащить id» — В RUST (ADR-005 R1 / W4, envelope::id_of):
+  // значение поля id возвращается как есть, нулевой id валиден, отсутствие
+  // поля или null — пустая строка. JS больше не разбирает конверт сам.
+  //
+  // ФУНКЦИЯ СТАЛА ASYNC: разбор идёт через мост, а мост асинхронен.
+  return WireSignalRule.envelopeId(envelope);
 }
 
 // Счётчик НЕ насыщается. Первая версия брала seq % 0xffff, и на 65537-й

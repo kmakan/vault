@@ -8,6 +8,7 @@
 // аватары групп — владелец groups-store (per-app экземпляр, приходит в
 // deps); список групп и два эффекта (heal/reply) — тоже deps.
 
+import * as WireSignalRule from '../wire-signal-rule.js';
 import { invoke } from '@tauri-apps/api/core';
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
@@ -58,11 +59,14 @@ export async function syncGroupAvatarsFromMeta(deps) {
             const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
             if (!body || !crypto.isEncrypted(body)) continue;
             const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
-            const obj = JSON.parse(plaintext);
+            // РОУТЕР СЕРВИСНЫХ СИГНАЛОВ — В RUST (ADR-005 R1 / W4): hav-запрос и
+            // мета — служебные форматы, «что это за письмо» решает ядро
+            // (vault::signals::parse_signal).
+            const sig = await WireSignalRule.parseSignal(plaintext);
             // hav-запрос аватарки {hav:1}: сервис-письмо, достижимо здесь
             // (мета-скан смотрит последние письма участников). Отвечаем и
             // ищем дальше — hav не является meta, применять нечего.
-            if (obj && obj.hav === 1) {
+            if (sig && sig.kind === 'group_avatar_heal') {
               // Ответ ТОЛЬКО если ещё не отвечали на это письмо; помечаем
               // applied-sig УСПЕШНОЙ ответ (replyHeal → true) — при ошибке
               // uid остаётся в обходе и поллинг повторит.
@@ -75,19 +79,21 @@ export async function syncGroupAvatarsFromMeta(deps) {
             }
             // gavatar-heal: конверт сообщения нёс gavatar — лечим kv (guard
             // на непустое/изменение внутри healGroupAvatarFromMessage).
+            // Сырой объект письма разбирает Rust (ADR-005 W4).
+            const obj = await WireSignalRule.envelopeObject(plaintext);
             if (obj && obj.gavatar) await deps.healGroupAvatarFromMessage(g.id, obj.gavatar);
-            if (obj && obj.meta === 1 && (obj.avatar || obj.name)) {
+            if (sig && sig.kind === 'group_meta' && (sig.avatar || sig.name)) {
               // Аватар группы — отдельный kv.
-              if (obj.avatar && (await db.kvGet('anon', 'group-avatar:' + g.id)) !== obj.avatar) {
-                await db.kvSet('anon', 'group-avatar:' + g.id, obj.avatar);
-                deps.groupStore.setGroupAvatar(g.id, obj.avatar);
+              if (sig.avatar && (await db.kvGet('anon', 'group-avatar:' + g.id)) !== sig.avatar) {
+                await db.kvSet('anon', 'group-avatar:' + g.id, sig.avatar);
+                deps.groupStore.setGroupAvatar(g.id, sig.avatar);
               }
               // Имя группы: применяем если пришло.
-              if (obj.name && g.name !== obj.name) {
+              if (sig.name && g.name !== sig.name) {
                 try {
-                  await invoke('groups_rename', { groupId: g.id, newName: obj.name });
-                  g.name = obj.name;
-                  console.log('[group] name applied:', g.id, '→', obj.name);
+                  await invoke('groups_rename', { groupId: g.id, newName: sig.name });
+                  g.name = sig.name;
+                  console.log('[group] name applied:', g.id, '→', sig.name);
                 } catch (e) { /* локально не обновилось — не критично */ }
               }
               metaFound = true;

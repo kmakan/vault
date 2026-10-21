@@ -116,8 +116,16 @@ pub enum SignalEnvelope {
     PollVote { poll_id: String, option: i64 },
     /// Heartbeat собеседника: `{presence:1, ts?}`.
     Presence { ts: i64 },
-    /// Мета группы (аватар): `{meta:1, avatar, ts?}`.
-    GroupMeta { avatar: String, ts: i64 },
+    /// Мета группы: `{meta:1, avatar?, name?, ts?}`.
+    ///
+    /// Аватар и имя — по отдельности необязательные: личные чаты берут из
+    /// меты аватар, скан мета-группы — ещё и имя. Что именно применять —
+    /// решение вызывающего (это отображение, а не формат).
+    GroupMeta {
+        avatar: String,
+        name: String,
+        ts: i64,
+    },
     /// Запрос аватарки группы: `{hav:1}`.
     GroupAvatarHeal,
 }
@@ -216,13 +224,11 @@ pub fn parse_signal(plain: &str) -> Option<SignalEnvelope> {
 
     // 6. Мета группы (аватар)
     if is_one("meta") {
-        let avatar = string_field(&obj, "avatar");
-        if !avatar.is_empty() {
-            return Some(SignalEnvelope::GroupMeta {
-                avatar,
-                ts: obj.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
-            });
-        }
+        return Some(SignalEnvelope::GroupMeta {
+            avatar: string_field(&obj, "avatar"),
+            name: string_field(&obj, "name"),
+            ts: obj.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
+        });
     }
 
     // 7. Запрос аватарки группы
@@ -419,13 +425,22 @@ mod tests {
         let m = parse_signal(r#"{"meta":1,"avatar":"data:image/png;base64,A","ts":5}"#)
             .expect("сигнал");
         match m {
-            SignalEnvelope::GroupMeta { avatar, ts } => {
+            SignalEnvelope::GroupMeta { avatar, name, ts } => {
                 assert_eq!(avatar, "data:image/png;base64,A");
+                assert_eq!(name, "");
                 assert_eq!(ts, 5);
             }
             other => panic!("не тот сигнал: {:?}", other),
         }
-        assert!(parse_signal(r#"{"meta":1}"#).is_none(), "meta без аватара — не meta");
+        // Мета без аватара, но с именем — тоже мета (имя применяет скан группы).
+        let n = parse_signal(r#"{"meta":1,"name":"Команда"}"#).expect("сигнал");
+        match n {
+            SignalEnvelope::GroupMeta { avatar, name, .. } => {
+                assert_eq!(avatar, "");
+                assert_eq!(name, "Команда");
+            }
+            other => panic!("не тот сигнал: {:?}", other),
+        }
         let h = parse_signal(r#"{"hav":1}"#).expect("сигнал");
         assert_eq!(h, SignalEnvelope::GroupAvatarHeal);
     }

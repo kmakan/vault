@@ -15,7 +15,17 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/envelope-id-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
-writeFileSync(MOCKS + '/eid.mjs', readFileSync(path.join(ROOT, 'src', 'features', 'envelope-id.js'), 'utf8'));
+// Разбор конверта уехал в Rust (ADR-005 W4) → в node нужен мок моста и
+// тестовый двойник правила (scripts/lib/wire-signal-mock.mjs).
+// Подключалка пишет копию адаптера и ставит мост (в т.ч. для id конверта).
+const { installEnvelopeMock } = await import('./lib/wire-envelope-mock.mjs');
+await installEnvelopeMock(MOCKS);
+writeFileSync(
+  MOCKS + '/eid.mjs',
+  readFileSync(path.join(ROOT, 'src', 'features', 'envelope-id.js'), 'utf8').replaceAll(
+    "from '../wire-signal-rule.js'", "from './wire-signal-rule.js'",
+  ),
+);
 const E = await import(MOCKS + '/eid.mjs');
 
 let pass = 0, fail = 0;
@@ -24,14 +34,14 @@ const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } e
 console.log('\nADR-003 Этап 3, партия 17 · идентификатор сообщения');
 
 // ── Настоящий id из конверта ───────────────────────────────────────────
-ok('id вытаскивается из конверта', E.envelopeIdOf('{"id":"msg-42","x":1}') === 'msg-42');
+ok('id вытаскивается из конверта', await E.envelopeIdOf('{"id":"msg-42","x":1}') === 'msg-42');
 ok('неразобранный конверт → пустая строка, не исключение',
-  E.envelopeIdOf('не json {{{') === '');
-ok('пустая строка → пустая строка', E.envelopeIdOf('') === '');
+  await E.envelopeIdOf('не json {{{') === '');
+ok('пустая строка → пустая строка', await E.envelopeIdOf('') === '');
 ok('null/undefined → пустая строка, без исключения',
-  E.envelopeIdOf(null) === '' && E.envelopeIdOf(undefined) === '');
-ok('конверт без поля id → пустая строка', E.envelopeIdOf('{"x":1}') === '');
-ok('id = 0 НЕ пустой: нулевой идентификатор бывает валиден', E.envelopeIdOf('{"id":0}') === 0);
+  await E.envelopeIdOf(null) === '' && await E.envelopeIdOf(undefined) === '');
+ok('конверт без поля id → пустая строка', await E.envelopeIdOf('{"x":1}') === '');
+ok('id = 0 НЕ пустой: нулевой идентификатор бывает валиден', await E.envelopeIdOf('{"id":0}') === 0);
 
 // ── Заглушка: одна формула на проект ───────────────────────────────────
 const p1 = E.pendingIdOf(1700000000000, 0.5);

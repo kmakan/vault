@@ -31,5 +31,11 @@ export default {
     { name: "объект конверта не достаётся (релей-дубль отправки не уходит)",
       pattern: "    let obj: serde_json::Value = serde_json::from_str(text).ok()?;\n    if obj.is_object() {",
       replacement: "    return None;\n    let obj: serde_json::Value = serde_json::from_str(text).ok()?;\n    if obj.is_object() {" },
+    { name: "id конверта всегда пустой (дедуп оптимистичных сообщений ломается)",
+      pattern: "        Some(v) => Some(v.clone()),",
+      replacement: "        Some(v) => Some(serde_json::json!(\"\"))," },
+    { name: "id конверта не читается (заглушка вместо настоящего id)",
+      pattern: "    match obj.get(\"id\") {\n        None | Some(serde_json::Value::Null) => None,",
+      replacement: "    match obj.get(\"id\") {\n        None | Some(serde_json::Value::Null) => None,\n        #[allow(unreachable_patterns)] Some(_) => None," },
   ],
 };

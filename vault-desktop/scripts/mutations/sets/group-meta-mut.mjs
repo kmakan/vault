@@ -16,8 +16,12 @@ export default {
     { name: "ключ группы не догружается",
       pattern: "                deps.groupStore.setGroupKey(g.id, kd.group_key);",
       replacement: "                void 0;" },
+    // Мета разбирает ядро (ADR-005 W4) — мутация бьёт по ветке применения.
     { name: "аватар группы не применяется",
-      pattern: "                deps.groupStore.setGroupAvatar(g.id, obj.avatar);",
+      pattern: "                deps.groupStore.setGroupAvatar(g.id, sig.avatar);",
       replacement: "                void 0;" },
+    { name: "имя группы не применяется",
+      pattern: "                  await invoke('groups_rename', { groupId: g.id, newName: sig.name });",
+      replacement: "                  void 0;" },
   ],
 };

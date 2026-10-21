@@ -34,5 +34,11 @@ export default {
     { name: "имя команды сигнала звонка перепутано (сигнал не разберётся)",
       pattern: "invoke('call_parse_signal', { decrypted })",
       replacement: "invoke('call_parse_signal_v2', { decrypted })" },
+    { name: "id конверта всегда пустой (дедуп ломается)",
+      pattern: "    return v === null || v === undefined ? '' : v;",
+      replacement: "    return '';" },
+    { name: "пустой текст конверта идёт в мост (лишний вызов и разбор мусора)",
+      pattern: "  if (!text || typeof text !== 'string') return '';",
+      replacement: "  if (false) return '';" },
   ],
 };

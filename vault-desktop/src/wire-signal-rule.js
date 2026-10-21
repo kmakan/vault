@@ -33,6 +33,20 @@ export async function parseCallSignal(decrypted) {
   }
 }
 
+// ── Идентификатор сообщения из конверта ─────────────────────────────────
+// Возвращает значение поля id как есть (нулевой id валиден) или '' — поля
+// нет. Правило — в ядре (envelope::id_of).
+export async function envelopeId(text) {
+  if (!text || typeof text !== 'string') return '';
+  try {
+    const v = await invoke('vault_envelope_id', { text });
+    return v === null || v === undefined ? '' : v;
+  } catch (e) {
+    console.error('[signal] Rust-разбор id конверта недоступен:', e && e.message || e);
+    return '';
+  }
+}
+
 // ── Роутер сервисных сигналов ───────────────────────────────────────────
 // Возвращает { kind: 'reaction'|'edit'|'ack'|'poll_vote'|'presence'|'group_meta'|
 // 'group_avatar_heal', ... } или null — это не сигнал (обычное письмо).

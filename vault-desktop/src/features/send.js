@@ -137,7 +137,7 @@ export async function sendMessage(deps) {
         const ttl = await ephemeralTtlOf(chatId);
         if (ttl) console.log('[sendMessage] ephemeral ttl=' + ttl + ' chat=' + chatId);
         const envelope = await deps.buildEnvelope(payload, ttl);
-        const envelopeId = EnvelopeId.envelopeIdOf(envelope);
+        const envelopeId = await EnvelopeId.envelopeIdOf(envelope);
 
         if (chatUi.activeChatType === 'group') {
           // Group message — encrypt with group key; never send plaintext without it
