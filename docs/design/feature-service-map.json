@@ -14,6 +14,7 @@
         "identity.js",
         "message-format.js",
         "message-store.js",
+        "note-id.js",
         "notify.js",
         "relay-client.js",
         "wire-signal-rule.js"
@@ -147,17 +148,18 @@
       "why": "То, что не уезжает в сервис: вход и восстановление, UI-правила, настройки, аварийный замок. Граница здесь — сберечь, а не вывозить.",
       "primitives": [
         "api.js",
+        "call-state-rule.js",
         "crypto.js",
-        "identity.js",
-        "message-format.js",
-        "wire-signal-rule.js",
         "envelope-rule.js",
         "ephemeral-rule.js",
-        "message-store.js",
         "history.js",
+        "identity.js",
+        "message-format.js",
+        "message-store.js",
+        "note-id.js",
         "notify.js",
-        "call-state-rule.js",
-        "relay-client.js"
+        "relay-client.js",
+        "wire-signal-rule.js"
       ],
       "features": [
         "auth-flow.js",

@@ -23,6 +23,7 @@
 // Инвариант: контент шифруется как обычное сообщение (AAD="VAULT") —
 // БЕЗ шифрования получатель не расшифрует и письмо молча отбросится.
 
+import { noteId } from '../note-id.js';
 import { uiStore } from "./session-store.js";
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
@@ -243,7 +244,7 @@ export function buildVoiceOptimisticMsg(audioData, { id, timeStr, name, status, 
 // «Заметки для себя» (локально, без шифрования/почты). DRY с send.js notes.
 export function buildNoteWithAttachment(file, { displayContent, base64, isImage, isAudio, isText, textContent, timeStr }) {
   return {
-    id: 'note-' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+    id: noteId(),
     content: displayContent,
     from: 'me',
     time: timeStr,
@@ -308,7 +309,7 @@ export async function sendAudioMessage(deps, audioData) {
     const now = Date.now();
     const name = `voice-${now}.webm`;
     const msg = buildVoiceOptimisticMsg(audioData, {
-      id: 'note-' + now.toString(36) + Math.random().toString(36).substr(2, 5),
+      id: noteId(now),
       timeStr, name, status: 'sent', encrypted: false,
     });
     msg.vault = false;

@@ -25,8 +25,8 @@ export default {
       replacement: "  } catch (e) {\n    throw e;\n  }",
       file: "src/migrations.js" },
     { name: "свои группы не переименовываются при смене почты",
-      pattern: "      const mine = String(g.created_by || '').toLowerCase() === old",
-      replacement: "      const mine = false",
+      pattern: "    const mine = String(g.created_by || '').toLowerCase() === old\n      || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);",
+      replacement: "    const mine = false;",
       file: "src/migrations.js" },
   ],
 };

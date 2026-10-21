@@ -33,20 +33,33 @@ export async function migrateAccountData(oldEmail, newEmail) {
   }
 }
 
+// ПЕРЕИМЕНОВАТЬ НАШ СТАРЫЙ АДРЕС в группах, где мы создатель или участник.
+//
+// Общая операция для двух вызовов (ADR-003 §5 решил НЕ сливать сами вызовы:
+// семантика разная — «сменил почту я» и «сменил почту пир»), но ПЕРЕБОР и
+// ПЕРЕИМЕНОВАНИЕ — одна и та же операция, и две копии правила расходились: в
+// одной был guard «старый == новый», в другой — нет. Правило должно быть одно.
+async function renameMeInGroups(oldEmail, newEmail) {
+  const all = await api.getGroups();
+  const old = String(oldEmail).toLowerCase();
+  let n = 0;
+  for (const g of all || []) {
+    const mine = String(g.created_by || '').toLowerCase() === old
+      || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);
+    if (!mine) continue;
+    await invoke('groups_rename_member', {
+      groupId: g.id, oldEmail, newEmail,
+    });
+    n++;
+  }
+  return n;
+}
+
 export async function migrateOwnGroups(oldEmail, newEmail) {
   if (!oldEmail || !newEmail || oldEmail === newEmail) return;
   try {
-    const all = await api.getGroups();
-    const old = String(oldEmail).toLowerCase();
-    for (const g of all || []) {
-      const mine = String(g.created_by || '').toLowerCase() === old
-        || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);
-      if (!mine) continue;
-      await invoke('groups_rename_member', {
-        groupId: g.id, oldEmail, newEmail,
-      });
-    }
-    console.log('[identity] own groups renamed:', oldEmail, '→', newEmail);
+    const n = await renameMeInGroups(oldEmail, newEmail);
+    console.log('[identity] own groups renamed:', oldEmail, '→', newEmail, '(' + n + ')');
   } catch (e) {
     console.warn('[identity] migrateOwnGroups failed:', e);
   }
@@ -122,19 +135,9 @@ export async function migrateOwnProfile(oldEmail, newEmail) {
 // иначе он останется со старыми адресами на экране.
 export async function migratePeerGroups(oldEmail, newEmail, onRenamed) {
   if (!oldEmail || !newEmail) return 0;
-  const oldLc = String(oldEmail).toLowerCase();
   let n = 0;
   try {
-    const all = await api.getGroups();
-    for (const g of all || []) {
-      const has = String(g.created_by || '').toLowerCase() === oldLc
-        || (g.members || []).some(m => String(m.email || '').toLowerCase() === oldLc);
-      if (!has) continue;
-      await invoke('groups_rename_member', {
-        groupId: g.id, oldEmail, newEmail,
-      });
-      n++;
-    }
+    n = await renameMeInGroups(oldEmail, newEmail);
     if (n) {
       console.log('[identity] peer groups renamed:', oldEmail, '→', newEmail, '(' + n + ')');
       if (onRenamed) { try { await onRenamed(); } catch (e) { /* перечитаем позже */ } }

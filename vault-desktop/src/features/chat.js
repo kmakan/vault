@@ -1,6 +1,8 @@
 // Feature module: чат-область/чатKey (ADR-001).
 // Чистые, не зависят от Vue-state: собираются из reactive-данных App.vue в proxy.
 // Переиспользуется в send.js, attachments.js (fetchDod/sendAudio/handleFileSelect).
+
+import { noteId } from '../note-id.js';
 export const CHAT_SCOPE = { group: 'group', peer: 'peer', channel: 'channel', notes: 'notes', self: 'self' };
 
 // Группа → 'group:<id>'; иначе activeChat (peer / '__notes__' / канал).
@@ -21,7 +23,7 @@ export function isRecentDuplicate({ lastSend, chatId, text, now }, WINDOW_MS = 3
 // (локально, без шифрования и почты). now/timeStr инъецируются — чистота для smoke.
 export function buildNoteMessage(payload, { now, timeStr }) {
   return {
-    id: 'note-' + now.toString(36) + Math.random().toString(36).substr(2, 5),
+    id: noteId(now),
     content: payload,
     from: 'me',
     time: timeStr,
