@@ -39,6 +39,7 @@
     "vault-desktop/src/ephemeral-rule.js": 8,
     "vault-desktop/src/external-links.js": 7,
     "vault-desktop/src/features/attachments.js": 3,
+    "vault-desktop/src/features/auth-flow.js": 12,
     "vault-desktop/src/features/autoclean.js": 12,
     "vault-desktop/src/features/block-user.js": 8,
     "vault-desktop/src/features/bounce.js": 8,

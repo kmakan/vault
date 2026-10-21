@@ -1008,6 +1008,7 @@ import * as ClipboardExportFeature from './features/clipboard-export.js';
 import * as GroupMembersFeature from './features/group-members.js';
 import * as GroupManagementFeature from './features/group-management.js';
 import * as ChatNavigationFeature from './features/chat-navigation.js';
+import * as AuthFlowFeature from './features/auth-flow.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2012,6 +2013,63 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт входа и смены почты (ADR-005 W3): длинные сценарии — в фиче
+    // features/auth-flow.js; компонент отдаёт состояние, ключи и эффекты.
+    authFlowDeps() {
+      return {
+        email: () => this.email,
+        password: () => this.password,
+        newEmail: () => this.newEmail,
+        newPassword: () => this.newPassword,
+        rememberMe: () => this.rememberMe,
+        imapServer: () => this.imapServer,
+        imapPort: () => this.imapPort,
+        smtpServer: () => this.smtpServer,
+        smtpPort: () => this.smtpPort,
+        ecoMode: () => this.ecoMode,
+        setEcoMode: (v) => { this.ecoMode = v; },
+        setEmail: (v) => { this.email = v; },
+        setPassword: (v) => { this.password = v; },
+        setUserId: (v) => { this.userId = v; },
+        setIsLoggedIn: (v) => { this.isLoggedIn = v; },
+        setConnected: (v) => { this.connected = v; },
+        setLoginLoading: (v) => { this.loginLoading = v; },
+        setLoginError: (v) => { this.loginError = v; },
+        setShowRecovery: (v) => { this.showRecovery = v; },
+        setNewEmail: (v) => { this.newEmail = v; },
+        setNewPassword: (v) => { this.newPassword = v; },
+        setChangeEmailLoading: (v) => { this.changeEmailLoading = v; },
+        setChangeEmailError: (v) => { this.changeEmailError = v; },
+        setShowChangeEmail: (v) => { this.showChangeEmail = v; },
+        setShowChangeEmailServers: (v) => { this.showChangeEmailServers = v; },
+        setShowSettings: (v) => { this.showSettings = v; },
+        setRelayEnabled: (v) => { this.relayEnabled = v; },
+        tr: (key) => uiStore.tr(key),
+        initCrypto: (opts) => this.initCrypto(opts),
+        initNotifications: () => initNotifications(),
+        isRecoveryPending: () => RecoverySession.isRecoveryPending(),
+        syncEcoWithRelay: (force) => RelayFeature.syncEcoWithRelay(this, force),
+        initLocalDb: () => this.initLocalDb(),
+        loadUnreadCounts: () => this.loadUnreadCounts(),
+        loadChatFlags: () => this.loadChatFlags(),
+        runAutoclean: () => this.runAutoclean(),
+        loadLocalProfiles: () => this.loadLocalProfiles(),
+        loadBodyCache: () => this.loadBodyCache(),
+        loadContacts: () => this.loadContacts(),
+        loadGroups: () => this.loadGroups(),
+        loadChannels: () => this.loadChannels(),
+        onEcoMode: (a, b) => this.onEcoMode(a, b),
+        startPolling: (ms) => this.startPolling(ms),
+        startRelayTicker: () => this.startRelayTicker(),
+        idleLoop: () => this.idleLoop(),
+        loadEmails: () => EmailsFeature.loadEmails(this.emailsDeps),
+        stopPolling: () => this.stopPolling(),
+        migrateAccountData: (a, b) => this.migrateAccountData(a, b),
+        migrateOwnGroups: (a, b) => this.migrateOwnGroups(a, b),
+        migrateLocalStores: (a, b) => this.migrateLocalStores(a, b),
+        broadcastProfile: () => this.broadcastProfile(),
       };
     },
     // Контракт навигации (ADR-005 W3): открытие чата и группы — сценарий
@@ -3500,87 +3558,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         this.applyMailProvider(this.mailProvider);
       }
     },
-    async login() {
-      // Обычный вход НЕ МОЖЕТ обойти прерванное восстановление
-      // (fix/recovery-resilience): пока маркер 'vault-recovery-pending' стоит,
-      // api.login + initCrypto({allowCreate:true}) создали бы НОВУЮ пару
-      // вместо восстановленной и затирали бы личность аккаунта. Оставляем
-      // пользователя на форме восстановления с переведённым сообщением.
-      // Маркер снимает только успешный commitRecoveryLogin.
-      this.loginLoading = true;
-      this.loginError = '';
-      try {
-        if (RecoverySession.isRecoveryPending()) {
-          this.showRecovery = true;
-          this.loginError = uiStore.tr('recovery_interrupted') || 'recovery_interrupted';
-          return;
-        }
-        // Пользовательские настройки серверов (если заполнены) — иначе
-        // дефолты Gmail внутри emailConnect.
-        const config = {};
-        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
-        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
-        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
-        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
-        const data = await api.login(this.email, this.password, { remember: this.rememberMe, config });
-        this.userId = data.user_id;
-        // Новому пользователю нужна крипто-пара — здесь генерация РАЗРЕШЕНА
-        // (явный обычный вход, а не старт/восстановление). Если не удалось ни
-        // загрузить, ни создать ключ — входа нет (ошибка видна в finally).
-        const cryptoReady = await this.initCrypto({ allowCreate: true });
-        if (!cryptoReady) {
-          this.isLoggedIn = false;
-          this.loginError = uiStore.tr('recovery_missing_keys') || 'recovery_missing_keys';
-          return;
-        }
-        this.isLoggedIn = true;
-        initNotifications().catch(() => {}); // push-уведомления (не блокирует вход)
-        // Namespace = fp:<fingerprint>. На ручном входе initCrypto из mounted
-        // уже отработал, но мог сработать ДО появления this.email — тогда кэш
-        // резолвера остался на legacy-емейле и миграция не запустилась бы.
-        // Сбрасываем кэш и переносим накопленные email-строки один раз.
-        resetAccountNamespaceCache();
-        try { await ensureAccountNamespace(this.email); }
-        catch (e) { console.warn('[identity] namespace bootstrap failed:', e); }
-        await this.initLocalDb(); // sqlite: tombstones + курсоры для аккаунта
-        this.loadUnreadCounts(); // счётчики непрочитанных из sqlite kv_store (после initLocalDb)
-        this.loadChatFlags(); // архив/mute чатов из sqlite kv_store
-        this.runAutoclean(); // плановая автоочистка при входе
-        this.loadLocalProfiles(); // локальные имена/аватары контактов (per-account)
-        // 0.1.180: релей/eco-инициализация при НОВОМ логине (зеркало
-        // auto-login пути): релей ВКЛ по умолчанию (free-токен 100/день,
-        // без промо-ключа) → eco активируется автоматически, foreground-
-        // служба не поднимается (батарея). Явное '0' юзера уважаем.
-        this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
-        try {
-          const rs = await relay.getSettings(this.email);
-          this.relayEnabled = rs.enabled;
-          if (this.relayEnabled) {
-            await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
-            // syncEcoWithRelay мог изменить ecoMode — перечитаем kv.
-            this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
-          }
-        } catch (e) { /* релей опционален — не блокируем почтовый вход */ }
-        await this.loadBodyCache(); 
-        await this.loadContacts();
-        await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-        // Скорость входа: UI сразу, фетч почты в фоне (не блокирует вход).
-        if (this.ecoMode) { this.onEcoMode(true, true).catch(() => {}); } // eco: служба отключена, доставка через релей
-        this.startPolling()
-        if (this.ecoMode) { this.startPolling(60000); this.startRelayTicker(); } // M2.3: эко — без IDLE, релей-тикер жив
-        else this.idleLoop(); // Rust-монитор IDLE — доставка звонков/писем
-        EmailsFeature.loadEmails(this.emailsDeps).catch(e => {
-          if (String(e && e.message || e).toLowerCase().includes('not connected')) {
-            this.loginError = e.message;
-          }
-        });
-      } catch (error) {
-        this.loginError = error.message;
-      } finally {
-        this.loginLoading = false;
-      }
-    },
+    async login() { return AuthFlowFeature.login(this.authFlowDeps); },
     async handleLogout() {
       return LogoutFeature.logoutFlow(this.logoutDeps);
     },
@@ -3589,67 +3567,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Контакты/группы остаются в peer_keys.json/kv_store. Новый адрес уходит
     // контактам broadcast-письмом с тем же fingerprint — они обновят адрес
     // без новых приглашений (fingerprint-матчинг в processIncoming).
-    openChangeEmail() {
-      this.newEmail = '';
-      this.newPassword = '';
-      this.changeEmailError = '';
-      this.showChangeEmailServers = false;
-      this.showChangeEmail = true;
-    },
-    async changeEmail() {
-      this.changeEmailLoading = true;
-      this.changeEmailError = '';
-      const oldEmail = this.email;
-      try {
-        const config = {};
-        if (this.imapServer.trim()) config.imap_server = this.imapServer.trim();
-        if (this.imapPort.trim()) config.imap_port = parseInt(this.imapPort.trim(), 10);
-        if (this.smtpServer.trim()) config.smtp_server = this.smtpServer.trim();
-        if (this.smtpPort.trim()) config.smtp_port = parseInt(this.smtpPort.trim(), 10);
-        // Входим на новый ящик (сохраняем креды для автовхода). Ключ E2E не
-        // перегенерируется — api.login только подключает почту.
-        await api.login(this.newEmail.trim(), this.newPassword, { remember: true, config });
-        this.stopPolling();
-        // Переключаем сессию на новый email, не сбрасывая ключи/контакты/группы.
-        this.email = this.newEmail.trim();
-        this.password = this.newPassword;
-        this.userId = this.email;
-        this.isLoggedIn = true;
-        this.connected = true;
-        // Кэш имени привязан к аккаунту (namespace = email) — сбрасываем.
-        api._displayName = undefined;
-        // счётчики, пометки) из namespace старого адреса в новый — иначе
-        // переписка «исчезает» после смены адреса.
-        await this.migrateAccountData(oldEmail, this.email);
-        await this.migrateOwnGroups(oldEmail, this.email);
-        // localStorage-хранилища (заметки/реакции/правки/томбстоуны) и свой
-        // профиль в kv keyed по email — ошибка миграции не должна ломать
-        // смену почты.
-        try {
-          await this.migrateLocalStores(oldEmail, this.email);
-        } catch (e) {
-          console.warn('[identity] local stores migrate failed:' + e);
-        }
-        await this.initLocalDb(); // курсоры/томбстоуны нового аккаунта
-        await this.loadContacts(); // peer_keys общие — контакты остаются
-        await this.loadGroups();
-          try { await this.loadChannels(); } catch (e) { /* не критично */ }
-        this.startPolling();
-        this.idleLoop();
-        EmailsFeature.loadEmails(this.emailsDeps).catch(() => {});
-        // Сообщаем контактам новый адрес: broadcast-письмо несёт name/avatar
-        // и key (тот же fingerprint) — получатели обновят адрес контакта.
-        try { await this.broadcastProfile(); } catch (e) { console.error('[change-email] broadcast failed:', e); }
-        console.log('[identity] email changed:', oldEmail, '→', this.email);
-        this.showChangeEmail = false;
-        this.showSettings = false;
-        this.loadUnreadCounts();
-      } catch (error) {
-        this.changeEmailError = (error && error.message) || String(error);
-      } finally {
-        this.changeEmailLoading = false;
-      }
-    },
+    openChangeEmail() { return AuthFlowFeature.openChangeEmail(this.authFlowDeps); },
+    async changeEmail() { return AuthFlowFeature.changeEmail(this.authFlowDeps); },
     // ADR-003 Этап 3: логика склейки адресов — в features/contacts-load.js.
     // contactAliases при ошибке НЕ затирается (там привязка истории чата):
     // ради этого функция возвращает null, а не пустой объект.

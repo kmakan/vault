@@ -18,6 +18,7 @@
 // сети нет. Тесты детерминированы, без таймеров и обратных вызовов с
 // состоянием результата. Гейт t_b5da2e97.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { parse as sfcParse, compileScript } from '@vue/compiler-sfc';
 
@@ -941,8 +942,17 @@ console.log('\nApp.vue — wiring (compiler-sfc + static):');
   check('App.vue mounted: при маркере showRecovery=true, перевод ошибки',
     /this\.showRecovery = true/.test(compiled.content) &&
     /(?:this\.t|uiStore\.tr)\('recovery_interrupted'\)/.test(compiled.content));
-  check('App.vue: обычный login вызывает initCrypto({ allowCreate: true })',
-    /initCrypto\(\{ allowCreate: true \}\)/.test(compiled.content));
+  // Сценарий входа уехал в фичу features/auth-flow.js (ADR-005 W3) — правило
+  // проверяем там, а не в компоненте: иначе проверка врала бы (компонент
+  // только передаёт deps).
+  let authFlowSrc = '';
+  try {
+    // Исходник фичи читаем НАПРЯМУЮ (через path.join): это статическая
+    // сверка текста, а не копия модуля — исполняется здесь ничего.
+    authFlowSrc = readFileSync(path.join(ROOT, 'src', 'features', 'auth-flow.js'), 'utf8');
+  } catch (e) { authFlowSrc = ''; }
+  check('auth-flow: обычный login вызывает initCrypto({ allowCreate: true })',
+    /initCrypto\(\{ allowCreate: true \}\)/.test(authFlowSrc));
   check('App.vue: mounted/auto-login/recovery initCrypto({ allowCreate: false })',
     /initCrypto\(\{ allowCreate: false \}\)/.test(compiled.content));
   check('App.vue auto-login: при отсутствии ключа → recovery_missing_keys (не генерация)',
