@@ -53,9 +53,12 @@ pub struct AppState {
     pub free_daily_limit: u32,
     /// Привязка токена к аккаунту: token_hash → fingerprint (один токен =
     /// один аккаунт — защита от шаринга premium-токена между аккаунтами).
-    /// In-memory: после рестарта перепривяжется к первому использовавшему;
-    /// при монетизации — персист в relay.db вместе со счётчиками.
+    /// ПЕРСИСТ: привязка переживает рестарт — иначе купленный Pro-токен
+    /// отвязывался бы и перехватывался первым же использовавшим.
     pub token_bindings: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Подписки: id покупки → план (PersistedState::Subscription). Персист:
+    /// купленный Pro не должен теряться при рестарте релея.
+    pub subscriptions: std::sync::Mutex<std::collections::HashMap<String, persist::Subscription>>,
 
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
@@ -120,13 +123,28 @@ impl AppState {
         fcm: Option<Arc<FcmSender>>,
         state_path: Option<std::path::PathBuf>,
     ) -> Self {
-        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys) = match &state_path {
-            Some(p) => {
-                let st = PersistedState::load(p);
-                (st.topic_fcm, st.topic_ringtone, st.fp_tokens, st.channel_keys)
-            }
-            None => (HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new()),
-        };
+        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions) =
+            match &state_path {
+                Some(p) => {
+                    let st = PersistedState::load(p);
+                    (
+                        st.topic_fcm,
+                        st.topic_ringtone,
+                        st.fp_tokens,
+                        st.channel_keys,
+                        st.token_bindings,
+                        st.subscriptions,
+                    )
+                }
+                None => (
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            };
         let require_sig = std::env::var("VAULT_RELAY_REQUIRE_SIG")
             .map(|v| matches!(v.trim(), "1" | "true" | "yes"))
             .unwrap_or(false);
@@ -142,7 +160,11 @@ impl AppState {
             unlimited_key,
             daily_pub: std::sync::Mutex::new(HashMap::new()),
             free_daily_limit,
-            token_bindings: std::sync::Mutex::new(HashMap::new()),
+            // Привязки токенов и подписки ПЕРЕЖИВАЮТ рестарт (см. persist.rs):
+            // иначе платный токен отвязывался бы и перехватывался первым же
+            // использовавшим после рестарта релея.
+            token_bindings: std::sync::Mutex::new(token_bindings),
+            subscriptions: std::sync::Mutex::new(subscriptions),
             last_seen: std::sync::Mutex::new(HashMap::new()),
             topic_ringtone: std::sync::Mutex::new(topic_ringtone),
             fcm,
@@ -168,6 +190,8 @@ impl AppState {
             &self.topic_ringtone.lock().expect("topic_ringtone lock"),
             &self.fp_tokens.lock().expect("fp_tokens lock"),
             &self.channel_keys.lock().expect("channel_keys lock"),
+            &self.token_bindings.lock().expect("token_bindings lock"),
+            &self.subscriptions.lock().expect("subscriptions lock"),
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
@@ -772,6 +796,10 @@ fn check_token_binding(app: &Arc<AppState>, token_hash: &str, fp: &Option<String
         Some(existing) => existing == &fp,
         None => {
             bindings.insert(token_hash.to_string(), fp);
+            // НОВАЯ ПРИВЯЗКА — СОХРАНЯЕМ: после рестарта релея она обязана
+            // остаться, иначе первый же использовавший перехватил бы токен.
+            drop(bindings);
+            app.persist();
             true
         }
     }

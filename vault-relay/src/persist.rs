@@ -63,6 +63,37 @@ pub struct PersistedState {
     /// режиме v1 (миграция), поведение прежнее.
     #[serde(default)]
     pub channel_keys: HashMap<String, crate::channel_keys::Entry>,
+    /// hash(токена) → fingerprint аккаунта: токен привязан к одному
+    /// аккаунту (защита от шаринга платного токена).
+    ///
+    /// ПЕРСИСТ — НЕ опция, а условие: при in-memory привязке после рестарта
+    /// релея токен обнулялся, и первый же использовавший получал его в
+    /// собственную привязку. Для бесплатных токенов это терпимо (выдача
+    /// возобновляется), для платных — нет: купленный Pro не должен
+    /// отвязываться из-за рестарта сервиса.
+    #[serde(default)]
+    pub token_bindings: HashMap<String, String>,
+    /// Подписки: id подписки → оплаченный план. Ключ — внешний идентификатор
+    /// покупки (checkout), значение — состояние плана.
+    #[serde(default)]
+    pub subscriptions: HashMap<String, Subscription>,
+}
+
+/// Состояние оплаченной подписки.
+///
+/// Поля — контракт с платёжным провайдером и с клиентом: план, до какого
+/// оплачено, и не отозвана ли подписка.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subscription {
+    /// Тариф: "free" | "pro" (см. vault_relay::tokens::Plan).
+    #[serde(default)]
+    pub plan: String,
+    /// unix-сек, до какого оплачен план (0 = без срока).
+    #[serde(default)]
+    pub paid_until: u64,
+    /// Подписка отозвана (возврат/отмена) — токены подписки не работают.
+    #[serde(default)]
+    pub revoked: bool,
 }
 
 /// Запись «fp аккаунта → выданный ему read-токен».
@@ -139,6 +170,8 @@ impl PersistedState {
         topic_ringtone: &HashMap<String, String>,
         fp_tokens: &HashMap<String, FpToken>,
         channel_keys: &HashMap<String, crate::channel_keys::Entry>,
+        token_bindings: &HashMap<String, String>,
+        subscriptions: &HashMap<String, Subscription>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
@@ -147,6 +180,8 @@ impl PersistedState {
             topic_ringtone: topic_ringtone.clone(),
             fp_tokens: fp_tokens.clone(),
             channel_keys: channel_keys.clone(),
+            token_bindings: token_bindings.clone(),
+            subscriptions: subscriptions.clone(),
         }
     }
 
@@ -297,6 +332,88 @@ pub fn state_path_from_raw(v: Option<&str>) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// ПРИВЯЗКА ТОКЕНА ПЕРЕЖИВАЕТ РЕСТАРТ.
+    ///
+    /// Это не «красиво», а условие: купленный Pro-токен не должен
+    /// отвязываться из-за рестарта релея (иначе первый же использовавший
+    /// перехватил бы его в свою привязку — тихо, без ошибки).
+    #[test]
+    fn test_token_bindings_survive_restart() {
+        let path = tmp_path("bindings");
+        let mut bindings = HashMap::new();
+        bindings.insert("hash-token-1".to_string(), "fp-alice".to_string());
+        let mut subs = HashMap::new();
+        subs.insert(
+            "checkout-77".to_string(),
+            Subscription {
+                plan: "pro".to_string(),
+                paid_until: 1_800_000_000,
+                revoked: false,
+            },
+        );
+        let st = PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &bindings,
+            &subs,
+        );
+        st.save_atomic(&path).expect("state saved");
+        let loaded = PersistedState::load(&path);
+        assert_eq!(
+            loaded.token_bindings.get("hash-token-1").map(|s| s.as_str()),
+            Some("fp-alice"),
+            "привязка токена обязана пережить рестарт релея"
+        );
+        let sub = loaded.subscriptions.get("checkout-77").expect("подписка сохранена");
+        assert_eq!(sub.plan, "pro");
+        assert_eq!(sub.paid_until, 1_800_000_000);
+        assert!(!sub.revoked);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Старый файл состояния (без новых полей) читается без паники: поля
+    /// помечены serde(default), поэтому рестарт релея после деплоя не теряет
+    /// остальное состояние.
+    #[test]
+    fn test_old_state_file_without_new_fields_loads() {
+        let path = tmp_path("oldstate");
+        std::fs::write(&path, r#"{"v":1,"saved_at":1}"#).expect("старый файл записан");
+        let loaded = PersistedState::load(&path);
+        assert!(loaded.token_bindings.is_empty());
+        assert!(loaded.subscriptions.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Отозванная подписка остаётся отозванной после перезагрузки — отзыв не
+    /// должен «смываться» рестартом.
+    #[test]
+    fn test_revoked_subscription_stays_revoked() {
+        let path = tmp_path("revoked");
+        let mut subs = HashMap::new();
+        subs.insert(
+            "checkout-9".to_string(),
+            Subscription {
+                plan: "pro".to_string(),
+                paid_until: 1_800_000_000,
+                revoked: true,
+            },
+        );
+        let st = PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &subs,
+        );
+        st.save_atomic(&path).expect("state saved");
+        let loaded = PersistedState::load(&path);
+        assert!(loaded.subscriptions["checkout-9"].revoked, "отзыв обязан пережить рестарт");
+        let _ = std::fs::remove_file(&path);
+    }
+
     fn tmp_path(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -329,6 +446,8 @@ mod tests {
                 t.clone(),
                 "https://vault-msg.ru/ring_incoming_pulse.mp3".to_string(),
             )]),
+            &HashMap::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
         );
@@ -364,6 +483,8 @@ mod tests {
         let t = topic('b');
         PersistedState::snapshot(
             &HashMap::from([(t.clone(), "tok".to_string())]),
+            &HashMap::new(),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -445,6 +566,8 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::from([(fp.clone(), rec.clone())]),
+            &HashMap::new(),
+            &HashMap::new(),
             &HashMap::new(),
         )
         .save_atomic(&path)
