@@ -10,7 +10,7 @@
 // ADR-005 W2 (партия 9): модуль не читает компонент — состояние замка
 // приходит узкими доступами в deps, ключи пиров — у владельца identity-store,
 // email — у владельца session-store.
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 
@@ -32,9 +32,30 @@ const cryptoMock = {
   encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:' + p; },
   loadPeerKeys: async () => cryptoMock.loadedKeys || [],
 };
-const invokeMock = async (cmd) => {
+const invokeMock = async (cmd, args) => {
   if (cmd === 'duress_get_config') return globalThis.__duressCfg;
   if (cmd === 'duress_get_recipients') return globalThis.__duressCfg;
+  // Формат конверта — в Rust (ADR-005 W4). Здесь — ТЕСТОВЫЙ ДВОЙНИК: та же
+  // таблица правил, что и в vault-client/src/vault/envelope.rs. При правке
+  // формата в Rust правится и здесь (расхождение = смоук проверяет не то, что
+  // в проде).
+  if (cmd === 'vault_build_envelope') {
+    const env = {
+      vault: 1,
+      id: args.id || '',
+      text: args.text == null ? '' : args.text,
+      name: args.name || '',
+      avatar: args.avatar || '',
+    };
+    if (args.msg_type) env.type = args.msg_type;
+    if (args.gavatar) env.gavatar = args.gavatar;
+    env.key = args.key || '';
+    env.ts = args.ts_ms || 0;
+    if (args.pq_ek) env.pq = args.pq_ek;
+    if (args.tok) env.tok = args.tok;
+    if (Number(args.ttl_secs) > 0) env.ttl = Number(args.ttl_secs);
+    return JSON.stringify(env);
+  }
   return null;
 };
 globalThis.__apiMock = apiMock;
@@ -53,10 +74,20 @@ prepareModuleCopy(
   {
     '../api.js': 'api.js',
     '../crypto.js': 'crypto.js',
+    '../envelope-rule.js': 'envelope-rule.js',
     '@tauri-apps/api/core': 'tauri-core.js',
   },
   MOCKS,
   [["import('@tauri-apps/api/event')", "import('" + MOCKS + "/event-stub.js')"]],
+);
+// Адаптер сборки конверта (ADR-005 W4) — настоящий файл, подменён только
+// Tauri-вызов (мост → мок invokeMock).
+writeFileSync(
+  MOCKS + '/envelope-rule.js',
+  readFileSync(ROOT + '/src/envelope-rule.js', 'utf8').replaceAll(
+    "from '@tauri-apps/api/core'",
+    "from './tauri-core.js'",
+  ),
 );
 
 // ── DOM-заглушки: модуль слушает visibilitychange/focus ────────────────────

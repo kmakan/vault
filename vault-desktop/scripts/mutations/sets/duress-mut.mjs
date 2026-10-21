@@ -31,9 +31,12 @@ export default {
     { name: "паника не чистит локальный email",
       pattern: "  sessionStore.setCurrentEmail(null);",
       replacement: "  void 0;" },
+    // Формат конверта уехал в Rust (ADR-005 W4) — мутация бьёт по вызову
+    // адаптера: подтип «sos» не передаётся, и получатель не поймёт, что это
+    // сигнал бедствия.
     { name: "SOS уходит без типа sos",
-      pattern: "          type: 'sos', text, name: (deps.displayName() || ''), ts: Date.now(),",
-      replacement: "          text, name: (deps.displayName() || ''), ts: Date.now()," },
+      pattern: "          msgType: 'sos',",
+      replacement: "          msgType: null," },
     { name: "SOS отправляется без ключа получателя (не шифруется)",
       pattern: "        if (!pk) {",
       replacement: "        if (false) {" },

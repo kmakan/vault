@@ -956,6 +956,7 @@ import * as ReportContent from './features/report-content.js';
 import * as PinWire from './features/group-pin-wire.js';
 import * as Geo from './geo.js';
 import * as Autoclean from './features/autoclean.js';
+import * as EnvelopeRule from './envelope-rule.js';
 import * as LogoutFeature from './features/logout.js';
 import * as ContactsDelete from './features/contacts-delete.js';
 import * as RecoveryEscrow from './features/recovery-escrow.js';
@@ -3785,35 +3786,43 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         try { gavatar = (await db.kvGet('anon', 'group-avatar:' + this.currentGroup.id)) || ''; }
         catch (e) { gavatar = ''; }
       }
-      const env = {
-        vault: 1,
-        id: this.newMessageId(),
-        text: text,
-        name: name,
-        avatar: avatar,
-        ...(gavatar ? { gavatar } : {}),
-        key: crypto.publicKey || '',
-        ts: Date.now(),
-      };
       // PQ: свой ML-KEM ek — получатель сохранит контакт и сможет
       // ответить гибридом (конверт несёт оба публичных ключа).
-      if (crypto.pqEk) env.pq = crypto.pqEk;
+      const pqEk = crypto.pqEk || null;
       // M2.4 АВТООБМЕН токенами: конверт несёт мой relay read-токен —
       // адрес моей очереди. Получатель молча сохранит его и сможет
       // слать мне мгновенные пуши. Пользователь ничего не вводит.
       // Гейт this.relayEnabled СНЯТ (как в calls.js sendCallEnvelope):
       // адрес нашей очереди нужен собеседнику независимо от нашего
       // переключателя — иначе выключенный релей у одного ломает обмен.
+      let tok = null;
       try {
         const { relays, active } = await (await import('./relay-client.js')).getSettings(this.email);
-        const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
-        if (myTok) env.tok = myTok;
+        tok = ((relays[active] || relays[0]) || {}).myToken || null;
       } catch (e) { /* релей опционален */ }
-      // Исчезающие сообщения: ttl в секундах от момента ПРОСМОТРА
-      // получателем. 0 = обычное сообщение. Получатель ставит локальный
-      // таймер удаления после показа (expireEphemeral).
-      if (ttl && Number(ttl) > 0) env.ttl = Number(ttl);
-      return JSON.stringify(env);
+      // ФОРМАТ КОНВЕРТА — В RUST (ADR-005 W4): какие поля входят и при каких
+      // условиях, решает ядро (vault_client::vault::envelope). Здесь — только
+      // данные. Пока сборка жила здесь, а разбор — в Rust (incoming::classify),
+      // формат был описан в двух местах, и правка одной стороны ломала другую.
+      // ttl — в секундах от момента ПРОСМОТРА получателем (0 = обычное
+      // сообщение, получатель не ставит таймер удаления).
+      const envelope = await EnvelopeRule.buildEnvelope({
+        id: this.newMessageId(),
+        text,
+        name,
+        avatar,
+        gavatar: gavatar || null,
+        key: crypto.publicKey || '',
+        pqEk,
+        tok,
+        ttlSecs: Number(ttl) || 0,
+        tsMs: Date.now(),
+      });
+      // Мост недоступен → конверта нет. Отправлять «null» нельзя: получатель
+      // не разберёт и письмо исчезнет у обоих молча. Явная ошибка — её поймает
+      // вызывающий и покажет тост.
+      if (!envelope) throw new Error('envelope: Rust-сборка конверта недоступна');
+      return envelope;
     },
     // Распарсить расшифрованный конверт. null = старый формат (простой текст).
     parseEnvelope(decrypted) { return MsgFormat.parseEnvelope(decrypted); },

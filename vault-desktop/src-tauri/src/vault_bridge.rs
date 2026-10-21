@@ -110,6 +110,43 @@ pub fn vault_call_next_state(current: String, event: String) -> String {
     }
 }
 
+/// Собрать wire-конверт сообщения (ADR-005 R1 / W4).
+///
+/// ФОРМАТ КОНВЕРТА — В ЯДРЕ: какие поля входят и при каких условиях.
+/// JS приносит данные (id, текст, имя, аватары, ключи, ttl, ts) и получает
+/// готовую строку. Пока сборка жила в App.vue, а разбор — в Rust
+/// (incoming::classify), формат был описан в двух местах.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn vault_build_envelope(
+    id: String,
+    text: String,
+    name: String,
+    avatar: String,
+    gavatar: Option<String>,
+    key: String,
+    pq_ek: Option<String>,
+    tok: Option<String>,
+    msg_type: Option<String>,
+    ttl_secs: i64,
+    ts_ms: i64,
+) -> String {
+    use vault_client::vault::envelope::{build, EnvelopeInput};
+    build(&EnvelopeInput {
+        id,
+        text,
+        name,
+        avatar,
+        gavatar,
+        key,
+        pq_ek,
+        tok,
+        msg_type,
+        ttl_secs,
+        ts_ms,
+    })
+}
+
 /// Правило «можно ли» (постановка таймера, начало звонка, приём, отмена,
 /// hangup по DC, SDP, запасной «звонок идёт») — решение в Rust.
 #[tauri::command]

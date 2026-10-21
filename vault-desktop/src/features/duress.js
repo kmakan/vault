@@ -9,6 +9,7 @@
 // Android-ветка: нативный LockActivity, JS-замок не показывается.
 
 import { uiStore, sessionStore } from "./session-store.js";
+import * as EnvelopeRule from '../envelope-rule.js';
 import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -189,10 +190,18 @@ export async function sendDuressSos(deps) {
           continue;
         }
         crypto.setPeerPublicKey(pk, identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[rcpt]);
-        const content = await crypto.encryptVault(JSON.stringify({
-          vault: 1, id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-          type: 'sos', text, name: (deps.displayName() || ''), ts: Date.now(),
-        }));
+        // ФОРМАТ КОНВЕРТА — В RUST (ADR-005 W4): SOS — тоже протокол (подтип
+        // «sos» получатель узнаёт по полю type). Пока сборка жила здесь, формат
+        // был описан в двух местах (здесь и в Rust incoming::classify).
+        const envelope = await EnvelopeRule.buildEnvelope({
+          id: 'sos-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+          text,
+          name: (deps.displayName() || ''),
+          msgType: 'sos',
+          tsMs: Date.now(),
+        });
+        if (!envelope) throw new Error('sos: Rust-сборка конверта недоступна');
+        const content = await crypto.encryptVault(envelope);
         await api.sendEmail('local', { to: rcpt, subject: '', body: content });
       } catch (e) {
         console.warn('[duress] SOS to', rcpt, 'failed:', e);

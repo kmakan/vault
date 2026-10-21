@@ -62,8 +62,14 @@ export const PROTOCOL_MARKERS = [
   { id: 'envelope-parse',
     re: /(?<!function )\b(?:parseEnvelope|parseEnvelopeSafe)\s*\(/g,
     why: 'разбор wire-конверта в JS: решение «что это за конверт» — в Rust' },
+  // СБОРКА конверта: долг — это когда JS САМ собирает формат (литерал с
+  // `vault:`), а не когда он ВЫЗЫВАЕТ сборщик. После переезда формата в Rust
+  // (vault_client::vault::envelope) вызов `buildEnvelope(...)` — это транспорт
+  // (как вызов `invoke('vault_call_...')` в правиле звонка), и штрафовать его
+  // нельзя: иначе придётся вручную дублировать формат в JS, чтобы «счётчик
+  // сошёлся» — ровно то, чего мы убирали.
   { id: 'envelope-build',
-    re: /(?<!function )\bbuildEnvelope\s*\(/g,
+    re: /JSON\.stringify\s*\(\s*\{[^)]{0,240}?\bvault\s*:/g,
     why: 'сборка wire-конверта в JS: формат принадлежит Rust' },
   { id: 'envelope-json',
     re: /JSON\.parse\s*\(\s*[^)\n]{0,60}?\b(?:env|envelope|wire|plain|plaintext|decrypted)\b/gi,
@@ -236,6 +242,9 @@ export function selfTest() {
     { name: 'crypto: isCryptoReady чист',   src: 'if (isCryptoReady()) { return; }',     fn: cryptoHits, want: 0, id: null },
     // (2) конверт: вызов ловится, объявление функции — нет.
     { name: 'envelope: разбор пойман',      src: 'const env = parseEnvelope(text);',     fn: protocolHits, want: 1, id: 'envelope-parse' },
+    // Сборка формата в JS — долг; ВЫЗОВ сборщика (транспорт) — чист.
+    { name: 'envelope: сборка в JS поймана', src: 'const env = JSON.stringify({ vault: 1, id: x });', fn: protocolHits, want: 1, id: 'envelope-build' },
+    { name: 'envelope: вызов сборщика — транспорт', src: 'const env = await buildEnvelope(payload);', fn: protocolHits, want: 0, id: null },
     { name: 'envelope: объявление чисто',   src: 'export function parseEnvelope(s) {',   fn: protocolHits, want: 0, id: null },
     // (3) состояние звонка: переход ловится, UI-строка — нет.
     { name: 'call-state: переход пойман',   src: "useSession().setCallState('active');", fn: protocolHits, want: 1, id: 'call-state' },
