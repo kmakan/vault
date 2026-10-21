@@ -53,6 +53,7 @@
     "vault-desktop/src/features/calls.js": 14,
     "vault-desktop/src/features/channels-store.js": 4,
     "vault-desktop/src/features/channels.js": 30,
+    "vault-desktop/src/features/chat-navigation.js": 13,
     "vault-desktop/src/features/chat-ui.js": 16,
     "vault-desktop/src/features/chat.js": 4,
     "vault-desktop/src/features/clipboard-export.js": 9,

@@ -1007,6 +1007,7 @@ import * as BlockUserFeature from './features/block-user.js';
 import * as ClipboardExportFeature from './features/clipboard-export.js';
 import * as GroupMembersFeature from './features/group-members.js';
 import * as GroupManagementFeature from './features/group-management.js';
+import * as ChatNavigationFeature from './features/chat-navigation.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2011,6 +2012,51 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт навигации (ADR-005 W3): открытие чата и группы — сценарий
+    // (сброс → кэш → состояние → загрузка) в фиче features/chat-navigation.js;
+    // компонент отдаёт владельцев состояния, ключи и эффекты.
+    chatNavigationDeps() {
+      return {
+        peerKeys: () => this.peerKeys,
+        peerPqKeys: () => this.peerPqKeys,
+        groupKeys: () => this.groupKeys,
+        cryptoReady: () => this.cryptoReady,
+        isMobile: () => this.isMobile,
+        emails: () => this.emails,
+        api,
+        alert: (msg) => window.alert(msg),
+        tr: (key) => uiStore.tr(key),
+        chat: this.chat,
+        setShowQRCode: (v) => { this.showQRCode = v; },
+        setShowSettings: (v) => { this.showSettings = v; },
+        setShowEphemeralMenu: (v) => { this.showEphemeralMenu = v; },
+        setMobileChatOpen: (v) => { this.mobileChatOpen = v; },
+        setNewMessage: (v) => { this.newMessage = v; },
+        setActiveChat: (v) => { this.activeChat = v; },
+        setActiveChatType: (v) => { this.activeChatType = v; },
+        setShowStarredOnly: (v) => { this.showStarredOnly = v; },
+        setCurrentView: (v) => { this.currentView = v; },
+        setCurrentEphemeralTtl: (v) => { this.currentEphemeralTtl = v; },
+        setCurrentGroup: (v) => { this.currentGroup = v; },
+        setGroupKey: (id, key) => this.groupsStore.setGroupKey(id, key),
+        incLoadSeq: () => { this.loadSeq++; },
+        saveDraft: () => this.saveDraft(),
+        cancelReply: () => this.cancelReply(),
+        restoreDraft: (key) => this.restoreDraft(key),
+        loadChatCache: (chat) => this.loadChatCache(chat),
+        msgTs: (m) => this.msgTs(m),
+        loadStarredFor: (k) => this.loadStarredFor(k),
+        ephemeralTtlOf: (k) => this.ephemeralTtlOf(k),
+        resetUnread: (k) => this.resetUnread(k),
+        openMobileChat: () => this.openMobileChat(),
+        loadEmails: (force) => EmailsFeature.loadEmails(this.emailsDeps, force),
+        loadMessages: (email) => this.loadMessages(email),
+        loadGroupMessages: (id, force) => this.loadGroupMessages(id, force),
+        backfillGroupFingerprints: (g) => this.backfillGroupFingerprints(g),
+        scrollToBottom: (force) => this.scrollToBottom(force),
+        selectChat: (email) => this.selectChat(email),
       };
     },
     // Контракт кэша тел писем (ADR-005 W3): загрузка и отложенное сохранение —
@@ -3706,71 +3752,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     noteChannelHello(chId, senderEmail) { return ChannelsFeature.noteChannelHello(chId, senderEmail); },
     setPeerKey(email, key, pq = null) { return KeysFeature.setPeerKey(this.keysDeps, email, key, pq); },
     setPeerKeyFromInput() { return KeysFeature.setPeerKeyFromInput(this.keysDeps); },
-    async selectChat(email) {
-      // Vault chat requires a peer key — without it there is nothing (and nothing
-      // encrypted) to show. Contacts without keys are already hidden from the list;
-      // this is a hard guard on top.
-      if (!this.peerKeys[email]) {
-        // Не молчим: объясняем, что нужно обменяться ключами, и сразу открываем
-        // панель 🔗 (QRCodePanel) — ввод id участника или сканирование QR.
-        alert(uiStore.tr('chat_no_key') || 'Нет ключа собеседника — обменяйтесь ключами: нажмите кнопку «Добавить контакт» (кнопка со значком ссылки вверху) и введите id участника или отсканируйте QR-код.');
-        this.showQRCode = true;
-        return;
-      }
-      // Сбрасываем чат сразу — иначе при медленной загрузке нового чата
-      // пользователь видит сообщения предыдущего (одни и те же во всех чатах).
-      this.saveDraft(); // черновик прошлого чата — до сброса activeChat
-      this.chat.set([]);
-      this.newMessage = '';
-      this.cancelReply();
-      await this.restoreDraft(email);
-      // показываем кэш прошлой сессии, пока идёт
-      // загрузка из IMAP. Свежие данные перезапишут кэш по завершении.
-      const cachedChat = await this.loadChatCache(email);
-      if (cachedChat && cachedChat.length) {
-        cachedChat.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.chat.set(cachedChat);
-      }
-      // Токен загрузки: незавершённый loadMessages прошлого чата увидит
-      // новый seq и не применит свои результаты.
-      this.loadSeq++;
-      this.activeChat = email;
-      this.activeChatType = 'chat';
-      this.showStarredOnly = false; // избранное — режим, сбрасывается при смене чата
-      this.loadStarredFor(email);
-      // TTL исчезающих для 1-на-1 — из kv (как selectGroup для групп): иначе
-      // currentEphemeralTtl остаётся от ПРЕДЫДУЩЕГО чата, иконка замка врёт,
-      // а старый fallback применял чужой TTL к сообщениям.
-      this.currentEphemeralTtl = await this.ephemeralTtlOf(email);
-      this.currentView = 'chats';
-      this.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
-      this.openMobileChat();
-      if (this.peerKeys[email]) {
-        crypto.setPeerPublicKey(this.peerKeys[email], this.peerPqKeys && this.peerPqKeys[email]);
-      }
-      // Если письма ещё не загружены (клик сразу после входа — поллинг идёт
-      // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.
-      if (this.emails.length === 0) {
-        try {
-          await EmailsFeature.loadEmails(this.emailsDeps, true);
-        } catch (e) { /* Not connected — тихий фолбэк */ }
-      }
-      await this.loadMessages(email);
-      // при открытии чата — сразу к последнему
-      // сообщению (вниз).
-      this.scrollToBottom(true);
-    },
-
+    async selectChat(email) { return ChatNavigationFeature.selectChat(this.chatNavigationDeps, email); },
     // M2.4: открыть чат по ключу (email) — из ntfy-пуша (vault://open?chat=).
-    async openChatByKey(key) {
-      const email = String(key || '').toLowerCase();
-      if (!email) return;
-      try {
-        await this.selectChat(email);
-        if (this.isMobile) this.mobileChatOpen = true;
-        this.showSettings = false;
-      } catch (e) { console.warn('[notify] openChatByKey failed:', e); }
-    },
+    async openChatByKey(key) { return ChatNavigationFeature.openChatByKey(this.chatNavigationDeps, key); },
     // Прокрутка списка сообщений вниз. force=true — всегда (открытие чата,
     // своя отправка); force=false — только если пользователь уже у низа
     // (поллинг не должен выдёргивать из чтения истории).
@@ -3791,62 +3775,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async pinGroupMessage(msg) { return GroupsFeature.pinGroupMessage(this.pinsDeps, msg); },
     unpinGroupMessage() { return GroupsFeature.unpinGroupMessage(this.pinsDeps); },
     scrollPinnedToView() { return GroupsFeature.scrollPinnedToView(this.pinsDeps); },
-    async selectGroup(group) {
-      this.saveDraft(); // черновик прошлого чата
-      this.chat.set([]);
-      this.newMessage = '';
-      this.cancelReply();
-      await this.restoreDraft('group:' + group.id);
-      const cachedGroup = await this.loadChatCache(`group:${group.id}`);
-      if (cachedGroup && cachedGroup.length) {
-        cachedGroup.sort((a, b) => this.msgTs(a) - this.msgTs(b));
-        this.chat.set(cachedGroup);
-      }
-      this.loadSeq++;
-      this.activeChat = `group:${group.id}`;
-      this.activeChatType = 'group';
-      this.showStarredOnly = false; // избранное — режим, сбрасывается при смене чата
-      this.loadStarredFor('group:' + group.id);
-      // Ленивое заполнение fingerprint участников: старые группы без
-      // fingerprint — заполняем из peer_keys при открытии (один раз; Rust
-      // сохраняет). Нужно для membership по ключу при смене почты.
-      this.backfillGroupFingerprints(group);
-      this.showEphemeralMenu = false;
-      this.currentEphemeralTtl = await this.ephemeralTtlOf('group:' + group.id);
-      this.currentGroup = group;
-      this.openMobileChat();
-      this.resetUnread('group:' + group.id); // группа открыта — сбрасываем счётчик
-
-      // Load group key if not already in memory
-      if (!this.groupKeys[group.id] && this.cryptoReady) {
-        try {
-          const keyData = await api.getMyGroupKey(group.id);
-          if (keyData && keyData.group_key) {
-            // Serverless: group key is stored locally in ~/.vault/groups.json
-            // (the same file the CLI reads) — no per-user encryption needed.
-            this.groupsStore.setGroupKey(group.id, keyData.group_key);
-          } else if (keyData && keyData.encrypted_key) {
-            // Decrypt the group key with our private key
-            // The encrypted_key was encrypted with our public key by the group creator
-            // We need the group creator's public key to decrypt
-            // For now, try to decrypt using the stored peer keys
-            const creatorEmail = group.created_by;
-            if (this.peerKeys[creatorEmail]) {
-              const groupKeyHex = await crypto.decryptGroupKey(
-                keyData.encrypted_key,
-                this.peerKeys[creatorEmail]
-              );
-              this.groupsStore.setGroupKey(group.id, groupKeyHex);
-            }
-          }
-        } catch (e) {
-          console.warn('Could not load group key:', e);
-        }
-      }
-
-      await this.loadGroupMessages(group.id, false);
-      this.scrollToBottom(true);
-    },
+    async selectGroup(group) { return ChatNavigationFeature.selectGroup(this.chatNavigationDeps, group); },
     // --- Заметки для себя
     // notes-store.js — ЕДИНСТВЕННОЕ место, знающее про хранилище (vault-notes-<email>).
     // Методы ниже — тонкие делегаты: они зовутся шаблоном и другими местами,
