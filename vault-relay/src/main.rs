@@ -69,6 +69,9 @@ pub struct AppState {
     pub checkouts: std::sync::Mutex<std::collections::HashMap<String, vault_relay::payments::Checkout>>,
     /// Попытки чекаута по fp: unix-сек последних попыток (лимитер ≤5/час).
     pub checkout_attempts: std::sync::Mutex<std::collections::HashMap<String, Vec<u64>>>,
+    /// Устройства подписки: id подписки → hash'ы её токенов (по одному на
+    /// устройство). Персист: рестарт релея не обнуляет лимит устройств.
+    pub sub_tokens: std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>,
 
     /// M2.3-b: ntfy-мост — host:port ntfy (пусто = пушей нет). ntfy на
     /// том же сервере → plain HTTP на 127.0.0.1:8092, без TLS-зависимостей.
@@ -134,7 +137,7 @@ impl AppState {
         state_path: Option<std::path::PathBuf>,
         payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
     ) -> Self {
-        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions) =
+        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens) =
             match &state_path {
                 Some(p) => {
                     let st = PersistedState::load(p);
@@ -145,9 +148,11 @@ impl AppState {
                         st.channel_keys,
                         st.token_bindings,
                         st.subscriptions,
+                        st.sub_tokens,
                     )
                 }
                 None => (
+                    HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
@@ -179,6 +184,7 @@ impl AppState {
             payment,
             checkouts: std::sync::Mutex::new(HashMap::new()),
             checkout_attempts: std::sync::Mutex::new(HashMap::new()),
+            sub_tokens: std::sync::Mutex::new(sub_tokens),
             last_seen: std::sync::Mutex::new(HashMap::new()),
             topic_ringtone: std::sync::Mutex::new(topic_ringtone),
             fcm,
@@ -261,6 +267,32 @@ impl AppState {
             .insert(c.id.clone(), c);
     }
 
+    /// Сколько устройств привязано к подписке (по sub, а не по токену).
+    ///
+    /// Считаем по токенам ЭТОЙ подписки: «купил Pro, поставил на трёх
+    /// телефонах» должно упираться в лимит устройств, а не в лимит токенов.
+    pub fn subscription_devices(&self, sub: &str) -> u32 {
+        self.sub_tokens
+            .lock()
+            .expect("sub_tokens lock")
+            .get(sub)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Зарегистрировать токен подписки (одно устройство). Повторная
+    /// активация того же токена устройство не добавляет.
+    pub fn register_sub_token(&self, sub: &str, token_hash: &str) {
+        {
+            let mut map = self.sub_tokens.lock().expect("sub_tokens lock");
+            let list = map.entry(sub.to_string()).or_default();
+            if !list.iter().any(|h| h == token_hash) {
+                list.push(token_hash.to_string());
+            }
+        }
+        self.persist();
+    }
+
     /// Не больше 5 чекаутов в час на fingerprint (защита от мусора в
     /// платёжные системы и от перебора fp).
     pub fn checkout_rate_ok(&self, fp: &str) -> bool {
@@ -288,6 +320,7 @@ impl AppState {
             &self.channel_keys.lock().expect("channel_keys lock"),
             &self.token_bindings.lock().expect("token_bindings lock"),
             &self.subscriptions.lock().expect("subscriptions lock"),
+            &self.sub_tokens.lock().expect("sub_tokens lock"),
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
@@ -1653,6 +1686,122 @@ fn payment_error_response(e: vault_relay::payments::PaymentError) -> Response {
     }
 }
 
+
+// ── Роуты токена подписки: активация на устройстве и остаток лимитов ────
+
+/// Сколько устройств может использовать один платный токен.
+pub const MAX_DEVICES: u32 = 3;
+
+/// Запрос активации платного токена на устройстве.
+#[derive(Deserialize)]
+pub struct ActivateReq {
+    /// v2-токен с планом.
+    token: String,
+    /// fingerprint устройства.
+    fp: String,
+}
+
+/// POST /relay/tokens/activate — привязать платный токен к устройству.
+///
+/// Проверка идёт по СУБ-подписке (все токены с тем же sub), а не по
+/// отдельному токену: так «купил один Pro, переустановил на трёх телефонах»
+/// ограничено тремя устройствами, а не тремя токенами.
+async fn relay_tokens_activate(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<ActivateReq>,
+) -> Response {
+    let Some(t) = vault_relay::parse(&app.keys, &req.token) else {
+        return err(StatusCode::BAD_REQUEST, "bad token");
+    };
+    // Платный = с plan Pro/Business (v2). Free/Install — обычные токены, у них
+    // лимита устройств нет (как раньше: один аккаунт — один токен).
+    let paid = matches!(
+        t.plan,
+        vault_relay::tokens::Plan::Pro | vault_relay::tokens::Plan::Business
+    );
+    if !paid {
+        return err(StatusCode::PAYMENT_REQUIRED, "not a paid token");
+    }
+    // 402: подписка истекла.
+    let paid_until = t.paid_until as u64;
+    if paid_until <= now() {
+        return err(StatusCode::PAYMENT_REQUIRED, "plan_expired");
+    }
+    let fp = match norm_fp(Some(&req.fp)) {
+        Some(f) => f,
+        None => return err(StatusCode::BAD_REQUEST, "bad fp"),
+    };
+    // 409: токен уже за другим аккаунтом.
+    if !check_token_binding(&app, &t.hash, &Some(fp.clone())) {
+        return err(StatusCode::CONFLICT, "bound_to_another");
+    }
+    // Сколько устройств у этой подписки: считаем по sub, а не по токену.
+    // Регистрируем токен (одно устройство) и считаем заново: повторная
+    // активация того же токена не должна увеличивать счётчик.
+    let sub_key = t.sub.to_string();
+    app.register_sub_token(&sub_key, &t.hash);
+    let devices = app.subscription_devices(&sub_key);
+    if devices > MAX_DEVICES {
+        return err(StatusCode::CONFLICT, "device_limit");
+    }
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "bound": true,
+            "devices": devices,
+            "max_devices": MAX_DEVICES,
+            "paid_until": paid_until,
+        })),
+    )
+        .into_response()
+}
+
+/// GET /relay/tokens/info — состояние подписки и остаток лимитов.
+///
+/// Нужен экрану покупки («осталось 588 конвертов сегодня») и офлайн-грейсу:
+/// серверная граница grace_until, чтобы клиент не «удлинял» офлайн-режим
+/// бесконечно.
+async fn relay_tokens_info(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(token) = auth_header(&headers) else {
+        return err(StatusCode::UNAUTHORIZED, "missing token");
+    };
+    let Some(t) = vault_relay::parse(&app.keys, &token) else {
+        return err(StatusCode::UNAUTHORIZED, "bad token");
+    };
+    if t.is_expired() {
+        return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
+    }
+    // Суточный расход издателя по этому токену (ключ — как у гейта лимита).
+    let pub_key = format!("t:{}", t.hash);
+    let daily_used = {
+        let map = app.daily_pub.lock().expect("daily_pub lock");
+        map.get(&pub_key).map(|(_, n)| *n).unwrap_or(0)
+    };
+    let daily_limit = if matches!(t.plan, vault_relay::tokens::Plan::Free) {
+        app.free_daily_limit
+    } else {
+        0 // безлимит: 0 = «лимита нет»
+    };
+    (
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "plan": format!("{:?}", t.plan).to_lowercase(),
+            "paid_until": t.paid_until as u64,
+            "daily_used": daily_used,
+            "daily_limit": daily_limit,
+            "devices": app.subscription_devices(&t.sub.to_string()),
+            "max_devices": MAX_DEVICES,
+            // Серверная граница офлайн-грейса: клиент доверяет локальному
+            // счёту только до этого момента.
+            "grace_until": t.paid_until as u64,
+        })),
+    )
+        .into_response()
+}
+
 /// POST /relay/purchase/checkout — создать платёжную сессию.
 async fn relay_purchase_checkout(
     State(app): State<Arc<AppState>>,
@@ -1866,6 +2015,8 @@ async fn main() {
         // Платёжные роуты (шаг 4 плана платных токенов).
         .route("/relay/purchase/checkout", post(relay_purchase_checkout))
         .route("/relay/purchase/verify", post(relay_purchase_verify))
+        .route("/relay/tokens/activate", post(relay_tokens_activate))
+        .route("/relay/tokens/info", get(relay_tokens_info))
         .route("/relay/poll", get(relay_poll))
         .route("/relay/ws", get(relay_ws))
         .route("/metrics", get(metrics))
@@ -2952,6 +3103,155 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS,
             "шестой чекаут в час должен быть отклонён"
         );
+    }
+
+    // ── Роуты токена подписки: активация и остаток лимитов ──────────────
+
+    /// Платный v2-токен для проверок: план Pro, подписка 42, срок — 10 лет.
+    fn paid_token(k: &ServerKeys, sub: u64) -> String {
+        vault_relay::tokens::issue_v2(
+            k,
+            Scope::Read,
+            vault_relay::tokens::Plan::Pro,
+            sub,
+            (now() + 3650 * 86400) as u32,
+        )
+    }
+
+    /// Активация платного токена: устройство привязывается, устройство = 1.
+    #[tokio::test]
+    async fn tokens_activate_binds_device_to_subscription() {
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let token = paid_token(&k, 42);
+        let resp = relay_tokens_activate(
+            State(app.clone()),
+            Json(ActivateReq {
+                token,
+                fp: "fp-alice".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 64 * 1024).await.expect("body"),
+        )
+        .expect("json");
+        assert_eq!(body["bound"], true);
+        assert_eq!(body["devices"], 1, "первое устройство подписки");
+        assert_eq!(body["max_devices"], 3);
+    }
+
+    /// Повторная активация ТОГО ЖЕ токена не увеличивает число устройств:
+    /// иначе перезапуск приложения съедал бы лимит.
+    #[tokio::test]
+    async fn tokens_activate_is_idempotent_for_same_token() {
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let token = paid_token(&k, 42);
+        for _ in 0..3 {
+            let resp = relay_tokens_activate(
+                State(app.clone()),
+                Json(ActivateReq {
+                    token: token.clone(),
+                    fp: "fp-alice".to_string(),
+                }),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        assert_eq!(
+            app.subscription_devices("42"),
+            1,
+            "один токен = одно устройство, сколько бы раз ни активировали"
+        );
+    }
+
+    /// Лимит устройств: четвёртое устройство — 409 device_limit.
+    #[tokio::test]
+    async fn tokens_activate_enforces_device_limit() {
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        for i in 0..3u64 {
+            let token = paid_token(&k, 42);
+            let resp = relay_tokens_activate(
+                State(app.clone()),
+                Json(ActivateReq {
+                    token,
+                    fp: format!("fp-device-{i}"),
+                }),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK, "устройство {i} должно активироваться");
+        }
+        // Четвёртое устройство — новый токен той же подписки.
+        let token = paid_token(&k, 42);
+        let resp = relay_tokens_activate(
+            State(app.clone()),
+            Json(ActivateReq {
+                token,
+                fp: "fp-device-4".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT, "четвёртое устройство — отказ");
+    }
+
+    /// Неплатный токен не активируется как платный (402).
+    #[tokio::test]
+    async fn tokens_activate_rejects_free_token() {
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let token = vault_relay::tokens::issue_install(&k, now() as u32);
+        let resp = relay_tokens_activate(
+            State(app),
+            Json(ActivateReq {
+                token,
+                fp: "fp-alice".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+    }
+
+    /// /tokens/info: без токена — 401; с платным — план, лимиты, устройства.
+    #[tokio::test]
+    async fn tokens_info_requires_token_and_reports_plan() {
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let resp = relay_tokens_info(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let token = paid_token(&k, 42);
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            format!("VaultRelay {token}").parse().expect("hdr"),
+        );
+        let resp = relay_tokens_info(State(app), h).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 64 * 1024).await.expect("body"),
+        )
+        .expect("json");
+        assert_eq!(body["plan"], "pro");
+        assert_eq!(body["max_devices"], 3);
+        assert!(body["daily_limit"].as_u64().is_some(), "лимит конвертов в сутки отдаётся");
     }
 
 }

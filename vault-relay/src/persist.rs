@@ -77,6 +77,14 @@ pub struct PersistedState {
     /// покупки (checkout), значение — состояние плана.
     #[serde(default)]
     pub subscriptions: HashMap<String, Subscription>,
+    /// Устройства подписки: id подписки → hash'ы выданных ей токенов.
+    ///
+    /// Один токен — одно устройство, поэтому лимит устройств считается по
+    /// ЧИСЛУ ТОКЕНОВ этой подписки. Персист обязателен: рестарт релея не
+    /// должен обнулять лимит (иначе после рестарта можно было бы навесить
+    /// unlimited устройств на один Pro).
+    #[serde(default)]
+    pub sub_tokens: HashMap<String, Vec<String>>,
 }
 
 /// Состояние оплаченной подписки.
@@ -177,6 +185,7 @@ impl PersistedState {
         channel_keys: &HashMap<String, crate::channel_keys::Entry>,
         token_bindings: &HashMap<String, String>,
         subscriptions: &HashMap<String, Subscription>,
+        sub_tokens: &HashMap<String, Vec<String>>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
@@ -187,6 +196,7 @@ impl PersistedState {
             channel_keys: channel_keys.clone(),
             token_bindings: token_bindings.clone(),
             subscriptions: subscriptions.clone(),
+            sub_tokens: sub_tokens.clone(),
         }
     }
 
@@ -364,6 +374,7 @@ mod tests {
             &HashMap::new(),
             &bindings,
             &subs,
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -414,6 +425,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &subs,
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -457,6 +469,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("save");
 
@@ -490,6 +503,7 @@ mod tests {
         let t = topic('b');
         PersistedState::snapshot(
             &HashMap::from([(t.clone(), "tok".to_string())]),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -573,6 +587,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::from([(fp.clone(), rec.clone())]),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
