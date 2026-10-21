@@ -72,6 +72,7 @@
     "vault-desktop/src/features/forward.js": 2,
     "vault-desktop/src/features/forward/state.js": 2,
     "vault-desktop/src/features/group-avatars.js": 11,
+    "vault-desktop/src/features/group-management.js": 12,
     "vault-desktop/src/features/group-members.js": 12,
     "vault-desktop/src/features/group-meta-broadcast.js": 6,
     "vault-desktop/src/features/group-meta.js": 5,

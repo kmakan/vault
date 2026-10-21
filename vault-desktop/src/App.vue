@@ -1006,6 +1006,7 @@ import * as IgnoredUsersFeature from './features/ignored-users.js';
 import * as BlockUserFeature from './features/block-user.js';
 import * as ClipboardExportFeature from './features/clipboard-export.js';
 import * as GroupMembersFeature from './features/group-members.js';
+import * as GroupManagementFeature from './features/group-management.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
 import * as CallsFeature from './features/calls.js';
@@ -2010,6 +2011,40 @@ export default {
         isIgnored: ContactsFeature.isIgnored,
         addIgnored: ContactsFeature.addIgnored,
         removeIgnored: ContactsFeature.removeIgnored,
+      };
+    },
+    // Контракт управления группой (ADR-005 W3): перечитывание, аватар,
+    // отпечатки участников, выход и удаление — в фиче
+    // features/group-management.js; компонент отдаёт владельцев состояния,
+    // ключи и эффекты.
+    groupManagementDeps() {
+      return {
+        group: () => this.currentGroup,
+        groups: () => this.groups,
+        setGroups: (list) => { this.groups = list; },
+        setCurrentGroup: (v) => { this.currentGroup = v; },
+        setGroupSettings: (v) => { this.showGroupSettings = v; },
+        activeChat: () => this.activeChat,
+        setActiveChat: (v) => { this.activeChat = v; },
+        chat: this.chat,
+        peerKeys: () => this.peerKeys,
+        groupKeys: () => this.groupKeys,
+        cryptoReady: () => this.cryptoReady,
+        api,
+        db,
+        loadGroupMessages: (id, force) => this.loadGroupMessages(id, force),
+        scrollToBottom: (smooth) => this.scrollToBottom(smooth),
+        setGroupAvatar: (id, av) => this.groupsStore.setGroupAvatar(id, av),
+        setNewGroupAvatar: (av) => { this.newGroupAvatar = av; },
+        avatarTooBig: (size) => AvatarImage.avatarTooBig(size),
+        fileToAvatarDataUrl: (file, kind) => AvatarImage.fileToAvatarDataUrl(file, kind),
+        GROUP_AVATAR: AvatarImage.GROUP_AVATAR,
+        // Рассылка мета-писем участникам — фича (features/group-meta-broadcast.js),
+        // приходит через контракт: фича не знает про фичу (ADR-004).
+        broadcastGroupMeta: (groupId, payload) => GroupMetaBroadcast.broadcastGroupMeta(groupId, payload,
+          { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady }),
+        alert: (msg) => window.alert(msg),
+        tr: (key) => uiStore.tr(key),
       };
     },
     // Контракт управления участниками группы (ADR-005 W3): правила состава и
@@ -3952,11 +3987,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // разового сбоя (session desync / DNS / троттлинг), инкрементальный фетч
     // больше не вернёт. Кнопка в шапке группы делает полный IMAP-скан папок
     // (INBOX+Junk) и восстанавливает пропущенные сообщения.
-    async refreshGroupFull() {
-      if (!this.currentGroup) return;
-      await this.loadGroupMessages(this.currentGroup.id, true);
-      this.scrollToBottom(false);
-    },
+    async refreshGroupFull() { return GroupManagementFeature.refreshGroupFull(this.groupManagementDeps); },
     // ── Групповые сообщения (логика в features/groups.js) — тонкий делегат ──
     // ADR-005 W2 партия 5: контракт модуля собирается здесь и ЖИВЬЁМ на
     // каждый вызов — модуль компонент не читает. Состояние — у владельцев
@@ -4063,25 +4094,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // Пресет GROUP_AVATAR общий с GroupSettings.vue, и это не украшение:
     // черновик обязан совпадать с тем, что сохранится. Пока копии были
     // написаны вручную, совпадение держалось на удачу.
-    async onNewGroupAvatarSelected(e) {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      if (AvatarImage.avatarTooBig(file.size)) {
-        alert(uiStore.tr('err_file_too_big_500'));
-        e.target.value = '';
-        return;
-      }
-      e.target.value = '';
-      try {
-        this.newGroupAvatar = await AvatarImage.fileToAvatarDataUrl(
-          file, AvatarImage.GROUP_AVATAR);
-      } catch (err) {
-        // Раньше обработчиков отказа не было вовсе: битый файл оставлял
-        // промес навечно, и сообщения об этом не было нигде.
-        console.warn('[avatar] draft image failed:', err && err.message || err);
-        alert(uiStore.tr('err_image_decode') || 'Не удалось прочитать изображение');
-      }
-    },
+    async onNewGroupAvatarSelected(e) { return GroupManagementFeature.onNewGroupAvatarSelected(this.groupManagementDeps, e); },
     // Файл резервной копии выбран — держим его в памяти до нажатия «Восстановить».
     async onRecoveryFilePicked(e) {
       const file = e.target.files && e.target.files[0];
@@ -4172,23 +4185,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async onGroupRename(payload) {
       return GroupMetaBroadcast.renameGroupFlow(this.groupDeps, payload);
     },
-    async onGroupAvatarUpdate({ groupId, avatar }) {
-      this.groupsStore.setGroupAvatar(groupId, avatar);
-      await db.kvSet('anon', 'group-avatar:' + groupId, avatar || '');
-      if (!avatar) return;
-      // Ключ группы мог быть ещё не загружен (настройки открыты без чата) —
-      // тогда `if (!groupKey) return` выше МОЛЧА пропускал рассылку и у
-      // участников аватар не появлялся никогда. Догружаем ключ (как в
-      // selectGroup) и шлём meta-письма в любом случае.
-      // Правило догрузки ключа — в features/group-meta-broadcast.js (ADR-003
-      // Этап 3, партия 11): оно было продублировано здесь и в onGroupRename, и
-      // именно из-за копии в переименовании баг дожил.
-      const r = await GroupMetaBroadcast.broadcastGroupMeta(groupId, { avatar },
-        { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady });
-      if (!r.sent) {
-        console.error('Failed to broadcast group avatar:', r.error || r.reason);
-      }
-    },
+    async onGroupAvatarUpdate(payload) { return GroupManagementFeature.onGroupAvatarUpdate(this.groupManagementDeps, payload); },
     // ── Heal аватарки группы — ВСЯ логика в features/group-avatars.js ──────
     // (изоляция фичи, правило t_7c3929d2: новые фичи не размазывать по
     // App.vue — здесь только обёртки-делегаты, зависимости через this=ctx).
@@ -4541,11 +4538,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     addManualEmail() { return GroupMembersFeature.addManualEmail(this.groupMembersDeps); },
     // Один fingerprint у двух адресов? (смена почты: старый/новый в peer_keys
     // ссылаются на один публичный ключ — см. aliasesOf)
-    emailSharesFingerprint(emailA, emailB) {
-      const ka = this.peerKeys[emailA || ''] || this.peerKeys[String(emailA || '').toLowerCase()];
-      const kb = this.peerKeys[emailB || ''] || this.peerKeys[String(emailB || '').toLowerCase()];
-      return !!(ka && kb && ka === kb);
-    },
+    emailSharesFingerprint(emailA, emailB) { return GroupManagementFeature.emailSharesFingerprint(this.groupManagementDeps, emailA, emailB); },
     // MEMBERSHIP ПО FINGERPRINT: from не числится в группе, но у нас
     // есть его peerKey (контакт известен) и он совпадает с peerKey одного из
     // участников → участник сменил почту. Мигрируем адрес в составе (Rust
@@ -4575,24 +4568,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // id участников, чей pubkey известен. Матчинг при смене почты идёт по
     // самому pubkey (tryMigrateGroupMember); поле хранится для будущих
     // офлайн-проверок и UX. Идемпотентен: сохраняет только если заполнилось.
-    async backfillGroupFingerprints(group) {
-      try {
-        let touched = false;
-        for (const m of (group.members || [])) {
-          if (m.fingerprint) continue;
-          const k = this.peerKeys[m.email] || this.peerKeys[String(m.email || '').toLowerCase()];
-          if (!k) continue;
-          m.fingerprint = k;
-          touched = true;
-        }
-        if (!touched) return;
-        await invoke('groups_save_member_fingerprints', {
-          groupId: group.id,
-          members: (group.members || []).map(m => ({ email: m.email, fingerprint: m.fingerprint || '' })),
-        });
-        console.log('[groups] fingerprints backfilled:', group.id);
-      } catch (e) { /* тихо: поле некритично, матчинг идёт по peer_keys */ }
-    },
+    async backfillGroupFingerprints(group) { return GroupManagementFeature.backfillGroupFingerprints(this.groupManagementDeps, group); },
     // ── Приглашение участников (логика в features/members.js) ──
     async inviteSelectedMembers() { return MembersFeature.inviteSelectedMembers(this.membersDeps); },
     // --- Инвайты группы + запросы контактов 1-на-1: попапы согласия ---
@@ -4612,14 +4588,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         loadProfiles: () => this.loadProfiles(),
       });
     },
-    async refreshGroupMembers() {
-      if (!this.currentGroup) return;
-      try {
-        this.currentGroup.members = await api.getGroupMembers(this.currentGroup.id);
-      } catch (e) {
-        console.error('refreshGroupMembers failed:', e);
-      }
-    },
+    async refreshGroupMembers() { return GroupManagementFeature.refreshGroupMembers(this.groupManagementDeps); },
     async acceptInvite(inv) {
       return InvitesFeature.acceptInvite(inv, {
         invites: this.invitesStore,
@@ -4715,39 +4684,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // group.blocked (который никто не читал и который не персистился).
     async blockUser(email) { return BlockUserFeature.blockUser(this.blockUserDeps, email); },
     async unblockUser(email) { return BlockUserFeature.unblockUser(this.blockUserDeps, email); },
-    async leaveGroup() {
-      if (!this.currentGroup) return;
-      const gid = this.currentGroup.id;
-      try {
-        await api.leaveGroup(gid);
-      } catch (e) {
-        console.error('leaveGroup failed:', e);
-      }
-      // Покинутая группа исчезает из списка (мы больше не участник).
-      this.groups = this.groups.filter(g => g.id !== gid);
-      this.showGroupSettings = false;
-      this.currentGroup = null;
-      if (this.activeChat === `group:${gid}`) {
-        this.activeChat = null;
-        this.chat.set([]);
-      }
-    },
-    async deleteGroup() {
-      if (!this.currentGroup) return;
-      const gid = this.currentGroup.id;
-      try {
-        await api.deleteGroup(gid);
-      } catch (e) {
-        console.error('deleteGroup failed:', e);
-      }
-      this.groups = this.groups.filter(g => g.id !== gid);
-      this.showGroupSettings = false;
-      this.currentGroup = null;
-      if (this.activeChat === `group:${gid}`) {
-        this.activeChat = null;
-        this.chat.set([]);
-      }
-    }
+    async leaveGroup() { return GroupManagementFeature.leaveGroup(this.groupManagementDeps); },
+    async deleteGroup() { return GroupManagementFeature.deleteGroup(this.groupManagementDeps); }
   }
 }
 </script>
