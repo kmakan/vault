@@ -1,0 +1,185 @@
+{
+  "_comment": "Карта «фича → будущий сервис» (ADR-005 W5). Машиночитаемая: её читает гейт scripts/service-boundary-gate.mjs. Правило: список фич сервиса ОБЯЗАН совпадать с реальными файлами src/features/*.js — иначе карта протухает молча, а протухшая карта хуже её отсутствия. Примитивы сервиса — корневые модули (src/*.js), которые его фичи могут импортировать: это контракт выноса в отдельный процесс.",
+  "version": 1,
+  "services": {
+    "messenger": {
+      "title": "Ядро обмена",
+      "why": "Конверты, крипто, классификация, хранилища, группы и контакты. Сегодня: Rust-ядро (vault-client) + JS-фичи обмена.",
+      "primitives": [
+        "api.js",
+        "crypto.js",
+        "envelope-rule.js",
+        "ephemeral-rule.js",
+        "history.js",
+        "identity.js",
+        "message-format.js",
+        "message-store.js",
+        "notify.js",
+        "relay-client.js",
+        "wire-signal-rule.js"
+      ],
+      "features": [
+        "account-load.js",
+        "attachments.js",
+        "autoclean.js",
+        "block-user.js",
+        "bounce.js",
+        "contacts.js",
+        "contacts-delete.js",
+        "contacts-load.js",
+        "drafts.js",
+        "edits.js",
+        "emails.js",
+        "envelope-build.js",
+        "envelope-id.js",
+        "ephemeral.js",
+        "folders.js",
+        "forward.js",
+        "group-avatars.js",
+        "group-management.js",
+        "group-members.js",
+        "group-meta.js",
+        "group-meta-broadcast.js",
+        "group-pin-wire.js",
+        "groups.js",
+        "groups-clone.js",
+        "groups-create.js",
+        "groups-load.js",
+        "groups-migrate.js",
+        "history.js",
+        "ignored-users.js",
+        "incoming.js",
+        "invites.js",
+        "keys.js",
+        "local-db-init.js",
+        "local-store.js",
+        "mailbox-api.js",
+        "members.js",
+        "messages.js",
+        "notes.js",
+        "poll.js",
+        "reactions.js",
+        "receipts.js",
+        "send.js",
+        "stars.js",
+        "unread.js"
+      ],
+      "owners": [
+        "contacts-store.js",
+        "folders-store.js",
+        "groups-store.js",
+        "identity-store.js",
+        "invites-store.js",
+        "mailbox-store.js",
+        "messages-store.js",
+        "notes-store.js",
+        "sending-store.js"
+      ]
+    },
+    "social": {
+      "title": "Соцсеть local-first",
+      "why": "Профили, каналы и лента, подписки, релей, presence. Сегодня целиком в JS — граница не вывозится, пока решения не в Rust.",
+      "primitives": [
+        "api.js",
+        "call-state-rule.js",
+        "crypto.js",
+        "identity.js",
+        "message-format.js",
+        "notify.js",
+        "relay-client.js"
+      ],
+      "features": [
+        "channels.js",
+        "presence.js",
+        "profiles.js",
+        "relay.js",
+        "relay-idle.js"
+      ],
+      "owners": [
+        "channels-store.js",
+        "relay-store.js"
+      ]
+    },
+    "videohost": {
+      "title": "Видеохостинг (частный)",
+      "why": "Видео и поиск по доступным у контактов. Сегодня: video.js + call-video.js в JS.",
+      "primitives": [
+        "api.js",
+        "crypto.js",
+        "call-state-rule.js",
+        "message-format.js"
+      ],
+      "features": [
+        "call-video.js",
+        "video.js"
+      ],
+      "owners": []
+    },
+    "streaming": {
+      "title": "Стриминг (частный)",
+      "why": "Поток для контактов, подписка на стримера, сигналинг звонков. Сегодня: calls.js + медиа-слой в JS.",
+      "primitives": [
+        "api.js",
+        "call-state-rule.js",
+        "crypto.js",
+        "history.js",
+        "identity.js",
+        "message-format.js",
+        "notify.js",
+        "relay-client.js",
+        "wire-signal-rule.js"
+      ],
+      "features": [
+        "call-clock.js",
+        "call-idle.js",
+        "call-resend.js",
+        "call-ring.js",
+        "call-session.js",
+        "call-terminal.js",
+        "call-watchdog.js",
+        "calls.js",
+        "timing.js"
+      ],
+      "owners": []
+    },
+    "app": {
+      "title": "Оболочка приложения",
+      "why": "То, что не уезжает в сервис: вход и восстановление, UI-правила, настройки, аварийный замок. Граница здесь — сберечь, а не вывозить.",
+      "primitives": [
+        "api.js",
+        "crypto.js",
+        "identity.js",
+        "message-format.js",
+        "wire-signal-rule.js",
+        "envelope-rule.js",
+        "ephemeral-rule.js",
+        "message-store.js",
+        "history.js",
+        "notify.js",
+        "call-state-rule.js",
+        "relay-client.js"
+      ],
+      "features": [
+        "auth-flow.js",
+        "chat.js",
+        "chat-navigation.js",
+        "chat-ui.js",
+        "chat-ui-rules.js",
+        "clipboard-export.js",
+        "duress.js",
+        "logout.js",
+        "migrate.js",
+        "recovery.js",
+        "recovery-escrow.js",
+        "recovery-session.js",
+        "recovery-ui.js",
+        "report-content.js",
+        "restore-failure.js",
+        "settings-ui.js"
+      ],
+      "owners": [
+        "session-store.js"
+      ]
+    }
+  }
+}

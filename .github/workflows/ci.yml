@@ -84,6 +84,13 @@ jobs:
       - name: Mutation density ratchet
         working-directory: vault-desktop
         run: npm run gate:mutation-density
+      # Граница сервисов (ADR-005 W5): карта «фича → будущий сервис» обязана
+      # совпадать с кодом, примитивы сервиса — объявлены по факту, а долг
+      # «фича тянет чужого владельца состояния» не растёт. Карта без гейта
+      # протухает за месяцы и начинает описывать вымышленную архитектуру.
+      - name: Service boundary
+        working-directory: vault-desktop
+        run: npm run gate:service-boundary
       - name: Check Tauri
         working-directory: vault-desktop
         run: npx tauri build
