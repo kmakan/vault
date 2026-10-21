@@ -68,6 +68,27 @@ export async function saveChatFlags(deps) {
 }
 
 // Assign the chat from the open chat-menu to a folder ('' removes it).
+// В архив / из архива (чат-меню). Флаг — в общем блобе флагов, поэтому
+// после переключения его надо сохранить (saveChatFlags).
+export async function toggleArchive(deps, target) {
+  const key = flagKey(target);
+  const f = { ...foldersStore.flagOf(key) };
+  f.archived = !f.archived;
+  foldersStore.setFlag(key, f);
+  deps.closeChatMenu();
+  await deps.saveChatFlags();
+}
+
+// Без звука / со звуком (чат-меню).
+export async function toggleMute(deps, target) {
+  const key = flagKey(target);
+  const f = { ...foldersStore.flagOf(key) };
+  f.muted = !f.muted;
+  foldersStore.setFlag(key, f);
+  deps.closeChatMenu();
+  await deps.saveChatFlags();
+}
+
 export async function setChatFolder(deps, name) {
   // Guard: меню могло быть уже закрыто (двойной вызов из шаблона/таймера) —
   // бесшумный no-op вместо падения на target=null.

@@ -2013,6 +2013,38 @@ export default {
         removeIgnored: ContactsFeature.removeIgnored,
       };
     },
+    // Контракт кэша тел писем (ADR-005 W3): загрузка и отложенное сохранение —
+    // в фиче features/history.js; владельцы состояния — почтовый стор и
+    // компонент (таймеры debounce).
+    bodyCacheDeps() {
+      return {
+        email: this.email,
+        emailBodyCache: () => this.emailBodyCache,
+        setEmailBodyCache: (v) => { this.emailBodyCache = v; },
+        bodyCacheOrder: () => this.bodyCacheOrder,
+        setBodyCacheOrder: (v) => { this.bodyCacheOrder = v; },
+        bodyCacheSaveTimer: () => this.bodyCacheSaveTimer,
+        setBodyCacheSaveTimer: (t) => { this.bodyCacheSaveTimer = t; },
+        persistBodyCache: () => this.persistBodyCache(),
+      };
+    },
+    // Контракт переключателя presence (ADR-005 W3): запись в kv и запуск/
+    // остановка heartbeat — в фиче features/presence.js.
+    presenceToggleDeps() {
+      return {
+        email: this.email,
+        startHeartbeats: () => PresenceFeature.startHeartbeats(this.presenceDeps),
+        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this.presenceDeps),
+      };
+    },
+    // Контракт флагов чата (ADR-005 W3): архив и mute — в фиче
+    // features/folders.js; флаги — у владельца папок.
+    foldersToggleDeps() {
+      return {
+        closeChatMenu: () => this.closeChatMenu(),
+        saveChatFlags: () => this.saveChatFlags(),
+      };
+    },
     // Контракт управления группой (ADR-005 W3): перечитывание, аватар,
     // отпечатки участников, выход и удаление — в фиче
     // features/group-management.js; компонент отдаёт владельцев состояния,
@@ -3124,17 +3156,8 @@ export default {
     // ADR-001: функции принимают конкретные зависимости, а не this целиком.
     bodyCacheKey() { return HistoryFeature.bodyCacheKey(this.email); },
     chatCacheKey(chat) { return HistoryFeature.chatCacheKey(this.email, chat); },
-    loadBodyCache() {
-      return HistoryFeature.loadBodyCache(this.email).then(({ bodies, order }) => {
-        this.emailBodyCache = bodies;
-        this.bodyCacheOrder = order;
-      });
-    },
-    cacheBody(key, body) {
-      HistoryFeature.cacheBody({ emailBodyCache: this.emailBodyCache, bodyCacheOrder: this.bodyCacheOrder }, key, body);
-      if (this.bodyCacheSaveTimer) clearTimeout(this.bodyCacheSaveTimer);
-      this.bodyCacheSaveTimer = setTimeout(() => this.persistBodyCache(), 2000);
-    },
+    loadBodyCache() { return HistoryFeature.loadBodyCacheInto(this.bodyCacheDeps); },
+    cacheBody(key, body) { return HistoryFeature.cacheBodyWithPersist(this.bodyCacheDeps, key, body); },
     persistBodyCache() { return HistoryFeature.persistBodyCache(this.email, this.emailBodyCache); },
     loadChatCache(chat) { return HistoryFeature.loadChatCache(this.email, chat); },
     saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this.email, chat, list, this.msgTs); },
@@ -3173,7 +3196,7 @@ export default {
     stopPolling() { return RelayFeature.stopPolling(this); },
     onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
     onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
-    onPresenceEnabled(on) { this.presenceSetEnabled(on); },
+    onPresenceEnabled(on) { return PresenceFeature.onPresenceEnabled(this.presenceToggleDeps, on); },
     // ── Звонки (логика в features/calls.js) ──
     // ADR-001: ниже передаются ЯВНЫЕ зависимости, а не `this`. Сигнатура
     // фичи — её контракт: она физически не может задеть поле, которого
@@ -3243,13 +3266,7 @@ export default {
     // ── Presence (t_e858bdb9) — heartbeat-зелёная точка; логика в
     // features/presence.js. Тумблер живёт в настройках (Приватность).
     isOnline(email) { return PresenceFeature.isOnline(this.lastSeenMap, email); },
-    presenceSetEnabled(on) {
-      PresenceFeature.setEnabled(this.email, on, {
-        startHeartbeats: () => PresenceFeature.startHeartbeats(this.presenceDeps),
-        stopHeartbeats: () => PresenceFeature.stopHeartbeats(this.presenceDeps),
-      }).catch(e =>
-        console.warn('[presence] setEnabled failed:', e && e.message || e));
-    },
+    presenceSetEnabled(on) { return PresenceFeature.setPresenceEnabled(this.presenceToggleDeps, on); },
     // ── Пересылка (forward) — логика в features/forward.js; обёртки держат
     // шаблонные биндинги явными (гейт check-template резолвит имена).
     startForward(msg) { return ForwardFeature.startForward({ setForwardTo: v => this.forwardTo = v }, msg); },
@@ -4389,22 +4406,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     },
     openChatMenu(target, e) { return ChatUiFeature.openChatMenu(this.chatUiDeps, target, e); },
     closeChatMenu() { return ChatUiFeature.closeChatMenu(this.chatUiDeps); },
-    async toggleArchive() {
-      const key = this.flagKey(this.chatMenu.target);
-      const f = { ...foldersStore.flagOf(key) };
-      f.archived = !f.archived;
-      foldersStore.setFlag(key, f);
-      this.closeChatMenu();
-      await this.saveChatFlags();
-    },
-    async toggleMute() {
-      const key = this.flagKey(this.chatMenu.target);
-      const f = { ...foldersStore.flagOf(key) };
-      f.muted = !f.muted;
-      foldersStore.setFlag(key, f);
-      this.closeChatMenu();
-      await this.saveChatFlags();
-    },
+    async toggleArchive() { return FoldersFeature.toggleArchive(this.foldersToggleDeps, this.chatMenu.target); },
+    async toggleMute() { return FoldersFeature.toggleMute(this.foldersToggleDeps, this.chatMenu.target); },
     // Ignore-лист из chat-меню (1:1-чат): блокировка E2E-честная — скрывает
     // новые сообщения/звонки у получателя, серверу невидим. После разблока
     // прошлое НЕ возвращается (его не было в истории).

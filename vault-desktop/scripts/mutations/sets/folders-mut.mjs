@@ -19,9 +19,12 @@ export default {
     { name: "папка не назначается чату",
       pattern: "  foldersStore.setFlag(key, f);",
       replacement: "  void 0;" },
+    // Паттерн должен быть УНИКАЛЬНЫМ: `deps.closeChatMenu();` встречается и в
+    // toggleArchive/toggleMute — иначе мутация била бы не ту строку, а
+    // проверка папки проходила бы на сломанном коде.
     { name: "меню не закрывается после назначения папки",
-      pattern: "  deps.closeChatMenu();",
-      replacement: "  void 0;" },
+      pattern: "  foldersStore.setFlag(key, f);\n  deps.closeChatMenu();\n  await saveChatFlags(deps);",
+      replacement: "  foldersStore.setFlag(key, f);\n  void 0;\n  await saveChatFlags(deps);" },
     { name: "без цели назначаем папку (порча состояния)",
       pattern: "  if (!menu || !menu.target) return;",
       replacement: "  if (false) return;" },
@@ -37,5 +40,17 @@ export default {
     { name: "диалог не закрывается после создания",
       pattern: "  uiStore.setModal('folderDialogOpen', false);",
       replacement: "  void 0;" },
+    { name: "архив не переключается (чат навсегда в архиве)",
+      pattern: "  f.archived = !f.archived;",
+      replacement: "  f.archived = false;" },
+    { name: "флаг архива не сохраняется (после перезапуска архив слетает)",
+      pattern: "  await deps.saveChatFlags();\n}\n\n// Без звука / со звуком (чат-меню).",
+      replacement: "  void 0;\n}\n\n// Без звука / со звуком (чат-меню)." },
+    { name: "mute не переключается (звук не возвращается)",
+      pattern: "  f.muted = !f.muted;",
+      replacement: "  f.muted = false;" },
+    { name: "после mute чат-меню не закрывается (меню висит поверх чата)",
+      pattern: "  f.muted = !f.muted;\n  foldersStore.setFlag(key, f);\n  deps.closeChatMenu();",
+      replacement: "  f.muted = !f.muted;\n  foldersStore.setFlag(key, f);\n  void 0;" },
   ],
 };

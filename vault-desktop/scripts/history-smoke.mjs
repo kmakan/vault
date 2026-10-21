@@ -138,5 +138,58 @@ check('msgTs: ts приоритетнее, чем date', H.msgTs({ts:777})===777
 check('msgTs _pendingAt fallback', H.msgTs({_pendingAt:555})===555);
 check('msgTs 0 on пусто', H.msgTs({})===0);
 
+// ── Кэш тел писем: загрузка в состояние и отложенное сохранение ────────
+console.log('\nКэш тел писем: загрузка и отложенное сохранение');
+{
+  const cache = { 'a@x': 'body-a' };
+  const order = ['a@x'];
+  const saved = [];
+  let timer = null;
+  const deps = {
+    email: 'u@x.org',
+    emailBodyCache: () => cache,
+    setEmailBodyCache: (v) => { Object.assign(cache, v); },
+    bodyCacheOrder: () => order,
+    setBodyCacheOrder: (v) => { order.length = 0; order.push(...v); },
+    bodyCacheSaveTimer: () => timer,
+    setBodyCacheSaveTimer: (t) => { timer = t; },
+    persistBodyCache: async () => { saved.push(1); },
+  };
+  await H.loadBodyCacheInto(deps);
+  // Источник — kv (мок отдаёт [['k1','b1'],['k2','b2']]), значит в состояние
+  // должны попасть ИМЕННО эти тела и такой же порядок.
+  check('кэш: тела из kv загружены в состояние',
+    cache['k1'] === 'b1' && cache['k2'] === 'b2', Object.keys(cache));
+  check('кэш: порядок ключей загружен',
+    JSON.stringify(order) === JSON.stringify(['k1', 'k2']), order);
+}
+{
+  const cache = {};
+  const order = [];
+  const saved = [];
+  let timer = null;
+  const deps = {
+    email: 'u@x.org',
+    emailBodyCache: () => cache,
+    setEmailBodyCache: (v) => { Object.assign(cache, v); },
+    bodyCacheOrder: () => order,
+    setBodyCacheOrder: (v) => { order.length = 0; order.push(...v); },
+    bodyCacheSaveTimer: () => timer,
+    setBodyCacheSaveTimer: (t) => { timer = t; },
+    persistBodyCache: async () => { saved.push(1); },
+  };
+  H.cacheBodyWithPersist(deps, 'k1', 'body-1');
+  check('кэш: тело положено', cache['k1'] === 'body-1', cache);
+  check('кэш: сохранение отложено (не сразу)', saved.length === 0, saved.length);
+  check('кэш: таймер установлен', !!timer, timer);
+  // Второе тело до истечения таймера — таймер перезапускается, сохранение
+  // остаётся отложенным (debounce).
+  H.cacheBodyWithPersist(deps, 'k2', 'body-2');
+  check('кэш: второе тело тоже в кэше', cache['k2'] === 'body-2', cache);
+  check('кэш: сохранение всё ещё отложено', saved.length === 0, saved.length);
+  await new Promise((r) => setTimeout(r, 2200));
+  check('кэш: сохранение произошло после паузы', saved.length === 1, saved.length);
+}
+
 console.log('=== ИТОГО: '+passed+' pass, '+failed+' fail ===');
 if (failed) process.exit(1);

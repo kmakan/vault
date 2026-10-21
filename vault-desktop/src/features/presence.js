@@ -50,6 +50,26 @@ export async function setEnabled(email, on, { startHeartbeats, stopHeartbeats })
   else stopHeartbeats();
 }
 
+// Включение/выключение presence.
+//
+// Сбой записи в kv не должен оставлять приложение в неопределённом
+// состоянии, поэтому ошибка гасится здесь, а не у вызывающего.
+export async function setPresenceEnabled(deps, on) {
+  try {
+    await setEnabled(deps.email, on, {
+      startHeartbeats: () => deps.startHeartbeats(),
+      stopHeartbeats: () => deps.stopHeartbeats(),
+    });
+  } catch (e) {
+    console.warn('[presence] setEnabled failed:', e && e.message || e);
+  }
+}
+
+// Обработчик переключателя в настройках — тот же путь, что у кнопки.
+export function onPresenceEnabled(deps, on) {
+  return setPresenceEnabled(deps, on);
+}
+
 // ── Отправка heartbeat ────────────────────────────────────────
 // Одно письмо каждому контакту с peer-ключом. Ролей у presence нет:
 // получатель просто отмечает «видел активность сейчас». Ошибки одного

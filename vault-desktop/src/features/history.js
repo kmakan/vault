@@ -35,6 +35,24 @@ export async function loadBodyCache(email) {
 }
 
 // Мутирует переданный кэш in-place (emailBodyCache — общий реактивный объект).
+// Загрузить кэш тел писем в состояние (владельца).
+export async function loadBodyCacheInto(deps) {
+  const { bodies, order } = await loadBodyCache(deps.email);
+  deps.setEmailBodyCache(bodies);
+  deps.setBodyCacheOrder(order);
+}
+
+// Положить тело в кэш и отложить сохранение на 2 секунды (debounce):
+// при загрузке пачки писем писать в хранилище на каждый — расточительно.
+export function cacheBodyWithPersist(deps, key, body) {
+  cacheBody(
+    { emailBodyCache: deps.emailBodyCache(), bodyCacheOrder: deps.bodyCacheOrder() },
+    key, body,
+  );
+  if (deps.bodyCacheSaveTimer()) clearTimeout(deps.bodyCacheSaveTimer());
+  deps.setBodyCacheSaveTimer(setTimeout(() => deps.persistBodyCache(), 2000));
+}
+
 export function cacheBody({ emailBodyCache, bodyCacheOrder }, key, body) {
   emailBodyCache[key] = body;
   const i = bodyCacheOrder.indexOf(key);

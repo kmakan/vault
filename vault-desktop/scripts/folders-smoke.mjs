@@ -167,5 +167,45 @@ console.log('9. createChatFolder: имя длиннее 24 символов об
     foldersStore.state.chatFoldersNames);
 }
 
+// ── 10. Архив и mute (чат-меню) ────────────────────────────────────────
+console.log('10. toggleArchive / toggleMute: флаг переключается и сохраняется');
+{
+  resetWorld();
+  uiStore.setFormField('chatMenu', { show: true, target: { type: 'contact', email: 'peer@x.ru' } });
+  const saved = [];
+  const deps2 = { ...deps, saveChatFlags: async () => { saved.push(1); } };
+  await F.toggleArchive(deps2, { type: 'contact', email: 'peer@x.ru' });
+  const key = F.flagKey({ type: 'contact', email: 'peer@x.ru' });
+  check('архив: чат помечен архивным', foldersStore.flagOf(key).archived === true, foldersStore.flagOf(key));
+  check('архив: флаг сохранён', saved.length === 1, saved.length);
+  await F.toggleArchive(deps2, { type: 'contact', email: 'peer@x.ru' });
+  // Владелец удаляет пустой флаг (нет ни archived, ни muted, ни folder) — значит
+  // «архив снят» = флага нет или archived не true.
+  check('архив: повтор снимает', foldersStore.flagOf(key).archived !== true, foldersStore.flagOf(key));
+}
+{
+  resetWorld();
+  const saved = [];
+  const deps2 = { ...deps, saveChatFlags: async () => { saved.push(1); } };
+  await F.toggleMute(deps2, { type: 'contact', email: 'peer@x.ru' });
+  const key = F.flagKey({ type: 'contact', email: 'peer@x.ru' });
+  check('mute: чат заглушён', foldersStore.flagOf(key).muted === true, foldersStore.flagOf(key));
+  check('mute: флаг сохранён', saved.length === 1, saved.length);
+  check('mute: архив не тронут', foldersStore.flagOf(key).archived !== true, foldersStore.flagOf(key));
+  // Второе переключение: снимает mute (владелец удаляет пустой флаг) и
+  // закрывает меню чата.
+  uiStore.setFormField('chatMenu', { show: true, target: { type: 'contact', email: 'peer@x.ru' } });
+  await F.toggleMute(deps2, { type: 'contact', email: 'peer@x.ru' });
+  check('mute: меню чата закрыто', uiStore.getFormField('chatMenu').show === false, uiStore.getFormField('chatMenu'));
+  check('mute: повтор снимает', foldersStore.flagOf(key).muted !== true, foldersStore.flagOf(key));
+}
+{
+  resetWorld();
+  const saved = [];
+  const deps2 = { ...deps, saveChatFlags: async () => { saved.push(1); } };
+  await F.toggleArchive(deps2, { type: 'contact', email: 'peer@x.ru' });
+  check('архив: меню чата закрыто', uiStore.getFormField('chatMenu').show === false, uiStore.getFormField('chatMenu'));
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

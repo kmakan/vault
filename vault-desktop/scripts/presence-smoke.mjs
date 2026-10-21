@@ -15,7 +15,7 @@ const db = {
   kvGet: async (ns, key) => globalThis.__pv ?? '0',
   kvSet: async () => {},
 };
-writeFileSync(`${MOCKS}/api.js`, `let getImpl = async (ns,key) => (globalThis.__pvGet ? globalThis.__pvGet(ns,key) : (globalThis.__pv ?? null));\nexport const db = { kvGet: getImpl, kvSet: async () => {} };\nexport default { db, sendReaction: async (peer, content) => { (globalThis.__hb = globalThis.__hb || []).push([peer, content]); } };\n`);
+writeFileSync(`${MOCKS}/api.js`, `let getImpl = async (ns,key) => (globalThis.__pvGet ? globalThis.__pvGet(ns,key) : (globalThis.__pv ?? null));\nexport const db = { kvGet: getImpl, kvSet: async (ns,key,v) => { if (globalThis.__pvKvFail) throw new Error('kv недоступен'); } };\nexport default { db, sendReaction: async (peer, content) => { (globalThis.__hb = globalThis.__hb || []).push([peer, content]); } };\n`);
 writeFileSync(`${MOCKS}/identity.js`, 'export async function accountNamespace(email){ return "ns"; }\n');
 writeFileSync(`${MOCKS}/crypto.js`, 'export default { encryptVault: async (p) => { if (globalThis.__encFailFirst) { globalThis.__encFailFirst = false; throw new Error("encrypt failed"); } (globalThis.__enc = globalThis.__enc || []).push(p); return "ENC:" + p; }, setPeerPublicKey: (k) => { (globalThis.__pk = globalThis.__pk || []).push(k); } };\n');
 writeFileSync(`${MOCKS}/tauri.js`, 'export async function invoke(){}\n');
@@ -103,6 +103,54 @@ check('setEnabled(false) stops heartbeat', started === 0 && stopped === 1);
   globalThis.__hb = [];
   await sendHeartbeat({ cryptoReady: () => false });
   check('heartbeat: crypto не готов → не отправляется', globalThis.__hb.length === 0, globalThis.__hb);
+}
+
+// ── 9. setPresenceEnabled: переключение с гарантией «без тишины» ───────
+console.log('9. setPresenceEnabled: запись в kv + запуск/остановка heartbeat');
+{
+  let started = 0, stopped = 0;
+  const deps = {
+    email: 'u@x.org',
+    startHeartbeats: () => { started++; },
+    stopHeartbeats: () => { stopped++; },
+  };
+  await mod.setPresenceEnabled(deps, true);
+  check('включение: heartbeat запущен', started === 1 && stopped === 0, { started, stopped });
+  await mod.setPresenceEnabled(deps, false);
+  check('выключение: heartbeat остановлен', started === 1 && stopped === 1, { started, stopped });
+}
+{
+  // Выключение должно ОСТАНОВИТЬ heartbeat: иначе мы продолжаем писать
+  // «я онлайн» в пустоту (и тратим письма).
+  let stoppedAfterOff = 0;
+  const deps = {
+    email: 'u@x.org',
+    startHeartbeats: () => {},
+    stopHeartbeats: () => { stoppedAfterOff++; },
+  };
+  await mod.setPresenceEnabled(deps, false);
+  check('выключение: heartbeat остановлен (а не продолжает писать)', stoppedAfterOff === 1, stoppedAfterOff);
+}
+{
+  // Ошибка записи в kv гасится внутри setEnabled (kv-недоступен — значит
+  // остаётся in-memory), и включение при этом НЕ роняется: пользователь не
+  // должен получать ошибку за настройку, которую он просто включил.
+  let threw = false;
+  const deps = {
+    email: 'u@x.org',
+    startHeartbeats: () => {},
+    stopHeartbeats: () => {},
+  };
+  globalThis.__pvKvFail = true;
+  try { await mod.setPresenceEnabled(deps, true); } catch (e) { threw = true; }
+  globalThis.__pvKvFail = false;
+  check('сбой записи не пробрасывается наружу', threw === false, threw);
+{
+}
+  let started = 0;
+  const deps2 = { email: 'u@x.org', startHeartbeats: () => { started++; }, stopHeartbeats: () => {} };
+  await mod.onPresenceEnabled(deps2, true);
+  check('обработчик переключателя ведёт себя как setEnabled', started === 1, started);
 }
 
 console.log('\nИТОГО: ' + p + ' pass, ' + f + ' fail');
