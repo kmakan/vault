@@ -36,6 +36,10 @@ function check(name, cond, extra) {
 const MOCKS = '/tmp/calls-deps-smocks';
 const { mkdirSync, writeFileSync } = await import('node:fs');
 mkdirSync(MOCKS + '/features', { recursive: true });
+// Мок форматов wire-конверта и сервисных сигналов (ADR-005 W4): правила —
+// в Rust, здесь их тестовый двойник.
+const { installEnvelopeMock } = await import('./lib/wire-envelope-mock.mjs');
+await installEnvelopeMock(MOCKS);
 const stub = (name, body) => writeFileSync(`${MOCKS}/${name}`, body);
 // Импорты calls.js: api.js (default + db, accountNamespace),
 // relay-client.js (*), crypto.js (default), history.js (save/load).

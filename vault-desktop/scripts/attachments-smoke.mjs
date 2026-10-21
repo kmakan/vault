@@ -52,7 +52,10 @@ writeFileSync(MOCKS + '/chatExport.js', 'export const downloadBase64 = (...a) =>
 writeFileSync(MOCKS + '/mailProviders.js', 'export const getAttachmentLimitMb = () => globalThis.__providers.limitMb;');
 writeFileSync(MOCKS + '/message-store.js', 'export const mediaQuality = () => globalThis.__mediaQuality();');
 
+// Сервисные wire-форматы (data-письмо) — двойник правил из Rust.
+// Мост в этом смоуке лежит в __tauri.invoke, поэтому оборачиваем именно его.
 globalThis.__tauri = tauri;
+globalThis.__tauri.invoke = (await import('./lib/wire-signal-mock.mjs')).wrapInvoke(tauri.invoke);
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__dl = dl;
 globalThis.__providers = providers;
@@ -86,6 +89,7 @@ prepareModuleCopy(
     '@tauri-apps/api/core': 'core.js',
     '../api.js': 'api.js',
   '../message-format.js': 'message-format.js',
+  '../wire-signal-rule.js': 'wire-signal-rule.js',
     '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
     '../chatExport.js': 'chatExport.js',

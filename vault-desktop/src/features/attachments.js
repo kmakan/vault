@@ -32,6 +32,7 @@ import { getAttachmentLimitMb } from '../mailProviders.js';
 import { isTextMime, parseEnvelope, senderEmail } from '../message-format.js';
 import { mediaQuality } from '../message-store.js';
 import * as EnvelopeId from './envelope-id.js';
+import * as WireSignalRule from '../wire-signal-rule.js';
 import { chatStore as chatState, sessionStore } from './session-store.js';
 import { identityStore } from './identity-store.js';
 import { mailboxState } from './mailbox-store.js';
@@ -186,8 +187,10 @@ export async function fetchDodAttachment(deps, msg, attachment) {
     if (plain === null || typeof plain !== 'string') throw new Error('decrypt failed');
     const env = await parseEnvelope(plain);
     const raw = env ? env.text : plain;
-    const obj = JSON.parse(raw);
-    if (!obj || obj.vault_dod_data !== 1 || !obj.data) throw new Error('not a dod data letter');
+    // ФОРМАТ data-письма — В RUST (ADR-005 R1 / W4): «что считается
+    // data-письмом» (метка строго 1 и непустое тело) решает ядро.
+    const obj = await WireSignalRule.parseDodData(raw);
+    if (!obj) throw new Error('not a dod data letter');
     if (String(obj.ref || '') !== attachment.dod.trim()) throw new Error('ref mismatch');
     attachment.data = obj.data;
     deps.dodCache[attachment.dod] = obj.data;
@@ -538,7 +541,9 @@ export async function handleFileSelect(deps, event) {
           // дедуплицируется на приёме), а обратный порядок дал бы
           // карточку без данных. Сбой data = мета бесполезна → failed.
           if (useDod) {
-            const dataPayload = JSON.stringify({ vault_dod_data: 1, ref: dodMid, data: base64 });
+            // ФОРМАТ data-письма — В RUST (ADR-005 R1 / W4).
+            const dataPayload = await WireSignalRule.buildDodData(dodMid, base64);
+            if (!dataPayload) throw new Error('dod: сборка data-письма недоступна');
             try {
               if (chatUi.activeChatType === 'group' && chatUi.currentGroup) {
                 const groupKey = deps.groupKeys[chatUi.currentGroup.id];

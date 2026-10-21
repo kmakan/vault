@@ -26,6 +26,7 @@ import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
 import * as MsgFormat from '../message-format.js';
+import * as WireSignalRule from '../wire-signal-rule.js';
 // ADR-004: владельцы состояния — прямые импорты, БЕЗ deps.
 import { identityStore } from './identity-store.js';
 import { chatStore as chatState, sessionStore } from './session-store.js';
@@ -167,7 +168,7 @@ export async function loadMessages(deps, email) {
               // Звонки (M3): call_* конверты — сигналы, НЕ сообщения. В истории
               // чата не рендерятся (как реакции/квитанции). Живая обработка —
               // в processIncoming (handleCallSignal); здесь просто пропуск.
-              const callSig = deps.parseCallSignal(text);
+              const callSig = await deps.parseCallSignal(text);
               if (callSig) return null; // не сообщение
               // 1) Реакция: {react:1, msg_id, emoji, action} — в чат не
               //    показываем, накапливаем для applyReactions.
@@ -227,10 +228,9 @@ export async function loadMessages(deps, email) {
               // Его содержимое (десятки МБ) подтянется по клику с карточки
               // мета-вложения (fetchDodAttachment по Message-ID из меты).
               if (env && typeof env.text === 'string' && env.text.startsWith('{')) {
-                try {
-                  const dodObj = JSON.parse(env.text);
-                  if (dodObj && dodObj.vault_dod_data === 1) return null;
-                } catch (e) { /* не dod — продолжаем */ }
+                // ФОРМАТ data-письма — В RUST (ADR-005 R1 / W4): «что считается
+                // data-письмом» решает ядро (vault::vault::signals).
+                if (await WireSignalRule.parseDodData(env.text)) return null;
               }
               // (внутри try), а return ниже был ВНЕ неё → ReferenceError молча
               // ловился catch'ем и сообщение шло без ttl. Выносим в msgTtl.

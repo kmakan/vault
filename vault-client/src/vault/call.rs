@@ -22,6 +22,11 @@ pub struct CallSignal {
     pub kemct: Option<String>,          // PQ KEM ciphertext (caller → callee)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_ek: Option<String>,       // ephemeral key handle for hybrid reply
+    /// Relay read-токен отправителя (адрес его очереди). JS его читает
+    /// (handleCallSignal → relay.memLearn): без поля токен терялся бы, и
+    /// собеседник не смог бы слать мгновенные сигналы.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tok: Option<String>,
 }
 
 /// Parse a decrypted plaintext into CallSignal (parity JS parseCallSignal).
@@ -50,12 +55,32 @@ pub fn parse_call_signal(decrypted: &str) -> Option<CallSignal> {
         role: obj.get("role").and_then(|v| v.as_str()).map(|s| s.to_string()),
         kemct: obj.get("kemct").and_then(|v| v.as_str()).map(|s| s.to_string()),
         sender_ek: obj.get("sender_ek").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        tok: obj.get("tok").and_then(|v| v.as_str()).map(|s| s.to_string()),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Relay-токен отправителя едет в call-конверте и читается JS
+    /// (handleCallSignal → relay.memLearn). Без него переезд разбора в Rust
+    /// тихо ломал бы обмен relay-токеном: токен просто не доехал бы.
+    #[test]
+    fn call_signal_carries_relay_token() {
+        let plain = r#"{"vault":1,"type":"call_request","call_id":"c1","ts":123,"tok":"QUEUE-TOKEN"}"#;
+        let sig = parse_call_signal(plain).expect("сигнал разобран");
+        assert_eq!(sig.tok.as_deref(), Some("QUEUE-TOKEN"));
+    }
+
+    /// Конверт без токена — обычное дело (релей выключен): tok пустой, но
+    /// разбор не падает.
+    #[test]
+    fn call_signal_without_token_is_ok() {
+        let plain = r#"{"vault":1,"type":"call_request","call_id":"c1","ts":123}"#;
+        let sig = parse_call_signal(plain).expect("сигнал разобран");
+        assert!(sig.tok.is_none());
+    }
 
     #[test]
     fn test_parse_call_signal_request() {

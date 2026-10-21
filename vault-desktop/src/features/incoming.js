@@ -197,7 +197,8 @@ async function routeLetter(deps, m, from) {
       // Порядок разбора батча (processIncoming: byArrival) + последовательный
       // await дают request → cancel строго по порядку доставки.
       if (cls && cls.kind === 'call') {
-        const callSig = JSON.parse(plain); // классификатор уже разобрал JSON
+        // Разбор сигнала — в Rust (ADR-005 R1 / W4); JS получает готовые поля.
+        const callSig = await deps.parseCallSignal(plain);
         try { await deps.handleCallSignal(callSig, from); }
         catch (e) { console.warn('[call] signal failed:', e); }
         return null;
@@ -294,7 +295,7 @@ async function routeLetter(deps, m, from) {
             // а не сырой `from`: иначе currentCall.peer = 'fp:…' и все
             // ответные конверты идут на несуществующий SMTP-адрес.
             console.log('[call] signal from new address', from, '— пир известен как', knownEmail);
-            try { await deps.handleCallSignal(JSON.parse(plain), knownEmail); }
+            try { await deps.handleCallSignal(await deps.parseCallSignal(plain), knownEmail); }
             catch (e) { console.warn('[call] signal failed:', e); }
             return null;
           }

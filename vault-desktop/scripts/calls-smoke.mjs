@@ -2,6 +2,7 @@
 // Vue/Tauri (паттерн incoming-smoke.mjs). Таймеры/Audio — управляемые моки.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createCallSession, callSession } from '../src/features/call-session.js';
 import { createCallResender, callResender, callRequestResender } from '../src/features/call-resend.js';
@@ -44,6 +45,9 @@ const ROOT = import.meta.dirname;
 // ── Заглушки ───────────────────────────────────────────────────
 const MOCKS = '/tmp/calls-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок форматов wire-конверта и сервисных сигналов (ADR-005 W4):
+// правила — в Rust, здесь их тестовый двойник.
+await installEnvelopeMock(MOCKS);
 
 const apiMock = {
   calls: [],
@@ -112,6 +116,13 @@ globalThis.__invokeMock = async () => null;
 // Правило состояния звонка — в Rust; здесь — его тестовый двойник (таблица
 // правил повторяет vault-client/src/vault/call_state.rs).
 globalThis.__invokeMock = (await import('./lib/call-state-mock.mjs')).installCallStateMock(globalThis.__invokeMock);
+// Сервисные wire-форматы (сигнал звонка) — двойник правил из Rust.
+const _wireSignal = (await import('./lib/wire-signal-mock.mjs')).wireSignalHandler;
+const _prevInvoke = globalThis.__invokeMock;
+globalThis.__invokeMock = async (cmd, args) => {
+  const v = _wireSignal(cmd, args);
+  return v !== undefined ? v : _prevInvoke(cmd, args);
+};
 
 prepareModuleCopy(
   ROOT + '/../src/features/calls.js',
@@ -123,6 +134,7 @@ prepareModuleCopy(
     '../history.js': 'history.js',
     '../call-state-rule.js': 'call-state-rule.js',
     '@tauri-apps/api/core': 'tauri-core.js',
+    '../wire-signal-rule.js': 'wire-signal-rule.js',
   },
   MOCKS,
 );
@@ -275,12 +287,18 @@ console.log('1. Дедуп звонков (kv call-seen)');
 // ── 2. parseCallSignal ─────────────────────────────────────────
 console.log('2. parseCallSignal');
 {
-  check('валидный call_request', C.parseCallSignal(JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c9', sdp: 'X' })).call_id === 'c9');
-  check('не-JSON → null', C.parseCallSignal('hello') === null);
-  check('не-звонковый тип → null', C.parseCallSignal(JSON.stringify({ vault: 1, type: 'msg', call_id: 'c' })) === null);
-  check('без call_id → null', C.parseCallSignal(JSON.stringify({ vault: 1, type: 'call_request' })) === null);
-  check('без vault:1 → null', C.parseCallSignal(JSON.stringify({ type: 'call_request', call_id: 'c' })) === null);
-  check('null → null', C.parseCallSignal(null) === null);
+  // Разбор сигнала — в Rust (ADR-005 R1 / W4), поэтому функция ASYNC.
+  const sig = await C.parseCallSignal(JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c9', sdp: 'X' }));
+  check('валидный call_request', sig && sig.call_id === 'c9' && sig.sdp === 'X', sig);
+  check('не-JSON → null', (await C.parseCallSignal('hello')) === null);
+  check('не-звонковый тип → null', (await C.parseCallSignal(JSON.stringify({ vault: 1, type: 'msg', call_id: 'c' }))) === null);
+  check('без call_id → null', (await C.parseCallSignal(JSON.stringify({ vault: 1, type: 'call_request' }))) === null);
+  check('без vault:1 → null', (await C.parseCallSignal(JSON.stringify({ type: 'call_request', call_id: 'c' }))) === null);
+  check('null → null', (await C.parseCallSignal(null)) === null);
+  // Relay-токен отправителя едет в конверте сигнала и читается при приёме.
+  // Пока правило жило в JS, а в Rust было без этого поля, токен терялся бы.
+  const sigTok = await C.parseCallSignal(JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c9', tok: 'QUEUE' }));
+  check('relay-токен в сигнале сохраняется', sigTok && sigTok.tok === 'QUEUE', sigTok);
 }
 
 // ── 3. sendCallEnvelope ─────────────────────────────────────────

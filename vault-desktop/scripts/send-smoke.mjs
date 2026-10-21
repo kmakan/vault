@@ -7,6 +7,7 @@
 // persist. Поведение 1:1 с inline-методом App.vue.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createNotesStore } from '../src/features/notes-store.js';
 import { createSendingStore } from '../src/features/sending-store.js';
@@ -22,6 +23,9 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/send-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок форматов wire-конверта и сервисных сигналов (ADR-005 W4):
+// правила — в Rust, здесь их тестовый двойник.
+await installEnvelopeMock(MOCKS);
 
 const apiMock = {
   sent: [],
@@ -58,6 +62,7 @@ prepareModuleCopy(
   MOCKS + '/send.mjs',
   {
     '@tauri-apps/api/core': 'core.js',
+    '../wire-signal-rule.js': 'wire-signal-rule.js',
     // Оригинал писал все четыре .replace В ОДНУ СТРОКУ, и построчный разбор
     // увидел только первый: остальные моки молча потерялись, а модуль начал
     // подтягивать настоящие api/crypto/relay-client — и падал на localStorage.

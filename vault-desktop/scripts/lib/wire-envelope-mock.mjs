@@ -24,6 +24,14 @@ export async function installEnvelopeMock(mocksDir) {
   // Мок Tauri-вызова: общий сценарий для всех смоуков.
   globalThis.__invokeMock = (await import('./envelope-mock.mjs'))
     .installEnvelopeMock(globalThis.__invokeMock || (async () => null));
+  // Сервисные форматы (сигнал звонка, data-письмо, объект конверта) — тот же
+  // приём: двойник правил из Rust (scripts/lib/wire-signal-mock.mjs).
+  const wire = (await import('./wire-signal-mock.mjs')).wireSignalHandler;
+  const prevInvoke = globalThis.__invokeMock;
+  globalThis.__invokeMock = async (cmd, args) => {
+    const v = wire(cmd, args);
+    return v !== undefined ? v : prevInvoke(cmd, args);
+  };
   writeFileSync(
     path.join(mocksDir, 'tauri-core.js'),
     'export const invoke = (...a) => globalThis.__invokeMock(...a);',
@@ -36,6 +44,32 @@ export async function installEnvelopeMock(mocksDir) {
       "from './tauri-core.js'",
     ),
   );
+  // Адаптер сервисных форматов (сигнал звонка, data-письмо, объект конверта).
+  // Его Tauri-вызов идёт через ОТДЕЛЬНЫЙ мост (wire-signal-core.js): у разных
+  // смоуков свой мост (__invokeMock / __tauri.invoke), и общий не нужен —
+  // нужен общий ДВОЙНИК правил.
+  writeFileSync(
+    path.join(mocksDir, 'wire-signal-core.js'),
+    'export const invoke = (...a) => globalThis.__wireSignalInvoke(...a);',
+  );
+  writeFileSync(
+    path.join(mocksDir, 'wire-signal-rule.js'),
+    readFileSync(path.join(ROOT, 'src', 'wire-signal-rule.js'), 'utf8').replaceAll(
+      "from '@tauri-apps/api/core'",
+      "from './wire-signal-core.js'",
+    ),
+  );
+  const wireHandler = (await import('./wire-signal-mock.mjs')).wireSignalHandler;
+  globalThis.__wireSignalInvoke = async (cmd, args) => {
+    const v = wireHandler(cmd, args);
+    if (v !== undefined) return v;
+    // Чужой мост смоука ищем В МОМЕНТ ВЫЗОВА: смоук ставит его после
+    // подключения моков, и раньше его просто не существует.
+    const prev = globalThis.__invokeMock
+      || (globalThis.__tauri && globalThis.__tauri.invoke)
+      || null;
+    return prev ? prev(cmd, args) : null;
+  };
   // message-format.js: копия, у которой импорт адаптера — соседний файл.
   writeFileSync(
     path.join(mocksDir, 'message-format.js'),

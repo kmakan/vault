@@ -36,6 +36,13 @@ mkdirSync(MOCKS, { recursive: true });
 
 // ── Мост Rust ──────────────────────────────────────────────────────────────
 // Классификатор: kind задаёт смоук (стенд). Персист: фиксируем вызов.
+// Сервисные wire-форматы (сигнал звонка) — двойник правил из Rust.
+const _wireSignal = (await import('./lib/wire-signal-mock.mjs')).wireSignalHandler;
+const _prevInvoke = globalThis.__invoke;
+globalThis.__invoke = async (cmd, args) => {
+  const v = _wireSignal(cmd, args);
+  return v !== undefined ? v : _prevInvoke(cmd, args);
+};
 globalThis.__invoke = async (cmd, args) => {
   const st = globalThis.__state;
   st.bridgeCalls.push({ cmd, args });
@@ -211,6 +218,8 @@ function makeDeps(over = {}) {
     noteSeen: (e, ts) => { st.seen.push([e, ts]); },
     onMailBounce: async (r, why) => { st.bounces.push({ recipients: r, reason: why }); },
     handleCallSignal: async (sig, from) => { st.callSignals.push({ sig, from }); },
+    // Разбор call-сигнала — в Rust (ADR-005 W4): здесь двойник правил.
+    parseCallSignal: async (plain) => (await import('./lib/wire-signal-mock.mjs')).callSignalParse(plain),
     canonicalOf: (x) => x,
     parseEnvelope: (plain) => {
       try {
@@ -500,8 +509,8 @@ console.log('13. гонка порядка: call_cancel (UID больше) ра�
   const newer = new Date(NOW - 5 * 1000).toISOString();
   const req = letter({ uid: 101, message_id: '<req@x>', date: older });
   const can = letter({ uid: 102, message_id: '<can@x>', date: newer });
-  withBody(deps, req, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'cX' }));
-  withBody(deps, can, 'ENC:' + JSON.stringify({ type: 'call_cancel', call_id: 'cX' }));
+  withBody(deps, req, 'ENC:' + JSON.stringify({ vault: 1, type: 'call_request', call_id: 'cX' }));
+  withBody(deps, can, 'ENC:' + JSON.stringify({ vault: 1, type: 'call_cancel', call_id: 'cX' }));
   await processIncoming(deps, [can, req], { notify: true }); // как вернул IMAP
   check('request разобран ПЕРВЫМ (звонок успел зазвонить)',
     order[0] === 'call_request' && order[1] === 'call_cancel', order);
@@ -513,15 +522,17 @@ console.log('14. сортировка батча: UID как число (\'9\' <
   resetWorld({ plainFromBody: true, classify: () => ({ kind: 'call' }) });
   const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
   const order = [];
-  deps.handleCallSignal = async (sig) => { order.push(sig.uid); };
+  // Наблюдаем ПОРЯДОК по call_id (протокольное поле). Раньше здесь был sig.uid —
+  // поля нет в протоколе сигнала, и тиtyped-разбор в Rust его не возвращает.
+  deps.handleCallSignal = async (sig) => { order.push(sig.call_id); };
   const same = new Date(NOW).toISOString();
   const m9 = letter({ uid: 9, message_id: '<m9@x>', date: same });
   const m10 = letter({ uid: 10, message_id: '<m10@x>', date: same });
-  withBody(deps, m9, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'c9', uid: 9 }));
-  withBody(deps, m10, 'ENC:' + JSON.stringify({ type: 'call_request', call_id: 'c10', uid: 10 }));
+  withBody(deps, m9, 'ENC:' + JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c9', uid: 9 }));
+  withBody(deps, m10, 'ENC:' + JSON.stringify({ vault: 1, type: 'call_request', call_id: 'c10', uid: 10 }));
   await processIncoming(deps, [m10, m9], { notify: true });
   check('uid 9 разобран раньше uid 10 (строковая сортировка переставила бы)',
-    order.length === 2 && order[0] === 9 && order[1] === 10, order);
+    order.length === 2 && order[0] === 'c9' && order[1] === 'c10', order);
 }
 
 // ── 15. Дедуп по env.id не ломается реордерингом ─────────────────────────
@@ -601,7 +612,7 @@ console.log('18. звонок под новым адресом: сигнал у�
     uid: 20, message_id: '<ns@x>',
   });
   withBody(deps, m, 'ENC:' + JSON.stringify({
-    type: 'call_request', call_id: 'c-ns1', key: 'ANNAK',
+    vault: 1, type: 'call_request', call_id: 'c-ns1', key: 'ANNAK',
   }));
   await processIncoming(deps, [m], { notify: true });
   check('сигнал звонка доставлен', got.length === 1 && got[0][0] === 'call_request', got);

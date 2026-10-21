@@ -1,11 +1,15 @@
 // Node-смоук features/forward.js — пересылка (explicit-deps).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
 
 const ROOT = '/home/maksim/whisper/vault-desktop/src/features';
 const FORWARD = ROOT + '/forward.js';
 const MOCKS = '/tmp/forward-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Мок форматов wire-конверта и сервисных сигналов (ADR-005 W4):
+// правила — в Rust, здесь их тестовый двойник.
+await installEnvelopeMock(MOCKS);
 
 const apiCalls = [];
 const cryptoCalls = [];

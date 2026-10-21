@@ -35,6 +35,7 @@ import * as relay from '../relay-client.js';
 import crypto from '../crypto.js';
 import { saveHistory, loadHistory } from '../history.js';
 import { invoke } from '@tauri-apps/api/core';
+import * as WireSignalRule from '../wire-signal-rule.js';
 // Re-export для backward-compat (App.vue / smoke ссылаются через C.SIGNAL_RESEND_DELAYS_MS).
 export { SIGNAL_RESEND_DELAYS_MS } from './call-resend.js';
 import { createMediaWatchdog } from './call-watchdog.js';
@@ -171,23 +172,18 @@ async function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
 // Распознавание сигнального конверта: {vault:1, type:'call_*', call_id,...}.
 // Такие письма НЕ рендерятся сообщениями (как квитанции) — уходят в
 // state machine звонка. Медиа (webrtc-rs) подключается в Фазе 2.
-export function parseCallSignal(decrypted) {
-  // JS-native sync parse (parity Rust parse_call_signal).
-  if (!decrypted || typeof decrypted !== 'string') return null;
-  try {
-    const obj = JSON.parse(decrypted);
-    if (obj && obj.vault === 1 && typeof obj.type === 'string'
-        && obj.type.indexOf('call_') === 0 && obj.call_id) {
-      return obj;
-    }
-  } catch (e) { /* не сигнал */ }
-  return null;
-}
-
-// M2.3: Rust bridge parity — parse_call_signal (async via invoke).
-export async function parseCallSignalRust(decrypted) {
-  try { return await invoke('call_parse_signal', { decrypted }); }
-  catch (e) { console.warn('[call] parse_signal bridge failed:', e && e.message || e); return null; }
+// Разбор сигнала звонка — В RUST (ADR-005 R1 / W4): правило «это call-сигнал»
+// и набор его полей — в ядре (vault::call::parse_call_signal).
+//
+// ПОЧЕМУ ПЕРЕЕХАЛО. Правило жило в двух местах: в Rust (M2.3) и в JS — и
+// они РАСХОДИЛИСЬ: Rust-сигнал не знал поля `tok` (relay-токен отправителя),
+// который JS читает при приёме сигнала (handleCallSignal → relay.memLearn).
+// Мост call_parse_signal в приложении не вызывался вообще — JS разбирал сам.
+// Теперь правило одно, и в нём есть tok.
+//
+// ФУНКЦИЯ СТАЛА ASYNC: разбор идёт через мост, а мост асинхронен.
+export async function parseCallSignal(decrypted) {
+  return WireSignalRule.parseCallSignal(decrypted);
 }
 
 // M2.8: Rust bridge parity — media_call_state (group-call roster state).

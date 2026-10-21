@@ -1,0 +1,38 @@
+// Набор мутаций: wire-signal-rule-mut
+// Цель: убедиться, что смоук wire-signal-rule-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'wire-signal-rule-mut',
+  file: 'src/wire-signal-rule.js',
+  smoke: 'wire-signal-rule-smoke.mjs',
+  mutations: [
+    { name: "при отказе моста разбор сигнала возвращает «null» строкой (сигнал примет за мусор)",
+      pattern: "    console.error('[signal] Rust-разбор call-сигнала недоступен:', e && e.message || e);\n    return null;",
+      replacement: "    console.error('[signal] Rust-разбор call-сигнала недоступен:', e && e.message || e);\n    return 'null';" },
+    { name: "при отказе моста разбор data-письма возвращает «null» строкой",
+      pattern: "    console.error('[signal] Rust-разбор data-письма недоступен:', e && e.message || e);\n    return null;",
+      replacement: "    console.error('[signal] Rust-разбор data-письма недоступен:', e && e.message || e);\n    return 'null';" },
+    { name: "при отказе моста сборка data-письма возвращает «null» строкой (уйдёт неразборчивое письмо)",
+      pattern: "    console.error('[signal] Rust-сборка data-письма недоступна:', e && e.message || e);\n    return null;",
+      replacement: "    console.error('[signal] Rust-сборка data-письма недоступна:', e && e.message || e);\n    return 'null';" },
+    { name: "при отказе моста объект конверта возвращает «null» строкой",
+      pattern: "    console.error('[signal] Rust-разбор объекта конверта недоступен:', e && e.message || e);\n    return null;",
+      replacement: "    console.error('[signal] Rust-разбор объекта конверта недоступен:', e && e.message || e);\n    return 'null';" },
+    { name: "пустой плейнтекст идёт в мост (лишний вызов и разбор мусора)",
+      pattern: "  if (!plain || typeof plain !== 'string') return null;",
+      replacement: "  if (false) return null;" },
+    { name: "пустой текст конверта идёт в мост (лишний вызов и разбор мусора)",
+      pattern: "  if (!text || typeof text !== 'string') return null;",
+      replacement: "  if (false) return null;" },
+    { name: "имя команды разбора data-письма перепутано (мост вернёт мусор)",
+      pattern: "invoke('vault_parse_dod_data', { plain })",
+      replacement: "invoke('vault_parse_dod_data_v2', { plain })" },
+    { name: "имя команды объекта конверта перепутано (релей получит мусор)",
+      pattern: "invoke('vault_envelope_object', { text })",
+      replacement: "invoke('vault_envelope_object_v2', { text })" },
+    { name: "имя команды сигнала звонка перепутано (сигнал не разберётся)",
+      pattern: "invoke('call_parse_signal', { decrypted })",
+      replacement: "invoke('call_parse_signal_v2', { decrypted })" },
+  ],
+};

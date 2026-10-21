@@ -23,6 +23,7 @@ import api from '../api.js';
 import crypto from '../crypto.js';
 import * as relay from '../relay-client.js';
 import * as EnvelopeId from './envelope-id.js';
+import * as WireSignalRule from '../wire-signal-rule.js';
 import * as MsgFormat from '../message-format.js';
 import { chatStore as chatState, sessionStore } from './session-store.js';
 import { identityStore } from './identity-store.js';
@@ -237,7 +238,8 @@ export async function sendMessage(deps) {
             // на Gmail-коннекте (держит до минуты, тротлит) — письмо
             // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
             try {
-              const envObj = JSON.parse(envelope);
+              // Объект конверта для релей-копии — разбор в Rust (ADR-005 R1 / W4).
+              const envObj = await WireSignalRule.envelopeObject(envelope);
               // Resolve peer fingerprint from peerKeys for fingerprint-based relay
               let peerFp = null;
               try {

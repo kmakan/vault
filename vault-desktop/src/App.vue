@@ -3052,7 +3052,7 @@ export default {
     // разумнее держать в features/ (см. ADR-001-заметку в calls.js).
     async isCallSeen(callId) { return CallsFeature.isCallSeen(this.email, callId); },
     async rememberCallSeen(callId) { return CallsFeature.rememberCallSeen(this.email, callId); },
-    parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
+    async parseCallSignal(decrypted) { return CallsFeature.parseCallSignal(decrypted); },
     async sendCallEnvelope(peer, payload, opts = {}) { return CallsFeature.sendCallEnvelope(this.callsDeps, peer, payload, opts); },
     async handleCallSignal(sig, from) { return CallsFeature.handleCallSignal(this.callsDeps, sig, from); },
     async onMailBounce(recipients, reason) { return CallsFeature.onMailBounce(this.callsDeps, recipients, reason); },

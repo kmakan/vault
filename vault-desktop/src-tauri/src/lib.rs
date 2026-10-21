@@ -2269,6 +2269,10 @@ pub fn run() {
             // W4: формат конверта — решение в Rust (ADR-005 R1).
             vault_bridge::vault_build_envelope,
             vault_bridge::vault_parse_envelope,
+            // W4: сигнальные форматы (data-письмо, объект конверта) — в Rust.
+            vault_bridge::vault_parse_dod_data,
+            vault_bridge::vault_build_dod_data,
+            vault_bridge::vault_envelope_object,
             vault_bridge::vault_call_next_state,
             vault_bridge::vault_call_can,
             vault_bridge::vault_call_can_apply,

@@ -25,5 +25,11 @@ export default {
     { name: "текст сообщения теряется",
       pattern: "        text: &input.text,",
       replacement: "        text: \"\"," },
+    { name: "объект конверта достаётся как есть — но не-объект проходит",
+      pattern: "    if obj.is_object() {\n        Some(obj)\n    } else {\n        None\n    }",
+      replacement: "    Some(obj)" },
+    { name: "объект конверта не достаётся (релей-дубль отправки не уходит)",
+      pattern: "    let obj: serde_json::Value = serde_json::from_str(text).ok()?;\n    if obj.is_object() {",
+      replacement: "    return None;\n    let obj: serde_json::Value = serde_json::from_str(text).ok()?;\n    if obj.is_object() {" },
   ],
 };

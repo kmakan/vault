@@ -8,7 +8,7 @@
     "vault-client/src/vault/call.rs": 5,
     "vault-client/src/vault/contacts.rs": 7,
     "vault-client/src/vault/edit.rs": 5,
-    "vault-client/src/vault/envelope.rs": 16,
+    "vault-client/src/vault/envelope.rs": 18,
     "vault-client/src/vault/ephemeral.rs": 6,
     "vault-client/src/vault/filter.rs": 8,
     "vault-client/src/vault/folders.rs": 5,
@@ -23,6 +23,7 @@
     "vault-client/src/vault/read_receipts.rs": 7,
     "vault-client/src/vault/relay.rs": 3,
     "vault-client/src/vault/search.rs": 5,
+    "vault-client/src/vault/signals.rs": 6,
     "vault-client/src/vault/status.rs": 6,
     "vault-client/src/vault/thread.rs": 7,
     "vault-desktop/src/api.js": 6,
@@ -126,7 +127,8 @@
     "vault-desktop/src/providerLimits.js": 8,
     "vault-desktop/src/relay-client.js": 13,
     "vault-desktop/src/themes.js": 4,
-    "vault-desktop/src/ui.js": 7
+    "vault-desktop/src/ui.js": 7,
+    "vault-desktop/src/wire-signal-rule.js": 9
   },
   "gaps": []
 }

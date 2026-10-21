@@ -226,6 +226,23 @@ pub fn parse(plain: &str) -> Option<EnvelopeFields> {
     Some(fields)
 }
 
+/// Сырой объект конверта — без разбора полей.
+///
+/// Нужен там, где требуется ИМЕННО объект (релей-дубль отправки), а не
+/// набор полей. Возвращает `None`, если это не JSON-объект: «мусор» и
+/// «массив» объектом конверта не являются.
+pub fn raw_object(text: &str) -> Option<serde_json::Value> {
+    if text.is_empty() {
+        return None;
+    }
+    let obj: serde_json::Value = serde_json::from_str(text).ok()?;
+    if obj.is_object() {
+        Some(obj)
+    } else {
+        None
+    }
+}
+
 fn string_field(obj: &serde_json::Value, key: &str) -> String {
     obj.get(key)
         .and_then(|v| v.as_str())
@@ -408,6 +425,22 @@ mod tests {
         let null_poll = r#"{"vault":1,"id":"m1","text":"x","poll":null}"#;
         let f2 = parse(null_poll).expect("разобран");
         assert!(f2.poll.is_none(), "poll:null — не голосование");
+    }
+
+    #[test]
+    fn raw_object_returns_the_object_untouched() {
+        let v = raw_object(r#"{"vault":1,"id":"m1","x":{"nested":true}}"#).expect("объект");
+        assert_eq!(v["vault"], 1);
+        assert_eq!(v["id"], "m1");
+        assert_eq!(v["x"]["nested"], true);
+    }
+
+    #[test]
+    fn raw_object_rejects_non_objects() {
+        assert!(raw_object("").is_none());
+        assert!(raw_object("не json").is_none());
+        assert!(raw_object("[1,2]").is_none(), "массив — не объект конверта");
+        assert!(raw_object("42").is_none());
     }
 
     #[test]

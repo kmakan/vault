@@ -88,6 +88,7 @@ prepareModuleCopy(
   {
     '../api.js': 'api.js',
   '../message-format.js': 'message-format.js',
+  '../wire-signal-rule.js': 'wire-signal-rule.js',
     '../message-format.js': 'message-format.js',
     '../crypto.js': 'crypto.js',
     './presence.js': 'presence.js',

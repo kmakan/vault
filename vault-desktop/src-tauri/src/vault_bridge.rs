@@ -110,6 +110,32 @@ pub fn vault_call_next_state(current: String, event: String) -> String {
     }
 }
 
+/// Разобрать data-письмо (download-on-demand) — ADR-005 R1 / W4.
+///
+/// ФОРМАТ — В ЯДРЕ: «что считается data-письмом» (`vault_dod_data` строго 1 и
+/// непустое тело) решает Rust. JS получает `ref` и `data`.
+#[tauri::command]
+pub fn vault_parse_dod_data(plain: String) -> Option<vault_client::vault::signals::DodData> {
+    vault_client::vault::signals::parse_dod_data(&plain)
+}
+
+/// Собрать data-письмо (download-on-demand) — ADR-005 R1 / W4.
+#[tauri::command]
+pub fn vault_build_dod_data(reference: String, data: String) -> String {
+    vault_client::vault::signals::build_dod_data(&reference, &data)
+}
+
+/// Сырой объект конверта (как JSON-объект, без разбора полей) — ADR-005 R1 / W4.
+///
+/// Релей-дубль отправки требует ОБЪЕКТ конверта (а не строку). Раньше JS
+/// разбирал его сам (`JSON.parse(envelope)`) — это был разбор протокола в
+/// фронте. Теперь разбор — в ядре; правила полей конверта при этом не
+/// меняются: возвращается ровно тот объект, что внутри конверта.
+#[tauri::command]
+pub fn vault_envelope_object(text: String) -> Option<serde_json::Value> {
+    vault_client::vault::envelope::raw_object(&text)
+}
+
 /// Разобрать wire-конверт сообщения (ADR-005 R1 / W4).
 ///
 /// ПРАВИЛА РАЗБОРА — В ЯДРЕ: какие поля берутся, что считается «не наш

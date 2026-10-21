@@ -4,6 +4,7 @@
 import api from '../api.js';
 import crypto from '../crypto.js';
 import * as EnvelopeId from './envelope-id.js';
+import * as WireSignalRule from '../wire-signal-rule.js';
 
 export { forwardState } from './forward/state.js';
 
@@ -61,7 +62,8 @@ export async function doForward({
       if (!groupKey) { if (t) alert(t('err_group_key')); return; }
       const content = await crypto.encryptWithGroupKey(envelope, groupKey);
       // envelopeObj: релей-дубль участникам (api.sendGroupMessage).
-      const envObj = (() => { try { return JSON.parse(envelope); } catch (e) { return null; } })();
+      // Объект конверта для релей-дубля — разбор в Rust (ADR-005 R1 / W4).
+      const envObj = await WireSignalRule.envelopeObject(envelope);
       await api.sendGroupMessage(gid, content, envObj);
       pendingMsg.status = 'sent';
       if (typeof markPending === 'function') markPending(key, pendingMsg);

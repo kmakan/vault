@@ -146,6 +146,8 @@ function makeDeps(over = {}) {
       } catch { return null; }
     },
     handleCallSignal: async (sig, from) => { st.callSignals.push({ sig, from }); },
+    // Разбор call-сигнала — в Rust (ADR-005 W4): двойник правил.
+    parseCallSignal: async (plain) => (await import('./lib/wire-signal-mock.mjs')).callSignalParse(plain),
     canonicalOf: (x) => x,
     localProfileOf: () => null,
     nameOf: () => '',

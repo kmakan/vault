@@ -17,6 +17,7 @@
 // STEALTH-группы: тема писем пустая → subject-фильтрации нет; единый проход
 // классифицирует реакцию/правку/квитанцию/pin/poll/presence/meta/hav/сообщение.
 import { expireAt } from '../ephemeral-rule.js';
+import * as WireSignalRule from '../wire-signal-rule.js';
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
 import * as PresenceFeature from './presence.js';
@@ -201,10 +202,8 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
               // Download-on-demand: data-письмо — транспорт, не сообщение
               // группы (содержимое подтянется по клику с мета-карточки).
               if (typeof plaintext === 'string' && plaintext.startsWith('{')) {
-                try {
-                  const dodObj = JSON.parse(plaintext);
-                  if (dodObj && dodObj.vault_dod_data === 1) continue;
-                } catch (e) { /* не dod */ }
+                // ФОРМАТ data-письма — В RUST (ADR-005 R1 / W4).
+                if (await WireSignalRule.parseDodData(plaintext)) continue;
               }
             }
             const { text, attachment } = MsgFormat.parseMessageContent(plaintext);
