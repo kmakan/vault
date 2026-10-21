@@ -28,6 +28,10 @@ import { pathToFileURL } from 'node:url';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/incoming-routing-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
+// Адаптер сервисных wire-форматов (ADR-005 W4): копия с подменой Tauri-вызова
+// на мост смоука. Правила — в Rust, здесь их тестовый двойник.
+const { installEnvelopeMock } = await import('./lib/wire-envelope-mock.mjs');
+await installEnvelopeMock(MOCKS);
 
 // ── Мосты: всё, что маршрутизатор зовёт наружу ────────────────────────────
 const calls = [];
@@ -40,6 +44,13 @@ globalThis.__invoke = async (cmd, args) => {
   return null;
 };
 
+// Сервисные wire-форматы (ADR-005 W4) — двойник правил из Rust.
+const _wireSignal = (await import('./lib/wire-signal-mock.mjs')).wireSignalHandler;
+const _prevInvoke = globalThis.__invoke;
+globalThis.__invoke = async (cmd, args) => {
+  const v = _wireSignal(cmd, args);
+  return v !== undefined ? v : _prevInvoke(cmd, args);
+};
 writeFileSync(MOCKS + '/core.js',
   'export const invoke = (...a) => globalThis.__invoke(...a);\n');
 writeFileSync(MOCKS + '/api.js', [
@@ -92,6 +103,7 @@ const REWRITES = [
   ["'./presence.js'", `"${MOCKS}/presence.js"`],
   ["'./identity-store.js'", `"${MOCKS}/identity-store.js"`],
   ["'@tauri-apps/api/core'", `"${MOCKS}/core.js"`],
+  ["'../wire-signal-rule.js'", `"${MOCKS}/wire-signal-rule.js"`],
 ];
 let patched = SRC;
 for (const [from, to] of REWRITES) patched = patched.split(from).join(to);
@@ -178,7 +190,8 @@ function makeDeps(over = {}) {
 
 const DEPS = {
   // Каналы: мост связывает свой ctx сам (App.vue), модуль отдаёт только данные.
-  ingestChannelEnvelope: (obj) => (obj && obj.post ? 'post' : null),
+  // Канальный конверт приходит РАЗОБРАННЫМ (формат решает Rust, ADR-005 W4).
+  ingestChannelEnvelope: (obj) => (obj && obj.has_post ? 'post' : null),
   isBounceMessage: () => false,
   bounceRecipients: () => [],
   bounceReason: () => '',

@@ -115,9 +115,12 @@ console.log('\n1. mailboxApi.processIncoming → deps не потеряны');
     Array.isArray(call.fetched) && call.fetched.length === 1 && call.fetched[0] === 'm1', JSON.stringify(call.fetched));
   const d = call.deps || {};
   check('deps передан (не undefined) — ИМЕННО ЭТО падало на relay-пути', !!call.deps);
-  check('deps: ровно 5 ключей incoming.js',
+  // Четыре ключа: isChannelEnvelope убран (ADR-005 W4) — проверку «это канал»
+  // делает ядро (vault::channels::parse_channel_envelope), а второй разбор
+  // формата в JS расходился с роутером.
+  check('deps: ровно 4 ключа incoming.js',
     JSON.stringify(Object.keys(d).sort()) === JSON.stringify(
-      ['bounceReason', 'bounceRecipients', 'ingestChannelEnvelope', 'isBounceMessage', 'isChannelEnvelope']),
+      ['bounceReason', 'bounceRecipients', 'ingestChannelEnvelope', 'isBounceMessage']),
     JSON.stringify(Object.keys(d)));
   check('deps.isBounceMessage — подлинная функция bounce.js', d.isBounceMessage === realBounce.isBounceMessage);
   check('deps.bounceRecipients — подлинная функция bounce.js', d.bounceRecipients === realBounce.bounceRecipients);

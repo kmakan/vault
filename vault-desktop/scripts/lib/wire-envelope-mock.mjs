@@ -67,6 +67,7 @@ export async function installEnvelopeMock(mocksDir) {
     // подключения моков, и раньше его просто не существует.
     const prev = globalThis.__invokeMock
       || (globalThis.__tauri && globalThis.__tauri.invoke)
+      || globalThis.__invoke
       || null;
     return prev ? prev(cmd, args) : null;
   };

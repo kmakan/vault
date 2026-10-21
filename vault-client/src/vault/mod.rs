@@ -1,6 +1,7 @@
 pub mod contacts;
 pub mod edit;
 pub mod call_state;
+pub mod channels;
 pub mod envelope;
 pub mod signals;
 pub mod ephemeral;

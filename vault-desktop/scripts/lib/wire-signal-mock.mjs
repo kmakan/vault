@@ -104,6 +104,39 @@ export function signalParse(plain) {
   return null;
 }
 
+// ── Канальный конверт (vault::channels::parse_channel_envelope) ─────────
+export function channelParse(plain) {
+  if (!plain || typeof plain !== 'string') return null;
+  let obj;
+  try { obj = JSON.parse(plain); } catch { return null; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  if (obj.channel !== 1) return null;
+  const str = (k) => (typeof obj[k] === 'string' ? obj[k] : '');
+  const env = {
+    chan: str('chan'),
+    id: str('id'),
+    is_meta: obj.meta === 1,
+    is_hello: obj.hello === 1,
+    has_post: false,
+    post_body: '',
+    post_images: [],
+    name: str('name'),
+    avatar: str('avatar'),
+    owner_fpr: str('owner_fpr'),
+    ts: Number(obj.ts) || 0,
+  };
+  // about отсутствует, а не null (вызывающий проверяет «поле было?»).
+  if (typeof obj.about === 'string') env.about = obj.about;
+  if (obj.post !== undefined && obj.post !== null && obj.post !== false) {
+    env.has_post = true;
+    if (typeof obj.post === 'object') {
+      env.post_body = typeof obj.post.body === 'string' ? obj.post.body : '';
+      env.post_images = Array.isArray(obj.post.images) ? obj.post.images.map((v) => String(v)) : [];
+    }
+  }
+  return env;
+}
+
 // ── Идентификатор из конверта (vault::envelope::id_of) ───────────────────
 // Значение поля id — как есть (нулевой id валиден); нет поля или null —
 // пустая строка.
@@ -122,6 +155,7 @@ export function wireSignalHandler(cmd, args) {
   if (cmd === 'call_parse_signal') return callSignalParse(a.decrypted);
   if (cmd === 'vault_parse_signal') return signalParse(a.plain);
   if (cmd === 'vault_envelope_id') return envelopeIdOf(a.text);
+  if (cmd === 'vault_parse_channel_envelope') return channelParse(a.plain);
   if (cmd === 'vault_parse_dod_data') return dodParse(a.plain);
   if (cmd === 'vault_build_dod_data') return dodBuild(a.reference, a.data);
   if (cmd === 'vault_envelope_object') return envelopeRawObject(a.text);

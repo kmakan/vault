@@ -40,5 +40,11 @@ export default {
     { name: "пустой текст конверта идёт в мост (лишний вызов и разбор мусора)",
       pattern: "  if (!text || typeof text !== 'string') return '';",
       replacement: "  if (false) return '';" },
+    { name: "имя команды разбора канального конверта перепутано",
+      pattern: "invoke('vault_parse_channel_envelope', { plain })",
+      replacement: "invoke('vault_parse_channel_envelope_v2', { plain })" },
+    { name: "при отказе моста разбор канала возвращает «null» строкой",
+      pattern: "    console.error('[signal] Rust-разбор канального конверта недоступен:', e && e.message || e);\n    return null;",
+      replacement: "    console.error('[signal] Rust-разбор канального конверта недоступен:', e && e.message || e);\n    return 'null';" },
   ],
 };

@@ -6,6 +6,7 @@
     "vault-client/src/vault/attachments.rs": 7,
     "vault-client/src/vault/call_state.rs": 6,
     "vault-client/src/vault/call.rs": 5,
+    "vault-client/src/vault/channels.rs": 8,
     "vault-client/src/vault/contacts.rs": 7,
     "vault-client/src/vault/edit.rs": 5,
     "vault-client/src/vault/envelope.rs": 20,
@@ -128,7 +129,7 @@
     "vault-desktop/src/relay-client.js": 13,
     "vault-desktop/src/themes.js": 4,
     "vault-desktop/src/ui.js": 7,
-    "vault-desktop/src/wire-signal-rule.js": 11
+    "vault-desktop/src/wire-signal-rule.js": 13
   },
   "gaps": []
 }

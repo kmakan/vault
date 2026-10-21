@@ -76,6 +76,27 @@ const argsOf = () => lastCall()[1] || {};
     (await R.parseCallSignal('{"vault":1}')) === null);
 }
 
+// ── Канальный конверт ───────────────────────────────────────────────────
+{
+  reset();
+  state.answer = { chan: 'ch1', id: 'p1', is_meta: false, is_hello: false, has_post: true, post_body: 'hi', post_images: [], name: '', avatar: '', owner_fpr: '', ts: 0 };
+  const env = await R.parseChannelEnvelope('{"channel":1,"chan":"ch1","post":{"body":"hi"}}');
+  ok('parseChannelEnvelope зовёт vault_parse_channel_envelope', cmdOf() === 'vault_parse_channel_envelope', lastCall());
+  ok('parseChannelEnvelope передаёт плейнтекст', argsOf().plain === '{"channel":1,"chan":"ch1","post":{"body":"hi"}}', argsOf());
+  ok('parseChannelEnvelope возвращает разобранный конверт', env && env.chan === 'ch1' && env.has_post === true, env);
+}
+{
+  reset();
+  ok('parseChannelEnvelope: пустой вход → null и мост НЕ зовётся',
+    (await R.parseChannelEnvelope('')) === null && state.calls.length === 0, state.calls);
+}
+{
+  reset();
+  state.fail = true;
+  ok('parseChannelEnvelope: отказ моста → null (не «null» строкой)',
+    (await R.parseChannelEnvelope('{"channel":1,"chan":"ch1"}')) === null);
+}
+
 // ── Идентификатор сообщения из конверта ─────────────────────────────────
 {
   reset();

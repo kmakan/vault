@@ -33,6 +33,20 @@ export async function parseCallSignal(decrypted) {
   }
 }
 
+// ── Канальный конверт ───────────────────────────────────────────────────
+// Возвращает разобранные поля канального письма или null — это не канал.
+// Правило «это канал» (channel === 1) и набор полей — в ядре
+// (vault::channels::parse_channel_envelope).
+export async function parseChannelEnvelope(plain) {
+  if (!plain || typeof plain !== 'string') return null;
+  try {
+    return await invoke('vault_parse_channel_envelope', { plain });
+  } catch (e) {
+    console.error('[signal] Rust-разбор канального конверта недоступен:', e && e.message || e);
+    return null;
+  }
+}
+
 // ── Идентификатор сообщения из конверта ─────────────────────────────────
 // Возвращает значение поля id как есть (нулевой id валиден) или '' — поля
 // нет. Правило — в ядре (envelope::id_of).

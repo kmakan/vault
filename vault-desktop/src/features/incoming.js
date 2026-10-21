@@ -18,6 +18,7 @@
 // здесь добавляется только ЭФФЕКТ. Ветвиться на «что это за конверт» в JS
 // нельзя — это протокольное решение (ADR-005 R1, W1 `t_2243231f`).
 
+import * as WireSignalRule from '../wire-signal-rule.js';
 import { uiStore } from "./session-store.js";
 import api from '../api.js';
 import crypto from '../crypto.js';
@@ -371,7 +372,9 @@ async function routeLetter(deps, m, from) {
         const cls = await classifyPlain(plain, from);
         if (cls === undefined) return null; // мост упал — письмо не трогаем
         if (!cls || cls.kind !== 'channel') continue; // не канал — мимо
-        const robj = JSON.parse(plain); // классификатор уже разобрал JSON
+        // ФОРМАТ КАНАЛЬНОГО КОНВЕРТА — В RUST (ADR-005 R1 / W4): «это канал»
+        // и набор его полей решает ядро (vault::channels::parse_channel_envelope).
+        const robj = await WireSignalRule.parseChannelEnvelope(plain);
         const applied = ingestChannelEnvelope(robj, from);
         if (applied) {
           console.log('[channel] envelope', applied, 'from', from, 'chan', ch.id);

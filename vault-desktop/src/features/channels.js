@@ -173,20 +173,23 @@ export async function sendChannelPost(ch, content, envelopeObj, account) {
 // envelope, i.e. `channel:1` marker present. The router then treats it
 // per type: post/meta/hello (see ingest below).
 
-export function isChannelEnvelope(obj) {
-  return !!(obj && typeof obj === 'object' && obj.channel === 1);
-}
+// Проверка «это канальное письмо» больше не нужна в JS: её делает ядро
+// (vault::channels::parse_channel_envelope, ADR-005 R1 / W4). Разбор в двух
+// местах — значит правило может разойтись; раньше так и вышло: роутер в
+// incoming.js и проверка здесь.
 
 // Apply a channel envelope to app state. Returns a short kind string or
 // null when nothing applied (bad envelope / unknown channel).
 // ADR-005 W2 (`t_bcb8927a`), партия 13: вместо ctx — узкий контракт deps
 // (channelById/noteChannelPost/noteChannelHello).
 export function ingestChannelEnvelope(deps, payload, senderEmail) {
-  if (!isChannelEnvelope(payload)) return null;
+  // ФОРМАТ — В RUST (ADR-005 R1 / W4): payload приходит уже разобранным
+  // (vault::channels::parse_channel_envelope). null = это не канал.
+  if (!payload) return null;
   const chId = payload.chan || '';
   const ch = deps.channelById && deps.channelById(chId);
   if (!ch) return null; // not subscribed to this channel — ignore
-  if (payload.meta === 1) {
+  if (payload.is_meta) {
     // meta update from the owner (name/about/avatar)
     if (ch.is_owner) return 'meta-own'; // our own echo — nothing to apply
     if (payload.avatar) db.kvSet('anon', 'channel-avatar:' + chId, payload.avatar).catch(() => {});
@@ -198,14 +201,14 @@ export function ingestChannelEnvelope(deps, payload, senderEmail) {
       .catch(e => console.warn('[channels] meta apply:', e));
     return 'meta';
   }
-  if (payload.post) {
+  if (payload.has_post) {
     if (Date.now() - (Number(payload.ts) || 0) < 0) return null; // future-dated
     const ts = Math.min(Number(payload.ts) || Date.now(), Date.now());
     updateChannel(chId, { last_ts: ts }).catch(() => {});
     deps.noteChannelPost && deps.noteChannelPost(chId, ts, payload, senderEmail);
     return 'post';
   }
-  if (payload.hello === 1) {
+  if (payload.is_hello) {
     // owner side: a subscriber said hello -> remember as known (email dup)
     if (ch.is_owner && senderEmail) {
       addKnownSubscriber(chId, senderEmail).catch(() => {});
@@ -410,8 +413,8 @@ export function noteChannelPost(chId, ts, payload, senderEmail) {
   const ch = channelById(chId);
   if (!ch) return;
   const posts = channelsStore.state.channelPosts[chId] || [];
-  const body = (payload && payload.post && payload.post.body) || '';
-  const images = (payload && payload.post && payload.post.images) || [];
+  const body = (payload && payload.post_body) || '';
+  const images = (payload && payload.post_images) || [];
   if (posts.some(p => p.id === payload.id)) return; // дедуп post.id
   posts.push({ id: payload.id, ts, body, images, sender: senderEmail || '' });
   posts.sort((a, b) => a.ts - b.ts);

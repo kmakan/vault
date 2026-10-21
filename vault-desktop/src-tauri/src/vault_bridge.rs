@@ -119,6 +119,16 @@ pub fn vault_parse_dod_data(plain: String) -> Option<vault_client::vault::signal
     vault_client::vault::signals::parse_dod_data(&plain)
 }
 
+/// Разобрать канальный конверт — ADR-005 R1 / W4.
+///
+/// ФОРМАТ — В ЯДРЕ: `channel === 1` и набор полей (meta/post/hello). JS
+/// получает разобранные поля и применяет последствия (обновить аватар,
+/// показать пост, запомнить подписчика).
+#[tauri::command]
+pub fn vault_parse_channel_envelope(plain: String) -> Option<vault_client::vault::channels::ChannelEnvelope> {
+    vault_client::vault::channels::parse_channel_envelope(&plain)
+}
+
 /// Идентификатор сообщения из конверта — ADR-005 R1 / W4.
 ///
 /// Правило «как вытащить id» — в ядре (envelope::id_of): значение поля `id`

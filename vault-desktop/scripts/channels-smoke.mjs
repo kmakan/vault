@@ -1,5 +1,6 @@
 // Node-смоук features/channels.js — чистая логика без Vue/Tauri.
 // Мокаем invoke/api через подмену импортов (заглушки в tmp-модулях).
+import { channelParse } from './lib/wire-signal-mock.mjs';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -107,16 +108,22 @@ ok('не-chn id → null', m.parseJoinLink('vault://join-channel?c=grp_x&k=' + '
 ok('пустой ввод → null', m.parseJoinLink('') === null && m.parseJoinLink(null) === null);
 
 // ── payloads ──
-const post = JSON.parse(m.buildPostPayload('chn_1', 'hello world', ['data:img1']));
-ok('post: маркер channel:1', post.channel === 1);
-ok('post: body+images', post.post.body === 'hello world' && post.post.images.length === 1);
-ok('post: id post_*, ts now', post.id.startsWith('post_') && Math.abs(post.ts - Date.now()) < 5000);
-ok('post: meta false', post.meta === false);
-const meta = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'N', about: 'A', avatar: '', key_version: 1 }));
-ok('meta: meta:1 + поля', meta.meta === 1 && meta.name === 'N' && meta.about === 'A' && meta.key_version === 1);
+// Сырая форма — для проверок СБОРКИ; разобранная (как её вернул бы Rust) —
+// для проверок ПРИМЕНЕНИЯ (ADR-005 W4: формат разбирает ядро).
+const postRaw = JSON.parse(m.buildPostPayload('chn_1', 'hello world', ['data:img1']));
+ok('post: маркер channel:1', postRaw.channel === 1);
+ok('post: body+images', postRaw.post.body === 'hello world' && postRaw.post.images.length === 1);
+ok('post: id post_*, ts now', postRaw.id.startsWith('post_') && Math.abs(postRaw.ts - Date.now()) < 5000);
+ok('post: meta false', postRaw.meta === false);
+const post = channelParse(JSON.stringify(postRaw));
+const metaRaw = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'N', about: 'A', avatar: '', key_version: 1 }));
+const meta = channelParse(JSON.stringify(metaRaw));
+ok('meta: meta:1 + поля', metaRaw.meta === 1 && metaRaw.name === 'N' && metaRaw.about === 'A' && metaRaw.key_version === 1);
 const hello = JSON.parse(m.buildHelloPayload('chn_1'));
 ok('hello: hello:1', hello.hello === 1 && hello.id.startsWith('hello_'));
-ok('isChannelEnvelope', m.isChannelEnvelope(hello) && m.isChannelEnvelope(post) && !m.isChannelEnvelope({ vault: 1 }) && !m.isChannelEnvelope(null));
+// Проверка «это канал» — в ядре (ADR-005 W4): разбор канального конверта.
+ok('разбор ядра: канал — разобран, обычное письмо — нет',
+  channelParse(JSON.stringify(hello)) !== null && channelParse('{"vault":1,"text":"x"}') === null);
 
 // ── ingest ──
 const calls = { posts: [], metas: 0, hellos: [] };
@@ -132,7 +139,7 @@ const core = await import('/tmp/channels-smoke-mocks/core.js');
 ok('ingest post → kind post', m.ingestChannelEnvelope(ctx, post, 'owner@x.y') === 'post');
 ok('ingest вызвал noteChannelPost', calls.posts.length === 1 && calls.posts[0].sender === 'owner@x.y');
 ok('ingest meta → kind meta', m.ingestChannelEnvelope(ctx, meta, 'owner@x.y') === 'meta');
-const ownHello = JSON.parse(m.buildHelloPayload('chn_1'));
+const ownHello = channelParse(m.buildHelloPayload('chn_1'));
 const mkDeps = (owner) => {   // ADR-005 W2 (партия 13): контракт deps
   const c = { channels: [{ id: 'chn_1', is_owner: owner }], noteChannelPost: ctx.noteChannelPost, noteChannelHello: ctx.noteChannelHello };
   c.channelById = (id) => c.channels.find(x => x.id === id) || null; // без замыкания на внешний ctx
@@ -196,7 +203,7 @@ const avatarKv = [];
 apiMock.db.kvSet = async (acc, k, v) => { avatarKv.push([acc, k, v]); };
 const chSub = { id: 'chn_1', key: 'k'.repeat(64), is_owner: false, name: 'C1', about: '' };
 const ctxMeta = { channels: [chSub], channelById: (id) => chSub.id === id ? chSub : null };
-const metaPayload = JSON.parse(m.buildMetaPayload({ id: 'chn_1', name: 'New', about: 'Desc', avatar: 'data:img', key_version: 1 }));
+const metaPayload = channelParse(m.buildMetaPayload({ id: 'chn_1', name: 'New', about: 'Desc', avatar: 'data:img', key_version: 1 }));
 ok('ingest meta: kind + мгновенный мутейт', m.ingestChannelEnvelope(ctxMeta, metaPayload, 'o@x.y') === 'meta' && chSub.name === 'New' && chSub.about === 'Desc');
 ok('ingest meta: avatar → kv channel-avatar:', avatarKv.some(([a, k, v]) => a === 'anon' && k === 'channel-avatar:chn_1' && v === 'data:img'));
 
@@ -278,8 +285,8 @@ ok('ingest meta: avatar → kv channel-avatar:', avatarKv.some(([a, k, v]) => a 
   // 3. channelPostsToMessages: формат и «свой пост»
   resetUi();
   mailboxState.state.channels = [{ id: 'chn_1', name: 'C1', owner: 'own@x.ru', is_owner: true }];
-  m.noteChannelPost('chn_1', 100, { id: 'p1', post: { body: 'B1' } }, 'own@x.ru');
-  m.noteChannelPost('chn_1', 200, { id: 'p2', post: { body: 'B2' } }, 'peer@x.ru');
+  m.noteChannelPost('chn_1', 100, { id: 'p1', post_body: 'B1', post_images: [] }, 'own@x.ru');
+  m.noteChannelPost('chn_1', 200, { id: 'p2', post_body: 'B2', post_images: [] }, 'peer@x.ru');
   const msgs = m.channelPostsToMessages(mailboxState.state.channels[0]);
   ok('channelPostsToMessages: свой пост → from=me', msgs[0].from === 'me', msgs);
   ok('channelPostsToMessages: чужой пост → отправитель', msgs[1].from === 'peer@x.ru');

@@ -63,7 +63,6 @@ export const mailboxApi = {
       isBounceMessage: bounce.isBounceMessage,
       bounceRecipients: bounce.bounceRecipients,
       bounceReason: bounce.bounceReason,
-      isChannelEnvelope: channels.isChannelEnvelope,
       ingestChannelEnvelope: channels.ingestChannelEnvelope,
     });
   },
