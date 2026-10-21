@@ -29,6 +29,17 @@ export const invoke = async (cmd, args) => {
 };
 `);
 
+// ── ТАБЛИЦА ответов ядра (кэш для синхронных мест) ──────────────────────
+// Часть решений о состоянии звонка читается в СИНХРОННЫХ местах (шаблон
+// компонента, fire-and-forget hangup), где await недопустим: решение
+// заранее принято ядром и лежит в кэше.
+const TABLE = {
+  idle: { call_idle: true, can_call_back: true, call_active: false, call_incoming_ringing: false, call_outgoing_ringing: false },
+  active: { call_idle: false, can_call_back: false, call_active: true, call_incoming_ringing: false, call_outgoing_ringing: false },
+  incoming_ringing: { call_idle: false, can_call_back: false, call_active: false, call_incoming_ringing: true, call_outgoing_ringing: false },
+  outgoing_ringing: { call_idle: false, can_call_back: false, call_active: false, call_incoming_ringing: false, call_outgoing_ringing: true },
+};
+
 let src = readFileSync(path.join(ROOT, 'src', 'call-state-rule.js'), 'utf8');
 src = src.replace("from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`);
 writeFileSync(MOCKS + '/call-state-rule.mjs', src, 'utf8');
@@ -119,6 +130,30 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
   // («состояние не меняется» и «стало active» дали бы один и тот же ответ).
   ok('callNextState при отказе моста → состояние не меняется',
     (await R.callNextState('outgoing_ringing', 'accepted')) === 'outgoing_ringing');
+}
+
+// ── Кэш таблицы: синхронное чтение решений ядра ────────────────────────
+{
+  reset();
+  state.answers['vault_call_can_table'] = TABLE;
+  ok('до прогрева кэш пуст (решение ещё не принято)',
+    R.canCached('idle', 'call_idle') === false);
+
+  const table = await R.warmCallTable();
+  ok('прогрев зовёт мост с командой таблицы',
+    state.calls.some((c) => c[0] === 'vault_call_can_table'), state.calls);
+  ok('прогрев вернул таблицу', !!table && !!table.idle, table);
+
+  ok('canCached: «звонков нет» в idle → да', R.canCached('idle', 'call_idle') === true);
+  ok('canCached: «звонков нет» в active → нет', R.canCached('active', 'call_idle') === false);
+  ok('canCached: «идёт разговор» в active → да', R.canCached('active', 'call_active') === true);
+  ok('canCached: «идёт разговор» в idle → нет', R.canCached('idle', 'call_active') === false);
+  ok('canCached: «звонит нам» в incoming_ringing → да',
+    R.canCached('incoming_ringing', 'call_incoming_ringing') === true);
+  ok('canCached: «мы звоним» в outgoing_ringing → да',
+    R.canCached('outgoing_ringing', 'call_outgoing_ringing') === true);
+  ok('canCached: неизвестное состояние → нет', R.canCached('busy', 'call_idle') === false);
+  ok('canCached: неизвестный вопрос → нет', R.canCached('idle', 'no_such_question') === false);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

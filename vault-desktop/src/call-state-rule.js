@@ -36,6 +36,52 @@ export async function callNextState(current, event) {
   }
 }
 
+// ТАБЛИЦА ответов «можно ли» по всем состояниям (Rust, call_state::can_table).
+//
+// Зачем целиком: часть решений о состоянии читается в СИНХРОННЫХ местах —
+// в шаблоне компонента и внутри fire-and-forget `hangup`, где `await` внутри
+// сдвинул бы сброс состояния на микротаск (гонка, уже ловившаяся в модуле
+// звонков). Ответ зависит только от состояния, состояний четыре, поэтому
+// таблица кэшируется и не протухает: решение принимает ядро, синхронные
+// места читают уже принятое решение.
+//
+// Отказ моста: таблица остаётся пустой, `canCached` отвечает false — то есть
+// «нельзя». Для «нельзя» безопасный ответ есть всегда: не гасить таймер,
+// не отвечать «занято», не начинать звонок. Обратное («можно») без таблицы
+// означало бы действие, которого мы не проверяли.
+let canTable = null;   // state → {question → bool}
+let canTablePromise = null;
+
+// Синхронное чтение кэша. Возвращает false, если таблицы ещё нет.
+export function canCached(state, question) {
+  const row = canTable && canTable[String(state)];
+  return !!(row && row[question]);
+}
+
+// Заполнить кэш таблицей (один вызов на всё время работы приложения).
+export async function warmCallTable() {
+  try {
+    if (!canTable) {
+      if (!canTablePromise) {
+        canTablePromise = invoke('vault_call_can_table').then((t) => {
+          canTable = t || null;
+          canTablePromise = null;
+          return canTable;
+        }).catch((e) => {
+          report('can_table', e);
+          canTablePromise = null;
+          return null;
+        });
+      }
+      await canTablePromise;
+    }
+    return canTable;
+  } catch (e) {
+    report('can_table', e);
+    return null;
+  }
+}
+
 // Правило «можно ли» — одним вопросом ядру ('arm_ring_timer' | 'start_outgoing' |
 // 'accept_incoming' | 'accept_outgoing' | 'cancel_outgoing' | 'send_dc_hangup' |
 // 'can_call_back' | 'ignore_stale_timeout' | 'apply_sdp' | 'media_fallback').

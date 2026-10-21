@@ -48,13 +48,38 @@ export function installCallStateMock(invokeMock) {
       case 'apply_sdp':
       case 'media_fallback':
       case 'call_active': return current === 'active';
+      case 'call_idle': return current === 'idle';
+      case 'call_incoming_ringing': return current === 'incoming_ringing';
+      case 'call_outgoing_ringing': return current === 'outgoing_ringing';
       default: return false;
     }
+  }
+
+  // ТАБЛИЦА ответов «можно ли» по всем состояниям (как в Rust:
+  // vault::call_state::can_table). Ответ зависит только от состояния, поэтому
+  // таблица не протухает и кэшируется на всё время работы приложения.
+  const QUESTIONS = [
+    'arm_ring_timer', 'start_outgoing', 'accept_incoming', 'accept_outgoing',
+    'cancel_outgoing', 'send_dc_hangup', 'can_call_back', 'ignore_stale_timeout',
+    'apply_sdp', 'media_fallback', 'call_active', 'call_idle',
+    'call_incoming_ringing', 'call_outgoing_ringing',
+  ];
+  const TABLE_STATES = ['idle', 'outgoing_ringing', 'incoming_ringing', 'active'];
+  function canTable() {
+    const table = {};
+    for (const st of TABLE_STATES) {
+      const row = {};
+      for (const q of QUESTIONS) row[q] = can(norm(st), q);
+      table[st] = row;
+    }
+    return table;
   }
 
   const prev = invokeMock;
   invokeMock = async (cmd, args) => {
     switch (cmd) {
+      case 'vault_call_can_table':
+        return canTable();
       case 'vault_call_next_state':
         return nextState(norm(args.current), args.event);
       case 'vault_call_incoming_action':

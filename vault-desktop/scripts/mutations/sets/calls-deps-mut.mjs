@@ -8,7 +8,7 @@ export default {
   smoke: 'calls-deps-smoke.mjs',
   mutations: [
     { name: "перезвонить можно во время активного звонка",
-      pattern: "      && callState === 'idle'",
+      pattern: "      && canCached(callState, 'can_call_back')",
       replacement: "      && true" },
     { name: "перезвонить можно в групповом чате",
       pattern: "      && activeChatType === 'chat'",

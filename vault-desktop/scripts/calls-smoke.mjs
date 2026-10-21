@@ -139,6 +139,12 @@ prepareModuleCopy(
   MOCKS,
 );
 const C = await import(MOCKS + '/features-calls.mjs');
+// ТАБЛИЦА ответов ядра о состоянии звонка (ADR-005 W4): решения «звонков нет?»
+// и «идёт разговор?» читаются из неё СИНХРОННО (шаблон, fire-and-forget
+// hangup), поэтому её надо прогреть ДО проверок. Тот же экземпляр модуля,
+// что и у копии calls.js (путь совпадает).
+const CallStateRule = await import(MOCKS + '/call-state-rule.js');
+await CallStateRule.warmCallTable();
 
 // ── ADR-001: адаптеры под ЯВНЫЕ зависимости ─────────────────────
 // Раньше эти функции брали `ctx` целиком и знали 212 полей App.vue.

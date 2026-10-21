@@ -218,8 +218,18 @@ pub fn vault_build_envelope(
     })
 }
 
-/// Правило «можно ли» (постановка таймера, начало звонка, приём, отмена,
-/// hangup по DC, SDP, запасной «звонок идёт») — решение в Rust.
+/// Таблица ответов «можно ли» для всех состояний звонка — ADR-005 R1 / W4.
+///
+/// Одним вызовом: часть решений о состоянии читается в СИНХРОННЫХ местах
+/// (шаблон компонента, fire-and-forget `hangup`, где await внутри сдвинул бы
+/// сброс состояния на микротаск). Ответ зависит только от состояния, поэтому
+/// JS кэширует таблицу и читает из неё — а решает по-прежнему ядро.
+#[tauri::command]
+pub fn vault_call_can_table() -> serde_json::Value {
+    use vault_client::vault::call_state::can_table;
+    serde_json::to_value(can_table()).unwrap_or(serde_json::Value::Null)
+}
+
 #[tauri::command]
 pub fn vault_call_can(current: String, question: String) -> bool {
     use vault_client::vault::call_state::{can, CallQuestion, CallState};
@@ -239,6 +249,9 @@ pub fn vault_call_can(current: String, question: String) -> bool {
         "apply_sdp" => CallQuestion::ApplySdp,
         "media_fallback" => CallQuestion::MediaFallback,
         "call_active" => CallQuestion::CallActive,
+        "call_idle" => CallQuestion::CallIdle,
+        "call_incoming_ringing" => CallQuestion::CallIncomingRinging,
+        "call_outgoing_ringing" => CallQuestion::CallOutgoingRinging,
         _ => return false,
     };
     can(st, q)

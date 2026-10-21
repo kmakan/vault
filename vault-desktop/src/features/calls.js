@@ -61,6 +61,7 @@ import { callResender, callRequestResender } from './call-resend.js';
 // разговор).
 import {
   can as callCan,
+  canCached,
   callNextState,
   incomingRequestAction,
   hangupSignalKind,
@@ -522,7 +523,8 @@ export async function handleCallSignal(deps, sig, from) {
         // «Вызов отклонён», а не «Нет ответа».
         hangup(deps, type === 'call_reject' ? 'remote_reject' : 'remote',
           await callNextState(useSession().callState, 'hung_up'));
-      } else if (useSession().lastCallId === call_id && useSession().callState === 'idle') {
+      } else if (useSession().lastCallId === call_id
+                 && await callCan(useSession().callState, 'call_idle')) {
         console.log('[call] remote end after local hangup — ensuring cleanup');
         hangup(deps, 'remote_late', await callNextState(useSession().callState, 'hung_up'));
       }
@@ -752,9 +754,14 @@ export async function hangup(deps, reason, nextState) {
   if (deps.stopVideo) deps.stopVideo();
   const c = useSession().currentCall;
   const callId = c ? c.call_id : null;
-  const wasActive = useSession().callState === 'active';
-  const wasIncoming = useSession().callState === 'incoming_ringing';
-  const wasOutgoing = useSession().callState === 'outgoing_ringing';
+  // Состояние звонка — из ТАБЛИЦЫ ОТВЕТОВ ЯДРА (ADR-005 R1 / W4). Здесь
+  // await недопустим: hangup — fire-and-forget, и await внутри сдвинул бы
+  // сброс состояния на микротаск (гонка: новая машина состояний успела бы
+  // начаться, пока старая ещё не сброшена). Таблица приходит одним вызовом и
+  // не протухает — ответ зависит только от состояния.
+  const wasActive = canCached(useSession().callState, 'call_active');
+  const wasIncoming = canCached(useSession().callState, 'call_incoming_ringing');
+  const wasOutgoing = canCached(useSession().callState, 'call_outgoing_ringing');
   console.log('[call] hangup', reason, 'call_id=' + callId, 'state=' + useSession().callState);
   // Снять full-screen уведомление входящего: любой исход
   // (принят/отклонён/таймаут/завершён) гасит системный звонок.
@@ -989,9 +996,11 @@ export function callPillIcon(msg) {
 // ADR-001: зависимости перечислены в сигнатуре, а не берутся из ctx.
 // Функция физически не может задеть поле, которого здесь нет.
 export function canCallBack({ expCalls, callState, activeChatType, peerKeys, activeChat }, msg) {
-  // Перезвонить можно, если звонок не активен и у собеседника есть ключ.
+  // Перезвонить можно, если звонков нет и у собеседника есть ключ.
+  // «Звонков нет» — решение ядра (call_state::can / can_call_back), прочитанное
+  // из кэша таблицы: шаблон компонента вызывает эту функцию синхронно.
   return !!(msg && msg.callEvent && expCalls
-      && callState === 'idle'
+      && canCached(callState, 'can_call_back')
       && activeChatType === 'chat'
       && peerKeys[activeChat]);
 }

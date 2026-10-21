@@ -893,6 +893,7 @@
 // reactive(createCallSession()): мутаторы пишут this.state.* через Vue Proxy,
 // поэтому Vue видит изменения. calls.js мутирует состояние через ctx.X,
 // а App.vue роутит это в computed-прокси → callSession.setX().
+import { warmCallTable } from './call-state-rule.js';
 import { useSession } from './features/call-session.js';
 import { reactive } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -2625,6 +2626,11 @@ export default {
   async mounted() {
     // Duress-замок: включён ли (до авторизации)
     this.checkDuressLock();
+    // ТАБЛИЦА ОТВЕТОВ ЯДРА о состоянии звонка (ADR-005 R1 / W4): решения
+    // «звонков нет?», «идёт разговор?» читаются в СИНХРОННЫХ местах (шаблон
+    // компонента, fire-and-forget hangup), где await недопустим. Один вызов
+    // на всё время работы приложения — ответ зависит только от состояния.
+    warmCallTable();
     applyTheme(loadSavedTheme())
     applyFont(loadSavedFont())
     // НАТИВНЫЕ КНОПКИ УВЕДОМЛЕНИЯ ЗВОНКА

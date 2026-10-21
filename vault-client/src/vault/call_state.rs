@@ -19,6 +19,7 @@
 //! `call_cancel`, `call_reject`) — конвенция, а не реализация: она совпадает
 //! с тем, что принимает `vault_client::vault::call::parse_call_signal`.
 
+use std::collections::BTreeMap;
 /// Состояние звонка на стороне одного абонента.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallState {
@@ -189,6 +190,12 @@ pub enum CallQuestion {
     /// Идёт ли сейчас разговор (влияет на частоту опроса реле: при звонке —
     /// чаще, чтобы сигнал звонка не ждал полный интервал).
     CallActive,
+    /// Звонков нет (состояние «покой»).
+    CallIdle,
+    /// Идёт входящий звонок (звонит нам собеседник).
+    CallIncomingRinging,
+    /// Идёт исходящий звонок (мы звоним, ждём ответа).
+    CallOutgoingRinging,
 }
 
 /// Ответ на правило «можно ли» в текущем состоянии.
@@ -205,6 +212,73 @@ pub fn can(state: CallState, question: CallQuestion) -> bool {
         CallQuestion::ApplySdp => state == CallState::Active,
         CallQuestion::MediaFallback => state == CallState::Active,
         CallQuestion::CallActive => state == CallState::Active,
+        CallQuestion::CallIdle => state == CallState::Idle,
+        CallQuestion::CallIncomingRinging => state == CallState::IncomingRinging,
+        CallQuestion::CallOutgoingRinging => state == CallState::OutgoingRinging,
+    }
+}
+
+/// Таблица ответов «можно ли» для КАЖДОГО состояния.
+///
+/// Зачем целиком: часть решений о состоянии читается в СИНХРОННЫХ местах —
+/// в шаблоне компонента и внутри fire-and-forget `hangup`, где `await` внутри
+/// сдвинул бы сброс состояния на микротаск (гонка, уже ловившаяся в этом
+/// модуле). Ответ зависит только от состояния, а состояний четыре, поэтому
+/// JS получает таблицу ОДНИМ вызовом и кэширует её: решение по-прежнему
+/// принимает ядро, а синхронные места читают уже принятое решение.
+///
+/// Кэш не протухает: таблица выводится из кода ядра и не меняется в рантайме.
+pub fn can_table() -> BTreeMap<&'static str, BTreeMap<&'static str, bool>> {
+    let states = [
+        CallState::Idle,
+        CallState::OutgoingRinging,
+        CallState::IncomingRinging,
+        CallState::Active,
+    ];
+    let questions = [
+        CallQuestion::ArmRingTimer,
+        CallQuestion::StartOutgoing,
+        CallQuestion::AcceptIncoming,
+        CallQuestion::AcceptOutgoing,
+        CallQuestion::CancelOutgoing,
+        CallQuestion::SendDcHangup,
+        CallQuestion::CanCallBack,
+        CallQuestion::IgnoreStaleTimeout,
+        CallQuestion::ApplySdp,
+        CallQuestion::MediaFallback,
+        CallQuestion::CallActive,
+        CallQuestion::CallIdle,
+        CallQuestion::CallIncomingRinging,
+        CallQuestion::CallOutgoingRinging,
+    ];
+    let mut table = BTreeMap::new();
+    for state in states {
+        let row: BTreeMap<&'static str, bool> = questions
+            .iter()
+            .map(|q| (question_name(*q), can(state, *q)))
+            .collect();
+        table.insert(state.as_str(), row);
+    }
+    table
+}
+
+/// Проводное имя вопроса (совпадает со строкой в JS).
+pub fn question_name(q: CallQuestion) -> &'static str {
+    match q {
+        CallQuestion::ArmRingTimer => "arm_ring_timer",
+        CallQuestion::StartOutgoing => "start_outgoing",
+        CallQuestion::AcceptIncoming => "accept_incoming",
+        CallQuestion::AcceptOutgoing => "accept_outgoing",
+        CallQuestion::CancelOutgoing => "cancel_outgoing",
+        CallQuestion::SendDcHangup => "send_dc_hangup",
+        CallQuestion::CanCallBack => "can_call_back",
+        CallQuestion::IgnoreStaleTimeout => "ignore_stale_timeout",
+        CallQuestion::ApplySdp => "apply_sdp",
+        CallQuestion::MediaFallback => "media_fallback",
+        CallQuestion::CallActive => "call_active",
+        CallQuestion::CallIdle => "call_idle",
+        CallQuestion::CallIncomingRinging => "call_incoming_ringing",
+        CallQuestion::CallOutgoingRinging => "call_outgoing_ringing",
     }
 }
 
@@ -266,6 +340,86 @@ pub fn ignore_stale_ring_timeout(state: CallState) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// Таблица ответов: каждая строка — состояние, каждый столбец — вопрос.
+    /// Смысл теста — в СОВПАДЕНИИ с `can`: таблица обязана быть теми же
+    /// ответами, иначе JS закэширует не то.
+    #[test]
+    fn can_table_matches_can_for_every_state() {
+        let table = can_table();
+        let states = ["idle", "outgoing_ringing", "incoming_ringing", "active"];
+        for s in states {
+            let st = CallState::from_str(s).expect("состояние разбирается");
+            let row = table.get(s).expect("состояние есть в таблице");
+            assert_eq!(
+                row.get("call_active").copied(),
+                Some(can(st, CallQuestion::CallActive)),
+                "call_active для {}",
+                s
+            );
+            assert_eq!(
+                row.get("call_idle").copied(),
+                Some(can(st, CallQuestion::CallIdle)),
+                "call_idle для {}",
+                s
+            );
+            assert_eq!(
+                row.get("can_call_back").copied(),
+                Some(can(st, CallQuestion::CanCallBack)),
+                "can_call_back для {}",
+                s
+            );
+            assert_eq!(
+                row.get("call_incoming_ringing").copied(),
+                Some(can(st, CallQuestion::CallIncomingRinging)),
+                "call_incoming_ringing для {}",
+                s
+            );
+            assert_eq!(
+                row.get("call_outgoing_ringing").copied(),
+                Some(can(st, CallQuestion::CallOutgoingRinging)),
+                "call_outgoing_ringing для {}",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn can_table_has_all_states_and_questions() {
+        let table = can_table();
+        assert_eq!(table.len(), 4, "состояний четыре");
+        for (_, row) in table.iter() {
+            assert_eq!(row.len(), 14, "вопросов четырнадцать");
+            assert!(row.contains_key("arm_ring_timer"));
+            assert!(row.contains_key("start_outgoing"));
+            assert!(row.contains_key("accept_incoming"));
+            assert!(row.contains_key("apply_sdp"));
+            assert!(row.contains_key("media_fallback"));
+        }
+    }
+
+    #[test]
+    fn new_state_identity_questions() {
+        assert!(can(CallState::Idle, CallQuestion::CallIdle));
+        assert!(!can(CallState::Active, CallQuestion::CallIdle));
+        assert!(can(
+            CallState::IncomingRinging,
+            CallQuestion::CallIncomingRinging
+        ));
+        assert!(!can(
+            CallState::OutgoingRinging,
+            CallQuestion::CallIncomingRinging
+        ));
+        assert!(can(
+            CallState::OutgoingRinging,
+            CallQuestion::CallOutgoingRinging
+        ));
+        assert!(!can(
+            CallState::IncomingRinging,
+            CallQuestion::CallOutgoingRinging
+        ));
+    }
+
     use super::*;
 
     #[test]

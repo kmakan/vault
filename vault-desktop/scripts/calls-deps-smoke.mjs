@@ -101,7 +101,11 @@ writeFileSync(
       "from '../call-state-rule.js'",
     ),
 );
-writeFileSync(`${MOCKS}/tauri-core.js`, 'export const invoke = async () => null;\n');
+// Мост смоука идёт через общий диспетчер: так работает и двойник правила
+// звонка (call-state-mock) — он отвечает на решения ядра о состоянии.
+globalThis.__invokeMock = (await import('./lib/call-state-mock.mjs'))
+  .installCallStateMock(async () => null);
+writeFileSync(`${MOCKS}/tauri-core.js`, 'export const invoke = (...a) => globalThis.__invokeMock(...a);\n');
 // Адаптер правила звонка — копия настоящего файла с подменой Tauri-зависимости.
 writeFileSync(
   `${MOCKS}/call-state-rule.js`,
@@ -111,6 +115,10 @@ writeFileSync(
   ),
 );
 const C = await import(MOCKS + '/features/calls.js');
+// ТАБЛИЦА ответов ядра о состоянии звонка (ADR-005 W4) — прогреваем до
+// проверок canCallBack (она читает решение синхронно).
+const CallStateRule = await import(MOCKS + '/call-state-rule.js');
+await CallStateRule.warmCallTable();
 
 // ── 1. canCallBack: объявлено 5 полей, читать можно только их ───────
 {
