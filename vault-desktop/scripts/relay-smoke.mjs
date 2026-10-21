@@ -108,9 +108,23 @@ prepareModuleCopy(
     '../api.js': 'api.js',
     '../relay-client.js': 'relay-client.js',
     './mailbox-api.js': 'mailbox-api.js',
+    '../call-state-rule.js': 'call-state-rule.js',
   },
   MOCKS,
 );
+// Адаптер правила состояния звонка (ADR-005 W4): настоящий файл, подменён
+// только Tauri-вызов (мост → мок). Без мока адаптер ушёл бы в запасной путь
+// («звонка нет»), и смоук проверял бы НЕ то поведение, что в проде.
+prepareModuleCopy(
+  path.join(FEATURES, '..', 'call-state-rule.js'),
+  MOCKS + '/call-state-rule.js',
+  { '@tauri-apps/api/core': 'tauri-core.js' },
+  MOCKS,
+);
+writeFileSync(MOCKS + '/tauri-core.js',
+  'export const invoke = (...a) => globalThis.__callStateInvoke(...a);\n');
+globalThis.__callStateInvoke = (await import('./lib/call-state-mock.mjs'))
+  .installCallStateMock(async () => null);
 const R = await import(MOCKS + '/features-relay.mjs');
 const bridge = await import(MOCKS + '/mailbox-api.js');
 // Владельцы состояния — те же самые инстансы, что видит копия relay.js

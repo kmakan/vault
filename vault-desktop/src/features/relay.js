@@ -20,6 +20,7 @@
 // Инвариант: ошибки релея НЕ влияют на почту — доставка продолжается.
 
 import api, { db } from '../api.js';
+import { can as callCan } from '../call-state-rule.js';
 import * as relay from '../relay-client.js';
 import { relayTicker, fastFetchCycle, pollingCycle, idleFallback } from './relay-idle.js';
 import { relayState, idleState } from './relay-idle.js';
@@ -330,7 +331,9 @@ export async function idleLoop(ctx) {
   // 60с-ретрая (idleFallback.arm ниже), поэтому резервный IDLE не восстанавливался
   // сам и почта оставалась на 30с-поллинге. Ходим через useSession() — как и
   // остальные обращения к call-session в этом файле.
-  if ((sessionStore.state.isLoggedIn) && useSession().callState !== 'idle') startPolling(ctx, 3000);
+  // Частота опроса при живом звонке — решение протокола (в Rust): звонок ждать
+  // полный интервал нельзя, сигнал звонка должен прийти быстро.
+  if ((sessionStore.state.isLoggedIn) && await callCan(useSession().callState, 'call_active')) startPolling(ctx, 3000);
   // Резервный IDLE умер (провайдер/сеть): обычный поллинг продолжает
   // работать; через 60с пробуем снова — и снова СНАЧАЛА Rust-монитор
   // (idleLoop), то есть при его успехе владение возвращается монитору,

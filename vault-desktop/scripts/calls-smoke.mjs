@@ -93,6 +93,14 @@ writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export defau
 writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => "fp:" + k; export const hasPeerToken = async () => false;');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
+// Адаптер правила — настоящий файл src/call-state-rule.js, меняется только
+// Tauri-зависимость (мост → мок).
+prepareModuleCopy(
+  ROOT + '/../src/call-state-rule.js',
+  MOCKS + '/call-state-rule.js',
+  { '@tauri-apps/api/core': 'tauri-core.js' },
+  MOCKS,
+);
 writeFileSync(MOCKS + '/history.js', 'export const saveHistory = (a, c, m) => globalThis.__histMock.saveHistory(a, c, m); export const loadHistory = (a, c) => globalThis.__histMock.loadHistory(a, c);');
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
@@ -101,6 +109,9 @@ globalThis.__relayMock = relayMock;
 globalThis.__cryptoMock = cryptoMock;
 globalThis.__histMock = histMock;
 globalThis.__invokeMock = async () => null;
+// Правило состояния звонка — в Rust; здесь — его тестовый двойник (таблица
+// правил повторяет vault-client/src/vault/call_state.rs).
+globalThis.__invokeMock = (await import('./lib/call-state-mock.mjs')).installCallStateMock(globalThis.__invokeMock);
 
 prepareModuleCopy(
   ROOT + '/../src/features/calls.js',
@@ -110,6 +121,7 @@ prepareModuleCopy(
     '../relay-client.js': 'relay-client.js',
     '../crypto.js': 'crypto.js',
     '../history.js': 'history.js',
+    '../call-state-rule.js': 'call-state-rule.js',
     '@tauri-apps/api/core': 'tauri-core.js',
   },
   MOCKS,
@@ -135,6 +147,12 @@ globalThis.setInterval = (fn, ms) => { const id = ++timerSeq; timers.set(id, { f
 globalThis.clearInterval = (id) => { timers.delete(id); };
 globalThis.setTimeout = (fn, ms) => { const id = ++timerSeq; timers.set(id, { fn, ms, kind: 't' }); return id; };
 globalThis.clearTimeout = (id) => { timers.delete(id); };
+// Дождаться отложенных (fire-and-forget) записей: пилюля о звонке и событие
+// пишутся без await — после них нужен тик, иначе проверка успевает уйти.
+// setImmediate, а НЕ setTimeout: в смоуке таймеры подменены (fireTimer
+// двигает их вручную), и setTimeout здесь просто не сработает.
+const flush = () => new Promise((r) => setImmediate(r));
+
 async function fireTimer(id) {
   const t = timers.get(id);
   if (!t) return;
@@ -405,6 +423,7 @@ console.log('5. lifecycle');
   check('ретрансляция call_request — только почтой', apiMock.calls.filter(c => c[0] === 'sendReadReceipt').length >= 1 && relayMock.pubs.length === 0);
   // таймаут гудков
   await fireTimer(ctx.session.callRingTimer);
+  await flush(); // пилюля пишется fire-and-forget (sqlite) — дожидаемся тика
   check('таймаут гудков → cancel → idle + no_answer-пилюля', ctx.session.callState === 'idle' && ctx.chat.state.messages.some(m => m.callEvent && m.callEvent.kind === 'no_answer'));
   histMock.store = {};
   // startCall без ключа пира — no-op
@@ -541,9 +560,11 @@ console.log('7. mute/speaker/resend/watchdog/часы');
   const wd = makeCtx({ callState: 'active', currentCall: { call_id: 'w1', peer: 'peer@x.ru' }, callMediaConnected: false });
   C.armMediaFallback(wd);
   await fireTimer(wd.session.mediaFallbackTimer);
+  await flush(); // колбэк watchdog асинхронный (решение Rust) — дожидаемся
   check('watchdog 90с → hangup(connect_timeout) + call_end собеседнику', wd.session.callState === 'idle' && apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
   // часы — владелец session.startCallClock/stopCallClock (ADR-004 E).
   // setInterval-хендл попадает в управляемую карту timers → fireTimer тикует.
+  await flush(); // доспавшиеся отложенные сбросы состояния не должны мешать
   const ck = makeCtx();
   const id = ck.session.startCallClock();
   await fireTimer(id);

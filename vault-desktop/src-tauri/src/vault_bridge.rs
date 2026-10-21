@@ -80,6 +80,132 @@ pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serd
 /// ADR-005 R1 / W4: правило времени жизни сообщения — в Rust.
 /// JS не считает «когда истечёт» сам: он получает готовые значения отсюда.
 ///
+/// Правило состояния звонка — в ядре (ADR-005 R1 / W4).
+///
+/// JS не решает, «занято ли», «вытеснять ли» и «какой сигнал уходит при
+/// отбое»: это протокол, и по нему фронт с ядром обязаны считать одинаково.
+/// Здесь только транспорт: строка → enum → правило → строка.
+///
+/// Неизвестное состояние/событие трактуем как «состояние не меняется»:
+/// решение не принято — значит, перехода нет.
+#[tauri::command]
+pub fn vault_call_next_state(current: String, event: String) -> String {
+    use vault_client::vault::call_state::{next_state, CallEvent, CallState};
+    let st = match CallState::from_str(&current) {
+        Some(s) => s,
+        None => return current,
+    };
+    let ev = match event.as_str() {
+        "request_received" => CallEvent::RequestReceived,
+        "outgoing_started" => CallEvent::OutgoingStarted,
+        "accepted" => CallEvent::Accepted,
+        "hung_up" => CallEvent::HungUp,
+        "ring_timeout" => CallEvent::RingTimeout,
+        "preempted" => CallEvent::Preempted,
+        _ => return current,
+    };
+    match next_state(st, ev) {
+        Some(next) => next.as_str().to_string(),
+        None => current,
+    }
+}
+
+/// Правило «можно ли» (постановка таймера, начало звонка, приём, отмена,
+/// hangup по DC, SDP, запасной «звонок идёт») — решение в Rust.
+#[tauri::command]
+pub fn vault_call_can(current: String, question: String) -> bool {
+    use vault_client::vault::call_state::{can, CallQuestion, CallState};
+    let st = match CallState::from_str(&current) {
+        Some(s) => s,
+        None => return false,
+    };
+    let q = match question.as_str() {
+        "arm_ring_timer" => CallQuestion::ArmRingTimer,
+        "start_outgoing" => CallQuestion::StartOutgoing,
+        "accept_incoming" => CallQuestion::AcceptIncoming,
+        "accept_outgoing" => CallQuestion::AcceptOutgoing,
+        "cancel_outgoing" => CallQuestion::CancelOutgoing,
+        "send_dc_hangup" => CallQuestion::SendDcHangup,
+        "can_call_back" => CallQuestion::CanCallBack,
+        "ignore_stale_timeout" => CallQuestion::IgnoreStaleTimeout,
+        "apply_sdp" => CallQuestion::ApplySdp,
+        "media_fallback" => CallQuestion::MediaFallback,
+        "call_active" => CallQuestion::CallActive,
+        _ => return false,
+    };
+    can(st, q)
+}
+
+/// Применим ли переход в текущем состоянии (решение — тоже в Rust).
+#[tauri::command]
+pub fn vault_call_can_apply(current: String, event: String) -> bool {
+    use vault_client::vault::call_state::{can_apply, CallEvent, CallState};
+    let st = match CallState::from_str(&current) {
+        Some(s) => s,
+        None => return false,
+    };
+    let ev = match event.as_str() {
+        "request_received" => CallEvent::RequestReceived,
+        "outgoing_started" => CallEvent::OutgoingStarted,
+        "accepted" => CallEvent::Accepted,
+        "hung_up" => CallEvent::HungUp,
+        "ring_timeout" => CallEvent::RingTimeout,
+        "preempted" => CallEvent::Preempted,
+        _ => return false,
+    };
+    can_apply(st, ev)
+}
+
+/// Что делать с пришедшим `call_request`: принять / проигнорировать / отказать
+/// (занято) / вытеснить текущий звонок.
+#[tauri::command]
+pub fn vault_call_incoming_action(current: String, same_call: bool, has_current: bool) -> String {
+    use vault_client::vault::call_state::{incoming_request_action, CallState};
+    let st = match CallState::from_str(&current) {
+        Some(s) => s,
+        None => return "ignore".to_string(),
+    };
+    match incoming_request_action(st, same_call, has_current) {
+        vault_client::vault::call_state::RequestAction::Accept => "accept",
+        vault_client::vault::call_state::RequestAction::Ignore => "ignore",
+        vault_client::vault::call_state::RequestAction::Busy => "busy",
+        vault_client::vault::call_state::RequestAction::Preempt => "preempt",
+    }
+    .to_string()
+}
+
+/// Тип терминального сигнала при отбое: `call_end` (разговор был) или
+/// `call_cancel` (звонок не состоялся).
+#[tauri::command]
+pub fn vault_call_hangup_signal_kind(state: String) -> String {
+    use vault_client::vault::call_state::{hangup_signal_kind, CallState};
+    let st = match CallState::from_str(&state) {
+        Some(s) => s,
+        None => return "call_cancel".to_string(),
+    };
+    hangup_signal_kind(st).to_string()
+}
+
+/// Можно ли начать исходящий звонок из этого состояния.
+#[tauri::command]
+pub fn vault_call_can_start(state: String) -> bool {
+    use vault_client::vault::call_state::{can_start_outgoing, CallState};
+    match CallState::from_str(&state) {
+        Some(s) => can_start_outgoing(s),
+        None => false,
+    }
+}
+
+/// Игнорировать ли «поздний» таймаут гудка (звонок уже идёт).
+#[tauri::command]
+pub fn vault_call_ignore_stale_ring_timeout(state: String) -> bool {
+    use vault_client::vault::call_state::{ignore_stale_ring_timeout, CallState};
+    match CallState::from_str(&state) {
+        Some(s) => ignore_stale_ring_timeout(s),
+        None => false,
+    }
+}
+
 /// Момент истечения: `base_ms + ttl_secs*1000` (0 — не исчезает).
 #[tauri::command]
 pub fn vault_ephemeral_expire_at(base_ms: i64, ttl_secs: i64) -> i64 {

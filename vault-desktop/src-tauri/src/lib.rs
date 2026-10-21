@@ -2265,6 +2265,14 @@ pub fn run() {
             voicenote::voicenote_stop,
             // M1.9: vault-client core bridge (MessageStore classify + store).
             vault_bridge::vault_classify_incoming,
+            // W4: правило состояния звонка — решение в Rust (ADR-005 R1).
+            vault_bridge::vault_call_next_state,
+            vault_bridge::vault_call_can,
+            vault_bridge::vault_call_can_apply,
+            vault_bridge::vault_call_incoming_action,
+            vault_bridge::vault_call_hangup_signal_kind,
+            vault_bridge::vault_call_can_start,
+            vault_bridge::vault_call_ignore_stale_ring_timeout,
             vault_bridge::vault_ephemeral_expire_at,
             vault_bridge::vault_ephemeral_is_expired,
             vault_bridge::vault_ephemeral_remaining_ms,

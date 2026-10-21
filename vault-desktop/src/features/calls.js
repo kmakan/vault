@@ -46,6 +46,31 @@ import { delay, later } from './timing.js';
 import { fastFetcher, connLostGuard } from './call-idle.js';
 import { useSession } from './call-session.js';
 import { callResender, callRequestResender } from './call-resend.js';
+
+// Правило состояния звонка — в Rust (ADR-005 R1 / W4, `t_821261f7`).
+//
+// ЧТО ОСТАЛОСЬ В JS: чтение ТЕКУЩЕГО состояния (владелец — наш) и
+// исполнение решения. ЧТО УШЛО В RUST: «можно ли» (поставить таймер гудка,
+// начать звонок, принять, отменить, отправить hangup по DC, применить SDP) и
+// «в какое состояние переходим».
+//
+// Почему так: расхождение фронта и ядра в правилах машины состояний означает
+// «обрыв на живом звонке» или «пропавший вызов» — оба случая уже были
+// (инцидент 12.10.2026: таймер гудка, пришедший после call_accept, рвал живой
+// разговор).
+import {
+  can as callCan,
+  callNextState,
+  incomingRequestAction,
+  hangupSignalKind,
+} from '../call-state-rule.js';
+
+// Перевести состояние по событию (решение — в Rust).
+async function applyCallState(event) {
+  const next = await callNextState(useSession().callState, event);
+  if (next) useSession().setCallState(next);
+  return next;
+}
 import { sessionStore, uiStore, chatStore } from './session-store.js';
 import { identityStore } from './identity-store.js';
 const terminalSender = createTerminalSender();
@@ -129,14 +154,15 @@ const ringTimer = createRingTimer();
 // затем (асинхронно) уточняется реальной настройкой. Гонка учтена:
 // если за это время звонок уже снят/принят (callRingTimer !== null
 // меняется на null) — переставлять таймер нельзя.
-function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
-  const start = (ms) => {
-    if (!useSession().currentCall || useSession().callState !== 'incoming_ringing') return;
+async function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
+  const start = async (ms) => {
+    if (!useSession().currentCall) return;
+    if (!(await callCan(useSession().callState, 'arm_ring_timer'))) return;
     useSession().setCallRingTimer(ringTimer.start(ms, () => cancelCall(deps, 'timeout')));
   };
-  start(fallbackMs);
-  fetchRingDurationMs().then((ms) => {
-    if (useSession().callState !== 'incoming_ringing') return;
+  await start(fallbackMs);
+  fetchRingDurationMs().then(async (ms) => {
+    if (!(await callCan(useSession().callState, 'arm_ring_timer'))) return;
     start(ms);
   }).catch(() => { /* дефолт уже стоит */ });
 }
@@ -357,9 +383,17 @@ export async function handleCallSignal(deps, sig, from) {
     if (await isCallSeen(sessionStore.getCurrentEmail(), call_id)) return;
     await rememberCallSeen(sessionStore.getCurrentEmail(), call_id);
   }
-  // Чужой звонок во время активного — отвечаем занято (call_reject).
-  if (useSession().callState !== 'idle' && useSession().currentCall
-      && useSession().currentCall.call_id !== call_id && type === 'call_request') {
+  // Чужой звонок, пока мы говорим — решение «занято» (call_reject).
+  // ПРАВИЛО — в Rust: «можно ли отвечать занято» зависит от состояния, и
+  // фронт с ядром обязаны считать одинаково.
+  const reqAction = type === 'call_request'
+    ? await incomingRequestAction(
+        useSession().callState,
+        !!(useSession().currentCall && useSession().currentCall.call_id === call_id),
+        !!useSession().currentCall)
+    : 'ignore';
+  if (reqAction === 'busy' && useSession().currentCall
+      && useSession().currentCall.call_id !== call_id) {
     await sendCallEnvelope(deps, from, { type: 'call_reject', call_id });
     // Пропущенные вызовы: мы говорили по другому звонку
     await recordCallEvent(deps, from, 'missed', sig.ts, 0, call_id);
@@ -374,11 +408,12 @@ export async function handleCallSignal(deps, sig, from) {
       // ГАРАНТИЯ ПОКАЗА: НОВЫЙ call_request ВСЕГДА вытесняет любое
       // состояние, кроме реального разговора (active) — даже если state
       // machine зависла в ringing от старого конверта без currentCall.
-      if (useSession().callState !== 'idle' && useSession().callState !== 'active') {
+      // Решение «вытеснить или принять» — в Rust.
+      if (reqAction === 'preempt') {
         console.warn('[call] forcing reset before new request (state=' + useSession().callState + ')');
-        await hangup(deps, 'preempt');
+        await hangup(deps, 'preempt', await callNextState(useSession().callState, 'preempted'));
       }
-      if (useSession().callState !== 'idle') return;
+      if (reqAction !== 'accept' && reqAction !== 'preempt') return;
       // OFFER В call_request: звонящий создаёт offer ДО набора
       // он едет в первом письме. Сохраняем: при accept сразу создадим
       // answer (1 hop вместо 2). Если sdp нет (старая версия/fallback) —
@@ -389,7 +424,7 @@ export async function handleCallSignal(deps, sig, from) {
         kemct: sig.kemct || null, senderEk: sig.sender_ek || null,
       });
       useSession().setLastCallId(call_id);
-      useSession().setCallState('incoming_ringing');
+      await applyCallState('request_received');
       useSession().setMuted(false);
       useSession().state.callStartedAt = Date.now();
       console.log('[call] incoming_ringing SET for', call_id, 'from', from);
@@ -414,7 +449,7 @@ export async function handleCallSignal(deps, sig, from) {
       // state machine: если kv не ответил — дефолт 180с (было хардкодом).
       // 180с вместо прежних 90с: call_accept/answer по почте идут долго
       // (SMTP+доставка+IMAP), звонок «сгорал» до ответа собеседника.
-      armRingTimer(deps, DEFAULT_RING_MS);
+      await armRingTimer(deps, DEFAULT_RING_MS);
       // S5-2 (контракт C): юзер уже нажал «Ответить»/«Отклонить» в
       // уведомлении, пока приложение поднималось. Звонок только что
       // появился в incoming_ringing — применяем накопленное решение один
@@ -431,7 +466,7 @@ export async function handleCallSignal(deps, sig, from) {
     }
     case 'call_accept': {
       if (useSession().currentCall && useSession().currentCall.call_id === call_id
-          && useSession().callState === 'outgoing_ringing') {
+          && await callCan(useSession().callState, 'accept_outgoing')) {
         // Собеседник принял — таймер отмены больше не нужен.
         ringTimer.stop();
         useSession().setCallRingTimer(null);
@@ -441,7 +476,7 @@ export async function handleCallSignal(deps, sig, from) {
         // Гудки исходящего → чайм соединения. stop не нужен
         // play сам останавливает предыдущий звук (Rust/HTML5).
         playCallSound(deps, 'connect', false);
-        useSession().setCallState('active');
+        await applyCallState('accepted');
         // Таймер НЕ запускаем: ждём событие call-media-connected
         // из Rust (реальный звук). Предохранитель 120с — если событие
         // потерялось, показываем таймер хоть когда-нибудь.
@@ -489,10 +524,11 @@ export async function handleCallSignal(deps, sig, from) {
       if (useSession().currentCall && useSession().currentCall.call_id === call_id) {
         // remote_reject — отдельно от remote: звонящий увидит
         // «Вызов отклонён», а не «Нет ответа».
-        hangup(deps, type === 'call_reject' ? 'remote_reject' : 'remote');
+        hangup(deps, type === 'call_reject' ? 'remote_reject' : 'remote',
+          await callNextState(useSession().callState, 'hung_up'));
       } else if (useSession().lastCallId === call_id && useSession().callState === 'idle') {
         console.log('[call] remote end after local hangup — ensuring cleanup');
-        hangup(deps, 'remote_late');
+        hangup(deps, 'remote_late', await callNextState(useSession().callState, 'hung_up'));
       }
       // ЗАПОМНИТЬ ТЕРМИНАЛЬНЫЙ call_id ВСЕГДА
       // доставки (INBOX/All Mail/Спам — разные копии, порядок не
@@ -510,7 +546,7 @@ export async function handleCallSignal(deps, sig, from) {
       // (завершает handshake, DTLS-SRTP устанавливается).
       console.log('[call] sdp received', call_id, 'role=' + sig.role, 'state=' + useSession().callState);
       if (!useSession().currentCall || useSession().currentCall.call_id !== call_id
-          || useSession().callState !== 'active') {
+          || !(await callCan(useSession().callState, 'apply_sdp'))) {
         console.warn('[call] sdp DROPPED by guard:', call_id, 'role=' + sig.role,
             'state=' + useSession().callState, 'current=' + (useSession().currentCall && useSession().currentCall.call_id));
         break;
@@ -537,11 +573,12 @@ export async function handleCallSignal(deps, sig, from) {
 export async function startCall(deps) {
   const peer = chatStore.state.activeChat;
   if (!peer || peer === '__notes__' || chatStore.state.activeChatType !== 'chat') return;
-  if (useSession().callState !== 'idle' || !identityStore.state.peerKeys[peer]) return;
+  if (!identityStore.state.peerKeys[peer]) return;
+  if (!(await callCan(useSession().callState, 'start_outgoing'))) return;
   const call_id = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   useSession().setCurrentCall({ call_id, peer });
   useSession().setLastCallId(call_id);
-  useSession().setCallState('outgoing_ringing');
+  await applyCallState('outgoing_started');
   useSession().setMuted(false);
   startFastPolling(() => deps.idleLoop(), useSession().callIdleMonitorUp);
   // для call_accept может превысить 180с, и звонок сгорал до ответа;
@@ -591,7 +628,7 @@ export async function startCall(deps) {
     useSession().setPendingKemct(null); useSession().setPendingSenderEk(null);
   } catch (e) {
     console.error('call_request failed:', e);
-    hangup(deps, 'error');
+    hangup(deps, 'error', await callNextState(useSession().callState, 'hung_up'));
     return;
   }
   // (Гудки исходящего уже запущены ДО отправки — см. выше; сюда
@@ -619,7 +656,8 @@ export async function startCall(deps) {
 
 export async function acceptCall(deps) {
   const c = useSession().currentCall;
-  if (!c || useSession().callState !== 'incoming_ringing') return;
+  if (!c) return;
+  if (!(await callCan(useSession().callState, 'accept_incoming'))) return;
   // Ответили — рингтон и таймер отмены в сторону, чайм соединения.
   // stop не нужен: play сам останавливает предыдущий звук.
   ringTimer.stop();
@@ -629,12 +667,13 @@ export async function acceptCall(deps) {
   // Задержка 1.2с перед запуском исходящего гудка — даёт время установиться
   // media-каналу (иначе гудок зациклен 3с и слышен артефакт). Fire-and-forget
   // через timing.js → в calls.js нет bare setTimeout (ADR-004 G).
-  later(() => {
-    if (useSession().callState === 'active' && !useSession().callMediaConnected) {
+  later(async () => {
+    if (!useSession().callMediaConnected
+        && await callCan(useSession().callState, 'media_fallback')) {
       playCallSound(deps, 'outgoing', true);
     }
   }, 1200);
-  useSession().setCallState('active');
+  await applyCallState('accepted');
   // S6: звонок принят — снимаем НАТИВНОЕ уведомление и рингтон (экран и звук
   // ведёт приложение). Иначе «Входящий звонок — ответьте в приложении»
   // висело бы всю длительность разговора.
@@ -686,12 +725,12 @@ export async function rejectCall(deps) {
     // Фаза 3: решение монитору-владельцу (нет missed поверх).
     api.reportCallState(c.call_id, 'reject');
   }
-  hangup(deps, 'reject');
+  hangup(deps, 'reject', await callNextState(useSession().callState, 'hung_up'));
 }
 
 export async function endCall(deps) {
   const c = useSession().currentCall;
-  if (c && useSession().callState === 'active') {
+  if (c && await callCan(useSession().callState, 'send_dc_hangup')) {
     // «hangup» по WebRTC DataChannel
     // собеседник получает за миллисекунды.
     // email 30-60с, и собеседник сидел с «активным» звонком.
@@ -700,11 +739,17 @@ export async function endCall(deps) {
     // 3 попытки: сразу, +3с, +7с.
     sendTerminalRepeat(deps, c.peer, 'call_end', c.call_id);
   }
-  hangup(deps, 'end');
+  hangup(deps, 'end', await callNextState(useSession().callState, 'hung_up'));
 }
 
 // Локальный сброс состояния (после сигнала, отмены или таймаута).
-export async function hangup(deps, reason) {
+export async function hangup(deps, reason, nextState) {
+  // nextState — решение Rust, вычисленное ВЫЗЫВАЮЩИМ (до входа в hangup).
+  // Почему не здесь: hangup — fire-and-forget (см. комментарий в cancelCall),
+  // и await внутри сдвинул бы сброс состояния на микротаск — появилась бы
+  // гонка: новая машина состояний успевала бы начать звонок, пока старое
+  // состояние ещё не сброшено. Поэтому решение считается ДО, а сброс —
+  // синхронно, как было.
   // Видео гасим ЗДЕСЬ, а не только в UI-пути App.vue: раньше внутренние
   // вызовы (отклонение/таймаут/ошибка собеседника) оставляли камеру включённой
   // — это приватность, а не косметика.
@@ -760,7 +805,10 @@ export async function hangup(deps, reason) {
       : 'ended';
     api.reportCallState(callId, st);
   }
-  useSession().setCallState('idle');
+  // По умолчанию — «отбой → idle». Это ровно то, что вернёт Rust для события
+  // 'hung_up' (правило в ядре); значение-запасной на случай, если вызывающий
+  // не передал решение (прямой вызов). Синхронно — гонки нет.
+  useSession().setCallState(nextState || 'idle');
   useSession().setCurrentCall(null);
   useSession().setMuted(false);
   useSession().setSpeaker(false);
@@ -792,7 +840,7 @@ export async function cancelCall(deps, reason) {
   // может сработать ПОЗЖЕ, чем call_accept дошёл по почте (SMTP с
   // Android + доставка + IMAP ≈ 90-180с). Если звонок уже active —
   // НЕ рвём живой звонок.
-  if (reason === 'timeout' && useSession().callState === 'active') {
+  if (reason === 'timeout' && await callCan(useSession().callState, 'ignore_stale_timeout')) {
     console.warn('[call] stale ring timeout ignored — call is active');
     return;
   }
@@ -803,10 +851,13 @@ export async function cancelCall(deps, reason) {
   // state на active, и hangup рвёт живой звонок.
   // Повтор сигнала: 3 попытки — см. sendTerminalRepeat.
   if (c) {
-    const type = useSession().callState === 'active' ? 'call_end' : 'call_cancel';
+    // Тип терминального сигнала — решение протокола (в Rust): у собеседника в
+    // истории «разговор был» (call_end) и «звонок сорвался» (call_cancel) —
+    // разные вещи.
+    const type = await hangupSignalKind(useSession().callState);
     sendTerminalRepeat(deps, c.peer, type, c.call_id);
   }
-  hangup(deps, reason || 'cancel');
+  hangup(deps, reason || 'cancel', await callNextState(useSession().callState, 'hung_up'));
 }
 
 // ── Отбой письма (DSN/bounce): гасим висящий исходящий вызов ──────────
@@ -829,7 +880,8 @@ export async function onMailBounce(deps, recipients = [], reason = '') {
   const c = useSession().currentCall;
   // Реагируем только на ВИСЯЩИЙ ИСХОДЯЩИЙ вызов: живой разговор отбой
   // письма не касается, входящий звонок — тем более.
-  if (!c || useSession().callState !== 'outgoing_ringing') return false;
+  if (!c) return false;
+  if (!(await callCan(useSession().callState, 'cancel_outgoing'))) return false;
   // Релей уже доставил этот сигнал (call.relayDelivered, см. sendCallEnvelope).
   // DSN относится только к почтовому дублю — вызов живёт, ждём ответа.
   if (c.relayDelivered) {
@@ -1040,15 +1092,19 @@ export function sendTerminalRepeat(deps, peer, type, call_id) {
 const mediaWatchdog = createMediaWatchdog();
 
 export function armMediaFallback(deps) {
-  const onTimeout = () => {
-    if (useSession().callState !== 'active' || useSession().callMediaConnected) return;
+  // Таймаут срабатывает в колбэке (не async) — решение Rust здесь взять не
+  // можно, поэтому состояние сбрасываем по ПРАВИЛУ «отбой → idle», а сам
+  // факт («звонок идёт») проверяем через can() до входа в колбэк.
+  const onTimeout = async () => {
+    if (useSession().callMediaConnected) return;
+    if (!(await callCan(useSession().callState, 'media_fallback'))) return;
     console.warn('[call] media not connected in 90s — auto hangup');
     uiStore.toast(uiStore.tr('call_connect_failed'), 4000);
     // Сообщаем собеседнику, чтобы у него тоже легла трубка
     // (он может висеть в таком же «Соединение…»).
     const c = useSession().currentCall;
     if (c) sendTerminalRepeat(deps, c.peer, 'call_end', c.call_id);
-    hangup(deps, 'connect_timeout');
+    hangup(deps, 'connect_timeout', await callNextState(useSession().callState, 'hung_up'));
   };
   useSession().setMediaFallbackTimer(mediaWatchdog.start(onTimeout));
 }

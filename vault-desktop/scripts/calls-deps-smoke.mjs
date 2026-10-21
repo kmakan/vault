@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+const CALL_STATE_RULE = path.join(ROOT, 'src', 'call-state-rule.js');
 const CALLS = path.join(ROOT, 'src/features/calls.js');
 const CALL_RESEND = path.join(ROOT, 'src/features/call-resend.js');
 const CALL_SESSION = path.join(ROOT, 'src/features/call-session.js');
@@ -85,12 +86,26 @@ writeFileSync(`${MOCKS}/features/call-clock.js`, readFileSync(CALL_CLOCK, 'utf8'
 // подменяем на stub, иначе Node не резолвит пакет в /tmp-копии.
 writeFileSync(
   `${MOCKS}/features/calls.js`,
-  readFileSync(CALLS, 'utf8').replaceAll(
-    "from '@tauri-apps/api/core'",
-    "from '../tauri-core.js'",
-  ),
+  readFileSync(CALLS, 'utf8')
+    .replaceAll(
+      "from '@tauri-apps/api/core'",
+      "from '../tauri-core.js'",
+    )
+    // Адаптер правила состояния звонка (ADR-005 W4) — тоже тянет Tauri.
+    .replaceAll(
+      "from '../call-state-rule.js'",
+      "from '../call-state-rule.js'",
+    ),
 );
 writeFileSync(`${MOCKS}/tauri-core.js`, 'export const invoke = async () => null;\n');
+// Адаптер правила звонка — копия настоящего файла с подменой Tauri-зависимости.
+writeFileSync(
+  `${MOCKS}/call-state-rule.js`,
+  readFileSync(CALL_STATE_RULE, 'utf8').replaceAll(
+    "from '@tauri-apps/api/core'",
+    "from './tauri-core.js'",
+  ),
+);
 const C = await import(MOCKS + '/features/calls.js');
 
 // ── 1. canCallBack: объявлено 5 полей, читать можно только их ───────

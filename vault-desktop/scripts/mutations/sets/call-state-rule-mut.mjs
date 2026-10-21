@@ -1,0 +1,29 @@
+// Набор мутаций: call-state-rule-mut
+// Цель: убедиться, что смоук call-state-rule-smoke.mjs ЛОВИТ эти поломки.
+// Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+
+export default {
+  id: 'call-state-rule-mut',
+  file: 'src/call-state-rule.js',
+  smoke: 'call-state-rule-smoke.mjs',
+  mutations: [
+    { name: "при отказе моста «можно ли» → true (звонок начинается вслепую)",
+      pattern: "    report('can/' + question, e);\n    return false;",
+      replacement: "    report('can/' + question, e);\n    return true;" },
+    { name: "при отказе моста входящий запрос → busy (отвечаем «занято» вслепую)",
+      pattern: "    report('incoming_action', e);\n    return 'ignore';",
+      replacement: "    report('incoming_action', e);\n    return 'busy';" },
+    { name: "при отказе моста тип отбоя → call_end (в истории «разговор был»)",
+      pattern: "    report('hangup_kind', e);\n    return 'call_cancel';",
+      replacement: "    report('hangup_kind', e);\n    return 'call_end';" },
+    { name: "при отказе моста поздний таймаут НЕ игнорируется (рвём живой разговор)",
+      pattern: "    report('stale_timeout', e);\n    return true;",
+      replacement: "    report('stale_timeout', e);\n    return false;" },
+    { name: "при отказе моста исходящий звонок разрешён (звоним вслепую)",
+      pattern: "    report('can_start', e);\n    return false;",
+      replacement: "    report('can_start', e);\n    return true;" },
+    { name: "при отказе моста состояние всё равно меняется",
+      pattern: "    report('next_state', e);\n    return current;",
+      replacement: "    report('next_state', e);\n    return 'active';" },
+  ],
+};
