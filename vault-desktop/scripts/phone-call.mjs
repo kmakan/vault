@@ -40,6 +40,31 @@ async function cdpEvaluate(expression) {
 const cmd = process.argv[2] || 'state';
 
 const PROBES = {
+  // Звонок конкретному контакту (Анна = десктопный аккаунт стенда).
+  'call-anna': `(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    const PEER = 'icemaksim@gmail.com';
+    // 1) Открыть чат с нужным контактом.
+    if (p.activeChat !== PEER) {
+      const item = Array.from(document.querySelectorAll('.contact-item'))
+        .find((e) => (e.innerText || '').includes(PEER));
+      if (!item) return { error: 'контакт не найден в списке чатов' };
+      item.click();
+      await sleep(1800);
+    }
+    if (p.activeChat !== PEER) return { error: 'чат не открылся', activeChat: p.activeChat };
+    // 2) Нажать кнопку звонка в шапке.
+    const btn = Array.from(document.querySelectorAll('.chat-actions button, .chat-header button'))
+      .find((b) => /Позвонить|call_start/i.test(b.getAttribute('title') || ''));
+    if (!btn) return { error: 'кнопка звонка не найдена', activeChat: p.activeChat };
+    btn.click();
+    await sleep(2000);
+    const s2 = p.callSession ? p.callSession.state : {};
+    return { peer: PEER, callId: s2.currentCall ? s2.currentCall.call_id : null,
+             state: p.callSession ? p.callSession.state.callState : null };
+  })()`,
   state: `(async () => {
     const app = document.querySelector('#app').__vue_app__;
     const p = app._container._vnode.component.proxy;
