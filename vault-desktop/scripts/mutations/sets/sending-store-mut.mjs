@@ -19,5 +19,11 @@ export default {
     { name: "бакет чата не очищается (dropBucket не работает)",
       pattern: "      delete this.state.pendingOutgoing[chatId];",
       replacement: "      void 0;" },
+    { name: "pending-строка рассыпается по символам (защита владельца снята)",
+      pattern: "      if (!isPlainRecord(pendingMsg)) {\n        console.warn('[sending] setPendingOutgoing: ожидали запись pending, получили', typeof pendingMsg);\n        return bucket;\n      }",
+      replacement: "      void 0;" },
+    { name: "бакет затирается не-записью (mergePendingOutgoing без проверки формы)",
+      pattern: "      if (bucket != null && !isPlainRecord(bucket)) {\n        console.warn('[sending] mergePendingOutgoing: ожидали бакет, получили', typeof bucket);\n        return this.state.pendingOutgoing[chatId] || null;\n      }",
+      replacement: "      void 0;" },
   ],
 };

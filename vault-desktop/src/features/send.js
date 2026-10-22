@@ -233,10 +233,38 @@ export async function sendMessage(deps) {
           // пользователь может удалить. История = источник своих сообщений.
           deps.saveCurrentHistory(chatUi.activeChat);
           try {
-            // Релей-копия ПЕРВОЙ (мгновенная доставка ~1-2с), SMTP —
-            // медленный основной канал: не блокируем статус «отправлено»
-            // на Gmail-коннекте (держит до минуты, тротлит) — письмо
-            // уходит в фоне, поллинг подтвердит доставку кругом через ящик.
+            // ДОСТАВКА = ЛЮБОЙ ИЗ ДВУХ ТРАНСПОРТОВ. Релей доставляет пиру за
+            // 1-2 с; SMTP-копия в свой ящик — резервный канал (Gmail тротлит
+            // до минуты). Раньше маркер зависел ТОЛЬКО от SMTP: письмо уже
+            // доставлено релеем, а статус висел 'sending' (красный) до
+            // 45-секундного таймаута — «не отправлено» при доставленном
+            // сообщении. Правило: первый успех → 'sent' (жёлтый), отказ
+            // ждёт второй транспорт, 'failed' (красный) — только если
+            // отказали ОБА. Квитанции (delivered/read) не понижаем.
+            let settled = false;
+            const finishOk = () => {
+              if (settled) return;
+              settled = true;
+              if (pendingMsg.status === 'delivered' || pendingMsg.status === 'read') return;
+              pendingMsg.status = 'sent';
+              if (deps.sending.getBucket(chatUi.activeChat)[pendingMsg.id]) {
+                deps.sending.setPendingOutgoing(chatUi.activeChat, pendingMsg);
+              }
+              deps.saveCurrentHistory(chatUi.activeChat);
+            };
+            const finishFail = (why) => {
+              if (settled) return;
+              settled = true;
+              if (pendingMsg.status === 'delivered' || pendingMsg.status === 'read') return;
+              pendingMsg.status = 'failed';
+              pendingMsg.failedTo = [why && why.message || String(why)];
+              if (deps.sending.getBucket(chatUi.activeChat)[pendingMsg.id]) {
+                deps.sending.setPendingOutgoing(chatUi.activeChat, pendingMsg);
+              }
+              deps.saveCurrentHistory(chatUi.activeChat);
+              console.error('Failed to send message:', why);
+            };
+            let relayP = null;
             try {
               // Объект конверта для релей-копии — разбор в Rust (ADR-005 R1 / W4).
               const envObj = await WireSignalRule.envelopeObject(envelope);
@@ -251,35 +279,46 @@ export async function sendMessage(deps) {
                 // If fingerprint resolution fails, continue with legacy email-only relay
                 peerFp = null;
               }
-              const pub = relay.relayPublish(myEmail(), chatUi.activeChat, envObj, content, { peerFp });
-              // §1: обновляем индикатор доставки по результату pub.
-              pub.then(r => {
-                if (r && r.why === 'daily-limit') {
-                  relayState.setRelayMode('email');
-                  // Баннер один раз за день (kv-флаг) — не спамим тостами.
-                  invoke('db_kv_get', { account: myEmail(), key: 'relay-limit-banner' }).then(v => {
-                    const today = String(Math.floor(Date.now() / 86400000));
-                    if (v !== today) {
-                      uiStore.toast(uiStore.tr('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
-                      invoke('db_kv_set', { account: myEmail(), key: 'relay-limit-banner', value: today });
-                    }
-                  }).catch(() => {});
-                } else if (r && r.ok) {
-                  relayState.setRelayMode('relay');
-                }
-              }).catch(() => {});
+              relayP = relay.relayPublish(myEmail(), chatUi.activeChat, envObj, content, { peerFp })
+                .then(r => {
+                  // §1: обновляем индикатор доставки по результату pub.
+                  if (r && r.why === 'daily-limit') {
+                    relayState.setRelayMode('email');
+                    // Баннер один раз за день (kv-флаг) — не спамим тостами.
+                    invoke('db_kv_get', { account: myEmail(), key: 'relay-limit-banner' }).then(v => {
+                      const today = String(Math.floor(Date.now() / 86400000));
+                      if (v !== today) {
+                        uiStore.toast(uiStore.tr('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                        invoke('db_kv_set', { account: myEmail(), key: 'relay-limit-banner', value: today });
+                      }
+                    }).catch(() => {});
+                  } else if (r && r.ok) {
+                    relayState.setRelayMode('relay');
+                  }
+                  return { ok: !!(r && r.ok), why: r && r.why };
+                })
+                .catch(e => ({ ok: false, err: e }));
             } catch (e) { /* envelope не JSON — релей пропускаем */ }
-            api.sendMessage(chatUi.activeChat, content).then(() => {
-              pendingMsg.status = 'sent';
-              if (deps.sending.getBucket(chatUi.activeChat)[pendingMsg.id]) {
-                deps.sending.setPendingOutgoing(chatUi.activeChat, pendingMsg);
-              }
-              deps.saveCurrentHistory(chatUi.activeChat);
-            }).catch(e => {
-              pendingMsg.status = 'failed';
-              pendingMsg.failedTo = [e && e.message || String(e)];
-              console.error('Failed to send message:', e);
-            });
+            // SMTP — второй транспорт: его отказ НЕ означает «не отправлено»,
+            // если релей уже доставил.
+            const smtpP = Promise.resolve()
+              .then(() => api.sendMessage(chatUi.activeChat, content))
+              .then(() => ({ ok: true }))
+              .catch(e => ({ ok: false, err: e }));
+            // Первый успех решает сразу; отказ ждёт второй транспорт.
+            const transports = [smtpP, relayP || Promise.resolve({ ok: false, why: 'no-relay' })];
+            let left = transports.length;
+            let anyOk = false;
+            let firstErr = null;
+            for (const p of transports) {
+              p.then(r => {
+                if (anyOk || settled) return;
+                if (r && r.ok) { anyOk = true; finishOk(); return; }
+                if (firstErr === null && r) firstErr = r.err || r.why || 'delivery failed';
+                left -= 1;
+                if (left === 0 && !anyOk) finishFail(firstErr || 'delivery failed');
+              });
+            }
           } catch (e) {
             // Сбой синхронной части (шифрование/pending): статус failed, иначе
             // поллинг подмешивал бы 'sending', а через 10 минут запись молча исчезала.

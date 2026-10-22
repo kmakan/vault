@@ -18,7 +18,7 @@
 //     это ОШИБКА набора (тест устарел), а не «пропущено»;
 //   * после прогона файл ВОССТАНАВЛИВАЕТСЯ (всегда, даже при ошибке);
 //   * «выжившая» мутация (тест зелёный на сломанном коде) — провал гейта.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -26,6 +26,45 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..', '..');   // vault-desktop/
 
 const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+
+// ЖУРНАЛ на диске — страховка от «всегда» в правиле «файл восстанавливается».
+// finally отрабатывает при ИСКЛЮЧЕНИИ, но не при SIGTERM/SIGKILL: убитый
+// прогон гейта оставлял в рабочем дереве СТРОКУ МУТАЦИИ (`if (false) return
+// false;` в recovery-escrow.js — снятый лимит попыток → смоук убивался OOM
+// через 40 секунд, и выглядит как поломка кода, а не как мусор после гейта).
+// Копия пишется ДО мутации и снимается ПОСЛЕ восстановления; leftover
+// подхватывает recoverJournal() на следующем старте.
+const JOURNAL_DIR = '/tmp/vault-mutation-journal';
+const journalPath = (file) => path.join(JOURNAL_DIR, Buffer.from(file, 'utf8').toString('hex') + '.bak');
+
+export function writeJournal(file, content) {
+  mkdirSync(JOURNAL_DIR, { recursive: true });
+  writeFileSync(journalPath(file), content);
+}
+
+export function clearJournal(file) {
+  try { unlinkSync(journalPath(file)); } catch (e) { /* журнала нет — и ладно */ }
+}
+
+// Восстановить всё, что оставил убитый прогон. Возвращает список файлов.
+// Ключ журнала — ПУТЬ КАК ЕСТЬ: rust-гейт мутирует крейты ВНЕ vault-desktop
+// (vault-client/…), и для абсолютного пути join(ROOT, file) дал бы мусор.
+export function recoverJournal() {
+  if (!existsSync(JOURNAL_DIR)) return [];
+  const restored = [];
+  for (const name of readdirSync(JOURNAL_DIR)) {
+    if (!name.endsWith('.bak')) continue;
+    const file = Buffer.from(name.slice(0, -4), 'hex').toString('utf8');
+    const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
+    const backup = readFileSync(path.join(JOURNAL_DIR, name), 'utf8');
+    if (existsSync(abs) && readFileSync(abs, 'utf8') !== backup) {
+      writeFileSync(abs, backup);
+      restored.push(file);
+    }
+    clearJournal(file);
+  }
+  return restored;
+}
 
 function applyMutation(file, pattern, replacement) {
   const abs = path.join(ROOT, file);
@@ -38,12 +77,14 @@ function applyMutation(file, pattern, replacement) {
   if (mutated === src) {
     return { applied: false, reason: 'мутация ничего не меняет' };
   }
+  writeJournal(file, src);
   writeFileSync(abs, mutated);
   return { applied: true, before, after: sha(mutated) };
 }
 
 function restoreFile(file, content) {
   writeFileSync(path.join(ROOT, file), content);
+  clearJournal(file);
 }
 
 // Маркеры ПРОВАЛА УТВЕРЖДЕНИЯ (смоук упал на проверке, а не на ошибке).

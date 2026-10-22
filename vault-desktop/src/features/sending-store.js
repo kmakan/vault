@@ -15,6 +15,10 @@
 // ТРАНСПОРТ для канала записи. Владелец централизует все писатели.
 //
 // Создаётся один раз на приложение (в композиционном корне App.vue).
+function isPlainRecord(v) {
+  return typeof v === 'object' && !Array.isArray(v);
+}
+
 export function createSendingStore() {
   const state = {
     sending: false,
@@ -42,14 +46,27 @@ export function createSendingStore() {
       return b;
     },
 
+    // Бакет — это {msg_id → pendingMsg}. Строка/массив/число сюда попасть не
+    // могут: Object.assign по строке рассыпает её по символам, и поллинг
+    // подмешивает символы в чат как сообщения (жалоба 22.10 — «пустые пузыри»).
+    // Проверка живёт во ВЛАДЕЛЬЦЕ: вызвать передачу с другой арностью могут в
+    // семи местах, забыть проверку в одном — нельзя.
     setPendingOutgoing(chatId, pendingMsg) {
       const bucket = this.state.pendingOutgoing[chatId] || {};
-      if (pendingMsg && pendingMsg.id) {
+      // Форма фиксирована ДО содержимого: слот бакета всегда запись. Иначе
+      // отказ записи оставил бы `undefined`, и читающий `Object.keys(bucket)`
+      // упал бы на пустом чате.
+      this.state.pendingOutgoing[chatId] = bucket;
+      if (pendingMsg == null) return bucket;
+      if (!isPlainRecord(pendingMsg)) {
+        console.warn('[sending] setPendingOutgoing: ожидали запись pending, получили', typeof pendingMsg);
+        return bucket;
+      }
+      if (pendingMsg.id) {
         bucket[pendingMsg.id] = pendingMsg;
       } else {
-        Object.assign(bucket, pendingMsg || {});
+        Object.assign(bucket, pendingMsg);
       }
-      this.state.pendingOutgoing[chatId] = bucket;
       return bucket;
     },
 
@@ -57,6 +74,10 @@ export function createSendingStore() {
     // Используется mergePending.js: `remaining` — уже ОтФИЛЬТРОВАННЫЙ набор
     // pending-записей; старые ключи (которых нет в remaining) должны исчезнуть.
     mergePendingOutgoing(chatId, bucket) {
+      if (bucket != null && !isPlainRecord(bucket)) {
+        console.warn('[sending] mergePendingOutgoing: ожидали бакет, получили', typeof bucket);
+        return this.state.pendingOutgoing[chatId] || null;
+      }
       this.state.pendingOutgoing[chatId] = bucket || {};
       return this.state.pendingOutgoing[chatId];
     },

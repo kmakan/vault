@@ -50,6 +50,13 @@ function reset() {
   uiStore.setFormField('starredMap', {});
 }
 
+// 0. Стартовое состояние: поле объявлено (иначе computed starredMap = undefined
+// и starredSet падает при первом рендере — живой лог 22.10.2026).
+console.log('0. стартовое состояние uiStore');
+check('starredMap объявлен объектом',
+  uiStore.getFormField('starredMap') && typeof uiStore.getFormField('starredMap') === 'object',
+  uiStore.getFormField('starredMap'));
+
 // 1. isStarred
 console.log('1. isStarred');
 {

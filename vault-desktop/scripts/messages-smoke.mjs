@@ -194,6 +194,26 @@ console.log('1. crypto-фильтр: не-Vault письмо отбрасыва�
   check('не расшифровалось → не рендерится (список пуст)', d.chat.state.messages.length === 0);
 }
 
+// ── 1b. пустой результат не стирает чат и архив ───────────────
+// Живой дефект 22.10.2026: чат активного собеседника «менялся», только что
+// отправленное сообщение исчезало. Причина — loadMessages записывал пустоту
+// (письма не расшифровались / история не успела загрузиться) поверх архива.
+console.log('1b. пустой merged не переписывает чат и архив');
+{
+  cryptoMock.decryptVault = async () => { throw new Error('AAD mismatch'); };
+  const m = mail('ENC:foreign', 'peer@x.ru', '<f2@x>', 2);
+  resetWorld({ emails: [m] });
+  withBody(m, 'ENC:foreign');
+  const d = makeDeps();
+  d.chat.set([{ id: 'old', content: 'архивное сообщение', from: 'me', ts: 1, status: 'read' }]);
+  await M.loadMessages(d, 'peer@x.ru');
+  check('чат не очищен пустотой', d.chat.state.messages.length === 1,
+    d.chat.state.messages);
+  check('история и кэш не перезаписаны пустотой',
+    d.saveCurrentHistoryCalls.length === 0 && d.saveChatCacheCalls.length === 0,
+    [d.saveCurrentHistoryCalls, d.saveChatCacheCalls]);
+}
+
 // ── 2. конверт-сообщение от пира ──────────────────────────────
 console.log('2. конверт {vault:1,text} от собеседника рендерится');
 {
@@ -318,11 +338,14 @@ console.log('4. stale-guard: чат переключили → messages не п�
   const d = makeDeps();
   d.chat.set(['KEEP']);
   // Переключение чата ВНУТРИ загрузки: модуль обязан прочитать activeChat
-  // живо (у владельца), а не снимком на входе.
-  d.showHistoryFirst = async () => { chatStore.setActiveChat('other@x.ru'); };
+  // живо (у владельца), а не снимком на входе. Окно — слияние истории:
+  // расшифровка уже прошла, экран ещё не перезаписан.
+  d.mergeHistory = async (chatKey, list) => { chatStore.setActiveChat('other@x.ru'); return list; };
   await M.loadMessages(d, 'peer@x.ru');
   check('stale по activeChat → messages не тронуты (KEEP)',
     Array.isArray(d.chat.state.messages) && d.chat.state.messages[0] === 'KEEP');
+  check('stale → кэш и архив не переписаны',
+    d.saveChatCacheCalls.length === 0 && d.saveCurrentHistoryCalls.length === 0);
 
   // Токен загрузки читается ВНУТРИ stale(), то есть живьём: роста loadSeq
   // посреди фетча достаточно, чтобы результат не применился.
@@ -330,10 +353,56 @@ console.log('4. stale-guard: чат переключили → messages не п�
   withBody(m, 'ENC:x');
   const d2 = makeDeps();
   d2.chat.set(['KEEP2']);
-  d2.showHistoryFirst = async () => { d2.loadSeq = 99; };
+  d2.mergeHistory = async (chatKey, list) => { d2.loadSeq = 99; return list; };
   await M.loadMessages(d2, 'peer@x.ru');
   check('loadSeq вырос посреди загрузки → messages не тронуты (KEEP2)',
     d2.chat.state.messages[0] === 'KEEP2');
+
+  // ПРАВИЛО ИСЧЕЗНОВЕНИЯ (22.10): история подставляется на экран ТОЛЬКО когда
+  // показывать нечего. На живом экране оптимистичное сообщение иначе
+  // исчезало через 2–3 секунды после отправки.
+  resetWorld({ emails: [m] });
+  withBody(m, 'ENC:x');
+  const d3 = makeDeps();
+  d3.chat.set([{ id: 'optimistic', content: 'жду ответа', from: 'me' }]);
+  await M.loadMessages(d3, 'peer@x.ru');
+  check('экран не пуст → showHistoryFirst НЕ зовётся', d3.historyFirst.length === 0, d3.historyFirst);
+
+  resetWorld({ emails: [m] });
+  withBody(m, 'ENC:x');
+  const d4 = makeDeps();
+  await M.loadMessages(d4, 'peer@x.ru');
+  check('экран пуст → showHistoryFirst зовётся (история дополняет)', d4.historyFirst.length === 1, d4.historyFirst);
+}
+
+// ── 4b. пустой результат не затирает живой экран (дефект 22.10) ──
+console.log('4b. пустая загрузка: живой экран остаётся, архив не переписан');
+{
+  cryptoMock.decryptVault = async () => null;   // писем нет вовсе
+  resetWorld({ emails: [] });
+  const d = makeDeps();
+  const live = [{ id: 'live', content: 'моё сообщение', from: 'me' }];
+  d.chat.set(live);
+  await M.loadMessages(d, 'peer@x.ru');
+  check('пустой результат → экран не обнулён', d.chat.state.messages.length === 1 && d.chat.state.messages[0].id === 'live',
+    d.chat.state.messages);
+  check('пустой результат → кэш не переписан', d.saveChatCacheCalls.length === 0, d.saveChatCacheCalls);
+  check('пустой результат → архив не переписан', d.saveCurrentHistoryCalls.length === 0, d.saveCurrentHistoryCalls);
+}
+{
+  // Обратный случай: в списке было содержимое, но всё удалено томбстоунами —
+  // очистка экрана ЗАКОННА (иначе удалённое сообщение жило бы вечно).
+  cryptoMock.decryptVault = async () => JSON.stringify({ vault: 1, id: 'evX', text: 't' });
+  const m = mail('ENC:x', 'peer@x.ru', '<x@x>', 1);
+  resetWorld({ emails: [m] });
+  withBody(m, 'ENC:x');
+  const d = makeDeps();
+  d.chat.set([{ id: 'gone', content: 'уже удалено', from: 'them' }]);
+  d.filterDeleted = (l) => l.filter(() => false);
+  await M.loadMessages(d, 'peer@x.ru');
+  check('всё удалено томбстоунами → экран очищается', d.chat.state.messages.length === 0,
+    d.chat.state.messages);
+  check('всё удалено → кэш очищен', d.saveChatCacheCalls.some(c => c[1] === 0), d.saveChatCacheCalls);
 }
 
 // ── 5. голос опроса — сигнал, не сообщение (дефект: ContactsFeature) ──

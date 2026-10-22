@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 const ROOT='/home/maksim/whisper/vault-desktop/src/features';
+const SRC='/home/maksim/whisper/vault-desktop/src';
 const HIST=ROOT+'/history.js';
 const MOCKS='/tmp/history-smoke-mocks'; mkdirSync(MOCKS,{recursive:true}); mkdirSync(MOCKS+'/features',{recursive:true});
 
@@ -12,17 +13,26 @@ const db={
   kvSet: async (ns,k,v) => { dbCalls.push(['kvSet',ns,k,v]); },
 };
 const histStore={};
-const histLib={ loadHistory: async (email,chat) => histStore[chat]||[], saveHistory: async (email,chat,msgs) => { histStore[chat]=JSON.parse(JSON.stringify(msgs)); } };
+// Архив — НАСТОЯЩИЙ src/history.js (слияние и нормализация проверяются кодом,
+// а не заглушкой), поэтому мок db обслуживает historyLoad/historySave.
+db.historyLoad = async (ns, chat) => (chat in histStore ? JSON.stringify(histStore[chat]) : null);
+db.historySave = async (ns, chat, json) => { histStore[chat] = JSON.parse(json); };
 const identityMock={ accountNamespace: async (e) => 'fp:'+(e||'anon') };
-globalThis.__dbMock=db; globalThis.__identityMock=identityMock; globalThis.__histMock=histLib;
+globalThis.__dbMock=db; globalThis.__identityMock=identityMock;
 writeFileSync(`${MOCKS}/api.js`, 'export const db = globalThis.__dbMock;\n');
 writeFileSync(`${MOCKS}/identity.js`, 'export const accountNamespace = (e) => globalThis.__identityMock.accountNamespace(e);\n');
-writeFileSync(`${MOCKS}/history.js`, 'export const loadHistory = (e,c) => globalThis.__histMock.loadHistory(e,c); export const saveHistory = (e,c,m) => globalThis.__histMock.saveHistory(e,c,m);\n');
+writeFileSync(`${MOCKS}/history.js`, prepareModuleCopy(SRC + '/history.js', `${MOCKS}/history.js`, {
+  './api.js':'api.js', './identity.js':'identity.js',
+}, MOCKS));
 
 writeFileSync(`${MOCKS}/features/history.js`, prepareModuleCopy(HIST, `${MOCKS}/features/history.js`, {
   '../api.js':'api.js', '../identity.js':'identity.js', '../history.js':'history.js',
 }, MOCKS));
 const H = await import(`${MOCKS}/features/history.js`).then(m => m.default||m);
+// Настоящий владелец переписки: chat-store.js не знает ни о Vue, ни о Tauri,
+// поэтому импортируется напрямую — смоук видит ТОТ ЖЕ контракт, что и App.vue.
+const { createChatStore } = await import(SRC + '/chat-store.js');
+const makeChatStore = () => createChatStore();
 let passed=0,failed=0;
 function check(l,c,e){if(c){passed++;console.log('  ✓ '+l)}else{failed++;console.log('  ✗ '+l+(e!==undefined?' -> '+JSON.stringify(e):''))}}
 
@@ -97,6 +107,16 @@ check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.
     outDup.filter(m=>m.content==='привет').length === 1, outDup);
 }
 
+{
+  // Бакет pending обязан быть ЗАПИСЬЮ. Строка (ключ чата, попавший не в тот
+  // аргумент) дала бы Object.keys по символам — поллинг подмешивал символы
+  // строки в чат вместо переписки («пустые пузыри», жалоба 22.10).
+  const corrupt={ 'peer@x.com':'peer@x.com' };
+  const outBad=H.mergePending({pendingOutgoing:corrupt,isTombstoned:()=>false,msgTs:H.msgTs,mergePendingOutgoing:()=>{},dropBucket:()=>{}},'peer@x.com',[{id:'m1',content:'живое'}]);
+  check('mergePending: бакет-строка не рассыпается в символы-сообщения',
+    outBad.every(m=>m && typeof m==='object') && outBad.length===1, outBad);
+}
+
 { const hist=[{from:'me',status:'sending',ts:Date.now()-120000},{from:'peer',status:'sending',ts:Date.now()+1000}];
   H.normalizeStaleSending(H.msgTs, hist);
   check('normalizeStaleSending старый sending→sent', hist[0].status==='sent');
@@ -122,16 +142,20 @@ check('chatCacheKey(email,chat) чистая строка', H.chatCacheKey('a@b.
 
 {
   histStore['fh']=[{id:'f1',content:'hi',ts:1}];
-  const chat={state:{messages:[]}, set:function(v){chat.state.messages=v}};
+  // ВЛАДЕЛЕЦ — НАСТОЯЩИЙ (src/chat-store.js), а не самоделка по форме:
+  // самописный `{state:{messages},set}` пропускал расхождение контракта,
+  // из-за которого приложение теряло отправленные сообщения (22.10).
+  const chat = makeChatStore();
   await H.showHistoryFirst({loadHistory: (ck)=>H.loadLocalHistory('a@b.c',ck,H.msgTs), chat, msgTs: H.msgTs}, 'fh', ()=>false);
   check('showHistoryFirst chat.set отфильтрованными (без call_)', chat.state.messages.length===1 && chat.state.messages[0].id==='f1');
 }
 
 {
   histStore['sh']=[];
-  const chatState={messages:[{id:'x',content:'y'}]};
-  H.saveCurrentHistory('a@b.c','sh',chatState);
-  check('saveCurrentHistory → saveHistory email,chatKey,messages', histStore['sh']&&histStore['sh'][0].id==='x');
+  const chat = makeChatStore();
+  chat.append({id:'x',content:'y'});
+  await H.saveCurrentHistory('a@b.c','sh',chat);
+  check('saveCurrentHistory берёт messages У ВЛАДИТЕЛЯ (chat.state.messages)', histStore['sh']&&histStore['sh'][0].id==='x');
 }
 
 check('msgTs: ts приоритетнее, чем date', H.msgTs({ts:777})===777);

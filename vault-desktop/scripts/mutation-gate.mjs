@@ -23,12 +23,22 @@
 //   node scripts/mutation-gate.mjs             # все наборы
 //   node scripts/mutation-gate.mjs --set keys  # один набор (быстрый цикл)
 //   node scripts/mutation-gate.mjs --list      # что есть
-import { runSet } from './mutations/engine.mjs';
+import { runSet, recoverJournal } from './mutations/engine.mjs';
 import { loadAllSets, loadSets } from './mutations/index.mjs';
 
 const args = process.argv.slice(2);
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : null;
 const listOnly = args.includes('--list');
+
+// Убитый прогон (SIGTERM/SIGKILL) не исполняет finally и оставляет в коде
+// СТРОКУ МУТАЦИИ. Поднимаем это до первого смоука: иначе следующий запуск
+// падает на «сломанном коде», которого не было.
+{
+  const restored = recoverJournal();
+  if (restored.length) {
+    console.log('⚠ mutation-gate: восстановлены файлы после убитого прогона: ' + restored.join(', '));
+  }
+}
 
 const sets = await loadAllSets();
 if (listOnly) {

@@ -675,4 +675,5 @@ export default {
   pro_buy_busy: '处理中…',
 
   pro_badge_hint: 'Pro 套餐已激活',
+  emoji_picker: '表情',
 }

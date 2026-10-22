@@ -681,4 +681,5 @@ export default {
   pro_buy_busy: 'Processing…',
 
   pro_badge_hint: 'Active Pro plan',
+  emoji_picker: 'Emoji',
 }

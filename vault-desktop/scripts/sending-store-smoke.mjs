@@ -107,5 +107,26 @@ check('setPendingOutgoing возвращает bucket', retBucket === store.stat
     !st.state.pendingOutgoing.cA && !!st.state.pendingOutgoing.cB, Object.keys(st.state.pendingOutgoing));
 }
 
+// 17. Бакет — только запись. Строка/массив сюда попасть не могут: Object.assign
+// по строке рассыпает её по символам, и поллинг подмешивает символы в чат как
+// сообщения (жалоба 22.10 — «пустые пузыри» вместо переписки; случилось потому,
+// что замыкание зависимости потеряло аргумент и передало ключ чата вместо msg).
+{
+  const st = createSendingStore();
+  st.setPendingOutgoing('peer@x.com', 'peer@x.com');
+  const b = st.state.pendingOutgoing['peer@x.com'];
+  check('setPendingOutgoing: строка вместо pending не рассыпается по символам',
+    !!b && typeof b === 'object' && Object.keys(b).length === 0, b && Object.keys(b));
+  st.setPendingOutgoing('peer@x.com', ['m5', 'm6']);
+  check('setPendingOutgoing: массив вместо pending не пишет числовые ключи',
+    Object.keys(st.state.pendingOutgoing['peer@x.com']).length === 0);
+  st.setPendingOutgoing('peer@x.com', { id: 'm7', text: 'ok' });
+  st.mergePendingOutgoing('peer@x.com', 'peer@x.com');
+  check('mergePendingOutgoing: строка не затирает бакет целиком',
+    !!st.state.pendingOutgoing['peer@x.com'].m7, st.state.pendingOutgoing['peer@x.com']);
+  check('setPendingOutgoing(null) — не падает и не пишет',
+    st.setPendingOutgoing('peer@x.com', null) !== undefined);
+}
+
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

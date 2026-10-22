@@ -133,6 +133,11 @@ export function defaultUiState() {
     draggedNoteId: null,
     dragOverNoteId: null,
     dragOverPos: null,
+    // ADR-005 W3 (партия 7): «звёзды» сообщений — карта «чат → [id]».
+    // Поле НЕ было объявлено: computed starredMap возвращал undefined, и
+    // starredSet падал при первом рендере чата (живой лог 22.10.2026:
+    // «render/error: starredSet» — список сообщений не отрисовывался).
+    starredMap: {},
     },
     // J.5b: UI toggle flags вынесены из App.data в uiStore.modalFlags.
     modals: {

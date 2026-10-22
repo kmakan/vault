@@ -683,4 +683,5 @@ export default {
   pro_buy_busy: 'Обработка…',
 
   pro_badge_hint: 'Активный платный тариф Pro',
+  emoji_picker: 'Эмодзи',
 }

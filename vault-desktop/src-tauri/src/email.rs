@@ -205,12 +205,32 @@ impl EmailClient {
         Duration::from_secs(BACKOFF_STEPS_SEC[idx])
     }
 
-    /// Отличать «сервера нет такой папки» от сетевого сбоя.
-    ///
-    /// Имена папок приходят ИЗ ДАННЫХ (настройки папок), а не из кода, и
-    /// формируются динамически. Если такой папки на сервере нет, SELECT
-    /// возвращает `No such folder` / `No such mailbox` (в тексте ошибки,
-    /// вместе с мусором вроде `select RELAY failed: No Response:
+    /// Папка-псевдоним виртуальных писем релея (в JS — `folder: 'RELAY'`).
+    /// Таких писем на IMAP-сервере НЕТ: их тело уже доставлено релеем и лежит
+    /// в кэше фронта. Раньше по этой папке шёл реальный SELECT («No such
+    /// folder»), ошибка считалась сбоем сессии → reconnect-шторм → рассыпалась
+    /// общая IMAP-сессия и висела отправка (маркер сообщения оставался
+    /// красным, хотя письмо доходило релеем). Решение «папка виртуальная» —
+    /// здесь, на границе IMAP; фронт не дублирует его ветвлением.
+    const VIRTUAL_FOLDER: &'static str = "RELAY";
+
+    /// Папка виртуальная (релей): на IMAP её нет, тело уже в кэше фронта.
+    pub fn is_virtual_folder(folder: &str) -> bool {
+        folder.eq_ignore_ascii_case(Self::VIRTUAL_FOLDER)
+    }
+
+    /// Настоящий IMAP uid — только цифры. Виртуальные письма релея
+    /// (uid `rl-<envId>`) и записи без адреса (`''`, `'undefined'`) на сервере
+    /// не существуют: UID FETCH по ним всегда возвращает пусто, а вызывающий
+    /// (lib.rs) принимал это за рассинхрон сессии → reconnect по лестнице
+    /// backoff, рассинхронизация общей сессии и зависшая отправка (маркер
+    /// сообщения оставался красным, хотя письмо доходило релеем).
+    pub fn is_imap_uid(uid: &str) -> bool {
+        !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// Разделение «нет такой папки» и сетевого сбоя. Папки берутся из
+    /// настроек и могут отсутствовать на сервере (`select RELAY failed:
     /// [CLIENTBUG] SELECT No such folder`). Это НЕ сетевая неудача: TCP жив,
     /// TLS жив, авторизация прошла — просто ящик не создан/удалён.
     ///
@@ -838,6 +858,17 @@ impl EmailClient {
     /// frontend body-cache permanently — invites/attachments/voice notes then
     /// rendered blank forever.
     pub async fn fetch_message_body(&mut self, uid: &str, folder: &str) -> Result<String> {
+        // Виртуальное письмо релея / не-IMAP адрес: тела на сервере нет,
+        // тело уже в кэше фронта. Пустой ответ БЕЗ ошибки — сессию не трогаем
+        // (см. VIRTUAL_FOLDER и is_imap_uid).
+        if Self::is_virtual_folder(folder) {
+            eprintln!("[email] body fetch: virtual folder {folder} — skipped");
+            return Ok(String::new());
+        }
+        if !Self::is_imap_uid(uid) {
+            eprintln!("[email] body fetch: uid {uid:?} is not an IMAP uid — skipped");
+            return Ok(String::new());
+        }
         let session = self
             .imap_session
             .as_mut()
@@ -889,12 +920,27 @@ impl EmailClient {
             }
         }
 
+        // Пустое тело ОДНОГО uid — то же различие, что и в fetch_bodies: письмо
+        // ушло из папки (курсор мёртв, сессия жива — отдаём пусто без ошибки)
+        // или FETCH молчит при живом письме (рассинхрон — Err на reconnect).
+        // Проверка — до возврата в INBOX, пока выбрана нужная папка.
+        let mut desync = false;
+        if body.is_empty() {
+            match Self::uids_present(session, &[uid.to_string()]) {
+                Ok(false) => {
+                    eprintln!("[email] body fetch: uid {uid} in {folder} отсутствует на сервере — не рассинхрон");
+                }
+                Ok(true) => desync = true,
+                Err(e) => return Err(e),
+            }
+        }
+
         // Вернуть сессию в INBOX.
         if folder != "INBOX" {
             let _ = session.select("INBOX");
         }
 
-        if body.is_empty() {
+        if desync {
             anyhow::bail!("Empty body for uid {uid} in {folder} (session desync?)");
         }
         Ok(body)
@@ -918,6 +964,21 @@ impl EmailClient {
         Ok(())
     }
 
+    /// Есть ли uid в ВЫБРАННОЙ папке. `UID SEARCH UID <set>` отвечает номерами:
+    /// ушедшие письма (перенесены, удалены, утонули в спам-очистке) дают пустой
+    /// список — и это НЕ рассинхрон сессии.
+    ///
+    /// Без этого различия мёртвый курсор гонял почтовый цикл по кругу: пустой
+    /// FETCH считался поломкой соединения, вызывающий делал reconnect и повторял
+    /// ТОТ ЖЕ батч. Замер на стенде 22.10 (папка Gmail с пятью исчезнувшими
+    /// письмами): 32 переподключения в минуту, живых писем не дождаться.
+    fn uids_present(session: &mut Session<TlsStream<TcpStream>>, uids: &[String]) -> Result<bool> {
+        let found = session
+            .uid_search(&format!("UID {}", uids.join(",")))
+            .context("uid_search existence check failed")?;
+        Ok(!found.is_empty())
+    }
+
     /// Fetch bodies of many messages from one mailbox in a batch: select the
     /// folder once, then UID FETCH each id. The UI previously fetched bodies
     /// one-by-one (each call re-selecting the folder) — dozens of round-trips
@@ -927,6 +988,27 @@ impl EmailClient {
         uids: &[String],
         folder: &str,
     ) -> Result<Vec<(String, String)>> {
+        // Одна виртуальная папка релея или батч из одних безадресных uid —
+        // на IMAP-сервере такого нет. Пустой результат без ошибки: иначе
+        // lib.rs считал это рассинхроном и рвал живую IMAP-сессию
+        // (см. VIRTUAL_FOLDER/is_imap_uid).
+        if Self::is_virtual_folder(folder) {
+            eprintln!("[fetch_bodies] folder={folder} virtual — skipped");
+            return Ok(Vec::new());
+        }
+        let real_uids: Vec<String> = uids
+            .iter()
+            .filter(|u| Self::is_imap_uid(u))
+            .cloned()
+            .collect();
+        if real_uids.is_empty() {
+            eprintln!(
+                "[fetch_bodies] folder={folder} requested={} but no real IMAP uids — skipped",
+                uids.len()
+            );
+            return Ok(Vec::new());
+        }
+        let uids = real_uids.as_slice();
         let session = self
             .imap_session
             .as_mut()
@@ -981,14 +1063,30 @@ impl EmailClient {
             empty_uids
         );
 
+        // «Все тела пустые» — это два разных мира, и путать их нельзя:
+        //   · письма УШЛИ из папки (перенос, очистка, спам-очистка) — курсор
+        //     мёртв, сессия жива. Ошибки нет: иначе вызывающий переподключается
+        //     и вечно повторяет тот же батч (шторм реконнектов).
+        //   · сессия правда рассинхронизирована — письмо в папке есть, но FETCH
+        //     молчит. Тогда Err, чтобы lib.rs сделал reconnect и повторил.
+        // Различает серверный вопрос UID SEARCH, пока папка ещё выбрана.
+        let mut desync = false;
+        if out.is_empty() && !empty_uids.is_empty() {
+            match Self::uids_present(session, &empty_uids) {
+                Ok(false) => eprintln!(
+                    "[fetch_bodies] folder={folder}: {n} uid отсутствуют на сервере — мёртвый курсор, не рассинхрон",
+                    n = empty_uids.len()
+                ),
+                Ok(true) => desync = true,
+                Err(e) => return Err(e),
+            }
+        }
+
         if folder != "INBOX" {
             let _ = session.select("INBOX");
         }
 
-        // ВСЕ тела пустые = реальный рассинхрон сессии (см. fetch_message_body):
-        // Err, чтобы lib.rs сделал reconnect и повторил батч. Частично пустые —
-        // норма (письма переехали в другую папку), отдаём то, что есть.
-        if out.is_empty() && !empty_uids.is_empty() {
+        if desync {
             anyhow::bail!(
                 "Empty body for ALL {n} uids in {folder} (session desync?)",
                 n = empty_uids.len()
@@ -1733,6 +1831,30 @@ mod tests {
                 !EmailClient::is_missing_folder_error(&e),
                 "сетевой сбой ошибочно принят за отсутствие папки: {c}"
             );
+        }
+    }
+
+    /// Виртуальные письма релея (uid `rl-…`) и записи без IMAP-адреса
+    /// (`''`, `'undefined'`) не должны доходить до session.select/uid_fetch:
+    /// иначе пустой ответ принимался за рассинхрон и рвал живую сессию.
+    #[test]
+    fn is_virtual_folder_matches_relay_pseudo_folder() {
+        // Имя папки фиксировано контрактом с фронтом (features/relay.js).
+        for v in ["RELAY", "relay", "Relay"] {
+            assert!(EmailClient::is_virtual_folder(v), "должна быть виртуальной: {v}");
+        }
+        for real in ["INBOX", "[Gmail]/Sent Mail", "Junk", ""] {
+            assert!(!EmailClient::is_virtual_folder(real), "реальная папка: {real:?}");
+        }
+    }
+
+    #[test]
+    fn is_imap_uid_accepts_only_digits() {
+        for ok in ["1", "636", "4294967295"] {
+            assert!(EmailClient::is_imap_uid(ok), "должен быть принят: {ok}");
+        }
+        for bad in ["", "undefined", "rl-3fa85f64", "12a", "-5", " "] {
+            assert!(!EmailClient::is_imap_uid(bad), "не IMAP uid: {bad:?}");
         }
     }
 

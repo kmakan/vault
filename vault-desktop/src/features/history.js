@@ -3,6 +3,7 @@
 import { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
 import { saveHistory, loadHistory } from '../history.js';
+import { normalizeHistoryList } from '../history.js';
 import * as EnvelopeId from './envelope-id.js';
 
 export { msgTs as _msgTsInternal };
@@ -79,7 +80,10 @@ export async function persistBodyCache(email, emailBodyCache) {
 export async function loadChatCache(email, chat) {
   try {
     const raw = await db.kvGet(await accountNamespace(email), 'chat-cache:' + chat);
-    return raw ? JSON.parse(raw) : null;
+    // Тот же фильтр, что и у архива: `{}` и записи без личности — не
+    // сообщения. Раньше кэш читался как есть, и чат открывался пустыми
+    // пузырями без текста и времени (жалоба 22.10).
+    return raw ? normalizeHistoryList(JSON.parse(raw)) : null;
   } catch (e) {
     return null;
   }
@@ -87,7 +91,11 @@ export async function loadChatCache(email, chat) {
 
 export async function saveChatCache(email, chat, list, msgTs) {
   try {
-    const slim = (list || []).map(m => ({
+    // Пустые объекты (`{}`) — не сообщения: раньше они оседали в кэше и
+    // чат открывался с пустыми пузырями. Фильтруем при записи.
+    const isMsg = (m) => m && typeof m === 'object' && !Array.isArray(m)
+      && (m.id || m.content !== undefined || m.mid);
+    const slim = (list || []).filter(isMsg).map(m => ({
       id: m.id, content: m.content, from: m.from, time: m.time,
       encrypted: m.encrypted, vault: m.vault, status: m.status,
       ts: m.ts || msgTs(m) || undefined,
@@ -109,7 +117,11 @@ export function markPending({ setPendingOutgoing }, chatKey, msg) {
 
 export function mergePending({ pendingOutgoing, isTombstoned, msgTs, mergePendingOutgoing, dropBucket }, chatKey, list) {
   const bucket = (pendingOutgoing || {})[chatKey];
-  if (!bucket || !Object.keys(bucket).length) return list;
+  // Бакет — запись {id → msg}. Строка (например ключ чата, попавший не в тот
+  // аргумент) дала бы Object.keys по символам и поллинг подмешал бы символы в
+  // чат как сообщения — «пустые пузыри» вместо переписки.
+  if (!bucket || typeof bucket !== 'object') return list;
+  if (!Object.keys(bucket).length) return list;
   const now = Date.now();
   const out = [...list];
   const seen = new Set(list.map(m => m.id));
@@ -212,10 +224,16 @@ export function showHistoryFirst({ loadHistory, chat, msgTs }, chatKey, isStale)
   });
 }
 
-// chatState: объект с .messages (реактивный стейт чата).
-export function saveCurrentHistory(email, chatKey, chatState) {
+// chat: владелец переписки (chat-store из `src/chat-store.js`), т.е. объект
+// с полем `state.messages`. Раньше читалось `chat.messages` — у владельца такого
+// поля нет, поэтому в архив всегда уходил пустой список: исходящие сообщения
+// жили только в памяти и исчезали при первом же перезаписи экрана (жалоба 22.10
+// «отправил — сообщение пропало»); локальная история не наполнялась никогда.
+export function saveCurrentHistory(email, chatKey, chat) {
   try {
-    saveHistory(email, chatKey, (chatState && chatState.messages) || []);
+    // Промис наружу: запись архива теперь read-modify-write, и вызывающему
+    // есть смысл дождаться (кто не ждёт — теряет не больше, чем раньше).
+    return saveHistory(email, chatKey, (chat && chat.state && chat.state.messages) || []);
   } catch (e) {
     console.warn('saveHistory (sqlite) failed:', e);
   }

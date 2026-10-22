@@ -364,7 +364,7 @@
             :placeholder="(t('message_placeholder') || 'Type a message') + '...'"
             class="message-field"
           />
-          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" title="Emoji"><Icon name="smile" :size="19" /></button>
+          <button class="emoji-btn" @click="showEmojiPicker = !showEmojiPicker" :title="t('emoji_picker')"><Icon name="smile" :size="19" /></button>
         </div>
         <!-- Отправка: ВСЕГДА видна в первом ряду -->
         <button class="send-btn-round" @click="sendMessage" :disabled="sending || !newMessage.trim()" :title="t('send') || 'Отправить'"><Icon name="send" :size="17" /></button>
@@ -1018,6 +1018,7 @@ import * as ProPlanFeature from './features/pro-plan.js';
 import * as EnvelopeBuildFeature from './features/envelope-build.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
+import { mailboxApi } from './features/mailbox-api.js';
 import * as CallsFeature from './features/calls.js';
 import * as CallVideoFeature from './features/call-video.js';
 // S5-2: приём решения кнопки уведомления (accept/reject), пока WebView
@@ -2176,7 +2177,7 @@ export default {
         initCrypto: (opts) => this.initCrypto(opts),
         initNotifications: () => initNotifications(),
         isRecoveryPending: () => RecoverySession.isRecoveryPending(),
-        syncEcoWithRelay: (force) => RelayFeature.syncEcoWithRelay(this, force),
+        syncEcoWithRelay: (force) => RelayFeature.syncEcoWithRelay(force),
         initLocalDb: () => this.initLocalDb(),
         loadUnreadCounts: () => this.loadUnreadCounts(),
         loadChatFlags: () => this.loadChatFlags(),
@@ -2302,9 +2303,10 @@ export default {
         fileToAvatarDataUrl: (file, kind) => AvatarImage.fileToAvatarDataUrl(file, kind),
         GROUP_AVATAR: AvatarImage.GROUP_AVATAR,
         // Рассылка мета-писем участникам — фича (features/group-meta-broadcast.js),
-        // приходит через контракт: фича не знает про фичу (ADR-004).
-        broadcastGroupMeta: (groupId, payload) => GroupMetaBroadcast.broadcastGroupMeta(groupId, payload,
-          { groupKeys: this.groupKeys, cryptoReady: this.cryptoReady }),
+        // приходит через контракт: фича не знает про фичу (ADR-004). Ключи и
+        // готовность крипты передаёт САМА фича третьим аргументом — замыкание не
+        // вправе подставлять свой контекст вместо присланного (гейт арности).
+        broadcastGroupMeta: (groupId, payload, ctx) => GroupMetaBroadcast.broadcastGroupMeta(groupId, payload, ctx),
         alert: (msg) => window.alert(msg),
         tr: (key) => uiStore.tr(key),
       };
@@ -2407,7 +2409,7 @@ export default {
     },
     // ADR-005 W3 (партия 7): звёзды и просмотр картинки — у владельца форм.
     starredMap: {
-      get() { return uiStore.getFormField('starredMap'); },
+      get() { return uiStore.getFormField('starredMap') || {}; },
       set(v) { uiStore.setFormField('starredMap', v || {}); },
     },
     viewingImage: {
@@ -2718,7 +2720,7 @@ export default {
         onEcoMode: (on, silent) => this.onEcoMode(on, silent),
         // Синхронизация эко с релеем — relay.js ещё ctx-модуль, поэтому его
         // зовёт компонент (модулю компонент не достаётся).
-        syncEcoWithRelay: () => RelayFeature.syncEcoWithRelay(this, true),
+        syncEcoWithRelay: () => RelayFeature.syncEcoWithRelay(true),
       };
     },
     // Контракт автоочистки (ADR-005 W3, партия 12): зеркала памяти и период.
@@ -2916,7 +2918,9 @@ export default {
     },
     starredSet() {
       const key = this.currentChatKey;
-      return new Set((key && this.starredMap[key]) || []);
+      // starredMap может быть ещё не инициализирован (первый рендер до
+      // загрузки формы) — падение здесь роняло весь рендер списка сообщений.
+      return new Set((key && (this.starredMap || {})[key]) || []);
     },
     currentChatKey() {
       if (!this.activeChat) return '';
@@ -3008,6 +3012,20 @@ export default {
       // setCurrentEmail избыточен (setter вызовит его при this.email = val).
     }
   },
+  created() {
+    mailboxApi.setOwner({
+      processIncoming: (f, o) => this.processIncoming(f, o),
+      loadMessages: (e) => this.loadMessages(e),
+      loadEmails: (s) => this.loadEmails(s),
+      loadGroups: () => this.loadGroups(),
+      loadGroupMessages: (id, force) => this.loadGroupMessages(id, force),
+      loadCursors: (id) => this.loadCursors(id),
+      saveCursors: (id, c) => this.saveCursors(id, c),
+      cacheBody: (k, b) => this.cacheBody(k, b),
+      scrollToBottom: (f) => this.scrollToBottom(f),
+    });
+  },
+
   async mounted() {
     // Duress-замок: включён ли (до авторизации)
     this.checkDuressLock();
@@ -3258,7 +3276,7 @@ export default {
             // syncEcoWithRelay проверит здоровье релея и включит eco
             // (если пользователь явно его не выключал в настройках).
             if (this.relayEnabled) {
-              await RelayFeature.syncEcoWithRelay(this, true).catch(() => {});
+              await RelayFeature.syncEcoWithRelay(true).catch(() => {});
               // syncEcoWithRelay мог изменить ecoMode — перечитаем kv.
               this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
             }
@@ -3394,14 +3412,19 @@ export default {
     persistBodyCache() { return HistoryFeature.persistBodyCache(this.email, this.emailBodyCache); },
     loadChatCache(chat) { return HistoryFeature.loadChatCache(this.email, chat); },
     saveChatCache(chat, list) { return HistoryFeature.saveChatCache(this.email, chat, list, this.msgTs); },
-    markPending(chatKey, msg) { return HistoryFeature.markPending({ setPendingOutgoing: v => this.setPendingOutgoing(chatKey, v) }, chatKey, msg); },
+    // АРНОСТЬ ЗАВИСИМОСТЕЙ — НЕ МЕЛОЧЬ. history.js зовёт эти две зависимости
+    // ДВУМЯ аргументами: setPendingOutgoing(chatKey, msg), mergePendingOutgoing
+    // (chatKey, bucket). Замыкание, берущее только первый аргумент, подставляет
+    // ключ чата ВМЕСТО сообщения — бакет становится строкой, а Object.assign по
+    // строке это её символы; поллинг подмешивал символы в чат пустыми пузырями.
+    markPending(chatKey, msg) { return HistoryFeature.markPending({ setPendingOutgoing: (k, m) => this.setPendingOutgoing(k, m) }, chatKey, msg); },
     mergePending(chatKey, list) {
       return HistoryFeature.mergePending({
         pendingOutgoing: this.pendingOutgoing,
         isTombstoned: this.isTombstoned,
         msgTs: this.msgTs,
-        mergePendingOutgoing: v => this.mergePendingOutgoing(chatKey, v),
-        dropBucket: () => this.dropBucket(chatKey),
+        mergePendingOutgoing: (k, b) => this.mergePendingOutgoing(k, b),
+        dropBucket: (ck) => this.dropBucket(ck),
       }, chatKey, list);
     },
     loadLocalHistory(chatKey) { return HistoryFeature.loadLocalHistory(this.email, chatKey, this.msgTs); },
@@ -3419,16 +3442,17 @@ export default {
     },
     saveCurrentHistory(chatKey) { return HistoryFeature.saveCurrentHistory(this.email, chatKey, this.chat); },
     // ── Релей/режимы приёма (логика в features/relay.js) ──
-    relayConsume() { return RelayFeature.relayConsume(this); },
-    loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(this, silent); },
-    startRelayTicker() { return RelayFeature.startRelayTicker(this); },
-    enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(this); },
-    idleLoop() { return RelayFeature.idleLoop(this); },
-    stopFastFetchTimer() { return RelayFeature.stopFastFetchTimer(this); },
-    startPolling(intervalMs = 30000) { return RelayFeature.startPolling(this, intervalMs); },
-    stopPolling() { return RelayFeature.stopPolling(this); },
-    onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(this, on, silent); },
-    onRelayEnabled(on) { return RelayFeature.onRelayEnabled(this, on); },
+    relayConsume() { return RelayFeature.relayConsume(); },
+    loadEmails(silent = false) { return EmailsFeature.loadEmails(this.emailsDeps, silent); },
+    loadEmailsFast(silent = true) { return RelayFeature.loadEmailsFast(silent); },
+    startRelayTicker() { return RelayFeature.startRelayTicker(); },
+    enterRelayOfflineRescue() { return RelayFeature.enterRelayOfflineRescue(); },
+    idleLoop() { return RelayFeature.idleLoop(); },
+    stopFastFetchTimer() { return RelayFeature.stopFastFetchTimer(); },
+    startPolling(intervalMs = 30000) { return RelayFeature.startPolling(intervalMs); },
+    stopPolling() { return RelayFeature.stopPolling(); },
+    onEcoMode(on, silent = false) { return RelayFeature.onEcoMode(on, silent); },
+    onRelayEnabled(on) { return RelayFeature.onRelayEnabled(on); },
     onPresenceEnabled(on) { return PresenceFeature.onPresenceEnabled(this.presenceToggleDeps, on); },
     // ── Звонки (логика в features/calls.js) ──
     // ADR-001: ниже передаются ЯВНЫЕ зависимости, а не `this`. Сигнатура

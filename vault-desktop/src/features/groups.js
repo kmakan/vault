@@ -276,7 +276,6 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
           // История — основа чата, письма добавляют новое (mergeHistory).
           // Статусы/реакции/правки — к итоговому списку (в истории старые
           // статусы, письмо приносит свежий).
-          const hadMessages = deps.chat.state.messages.length > 0;
           const merged0 = await deps.mergeHistory(chat, list);
           const statusById = new Map();
           for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
@@ -298,7 +297,11 @@ export async function loadGroupMessages(deps, groupId, forceRescan = false) {
           deps.applyEdits(merged0, chat, wireEdits);
           deps.applyPollVotes(merged0, wirePollVotes);
           const merged = deps.filterDeleted(deps.mergePending(chat, merged0));
-          if (!merged.length && hadMessages && !stale()) {
+          if (!merged.length) {
+            // Пустой результат — не «группа пуста»: история могла не
+            // загрузиться, письма не расшифроваться. Пустотой архив и кэш
+            // не переписываем (иначе переписка пропадала насовсем).
+            console.warn('[loadGroupMessages] пустой результат — чат и архив не переписываю');
             return;
           }
           deps.chat.set(merged);

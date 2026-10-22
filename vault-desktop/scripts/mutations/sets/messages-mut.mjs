@@ -22,6 +22,21 @@ export default {
     { name: "история не показывается до мержа",
       pattern: "      await deps.showHistoryFirst(chat, stale);",
       replacement: "      void 0;" },
+    // ПРАВИЛО ИСЧЕЗНОВЕНИЯ (22.10): история — только когда показывать нечего.
+    // Снятие условия возвращает дефект: оптимистичное сообщение исчезает при
+    // ближайшем поллинге.
+    { name: "история подставляется на живой экран (оптимистичное исчезает)",
+      pattern: "      if (!(deps.chat.state.messages || []).length) {\n        await deps.showHistoryFirst(chat, stale);\n      }",
+      replacement: "      await deps.showHistoryFirst(chat, stale);" },
+    { name: "пустой результат затирает живой экран",
+      pattern: "        if (!merged.length) {",
+      replacement: "        if (false) {" },
+    { name: "томбстоун-очистка не работает (удалённое живёт вечно)",
+      pattern: "          if (merged0.length) {",
+      replacement: "          if (false) {" },
+    { name: "гард актуальности перед перезаписью экрана снят",
+      pattern: "        if (stale()) return;\n        if (!merged.length) {",
+      replacement: "        void 0;\n        if (!merged.length) {" },
     // Статус применяется в ТРЁХ местах (список, merged через statusById,
     // merged напрямую) — мутация одной точки маскируется остальными. Поэтому
     // бьём ИСТОЧНИК: квитанции не собираются вовсе.

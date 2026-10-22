@@ -42,8 +42,12 @@ writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; exp
 writeFileSync(MOCKS + '/core.js', 'export const invoke = async () => null;');
 writeFileSync(MOCKS + '/message-store.js', 'export const ephemeralTtlOf = (chatId) => globalThis.__ttl(chatId);');
 globalThis.__ttl = () => 0;
+// Релей-двойник управляемый (globalThis.__relayMock): доставка считается
+// состоявшейся, если сработал ХОТЯ БЫ ОДИН транспорт (релей или SMTP).
+globalThis.__relayMock = { ok: true, why: undefined };
 writeFileSync(MOCKS + '/relay-client.js',
-  'export const fingerprintOf = async () => null; export const relayPublish = () => Promise.resolve({ ok: true });');
+  'export const fingerprintOf = async () => null;'
+  + ' export const relayPublish = async () => { (globalThis.__order || []).push(\'relay\'); return { ...globalThis.__relayMock }; };');
 globalThis.__apiMock = apiMock; globalThis.__cryptoMock = cryptoMock;
 
 // ADR-004 A15: notes-store.js работает с глобальным localStorage.
@@ -226,8 +230,17 @@ console.log('3. 1:1: конверт→шифр→api.sendMessage→статус 
   await tick(); // даём fire-and-forget api.sendMessage разрешиться
   // ОПТИМИСТИЧНОЕ сохранение обязано быть ДО отправки: иначе при падении
   // SMTP своё сообщение пропало бы из истории (а после отправки — поздно).
-  check('история сохранена ДО отправки (оптимистично)',
-    d.order.indexOf('history') !== -1 && d.order.indexOf('history') < d.order.indexOf('send'), d.order);
+  // Сравниваем с ЛЮБЫМ транспортом, не только с SMTP: релей вызывается
+  // раньше и доставляет за секунду, поэтому «history < send» зелёный и на
+  // коде без оптимистичной записи (первый history тогда — из finishOk relay).
+  {
+    const iHist = d.order.indexOf('history');
+    const iSend = d.order.indexOf('send');
+    const iRelay = d.order.indexOf('relay');
+    const iTransport = Math.min(iSend === -1 ? Infinity : iSend, iRelay === -1 ? Infinity : iRelay);
+    check('история сохранена ДО ЛЮБОГО транспорта (оптимистично)',
+      iHist !== -1 && iHist < iTransport, d.order);
+  }
   // После УСПЕШНОЙ отправки история пересохраняется: статус изменился на
   // 'sent' — иначе в персисте остался бы 'sending'.
   check('после отправки история пересохранена (статус sent)',
@@ -276,19 +289,55 @@ console.log('4b. lazy-backfill ключа группы');
   delete apiMock.getMyGroupKey;
 }
 
-// ── 5. ошибка доставки → статус failed ─────────────────────────
-console.log('5. сбой api.sendMessage → статус failed');
+// ── 5. отказ ОБОИХ транспортов → статус failed ─────────────────
+// Семантика: «отправлено» = сообщение вышло с устройства любым транспортом.
+// Релей доставляет пиру за секунды, SMTP-копия в ящик — резерв. Поэтому
+// failed только тогда, когда отказали оба; отказ одного при успехе другого
+// — это доставленное сообщение (раньше маркер врал красным).
+console.log('5. сбой api.sendMessage и релея → статус failed');
 {
   apiMock.sent.length = 0;
   apiMock.sendMessage = async () => { throw new Error('smtp down'); };
+  globalThis.__relayMock = { ok: false, why: 'no-live-relay' };
   resetWorld();
   const d = makeDeps();
   d.chat.setDraft('упс');
   await S.sendMessage(d);
   await tick();
-  check('предпросмотр статус failed при сбое', d.chat.list()[0] && d.chat.list()[0].status === 'failed');
+  check('предпросмотр статус failed при сбое обоих транспортов',
+    d.chat.list()[0] && d.chat.list()[0].status === 'failed');
   // restore
   apiMock.sendMessage = async (to, content) => { apiMock.sent.push(['msg', to, content]); (globalThis.__order || []).push('send'); };
+  globalThis.__relayMock = { ok: true };
+}
+
+// ── 5b. SMTP отказал, но релей доставил → sent (не врём красным) ─────────
+console.log('5b. релей доставил, SMTP отказал → статус sent');
+{
+  apiMock.sent.length = 0;
+  apiMock.sendMessage = async () => { throw new Error('smtp timeout'); };
+  globalThis.__relayMock = { ok: true };
+  resetWorld();
+  const d = makeDeps();
+  d.chat.setDraft('через релей');
+  await S.sendMessage(d);
+  await tick();
+  check('статус sent, когда доставил релей', d.chat.list()[0] && d.chat.list()[0].status === 'sent');
+  apiMock.sendMessage = async (to, content) => { apiMock.sent.push(['msg', to, content]); (globalThis.__order || []).push('send'); };
+}
+
+// ── 5c. Релей недоступен, но SMTP прошёл → sent ─────────────────────────
+console.log('5c. релей отказал, SMTP прошёл → статус sent');
+{
+  apiMock.sent.length = 0;
+  globalThis.__relayMock = { ok: false, why: 'no-live-relay' };
+  resetWorld();
+  const d = makeDeps();
+  d.chat.setDraft('через smtp');
+  await S.sendMessage(d);
+  await tick();
+  check('статус sent, когда доставил SMTP', d.chat.list()[0] && d.chat.list()[0].status === 'sent');
+  globalThis.__relayMock = { ok: true };
 }
 
 // ── Исчезающие сообщения: TTL из kv → таймер взводится ────────────────────

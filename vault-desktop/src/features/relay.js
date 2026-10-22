@@ -33,7 +33,7 @@ import { mailboxApi } from './mailbox-api.js';
 // не задвоит, дедуп в mergePending/mergeHistory по env.id тоже страхует).
 // from приходит от отправителя (поле from) — дальше обычная расшифровка
 // пир-ключом в processIncoming. Ошибки релея НЕ влияют на почту.
-export async function relayConsume(ctx) {
+export async function relayConsume() {
   const list = await relay.relayPoll(sessionStore.getCurrentEmail());
   // Каналы (M2 channels-3): подписчики пуллят общую очередь каждого канала
   // его read-токеном (fan-out, серверный peek+курсор). Конверты-посты идут
@@ -59,6 +59,10 @@ export async function relayConsume(ctx) {
     seen.add(uid + '|RELAY');
     fresh.push({
       uid,
+      // 'RELAY' — ВИРТУАЛЬНАЯ папка: на IMAP-сервере её нет, тело уже здесь.
+      // Контракт с Rust-шлюзом: email.rs (VIRTUAL_FOLDER) тела по этой папке
+      // не запрашивает и сессию из-за неё не переподключает. Отдельной
+      // ветки в JS-адаптере нет — решение одно, в Rust.
       folder: 'RELAY',
       from: (env.from || '').toLowerCase(),
       to: sessionStore.getCurrentEmail(),
@@ -78,7 +82,7 @@ export async function relayConsume(ctx) {
   for (const f of fresh) {
     mailboxStore.cacheBody('RELAY:' + f.uid, f.body);
   }
-  await mailboxApi.processIncoming(fresh, { notify: true }, ctx);
+  await mailboxApi.processIncoming(fresh, { notify: true });
   console.log('[relay] consumed envelopes: ' + fresh.length);
 }
 
@@ -86,7 +90,7 @@ export async function relayConsume(ctx) {
 // конкурирует за lock основного клиента. Используется ИЗ IDLE-цикла:
 // входящий call_request доходит, даже когда обычный поллинг пропускается
 // из-за занятого lock (троттлинг Gmail / долгие UI-фетчи).
-export async function loadEmailsFast(ctx, silent = true) {
+export async function loadEmailsFast(silent = true) {
   try {
     const accounts = await api.getEmailAccounts();
     const fetched = [];
@@ -115,7 +119,7 @@ export async function loadEmailsFast(ctx, silent = true) {
     mailboxStore.state.emails = merged;
     console.log(`[Emails] fast loaded ${mailboxStore.state.emails.length} messages (${fetched.length} new)`);
     // Разбор сигналов звонков и уведомлений (как обычный loadEmails).
-    await mailboxApi.processIncoming(fetched, { notify: silent }, ctx);
+    await mailboxApi.processIncoming(fetched, { notify: silent });
   } catch (e) {
     console.warn('[calls] fast load failed:', e);
   }
@@ -128,7 +132,7 @@ export async function loadEmailsFast(ctx, silent = true) {
 // АВТОНОМНЫЙ режим: поднимаем foreground-службу + IDLE + поллинг 30с —
 // приложение работает как классика, единственная разница — иконка в
 // шторке. При оживании релея — тихо возвращаемся в эко.
-export function startRelayTicker(ctx) {
+export function startRelayTicker() {
   // ADR-004 H+: владелец таймера — relay-idle.js/relayTicker (singleton).
   if (relayTicker.timer) return;
   relayState.state.relayFails = 0;
@@ -138,7 +142,7 @@ export function startRelayTicker(ctx) {
       relayTicker.stop();
       return;
     }
-    try { await relayConsume(ctx); } catch (e) { /* релей опционален */ }
+    try { await relayConsume(); } catch (e) { /* релей опционален */ }
     // Health-чек раз в 60с (не на каждом тике — экономим трафик/батарею).
     if (Date.now() - relayState.state.lastRelayHealth >= 60000) {
       relayState.state.lastRelayHealth = Date.now();
@@ -155,30 +159,30 @@ export function startRelayTicker(ctx) {
           }
         }
         // Авто-eco: релей жив и не был отключён пользователем → eco ON.
-        syncEcoWithRelay(ctx, true).catch(() => {});
+        syncEcoWithRelay(true).catch(() => {});
       } else {
         relayState.state.relayFails++;
         console.warn(`[relay] health fail #${relayState.state.relayFails}`);
         // 3 минуты подряд (3 чека × 60с) — считаем релей заблокированным.
         if (relayState.state.relayFails >= 3 && (relayState.isEcoMode()) && !relayState.state.ecoAutonomous) {
           console.warn('[relay] dead in eco → AUTONOMOUS mode (service+IDLE)');
-          enterRelayOfflineRescue(ctx);
+          enterRelayOfflineRescue();
         }
         // Авто-eco: релей отключился — выходим из эко в классический режим
         // (пользователь не должен получать «молчащий» мессенджер).
-        syncEcoWithRelay(ctx, true).catch(() => {});
+        syncEcoWithRelay(true).catch(() => {});
       }
     }
   });
   // M2.3-c: мгновенный первый consume — ntfy-пуш будит холодный старт,
   // call_request уже в очереди; без этого звонок загремел бы через 5с.
-  if ((sessionStore.state.isLoggedIn)) relayConsume(ctx).catch(() => {});
+  if ((sessionStore.state.isLoggedIn)) relayConsume().catch(() => {});
 }
 
 // Автономный режим в эко при мёртвом релее: служба слушает ящик (IDLE),
 // уведомления локальные — работа мессенджера НЕ отличается от классики.
 // Отличия только: иконка в шторке есть, скорость = почтовая.
-export async function enterRelayOfflineRescue(ctx) {
+export async function enterRelayOfflineRescue() {
   relayState.state.ecoAutonomous = true;
   relayState.state.relayOfflineSince = Date.now();
   relayState.setRelayMode('email');
@@ -200,9 +204,9 @@ export async function enterRelayOfflineRescue(ctx) {
   // владельца IDLE и гасят таймер быстрого фетча), затем idleLoop — чтобы
   // он поднял монитор последним и его флаги не затёрлись.
   idleState.setIdleStop(false);
-  stopPolling(ctx);
-  startPolling(ctx);
-  idleLoop(ctx);
+  stopPolling();
+  startPolling();
+  idleLoop();
   uiStore.toast(uiStore.tr('relay_offline_toast') || 'Релей недоступен — перешли в автономный режим (доставка по почте, без потери сообщений)', 5000);
 }
 
@@ -216,18 +220,18 @@ const FAST_FETCH_TICK_MS = 7000;
 // Идемпотентен: повторный вызов при живом таймере — no-op, второй таймер
 // не заводим (иначе на повторном входе тики наложились бы вдвое).
 // Владелец таймера — relay-idle.js/fastFetchCycle (busy-гвард анти-наложения).
-function startFastFetchTimer(ctx) {
+function startFastFetchTimer() {
   if (fastFetchCycle.timer) return;
   fastFetchCycle.start(async () => {
     // Вышли из сессии или эко погасило IDLE — таймер больше не нужен.
     if (!(sessionStore.state.isLoggedIn) || idleState.idleStop) { fastFetchCycle.stop(); return; }
     // Анти-наложение loadEmailsFast (до 30с в Rust) — busy-флаг владельца
     // fastFetchCycle.guard пропускает тик, пока предыдущий идёт.
-    try { await loadEmailsFast(ctx, true); } catch (e) { /* тихо */ }
+    try { await loadEmailsFast(true); } catch (e) { /* тихо */ }
   });
 }
 
-export function stopFastFetchTimer(ctx) {
+export function stopFastFetchTimer() {
   fastFetchCycle.stop();
 }
 
@@ -246,13 +250,13 @@ export function stopFastFetchTimer(ctx) {
 //     монитором по построению: резерв включается лишь тогда, когда Rust
 //     подтвердил, что монитор не запущен. Параллельно они не работают
 //     никогда — это и есть «один владелец».
-export async function idleLoop(ctx) {
+export async function idleLoop() {
   if (!(sessionStore.state.isLoggedIn)) return;
   // Монитор уже поднят: НЕ перезапускаем его. api.idleStart останавливает
   // прежний таск и создаёт НОВЫЙ EmailClient — то есть новое TCP+TLS. Без
   // этой проверки каждый сигнал звонка (startFastPolling → idleLoop) поднимал
   // бы свежее соединение. Идемпотентность — на стороне владельца.
-  if (useSession().callIdleMonitorUp) { startFastFetchTimer(ctx); return; }
+  if (useSession().callIdleMonitorUp) { startFastFetchTimer(); return; }
   if (idleState.idleActive) return;
   idleState.setIdleActive(true);
   // Вызывающий явно просит включить IDLE — снимаем прошлый стоп (эко гасит
@@ -260,7 +264,7 @@ export async function idleLoop(ctx) {
   idleState.setIdleStop(false);
   // M2.2: релей-конверты — быстрый канал (email IDLE ~1с для писем,
   // но relay-очередь иначе ждала бы 30с тика поллинга).
-  startRelayTicker(ctx);
+  startRelayTicker();
   // Rust-монитор: курсоры берём из кэша активного аккаунта, чтобы первый
   // fetch не тянул старые письма.
   let monitorUp = false;
@@ -279,7 +283,7 @@ export async function idleLoop(ctx) {
     // РЕГРЕССИЯ (найдена смоуком 17.10 при переводе relay-smoke на владельцев):
     // при конвертации в state-machine из этой ветки пропали ДВА действия
     // baseline:
-    //   1) startFastFetchTimer(ctx) — без него страховочный фетч (call_* в СПАМ +
+    //   1) startFastFetchTimer() — без него страховочный фетч (call_* в СПАМ +
     //      сигналы звонков) не поднимается при живом мониторе вовсе: первый
     //      call_request ждал бы 30с-поллинг (а в эко — 60с). Хуже того,
     //      startFastFetchTimer зовётся только из веток idleLoop, то есть
@@ -291,7 +295,7 @@ export async function idleLoop(ctx) {
     //      падала на 30с-поллинг до перезапуска приложения.
     useSession().setCallIdleMonitorUp(true);
     idleState.setIdleActive(false);
-    startFastFetchTimer(ctx);
+    startFastFetchTimer();
     return;
   }
   // ── Резервный путь: монитор не поднялся, ведём IDLE из JS ──────────
@@ -316,7 +320,7 @@ export async function idleLoop(ctx) {
         // зависшими операциями/троттлингом (lock busy → поллинг молча
         // пропускается, call_request невидим часами). Звонки доходят
         // всегда, независимо от состояния основного клиента.
-        try { await loadEmailsFast(ctx, true); } catch (e) { /* тихо */ }
+        try { await loadEmailsFast(true); } catch (e) { /* тихо */ }
       }
     }
   } finally {
@@ -333,18 +337,18 @@ export async function idleLoop(ctx) {
   // остальные обращения к call-session в этом файле.
   // Частота опроса при живом звонке — решение протокола (в Rust): звонок ждать
   // полный интервал нельзя, сигнал звонка должен прийти быстро.
-  if ((sessionStore.state.isLoggedIn) && await callCan(useSession().callState, 'call_active')) startPolling(ctx, 3000);
+  if ((sessionStore.state.isLoggedIn) && await callCan(useSession().callState, 'call_active')) startPolling(3000);
   // Резервный IDLE умер (провайдер/сеть): обычный поллинг продолжает
   // работать; через 60с пробуем снова — и снова СНАЧАЛА Rust-монитор
   // (idleLoop), то есть при его успехе владение возвращается монитору,
   // а JS-цикл выключается.
   if ((sessionStore.state.isLoggedIn) && idleFailed) {
     // Авто-восстановление IDLE через 60с: владелец — relay-idle.js/idleFallback.
-    idleFallback.arm(() => { if ((sessionStore.state.isLoggedIn)) idleLoop(ctx); });
+    idleFallback.arm(() => { if ((sessionStore.state.isLoggedIn)) idleLoop(); });
   }
 }
 
-export function startPolling(ctx, intervalMs = 30000) {
+export function startPolling(intervalMs = 30000) {
   // ADR-004 H+: владелец таймера — relay-idle.js/pollingCycle (busy-гвард).
   if (pollingCycle.timer) return;
   pollingCycle.start(async () => {
@@ -358,27 +362,27 @@ export function startPolling(ctx, intervalMs = 30000) {
       // мержим в mailboxStore.state.emails как виртуальные письма (uid: rl-<id>) —
       // дальше их разберёт штатный processIncoming (дедуп по env.id
       // в mergeHistory не даст дубликату email-письма задвоиться).
-      try { await relayConsume(ctx); } catch (e) { /* релей недоступен — почта продолжит доставку */ }
+      try { await relayConsume(); } catch (e) { /* релей недоступен — почта продолжит доставку */ }
       // Пересборка групп в НАЧАЛЕ тика: участники групп попадают в список
       // контактов (модель почтовый мессенджер — группа тоже источник контактов).
-      try { await mailboxApi.loadGroups(ctx); } catch (e) { /* тихо */ }
+      try { await mailboxApi.loadGroups(); } catch (e) { /* тихо */ }
       // Тихий поллинг: не трогает спиннер/ошибки почты, но разбирает
       // инвайты (попап согласия) и обновляет список писем.
-      await mailboxApi.loadEmails(true, ctx);
+      await mailboxApi.loadEmails(true);
       // Новые письма могли прийти в любой момент — перерисовываем
       // открытый чат, чтобы не приходилось переоткрывать его вручную.
       if (chatStore.state.activeChat === '__notes__') {
         // Заметки для себя — локальные, поллинг их НЕ трогает (иначе
         // перезаписал бы пустым списком из IMAP).
       } else if (chatStore.state.activeChat && chatStore.state.activeChatType === 'chat') {
-        await mailboxApi.loadMessages(chatStore.state.activeChat, ctx);
+        await mailboxApi.loadMessages(chatStore.state.activeChat);
         // Не выдёргиваем из чтения истории: прокручиваем только если
         // пользователь уже у низа чата.
         mailboxApi.scrollToBottom(false);
       } else if (chatStore.state.activeChatType === 'group' && chatStore.state.currentGroup) {
         // Группы тоже обновляем поллингом: новые сообщения и реакции
         // (VaultGroupReact) иначе не подхватывались до переоткрытия чата.
-        await mailboxApi.loadGroupMessages(chatStore.state.currentGroup.id, false, ctx);
+        await mailboxApi.loadGroupMessages(chatStore.state.currentGroup.id, false);
         mailboxApi.scrollToBottom(false);
       }
     } catch (e) {
@@ -388,9 +392,9 @@ export function startPolling(ctx, intervalMs = 30000) {
       if (String(e && e.message || e).toLowerCase().includes('not connected')) {
         try {
           const ok = await api.restoreSession();
-          if (!ok) stopPolling(ctx);
+          if (!ok) stopPolling();
         } catch (_) {
-          stopPolling(ctx);
+          stopPolling();
         }
       } else {
         console.error('Polling loadEmails failed:', e);
@@ -399,13 +403,13 @@ export function startPolling(ctx, intervalMs = 30000) {
   }, intervalMs);
 }
 
-export function stopPolling(ctx) {
+export function stopPolling() {
   pollingCycle.stop();
   // Страховочный быстрый фетч — часть режима IDLE, а не поллинга: гасим
   // его здесь, чтобы на выходе/смене почты/размонтировании не осталось
   // висящего IMAP-таймера. Восстанавливает его idleLoop (в т.ч. через
   // startFastPolling на сигнале звонка).
-  stopFastFetchTimer(ctx);
+  stopFastFetchTimer();
   // Смена учётки/выход/размонтирование обесценивают фонового владельца IDLE:
   // нативная сессия разрывается (email_disconnect гасит монитор), поэтому
   // флаг сбрасываем — иначе следующий вход увидел бы «монитор поднят» и не
@@ -420,7 +424,7 @@ export function stopPolling(ctx) {
 // (постоянный IMAP IDLE не нужен — доставка едет релеем + ntfy).
 // Ручное выключение тумблером выставляет kv 'eco-user-disabled' и
 // автопереключение больше не дёргает режим («не выключен пользователем»).
-export async function syncEcoWithRelay(ctx, silent = false) {
+export async function syncEcoWithRelay(silent = false) {
   if (!(sessionStore.state.isLoggedIn)) return;
   let healthy = false;
   try { healthy = await relay.relayHealth(sessionStore.getCurrentEmail()); } catch (e) { healthy = false; }
@@ -430,17 +434,17 @@ export async function syncEcoWithRelay(ctx, silent = false) {
   if (wantEco === (relayState.isEcoMode())) return; // уже в нужном режиме
   if (wantEco) {
     console.log('[eco] relay alive → auto eco ON');
-    await onEcoMode(ctx, true, silent);
+    await onEcoMode(true, silent);
   } else {
     // Релей умер/отключён — автономный rescue поднимет службу через
     // health-чек тикера; сюда приходим только при выключении релея
     // пользователем — тогда чистый классический режим.
     console.log('[eco] relay off → auto eco OFF');
-    await onEcoMode(ctx, false, silent);
+    await onEcoMode(false, silent);
   }
 }
 
-export async function onEcoMode(ctx, on, silent = false) {
+export async function onEcoMode(on, silent = false) {
   relayState.enableEco(!!on);
   // Сброс автономного состояния: onEcoMode(true) из rescue-возврата
   // (релей ожил) и ручное выключение эко — оба начинают с чистого листа.
@@ -451,7 +455,7 @@ export async function onEcoMode(ctx, on, silent = false) {
   if ((relayState.isEcoMode())) {
     // стоп JS IDLE-цикла и таймера быстрого фетча
     idleState.setIdleStop(true);
-    stopFastFetchTimer(ctx);
+    stopFastFetchTimer();
     // Эко означает «постоянного фонового соединения нет»: сбрасываем флаг
     // владельца, иначе последующий idleLoop (выключение эко / сигнал звонка)
     // увидел бы callIdleMonitorUp и НЕ поднял бы монитор заново.
@@ -468,30 +472,30 @@ export async function onEcoMode(ctx, on, silent = false) {
     // процесс/WebView спит. Не убивать службу = доставка не зависит от релея.
     try { await api.ecoSet(true); } catch (e) { console.warn('[eco] svc quiet:', e); }
     // релей-тикер — канал приёма при живом JS (activity открыта)
-    startRelayTicker(ctx);
+    startRelayTicker();
     // редкий поллинг-тик страхует (релей — основной канал)
-    stopPolling(ctx);
-    startPolling(ctx, 60000);
+    stopPolling();
+    startPolling(60000);
     if (!silent) uiStore.toast(uiStore.tr('eco_on_toast') || 'Экономный режим: фоновое соединение остановлено, доставка через релей');
   } else {
     // классика: постоянный IDLE + обычный поллинг
     try { await api.pushSet(false, '', ''); } catch (e) { /* push-mode off */ }
     try { await api.ecoSet(false); } catch (e) { console.warn('[eco] svc start:', e); }
-    stopPolling(ctx);
-    idleLoop(ctx);
-    startPolling(ctx);
+    stopPolling();
+    idleLoop();
+    startPolling();
     uiStore.toast(uiStore.tr('eco_off_toast') || 'Классический режим: постоянное соединение включено');
   }
 }
 
-export function onRelayEnabled(ctx, on) {
+export function onRelayEnabled(on) {
   relayState.enableRelay(!!on);
   // 0.1.180: живое применение тумблера ИЗ настроек. Раньше только
   // health-тик релей-тикера (60с) заметил изменение — а в классическом
   // (не-eco) режиме тикер не запущен, и выключенный релей НЕ поднимал
   // службу. Теперь: on=true → eco-автопроверка; on=false → сразу классика
   // (syncEcoWithRelay выключит eco → foreground-служба + IDLE).
-  syncEcoWithRelay(ctx, true).catch(() => {});
+  syncEcoWithRelay(true).catch(() => {});
 }
 
 // Объяснить пользователю, почему доставка идёт по почте (релей недоступен

@@ -31,6 +31,12 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+// Дисковый журнал — тот же, что у JS-гейта. finally не выполняется при
+// SIGTERM/SIGKILL, а убитый прогон rust-гейта оставлял мутанта В КРЕЙТЕ:
+// `if false { return PubOutcome::Disabled; }` в relay.rs ронял базовый прогон
+// ВСЕХ наборов сразу («тесты не проходят на чистом дереве»), и 187 мутаций
+// мерились по сломанному дереву.
+import { recoverJournal, writeJournal, clearJournal } from './mutations/engine.mjs';
 
 const HERE = import.meta.dirname;                       // vault-desktop/scripts
 const REPO = path.resolve(HERE, '..', '..');             // корень репозитория
@@ -108,12 +114,14 @@ export function runSet(set, opts = {}) {
       continue;
     }
     const mutated = src.replace(m.pattern, m.replacement);
+    writeJournal(mFile, src);
     writeFileSync(mFile, mutated);
     let out;
     try {
       out = runTests(kind, set.timeoutMs);
     } finally {
       writeFileSync(mFile, src);   // восстановление побайтно
+      clearJournal(mFile);
     }
     if (out.timedOut) {
       broken.push({ name: m.name, reason: 'тесты зависли (таймаут)' });
@@ -143,6 +151,12 @@ export function runSet(set, opts = {}) {
 
 // ── main ────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
+{
+  const restored = recoverJournal();
+  if (restored.length) {
+    console.log(`  журнал: восстановлено после убитого прогона — ${restored.join(', ')}`);
+  }
+}
 const sets = await loadSets();
 if (args.includes('--list')) {
   for (const s of sets) console.log(`${s.id.padEnd(22)} ${s.file}  (${s.mutations.length} мутаций, kind=${s.kind || 'lib'})`);

@@ -204,7 +204,7 @@ console.log('1. relayConsume (виртуальные письма)');
     { id: 'r1', from: 'peer@x.ru', ts: 1758000000, body: 'ENC:hello' }, // дубль по env.id
     { id: 'r2', from: 'peer@x.ru', ts: 1758000001, body: 'ENC:second' },
   ];
-  await R.relayConsume(ctx);
+  await R.relayConsume();
   const emails = mailboxStore.state.emails;
   check('2 свежих конверта слиты в mailboxStore (дубль отфильтрован)', emails.length === 2);
   check('uid rl-<id> + folder RELAY', emails.every((m) => m.uid.startsWith('rl-') && m.folder === 'RELAY'));
@@ -216,14 +216,14 @@ console.log('1. relayConsume (виртуальные письма)');
   const pi = ops('processIncoming');
   check('мост получил свежие (processIncoming)', pi.length === 1 && pi[0].fetched.length === 2, pi.length);
   check('мост получил notify: true', pi[0] && pi[0].opts && pi[0].opts.notify === true);
-  check('мост получил ИМЕННО ctx вызывающего (identity)', pi[0] && pi[0].ctx === ctx);
+  check('мост не получает ctx (порт без ctx)', pi[0] && pi[0].ctx === undefined);
   // пустая очередь — ничего не делает
   bridge.calls.length = 0;
-  await R.relayConsume(ctx);
+  await R.relayConsume();
   check('пустая очередь — no-op', ops('processIncoming').length === 0 && mailboxStore.state.emails.length === 2);
   // повторный poll тех же конвертов — не задваивает
   relayMock.queue = [{ id: 'r1', from: 'peer@x.ru', ts: 1758000000, body: 'ENC:hello' }];
-  await R.relayConsume(ctx);
+  await R.relayConsume();
   check('повторный poll того же конверта — не дубль', mailboxStore.state.emails.length === 2);
 }
 
@@ -236,11 +236,10 @@ console.log('2. loadEmailsFast (звонковый фетч)');
     apiMock.calls.push(['fetchFast', acc, cursors]);
     return { messages: [{ uid: 10, folder: 'INBOX', from: 'a@x.ru', date: '2026-01-01T00:00:00Z' }], cursors: { INBOX: 10 } };
   };
-  await R.loadEmailsFast(ctx, false);
+  await R.loadEmailsFast(false);
   check('письма слиты в mailboxStore', mailboxStore.state.emails.length === 1 && mailboxStore.state.emails[0].uid === 10);
   const pi = ops('processIncoming');
   check('мост: notify=false (silent=false)', pi.length === 1 && pi[0].opts.notify === false);
-  check('мост: ctx вызывающего (identity)', pi[0] && pi[0].ctx === ctx);
   // J.4-фикс: курсоры обязаны быть ОБЪЕКТОМ, а не Promise (мост async, App-версия sync)
   const fast = apiMock.calls.filter((c) => c[0] === 'fetchFast');
   check('курсоры переданы как объект, а не Promise (J.4)',
@@ -250,7 +249,7 @@ console.log('2. loadEmailsFast (звонковый фетч)');
   // сбой fetch — тихо
   apiMock.fetchEmailsIncrementalFast = async () => { throw new Error('lock busy'); };
   const before = mailboxStore.state.emails.length;
-  await R.loadEmailsFast(ctx, true);
+  await R.loadEmailsFast(true);
   check('сбой fetch — тихо, список цел', mailboxStore.state.emails.length === before);
   apiMock.fetchEmailsIncrementalFast = async (acc, cursors) => { apiMock.calls.push(['fetchFast', acc, cursors]); return { messages: [], cursors }; };
 }
@@ -260,7 +259,7 @@ console.log('3. startPolling/stopPolling');
 {
   resetWorld();
   const ctx = makeCtx();
-  R.startPolling(ctx, 1000);
+  R.startPolling(1000);
   check('таймер поллинга создан (владелец pollingCycle)', pollingCycle.timer !== null
     && timers.get(pollingCycle.timer) && timers.get(pollingCycle.timer).ms === 1000);
   // РЕГРЕССИЯ H+: первый тик обязан быть ЧЕРЕЗ ИНТЕРВАЛ, а не немедленно
@@ -270,7 +269,7 @@ console.log('3. startPolling/stopPolling');
   // у поллинга живут ДВА таймера (двойной опрос, двойная нагрузка на IMAP-lock).
   // Проверяем КОНКРЕТНО: тот же таймер, а не «какой-нибудь таймер».
   const pollTimerBefore = pollingCycle.timer;
-  R.startPolling(ctx, 1000);
+  R.startPolling(1000);
   check('повторный startPolling отвергнут (таймер прежний, второй не создан)',
     pollingCycle.timer === pollTimerBefore, { before: pollTimerBefore, now: pollingCycle.timer });
   // То же правило у тикера релея — отдельный владелец, отдельная строка.
@@ -304,15 +303,15 @@ console.log('3. startPolling/stopPolling');
   const ctx2 = makeCtx();
   chatStore.setActiveChat('peer@x.ru');
   chatStore.setActiveChatType('chat');
-  R.startPolling(ctx2, 1000);
+  R.startPolling(1000);
   await fire('i', pollingCycle.timer); await flush();
   check('тик: релей опрошен (relayPoll)', relayMock.polls > 0);
   check('тик: loadGroups вызван', ops('loadGroups').length === 1);
   check('тик: loadEmails(silent=true) вызван', ops('loadEmails').length === 1 && ops('loadEmails')[0].silent === true);
   check('тик: loadMessages для активного чата', ops('loadMessages').length === 1
     && ops('loadMessages')[0].email === 'peer@x.ru');
-  check('тик: все вызовы моста — с ctx вызывающего', bridge.calls.filter((c) => c.op !== 'scrollToBottom' && c.op !== 'saveCursors')
-    .every((c) => c.ctx === ctx2), 'нарушителей: ' + bridge.calls.filter((c) => c.ctx !== ctx2).length);
+  check('тик: мост вызван (порт без ctx)', bridge.calls.filter((c) => c.op !== 'scrollToBottom' && c.op !== 'saveCursors')
+    ) // ctx removed;
   // группа
   resetWorld();
   const ctx3 = makeCtx();
@@ -361,7 +360,7 @@ console.log('4. idleLoop (владелец IDLE — Rust-монитор, JS-ци
   let idleWaitCalls = 0;
   apiMock.idleWait = async () => { idleWaitCalls++; return { changed: false }; };
   const ctx = makeCtx();
-  await R.idleLoop(ctx);
+  await R.idleLoop();
   check('монитор: idleStart вызван', apiCalled('idleStart'));
   check('монитор: api.idleWait в цикле НЕ вызывается (нет двойного IDLE)', idleWaitCalls === 0);
   check('монитор: флаг владельца callIdleMonitorUp', useSession().callIdleMonitorUp === true);
@@ -400,7 +399,7 @@ console.log('4. idleLoop (владелец IDLE — Rust-монитор, JS-ци
   // повторный idleLoop/startFastPolling при живом мониторе — no-op
   const idleStartCount = apiMock.calls.filter((c) => c[0] === 'idleStart').length;
   const timerId = fastFetchCycle.timer;
-  await R.idleLoop(ctx);
+  await R.idleLoop();
   check('повторный idleLoop при живом мониторе — no-op (без нового idleStart)',
     apiMock.calls.filter((c) => c[0] === 'idleStart').length === idleStartCount);
   check('повторный idleLoop — таймер не задвоен', fastFetchCycle.timer === timerId);
@@ -477,14 +476,14 @@ console.log('5. relayTicker + relay-resilience');
 {
   resetWorld();
   const ctx = makeCtx();
-  R.startRelayTicker(ctx);
+  R.startRelayTicker();
   check('таймер тикера создан (владелец relayTicker, 5с)', relayTicker.timer !== null
     && timers.get(relayTicker.timer).ms === 5000);
   // «мгновенный первый consume» — ровно ОДИН (H+ давал два: свой immediate-тик + этот вызов)
   await flush();
   check('мгновенный первый consume ровно один (регрессия H+)', relayMock.polls === 1, relayMock.polls);
   check('health-чек на старте не дёргается', relayMock.healthCalls === 0);
-  R.startRelayTicker(ctx);
+  R.startRelayTicker();
   check('повторный start — no-op (таймер тот же)', timers.size >= 1 && relayMock.polls === 1);
   // health-чек: lastRelayHealth старый → сработает на тике
   relayMock.healthy = false;
@@ -523,7 +522,7 @@ console.log('6. rescue + onEcoMode');
   resetWorld();
   const ctx = makeCtx();
   const idleStarted = () => apiCalled('idleStart');
-  await R.enterRelayOfflineRescue(ctx);
+  await R.enterRelayOfflineRescue();
   await flush();
   check('автономный режим: флаги', relayState.state.ecoAutonomous === true
     && relayState.state.relayOfflineSince !== null && relayState.state.relayDeliveryMode === 'email');
@@ -533,7 +532,7 @@ console.log('6. rescue + onEcoMode');
   // onEcoMode(true): глушит IDLE, релей-тикер + поллинг 60с
   resetWorld();
   const eco = makeCtx();
-  await R.onEcoMode(eco, true, true);
+  await R.onEcoMode(true, true);
   check('эко ON: ecoMode=true, kv сохранён', relayState.state.ecoMode === true && dbMock.kv.get('eco-mode') === '1');
   check('эко ON: IDLE стоп + сервис глушится',
     apiCalled('idleStop') && apiMock.calls.some((c) => c[0] === 'ecoSet' && c[1] === true));
@@ -542,7 +541,7 @@ console.log('6. rescue + onEcoMode');
   check('эко ON silent: без тоста', toasts.length === 0);
   check('эко ON: idleStop-флаг владельца поднят', idleState.idleStop === true);
   // эко OFF: классика
-  await R.onEcoMode(eco, false);
+  await R.onEcoMode(false);
   await flush();
   check('эко OFF: IDLE+поллинг 30с, тост',
     timers.get(pollingCycle.timer) && timers.get(pollingCycle.timer).ms === 30000 && toasts.length === 1);
@@ -557,7 +556,7 @@ console.log('6. rescue + onEcoMode');
   sessionStore.logout();
   const nl = makeCtx();
   apiMock.calls.length = 0;
-  await R.onEcoMode(nl, true);
+  await R.onEcoMode(true);
   check('эко без логина: состояние сохранено, сервис не трогаем',
     relayState.state.ecoMode === true && apiMock.calls.length === 0);
   // onRelayEnabled

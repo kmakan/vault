@@ -49,7 +49,14 @@ export async function loadMessages(deps, email) {
       // ВАЖНО: await — история должна загрузиться ДО мержа, иначе
       // гонка с loadMessages: merged=[] без истории и saveCurrentHistory([])
       // затирал сохранённую историю → сообщения «пропадали» (kmakan).
-      await deps.showHistoryFirst(chat, stale);
+      //
+      // НО только когда показывать нечего. Раньше история подставлялась на
+      // КАЖДОМ поллинге и затирала экран: optimistic-сообщение, которого ещё
+      // нет в архиве, исчезало через 2–3 секунды после отправки («отправил —
+      // сообщение пропало», 22.10). Экран — живой список, архив — дополнение.
+      if (!(deps.chat.state.messages || []).length) {
+        await deps.showHistoryFirst(chat, stale);
+      }
       // Vault chat: only show mail FOR this contact, and only decrypt if we
       // hold their key (contact must be a Vault peer).
       if (!identityStore.state.peerKeys[email]) {
@@ -426,7 +433,6 @@ export async function loadMessages(deps, email) {
         }
         // ИСТОРИЯ — основа чата, письма — дополнение; статусы/реакции/правки
         // применяются к merged; pending — подмешиваются; удалённые фильтруются.
-        const hadMessages = deps.chat.state.messages && deps.chat.state.messages.length > 0;
         const merged0 = await deps.mergeHistory(chat, list);
         const statusById = new Map();
         for (const m of list) if (m.id && m.status) statusById.set(m.id, m.status);
@@ -447,15 +453,30 @@ export async function loadMessages(deps, email) {
         deps.applyPollVotes(merged0, wirePollVotes);
         const merged = deps.filterDeleted(deps.mergePending(chat, merged0));
         for (const m of merged) if (m.expiresAt) deps.scheduleEphemeral(m, chat).catch(() => {});
-        if (!merged.length && hadMessages && !stale()) {
-          // Письма не пришли, но чат уже показан (кэш/история/оптимистичные)
-          // — оставляем его, кэш не переписываем (иначе пустота затёрла бы
-          // сохранённую историю чата).
+        // Экран перезаписывается, только если чат всё ещё открыт. Гард до
+        // merge (строка выше) покрывает расшифровку, но переключение чата
+        // посреди слияния/статусов иначе показало бы ДРУГОМУ чату сообщения
+        // этого — тот же класс «чат изменился сам собой».
+        if (stale()) return;
+        if (!merged.length) {
+          if (merged0.length) {
+            // Всё содержимое удалено (томбстоуны/эфемерные) — очистка законна.
+            deps.chat.set([]);
+            deps.saveChatCache(chat, []);
+            return;
+          }
+          // Пустой результат = «нечего показать СЕЙЧАС», а не «чат пуст»:
+          // история могла не загрузиться (гонка открытия чата с поллингом),
+          // письма могли не расшифроваться. Пустотой архив и кэш НЕ
+          // переписываем — иначе переписка затиралась насовсем (именно так
+          // «менялся чат» и исчезало только что отправленное сообщение).
+          console.warn('[loadMessages] пустой результат — чат и архив не переписываю');
           return;
         }
         deps.chat.set(merged);
         deps.saveChatCache(chat, deps.chat.state.messages);
-        // Локальная история (IndexedDB) — полный архив чата.
+        // Локальная история (archive) — дополняется, но не укорачивается
+        // (слияние внутри saveHistory).
         deps.saveCurrentHistory(chat);
         // Открыли чат — шлём отправителю квитанции «просмотрено» по входящим.
         const incoming = deps.chat.state.messages.filter(m => m.from === 'them' && m.id && !m.callEvent).map(m => m.id);
