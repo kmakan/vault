@@ -1,0 +1,165 @@
+// Фича: платный тариф Pro — правила экрана и покупка (ADR-005 W3).
+//
+// ЗДЕСЬ — ЧИСТЫЕ ПРАВИЛА: как по состоянию подписки выглядит экран (текст,
+// кнопка, срок, устройства) и как ответ сервера превращается в состояние.
+// Сетевые вызовы — в примитиве relay-client.js, компонент только вызывает.
+//
+// ПОЧЕМУ ОТДЕЛЬНЫЙ МОДУЛЬ, А НЕ МЕТОДЫ КОМПОНЕНТА. Экран покупки — это
+// ПРАВИЛО («что показывать, когда подписка истекла»), а не поведение
+// компонента. Правило должно быть одно: разбор состояния в трёх местах
+// (настройки, заголовок чата, офлайн-грейс) обязан сходиться, иначе
+// пользователь увидит «Pro активен» в одном месте и «релей в режиме Free»
+// в другом.
+//
+// ГЛАВНОЕ ПРАВИЛО ЧЕСТНОСТИ. Экран НИКОГДА не обещает оплаченного: он
+// показывает то, что подтвердил сервер (плюс офлайн-грейс на 7 дней, когда
+// сервер недоступен). Клиент не решает, что «покупка прошла» — это решает
+// сервер, опросив платёжного провайдера.
+//
+// deps (ADR-001 R3): всё, что нужно снаружи, — явными параметрами:
+//   account          — аккаунт (KV и fingerprint);
+//   checkout(plan, months) — создать платёжную сессию;
+//   verify(checkoutId)     — подтвердить оплату и получить токен;
+//   refresh()        — перечитать состояние подписки;
+//   toast(msg) / tr(key, params) — обратная связь;
+//   now()            — unix-секунды (в тестах — фиксированные);
+//   locale           — код языка для даты.
+
+export const PRO_KIND = {
+  FREE: 'free',
+  TRIAL: 'trial',
+  ACTIVE: 'active',
+  EXPIRED: 'expired',
+};
+
+export const PRO_PLAN = 'pro';
+export const PRO_MONTHS = 12;
+export const FREE_DAILY_LIMIT = 100;
+
+// ── Состояние экрана ────────────────────────────────────────────────────
+//
+// pro: { plan, paid_until, offline, devices, max_devices, daily_used, daily_limit }
+export function proView(pro, nowSec) {
+  const st = pro || {};
+  const plan = st.plan || 'free';
+  const paidUntil = Number(st.paid_until) || 0;
+  const now = Number(nowSec) || 0;
+  const daysLeft = paidUntil > now ? Math.ceil((paidUntil - now) / 86400) : 0;
+  let kind;
+  if (plan === 'free') {
+    kind = PRO_KIND.FREE;
+  } else if (paidUntil > now) {
+    kind = plan === 'trial' ? PRO_KIND.TRIAL : PRO_KIND.ACTIVE;
+  } else {
+    // План был, срок вышел — честно показываем «истёк», а не «active».
+    kind = PRO_KIND.EXPIRED;
+  }
+  return {
+    kind,
+    plan,
+    paidUntil,
+    daysLeft,
+    devices: Number(st.devices) || 0,
+    maxDevices: Number(st.max_devices) || 0,
+    dailyUsed: Number(st.daily_used) || 0,
+    dailyLimit: Number(st.daily_limit) || 0,
+    // Офлайн-грейс: сервер недоступен, но последнее подтверждение ещё в силе.
+    offline: st.offline === true,
+  };
+}
+
+// Дата подписки в читаемом виде. Локаль — из deps: правило даты не должно
+// зависеть от языка, установленного где-то ещё.
+export function proUntilText(view, locale) {
+  if (!view || !view.paidUntil) return '';
+  try {
+    return new Date(view.paidUntil * 1000)
+      .toLocaleDateString(locale || 'ru', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch (e) {
+    return new Date(view.paidUntil * 1000).toISOString().slice(0, 10);
+  }
+}
+
+// ── Тексты экрана ───────────────────────────────────────────────────────
+//
+// Все ключи обязаны быть в ru/en/zh (гейт locale-keys-gate). Обратите
+// внимание: приём `t('key') || 'запасной текст'` НЕ работает — t() возвращает
+// сам ключ, а он непустая строка (см. комментарий гейта locale-keys-gate).
+export function proStatusText(view, t) {
+  if (!view) return '';
+  switch (view.kind) {
+    case PRO_KIND.TRIAL:
+      return t('pro_status_trial', { days: view.daysLeft });
+    case PRO_KIND.ACTIVE:
+      // Дату выносим в отдельную строку (proDetailsText): в строке статуса
+      // она превращалась бы в многострочный текст.
+      return t('pro_status_active');
+    case PRO_KIND.EXPIRED:
+      return t('pro_status_expired');
+    default:
+      return t('pro_status_free', { limit: view.dailyLimit || FREE_DAILY_LIMIT });
+  }
+}
+
+// Текст кнопки: у истёкшего тарифа — «Продлить», у активного — тоже
+// (продление на год), у свободного и пробного — «Купить Pro».
+export function proActionLabel(view, t) {
+  if (!view) return t('pro_action_buy');
+  return (view.kind === PRO_KIND.ACTIVE || view.kind === PRO_KIND.EXPIRED)
+    ? t('pro_action_extend')
+    : t('pro_action_buy');
+}
+
+// Срок и устройства — отдельной строкой (в строку статуса они не влезают).
+export function proDetailsText(view, t, locale) {
+  if (!view) return '';
+  const parts = [];
+  if (view.paidUntil) {
+    parts.push(t('pro_until', { date: proUntilText(view, locale) }));
+  }
+  if (view.maxDevices) {
+    parts.push(t('pro_devices', { used: view.devices, max: view.maxDevices }));
+  }
+  return parts.join(' · ');
+}
+
+// ── Покупка ─────────────────────────────────────────────────────────────
+//
+// Ошибки сервера — в человеческие тексты. Сырые коды («checkout disabled»)
+// пользователю показывать нельзя: они ничего не объясняют.
+const ERROR_TEXTS = {
+  checkout_disabled: 'pro_err_disabled',
+  already_active: 'pro_err_active',
+  rate_limited: 'pro_err_rate',
+  bad_plan_months: 'pro_err_plan',
+  fp_mismatch: 'pro_err_fp',
+  device_limit: 'pro_err_devices',
+  not_paid_yet: 'pro_err_notpaid',
+  network: 'pro_err_network',
+  no_fp: 'pro_err_nofp',
+};
+
+export function proErrorText(error, t) {
+  const key = ERROR_TEXTS[error] || 'pro_err_generic';
+  return t(key, { why: error || '' });
+}
+
+// Купить/продлить Pro: чекаут → подтверждение оплаты → (сервер сам
+// активирует токен на устройстве). Возвращает { ok, error }.
+export async function buyPro(deps) {
+  const res = await deps.checkout(PRO_PLAN, PRO_MONTHS);
+  if (!res || res.error) {
+    const why = (res && res.error) || 'network';
+    deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));
+    return { ok: false, error: why };
+  }
+  const v = await deps.verify(res.checkout_id);
+  if (!v || v.error) {
+    const why = (v && v.error) || 'network';
+    deps.toast(deps.tr('pro_buy_failed', { why: proErrorText(why, deps.tr) }));
+    return { ok: false, error: why };
+  }
+  deps.toast(deps.tr('pro_buy_ok'));
+  if (deps.refresh) await deps.refresh();
+  return { ok: true, plan: v.plan, paidUntil: v.paid_until };
+}

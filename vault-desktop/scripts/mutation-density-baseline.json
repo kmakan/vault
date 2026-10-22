@@ -109,6 +109,7 @@
     "vault-desktop/src/features/poll.js": 4,
     "vault-desktop/src/features/poll/state.js": 3,
     "vault-desktop/src/features/presence.js": 12,
+    "vault-desktop/src/features/pro-plan.js": 10,
     "vault-desktop/src/features/profiles.js": 10,
     "vault-desktop/src/features/reactions.js": 8,
     "vault-desktop/src/features/receipts.js": 13,

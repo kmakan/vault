@@ -1,0 +1,171 @@
+// Node-смоук features/pro-plan.js — правила экрана платного тарифа Pro.
+//
+// ЧТО ЛОВИТСЯ. Экран покупки — самое «денежное» место приложения, и ошибки в
+// нём двусторонние: можно показать «оплачено» без оплаты (пользователь
+// платит и не получает Pro) или показать «Free» при оплаченном Pro (пользователь
+// требует возврата). Правила проверяем в чистом виде: вид экрана по состоянию,
+// срок, устройства, человеческие тексты ошибок и сам сценарий покупки.
+//
+// ПРО МОНОТОННОСТЬ. Счёт дней и сравнение сроков — в unix-СЕКУНДАХ (так их
+// отдаёт сервер). Проверка с секундами ловит смешение единиц, из-за которого
+// «7 дней грейса» превращались в 7000 дней, а срок в 2100 году считался
+// вечным.
+import { writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { prepareModuleCopy } from './smoke-imports.mjs';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const MOCKS = '/tmp/pro-plan-smoke-mocks';
+mkdirSync(MOCKS, { recursive: true });
+
+prepareModuleCopy(
+  ROOT + '/src/features/pro-plan.js',
+  MOCKS + '/pro-plan.mjs',
+  {},
+  MOCKS,
+);
+const P = await import(MOCKS + '/pro-plan.mjs');
+
+let pass = 0, fail = 0;
+function check(name, cond, extra) {
+  if (cond) { pass++; console.log('  ✓ ' + name); }
+  else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
+}
+
+// Подставка перевода. Два варианта:
+//   t  — возвращает сам ключ: так проверяется, ЧТО за ключ выбран (текст
+//        экрана должен брать именно 'pro_status_free', а не что-то другое);
+//   tl — возвращает «локализованную» строку с подстановкой параметров: так
+//        проверяется, что причина ошибки ДОШЛА до пользователя (в реальном
+//        i18n.js подстановка идёт в значение локали, а не в ключ).
+const t = (key, params) => {
+  let s = key;
+  for (const [k, v] of Object.entries(params || {})) s = s.replace('{' + k + '}', String(v));
+  return s;
+};
+const LOCALES = {
+  pro_buy_failed: 'Не удалось оформить покупку: {why}',
+  pro_buy_ok: 'Pro активирован',
+  pro_err_generic: 'Не удалось оформить покупку ({why})',
+};
+const tl = (key, params) => {
+  let s = LOCALES[key] || key;
+  for (const [k, v] of Object.entries(params || {})) s = s.replace('{' + k + '}', String(v));
+  return s;
+};
+
+const NOW = 1_800_000_000; // фиксированный момент (секунды)
+const DAY = 86400;
+
+// ── 1. Вид экрана по состоянию ──────────────────────────────────────────
+console.log('1. proView');
+{
+  check('free: без состояния', P.proView(null, NOW).kind === P.PRO_KIND.FREE);
+  check('free: план free', P.proView({ plan: 'free' }, NOW).kind === P.PRO_KIND.FREE);
+
+  const active = P.proView({ plan: 'pro', paid_until: NOW + 30 * DAY }, NOW);
+  check('active: оплаченный план в силе', active.kind === P.PRO_KIND.ACTIVE, active);
+  check('active: дней осталось 30', active.daysLeft === 30, active);
+
+  const trial = P.proView({ plan: 'trial', paid_until: NOW + 12 * DAY }, NOW);
+  check('trial: пробный период', trial.kind === P.PRO_KIND.TRIAL, trial);
+  check('trial: дней осталось 12', trial.daysLeft === 12, trial);
+
+  const expired = P.proView({ plan: 'pro', paid_until: NOW - DAY }, NOW);
+  check('expired: срок вышел — не active', expired.kind === P.PRO_KIND.EXPIRED, expired);
+  check('expired: дней не осталось', expired.daysLeft === 0, expired);
+
+  // Край: срок истёк ровно сейчас → уже не активен.
+  const edge = P.proView({ plan: 'pro', paid_until: NOW }, NOW);
+  check('edge: срок == сейчас → expired', edge.kind === P.PRO_KIND.EXPIRED, edge);
+
+  // Остаток суток округляется вверх: «осталось 12 дней» должно означать
+  // «меньше суток не значит ноль».
+  const hour = P.proView({ plan: 'pro', paid_until: NOW + 3600 }, NOW);
+  check('дробные сутки округляются вверх', hour.daysLeft === 1, hour);
+}
+
+// ── 2. Тексты экрана ────────────────────────────────────────────────────
+console.log('2. тексты');
+{
+  const free = P.proView({ plan: 'free', daily_limit: 100 }, NOW);
+  check('free: статус', P.proStatusText(free, t) === 'pro_status_free', P.proStatusText(free, t));
+  check('free: кнопка «купить»', P.proActionLabel(free, t) === 'pro_action_buy');
+
+  const active = P.proView({ plan: 'pro', paid_until: NOW + 30 * DAY, devices: 2, max_devices: 3 }, NOW);
+  check('active: статус', P.proStatusText(active, t) === 'pro_status_active', P.proStatusText(active, t));
+  check('active: кнопка «продлить»', P.proActionLabel(active, t) === 'pro_action_extend');
+  const details = P.proDetailsText(active, t, 'ru');
+  check('active: в деталях есть срок', details.includes('pro_until'), details);
+  check('active: в деталях есть устройства', details.includes('pro_devices'), details);
+
+  const expired = P.proView({ plan: 'pro', paid_until: NOW - DAY }, NOW);
+  check('expired: кнопка «продлить»', P.proActionLabel(expired, t) === 'pro_action_extend');
+  check('expired: статус с предупреждением', P.proStatusText(expired, t) === 'pro_status_expired');
+
+  const trial = P.proView({ plan: 'trial', paid_until: NOW + 12 * DAY }, NOW);
+  check('trial: кнопка «купить»', P.proActionLabel(trial, t) === 'pro_action_buy');
+}
+
+// ── 3. Человеческие тексты ошибок ───────────────────────────────────────
+console.log('3. ошибки');
+{
+  check('checkout_disabled → pro_err_disabled',
+    P.proErrorText('checkout_disabled', t) === 'pro_err_disabled', P.proErrorText('checkout_disabled', t));
+  check('device_limit → pro_err_devices',
+    P.proErrorText('device_limit', t) === 'pro_err_devices', P.proErrorText('device_limit', t));
+  check('неизвестная ошибка → общий текст с причиной',
+    P.proErrorText('что-то странное', t) === 'pro_err_generic', P.proErrorText('что-то странное', t));
+  check('в тексте есть исходная причина',
+    P.proErrorText('что-то странное', tl).includes('что-то странное'),
+    P.proErrorText('что-то странное', tl));
+}
+
+// ── 4. Сценарий покупки ─────────────────────────────────────────────────
+console.log('4. buyPro');
+{
+  const calls = [];
+  const toasts = [];
+  const deps = (checkoutRes, verifyRes) => ({
+    checkout: async (plan, months) => { calls.push(['checkout', plan, months]); return checkoutRes; },
+    verify: async (id) => { calls.push(['verify', id]); return verifyRes; },
+    refresh: async () => { calls.push(['refresh']); },
+    toast: (m) => toasts.push(m),
+    tr: tl,
+  });
+
+  // Успех: чекаут → верификация → обновление состояния → тост.
+  let res = await P.buyPro(deps(
+    { checkout_id: 'co_1' },
+    { token: 'v2', plan: 'pro', paid_until: NOW + 365 * DAY },
+  ));
+  check('успех: ok=true', res.ok === true, res);
+  check('успех: запрошен pro на 12 месяцев',
+    calls[0][0] === 'checkout' && calls[0][1] === 'pro' && calls[0][2] === 12, calls);
+  check('успех: верификация по checkout_id', calls[1][0] === 'verify' && calls[1][1] === 'co_1', calls);
+  check('успех: состояние перечитано', calls.some((c) => c[0] === 'refresh'), calls);
+  check('успех: тост об активации', toasts.length === 1 && toasts[0] === 'Pro активирован', toasts);
+
+  // Ошибка чекаута: верификация не вызывается, пользователь видит причину.
+  calls.length = 0; toasts.length = 0;
+  res = await P.buyPro(deps({ error: 'checkout_disabled' }, { token: 'v2' }));
+  check('ошибка чекаута: ok=false', res.ok === false, res);
+  check('ошибка чекаута: верификация не вызвана', !calls.some((c) => c[0] === 'verify'), calls);
+  check('ошибка чекаута: тост с причиной',
+    toasts.length === 1 && toasts[0].includes('pro_err_disabled'), toasts);
+  check('ошибка чекаута: тост объясняет, что делать',
+    toasts.length === 1 && toasts[0].startsWith('Не удалось оформить покупку'), toasts);
+
+  // Ошибка верификации («оплата ещё не подтверждена»).
+  calls.length = 0; toasts.length = 0;
+  res = await P.buyPro(deps({ checkout_id: 'co_1' }, { error: 'not_paid_yet' }));
+  check('ошибка верификации: ok=false', res.ok === false, res);
+  check('ошибка верификации: тост с причиной',
+    toasts.length === 1 && toasts[0].includes('pro_err_notpaid'), toasts);
+  check('ошибка верификации: состояние НЕ перечитывается',
+    !calls.some((c) => c[0] === 'refresh'), calls);
+}
+
+console.log('');
+console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
+process.exit(fail ? 1 : 0);

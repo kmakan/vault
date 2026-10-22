@@ -274,6 +274,25 @@
         </div>
       </div>
 
+      <!-- Платный тариф Pro (M2: монетизация).
+           Экран показывает ТО, что подтвердил сервер: покупку обещает сервер,
+           а не клиент, поэтому здесь нет «оплачено» без ответа сервера. -->
+      <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span>{{ t('relay_pro_label') }}</span>
+          <span v-if="proView.kind === 'active' || proView.kind === 'trial'"
+                style="font-size:10px;letter-spacing:.6px;padding:2px 7px;border-radius:4px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff">PRO</span>
+        </div>
+        <div style="font-size:13px" :style="proView.kind === 'expired' ? 'color:#eab308' : ''">
+          {{ proStatusText }}
+        </div>
+        <div v-if="proDetailsText" style="font-size:12px;opacity:.7">{{ proDetailsText }}</div>
+        <button class="btn-primary" style="padding:9px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start"
+                :disabled="proBusy" @click="proBuy">
+          {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
+        </button>
+      </div>
+
       <!-- M2.2/M2.4: Push-релеи. Модель доставки: пользователь САМ выбирает
            режим — быстрый (релей) или прямой (только почта), с честным
            предупреждением о скорости у обоих. -->
@@ -427,6 +446,8 @@ import { duressApi } from '../api.js';
 import { openUrl as shellOpen } from '@tauri-apps/plugin-opener';
 import { notificationsEnabled, setNotificationsEnabled } from '../notify.js';
 import * as relayClient from '../relay-client.js';
+import * as ProPlan from '../features/pro-plan.js';
+import { uiStore } from '../features/session-store.js';
 import AvatarUpload from './AvatarUpload.vue';
 import Icon from './Icon.vue';
 import ThemeSelector from './ThemeSelector.vue';
@@ -441,7 +462,7 @@ export default {
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
   emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed'],
-  setup() { const { t } = useI18n(); return { t }; },
+  setup() { const { t, currentLocale } = useI18n(); return { t, currentLocale }; },
   data() {
     return {
       // Duress
@@ -470,6 +491,10 @@ export default {
       relayNtfyLink: '',
       relayPromoOpen: false,
       relayPromoKey: '',
+      // Платный тариф Pro (M2: монетизация). Состояние — то, что подтвердил
+      // сервер (плюс офлайн-грейс, когда сервер недоступен).
+      proState: null,
+      proBusy: false,
       // Мобильный режим: на телефоне список разделов и контент
       // отдельные «экраны» (v-show), на десктопе оба видны всегда.
       isMobile: window.matchMedia('(max-width: 767px)').matches,
@@ -581,9 +606,53 @@ export default {
         this.relayActive = rs.active;
         this.relayRefreshPeersView();
       } catch (e) { /* ignore */ }
+      // Состояние платного тарифа (Pro). Ошибка не критична: без него экран
+      // покажет «бесплатный тариф» — это правда, а не поломка.
+      try { await this.proRefresh(); } catch (e) { /* ignore */ }
     } catch (e) { /* ignore */ }
   },
+  computed: {
+    // Вид экрана тарифа — ПРАВИЛО фичи features/pro-plan.js, а не логика
+    // компонента (ADR-001: правило одно, чтобы экран настроек, заголовок чата
+    // и офлайн-грейс показывали одно и то же).
+    proView() {
+      return ProPlan.proView(this.proState, Math.floor(Date.now() / 1000));
+    },
+    proStatusText() { return ProPlan.proStatusText(this.proView, this.t); },
+    proActionLabel() { return ProPlan.proActionLabel(this.proView, this.t); },
+    proDetailsText() {
+      return ProPlan.proDetailsText(this.proView, this.t, this.currentLocale);
+    },
+  },
   methods: {
+    // ── Платный тариф Pro (M2: монетизация) ────────────────────
+    // Перечитать состояние подписки: сперва локально (грейс держит и при
+    // недоступном сервере), затем у сервера — он источник правды.
+    async proRefresh() {
+      try {
+        const st = await relayClient.proState(this.email || 'anon');
+        this.proState = st;
+        const info = await relayClient.fetchTokenInfo(this.email || 'anon');
+        if (info && !info.expired) {
+          this.proState = { ...st, ...info, offline: false };
+        }
+      } catch (e) { /* офлайн: показываем последнее известное состояние */ }
+    },
+    async proBuy() {
+      if (this.proBusy) return;
+      this.proBusy = true;
+      try {
+        await ProPlan.buyPro({
+          checkout: (plan, months) => relayClient.purchaseCheckout(this.email || 'anon', plan, months),
+          verify: (id) => relayClient.purchaseVerify(this.email || 'anon', id),
+          refresh: () => this.proRefresh(),
+          toast: (m) => uiStore.toast(m),
+          tr: (k, p) => this.t(k, p),
+        });
+      } finally {
+        this.proBusy = false;
+      }
+    },
     // ── M2.2: релеи (список с фолбэком) ─────────────────────
     async relayRefreshPeersView() {
       const rs = await relayClient.getSettings(this.email || 'anon');
