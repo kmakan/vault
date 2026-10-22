@@ -165,6 +165,7 @@
           :isAdmin="isGroupAdmin"
           :hasPeerKey="!!peerKeys[activeChat]"
           :relayEmailDelivery="relayDeliveryMode === 'email'"
+          :proActive="proActive"
           :expCalls="expCalls"
           :ephemeralTtl="currentEphemeralTtl"
           :ephemeralMenuOpen="showEphemeralMenu"
@@ -1013,6 +1014,7 @@ import * as RecoveryUiFeature from './features/recovery-ui.js';
 import * as SettingsUiFeature from './features/settings-ui.js';
 import * as ChatUiRulesFeature from './features/chat-ui-rules.js';
 import * as AccountLoadFeature from './features/account-load.js';
+import * as ProPlanFeature from './features/pro-plan.js';
 import * as EnvelopeBuildFeature from './features/envelope-build.js';
 import * as LocalStoreFeature from './features/local-store.js';
 import * as RelayFeature from './features/relay.js';
@@ -2041,6 +2043,17 @@ export default {
     },
     // Контракт загрузки данных аккаунта (ADR-005 W3): контакты, группы,
     // профиль, локальные кэши.
+    // Бейдж Pro в шапке чата — правило фичи (ADR-001: логика вне
+    // компонента). Прокси на владельца состояния (relay-store).
+    proActive() { return ProPlanFeature.isProActive(this.relayStore.state.proState); },
+    // Контракт deps для загрузки состояния подписки (ADR-001 R3).
+    proPlanDeps() {
+      return {
+        localState: () => relay.proState(this.email || 'anon'),
+        info: () => relay.fetchTokenInfo(this.email || 'anon'),
+        setState: (v) => { this.relayStore.setProState(v); },
+      };
+    },
     accountLoadDeps() {
       return {
         email: () => this.email,
@@ -3255,6 +3268,9 @@ export default {
           await api.getChats();
           await this.loadContacts();
           await this.loadGroups();
+          // Состояние подписки Pro: не критично для входа (релей может быть
+          // недоступен) — при ошибке просто не будет бейджа.
+          try { await this.loadProState(); } catch (e) { /* не критично */ }
           try { await this.loadChannels(); } catch (e) { /* не критично */ }
           // Скорость входа: UI показывается СРАЗУ (история/кэши в памяти),
           // фетч почты идёт в фоне — вход не должен ждать IMAP.
@@ -3624,6 +3640,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     // contactAliases при ошибке НЕ затирается (там привязка истории чата):
     // ради этого функция возвращает null, а не пустой объект.
     async loadContacts() { return AccountLoadFeature.loadContacts(this.accountLoadDeps); },
+    // Состояние платной подписки (бейдж Pro в шапке и экран тарифа).
+    async loadProState() { return ProPlanFeature.loadProState(this.proPlanDeps); },
     // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
     // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по
     // префиксу (chat-cache/unread-/accepted-/…) — терялись черновики,

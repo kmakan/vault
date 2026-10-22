@@ -917,6 +917,10 @@ export async function proState(account) {
     paid_until: st.paid_until || 0,
     checkout_id: st.checkout_id || '',
     offline,
+    devices: st.devices || 0,
+    max_devices: st.max_devices || 0,
+    daily_used: st.daily_used || 0,
+    daily_limit: st.daily_limit || 0,
   };
 }
 
@@ -929,6 +933,13 @@ export async function saveProState(account, state) {
     paid_until: state.paid_until || 0,
     checkout_id: state.checkout_id || '',
     grace_until: state.grace_until || 0,
+    // Устройства и лимиты — тоже часть состояния: экран показывает
+    // «устройств 2/3» и остаток конвертов, и без их сохранения эти строки
+    // были бы пустыми (сервер ответил, а мы его ответ выбросили).
+    devices: state.devices || 0,
+    max_devices: state.max_devices || 0,
+    daily_used: state.daily_used || 0,
+    daily_limit: state.daily_limit || 0,
     updated_at: Date.now(),
   };
   await invoke('db_kv_set', { account, key: KV_PRO, value: JSON.stringify(st) });
@@ -960,6 +971,10 @@ export async function fetchTokenInfo(account, relayUrl) {
       plan: info.plan,
       paid_until: info.paid_until,
       grace_until: info.grace_until,
+      devices: info.devices,
+      max_devices: info.max_devices,
+      daily_used: info.daily_used,
+      daily_limit: info.daily_limit,
     });
     return info;
   } catch (e) {
@@ -1025,6 +1040,9 @@ export async function purchaseVerify(account, checkoutId) {
       paid_until: (body && body.paid_until) || 0,
       checkout_id: checkoutId || '',
     });
+    // Устройства и лимиты известны только серверу — забираем их сразу после
+    // покупки, чтобы экран показал «устройств N/M» без лишнего запроса.
+    await fetchTokenInfo(account, url);
     return body || { error: 'empty_body' };
   } catch (e) {
     console.log('[relay] purchase/verify failed:', e && e.message || e);

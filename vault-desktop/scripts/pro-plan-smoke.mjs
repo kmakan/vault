@@ -166,6 +166,74 @@ console.log('4. buyPro');
     !calls.some((c) => c[0] === 'refresh'), calls);
 }
 
+// ── 5. Бейдж Pro в шапке чата ───────────────────────────────────────────
+console.log('5. isProActive');
+{
+  check('нет состояния — бейджа нет', P.isProActive(null, NOW) === false);
+  check('free — бейджа нет', P.isProActive({ plan: 'free' }, NOW) === false);
+  // Free с будущим сроком — реальный случай: бесплатный токен тоже имеет
+  // срок действия, и его paid_until сервер отдаёт в /tokens/info. Бейдж Pro
+  // на бесплатном тарифе показываться не должен.
+  check('free с будущим сроком — бейджа нет',
+    P.isProActive({ plan: 'free', paid_until: NOW + DAY }, NOW) === false);
+  check('оплаченный Pro — бейдж есть',
+    P.isProActive({ plan: 'pro', paid_until: NOW + DAY }, NOW) === true);
+  check('истёкший Pro — бейджа нет',
+    P.isProActive({ plan: 'pro', paid_until: NOW - DAY }, NOW) === false);
+  check('пробный период — бейдж есть (тариф оплаченного уровня)',
+    P.isProActive({ plan: 'trial', paid_until: NOW + DAY }, NOW) === true);
+  // Без явного времени — текущее: срок 1970 года не должен считаться активным.
+  check('срок 1970 года не активен', P.isProActive({ plan: 'pro', paid_until: 1 }) === false);
+}
+
+// ── 6. Загрузка состояния подписки ──────────────────────────────────────
+console.log('6. loadProState');
+{
+  const mk = (local, info) => {
+    const put = [];
+    return {
+      put,
+      deps: {
+        localState: async () => local,
+        info: async () => info,
+        setState: (v) => put.push(v),
+      },
+    };
+  };
+
+  // Сервер ответил — его данные побеждают локальный кэш.
+  let t = mk({ plan: 'free', paid_until: 0 }, { plan: 'pro', paid_until: NOW + DAY, devices: 2 });
+  let st = await P.loadProState(t.deps);
+  check('ответ сервера побеждает локальный кэш', st.plan === 'pro', st);
+  check('состояние положено владельцу', t.put.length === 1 && t.put[0].plan === 'pro', t.put);
+  check('при ответе сервера offline = false', st.offline === false, st);
+
+  // Сервер недоступен — держим локальное состояние (офлайн-грейс).
+  t = mk({ plan: 'pro', paid_until: NOW + DAY, offline: true }, null);
+  st = await P.loadProState(t.deps);
+  check('при недоступном сервере остаётся локальное состояние', st.plan === 'pro', st);
+  check('локальное состояние сохраняется как есть', st.offline === true, st);
+
+  // Сервер сказал «подписка истекла»: клиент обязан отбросить локальный
+  // кэш, который ещё утверждает «Pro активен». Порядок вызовов важен —
+  // ответ сервера приходит ПЕРВЫМ и сбрасывает кэш, поэтому после него
+  // локальное состояние уже «free».
+  const order = [];
+  const put = [];
+  st = await P.loadProState({
+    localState: async () => { order.push('local'); return { plan: 'free', paid_until: 0 }; },
+    info: async () => { order.push('info'); return { expired: true, plan: 'free' }; },
+    setState: (v) => put.push(v),
+  });
+  check('сервер опрашивается первым', order[0] === 'info', order);
+  check('истёкшая подписка сбрасывает локальный кэш', st.plan === 'free', st);
+
+  // Ни локального состояния, ни сервера — пусто, но без падения.
+  t = mk(null, null);
+  st = await P.loadProState(t.deps);
+  check('пустое состояние не ломает экран', st === null || st === undefined, st);
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

@@ -1,0 +1,59 @@
+{
+  "why": "Контракт ответов платёжных роутов релея ↔ клиента Vault. Читают ОБЕ стороны: Rust-тесты релея (vault-relay/src/main.rs) и JS-смоук клиента (vault-desktop/scripts/relay-pro-smoke.mjs). Зачем: пока контракт проверялся с каждой стороны отдельно, расхождение (имя поля, тип, обязательность) проходило незамеченным — релей отдавал одно, клиент ждал другое, и обе проверки были зелёными. Общая фикстура превращает это в паритет: переименование поля ломает обе проверки сразу.",
+  "producer": "vault-relay/src/main.rs (relay_purchase_checkout / relay_purchase_verify / relay_tokens_info / relay_tokens_activate)",
+  "consumer": "vault-desktop/src/relay-client.js (purchaseCheckout / purchaseVerify / fetchTokenInfo / activateToken)",
+  "checkout_ok": {
+    "checkout_id": "co_test_1",
+    "provider": "test",
+    "payment_url": "https://pay.example/checkout",
+    "expires_in": 1800
+  },
+  "verify_ok": {
+    "token": "<v2 token>",
+    "topic": "<queue address hash>",
+    "plan": "pro",
+    "paid_until": 4102444800,
+    "sub": 1
+  },
+  "tokens_info_ok": {
+    "plan": "pro",
+    "paid_until": 4102444800,
+    "daily_used": 12,
+    "daily_limit": 0,
+    "devices": 1,
+    "max_devices": 3,
+    "grace_until": 4102444800
+  },
+  "activate_ok": {
+    "bound": true,
+    "devices": 1,
+    "max_devices": 3,
+    "paid_until": 4102444800
+  },
+  "error_codes": {
+    "checkout_disabled": "checkout disabled",
+    "already_active": "already_active",
+    "rate limited": "rate limited",
+    "bad plan/months": "bad plan/months",
+    "fp_mismatch": "fp_mismatch",
+    "device_limit": "device_limit",
+    "not_paid_yet": "not_paid_yet"
+  },
+  "field_types": {
+    "checkout_id": "string",
+    "provider": "string",
+    "payment_url": "string",
+    "expires_in": "number",
+    "token": "string",
+    "topic": "string",
+    "plan": "string",
+    "paid_until": "number",
+    "sub": "number",
+    "daily_used": "number",
+    "daily_limit": "number",
+    "devices": "number",
+    "max_devices": "number",
+    "grace_until": "number",
+    "bound": "boolean"
+  }
+}

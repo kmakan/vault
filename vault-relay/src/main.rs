@@ -3254,4 +3254,173 @@ mod tests {
         assert!(body["daily_limit"].as_u64().is_some(), "лимит конвертов в сутки отдаётся");
     }
 
+    // ── Контракт с клиентом (общая фикстура) ───────────────────────────
+    //
+    // Фикстура tests/fixtures/pay-contract.json читают ОБЕ стороны: эти
+    // тесты (релей) и JS-смоук клиента. Пока контракт проверялся с каждой
+    // стороны отдельно, расхождение (имя поля, тип) проходило незамеченным:
+    // релей отдавал одно, клиент ждал другое, и обе проверки были зелёными.
+    fn pay_contract_fixture() -> serde_json::Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/pay-contract.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("фикстура контракта читается"))
+            .expect("фикстура контракта — валидный JSON")
+    }
+
+    /// Тип значения по имени фикстуры: string / number / boolean.
+    fn json_type(v: &serde_json::Value) -> &'static str {
+        match v {
+            serde_json::Value::String(_) => "string",
+            serde_json::Value::Number(_) => "number",
+            serde_json::Value::Bool(_) => "boolean",
+            _ => "other",
+        }
+    }
+
+    /// Сверить ответ роута с фикстурой: те же поля и те же типы.
+    fn assert_shape(actual: &serde_json::Value, expected: &serde_json::Value, ctx: &str) {
+        let a = actual.as_object().expect("ответ — объект");
+        let e = expected.as_object().expect("фикстура — объект");
+        let mut ak: Vec<&String> = a.keys().collect();
+        let mut ek: Vec<&String> = e.keys().collect();
+        ak.sort();
+        ek.sort();
+        assert_eq!(ak, ek, "{}: набор полей ответа разошёлся с фикстурой", ctx);
+        let types = pay_contract_fixture();
+        for (k, v) in a {
+            let want = types["field_types"][k]
+                .as_str()
+                .unwrap_or_else(|| panic!("{}: поле {} не описано в фикстуре типов", ctx, k));
+            assert_eq!(
+                json_type(v),
+                want,
+                "{}: тип поля {} разошёлся с фикстурой (клиент ждёт другой)",
+                ctx,
+                k
+            );
+        }
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .expect("body"),
+        )
+        .expect("json")
+    }
+
+    /// ЧЕКАУТ: набор полей и их типы совпадают с общей фикстурой.
+    #[tokio::test]
+    async fn pay_checkout_response_matches_contract_fixture() {
+        let fixture = pay_contract_fixture();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let resp = relay_purchase_checkout(
+            State(app),
+            Json(checkout_req("pro", 1, "fp-alice")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_shape(&body, &fixture["checkout_ok"], "checkout");
+    }
+
+    /// ВЕРИФИКАЦИЯ: набор полей и их типы совпадают с общей фикстурой.
+    #[tokio::test]
+    async fn pay_verify_response_matches_contract_fixture() {
+        let fixture = pay_contract_fixture();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let resp = relay_purchase_checkout(
+            State(app.clone()),
+            Json(checkout_req("pro", 1, "fp-alice")),
+        )
+        .await;
+        let body = body_json(resp).await;
+        let checkout_id = body["checkout_id"].as_str().expect("checkout_id").to_string();
+        let vresp = relay_purchase_verify(
+            State(app),
+            Json(VerifyReq {
+                checkout_id,
+                fp: "fp-alice".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(vresp.status(), StatusCode::OK);
+        let vbody = body_json(vresp).await;
+        assert_shape(&vbody, &fixture["verify_ok"], "verify");
+    }
+
+    /// ТОКЕНЫ/INFO: набор полей и их типы совпадают с общей фикстурой.
+    #[tokio::test]
+    async fn pay_tokens_info_response_matches_contract_fixture() {
+        let fixture = pay_contract_fixture();
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let token = paid_token(&k, 42);
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            format!("VaultRelay {token}").parse().expect("hdr"),
+        );
+        let resp = relay_tokens_info(State(app), h).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_shape(&body, &fixture["tokens_info_ok"], "tokens_info");
+    }
+
+    /// АКТИВАЦИЯ: набор полей и их типы совпадают с общей фикстурой.
+    #[tokio::test]
+    async fn pay_tokens_activate_response_matches_contract_fixture() {
+        let fixture = pay_contract_fixture();
+        let k = keys();
+        let app = pay_app_state(
+            ServerKeys::new([7u8; 32]),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let token = paid_token(&k, 42);
+        let resp = relay_tokens_activate(
+            State(app),
+            Json(ActivateReq {
+                token,
+                fp: "fp-alice".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_json(resp).await;
+        assert_shape(&body, &fixture["activate_ok"], "tokens_activate");
+    }
+
+    /// Коды ошибок платёжных роутов — те же строки, что в фикстуре: клиент
+    /// по коду выбирает человеческий текст, и незнакомый код означал бы
+    /// «что-то сломалось» вместо понятного объяснения.
+    #[tokio::test]
+    async fn pay_error_codes_match_contract_fixture() {
+        let fixture = pay_contract_fixture();
+        let codes = fixture["error_codes"].as_object().expect("коды ошибок");
+        // 402 «покупка недоступна» — главный код, который видит пользователь.
+        let app = pay_app_state(keys(), None);
+        let resp = relay_purchase_checkout(
+            State(app),
+            Json(checkout_req("pro", 1, "fp-alice")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        let body = body_json(resp).await;
+        let got = body["error"].as_str().expect("error");
+        assert_eq!(
+            got,
+            codes["checkout_disabled"].as_str().expect("код в фикстуре"),
+            "код ошибки разошёлся с фикстурой"
+        );
+    }
+
 }

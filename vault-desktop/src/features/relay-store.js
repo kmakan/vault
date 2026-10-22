@@ -32,6 +32,10 @@ export function createRelayStore() {
     relayOfflineSince: null,
     relayFails: 0,
     lastRelayHealth: null,
+    // Состояние платной подписки Pro (тариф, срок, устройства). Владелец —
+    // этот же стор: подписка относится к релею, и читателей много (экран
+    // настроек, бейдж в шапке чата, гейт отправки).
+    proState: null,
   };
 
   return {
@@ -80,5 +84,9 @@ export function createRelayStore() {
     deliveryMode() {
       return this.state.relayDeliveryMode;
     },
-  };
+  
+    // ── Состояние подписки Pro ────────────────────────────────────────
+    setProState(v) { this.state.proState = v || null; return this.state.proState; },
+    getProState() { return this.state.proState; },
+};
 }

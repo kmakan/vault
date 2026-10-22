@@ -679,4 +679,6 @@ export default {
 
   relay_pro_label: 'Pro plan',
   pro_buy_busy: 'Processing…',
+
+  pro_badge_hint: 'Active Pro plan',
 }

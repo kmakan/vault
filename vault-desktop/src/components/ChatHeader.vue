@@ -56,6 +56,9 @@
             <span v-if="relayEmailDelivery" class="relay-delivery-badge" :title="t('relay_delivery_email_hint')" @click="$emit('relay-explain')">
               <Icon name="mail" :size="11" /><span>{{ t('relay_delivery_email') }}</span>
             </span>
+            <!-- Маркер активного платного тарифа. Без блокировки функций:
+                 это указание, а не условие (приложение работает и на Free). -->
+            <span v-if="proActive" class="pro-badge" :title="t('pro_badge_hint')">PRO</span>
           </template>
         </div>
       </div>
@@ -138,6 +141,9 @@ defineProps({
   isAdmin: { type: Boolean, default: false },
   hasPeerKey: { type: Boolean, default: false },
   relayEmailDelivery: { type: Boolean, default: false },
+  // Платный тариф активен — в шапке показываем маленький бейдж PRO
+  // (без блокировки функций: это маркер, а не условие работы).
+  proActive: { type: Boolean, default: false },
   expCalls: { type: Boolean, default: false },
   ephemeralTtl: { type: Number, default: 0 },
   ephemeralMenuOpen: { type: Boolean, default: false },
@@ -206,6 +212,19 @@ defineEmits(['back', 'open-card', 'members', 'relay-explain', 'add-member', 'ref
 .chat-status {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Маркер платного тарифа Pro в шапке чата. Маленький, не перетягивает
+   внимание: он сообщает «у вас активный Pro», а не «у вас проблемы». */
+.pro-badge {
+  font-size: 9.5px;
+  letter-spacing: 0.6px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  opacity: 0.9;
 }
 
 /* §1: индикатор канала доставки — конверт «почта», когда релей недоступен

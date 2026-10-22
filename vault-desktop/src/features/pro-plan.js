@@ -123,6 +123,43 @@ export function proDetailsText(view, t, locale) {
   return parts.join(' · ');
 }
 
+// ── Бейдж в шапке чата ──────────────────────────────────────────────────
+//
+// Отдельная чистая функция, чтобы правило «показывать бейдж Pro» не
+// расходилось с правилом «что показывать в настройках»: обе смотрят на
+// одно и то же состояние и решают по нему одинаково.
+export function isProActive(state, nowSec) {
+  if (!state) return false;
+  const plan = state.plan || 'free';
+  if (plan === 'free') return false;
+  const paidUntil = Number(state.paid_until) || 0;
+  // Без явного времени — текущее (секунды). Ноль как «сейчас» был бы
+  // неверным: срок 1970 года считался бы активным.
+  const now = nowSec === undefined ? Math.floor(Date.now() / 1000) : Number(nowSec);
+  return paidUntil > now;
+}
+
+// ── Загрузка состояния подписки ─────────────────────────────────────────
+//
+// deps:
+//   localState() — локально сохранённое состояние (офлайн-грейс);
+//   info()       — ответ сервера /relay/tokens/info (null, если недоступен);
+//   setState(v)  — положить состояние владельцу (relay-store).
+export async function loadProState(deps) {
+  // ПОРЯДОК ВАЖЕН: сначала сервер, потом локальное состояние. Ответ сервера
+  // не только источник правды, но и сбрасывает локальный кэш, если подписка
+  // истекла (fetchTokenInfo при 402 пишет plan=free). Если читать локальное
+  // состояние ДО сервера, вернётся устаревшее «Pro активен» — ровно то,
+  // что сервер только что опроверг.
+  let info = null;
+  try { info = await deps.info(); } catch (e) { info = null; }
+  let st = null;
+  try { st = await deps.localState(); } catch (e) { st = null; }
+  const state = (info && !info.expired) ? { ...(st || {}), ...info, offline: false } : st;
+  deps.setState(state);
+  return state;
+}
+
 // ── Покупка ─────────────────────────────────────────────────────────────
 //
 // Ошибки сервера — в человеческие тексты. Сырые коды («checkout disabled»)

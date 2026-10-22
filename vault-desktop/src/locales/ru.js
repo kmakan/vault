@@ -681,4 +681,6 @@ export default {
 
   relay_pro_label: 'Тариф Pro',
   pro_buy_busy: 'Обработка…',
+
+  pro_badge_hint: 'Активный платный тариф Pro',
 }
