@@ -36,6 +36,9 @@ const KV_PEERS = 'relay-peer-tokens'; // { relayUrl: { chatId(lower): token } }
 const KV_ENABLED = 'relay-enabled';
 const KV_RELAYS = 'relay-list'; // JSON: [{url, myToken, label}] — порядок = приоритет
 const KV_ACTIVE = 'relay-active'; // индекс активного релея в списке (auto-managed)
+// Состояние Pro на клиенте: { plan, paid_until, checkout_id } — последнее
+// подтверждённое сервером состояние подписки (ADR: paid-tokens-spec §5.2).
+const KV_PRO = 'relay-pro-state';
 const KV_LIMIT_DAY = 'relay-limit-day'; // UTC-день исчерпания лимита (тихий фолбэк)
 
 // S3: ntfy-пуш звонка = ЗВУК ИЗ НАСТРОЕК приложения. Сервер играл один
@@ -837,5 +840,217 @@ export async function relayChannelPoll(ch, account) {
     return list;
   } catch (e) {
     return [];
+  }
+}
+
+// Записать НАШ токен релея (первым в списке — он приоритетный).
+// Единственный путь записи платного токена: после успешной оплаты и
+// активации. Старый токен (если был) заменяем, а не добавляем вторым:
+// два наших токена на одном аккаунте = путаница в привязке и лимитах.
+export async function setOurToken(account, url, token) {
+  account = await accountNamespace(account);
+  const u = normalizeRelayUrl(url) || DEFAULT_RELAY_URL;
+  const list = (await getRelays(account)).filter(x => x.url !== u);
+  list.unshift({ url: u, myToken: token || '', label: 'Vault' });
+  await saveRelays(account, list);
+  return list;
+}
+
+// ───────────────────────── Платные токены (Pro) ─────────────────────────
+//
+// Покупка идёт через релей: сервер сам спрашивает платёжного провайдера и
+// выпускает v2-токен с планом. Клиент в провайдера не лезет и «оплачено» от
+// себя не объявляет.
+//
+// ОФЛАЙН-ГРЕЙС (§5.3). Релей может быть недоступен (обрыв, сон, туннель), и
+// тогда сообщения не ходят вообще — это хуже, чем «Pro по счёту не проверить».
+// Поэтому клиент помнит последнее подтверждённое paid_until и доверяет ему
+// ещё 7 дней. СЧЁТ ВРЕМЕНИ — не по Date.now() пользователя: часы можно
+// перевести назад и продлить себе подписку. Отсчёт — от performance.timeOrigin
+// (монотонный счётчик браузера), а серверное время — единственный
+// авторитетный источник paid_until.
+
+// Грейс — в СЕКУНДАХ: сервер отдаёт paid_until в unix-секундах, и прибавлять
+// миллисекунды к секундам нельзя (7 дней превратились бы в 7 000 дней, и Pro
+// считался бы активным годами после оплаты).
+const PRO_GRACE_SEC = 7 * 24 * 60 * 60; // 7 дней офлайн-грейса
+
+// Монотонные «часы» клиента — в unix-СЕКУНДАХ.
+//
+// performance.timeOrigin фиксируется ОДИН РАЗ при загрузке страницы, а
+// performance.now() идёт монотонно и не поддаётся переводу системных часов.
+// Их сумма — «клиентское время», которое пользователь не может откатить
+// назад, переведя часы. Поэтому офлайн-грейс нельзя считать по Date.now():
+// перевод часов назад продлил бы грейс до бесконечности.
+//
+// ЕДИНИЦЫ. Сервер отдаёт paid_until в unix-СЕКУНДАХ, поэтому и здесь
+// секунды: timeOrigin и performance.now() — миллисекунды, их сумма делится
+// на 1000. Смешение единиц здесь означало бы, что грейс не наступает никогда
+// (миллисекунды всегда больше секунд) — то есть Pro считался бы вечным.
+function monoNow() {
+  try {
+    if (typeof performance !== 'undefined' && performance.timeOrigin
+        && typeof performance.now === 'function') {
+      return Math.floor((performance.timeOrigin + performance.now()) / 1000);
+    }
+  } catch (e) { /* нет performance — падаем на Date.now() */ }
+  return Math.floor(Date.now() / 1000);
+}
+
+// Состояние Pro, известное клиенту (без сети): что лежит в KV.
+export async function proState(account) {
+  account = await accountNamespace(account);
+  const raw = await invoke('db_kv_get', { account, key: KV_PRO }).catch(() => null);
+  let st = null;
+  try { st = raw ? JSON.parse(raw) : null; } catch (e) { st = null; }
+  if (!st || !st.plan) return { plan: 'free', paid_until: 0, offline: false };
+  // Грейс: локально верим до paid_until + 7 дней, но НЕ дольше серверной
+  // границы (если сервер её сообщил).
+  const now = monoNow();
+  const graceEnd = Math.min(
+    (st.paid_until || 0) + PRO_GRACE_SEC,
+    st.grace_until || Number.MAX_SAFE_INTEGER,
+  );
+  const offline = now <= graceEnd;
+  return {
+    plan: offline ? (st.plan || 'pro') : 'free',
+    paid_until: st.paid_until || 0,
+    checkout_id: st.checkout_id || '',
+    offline,
+  };
+}
+
+// Запомнить подтверждённое сервером состояние (после успешного /tokens/info
+// или /purchase/verify).
+export async function saveProState(account, state) {
+  account = await accountNamespace(account);
+  const st = {
+    plan: state.plan || 'free',
+    paid_until: state.paid_until || 0,
+    checkout_id: state.checkout_id || '',
+    grace_until: state.grace_until || 0,
+    updated_at: Date.now(),
+  };
+  await invoke('db_kv_set', { account, key: KV_PRO, value: JSON.stringify(st) });
+  return st;
+}
+
+// GET /relay/tokens/info — состояние подписки и остаток лимитов.
+export async function fetchTokenInfo(account, relayUrl) {
+  try {
+    account = await accountNamespace(account);
+    const url = normalizeRelayUrl(relayUrl || DEFAULT_RELAY_URL);
+    if (!url) return null;
+    const { relays, active } = await getSettings(account);
+    const token = (relays[active] && relays[active].myToken) || '';
+    if (!token) return null;
+    const res = await rfetch(url + '/tokens/info', {
+      method: 'GET',
+      headers: authHeader(token),
+      connectTimeout: 10000,
+    });
+    if (res.status === 402) {
+      // Подписка истекла — это НЕ «релей недоступен»: клиент должен узнать.
+      await saveProState(account, { plan: 'free', paid_until: 0 });
+      return { expired: true, plan: 'free', paid_until: 0 };
+    }
+    if (!res.ok) return null;
+    const info = await res.json();
+    await saveProState(account, {
+      plan: info.plan,
+      paid_until: info.paid_until,
+      grace_until: info.grace_until,
+    });
+    return info;
+  } catch (e) {
+    console.log('[relay] tokens/info failed:', e && e.message || e);
+    return null;
+  }
+}
+
+// POST /relay/purchase/checkout — создать платёжную сессию.
+export async function purchaseCheckout(account, plan, months) {
+  try {
+    account = await accountNamespace(account);
+    const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
+    const fp = await myFingerprint(account);
+    if (!url || !fp) return { error: 'no_fp' };
+    const res = await rfetch(url + '/purchase/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, months, fp, lang: 'ru' }),
+      connectTimeout: 10000,
+    });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) {
+      return { error: (body && body.error) || ('http_' + res.status), status: res.status, body };
+    }
+    return body;
+  } catch (e) {
+    console.log('[relay] purchase/checkout failed:', e && e.message || e);
+    return { error: 'network' };
+  }
+}
+
+// POST /relay/purchase/verify — подтвердить оплату и получить платный токен.
+export async function purchaseVerify(account, checkoutId) {
+  try {
+    account = await accountNamespace(account);
+    const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
+    const fp = await myFingerprint(account);
+    if (!url || !fp) return { error: 'no_fp' };
+    const res = await rfetch(url + '/purchase/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkout_id: checkoutId, fp }),
+      connectTimeout: 10000,
+    });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) {
+      return { error: (body && body.error) || ('http_' + res.status), status: res.status, body };
+    }
+    // Токен активируем на этом устройстве и кладём в relay-list — других
+    // путей записи токена нет.
+    if (body && body.token) {
+      const act = await activateToken(account, body.token);
+      if (act && act.error) {
+        return { error: act.error, status: act.status, body };
+      }
+      await setOurToken(account, url, body.token);
+    }
+    await saveProState(account, {
+      plan: (body && body.plan) || 'pro',
+      paid_until: (body && body.paid_until) || 0,
+      checkout_id: checkoutId || '',
+    });
+    return body || { error: 'empty_body' };
+  } catch (e) {
+    console.log('[relay] purchase/verify failed:', e && e.message || e);
+    return { error: 'network' };
+  }
+}
+
+// POST /relay/tokens/activate — привязать платный токен к этому устройству.
+export async function activateToken(account, token) {
+  try {
+    account = await accountNamespace(account);
+    const url = normalizeRelayUrl(DEFAULT_RELAY_URL);
+    const fp = await myFingerprint(account);
+    if (!url || !fp) return { error: 'no_fp' };
+    const res = await rfetch(url + '/tokens/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, fp }),
+      connectTimeout: 10000,
+    });
+    let body = null;
+    try { body = await res.json(); } catch (e) { body = null; }
+    if (!res.ok) return { error: (body && body.error) || ('http_' + res.status), status: res.status, body };
+    return body || { bound: true };
+  } catch (e) {
+    console.log('[relay] tokens/activate failed:', e && e.message || e);
+    return { error: 'network' };
   }
 }

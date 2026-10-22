@@ -570,6 +570,7 @@ console.log('6. rescue + onEcoMode');
   await flush();
 }
 
+
 // ── 7. Анти-рот: смоук не вырожден ─────────────────────────────
 console.log('\n7. Анти-рот');
 check('проверок выполнено достаточно (>= 45)', pass + fail >= 45, pass + fail);

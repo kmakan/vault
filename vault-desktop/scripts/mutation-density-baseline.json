@@ -1,7 +1,7 @@
 {
   "note": "Счётчики мутаций по модулям (уменьшаться нельзя) и список модулей без мутаций (может только сокращаться: закрытая дыра удаляется из списка).",
   "counts": {
-    "vault-client/src/crypto.rs": 8,
+    "vault-client/src/crypto.rs": 10,
     "vault-client/src/crypto/encryptor.rs": 8,
     "vault-client/src/vault/attachments.rs": 7,
     "vault-client/src/vault/call_state.rs": 12,
@@ -140,7 +140,7 @@
     "vault-desktop/src/note-id.js": 3,
     "vault-desktop/src/notify.js": 7,
     "vault-desktop/src/providerLimits.js": 8,
-    "vault-desktop/src/relay-client.js": 13,
+    "vault-desktop/src/relay-client.js": 20,
     "vault-desktop/src/themes.js": 4,
     "vault-desktop/src/ui.js": 7,
     "vault-desktop/src/wire-signal-rule.js": 13
