@@ -65,6 +65,78 @@ async function cdpEvaluate(expression) {
 
 // Проба — код, исполняемый В СТРАНИЦЕ приложения. Возвращает отчёт.
 const PROBES = {
+  // Проба экрана платного тарифа (ADR-005 W5/монетизация). Отдельная от
+  // общей UI-пробы: покупка — единственное место, где нужно нажать кнопку и
+  // дождаться ответа сервера, и единственное, где ошибка «тихая» (экран
+  // покажет «оплачено», а токена нет).
+  pro: `(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    const report = { steps: [] };
+    const step = (name, cond, extra) => {
+      report.steps.push({ name, pass: !!cond, extra: extra === undefined ? undefined : extra });
+    };
+    const text = (el) => (el && el.innerText || '').replace(/\\n+/g, ' | ').trim();
+    const content = () => text(document.querySelector('.settings-content'));
+
+    step('приложение залогинено', p.isLoggedIn === true, { isLoggedIn: p.isLoggedIn, email: p.email });
+
+    // Настройки открыты?
+    if (!p.showSettings) {
+      const btns = document.querySelectorAll('.header-actions button');
+      if (btns.length) { btns[btns.length - 1].click(); await sleep(900); }
+    }
+    step('настройки открылись', p.showSettings === true, { showSettings: p.showSettings });
+
+    // Раздел «Приватность» (там секция тарифа и релея).
+    const cat = Array.from(document.querySelectorAll('.settings-nav-item'))
+      .find((el) => /Приватн|Privacy/i.test(el.innerText || ''));
+    step('пункт «Приватность» есть', !!cat, {
+      items: Array.from(document.querySelectorAll('.settings-nav-item')).map((e) => (e.innerText || '').trim()),
+    });
+    if (cat) { cat.click(); await sleep(800); }
+
+    step('секция «Тариф Pro» видна', /Тариф Pro|Pro plan/i.test(content()), { text: content().slice(0, 300) });
+
+    // Проба ИДЕМПОТЕНТНА: если тариф уже активен (аккаунт покупал раньше),
+    // покупку не повторяем — проверяем состояние. Иначе — покупаем.
+    const alreadyPro = /Pro активен|Pro is active/i.test(content());
+    const buyBtn = Array.from(document.querySelectorAll('.settings-content button'))
+      .find((b) => /Купить Pro|Buy Pro/i.test(b.innerText || ''));
+    step('кнопка «Купить Pro» есть (или тариф уже активен)', !!buyBtn || alreadyPro, {
+      alreadyPro,
+      buttons: Array.from(document.querySelectorAll('.settings-content button')).map((e) => (e.innerText || '').trim().slice(0, 24)),
+    });
+
+    if (buyBtn && !alreadyPro) {
+      buyBtn.click();
+      let bought = false;
+      for (let i = 0; i < 40; i++) {
+        await sleep(500);
+        if (/Pro активен|Pro is active/i.test(content())) { bought = true; break; }
+      }
+      step('после оплаты статус «Pro активен»', bought, { text: content().slice(0, 300) });
+      step('число устройств показано', /устройств|devices/i.test(content()), { text: content().slice(0, 300) });
+      step('кнопка стала «Продлить»', /Продлить|Extend/i.test(content()), { text: content().slice(0, 300) });
+    }
+
+    // Закрыть настройки: бейдж PRO — в шапке чата. В чате ЗАМЕТОК бейджа нет
+    // (это локальный чат, тариф там ни при чём) — открываем обычный.
+    p.showSettings = false;
+    await sleep(900);
+    if (!p.activeChat || p.activeChat === '__notes__') {
+      const c = document.querySelector('.contact-item:not(.notes-self)');
+      if (c) { c.click(); await sleep(1400); }
+    }
+    step('открыт обычный чат (не заметки)', p.activeChat !== '__notes__', { activeChat: p.activeChat });
+    const badge = document.querySelector('.pro-badge');
+    step('бейдж PRO в шапке чата', !!badge, {
+      badge: badge ? text(badge) : null,
+      header: text(document.querySelector('.chat-header')).slice(0, 200),
+    });
+    return report;
+  })()`,
   ui: `(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const app = document.querySelector('#app').__vue_app__;

@@ -49,5 +49,8 @@ export default {
     { name: "ответ сервера игнорируется (подписка на Free не обновляется)",
       pattern: "  const state = (info && !info.expired) ? { ...(st || {}), ...info, offline: false } : st;",
       replacement: "  const state = st;" },
+    { name: "у бесплатного тарифа показывается срок технического токена (читается как «бесплатно до 2036»)",
+      pattern: "  if (view.kind === PRO_KIND.FREE) return '';",
+      replacement: "  if (false) return '';" },
   ],
 };

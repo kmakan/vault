@@ -454,7 +454,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" @pro-state="onProState" />
         </div>
       </div>
 
@@ -3642,6 +3642,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async loadContacts() { return AccountLoadFeature.loadContacts(this.accountLoadDeps); },
     // Состояние платной подписки (бейдж Pro в шапке и экран тарифа).
     async loadProState() { return ProPlanFeature.loadProState(this.proPlanDeps); },
+    // Состояние подписки из экрана настроек → владельцу (relay-store).
+    onProState(v) { return this.relayStore.setProState(v); },
     // Смена почты: перенос ВСЕХ локальных данных аккаунта из старого
     // namespace в новый. Раньше здесь копировалось подмножество kv-ключей по
     // префиксу (chat-cache/unread-/accepted-/…) — терялись черновики,

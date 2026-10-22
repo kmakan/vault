@@ -461,7 +461,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed', 'pro-state'],
   setup() { const { t, currentLocale } = useI18n(); return { t, currentLocale }; },
   data() {
     return {
@@ -636,6 +636,10 @@ export default {
         if (info && !info.expired) {
           this.proState = { ...st, ...info, offline: false };
         }
+        // Сообщаем наверх: бейдж Pro в шапке чата читает состояние у
+        // владельца (relay-store), а не из своей копии. Две копии состояния
+        // разошлись бы: экран показал бы «Pro активен», а шапка — нет.
+        this.$emit('pro-state', this.proState);
       } catch (e) { /* офлайн: показываем последнее известное состояние */ }
     },
     async proBuy() {

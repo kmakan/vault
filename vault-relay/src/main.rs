@@ -1476,6 +1476,65 @@ async fn relay_register(
             map.get(fp_ref).filter(|r| r.exp > now32).cloned()
         };
         if let Some(rec) = existing {
+            // (1a) ПЛАТНЫЙ ТОКЕН КЛИЕНТА ВАЖНЕЕ БЕСПЛАТНОЙ ЗАПИСИ ПО ЭТОМУ fp.
+            //
+            // Покупка Pro выдаёт токен отдельной операцией (/relay/purchase/verify),
+            // и в карту fp→токен он НЕ попадает: там лежит бесплатный токен,
+            // выданный при прошлой регистрации. Если сейчас вернуть бесплатную
+            // запись, клиент потеряет купленный Pro уже при СЛЕДУЮЩЕЙ
+            // регистрации (а он регистрируется при каждом входе) — покупка
+            // отменялась бы сама собой через минуту.
+            //
+            // Проверки те же, что и в блоке (1b) ниже: токен разбирается,
+            // это read-область, не протух, и привязан к ЭТОМУ же fp. То есть
+            // «keep» здесь — недоверенное заявление, а проверенный факт.
+            if let Some(keep_raw) = req.keep.as_deref() {
+                let keep_tok = keep_raw.trim();
+                if let Some(t) = vault_relay::parse(&app.keys, keep_tok) {
+                    let paid = matches!(t.plan, vault_relay::tokens::Plan::Pro | vault_relay::tokens::Plan::Business);
+                    if paid
+                        && t.scope == Scope::Read
+                        && !t.is_expired()
+                        && check_token_binding(&app, &t.hash, &req.fp)
+                    {
+                        // Запись переводится на платный токен: следующая
+                        // регистрация (даже без keep) вернёт именно его.
+                        {
+                            let mut map = app.fp_tokens.lock().expect("fp_tokens lock");
+                            map.insert(
+                                fp_ref.to_string(),
+                                FpToken {
+                                    token: keep_tok.to_string(),
+                                    kind: Kind::of(&t).as_str().to_string(),
+                                    exp: t.expiry,
+                                },
+                            );
+                        }
+                        app.metrics.register_keep.fetch_add(1, Ordering::Relaxed);
+                        ringtone_resolve(&app.topic_ringtone, &t.hash, req.ringtone.as_deref());
+                        app.persist();
+                        tracing::info!(
+                            fp = %fp_ref,
+                            plan = ?t.plan,
+                            "register: kept PAID token (paid beats free record)"
+                        );
+                        let keep_kind = Kind::of(&t).as_str().to_string();
+                        let keep_hash = t.hash.clone();
+                        let keep_exp = t.expiry;
+                        return (
+                            StatusCode::OK,
+                            AxumJson(RegisterOk {
+                                token: keep_tok.to_string(),
+                                topic: keep_hash,
+                                exp: keep_exp,
+                                unlimited: true,
+                                kind: keep_kind,
+                            }),
+                        )
+                            .into_response();
+                    }
+                }
+            }
             if let Some(t) = vault_relay::parse(&app.keys, &rec.token) {
                 let kind = Kind::of(&t);
                 if !(promo_ok && kind == Kind::Install) {
@@ -1734,6 +1793,34 @@ async fn relay_tokens_activate(
     // 409: токен уже за другим аккаунтом.
     if !check_token_binding(&app, &t.hash, &Some(fp.clone())) {
         return err(StatusCode::CONFLICT, "bound_to_another");
+    }
+    // АКТИВАЦИЯ ЗАКРЕПЛЯЕТ ТОКЕН ЗА АККАУНТОМ (fp → токен).
+    //
+    // Без этого купленный Pro был бы невосстановим: клиент потерял бы
+    // токен (переустановка, очистка данных, потеря KV), а карта fp→токен
+    // продолжала бы лежать с БЕСПЛАТНЫМ токеном — регистрация выдала бы
+    // бесплатный, и платная подписка пропадала бы навсегда.
+    //
+    // Теперь после активации запись fp→токен указывает на платный токен, и
+    // обычная регистрация (даже без `keep`) вернёт именно его — восстановление
+    // происходит само, без поддержки и без нового платежа.
+    {
+        let kind = Kind::of(&t);
+        let mut map = app.fp_tokens.lock().expect("fp_tokens lock");
+        let mut rec = FpToken {
+            token: req.token.clone(),
+            kind: kind.as_str().to_string(),
+            exp: t.expiry,
+        };
+        // Не понижаем вид: если за fp уже стоял платный токен, а предъявлен
+        // бесплатный — оставляем платный (иначе «keep» бесплатным токеном
+        // обнулял бы подписку).
+        if let Some(old) = map.get(&fp) {
+            if old.kind == "paid" && rec.kind != "paid" {
+                rec = old.clone();
+            }
+        }
+        map.insert(fp.clone(), rec);
     }
     // Сколько устройств у этой подписки: считаем по sub, а не по токену.
     // Регистрируем токен (одно устройство) и считаем заново: повторная
@@ -2656,6 +2743,144 @@ mod tests {
         let (_s2, j2) = reg(&app, Some("aa:bb:cc:dd:ee:ff"), None).await;
         assert_eq!(j2["token"], tok);
         assert_eq!(app.metrics.register_reuse.load(Ordering::Relaxed), 1);
+    }
+
+    /// РЕГРЕСС (найдено приёмкой 22.10.2026): покупка Pro отменялась САМА
+    /// СОБОЙ. Платный токен выдаёт отдельная операция (/relay/purchase/verify)
+    /// и в карту fp→токен не попадает — там остаётся бесплатный токен прошлой
+    /// регистрации. Следующая регистрация (а она идёт при каждом входе)
+    /// отдавала бесплатную запись, и купленный Pro исчезал через минуту.
+    ///
+    /// Теперь платный `keep` (проверенный: разбирается, read-область, не
+    /// протух, привязан к этому же fp) важнее бесплатной записи, и запись
+    /// переводится на платный токен.
+    #[tokio::test]
+    async fn register_keeps_paid_token_over_free_record() {
+        let app = app_state_with_key(keys(), None);
+        let fp = "aa:bb:cc:dd:ee:ff";
+        // Первая регистрация: бесплатный установочный токен, он же в записи fp.
+        let (_s, j_free) = reg(&app, Some(fp), None).await;
+        let free_tok = j_free["token"].as_str().expect("token").to_string();
+        assert_eq!(j_free["kind"], "install");
+
+        // Покупка: платный v2-токен и активация на этом же fingerprint.
+        let paid = vault_relay::tokens::issue_v2(
+            &app.keys,
+            Scope::Read,
+            vault_relay::tokens::Plan::Pro,
+            42,
+            (now() + 30 * 86400) as u32,
+        );
+        let act = relay_tokens_activate(
+            State(app.clone()),
+            Json(ActivateReq {
+                token: paid.clone(),
+                fp: fp.to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(act.status(), StatusCode::OK, "активация платного токена");
+
+        // Регистрация с keep (платный токен) — обязана вернуть ПЛАТНЫЙ.
+        let (s, j) = reg_full(&app, Some(fp), None, Some(&paid)).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(j["token"], paid, "платный токен обязан пережить регистрацию");
+        assert_ne!(j["token"], free_tok, "бесплатный токен не должен вытеснять платный");
+        assert_eq!(j["unlimited"], true, "платный токен — безлимит");
+
+        // Запись fp переведена на платный токен: даже регистрация БЕЗ keep
+        // вернёт именно его (иначе покупка снова отменилась бы).
+        let (_s2, j2) = reg(&app, Some(fp), None).await;
+        assert_eq!(j2["token"], paid, "запись fp переведена на платный токен");
+    }
+
+    /// Обратная сторона: БЕСПЛАТНЫЙ keep не должен вытеснить платный токен,
+    /// который уже записан за этим fp. Иначе любой, кто предъявит
+    /// бесплатный токен, обнулил бы подписку.
+    /// АВТОВОССТАНОВЛЕНИЕ ПОСЛЕ ПОТЕРИ ТОКЕНА.
+    ///
+    /// Сценарий, найденный на живой приёмке: клиент купил Pro, активировал
+    /// токен — и потерял его (переустановка, очистка данных). Раньше карта
+    /// fp→токен продолжала лежать с БЕСПЛАТНЫМ токеном, обычная регистрация
+    /// выдавала его, и платная подписка пропадала навсегда (восстановиться
+    /// было нечем — «у вас уже есть активная подписка», а токена нет).
+    ///
+    /// Теперь активация закрепляет платный токен за fp, и регистрация без
+    /// `keep` возвращает именно его.
+    #[tokio::test]
+    async fn activate_registers_paid_token_for_fp_so_registration_recovers_it() {
+        let app = app_state_with_key(keys(), None);
+        let fp = "aa:bb:cc:dd:ee:ff";
+        // Первая регистрация: бесплатный установочный токен, он же в записи fp.
+        let (_s, j_free) = reg(&app, Some(fp), None).await;
+        let free_tok = j_free["token"].as_str().expect("token").to_string();
+
+        // Покупка: платный токен + активация на этом же fingerprint.
+        let paid = vault_relay::tokens::issue_v2(
+            &app.keys,
+            Scope::Read,
+            vault_relay::tokens::Plan::Pro,
+            42,
+            (now() + 30 * 86400) as u32,
+        );
+        let act = relay_tokens_activate(
+            State(app.clone()),
+            Json(ActivateReq {
+                token: paid.clone(),
+                fp: fp.to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(act.status(), StatusCode::OK, "активация платного токена");
+
+        // Клиент потерял данные и регистрируется заново — БЕЗ keep.
+        let (_s2, j2) = reg(&app, Some(fp), None).await;
+        assert_eq!(
+            j2["token"], paid,
+            "регистрация обязана вернуть платный токен, иначе покупка пропала"
+        );
+        assert_ne!(j2["token"], free_tok);
+        assert_eq!(j2["unlimited"], true);
+
+        // И бесплатный keep не понижает вид записи: платный остаётся.
+        let (_s3, j3) = reg_full(&app, Some(fp), None, Some(&free_tok)).await;
+        assert_eq!(j3["token"], paid, "бесплатный keep не должен понижать запись");
+    }
+
+    #[tokio::test]
+    async fn register_free_keep_does_not_replace_paid_record() {
+        let app = app_state_with_key(keys(), None);
+        let fp = "11:22:33:44:55:66";
+        let (_s, j_free) = reg(&app, Some(fp), None).await;
+        let free_tok = j_free["token"].as_str().expect("token").to_string();
+
+        let paid = vault_relay::tokens::issue_v2(
+            &app.keys,
+            Scope::Read,
+            vault_relay::tokens::Plan::Pro,
+            7,
+            (now() + 30 * 86400) as u32,
+        );
+        let act = relay_tokens_activate(
+            State(app.clone()),
+            Json(ActivateReq {
+                token: paid.clone(),
+                fp: fp.to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(act.status(), StatusCode::OK);
+
+        // Запись переведена на платный токен предыдущей регистрацией с keep.
+        let (_s1, j1) = reg_full(&app, Some(fp), None, Some(&paid)).await;
+        assert_eq!(j1["token"], paid);
+
+        // Теперь клиент предъявляет бесплатный keep — запись не меняется.
+        let (_s2, j2) = reg_full(&app, Some(fp), None, Some(&free_tok)).await;
+        assert_eq!(
+            j2["token"], paid,
+            "бесплатный keep не должен вытеснить платный токен"
+        );
     }
 
     #[tokio::test]

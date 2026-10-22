@@ -91,6 +91,12 @@ console.log('2. тексты');
   const free = P.proView({ plan: 'free', daily_limit: 100 }, NOW);
   check('free: статус', P.proStatusText(free, t) === 'pro_status_free', P.proStatusText(free, t));
   check('free: кнопка «купить»', P.proActionLabel(free, t) === 'pro_action_buy');
+  // У бесплатного тарифа деталей нет: «до <дата>» означала бы срок технического
+  // токена, а читалась как «бесплатно до 2036».
+  check('free: деталей нет (срок токена ≠ срок оплаченного тарифа)',
+    P.proDetailsText(free, t, 'ru') === '', P.proDetailsText(free, t, 'ru'));
+  check('free: даже со сроком деталей нет',
+    P.proDetailsText(P.proView({ plan: 'free', paid_until: NOW + 30 * DAY }, NOW), t, 'ru') === '');
 
   const active = P.proView({ plan: 'pro', paid_until: NOW + 30 * DAY, devices: 2, max_devices: 3 }, NOW);
   check('active: статус', P.proStatusText(active, t) === 'pro_status_active', P.proStatusText(active, t));
