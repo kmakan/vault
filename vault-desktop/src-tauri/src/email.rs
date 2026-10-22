@@ -227,9 +227,28 @@ impl EmailClient {
     /// {folder} failed: …»), и верхний слой сам по себе не содержит признака.
     /// Регистр не важен — провайдеры пишут по-разному.
     pub fn is_missing_folder_error(err: &anyhow::Error) -> bool {
+        // Формулировки «папки нет» у разных провайдеров РАЗНЫЕ, и это не
+        // мелочь: нераспознанная формулировка считается сетевым сбоем, а
+        // сетевой сбой в почтовом цикле означает backoff — и вся забор писем
+        // встаёт из-за ОДНОЙ отсутствующей папки.
+        //
+        // Найдено на живом стенде 22.10.2026 (десктоп, аккаунт Zoho):
+        // провайдер отвечает «No Response: [NONEXISTENT] Unknown Mailbox: RELAY
+        // (now in authenticated state) (Failure)». Детектор знал только
+        // «no such folder»/«no such mailbox» — Zoho-формулировка не
+        // распознавалась, и почтовый цикл уходил в бесконечный backoff
+        // (streak=150, «reconnect deferred» каждые 3 мс). Письма не приходили
+        // вообще, включая сигнал входящего звонка.
         let is_missing = |text: &str| {
             let t = text.to_ascii_lowercase();
-            t.contains("no such folder") || t.contains("no such mailbox")
+            t.contains("no such folder")
+                || t.contains("no such mailbox")
+                // Gmail и Zoho: «Unknown Mailbox: <имя>».
+                || t.contains("unknown mailbox")
+                || t.contains("unknown folder")
+                // Некоторые серверы: «Mailbox doesn't exist».
+                || t.contains("doesn't exist")
+                || t.contains("does not exist")
         };
         // Строка цепочки целиком — ловит вложенные варианты вроде
         // «No Response: [CLIENTBUG] SELECT No such folder».
@@ -1672,6 +1691,51 @@ mod tests {
     /// отсутствующем ящике. Отсутствие папки обязано распознаваться и НЕ
     /// обрабатываться как сетевая неудача.
     #[test]
+    /// Формулировки «папки нет» от разных провайдеров. Каждая обязана
+    /// распознаваться: нераспознанная = сетевой сбой = backoff = почта встала
+    /// целиком (см. комментарий у is_missing_folder_error).
+    #[test]
+    fn is_missing_folder_error_knows_all_provider_wordings() {
+        let cases = [
+            // Gmail (классическая форма).
+            "select RELAY failed: No Response: [CLIENTBUG] SELECT No such folder",
+            // Gmail (актуальная форма в скобках).
+            "select RELAY failed: No Response: [NONEXISTENT] Unknown Mailbox: RELAY",
+            // Zoho — найдено на живом стенде 22.10.2026.
+            "select RELAY failed: No Response: [NONEXISTENT] Unknown Mailbox: RELAY (now in authenticated state) (Failure)",
+            // Yandex/прочие.
+            "select RELAY failed: No such mailbox",
+            // Ещё одна встречающаяся форма.
+            "Mailbox doesn't exist: RELAY",
+        ];
+        for c in cases {
+            let e = anyhow::anyhow!("{c}");
+            assert!(
+                EmailClient::is_missing_folder_error(&e),
+                "не распознана формулировка об отсутствующей папке: {c}"
+            );
+        }
+    }
+
+    /// Обратная сторона: настоящий сетевой сбой НЕ должен считаться
+    /// «нет папки» — иначе почтовый цикл будет молча пропускать реальные
+    /// ошибки и не переподключаться.
+    #[test]
+    fn is_missing_folder_error_does_not_swallow_real_failures() {
+        for c in [
+            "Not connected to IMAP server",
+            "connection reset by peer",
+            "authentication failed",
+            "SELECT command failed: mailbox busy",
+        ] {
+            let e = anyhow::anyhow!("{c}");
+            assert!(
+                !EmailClient::is_missing_folder_error(&e),
+                "сетевой сбой ошибочно принят за отсутствие папки: {c}"
+            );
+        }
+    }
+
     fn is_missing_folder_error_true_for_missing_folder() {
         // Точная строка из лога провайдера (папка из настроек, имя динамическое).
         let missing =

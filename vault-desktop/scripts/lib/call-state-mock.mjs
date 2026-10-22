@@ -37,7 +37,10 @@ export function installCallStateMock(invokeMock) {
   // Правило «можно ли».
   function can(current, question) {
     switch (question) {
-      case 'arm_ring_timer': return current === 'incoming_ringing';
+      // Повторяет правило ядра (vault-client/src/vault/call_state.rs):
+      // таймер гудка можно ставить и во входящем, и в исходящем звонке —
+      // иначе исходящий не уважает настройку «длительность гудка».
+      case 'arm_ring_timer': return current === 'incoming_ringing' || current === 'outgoing_ringing';
       case 'start_outgoing':
       case 'can_call_back': return current === 'idle';
       case 'accept_incoming': return current === 'incoming_ringing';

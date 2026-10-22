@@ -156,7 +156,7 @@ const ringTimer = createRingTimer();
 // затем (асинхронно) уточняется реальной настройкой. Гонка учтена:
 // если за это время звонок уже снят/принят (callRingTimer !== null
 // меняется на null) — переставлять таймер нельзя.
-async function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
+async function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS, marginMs = 0) {
   const start = async (ms) => {
     if (!useSession().currentCall) return;
     if (!(await callCan(useSession().callState, 'arm_ring_timer'))) return;
@@ -165,7 +165,9 @@ async function armRingTimer(deps, fallbackMs = DEFAULT_RING_MS) {
   await start(fallbackMs);
   fetchRingDurationMs().then(async (ms) => {
     if (!(await callCan(useSession().callState, 'arm_ring_timer'))) return;
-    start(ms);
+    // Запас на доставку ответа собеседника (accept идёт почтой — это секунды
+    // и минуты). Для ВХОДЯЩЕГО звонка запас не нужен: там мы сами звоним.
+    start(Math.min(600000, ms + marginMs));
   }).catch(() => { /* дефолт уже стоит */ });
 }
 
@@ -579,9 +581,13 @@ export async function startCall(deps) {
   await applyCallState('outgoing_started');
   useSession().setMuted(false);
   startFastPolling(() => deps.idleLoop(), useSession().callIdleMonitorUp);
-  // для call_accept может превысить 180с, и звонок сгорал до ответа;
-  // окончательно решает call_reject/call_cancel от собеседника).
-  useSession().setCallRingTimer(ringTimer.start(300000, () => cancelCall(deps, 'timeout')));
+  // Ждём ОТВЕТ собеседника, значит ждём дольше, чем его собственный гудок:
+  // настройка «длительность гудка» + запас на доставку accept по почте.
+  //
+  // Раньше здесь стоял хардкод 300с и настройка пользователя ИГНОРИРОВАЛАСЬ:
+  // вызов висел пять минут, даже если человек поставил гудок 60с. Для
+  // входящего звонка настройка читалась (armRingTimer), для исходящего — нет.
+  await armRingTimer(deps, 300000, 60000);
   // ВАЖНО: сигнал call_request отправляем ДО гудков. cpal-гудок
   // может зависнуть на enum аудио-устройств (глючный Bluetooth) и
   // заблокировать рантайм — если бы он стоял перед отправкой, сигнал не

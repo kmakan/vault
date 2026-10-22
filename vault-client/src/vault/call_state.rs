@@ -201,7 +201,16 @@ pub enum CallQuestion {
 /// Ответ на правило «можно ли» в текущем состоянии.
 pub fn can(state: CallState, question: CallQuestion) -> bool {
     match question {
-        CallQuestion::ArmRingTimer => state == CallState::IncomingRinging,
+        // Таймер гудка можно ставить в обоих «звонящих» состояниях.
+        //
+        // Раньше разрешалось только во входящем, и ИСХОДЯЩИЙ вызов не мог
+        // уважать настройку «длительность гудка»: JS ставил жёсткие 300 секунд,
+        // и вызов висел пять минут, даже если человек поставил гудок 60с.
+        // Ждём мы тут ОТВЕТ собеседника, а значит ждём дольше его гудка —
+        // это улаживает JS (настройка + запас на доставку accept).
+        CallQuestion::ArmRingTimer => {
+            state == CallState::IncomingRinging || state == CallState::OutgoingRinging
+        }
         CallQuestion::StartOutgoing => can_start_outgoing(state),
         CallQuestion::AcceptIncoming => state == CallState::IncomingRinging,
         CallQuestion::AcceptOutgoing => state == CallState::OutgoingRinging,
@@ -384,6 +393,18 @@ mod tests {
         }
     }
 
+    /// Таймер гудка ставится и во входящем, и в исходящем звонке: иначе
+    /// исходящий не может уважать настройку «длительность гудка» (регресс
+    /// найден на живом стенде 22.10.2026: вызов висел 5 минут при гудке 60с).
+    #[test]
+    fn arm_ring_timer_allowed_in_both_ringing_states() {
+        assert!(can(CallState::IncomingRinging, CallQuestion::ArmRingTimer));
+        assert!(can(CallState::OutgoingRinging, CallQuestion::ArmRingTimer));
+        // В покое и в активном звонке — нельзя (таймер там бессмыслен).
+        assert!(!can(CallState::Idle, CallQuestion::ArmRingTimer));
+        assert!(!can(CallState::Active, CallQuestion::ArmRingTimer));
+    }
+
     #[test]
     fn can_table_has_all_states_and_questions() {
         let table = can_table();
@@ -538,9 +559,10 @@ mod tests {
 
     #[test]
     fn question_table() {
-        // Таймер гудка — только для входящего.
+        // Таймер гудка — в обоих «звонящих» состояниях: исходящий тоже ждёт
+        // ответа и должен уважать настройку «длительность гудка».
         assert!(can(CallState::IncomingRinging, CallQuestion::ArmRingTimer));
-        assert!(!can(CallState::OutgoingRinging, CallQuestion::ArmRingTimer));
+        assert!(can(CallState::OutgoingRinging, CallQuestion::ArmRingTimer));
         assert!(!can(CallState::Idle, CallQuestion::ArmRingTimer));
 
         // Исходящий звонок — только из idle.
