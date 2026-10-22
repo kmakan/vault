@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::Shutdown;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
+use vault_client::vault::body_absence;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -924,13 +925,18 @@ impl EmailClient {
         // ушло из папки (курсор мёртв, сессия жива — отдаём пусто без ошибки)
         // или FETCH молчит при живом письме (рассинхрон — Err на reconnect).
         // Проверка — до возврата в INBOX, пока выбрана нужная папка.
+        //
+        // Тот же контракт, что и в батче (см. absent_bodies): Ok("") = «этого
+        // тела не будет никогда», Err = «повтори после reconnect». Фронт по
+        // Ok("") кэширует негатив и перестаёт переспрашивать письмо каждый тик.
         let mut desync = false;
         if body.is_empty() {
-            match Self::uids_present(session, &[uid.to_string()]) {
-                Ok(false) => {
+            let probe = [uid.to_string()];
+            match Self::uids_absent(session, &probe) {
+                Ok(absent) if absent.is_empty() => desync = true,
+                Ok(_) => {
                     eprintln!("[email] body fetch: uid {uid} in {folder} отсутствует на сервере — не рассинхрон");
                 }
-                Ok(true) => desync = true,
                 Err(e) => return Err(e),
             }
         }
@@ -964,19 +970,30 @@ impl EmailClient {
         Ok(())
     }
 
-    /// Есть ли uid в ВЫБРАННОЙ папке. `UID SEARCH UID <set>` отвечает номерами:
-    /// ушедшие письма (перенесены, удалены, утонули в спам-очистке) дают пустой
-    /// список — и это НЕ рассинхрон сессии.
+    /// Те из uid, которых в ВЫБРАННОЙ папке НЕТ. `UID SEARCH UID <set>` отвечает
+    /// номерами найденных писем: ушедшие письма (перенесены, удалены, утонули в
+    /// спам-очистке) дают пустой ответ — и это НЕ рассинхрон сессии. Не отвеченный
+    /// uid — письмо ушло, его тело не появится никогда (см. `absent_bodies`).
     ///
     /// Без этого различия мёртвый курсор гонял почтовый цикл по кругу: пустой
     /// FETCH считался поломкой соединения, вызывающий делал reconnect и повторял
     /// ТОТ ЖЕ батч. Замер на стенде 22.10 (папка Gmail с пятью исчезнувшими
     /// письмами): 32 переподключения в минуту, живых писем не дождаться.
-    fn uids_present(session: &mut Session<TlsStream<TcpStream>>, uids: &[String]) -> Result<bool> {
+    fn uids_absent(
+        session: &mut Session<TlsStream<TcpStream>>,
+        uids: &[String],
+    ) -> Result<Vec<String>> {
         let found = session
             .uid_search(&format!("UID {}", uids.join(",")))
             .context("uid_search existence check failed")?;
-        Ok(!found.is_empty())
+        Ok(uids
+            .iter()
+            .filter(|u| {
+                let Ok(n) = u.trim().parse::<u32>() else { return true };
+                !found.contains(&n)
+            })
+            .cloned()
+            .collect())
     }
 
     /// Fetch bodies of many messages from one mailbox in a batch: select the
@@ -989,16 +1006,24 @@ impl EmailClient {
         folder: &str,
     ) -> Result<Vec<(String, String)>> {
         // Одна виртуальная папка релея или батч из одних безадресных uid —
-        // на IMAP-сервере такого нет. Пустой результат без ошибки: иначе
+        // на IMAP-сервере такого нет. Пустой результат БЕЗ ошибки: иначе
         // lib.rs считал это рассинхроном и рвал живую IMAP-сессию
-        // (см. VIRTUAL_FOLDER/is_imap_uid).
+        // (см. VIRTUAL_FOLDER/is_imap_uid). Но пустой результат обязан быть
+        // ОТЛИЧЕН от «не знаю» — иначе фронт повторяет запрос каждый тик
+        // (см. absent_bodies). Поэтому: каждый запрошенный uid возвращается
+        // записью с пустым телом = «тела не будет никогда».
         if Self::is_virtual_folder(folder) {
             eprintln!("[fetch_bodies] folder={folder} virtual — skipped");
-            return Ok(Vec::new());
+            return Ok(body_absence::absent_bodies(uids));
         }
         let real_uids: Vec<String> = uids
             .iter()
             .filter(|u| Self::is_imap_uid(u))
+            .cloned()
+            .collect();
+        let pseudo_uids: Vec<String> = uids
+            .iter()
+            .filter(|u| !Self::is_imap_uid(u))
             .cloned()
             .collect();
         if real_uids.is_empty() {
@@ -1006,7 +1031,7 @@ impl EmailClient {
                 "[fetch_bodies] folder={folder} requested={} but no real IMAP uids — skipped",
                 uids.len()
             );
-            return Ok(Vec::new());
+            return Ok(body_absence::absent_bodies(uids));
         }
         let uids = real_uids.as_slice();
         let session = self
@@ -1023,11 +1048,19 @@ impl EmailClient {
         // uids», и вызывающий в lib.rs пошёл переподключаться по кругу
         // (шторм реконнектов, телефон X50, 04.10.2026). Отдаём пустой батч
         // без Err — цикл пропустит папку. Реальная ошибка сети — в Err.
+        //
+        // Пометка «никогда» здесь корректна в границах СЕССИИ: имена папок
+        // приходят из настроек и переоткрываются на каждом подключении, поэтому
+        // ключ `folder:uid` на новом соединении другой и негатив не переиспользуется
+        // (Gmail меняет modified UTF-7 имя спама между сессиями — письмо всё
+        // равно было недостижимо, раз папка не SELECTится).
         if let Err(e) = session.select(folder) {
             let err = anyhow::anyhow!("select {folder} failed: {e}");
             if Self::is_missing_folder_error(&err) {
                 eprintln!("[fetch_bodies] folder={folder} missing on server — skipped");
-                return Ok(Vec::new());
+                let mut all = body_absence::absent_bodies(uids);
+                all.extend(body_absence::absent_bodies(&pseudo_uids));
+                return Ok(all);
             }
             return Err(err);
         }
@@ -1070,17 +1103,24 @@ impl EmailClient {
         //   · сессия правда рассинхронизирована — письмо в папке есть, но FETCH
         //     молчит. Тогда Err, чтобы lib.rs сделал reconnect и повторил.
         // Различает серверный вопрос UID SEARCH, пока папка ещё выбрана.
-        let mut desync = false;
-        if out.is_empty() && !empty_uids.is_empty() {
-            match Self::uids_present(session, &empty_uids) {
-                Ok(false) => eprintln!(
-                    "[fetch_bodies] folder={folder}: {n} uid отсутствуют на сервере — мёртвый курсор, не рассинхрон",
-                    n = empty_uids.len()
-                ),
-                Ok(true) => desync = true,
+        // Мёртвые uid при этом помечаем окончательными — по этой пометке фронт
+        // перестаёт перепрашивать их на каждом поллинге (absent_bodies).
+        let (dead, desync) = if empty_uids.is_empty() {
+            (Vec::new(), false)
+        } else {
+            match Self::uids_absent(session, &empty_uids) {
+                Ok(absent) => {
+                    if !absent.is_empty() {
+                        eprintln!(
+                            "[fetch_bodies] folder={folder}: {n} uid отсутствуют на сервере — мёртвый курсор, не рассинхрон",
+                            n = absent.len()
+                        );
+                    }
+                    body_absence::classify_empty_batch(out.len(), &empty_uids, &absent)
+                }
                 Err(e) => return Err(e),
             }
-        }
+        };
 
         if folder != "INBOX" {
             let _ = session.select("INBOX");
@@ -1092,6 +1132,8 @@ impl EmailClient {
                 n = empty_uids.len()
             );
         }
+        out.extend(body_absence::absent_bodies(&dead));
+        out.extend(body_absence::absent_bodies(&pseudo_uids));
         Ok(out)
     }
 
@@ -1788,7 +1830,7 @@ mod tests {
     /// реальных переподключений — клиент растил streak на ответ сервера об
     /// отсутствующем ящике. Отсутствие папки обязано распознаваться и НЕ
     /// обрабатываться как сетевая неудача.
-    #[test]
+    ///
     /// Формулировки «папки нет» от разных провайдеров. Каждая обязана
     /// распознаваться: нераспознанная = сетевой сбой = backoff = почта встала
     /// целиком (см. комментарий у is_missing_folder_error).
@@ -1858,6 +1900,8 @@ mod tests {
         }
     }
 
+
+    #[test]
     fn is_missing_folder_error_true_for_missing_folder() {
         // Точная строка из лога провайдера (папка из настроек, имя динамическое).
         let missing =

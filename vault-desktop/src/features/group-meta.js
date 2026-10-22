@@ -57,7 +57,18 @@ export async function syncGroupAvatarsFromMeta(deps) {
           if (!groupKey) { console.log('[group] meta-scan no-key:', g.id); break; }
           try {
             const body = await api.fetchEmailBody('local', latest.uid, latest.folder);
-            if (!body || !crypto.isEncrypted(body)) continue;
+            // Пустое тело — решение Rust «этого тела не будет никогда»
+            // (RELAY-конверт, не-IMAP uid, письмо ушло из папки). Тело письма
+            // неизменно, поэтому такое письмо заносим в applied-sig: без этого
+            // мета-скан повторяет ОДИН И ТОТ ЖЕ запрос каждым поллингом (жалоба
+            // 22.10 «приглашения от старых email», замер на стенде: 368 строк
+            // лога за 2,5 минуты). Обычное (не шифрованное) письмо — та же
+            // логика: оно никогда не станет meta-письмом.
+            if (!body || !crypto.isEncrypted(body)) {
+              alreadyApplied.add(appliedSig);
+              await db.kvSet('anon', appliedKey, [...alreadyApplied].join(','));
+              continue;
+            }
             const plaintext = await crypto.decryptWithGroupKey(body, groupKey);
             // РОУТЕР СЕРВИСНЫХ СИГНАЛОВ — В RUST (ADR-005 R1 / W4): hav-запрос и
             // мета — служебные форматы, «что это за письмо» решает ядро

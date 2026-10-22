@@ -1,4 +1,5 @@
 pub mod contacts;
+pub mod body_absence;
 pub mod edit;
 pub mod call_state;
 pub mod channels;

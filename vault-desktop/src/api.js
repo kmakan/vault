@@ -999,9 +999,13 @@ export class ApiClient {
             continue; // не кэшируем — ретрай следующим тиком
           }
           for (const m of list) {
-            const body = bodies[String(m.uid ?? m.id)] || '';
-            if (!body) continue; // пусто/нет — не кэшируем, ретрай позже
-            this._handshakeParsed.set(keyOf(m), this._parseHandshakeItem(m, body));
+            const k = String(m.uid ?? m.id);
+            // Ключ есть в ответе с ПУСТЫМ телом = Rust решил, что тела не будет
+            // никогда. Такой негатив кэшируем — иначе конверт (RELAY, мёртвый uid)
+            // парсится заново каждым поллингом и «приглашения от старых email»
+            // приходят бесконечно. Ключа нет = не знаем, повторим следующим тиком.
+            if (!Object.prototype.hasOwnProperty.call(bodies, k)) continue;
+            this._handshakeParsed.set(keyOf(m), this._parseHandshakeItem(m, bodies[k] || ''));
           }
         }
       }
@@ -1478,6 +1482,15 @@ async mediaSoundStop() {
     return await invoke('media_sound_stop');
   }
 
+  // ПУСТОЕ ТЕЛО = РЕШЕНИЕ RUST, ЧТО ТЕЛА НЕ БУДЕТ НИКОГДА.
+  // email_fetch_body отвечает Ok("") по структурному отсутствию (RELAY-конверт,
+  // не-IMAP uid, нет такой папки, письмо ушло из папки по UID SEARCH) и Err —
+  // по временному (рассинхрон сессии, reconnect+retry). Поэтому пустое тело
+  // обязан доходить до вызывающих как '' — по нему они метят письмо
+  // обработанным и перестают переспрашивать. Молча бросить исключение сюда —
+  // вернуть жалобу 22.10 «приглашения от старых email»: мета-скан группы
+  // бесконечно повторяет тот же запрос (замер на стенде — 368 строк лога за
+  // 2,5 минуты одних и тех же RELAY-конвертов).
   async fetchEmailBody(accountId, uid, folder) {
     return await invoke('email_fetch_body', { uid: String(uid), folder: folder || 'INBOX' });
   }
@@ -1485,6 +1498,8 @@ async mediaSoundStop() {
   async fetchEmailBodies(folder, uids) {
     // Батч-фетч тел одной папки (Rust выбирает папку один раз) —
     // без него чат фетчил каждое тело отдельным round-trip'ом.
+    // Тот же контракт, что и выше: запись [uid, ''] = «не будет никогда»,
+    // отсутствие записи = «не знаю, повтори».
     const list = await invoke('email_fetch_bodies', { uids: uids.map(String), folder: folder || 'INBOX' });
     const out = {};
     for (const [uid, body] of list || []) out[String(uid)] = body;
@@ -1510,7 +1525,16 @@ async mediaSoundStop() {
       const fetched = await this.fetchEmailBodies(f, missing);
       for (const uid of Object.keys(fetched || {})) {
         const body = fetched[uid];
-        if (!body) continue;
+        // Пустое тело В ОТВЕТЕ Rust — решение «этого тела не будет никогда»
+        // (RELAY-конверт, не-IMAP uid, мёртвый uid по UID SEARCH). В body_cache
+        // не пишем (там лежат настоящие тела), но в map оставляем: по этому
+        // признаку вызывающий кэширует негатив и перестаёт переспрашивать
+        // письмо каждым поллингом (жалоба 22.10 «приглашения от старых email»).
+        // UID, которого в ответе нет вовсе, — «не знаю», повтор следующим тиком.
+        if (!body) {
+          out[uid] = '';
+          continue;
+        }
         out[uid] = body;
         // Сразу в БД — следующий раз письмо читается из body_cache, а не IMAP.
         db.bodyCacheSet(acc, `${f}:${uid}`, body).catch(() => {});
