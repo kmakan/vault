@@ -117,6 +117,75 @@ cd ~/whisper/vault-desktop && npx tauri build --bundles deb
 # артефакт: src-tauri/target/release/bundle/deb/Vault_<версия>_amd64.deb
 ```
 
+## 6а. Деплой релея (vault-relay) — серверная часть
+
+Релей — продовый сервис доставки (пуши, каналы, будилки FCM/ntfy). Собран
+из `vault-relay/` и крутится на `server` как `vault-relay.service`
+(WorkingDirectory `~/vault-relay`, порт 127.0.0.1:8091, nginx проксирует
+`/relay/*` наружу).
+
+### ГЛАВНОЕ ПРАВИЛО: собирать НА СЕРВЕРЕ, а не копировать локальный бинарь
+
+22.10.2026 локально собранный бинарь (`cargo build --release`) был скопирован
+на сервер — и упал: `GLIBC_2.32/2.33/2.34 not found` (на сервере glibc 2.31,
+на рабочей машине — новее). Релей лежал ~2 минуты, пока не откатили на
+бэкап. Rust-бинарь НЕ переносится между машинами с разной glibc.
+
+Правильный путь: rsync исходников на сервер → сборка там → подмена бинаря.
+
+```bash
+# 1) исходники на сервер (без target/ и .git/)
+cd ~/whisper/vault-relay
+rsync -az --delete --exclude 'target' --exclude '.git' ./ server:~/vault-relay-build/
+
+# 2) сборка НА СЕРВЕРЕ (cargo там есть, но не в PATH неинтерактивной сессии)
+ssh server 'cd ~/vault-relay-build && PATH=$HOME/.cargo/bin:$PATH cargo build --release --bin vault-relay'
+
+# 3) подмена: сначала копия во временный файл, потом mv
+#    (`cp` прямо поверх работающего бинаря → "Text file busy")
+ssh server 'cd ~/vault-relay
+  STAMP=$(date +%m%d%H%M)
+  cp -a vault-relay vault-relay.bak-$STAMP
+  cp -a vault-relay-state.json vault-relay-state.json.bak-$STAMP
+  cp ~/vault-relay-build/target/release/vault-relay vault-relay.new
+  chmod +x vault-relay.new
+  mv -f vault-relay.new vault-relay
+  echo "$SUDO_PASSWORD" | sudo -S systemctl restart vault-relay'
+
+# 4) проверка: сервис жив, старые роуты работают, новые — по контракту
+ssh server 'systemctl is-active vault-relay
+  curl -s -m 5 http://127.0.0.1:8091/health
+  curl -s -m 5 -w " [%{http_code}]\n" -X POST http://127.0.0.1:8091/relay/purchase/checkout \
+    -H "Content-Type: application/json" -d "{\"plan\":\"pro\",\"months\":12,\"fp\":\"testfp\"}"'
+```
+
+`sudo` через SSH требует пароль: `echo "$SUDO_PASSWORD" | sudo -S ...`, где
+`SUDO_PASSWORD` берётся из `~/.hermes/.env` ЛОКАЛЬНО и подставляется в
+команду (на сервере этой переменной нет).
+
+### Платёжный провайдер
+
+По умолчанию платежи ВЫКЛЮЧЕНЫ (`VAULT_RELAY_PAYMENTS` не задан) — все
+платёжные роуты отвечают `402 {"error":"checkout disabled"}`. Это честное
+состояние: реального провайдера (ЮKassa) нет до ИП (канбан ORG-2). Для
+приёмки на устройстве провайдера включают на ВРЕМЯ проверки
+(`VAULT_RELAY_PAYMENTS=test` → `TestProvider`, оплата подтверждается
+мгновенно) и выключают сразу после: включённый тестовый провайдер в проде
+раздаёт бесплатные Pro-токены всем подряд.
+
+### Откат
+
+```bash
+ssh server 'cd ~/vault-relay
+  cp -a vault-relay.bak-<STAMP> vault-relay.new && mv -f vault-relay.new vault-relay
+  echo "$SUDO_PASSWORD" | sudo -S systemctl restart vault-relay'
+```
+
+Бэкапы бинаря и файла состояния лежат рядом с живыми файлами
+(`vault-relay.bak-<MMDDHHMM>`, `vault-relay-state.json.bak-<MMDDHHMM>`).
+Файл состояния совместим назад: новые поля помечены `serde(default)`, старый
+файл читается без паники (проверено тестом `test_old_state_file_without_new_fields_loads`).
+
 ## 7. Сайты
 
 ```bash
@@ -196,6 +265,13 @@ git push github refactor/adr001-stage4 && git push gitverse refactor/adr001-stag
 ---
 
 ## Чего НЕ делать (уроки)
+
+* **НЕ копировать Rust-бинарь на сервер из другой машины.** glibc на сервере
+  2.31, на рабочей машине новее — бинарь не стартует (`GLIBC_2.32 not found`),
+  и сервис лежит до ручного отката. Собирать НА сервере: `rsync` исходников +
+  `cargo build --release` там (см. §6а).
+* **НЕ делать `cp` поверх работающего бинаря** — «Text file busy». Сначала
+  копия во временный файл, потом `mv`.
 
 1. **Не публиковать непроверенную на устройстве версию.** Приёмка — часть
    релиза, а не «после».

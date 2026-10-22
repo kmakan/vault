@@ -270,6 +270,25 @@ impl PersistedState {
             }
             tracing::warn!(dropped = extra, "state: fp entries over cap dropped");
         }
+        // Новые карты (платные токены) — под тем же потолком: растут медленно
+        // (одна привязка на выданный токен), но «медленно» не значит «никогда»,
+        // и файл состояния не должен расти без предела.
+        if self.token_bindings.len() > MAX_ENTRIES {
+            let extra = self.token_bindings.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.token_bindings.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.token_bindings.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: token bindings over cap dropped");
+        }
+        if self.sub_tokens.len() > MAX_ENTRIES {
+            let extra = self.sub_tokens.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.sub_tokens.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.sub_tokens.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: subscription devices over cap dropped");
+        }
     }
 
     /// Сохранить атомарно: пишем `<path>.tmp`, fsync, затем `rename` в
