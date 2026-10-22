@@ -284,6 +284,73 @@ console.log('9. accept-инвайта с аватаром: аватар пише
   check('аватар сохранён в kv', state.calls.some(c => c === 'kvSet:group-avatar:G1'), state.calls);
 }
 
+// ── 9b. СЕКРЕТ НОВОГО УЧАСТНИКА: приняли → ключ есть → инвайт зашифрован ──
+//
+// Риск, зафиксированный в задаче t_c446d61c: можно принять приглашение, не
+// создав секрет для нового участника, и остаться в группе, в которую нельзя
+// писать. Ошибка тут НЕЗАМЕТНА в обычных тестах и опасна. Поэтому проверяем
+// три вещи:
+//   1) в принятом письме есть РАСШИФРОВАННЫЙ ключ группы;
+//   2) зашифрованный блоб НЕ уходит на сервер (иначе сервер сохранил бы
+//      ciphertext вместо секрета, и группа осталась бы без ключа);
+//   3) если расшифровка не удалась — принятия НЕТ вовсе.
+console.log('9b. секрет нового участника: ключ расшифрован и отправлен');
+{
+  resetWorld();
+  state.invites.setPendingInvites([{ group_id: 'G1', uid: 1, sender: 'a@x' }]);
+  const deps = makeDeps({
+    isCryptoReady: () => true,
+    decryptGroupKey: async () => 'DECRYPTED_GROUP_KEY',
+  });
+  await acceptInvite({
+    group_id: 'G1', uid: 1, sender: 'a@x',
+    group_key_enc: 'ENCRYPTED_BLOB', sender_public_key: 'PUB',
+  }, deps);
+  const call = apiMock.calls.find(c => c[0] === 'accept');
+  check('принятие выполнено', !!call, apiMock.calls);
+  check('в письме есть РАСШИФРОВАННЫЙ ключ группы',
+    !!(call && call[2] && call[2].group_key === 'DECRYPTED_GROUP_KEY'), call && call[2]);
+  check('зашифрованный блоб НЕ отправлен как ключ',
+    !!(call && call[2] && call[2].group_key !== 'ENCRYPTED_BLOB'), call && call[2]);
+  check('ошибок нет', state.alerts.length === 0, state.alerts);
+}
+
+// ── 9c. Секрет не создался: расшифровка не удалась → принятия нет ───────
+console.log('9c. расшифровка не удалась — письмо НЕ принимается (секрета нет)');
+{
+  resetWorld();
+  state.invites.setPendingInvites([{ group_id: 'G1', uid: 1, sender: 'a@x' }]);
+  const deps = makeDeps({
+    isCryptoReady: () => true,
+    decryptGroupKey: async () => null,
+  });
+  await acceptInvite({
+    group_id: 'G1', uid: 1, sender: 'a@x',
+    group_key_enc: 'ENCRYPTED_BLOB', sender_public_key: 'PUB',
+  }, deps);
+  check('принятия НЕ было', !apiMock.calls.some(c => c[0] === 'accept'), apiMock.calls);
+  check('инвайт вернулся в очередь (пользователь может попробовать снова)',
+    state.invites.getPendingInvites().length === 1, state.invites.getPendingInvites());
+}
+
+// ── 9d. Крипто НЕ готов → инвайт с шифрованным ключом не принимается ────
+console.log('9d. крипто не готово — шифрованный инвайт не принимается');
+{
+  resetWorld();
+  state.invites.setPendingInvites([{ group_id: 'G1', uid: 1, sender: 'a@x' }]);
+  const deps = makeDeps({
+    isCryptoReady: () => false,
+    decryptGroupKey: async () => { state.calls.push('decrypt'); return 'DECRYPTED_GROUP_KEY'; },
+  });
+  await acceptInvite({
+    group_id: 'G1', uid: 1, sender: 'a@x',
+    group_key_enc: 'ENCRYPTED_BLOB', sender_public_key: 'PUB',
+  }, deps);
+  check('принятия НЕ было (ключ негде взять)', !apiMock.calls.some(c => c[0] === 'accept'),
+    apiMock.calls);
+  check('расшифровка не вызывалась', !state.calls.includes('decrypt'), state.calls);
+}
+
 // ── 10. accept: ошибка → инвайт возвращается в очередь ───────────────────
 console.log('10. accept с ошибкой: alert, метка снята, инвайт вернулся в очередь');
 {

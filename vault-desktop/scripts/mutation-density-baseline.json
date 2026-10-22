@@ -93,7 +93,7 @@
     "vault-desktop/src/features/ignored-users.js": 7,
     "vault-desktop/src/features/incoming.js": 11,
     "vault-desktop/src/features/invites-store.js": 6,
-    "vault-desktop/src/features/invites.js": 9,
+    "vault-desktop/src/features/invites.js": 12,
     "vault-desktop/src/features/keys.js": 21,
     "vault-desktop/src/features/local-db-init.js": 5,
     "vault-desktop/src/features/local-store.js": 6,
