@@ -65,16 +65,34 @@ for i in 1 2 3; do
   adb -s "$SER" logcat -c
   adb -s "$SER" shell am start -n com.vault.vault/.MainActivity >/dev/null 2>&1
   sleep 12
-  RES=$(adb -s "$SER" shell dumpsys activity activities 2>/dev/null | grep -m1 "mResumedActivity" | grep -c "com.vault.vault")
+  # «на переднем плане» мерим по ЛЮБОЙ форме строки резюмированной активности:
+  # на Android 15 это `topResumedActivity=` / `ResumedActivity:`, а не только
+  # `mResumedActivity`. Старый греп давал foreground=0 на здоровом приложении —
+  # ложный сигнал, из-за которого провальная приёмка выглядит «так и надо».
+  RES=$(adb -s "$SER" shell dumpsys activity activities 2>/dev/null | grep -m1 "ResumedActivity" | grep -c "com.vault.vault")
   CRASH=$(adb -s "$SER" logcat -d 2>/dev/null | grep -icE "FATAL EXCEPTION|has died")
   echo "  restart $i: foreground=$RES crash-маркеров=$CRASH"
 done
 
 echo "=== 6. CDP-приёмка (19 проверок) ==="
+# ВЫХОД ЭТОГО ШАГА = ВЫХОД ПРИЁМКИ. Раньше здесь стояло
+#   node scripts/device-accept.mjs 2>&1 | tail -4
+и код возврата node съедался пайпом: скрипт завершался с 0 даже когда
+# пробы красные (23.10 на 0.1.259 приёмка «прошла» с необработанным
+# исключением в странице). То же касательно «приложение не запущено»: CDP —
+# обязательная часть приёмки, пропускать её молча нельзя.
 PID=$(adb -s "$SER" shell pidof com.vault.vault | tr -d '\r')
-if [ -n "$PID" ]; then
-  adb -s "$SER" forward tcp:9224 "localabstract:webview_devtools_remote_$PID" >/dev/null
-  node scripts/device-accept.mjs 2>&1 | tail -4
-else
-  echo "приложение не запущено — CDP-пробы пропущены"
+CDP_LOG=/tmp/device-accept-cdp.$$.log
+if [ -z "$PID" ]; then
+  echo "✗ приложение не запущено — CDP-пробы не сняты, приёмка НЕ принята"
+  exit 1
 fi
+adb -s "$SER" forward tcp:9224 "localabstract:webview_devtools_remote_$PID" >/dev/null
+node scripts/device-accept.mjs > "$CDP_LOG" 2>&1
+CDP_RC=$?
+tail -12 "$CDP_LOG"
+if [ "$CDP_RC" -ne 0 ]; then
+  echo "✗ CDP-приёмка провалена (код $CDP_RC) — версию не публиковать"
+  exit "$CDP_RC"
+fi
+echo "✓ CDP-приёмка принята"

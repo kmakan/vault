@@ -100,6 +100,15 @@ VAULT_SER="<host:port>" ./scripts/device-accept-apk.sh
 Скрипт: подпись (md5 APK vs keystore) → `install -r` → запуск → крэш-маркеры →
 рестарты ×3 → CDP-приёмка (19 проверок, `scripts/device-accept.mjs`).
 
+**Публиковать можно только при `echo $? = 0` у самого скрипта.** До 23.10 это
+было иллюзией: шаг CDP был написан как `node device-accept.mjs 2>&1 | tail -4`,
+пайп съедал код возврата node, и приёмка завершалась с нулём даже на красных
+пробах (на 0.1.259 так и вышло: необработанное исключение в странице + «exit=0»).
+Тихий пропуск «приложение не запущено — CDP-пробы пропущены» теперь тоже провал. И `foreground` в цикле рестартов мерился по
+`mResumedActivity`, которой на Android 15 нет (строка называется
+`topResumedActivity` / `ResumedActivity:`) — здоровое приложение выглядело как
+`foreground=0`; теперь грепается любая форма.
+
 Плюс отдельная проверка консоли WebView (ошибки JS = «тихий» дефект):
 
 ```bash
@@ -256,7 +265,18 @@ rsync -avz latest-en.json server:sites/vault-msg/en/latest.json
 curl -sI "https://vault-msg.ru/releases/vault-<версия>.apk?cb=$(date +%s)" | grep -i content-length
 curl -s "https://vault-msg.ru/releases/vault-<версия>.apk?cb=$(date +%s)" | sha256sum
 sha256sum releases/vault-<версия>.apk
+# 6) ГЕЙТ целостности публикации — обязательный шаг, а не «по желанию»
+node ~/whisper/vault-desktop/scripts/release-site-check.mjs <версия> --live
 ```
+
+**Зачем шаг 6.** Кнопка «Обновить» в приложении ведёт НЕ на сайт, а на
+`apk_url`/`desktop_url` из `latest.json`. На 0.1.258 обновили `version` и
+`changelog`, а ссылки оставить старыми — и живое кольцо было: «доступна
+версия 0.1.258», по кнопке пользователь идёт качать 0.1.255. Гейт требует,
+чтобы версия и оба URL в `latest.json`/`latest-en.json` называли ОДНУ сборку,
+чтобы ассеты лежали в `releases/`, и (с `--live`) чтобы скачанный APK совпадал
+по sha256 с локальным. Самопроверка гейта — `--selftest` (7 случаев, включая
+«version обновили, apk_url забыли» и «хвост 0.1.25 не считается 0.1.258»).
 
 **EN-сайт = корень `vault-msg.tech`** (без `/en/` — `/en/` даёт 404).
 

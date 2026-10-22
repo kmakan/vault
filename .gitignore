@@ -64,3 +64,6 @@ store-assets/
 2026*_*.jsonl
 2026*_*_*
 .opencode/
+
+# Локальные разрешения CLI (машина/сессия) — не часть проекта
+.qoder/settings.local.json
