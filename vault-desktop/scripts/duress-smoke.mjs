@@ -47,13 +47,13 @@ const invokeMock = async (cmd, args) => {
       name: args.name || '',
       avatar: args.avatar || '',
     };
-    if (args.msg_type) env.type = args.msg_type;
+    if (args.msgType) env.type = args.msgType;
     if (args.gavatar) env.gavatar = args.gavatar;
     env.key = args.key || '';
-    env.ts = args.ts_ms || 0;
-    if (args.pq_ek) env.pq = args.pq_ek;
+    env.ts = args.tsMs || 0;
+    if (args.pqEk) env.pq = args.pqEk;
     if (args.tok) env.tok = args.tok;
-    if (Number(args.ttl_secs) > 0) env.ttl = Number(args.ttl_secs);
+    if (Number(args.ttlSecs) > 0) env.ttl = Number(args.ttlSecs);
     return JSON.stringify(env);
   }
   return null;

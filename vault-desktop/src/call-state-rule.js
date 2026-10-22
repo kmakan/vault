@@ -109,7 +109,11 @@ export async function canApply(current, event) {
 // sameCall — тот же call_id (повтор запроса, а не новый звонок).
 export async function incomingRequestAction(current, sameCall, hasCurrent) {
   try {
-    return await invoke('vault_call_incoming_action', { current, same_call: sameCall, has_current: hasCurrent });
+    // Имена аргументов — camelCase: Tauri v2 переводит их в snake_case сам, а
+    // snake_case от JS ТЕРЯЛСЯ МОЛЧА (same_call/has_current приходили как
+    // false) — то есть решение «принять/отклонить» входящий звонок до Rust
+    // не доходило, и вызов молча игнорировался.
+    return await invoke('vault_call_incoming_action', { current, sameCall, hasCurrent });
   } catch (e) {
     report('incoming_action', e);
     return 'ignore';

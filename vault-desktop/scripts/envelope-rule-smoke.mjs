@@ -41,12 +41,20 @@ function reset() { state.calls = []; state.fail = false; state.answer = '{"vault
 const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
 
 // ── Имена аргументов совпадают с объявлением команды в Rust ──────────────
+//
+// Tauri v2 принимает аргументы из JS в camelCase и сам переводит их в
+// snake_case для Rust. Поэтому сверять надо КАМЕЛ-кейс JS с КАМЕЛ-кейсом
+// Rust-сигнатуры, а не имена напрямую: иначе проверка либо закрепляет
+// нерабочую схему, либо ругается на корректный код.
 {
   const bridge = readFileSync(path.join(ROOT, 'src-tauri', 'src', 'vault_bridge.rs'), 'utf8');
   const m = bridge.match(/pub fn vault_build_envelope\(([^)]*)\)/);
-  const got = m ? m[1].split(',').map((s) => s.trim().split(':')[0].trim()).filter(Boolean) : [];
-  const want = ['id', 'text', 'name', 'avatar', 'gavatar', 'key', 'pq_ek', 'tok', 'msg_type', 'ttl_secs', 'ts_ms'];
-  ok('команда vault_build_envelope объявлена с теми же именами аргументов',
+  const camel = (snake) => snake.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+  const got = m
+    ? m[1].split(',').map((s) => s.trim().split(':')[0].trim()).filter(Boolean).map(camel)
+    : [];
+  const want = ['id', 'text', 'name', 'avatar', 'gavatar', 'key', 'pqEk', 'tok', 'msgType', 'ttlSecs', 'tsMs'];
+  ok('команда vault_build_envelope объявлена с теми же именами аргументов (camelCase, как ждёт Tauri v2)',
     JSON.stringify(got) === JSON.stringify(want), { got, want });
 }
 
@@ -64,25 +72,38 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
   ok('avatar передан', a.avatar === 'AV', a);
   ok('gavatar передан', a.gavatar === 'GAV', a);
   ok('key передан', a.key === 'PUB', a);
-  ok('pq_ek передан', a.pq_ek === 'PQ', a);
+  ok('pqEk передан', a.pqEk === 'PQ', a);
   ok('tok передан', a.tok === 'TOK', a);
-  ok('ttl_secs передан числом', a.ttl_secs === 3600, a);
-  ok('ts_ms передан числом', a.ts_ms === 1700000000, a);
-  ok('msg_type передан', a.msg_type === 'PQ-TYPE', a);
+  // Tauri v2 принимает аргументы в camelCase и сам переводит их в
+  // snake_case для Rust. Со snake_case команда ПАДАЕТ целиком («missing
+  // required key»), и приложение продолжает работать — только конверты не
+  // собираются. На живой приёмке 22.10.2026 это выглядело как «письма
+  // приходят, но не расшифровываются» и «сообщение не отправляется».
+  // Проверка здесь — чтобы ошибка не вернулась: смоук подменяет invoke и
+  // принимает любые имена, а реальный мост — нет.
+  const snakeNames = Object.keys(a).filter((k) => /^[a-z]+_[a-z0-9_]*$/.test(k));
+  ok('snake_case-имён быть не должно (Tauri v2 ждёт camelCase)', snakeNames.length === 0, snakeNames);
+  // И главное: имя типа конверта должно ДОЙТИ. Раньше msg_type терялся, и
+  // конверт уходил без типа — получатель не опознавал его как звонок.
+  ok('тип конверта передан (msgType), а не потерян', a.msgType === 'PQ-TYPE', a.msgType);
+  ok('PQ-ключ передан (pqEk), а не потерян', a.pqEk === 'PQ', a.pqEk);
+  ok('ttlSecs передан числом', a.ttlSecs === 3600, a);
+  ok('tsMs передан числом', a.tsMs === 1700000000, a);
+  ok('msgType передан', a.msgType === 'PQ-TYPE', a);
 }
 {
   reset();
   await R.buildEnvelope({ id: 'm2', text: 'x' });
   const a = lastArgs();
   ok('пустое необязательное поле → null (а не пустая строка)',
-    a.gavatar === null && a.pq_ek === null && a.tok === null && a.msg_type === null, a);
+    a.gavatar === null && a.pqEk === null && a.tok === null && a.msgType === null, a);
   ok('пустой текст → пустая строка', a.text === 'x' && a.name === '' && a.avatar === '', a);
-  ok('ttl без значения → 0', a.ttl_secs === 0, a);
+  ok('ttl без значения → 0', a.ttlSecs === 0, a);
 }
 {
   reset();
   await R.buildEnvelope({ id: 'm3', text: 'x', ttlSecs: 'не число' });
-  ok('не-числовой ttl → 0 (не NaN)', lastArgs().ttl_secs === 0, lastArgs());
+  ok('не-числовой ttl → 0 (не NaN)', lastArgs().ttlSecs === 0, lastArgs());
 }
 {
   // ПУСТАЯ строка в необязательном поле — это «поля нет», а не «поле с пустым
@@ -92,7 +113,7 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
   await R.buildEnvelope({ id: 'm4', text: 'x', gavatar: '', pqEk: '', tok: '' });
   const a = lastArgs();
   ok('пустая строка в необязательном поле → null (поля нет)',
-    a.gavatar === null && a.pq_ek === null && a.tok === null && a.msg_type === null, a);
+    a.gavatar === null && a.pqEk === null && a.tok === null && a.msgType === null, a);
 }
 
 // ── Ответ моста доезжает до вызывающего ──────────────────────────────────

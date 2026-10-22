@@ -94,8 +94,8 @@ const lastArgs = () => (state.calls[state.calls.length - 1] || [])[1] || {};
 {
   reset();
   await R.incomingRequestAction('active', false, true);
-  ok('incomingRequestAction: same_call и has_current по именам',
-    lastArgs().same_call === false && lastArgs().has_current === true, lastArgs());
+  ok('incomingRequestAction: sameCall и hasCurrent по именам (camelCase — Tauri v2 ждёт так)',
+    lastArgs().sameCall === false && lastArgs().hasCurrent === true, lastArgs());
 }
 
 // ── Ответ моста доезжает до вызывающего ──────────────────────────────────

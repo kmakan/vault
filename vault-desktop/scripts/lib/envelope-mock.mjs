@@ -11,21 +11,35 @@
 //
 // Формат: envelope {vault:1, id, text, name, avatar, type?, gavatar?, key, ts,
 // pq?, tok?, ttl?, bio?} + poll-подконверт {id?, question, options}.
+//
+// ВАЖНО про имена аргументов: мок принимает их в camelCase — ровно как
+// ждёт Tauri v2. Если читать их в snake_case, смоуки будут проверять не тот
+// путь, который реально работает: мост snake_case от JS молча теряет, и
+// конверт уходит без типа (SOS, сигналы звонков) — а тесты зелёные.
 export function envelopeBuild(args) {
+  // Имена аргументов — camelCase: так их ждёт Tauri v2 (он сам переводит их
+  // в snake_case для Rust). Мок раньше читал snake_case — и тем самым
+  // закреплял СЛОМАННУЮ схему: смоуки проходили, хотя реальный мост терял
+  // тип конверта и PQ-ключ. Из-за этого SOS-конверт уходил без type, а
+  // сигналы звонка (msg_type=call_request) — без типа, то есть получатель
+  // не опознавал их как звонок.
+  const camel = (snake) => snake.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+  const a = {};
+  for (const [k, v] of Object.entries(args || {})) a[camel(k)] = v;
   const env = {
     vault: 1,
-    id: args.id || '',
-    text: args.text == null ? '' : args.text,
-    name: args.name || '',
-    avatar: args.avatar || '',
+    id: a.id || '',
+    text: a.text == null ? '' : a.text,
+    name: a.name || '',
+    avatar: a.avatar || '',
   };
-  if (args.msg_type) env.type = args.msg_type;
-  if (args.gavatar) env.gavatar = args.gavatar;
-  env.key = args.key || '';
-  env.ts = args.ts_ms || 0;
-  if (args.pq_ek) env.pq = args.pq_ek;
-  if (args.tok) env.tok = args.tok;
-  if (Number(args.ttl_secs) > 0) env.ttl = Number(args.ttl_secs);
+  if (a.msgType) env.type = a.msgType;
+  if (a.gavatar) env.gavatar = a.gavatar;
+  env.key = a.key || '';
+  env.ts = a.tsMs || 0;
+  if (a.pqEk) env.pq = a.pqEk;
+  if (a.tok) env.tok = a.tok;
+  if (Number(a.ttlSecs) > 0) env.ttl = Number(a.ttlSecs);
   return JSON.stringify(env);
 }
 

@@ -40,11 +40,20 @@ export async function buildEnvelope(input) {
       avatar: String(i.avatar || ''),
       gavatar: i.gavatar == null || i.gavatar === '' ? null : String(i.gavatar),
       key: String(i.key || ''),
-      pq_ek: i.pqEk == null || i.pqEk === '' ? null : String(i.pqEk),
+      // Имена аргументов — camelCase (Tauri v2): pq_ek/msg_type молча
+      // ТЕРЯЛИСЬ, и конверт уходил без PQ-ключа и без типа. Конверт без
+      // типа — это не «сообщение без типа», а письмо, которое получатель не
+      // может опознать: так терялись сигналы звонка (msg_type = call_request).
+      pqEk: i.pqEk == null || i.pqEk === '' ? null : String(i.pqEk),
       tok: i.tok == null || i.tok === '' ? null : String(i.tok),
-      msg_type: i.msgType == null || i.msgType === '' ? null : String(i.msgType),
-      ttl_secs: Number(i.ttlSecs) || 0,
-      ts_ms: Number(i.tsMs) || 0,
+      msgType: i.msgType == null || i.msgType === '' ? null : String(i.msgType),
+      // Имена аргументов — в camelCase: Tauri v2 ждёт именно так
+      // (ttlSecs/tsMs) и сам переводит их в snake_case для Rust. С snake_case
+      // (ttl_secs) команда падала с «missing required key ttlSecs», и
+      // СБОРКА КОНВЕРТА ВЫКЛЮЧАЛАСЬ — на живой приёмке 22.10 это выглядело
+      // как «письма приходят, но не расшифровываются» (AAD auth failed).
+      ttlSecs: Number(i.ttlSecs) || 0,
+      tsMs: Number(i.tsMs) || 0,
     });
   } catch (e) {
     console.error('[envelope] Rust-сборка конверта недоступна:', e && e.message || e);
