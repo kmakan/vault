@@ -8,8 +8,11 @@
 //!
 //! Типы `StoredKeyPair`/`StoredPeerKey`/`KeyStoreMetadata` живут в
 //! `key_store_types` — здесь только I/O + бизнес-правила (PQ-миграция,
-//! ADDRESS GATE, SELF-KEY GUARD, DEDUP).
+//! ADDRESS GATE, SELF-KEY GUARD, DEDUP). Форму адреса и ответ «тот же ли это
+//! адрес» решает `crate::identity` — здесь не пятой копией правила, а
+//! вызовом.
 
+use crate::identity;
 use crate::key_store_types::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
 use anyhow::{anyhow, Result};
 use std::fs;
@@ -111,9 +114,9 @@ pub fn load_peer_keys_at(keys_dir: &Path) -> Result<Vec<StoredPeerKey>> {
 pub fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> Result<()> {
     // ADDRESS GATE: peer_keys индексируется по email — только настоящие
     // адреса. Строки вида fp:<fingerprint> (account-namespace) создавали
-    // «контакт-отпечаток» в списке (живой баг 06.10.2026).
-    let em = key.email.trim();
-    if !em.contains('@') || em.to_lowercase().starts_with("fp:") {
+    // «контакт-отпечаток» в списке (живой баг 06.10.2026). Форму адреса
+    // решает `identity` — та же, что у групп и присутствия.
+    if !identity::is_contact_address(&key.email) {
         return Err(anyhow!(
             "peer key address must be an email, got: {}",
             key.email
@@ -131,7 +134,7 @@ pub fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> Result<()> {
     // DEDUP (IDENTITY = pubkey; EMAIL = транспорт): тот же pubkey под другим
     // email = собеседник сменил почту → переименовываем, а не создаём дубль.
     if let Some(idx) = keys.iter().position(|k| k.public_key == key.public_key) {
-        if !keys[idx].email.eq_ignore_ascii_case(&key.email) {
+        if !identity::same_address(&keys[idx].email, &key.email) {
             keys[idx].email = key.email.clone();
             keys[idx].label = key.label;
             // PQ: новый ek обновляет; None НЕ трогает существующий.
@@ -143,7 +146,10 @@ pub fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> Result<()> {
         }
         // email совпадает — падаем через вниз (обновление полей).
     }
-    if let Some(existing) = keys.iter_mut().find(|k| k.email == key.email) {
+    if let Some(existing) = keys
+        .iter_mut()
+        .find(|k| identity::same_address(&k.email, &key.email))
+    {
         existing.public_key = key.public_key;
         existing.label = key.label;
         if key.pq_public_key.is_some() {
@@ -159,7 +165,7 @@ pub fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> Result<()> {
 pub fn remove_peer_key_at(keys_dir: &Path, email: &str) -> Result<bool> {
     let mut keys = load_peer_keys_at(keys_dir)?;
     let before = keys.len();
-    keys.retain(|k| k.email != email);
+    keys.retain(|k| !identity::same_address(&k.email, email));
     let removed = keys.len() < before;
     if removed {
         save_peer_keys_at(keys_dir, &keys)?;
@@ -369,6 +375,60 @@ mod tests {
         assert!(err.to_string().contains("own public key"));
         assert!(load_peer_keys_at(dir.path()).unwrap().is_empty());
     }
+    /// Гейт адреса — правило `identity::is_contact_address`: служебный
+    /// `fp:`-ключ отвергается в любом написании, а не только строчном.
+    #[test]
+    fn add_peer_rejects_service_key_in_any_spelling() {
+        let dir = TempDir::new().unwrap();
+        for bad in [" FP:ab:cd ", "Fp:x@y", "not-an-email", "   "] {
+            let err = add_peer_key_at(dir.path(), peer(bad, "deadbeef")).unwrap_err();
+            assert!(err.to_string().contains("must be an email"), "отказ {bad:?}: {err}");
+        }
+        assert!(load_peer_keys_at(dir.path()).unwrap().is_empty());
+    }
+
+    /// Смена почты при том же публичном ключе — переименование записи, а не
+    /// второй контакт.
+    #[test]
+    fn add_peer_renames_on_email_change_and_keeps_one_record() {
+        let dir = TempDir::new().unwrap();
+        add_peer_key_at(dir.path(), peer("bob@old.example", "aabbccdd")).unwrap();
+        add_peer_key_at(dir.path(), peer(" Bob@New.Example ", "aabbccdd")).unwrap();
+        let keys = load_peer_keys_at(dir.path()).unwrap();
+        assert_eq!(keys.len(), 1, "один ключ — одна запись");
+        assert!(
+            identity::same_address(&keys[0].email, "bob@new.example"),
+            "запись переименована: {}",
+            keys[0].email
+        );
+    }
+
+    /// Тот же адрес в другом написании обновляет ту же запись, а не заводит
+    /// вторую с другим ключом. Кириллица: `eq_ignore_ascii_case` её не
+    /// понижает, поэтому старая копия правила видела здесь два адреса.
+    #[test]
+    fn add_peer_updates_same_address_in_other_spelling() {
+        let dir = TempDir::new().unwrap();
+        add_peer_key_at(dir.path(), peer("боб@почта.рф", "first")).unwrap();
+        add_peer_key_at(dir.path(), peer(" БОБ@ПОЧТА.РФ ", "second")).unwrap();
+        let keys = load_peer_keys_at(dir.path()).unwrap();
+        assert_eq!(keys.len(), 1, "один человек — одна запись");
+        assert_eq!(keys[0].public_key, "second");
+    }
+
+    /// Тот же ключ и адрес в другом написании — не переименование: форма
+    /// записи не переписывается. Для `eq_ignore_ascii_case` это были два
+    /// разных адреса.
+    #[test]
+    fn add_peer_does_not_rename_when_address_is_the_same() {
+        let dir = TempDir::new().unwrap();
+        add_peer_key_at(dir.path(), peer("боб@почта.рф", "same-key")).unwrap();
+        add_peer_key_at(dir.path(), peer(" БОБ@ПОЧТА.РФ ", "same-key")).unwrap();
+        let keys = load_peer_keys_at(dir.path()).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].email, "боб@почта.рф", "написание записи не меняется");
+    }
+
     #[test]
     fn add_peer_dedup_pubkey_email_and_pq() {
         let dir = TempDir::new().unwrap();
@@ -424,6 +484,21 @@ mod tests {
         assert!(remove_peer_key_at(dir.path(), "a@x").unwrap());
         assert!(load_peer_keys_at(dir.path()).unwrap().is_empty());
         assert!(!remove_peer_key_at(dir.path(), "nope@n").unwrap());
+    }
+
+    /// Удаление находит запись по нормальной форме адреса и не трогает
+    /// чужие. Пустой адрес — не ключ: он не удаляет «безымянную» запись.
+    #[test]
+    fn remove_peer_key_matches_normal_form_and_keeps_others() {
+        let dir = TempDir::new().unwrap();
+        add_peer_key_at(dir.path(), peer("Боб@Почта.РФ", "k1")).unwrap();
+        add_peer_key_at(dir.path(), peer("anna@mail.ru", "k2")).unwrap();
+        assert!(remove_peer_key_at(dir.path(), " боб@почта.рф ").unwrap());
+        let keys = load_peer_keys_at(dir.path()).unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(identity::same_address(&keys[0].email, "anna@mail.ru"));
+        assert!(!remove_peer_key_at(dir.path(), "").unwrap(), "пустой адрес — не ключ");
+        assert_eq!(load_peer_keys_at(dir.path()).unwrap().len(), 1);
     }
     #[test]
     fn delete_keys_isolates_peers_and_keypair() {

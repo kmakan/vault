@@ -10,14 +10,19 @@
 // факта расходятся молча — поэтому каждая мутация ниже это реальный дефект
 // из истории или из другой копии правила.
 //
+// Модуль живёт в `vault-core` (его форму адреса спрашивает хранилище ключей),
+// `vault-client` реэкспортирует его как `vault::identity`. Набор остался тем
+// же — переехал файл, а не правило.
+//
 // Класс мутируемого здесь — НЕ число: здесь правила нормализации и порядок
 // «fp-first, адрес как fallback». Отдельно держим пустые значения: «пустой
 // адрес == пустой адрес» и «пустой отпечаток совпадает с любым» — это не
 // косметика, а дыра (письмо без From считается своим, чужая группа — моей).
 export default {
   id: 'rust-identity',
-  file: 'vault-client/src/vault/identity.rs',
-  smoke: 'cargo test -p vault-client --lib',
+  crate: 'vault-core',
+  file: 'vault-core/src/identity.rs',
+  smoke: 'cargo test -p vault-core --lib',
   mutations: [
     { name: 'регистр ASCII вместо Юникода (кириллические адреса не совпадают никогда — тот же дефект, что был с именами папок)',
       pattern: '    raw.trim().to_lowercase()',
@@ -79,5 +84,15 @@ export default {
     { name: 'массовая миграция не считает пустой отпечаток пустым (пишет поверх занятого слота)',
       pattern: '    if new_fp.is_empty() || !existing_fp.trim().is_empty() {',
       replacement: '    if new_fp.is_empty() || existing_fp.is_empty() {' },
+    // Гейт контактного адреса (партия 4d): его спрашивает хранилище ключей.
+    { name: 'служебный fp:-ключ проходит гейт (контакт-отпечаток снова в списке)',
+      pattern: "    v.contains('@') && !v.starts_with(\"fp:\")",
+      replacement: "    v.contains('@')" },
+    { name: 'адрес без @ считается контактом (в peer_keys заводятся не-адреса)',
+      pattern: "    v.contains('@') && !v.starts_with(\"fp:\")",
+      replacement: "    !v.starts_with(\"fp:\")" },
+    { name: 'гейт смотрит на сырую строку (FP: в верхнем регистре и обрамление проходят)',
+      pattern: "    let v = normalize(raw);\n    v.contains('@') && !v.starts_with(\"fp:\")",
+      replacement: "    let v = raw;\n    v.contains('@') && !v.starts_with(\"fp:\")" },
   ],
 };

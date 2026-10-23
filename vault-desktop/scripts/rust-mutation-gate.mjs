@@ -21,7 +21,11 @@
 //     набора (тест/код устарел), а не «пропущено»;
 //   * после прогона файл ВОССТАНАВЛИВАЕТСЯ побайтно (всегда, даже при ошибке);
 //   * базовый прогон обязателен: набор, чей тест не проходит на чистом дереве,
-//     бессмысленен (сломанный тест «ловит» любую поломку).
+//     бессмысленен (сломанный тест «ловит» любую поломку);
+//   * крейт берётся из поля `crate` набора (по умолчанию `vault-client`).
+//     Файл мутации может лежать в другом крейте: cargo соберёт его как path-
+//     зависимость. Так `vault-core` (общий слой хранилищ) перестаёт быть
+//     слепой зоной, не превращаясь во второй гейт.
 //
 // ЗАПУСК:
 //   node scripts/rust-mutation-gate.mjs                    # все наборы
@@ -40,7 +44,7 @@ import { recoverJournal, writeJournal, clearJournal } from './mutations/engine.m
 
 const HERE = import.meta.dirname;                       // vault-desktop/scripts
 const REPO = path.resolve(HERE, '..', '..');             // корень репозитория
-const CRATE = path.join(REPO, 'vault-client');
+const DEFAULT_CRATE = 'vault-client';
 const SETS_DIR = path.join(HERE, 'rust-mutations', 'sets');
 
 const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
@@ -55,6 +59,11 @@ async function loadSets() {
       console.error(`  ✗ набор ${f}: не хватает id/file/smoke`);
       continue;
     }
+    const crate = s.crate || DEFAULT_CRATE;
+    if (!existsSync(path.join(REPO, crate, 'Cargo.toml'))) {
+      console.error(`  ✗ набор ${f}: крейт ${crate} не найден`);
+      continue;
+    }
     sets.push(s);
   }
   return sets;
@@ -62,12 +71,12 @@ async function loadSets() {
 
 // Запуск тестов крейта. kind: 'lib' (юнит-тесты) | 'all' (включая интеграционные)
 // | произвольная строка cargo-фильтра.
-function runTests(kind = 'lib', timeoutMs = 600000) {
+function runTests(crate, kind = 'lib', timeoutMs = 600000) {
   const args = kind === 'all'
-    ? ['test', '-p', 'vault-client', '--quiet']
-    : ['test', '-p', 'vault-client', '--lib', '--quiet'];
+    ? ['test', '-p', crate, '--quiet']
+    : ['test', '-p', crate, '--lib', '--quiet'];
   const res = spawnSync('cargo', args, {
-    cwd: CRATE,
+    cwd: path.join(REPO, crate),
     timeout: timeoutMs,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -90,6 +99,7 @@ export function runSet(set, opts = {}) {
     return { id: set.id, total: set.mutations.length, caught: 0, survived: [], rejected: [], broken: [{ name: '(файл модуля)', reason: 'нет файла ' + set.file }] };
   }
   const original = readFileSync(file, 'utf8');
+  const crate = set.crate || DEFAULT_CRATE;
   const kind = set.kind || 'lib';
   const caught = [];
   const survived = [];
@@ -97,7 +107,7 @@ export function runSet(set, opts = {}) {
   const broken = [];
 
   // Базовый прогон: тест обязан проходить на чистом дереве.
-  const base = runTests(kind, set.timeoutMs);
+  const base = runTests(crate, kind, set.timeoutMs);
   if (base.code !== 0) {
     return {
       id: set.id, total: set.mutations.length, caught, survived, rejected, broken,
@@ -118,7 +128,7 @@ export function runSet(set, opts = {}) {
     writeFileSync(mFile, mutated);
     let out;
     try {
-      out = runTests(kind, set.timeoutMs);
+      out = runTests(crate, kind, set.timeoutMs);
     } finally {
       writeFileSync(mFile, src);   // восстановление побайтно
       clearJournal(mFile);
@@ -159,7 +169,7 @@ const args = process.argv.slice(2);
 }
 const sets = await loadSets();
 if (args.includes('--list')) {
-  for (const s of sets) console.log(`${s.id.padEnd(22)} ${s.file}  (${s.mutations.length} мутаций, kind=${s.kind || 'lib'})`);
+  for (const s of sets) console.log(`${s.id.padEnd(22)} ${s.crate ? `[${s.crate}] ` : ''}${s.file}  (${s.mutations.length} мутаций, kind=${s.kind || 'lib'})`);
   process.exit(0);
 }
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : null;
@@ -171,13 +181,15 @@ if (!chosen.length) {
 
 console.log(`▸ rust-mutation-gate: наборов ${chosen.length}, мутаций ` +
   chosen.reduce((a, s) => a + s.mutations.length, 0));
-console.log(`  крейт: ${path.relative(REPO, CRATE)}  (cargo test -p vault-client --lib)\n`);
+const crates = [...new Set(chosen.map((s) => s.crate || DEFAULT_CRATE))].sort();
+console.log(`  крейты: ${crates.join(', ')}  (cargo test -p <крейт> --lib)\n`);
 
 let total = 0, caught = 0;
 const allSurvived = [];
 const allBroken = [];
 for (const s of chosen) {
-  console.log(`▸ ${s.id}: ${s.mutations.length} мутаций → ${s.file}`);
+  console.log(`▸ ${s.id}: ${s.mutations.length} мутаций → ${s.file}` +
+    (s.crate ? ` (крейт ${s.crate})` : ''));
   const r = runSet(s, { log: (m) => console.log(m) });
   total += r.total;
   caught += r.caught.length;

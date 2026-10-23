@@ -14,7 +14,10 @@ pub mod filter;
 pub mod folders;
 pub mod groups;
 pub mod group_rules;
-pub mod identity;
+// Форма адреса и предикаты владения живут в `vault-core`: тот же вопрос
+// задаёт хранилище ключей, а `vault-core` не может зависеть от этого крейта
+// (был бы цикл). Реэкспорт оставляет путь `vault::identity` прежним.
+pub use vault_core::identity;
 pub mod invite;
 pub mod imap_dialect;
 pub mod kitty;

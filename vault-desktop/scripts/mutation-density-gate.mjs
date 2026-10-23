@@ -53,6 +53,10 @@ const EXEMPT = new Map([
   ['vault-client/src/api/client.rs', 'тонкий HTTP-обвязка (23 строки) — решений нет'],
   ['vault-client/src/listen.rs', 'IMAP-listener: нужен живой сервер, проверяется e2e'],
   ['vault-client/src/storage/sqlite.rs', 'хранилище SQLite: проверяется e2e-сценариями (нужен файл БД)'],
+  ['vault-core/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
+  ['vault-core/src/key_store_types.rs', 'типы хранения и serde-форма — данных и решений нет'],
+  ['vault-core/src/crypto_pq.rs', 'примитивы ML-KEM/X25519 с 10 пробами крейта; мутационный набор — отдельная задача ' +
+    '(канбан: PQ-примитивы vault-core), здесь не смешивается с переносом адресного правила'],
 ]);
 
 const MIN_LOC = 40;   // модули короче — не сигнал (обычно это константы/структуры)
@@ -102,6 +106,9 @@ function moduleFiles() {
   };
   walk(path.join(DESKTOP, 'src'), 'vault-desktop/src');
   walk(path.join(REPO, 'vault-client', 'src'), 'vault-client/src');
+  // Общий слой хранилищ: сюда переехала форма адреса, и мутация без набора
+  // больше не должна становиться слепой зоной только из-за другого крейта.
+  walk(path.join(REPO, 'vault-core', 'src'), 'vault-core/src');
   return out;
 }
 

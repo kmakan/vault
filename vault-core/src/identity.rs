@@ -1,6 +1,11 @@
 //! Кто это «я»: нормализация адресов и предикат владения записью (ADR-005 §W4,
 //! партия 4).
 //!
+//! ЖИВЁТ В `vault-core`, А НЕ В `vault-client`: тот же вопрос о форме адреса
+//! задаёт хранилище ключей (`key_store`: гейт адреса, дедуп, переименование,
+//! удаление), а `vault-client` зависит от `vault-core`, не наоборот. Путь
+//! `vault::identity` сохранён реэкспортом.
+//!
 //! ЗАЧЕМ В ЯДРЕ. Вопрос «эта запись моя?» решает, что удаляется, что
 //! пересылается и что считается уже импортированным. Ошибка здесь не
 //! косметическая: чужую запись клиент принимает за свою и убирает её из ленты
@@ -49,6 +54,15 @@ pub fn normalize(raw: &str) -> String {
 pub fn same_address(a: &str, b: &str) -> bool {
     let (a, b) = (normalize(a), normalize(b));
     !a.is_empty() && a == b
+}
+
+/// Настоящий контактный адрес: содержит `@` и не служебный `fp:`-ключ.
+/// Служебный ключ account-namespace заводил «контакт-отпечаток» в списке
+/// (живой баг 06.10.2026). Проверка — по нормальной форме, поэтому `FP:` и
+/// адрес с обрамлением оцениваются так же, как их нормальный вид.
+pub fn is_contact_address(raw: &str) -> bool {
+    let v = normalize(raw);
+    v.contains('@') && !v.starts_with("fp:")
 }
 
 /// Тот же отпечаток? Пустой отпечаток (старые группы, инвайты без поля) не
@@ -226,6 +240,19 @@ mod tests {
         assert!(!same_fingerprint("", ""));
         assert!(!id().has_address(""));
         assert!(!id().has_fingerprint(""));
+    }
+
+    #[test]
+    fn contact_address_is_judged_by_normal_form() {
+        // Хранилище ключей индексирует контакты по адресу: служебный
+        // fp:-ключ и строка без `@` — не контакт. Регистр и обрамление не
+        // должны открывать обход гейта.
+        assert!(is_contact_address(" Anna@Mail.RU "));
+        assert!(is_contact_address("Иван@Почта.РФ"));
+        assert!(!is_contact_address("fp:ab:cd"));
+        assert!(!is_contact_address(" FP:bob@mail.ru "));
+        assert!(!is_contact_address("not-an-email"));
+        assert!(!is_contact_address(""));
     }
 
     #[test]
