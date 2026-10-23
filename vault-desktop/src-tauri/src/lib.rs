@@ -2259,6 +2259,8 @@ pub fn run() {
             voicenote::voicenote_stop,
             // M1.9: vault-client core bridge (MessageStore classify + store).
             vault_bridge::vault_classify_incoming,
+            // W4: окна фоновой доставки — данными из ядра, не литералами в JS.
+            vault_bridge::vault_timings_snapshot,
             // W4: правило состояния звонка — решение в Rust (ADR-005 R1).
             // W4: формат конверта — решение в Rust (ADR-005 R1).
             vault_bridge::vault_build_envelope,

@@ -43,13 +43,34 @@ globalThis.__invoke = async (cmd, args) => {
   const v = _wireSignal(cmd, args);
   return v !== undefined ? v : _prevInvoke(cmd, args);
 };
+
+// Стенд ядровой политики опроса (`timings::poll_fresh_at`): RFC 2822 и ISO,
+// миллисекундное окно 15 минут, неизвестный Date — НЕ свежее. Ровно эту
+// политику обязан реализовать Rust (мутации `rust-timings`); смоук проверяет,
+// что модуль БЕРЁТ её из ответа, а не решает сам.
+function standFresh(date) {
+  const t = new Date(date || 0).getTime();
+  return Number.isFinite(t) && Date.now() - t < 15 * 60 * 1000;
+}
+
+// Счётчик снапшота — ВНЕ resetWorld: кэш «один раз на сессию» переживает
+// сценарии, и это как раз проверяется.
+let snapshotCalls = 0;
+
 globalThis.__invoke = async (cmd, args) => {
   const st = globalThis.__state;
   st.bridgeCalls.push({ cmd, args });
   if (st.bridgeDown) throw new Error('мост недоступен (тест)');
+  if (cmd === 'vault_timings_snapshot') {
+    snapshotCalls++;
+    // 901, а не 900: диагностическая строка обязана показать ИМЕННО значение
+    // из снапшота — иначе «окно из ядра» неотличимо от литерала.
+    return { freshSecs: 901, callStaleMs: 600000, ringTimeoutMs: 45000, callTombstoneMs: 600000, seenCap: 200 };
+  }
   if (cmd === 'vault_classify_incoming') {
     const input = (args && args.input) || {};
-    return st.classify(input.decrypted, input.from);
+    st.classifyInputs.push(input);
+    return st.classify(input.decrypted, input.from, input.date);
   }
   return null;
 };
@@ -164,7 +185,8 @@ function resetWorld(over = {}) {
   globalThis.__state = {
     bridgeCalls: [],
     bridgeDown: false,
-    classify: () => ({ kind: 'message' }),
+    classifyInputs: [],
+    classify: (_plain, _from, date) => ({ kind: 'message', fresh: standFresh(date) }),
     plain: '',
     plainForKey: null,
     plainFromBody: false,
@@ -345,6 +367,9 @@ console.log('4. kind=message: бейдж +1, уведомление, дедуп 
     && deps.processedUnreadIds.has('env:env9'), [...deps.processedUnreadIds]);
   check('персист в Rust MessageStore вызван',
     st.bridgeCalls.some(c => c.cmd === 'vault_store_incoming_message'));
+  const ci = st.classifyInputs[0] || {};
+  check('дата письма ушла в Rust (свежесть решает ядро, а не JS)',
+    ci.date === m.date, ci);
 }
 
 // ── 5. Инвариант 2fa9103: дедуп счётчика ≠ дедуп уведомления ─────────────
@@ -383,9 +408,34 @@ console.log('7. stale-письмо: счётчик растёт, уведомл�
   const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
   const old = letter({ uid: 10, message_id: '<o@x>', date: new Date(NOW - 16 * 60 * 1000).toISOString() });
   withBody(deps, old, 'ENC:1');
-  await processIncoming(deps, [old], { notify: true });
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...a) => { logs.push(a.join(' ')); };
+  try { await processIncoming(deps, [old], { notify: true }); } finally { console.log = origLog; }
   check('бейдж +1', globalThis.__state.unread['peer@x.ru'] === 1, globalThis.__state.unread);
   check('уведомления нет (старше окна свежести)', notifyMock.fires.length === 0, notifyMock.fires);
+  check('окно в диагностике — из снапшота ядра (901, а не литерал 900)',
+    logs.some((l) => l.includes('window=901s')), logs);
+  check('снапшот прочитан ровно один раз (кэш на сессию)', snapshotCalls === 1, snapshotCalls);
+}
+
+// ── 7b. Нераспарсенный Date: бейдж есть, уведомления НЕТ ─────────────────
+// Политика опроса (ядро): у JS-пути нет второго рубежа по `ts` конверта,
+// поэтому «неизвестно» = не будить. Раньше это давало NaN-сравнение во фронте;
+// теперь решение приходит полем fresh, и фронт не имеет права его подменить.
+console.log('7b. неизвестный Date: счётчик растёт, уведомления нет');
+{
+  resetWorld({ plain: JSON.stringify({ vault: 1, id: 'e10b', key: 'PEERK', text: 'x' }) });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
+  const weird = letter({ uid: 13, message_id: '<w@x>', date: 'Not a date' });
+  withBody(deps, weird, 'ENC:1');
+  await processIncoming(deps, [weird], { notify: true });
+  check('бейдж +1', globalThis.__state.unread['peer@x.ru'] === 1, globalThis.__state.unread);
+  check('уведомления нет (неизвестная дата не будит)', notifyMock.fires.length === 0, notifyMock.fires);
+  check('политику применило ядро: дата дошла как есть',
+    globalThis.__state.classifyInputs[0]
+    && globalThis.__state.classifyInputs[0].date === 'Not a date',
+    globalThis.__state.classifyInputs[0]);
 }
 
 // ── 8. Muted / видимый чат ────────────────────────────────────────────────
@@ -653,6 +703,10 @@ console.log('19. мост Rust упал: письмо повторится на 
   check('падение моста громкое (console.error), а не молча',
     seen.some(s => s.includes('Rust-классификатор недоступен')), seen);
 }
+
+// Кэш снапшота — на сессию, а не на письмо/сценарий.
+check('снапшот окон не перезапрашивается (весь прогон — один вызов)',
+  snapshotCalls === 1, snapshotCalls);
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

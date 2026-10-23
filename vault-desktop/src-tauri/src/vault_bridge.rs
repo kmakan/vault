@@ -48,21 +48,38 @@ pub struct ClassifyInput {
     pub from: String,
     /// Decrypted plaintext JSON.
     pub decrypted: String,
+    /// Сырой заголовок `Date` письма (RFC 2822) или ISO relay-копии.
+    /// Старые вызовы без поля не ломаются: `default` = пусто = «не свежее».
+    #[serde(default)]
+    pub date: String,
 }
 
 /// Convert ClassifyResult to JSON-safe Value.
-fn classify_result_to_json(r: &ClassifyResult) -> serde_json::Value {
+fn classify_result_to_json(r: &ClassifyResult, fresh: bool) -> serde_json::Value {
     serde_json::json!({
         "kind": r.kind.to_string(),
         "msg_type": r.msg_type.as_ref().and_then(|mt| serde_json::to_value(mt).ok()),
         "env_id": r.env_id,
         "chat_key": r.chat_key,
         "title": r.title,
+        // Свежесть для уведомления решает ядро (`timings::poll_fresh_at`),
+        // а не фронт: политика «неизвестный Date не будит» — протокольная.
+        "fresh": fresh,
     })
 }
 
+/// Классификация + свежесть как единый ответ роутеру.
+///
+/// `now_ms` — параметр, а не обращение к часам: тесты фиксируют время, и
+/// мутация порога ловится, а не списывается на «повезло с часами».
+fn classify_json(input: &ClassifyInput, now_ms: i64) -> Option<serde_json::Value> {
+    let r = vault_client::vault::classify(&input.decrypted, &input.from)?;
+    let fresh = vault_client::vault::timings::poll_fresh_at(&input.date, now_ms);
+    Some(classify_result_to_json(&r, fresh))
+}
+
 /// Classify an incoming decrypted plaintext via core.
-/// Returns JSON {kind, msg_type, env_id, chat_key, title} or null.
+/// Returns JSON {kind, msg_type, env_id, chat_key, title, fresh} or null.
 ///
 /// Классификатор чистый: ему нужны только байты письма, состояние — нет.
 /// Раньше здесь создавался `MessageStore::new()`, который на КАЖДОЕ входящее
@@ -70,11 +87,24 @@ fn classify_result_to_json(r: &ClassifyResult) -> serde_json::Value {
 /// это было незаметно; с W1 она на горячем пути поллинга, поэтому вызов идёт
 /// напрямую в `vault::classify`.
 #[tauri::command]
-pub async fn vault_classify_incoming(input: ClassifyInput) -> Result<Option<serde_json::Value>, String> {
-    match vault_client::vault::classify(&input.decrypted, &input.from) {
-        Some(r) => Ok(Some(classify_result_to_json(&r))),
-        None => Ok(None),
-    }
+pub async fn vault_classify_incoming(
+    input: ClassifyInput,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(classify_json(
+        &input,
+        vault_client::vault::timings::now_ms(),
+    ))
+}
+
+/// Снимок окон фоновой доставки — данные для фронта (ADR-005 §W4).
+///
+/// Мост не решает и не дублирует числа: всё приходит из
+/// `vault_client::vault::timings::snapshot`. Нужен, чтобы окно свежести в
+/// `features/incoming.js` перестало быть литералом, а UI мог показать
+/// настоящий порог вместо копии.
+#[tauri::command]
+pub fn vault_timings_snapshot() -> vault_client::vault::timings::TimingsSnapshot {
+    vault_client::vault::timings::snapshot()
 }
 
 /// ADR-005 R1 / W4: правило времени жизни сообщения — в Rust.
@@ -122,7 +152,9 @@ pub fn vault_parse_dod_data(plain: String) -> Option<vault_client::vault::signal
 /// получает разобранные поля и применяет последствия (обновить аватар,
 /// показать пост, запомнить подписчика).
 #[tauri::command]
-pub fn vault_parse_channel_envelope(plain: String) -> Option<vault_client::vault::channels::ChannelEnvelope> {
+pub fn vault_parse_channel_envelope(
+    plain: String,
+) -> Option<vault_client::vault::channels::ChannelEnvelope> {
     vault_client::vault::channels::parse_channel_envelope(&plain)
 }
 
@@ -350,17 +382,44 @@ pub fn message_from_payload(
         from: from.to_string(),
         to: to.to_string(),
         ts: p.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
-        text: p.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        name: p.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        avatar: p.get("avatar").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        reactions: p.get("reactions").and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        text: p
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        name: p
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        avatar: p
+            .get("avatar")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        reactions: p
+            .get("reactions")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
         edited: p.get("edited").and_then(|v| v.as_bool()).unwrap_or(false),
-        replies: p.get("replies").and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        replies: p
+            .get("replies")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default(),
-        in_reply_to: p.get("in_reply_to").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        in_reply_to: p
+            .get("in_reply_to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         ttl: p.get("ttl").and_then(|v| v.as_u64()),
     })
 }
@@ -417,12 +476,9 @@ pub async fn vault_download_attachment(
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir),
     };
-    let path = vault_client::vault::download_file(
-        &envelope_text,
-        Some(&dir),
-        output_name.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    let path =
+        vault_client::vault::download_file(&envelope_text, Some(&dir), output_name.as_deref())
+            .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -526,10 +582,62 @@ mod tests {
             chat_key: Some("alice@x".to_string()),
             title: Some("Alice".to_string()),
         };
-        let v = classify_result_to_json(&r);
+        let v = classify_result_to_json(&r, true);
         assert_eq!(v["kind"], "message");
         assert_eq!(v["env_id"], "m1");
         assert_eq!(v["chat_key"], "alice@x");
+        assert_eq!(v["fresh"], true);
+    }
+
+    /// Свежесть — это ответ ядра в том же вызове, что и тип письма.
+    /// Фиксированное `now` (1700000000 = Tue, 14 Nov 2023 22:13:20 UTC):
+    /// тест не зависит от часов машины.
+    #[test]
+    fn test_classify_json_carries_core_freshness() {
+        const NOW: i64 = 1_700_000_000_000;
+        let input = |date: &str| ClassifyInput {
+            from: "peer@x".to_string(),
+            decrypted: r#"{"vault":1,"text":"hi"}"#.to_string(),
+            date: date.to_string(),
+        };
+        // email-копия (RFC 2822) и relay-копия (ISO) одного момента.
+        assert_eq!(
+            classify_json(&input("Tue, 14 Nov 2023 22:13:20 +0000"), NOW).unwrap()["fresh"],
+            true
+        );
+        assert_eq!(
+            classify_json(&input("2023-11-14T22:13:20.000Z"), NOW).unwrap()["fresh"],
+            true
+        );
+        // 901 секунда — за окном 15 минут.
+        assert_eq!(
+            classify_json(&input("Tue, 14 Nov 2023 21:58:19 +0000"), NOW).unwrap()["fresh"],
+            false
+        );
+        // Политика опроса: неизвестный Date не будит.
+        assert_eq!(
+            classify_json(&input("garbage"), NOW).unwrap()["fresh"],
+            false
+        );
+        assert_eq!(classify_json(&input(""), NOW).unwrap()["fresh"], false);
+        // Не наше письмо — по-прежнему null, свежесть не выдумывается.
+        let not_ours = ClassifyInput {
+            decrypted: "plain text".to_string(),
+            ..input("")
+        };
+        assert!(classify_json(&not_ours, NOW).is_none());
+    }
+
+    /// Имена полей снапшота — контракт с JS: переименование превратило бы
+    /// окно во фронте в `undefined` (и свежесть — в NaN-сравнение).
+    #[test]
+    fn test_timings_snapshot_contract() {
+        let v = serde_json::to_value(vault_timings_snapshot()).unwrap();
+        assert_eq!(v["freshSecs"], 15 * 60);
+        assert_eq!(v["callStaleMs"], 10 * 60 * 1000);
+        assert_eq!(v["ringTimeoutMs"], 45 * 1000);
+        assert_eq!(v["callTombstoneMs"], 10 * 60 * 1000);
+        assert_eq!(v["seenCap"], 200);
     }
 
     #[test]
@@ -580,11 +688,7 @@ mod tests {
         let envelope = enc.encrypt_file(&src).unwrap();
         let _ = std::fs::remove_file(&src);
 
-        let result = vault_client::vault::download_file(
-            &envelope,
-            Some(&temp),
-            None,
-        );
+        let result = vault_client::vault::download_file(&envelope, Some(&temp), None);
         assert!(result.is_ok());
         let recovered = std::fs::read(result.unwrap()).unwrap();
         assert_eq!(recovered, b"bridge test data");
@@ -632,8 +736,8 @@ mod tests {
     #[test]
     fn test_save_file_does_not_escape_target_dir() {
         use base64::Engine as _;
-        let dir = std::env::temp_dir()
-            .join(format!("vault_bridge_traversal-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("vault_bridge_traversal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let b64 = base64::engine::general_purpose::STANDARD.encode(b"x");
 
@@ -697,23 +801,35 @@ mod tests {
     fn test_message_from_payload_id_chain() {
         let with_both = r#"{"id":"from-payload"}"#;
         assert_eq!(
-            message_from_payload("a@x", "m@x", Some("from-js"), with_both).unwrap().id,
+            message_from_payload("a@x", "m@x", Some("from-js"), with_both)
+                .unwrap()
+                .id,
             "from-js"
         );
         assert_eq!(
-            message_from_payload("a@x", "m@x", None, with_both).unwrap().id,
+            message_from_payload("a@x", "m@x", None, with_both)
+                .unwrap()
+                .id,
             "from-payload"
         );
         let legacy = r#"{"message_id":"legacy-1"}"#;
-        assert_eq!(message_from_payload("a@x", "m@x", None, legacy).unwrap().id, "legacy-1");
-        assert_eq!(message_from_payload("a@x", "m@x", None, "{}").unwrap().id, "");
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, legacy).unwrap().id,
+            "legacy-1"
+        );
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, "{}").unwrap().id,
+            ""
+        );
     }
 
     /// Не-JSON — ошибка: сообщение не должно сохраниться «молча с пустым id».
     #[test]
     fn test_message_from_payload_rejects_non_json() {
         let err = message_from_payload("a@x", "m@x", None, "просто текст").unwrap_err();
-        assert!(err.starts_with("payload parse:"), "неожиданная ошибка: {err}");
+        assert!(
+            err.starts_with("payload parse:"),
+            "неожиданная ошибка: {err}"
+        );
     }
 }
-

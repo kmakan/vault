@@ -33,7 +33,24 @@ import { identityStore } from './identity-store.js';
 import { invoke } from '@tauri-apps/api/core';
 
 const MAX_POOL = 50;          // писем за один прогон (как было)
-const FRESH_WINDOW_MS = 15 * 60 * 1000;
+
+// Окно свежести — НЕ литерал во фронте. Число приходит из ядра
+// (`vault_timings_snapshot`), а само решение «будить ли по этому письму» —
+// поле `fresh` в ответе классификатора (ядро, `timings::poll_fresh_at`).
+// Снимок читается лениво и один раз на сессию: он нужен диагностике порога,
+// а не горячему пути. Политика «неизвестный Date не будит» живёт в ядре:
+// у опроса нет второго рубежа по `ts` конверта, поэтому она отличается от
+// мониторной `date_fresh` («неизвестное = свежее»).
+let timingsSnapshotPromise = null;
+function timingsSnapshot() {
+  if (!timingsSnapshotPromise) {
+    timingsSnapshotPromise = invoke('vault_timings_snapshot').catch((e) => {
+      console.warn('[timings] снапшот недоступен:', e && e.message || e);
+      return null;
+    });
+  }
+  return timingsSnapshotPromise;
+}
 
 // ── Решение «что это за письмо» — в Rust (ADR-005 R1, эпик W1) ─────────────
 // До W1 роутер решал сам: `parseCallSignal` / `presence === 1` /
@@ -50,9 +67,9 @@ const FRESH_WINDOW_MS = 15 * 60 * 1000;
 // упал. Разница принципиальная: `null` окончателен, письмо можно забыть;
 // `undefined` значит «не смогли решить», письмо НЕ помечается обработанным и
 // поллинг повторит его. Глотать отказ моста в `null` — терять почту тихо.
-async function classifyPlain(plain, from) {
+async function classifyPlain(plain, from, date) {
   try {
-    return await invoke('vault_classify_incoming', { input: { from, decrypted: plain } });
+    return await invoke('vault_classify_incoming', { input: { from, decrypted: plain, date: date || '' } });
   } catch (e) {
     console.error('[classify] Rust-классификатор недоступен — письмо останется необработанным:', e && e.message || e);
     return undefined;
@@ -178,6 +195,9 @@ async function routeLetter(deps, m, from) {
   let chatKey = null; // email (1:1) или 'group:<id>'
   let title = '';
   let envId = ''; // id конверта (общий для relay-копии и email-копии)
+  // Решение «письмо свежее для уведомления» — из ядра (поле fresh ответа
+  // классификатора). Фронт его только переносит в хвост countAndNotify.
+  let fresh = false;
 
   // 1:1 — расшифровка пир-ключом.
   if (deps.peerKeys[from]) {
@@ -186,8 +206,9 @@ async function routeLetter(deps, m, from) {
       const plain = await crypto.decryptVault(body);
       // Тип письма решает Rust (W1). undefined — мост упал: письмо не наше
       // дело в этом прогоне, но и «обработанным» оно не станет.
-      const cls = await classifyPlain(plain, from);
+      const cls = await classifyPlain(plain, from, m.date || '');
       if (cls === undefined) return null;
+      fresh = cls ? cls.fresh === true : false;
       // Звонки (M3): call_* конверты — сигналы, НЕ сообщения (не в
       // бейджи, не в уведомления) — уходят в state machine звонка.
       // AWAIT (было fire-and-forget): handleCallSignal внутри ходит в
@@ -289,7 +310,7 @@ async function routeLetter(deps, m, from) {
           // личности. Раньше сигнал отличался тем, что `parseCallSignal` его
           // узнавал, а `parseEnvelope` нет; теперь это одно решение Rust.
           // Сигнал, ушедший в ветку «смена почты», терялся (регресс 25dd18a).
-          const cls = await classifyPlain(plain, knownEmail);
+          const cls = await classifyPlain(plain, knownEmail, m.date || '');
           if (cls === undefined) return null; // мост упал — письмо не трогаем
           if (cls && cls.kind === 'call') {
             // Адрес для state machine — ИЗВЕСТНЫЙ адрес пира (knownEmail),
@@ -306,11 +327,12 @@ async function routeLetter(deps, m, from) {
           // Эхо-защита: письмо с моим ключом — от меня (старый адрес),
           // НЕ «смена почты» собеседника.
           if (env && env.key === knownKey && !(crypto.publicKey && env.key === crypto.publicKey)) {
-            matched = { knownEmail, plain, env, kind: cls.kind }; break;
+            matched = { knownEmail, plain, env, kind: cls.kind, fresh: cls.fresh === true }; break;
           }
         } catch (e) { /* не этим ключом */ }
       }
       if (matched) {
+        fresh = matched.fresh === true;
         // ANTI-PING-PONG: старое письмо (ts ≤ порога) не переименовывает
         // назад — пропускаем обработку целиком (содержимое уже в истории).
         const _idTs = new Date(m.date || 0).getTime() || 0;
@@ -369,9 +391,10 @@ async function routeLetter(deps, m, from) {
       try {
         const plain = await crypto.decryptWithGroupKey(body, ch.key);
         // Канальный конверт — решение Rust (`channel===1`), не проверка полей в JS.
-        const cls = await classifyPlain(plain, from);
+        const cls = await classifyPlain(plain, from, m.date || '');
         if (cls === undefined) return null; // мост упал — письмо не трогаем
         if (!cls || cls.kind !== 'channel') continue; // не канал — мимо
+        fresh = cls.fresh === true;
         // ФОРМАТ КАНАЛЬНОГО КОНВЕРТА — В RUST (ADR-005 R1 / W4): «это канал»
         // и набор его полей решает ядро (vault::channels::parse_channel_envelope).
         const robj = await WireSignalRule.parseChannelEnvelope(plain);
@@ -380,7 +403,7 @@ async function routeLetter(deps, m, from) {
           console.log('[channel] envelope', applied, 'from', from, 'chan', ch.id);
           // post — как сообщение (бейдж+пуш); meta/hello — тихие
           if (applied === 'post') {
-            return { kind: 'message', chatKey: 'channel:' + ch.id, title: ch.name || '', envId: String(robj.id || '') };
+            return { kind: 'message', chatKey: 'channel:' + ch.id, title: ch.name || '', envId: String(robj.id || ''), fresh };
           }
           return null;
         }
@@ -427,8 +450,9 @@ async function routeLetter(deps, m, from) {
       try {
         const plain = await crypto.decryptWithGroupKey(body, gk);
         // Тип письма — Rust (W1): hav-запрос, сообщение или не наше.
-        const cls = await classifyPlain(plain, from);
+        const cls = await classifyPlain(plain, from, m.date || '');
         if (cls === undefined) return null; // мост упал — письмо не трогаем
+        fresh = cls ? cls.fresh === true : false;
         if (cls && cls.kind === 'group-service') {
           // Сервис-письма группы: hav = запрос аватарки — отвечаем владельцу
           // аватара (24ч rate-limit внутри replyGroupAvatarHeal).
@@ -472,12 +496,16 @@ async function routeLetter(deps, m, from) {
     in_reply_to: null,
     ttl: null,
   };
-  return { kind: 'message', chatKey, title, envId, msg };
+  return { kind: 'message', chatKey, title, envId, fresh, msg };
 }
 
 // ── Хвост: дедуп + счётчик + уведомление ─────────────────────────────────
 async function countAndNotify(deps, m, cls, { notify }) {
   const { chatKey, title, envId } = cls;
+  // Свежесть — решение ядра (`fresh` в ответе классификатора), не сравнение
+  // дат во фронте. У опроса нет второго рубежа по `ts` конверта, поэтому
+  // «нераспарсенный Date» ядро трактует как «не свежее» (иначе ложные пуши).
+  const fresh = cls.fresh === true;
   // Дедуп: письмо уже учтено ранее (повторный фетч) — пропускаем,
   // иначе счётчик непрочитанных рос бы на каждом поллинге.
   const mid = m.uid + '|' + (m.folder || 'INBOX');
@@ -513,7 +541,6 @@ async function countAndNotify(deps, m, cls, { notify }) {
     }
     await deps.saveUnreadSeen();
   }
-  const fresh = Date.now() - new Date(m.date || 0).getTime() < FRESH_WINDOW_MS;
   // Счётчик непрочитанных: для новых писем, кроме видимого сейчас чата.
   if (counted && !deps.chatVisible(chatKey)) {
     deps.incUnread(chatKey);
@@ -544,6 +571,10 @@ async function countAndNotify(deps, m, cls, { notify }) {
       id: dk,
     });
   } else if (notify) {
-    console.log('[notify] SKIP fresh=' + fresh + ' visible=' + deps.chatVisible(chatKey) + ' muted=' + deps.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's');
+    // Окно для диагностики — из снапшота ядра, не литерал во фронте.
+    // Снимок ленивый и один на сессию: в горячем пути его нет.
+    const snap = await timingsSnapshot();
+    const windowSecs = snap ? Number(snap.freshSecs) || 0 : 0;
+    console.log('[notify] SKIP fresh=' + fresh + ' visible=' + deps.chatVisible(chatKey) + ' muted=' + deps.isMuted(chatKey) + ' age=' + Math.round((Date.now() - new Date(m.date || 0).getTime()) / 1000) + 's window=' + windowSecs + 's');
   }
 }

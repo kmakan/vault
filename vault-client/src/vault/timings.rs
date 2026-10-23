@@ -23,6 +23,8 @@
 //! мутация порога ловится тестом, а не везением с часами машины. Часы —
 //! `now_ms`/`now_secs`, их вызывает мост.
 
+use serde::{Deserialize, Serialize};
+
 /// Не уведомлять о письмах старше 15 минут.
 pub const FRESH_SECS: i64 = 15 * 60;
 /// `call_request` старше 10 мин — считается stale.
@@ -65,6 +67,75 @@ pub fn date_fresh_at(date_header: &str, now_ms: i64) -> bool {
 /// [`date_fresh_at`] по текущим часам.
 pub fn date_fresh(date_header: &str) -> bool {
     date_fresh_at(date_header, now_ms())
+}
+
+/// Разобрать заголовок `Date` в миллисекунды эпохи.
+///
+/// ДВА ФОРМАТА — НЕ «НА ВСЯКИЙ СЛУЧАЙ». Email-копия несёт сырой `Date:` из
+/// IMAP (RFC 2822, `email.rs`), а relay-копия собирается на фронте из
+/// `env.ts` и приходит как ISO (`features/relay.js`). Парсер, знающий только
+/// RFC 2822, объявил бы каждую relay-копию «неизвестной», и мгновенная
+/// доставка (основной путь уведомления) замолчала бы.
+pub fn parse_date_ms(date_header: &str) -> Option<i64> {
+    let trimmed = date_header.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(trimmed) {
+        return Some(dt.timestamp_millis());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.timestamp_millis());
+    }
+    None
+}
+
+/// Свежесть для УВЕДОМЛЕНИЯ по опросу: неизвестный `Date` — НЕ свежий.
+///
+/// Отличается от [`date_fresh_at`] осознанно. У монитора есть второй рубеж —
+/// `ts` расшифрованного конверта, поэтому там «неизвестное = свежее» (иначе
+/// сломанный MTA глушит монитор). У JS-опроса второго рубежа нет: он видит
+/// только заголовок, расшифровка происходит уже после решения. Поэтому
+/// нераспарсенное письмо не будит — ровно как до переноса (`NaN < window`
+/// в JS давало `false`). Сравнение миллисекундное: прежний предикат во фронте
+/// не округлял возраст до секунд.
+pub fn poll_fresh_at(date_header: &str, now_ms: i64) -> bool {
+    match parse_date_ms(date_header) {
+        Some(ts) => now_ms - ts < FRESH_SECS * 1000,
+        None => false,
+    }
+}
+
+/// [`poll_fresh_at`] по текущим часам.
+pub fn poll_fresh(date_header: &str) -> bool {
+    poll_fresh_at(date_header, now_ms())
+}
+
+/// Снимок окон для фронта: числа отдаются данными, а не копируются в JS.
+///
+/// Имена полей — camelCase: их читает JS (`vault_timings_snapshot`), и вторая
+/// форма имени на границе дала бы молчаливый `undefined` (урок
+/// tauri-args-gate). Закреплено тестом сериализации.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingsSnapshot {
+    pub fresh_secs: i64,
+    pub call_stale_ms: i64,
+    pub ring_timeout_ms: i64,
+    pub call_tombstone_ms: i64,
+    pub seen_cap: usize,
+}
+
+/// Снимок текущих окон. Единственное место, где числа превращаются в данные
+/// для фронта; сам мост ничего не решает и не дублирует константы.
+pub fn snapshot() -> TimingsSnapshot {
+    TimingsSnapshot {
+        fresh_secs: FRESH_SECS,
+        call_stale_ms: CALL_STALE_MS,
+        ring_timeout_ms: RING_TIMEOUT_MS,
+        call_tombstone_ms: CALL_TOMBSTONE_MS,
+        seen_cap: SEEN_CAP,
+    }
 }
 
 /// С какого элемента резать дедуп-список длиной `len`, чтобы осталось не больше
@@ -184,6 +255,91 @@ mod tests {
             !date_fresh_at(&stamp, (parsed + FRESH_SECS) * 1000),
             "на пороге окно уже закрыто"
         );
+    }
+
+    // ── Свежесть опроса (JS-путь уведомлений) ──
+
+    /// ISO-8601 с миллисекундами — формат relay-копии (`features/relay.js`).
+    fn iso_offset(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(now_ms() + ms)
+            .expect("valid timestamp")
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    #[test]
+    fn poll_fresh_understands_both_wire_formats() {
+        // Email-копия: сырой Date из IMAP (RFC 2822).
+        assert!(poll_fresh(&date_offset(0)));
+        // Relay-копия: ISO из env.ts. Парсер, знающий только RFC 2822,
+        // объявил бы её «неизвестной» и заглушил бы основной путь.
+        assert!(poll_fresh(&iso_offset(0)));
+    }
+
+    #[test]
+    fn poll_fresh_rejects_stale_letters_in_both_formats() {
+        assert!(!poll_fresh(&date_offset(-(FRESH_SECS + 1))));
+        assert!(!poll_fresh(&iso_offset(-(FRESH_SECS * 1000 + 1))));
+    }
+
+    #[test]
+    fn poll_fresh_keeps_the_js_policy_for_unparsable_dates() {
+        // Ключевое отличие от монитора: у опроса нет второго рубежа по `ts`
+        // конверта, поэтому «неизвестно» = НЕ будить (как NaN-сравнение в JS).
+        assert!(!poll_fresh_at("", now_ms()));
+        assert!(!poll_fresh_at("garbage", now_ms()));
+        assert!(!poll_fresh_at("   ", now_ms()));
+        assert!(!poll_fresh_at("Mon, 99 Xxx 2099 99:99:99 +0000", now_ms()));
+    }
+
+    #[test]
+    fn poll_fresh_compares_milliseconds_exactly() {
+        let now = now_ms();
+        let ts = now - FRESH_SECS * 1000;
+        // На миллисекунду раньше порога — ещё свежее, на пороге — уже нет.
+        assert!(poll_fresh_at(&iso_offset(-(FRESH_SECS * 1000 - 1)), now));
+        assert!(!poll_fresh_at(&iso_offset(-(FRESH_SECS * 1000)), now));
+        // Дробные миллисекунды не теряются (RFC 2822 их не несёт, ISO — да).
+        let fractional = ts + 499;
+        let header = chrono::DateTime::from_timestamp_millis(fractional)
+            .expect("valid timestamp")
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        assert!(poll_fresh_at(&header, now));
+    }
+
+    #[test]
+    fn poll_fresh_allows_future_skew() {
+        assert!(poll_fresh(&iso_offset(3600 * 1000)));
+    }
+
+    #[test]
+    fn poll_fresh_trims_surrounding_whitespace() {
+        // Реальный `Date:` приходит от чужого MTA и бывает с обрамлением.
+        // Без trim свежее письмо стало бы «неизвестным» и не разбудило.
+        assert!(poll_fresh(&format!("  {}  ", iso_offset(0))));
+        assert!(poll_fresh(&format!("\t{}\n", date_offset(0))));
+    }
+
+    #[test]
+    fn snapshot_names_and_values_match_the_frontend_contract() {
+        let v = serde_json::to_value(snapshot()).expect("snapshot serializes");
+        assert_eq!(v["freshSecs"], FRESH_SECS);
+        assert_eq!(v["callStaleMs"], CALL_STALE_MS);
+        assert_eq!(v["ringTimeoutMs"], RING_TIMEOUT_MS);
+        assert_eq!(v["callTombstoneMs"], CALL_TOMBSTONE_MS);
+        assert_eq!(v["seenCap"], SEEN_CAP);
+        // snake_case или новое имя поля = `undefined` во фронте.
+        for key in [
+            "fresh_secs",
+            "call_stale_ms",
+            "ring_timeout_ms",
+            "call_tombstone_ms",
+            "seen_cap",
+        ] {
+            assert!(
+                v.get(key).is_none(),
+                "лишнее/старое имя поля в снапшоте: {key}"
+            );
+        }
     }
 
     // ── Дедуп-список ──
