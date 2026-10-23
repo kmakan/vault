@@ -1933,11 +1933,50 @@ foreground=1/crash=0, CDP 19/19. Десктоп пересобран после 
 сайты RU/EN сверены живым гейтом (`release-site-check --live`, sha256 APK
 совпал), тег `v0.1.262` — на одном коммите на обоих ремоутах.
 
+**Партия 4f: одна форма `groups.json` у CLI и моста (23.10, `t_de743bf4`).**
+Файл `~/.vault/groups.json` читают оба клиента — CLI (`GroupManager`) и мост
+десктопа (`src-tauri/src/groups.rs`), — и до партии у каждого была СВОЯ копия
+структур. У копии в ядре не было поля `fingerprint`, поэтому участник,
+опознанный только отпечатком (после смены почты), для одного клиента был
+своим, а для другого — чужим. Вторая половина дефекта — фронт: старый
+`backfillGroupFingerprints` писал в `fingerprint` значение из `peerKeys()`,
+то есть 64-hex ПУБЛИЧНЫЙ КЛЮЧ, а не отпечаток `xx:xx:…:****`. В живом
+`groups.json` появились две формы одного поля, и fp-ветка для второй записи
+не срабатывала никогда.
+
+| Решение | Где жило | Куда переехало | Мера |
+|---|---|---|---|
+| форма записи группы/участника | две копии (`vault-client/src/vault/groups.rs`, `src-tauri/src/groups.rs`) | `vault_core::group_types` (одна на оба клиента) | `groups` 8/8, паритетная фикстура |
+| отпечаток из публичного ключа | `crypto.rs::fingerprint_cmd` и JS-вызов | `identity::fingerprint_from_public_key` | `rust-identity` 28/28 |
+| что писать в `fingerprint` при починке | старый JS-backfill (писал ключ) | `identity::fingerprint_to_repair` + мост `backfill_member_fingerprints` | `rust-identity`, bridge-тест |
+| участник stealth-группы | `cli/repl.rs` — только адрес | `identity::member_matches` (fp-first, адрес fallback) | `rust-identity` |
+
+**Гейт паритета.** Одна фикстура
+`vault-client/tests/fixtures/groups-file-contract.json` (по образцу M0)
+читается двумя тестами: `vault-client/tests/groups_file_contract.rs` — настоящим
+путём CLI (`GroupManager::with_path`), и тестом моста
+(`groups_file_contract_parity_with_cli`) — через `VAULT_GROUPS_FILE`. Оба
+обязаны: не потерять ни одной группы, ответить одинаковым списком «мои
+группы», прочитать legacy-запись без `fingerprint`/`joined_at`/`key_shared`/
+`blocked`/`group_key` и записать её обратно без изменения смысла. Молчаливое
+расхождение формата теперь падает в тесте, а не всплывает у пользователя
+пропавшей группой.
+
+**Проверка партии:** `vault-core` — 52 (было 48: +2 `group_types`, +2
+`identity`); `vault-client` — 413 + 489 + 2 + 2 + 1 (новый паритетный файл — 2);
+мост — 166 (было 164: +1 паритет, +1 починка отпечатков); плотность — 158
+модулей / 1252 мутации / 0 дыр (`group_types` — в исключениях с причиной, как
+`key_store_types`: форма и serde-умолчания, решений нет); `rust-identity` —
+28/28 (было 23: +5 на отпечаток и починку), `groups` — 8/8; Android-таргет —
+`cargo check --target aarch64-linux-android` exit 0; `npm run build`,
+`feature-coverage`, `service-boundary`, `tauri-args`, `hygiene` — зелёные;
+`./scripts/test-all.sh` — всё зелёное. Ядро и мост входят в APK, поэтому
+после сборки — приёмка на устройстве (0.1.263).
+
 Остаток карты (партии 5+, заведены задачами на канбане): крипто-параметры и
 медиаразбор — KDF в `duress.rs`, контрольная сумма мнемоники в `key_escrow.rs`,
 разбор WAV (`t_502b6c90`), плюс арифметика самолечения курсора/`UIDVALIDITY`;
-две формы `groups.json` — поле `fingerprint` в ядре и гейт паритета
-CLI↔Desktop (`t_de743bf4`); со стороны фронта — снапшот окон для `incoming.js`
+со стороны фронта — снапшот окон для `incoming.js`
 (`t_ee90c534`) и значения строковых имён на границе JS↔Rust (`t_57ed7152`).
 Партия 3 закрыла TTL/пороги/часы (`vault::timings`) и `version_gt`
 (`vault::semver`), `monitor_invariants.rs` удалён; партия 4 закрыла форму
@@ -1952,7 +1991,10 @@ CLI↔Desktop (`t_de743bf4`); со стороны фронта — снапшо�
 `vault::identity::member_matches`, команды `groups_access`/`groups_has_member`/
 `groups_rename_address`); партия 4e закрыла форму адреса в хранилище ключей и
 научила гейт мерить второй крейт (`vault_core::identity`,
-`rust-key-store`).
+`rust-key-store`); партия 4f закрыла две формы `groups.json` — общие типы
+`vault_core::group_types`, отпечаток из ключа и починку старого следа
+(`identity::fingerprint_from_public_key`/`fingerprint_to_repair`, мост
+`groups_backfill_member_fingerprints`) и завела паритетную фикстуру CLI↔мост.
 
 ### W5. Карта «фича → будущий сервис» и требования к границам — ВЫПОЛНЕНО (22.10.2026)
 
