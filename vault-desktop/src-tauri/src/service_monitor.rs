@@ -61,9 +61,15 @@ const MAX_TRIES: u32 = 3; // попыток доставки письма до �
 // (`rust-mutation-gate` считает наборы по крейту `vault-client`). Форма адреса
 // и переходы журнала звонков — там же (ADR-005 §W4, партии 2-3).
 use vault_client::vault::call_record::{self, Incoming, RecordState};
+use vault_client::vault::identity;
 use vault_client::vault::timings::{
     date_fresh, dedup_cut, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, RING_TIMEOUT_MS, SEEN_CAP,
 };
+
+// ───────────── Адрес контакта: решение в ядре, обход — в peer_index ─────────────
+// Поиск ключа собеседника (сигнал звонка, письмо-отказ, SOS) и карта контактов
+// для расшифровки входящих вынесены в `crate::peer_index`: там же и их пробы.
+use crate::peer_index::{is_own_public_key, peer_key_for, peer_map};
 
 /// Глобальное состояние headless-монитора (один на процесс).
 struct MonitorState {
@@ -218,10 +224,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeSendC
     // Шифрование + SMTP в tokio-рантайме (blocking-потоки JVM не заняты).
     let handle = runtime().spawn(async move {
         let peer_key = match crate::key_store::load_peer_keys() {
-            Ok(list) => list
-                .into_iter()
-                .find(|p| p.email.eq_ignore_ascii_case(&email))
-                .map(|p| p.public_key),
+            Ok(list) => peer_key_for(&list, &email),
             Err(_) => None,
         };
         let Some(peer_key) = peer_key else {
@@ -343,7 +346,10 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
     // 1) Смотрим запись звонка (email/caller нужны для письма).
     let creds = crate::credential_store::load_credentials().ok().flatten();
     let Some(creds) = creds else { return };
-    let account = creds.email.to_lowercase();
+    let Some(account) = identity::ledger_key(&creds.email) else {
+        log::warn!("[svc-monitor] decision: пустой адрес аккаунта — записи звонка не найдём");
+        return;
+    };
     let db_path = match dirs::data_local_dir() {
         Some(d) => d.join("com.vault.vault").join("monitor.db"),
         None => {
@@ -439,10 +445,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
 fn spawn_call_signal_email(email: String, call_id: String, signal: &'static str) {
     let handle = runtime().spawn(async move {
         let peer_key = match crate::key_store::load_peer_keys() {
-            Ok(list) => list
-                .into_iter()
-                .find(|p| p.email.eq_ignore_ascii_case(&email))
-                .map(|p| p.public_key),
+            Ok(list) => peer_key_for(&list, &email),
             Err(_) => None,
         };
         let Some(peer_key) = peer_key else {
@@ -510,13 +513,16 @@ async fn run_loop(stop: Arc<AtomicBool>) {
         }
     };
     // 3) Контакты ($HOME/.vault/keys/peer_keys.json): email → публичный ключ.
-    let mut peers: HashMap<String, String> = HashMap::new();
-    if let Ok(list) = key_store::load_peer_keys() {
-        for p in list {
-            peers.insert(p.email.to_lowercase(), p.public_key);
-        }
-    }
-    let account = creds.email.to_lowercase();
+    let peers: HashMap<String, String> = match key_store::load_peer_keys() {
+        Ok(list) => peer_map(&list),
+        Err(_) => HashMap::new(),
+    };
+    let Some(account) = identity::ledger_key(&creds.email) else {
+        // Пустой адрес аккаунта — нечего ни мониторить, ни писать в БД:
+        // пространство имён «ни от кого» позже совпадало бы с любым письмом.
+        log::warn!("[svc-monitor] пустой адрес аккаунта — монитор не стартует");
+        return;
+    };
     log::info!("[svc-monitor] peers loaded: {}", peers.len());
     // выведенный из
     // загруженного привата публичный ключ. Если он != ожидаемому (JS app
@@ -914,7 +920,10 @@ async fn ingest_message(ctx: &Ctx<'_>, m: &EmailMessage) {
     }
     list.push(PendingEntry {
         mid: message_id,
-        from: m.from.to_lowercase(),
+        // Форма адреса — из ядра: очередь расшифровки и карта контактов
+        // должны ключеваться одинаково, иначе письмо от контакта с
+        // обрамляющим пробелом («не тот регистр») не находит свой ключ.
+        from: identity::normalize(&m.from),
         folder: m.folder.clone(),
         uid: m.id.clone(),
         tries: 0,
@@ -1130,7 +1139,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                     .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect();
-                if env_key.eq_ignore_ascii_case(&my_pub_hex) {
+                if is_own_public_key(env_key, &my_pub_hex) {
                     log::info!("[svc-monitor] echo-guard: letter with my own key, skip");
                     return Outcome::Delivered;
                 }
@@ -1391,7 +1400,9 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
     let account = crate::credential_store::load_credentials()
         .ok()
         .flatten()
-        .map(|c| c.email.to_lowercase())
+        // Пространство имён журнала звонков — форма адреса из ядра: иначе
+        // дубли записей на аккаунте с обрамляющими пробелами.
+        .and_then(|c| identity::ledger_key(&c.email))
         .unwrap_or_default();
     // state от JS: глагол действия (accept | reject | end), а журнал хранит
     // состояние; активный разговор = accepted. Отображение — правило ядра
@@ -1432,10 +1443,7 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
             smtp_port: creds.smtp_port,
         });
         for rcpt in &recipients {
-            let peer_key = peers
-                .iter()
-                .find(|p| p.email.eq_ignore_ascii_case(rcpt))
-                .map(|p| p.public_key.clone());
+            let peer_key = peer_key_for(&peers, rcpt);
             let envelope = serde_json::json!({
                 "vault": 1,
                 "id": format!("{}sos", now_ms()),
@@ -1463,4 +1471,3 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
     let _ = handle;
     Ok(())
 }
-

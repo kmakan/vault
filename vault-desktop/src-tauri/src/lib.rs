@@ -34,6 +34,10 @@ mod key_escrow;
 mod key_escrow_smoke;
 mod key_store;
 mod media;
+// Справочник «адрес контакта → ключ». Потребитель (`service_monitor`) компилируется
+// только под Android, на хосте модуль нужен ради тестов самого обхода.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod peer_index;
 mod storage;
 // Видеозвонки (M3, шаг 2/3): захват камеры + запись кадров в VP8-трек звонка.
 mod video;

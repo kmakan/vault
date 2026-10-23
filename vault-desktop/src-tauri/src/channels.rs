@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use vault_client::vault::identity;
 
 const CHANNELS_FILE: &str = "channels.json";
 
@@ -235,14 +236,20 @@ pub struct ChannelPatch {
 }
 
 /// Owner-side: remember a known subscriber (opt-in hello or manual add).
-/// Idempotent; enforced by the caller (owner only).
+/// Idempotent; enforced by the caller (owner only). Форма адреса и «тот ли это
+/// подписчик» — правила ядра ([`identity`]), иначе «Боб@Почта.ру» заводился
+/// вторым подписчиком рядом с `боб@почта.ру` и пост уходил дважды.
 pub fn add_known_subscriber(channel_id: &str, email: &str) -> Result<()> {
     let mut channels = load_channels()?;
     let ch = channels
         .get_mut(channel_id)
         .ok_or_else(|| anyhow::anyhow!("Channel not found: {channel_id}"))?;
-    let email = email.trim().to_lowercase();
-    if !email.is_empty() && !ch.known_subscribers.iter().any(|s| *s == email) {
+    let email = identity::normalize(email);
+    let known = ch
+        .known_subscribers
+        .iter()
+        .any(|s| identity::same_address(s, &email));
+    if !email.is_empty() && !known {
         ch.known_subscribers.push(email);
         save_channels(&channels)?;
     }
@@ -393,6 +400,23 @@ mod tests {
         // Delete
         delete_channel(&ch.id).unwrap();
         assert!(load_channels().unwrap().get(&ch.id).is_none());
+    }
+
+    #[test]
+    fn known_subscriber_is_deduped_by_normalised_address() {
+        let _path = redirect("subs");
+        let ch = create_channel("News", "a@x.y", "fpr1", "about").unwrap();
+        add_known_subscriber(&ch.id, " Боб@Почта.РУ ").unwrap();
+        add_known_subscriber(&ch.id, "боб@почта.ру").unwrap();
+        let subs = &load_channels().unwrap()[&ch.id].known_subscribers;
+        assert_eq!(
+            subs.len(),
+            1,
+            "тот же адрес в другом регистре — не второй подписчик"
+        );
+        assert_eq!(subs[0], "боб@почта.ру");
+        add_known_subscriber(&ch.id, "").unwrap();
+        assert_eq!(load_channels().unwrap()[&ch.id].known_subscribers.len(), 1);
     }
     // ── Общие тест-векторы клиента и релея ───────────────────────────
     //

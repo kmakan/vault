@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use vault_client::vault::identity;
 
 pub struct Storage {
     conn: Connection,
@@ -836,11 +837,13 @@ impl Storage {
     // при следующем вызове, когда ключ уже есть.
 
     /// Нормализованный namespace аккаунта: fp есть → `fp:<fp>` (lowercase),
-    /// нет → email (lowercase).
+    /// нет → email (lowercase). Форма значения — из ядра
+    /// ([`vault_client::vault::identity::normalize`]): `to_lowercase()` по
+    /// Юникоду, ASCII-вариант кириллицу не понижает.
     pub fn normalize_account(&self, fp: String, email: String) -> Result<String> {
-        let fp = fp.trim().to_lowercase();
+        let fp = identity::normalize(&fp);
         if fp.is_empty() {
-            return Ok(email.trim().to_lowercase());
+            return Ok(identity::normalize(&email));
         }
         Ok(format!("fp:{}", fp))
     }
@@ -882,8 +885,8 @@ impl Storage {
         old_account: &str,
         new_account: &str,
     ) -> Result<MigrationReport> {
-        let old_account = old_account.trim().to_lowercase();
-        let new_account = new_account.trim().to_lowercase();
+        let old_account = identity::normalize(old_account);
+        let new_account = identity::normalize(new_account);
         let mut report = MigrationReport::default();
 
         // No-op: пустые/глобальные/совпадающие namespace. 'anon' — настройки
@@ -1237,6 +1240,14 @@ mod tests {
         assert_eq!(
             s.resolve_account("".into(), "User@X.com".into()).unwrap(),
             "user@x.com"
+        );
+        // Юникодный нижний регистр (правило ядра): ASCII-фолд кириллицу не
+        // трогает, и «Иван@Почта.РФ» жил бы вторым пространством рядом с
+        // `иван@почта.рф`.
+        assert_eq!(
+            s.resolve_account("".into(), " Иван@Почта.РФ ".into())
+                .unwrap(),
+            "иван@почта.рф"
         );
     }
 
