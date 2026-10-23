@@ -1,0 +1,227 @@
+//! Правила списка участников группы (ADR-005 §W4, партия 4b).
+//!
+//! ЗАЧЕМ В ЯДРЕ. Эти правила решают, СКОЛЬКО записей об одном человеке живёт в
+//! `groups.json` и кого нельзя выгнать из группы. Ошибка здесь — это испорченные
+//! данные, а не косметика: живые группы с «двумя участниками на один отпечаток»
+//! (06.10.2026, группа «Четыре») появились именно из-за неверного слияния при
+//! смене почты. До переноса правила жили в мосту
+//! (`src-tauri/src/groups.rs::rename_member`, `import_group`, `remove_member`,
+//! `set_member_role`), то есть вне `rust-mutation-gate`, который меряет только
+//! этот крейт: сдвиг индекса `if i < j { j - 1 } else { j }` проверяла только
+//! приёмка на живых данных, а это часы, а не секунды.
+//!
+//! ФОРМА. Ядро решает, а тип участника не знает: вход — индексы и строки,
+//! ничего про `GroupMember` (ни мостовый, ни ядровый). Поэтому правило одно для
+//! десктопа и CLI, а мосту остаётся обход и запись.
+//!
+//! СРАВНЕНИЕ АДРЕСОВ — тоже не здесь: «одно ли это письмо» решает
+//! [`crate::vault::identity`], а эти функции принимают уже найденные позиции.
+
+use crate::vault::identity::{normalize, same_address};
+
+/// Что сделать со списком участников, когда собеседник переехал на новый
+/// адрес. `drop`/`at` — позиции в списке ДО изменений, `keep` — уже со сдвигом
+/// после удаления.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rename {
+    /// Старого адреса в списке нет — трогать нечего. Сюда же попадает
+    /// идемпотентный случай «старого нет, а новый уже участник»: вставка
+    /// иначе завела бы ВТОРУЮ запись о том же человеке.
+    Nothing,
+    /// Оба адреса в списке (переименование догнало свежий инвайт). Убираем
+    /// СТАРУЮ запись, а НОВУЮ помечаем общим ключом — она авторитетнее,
+    /// потому что пришла из свежего письма.
+    MergeDuplicate { drop: usize, keep: usize },
+    /// Запись одна: переименовываем её и помечаем общим ключом.
+    Move { at: usize },
+}
+
+/// Сплит решений ренейма. `old_idx`/`new_idx` — позиции, найденные по форме
+/// адреса из ядра; совпадение индексов означает «старый и новый адрес — одна и
+/// та же запись» (регистр/обрамление различаются, человек тот же).
+pub fn plan_rename(old_idx: Option<usize>, new_idx: Option<usize>) -> Rename {
+    match (old_idx, new_idx) {
+        (None, _) => Rename::Nothing,
+        (Some(i), Some(j)) if i != j => Rename::MergeDuplicate {
+            // После remove(i) всё, что шло после него, сдвигается влево на
+            // единицу. Ошибиться стороной — пометить `key_shared` не того
+            // участника (дефект группы «Четыре»).
+            keep: if i < j { j - 1 } else { j },
+            drop: i,
+        },
+        (Some(i), _) => Rename::Move { at: i },
+    }
+}
+
+/// Можно ли убирать участника из группы. Создателя — нельзя: он выходит сам.
+/// Иначе «удалить участника» в чужом клиенте ломает группу всем остальным.
+pub fn may_remove_member(candidate: &str, created_by: &str) -> bool {
+    !same_address(candidate, created_by)
+}
+
+/// Можно ли ставить участнику эту роль. Создателя нельзя понизить с Admin,
+/// но «оставить Admin» разрешено — это идемпотентный вызов, а не отказ.
+pub fn may_set_role(candidate: &str, created_by: &str, target_is_admin: bool) -> bool {
+    target_is_admin || !same_address(candidate, created_by)
+}
+
+/// План слияния локального списка участников со списком из инвайта.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InvitePlan {
+    /// (позиция в локальном списке, позиция в инвайте) — роль из инвайта
+    /// авторитетна для уже известного участника.
+    pub update: Vec<(usize, usize)>,
+    /// Позиции в инвайте, которых нет локально — их надо добавить.
+    pub push: Vec<usize>,
+    /// Отправитель инвайта обязан числиться участником; если его нет в
+    /// инвайте и нет локально — мост добавляет его сам.
+    pub push_sender: bool,
+}
+
+/// Что делает инвайт со списком. Пустой адрес участника инвайта не заводит
+/// запись: «участник с пустым адресом» — это дыра, через которую позже
+/// совпадает кто угодно (`identity` пустое ни с чем не сравнивает).
+pub fn plan_invite(existing: &[&str], incoming: &[&str], sender: &str) -> InvitePlan {
+    let mut plan = InvitePlan::default();
+    for (j, email) in incoming.iter().enumerate() {
+        if normalize(email).is_empty() {
+            continue;
+        }
+        // Повтор адреса в самом инвайте: первую запись мост добавит (или
+        // обновит), вторая не должна заводить ещё одну — иначе один человек
+        // получает две строки из одного письма.
+        if incoming[..j].iter().any(|e| same_address(e, email)) {
+            continue;
+        }
+        match existing.iter().position(|e| same_address(e, email)) {
+            Some(i) => plan.update.push((i, j)),
+            None => plan.push.push(j),
+        }
+    }
+    plan.push_sender = !normalize(sender).is_empty()
+        && !existing.iter().any(|e| same_address(e, sender))
+        && !plan.push.iter().any(|&j| same_address(incoming[j], sender));
+    plan
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_of_absent_member_does_nothing() {
+        assert_eq!(plan_rename(None, None), Rename::Nothing);
+        // (а) старый адрес уже ушёл, а новый значится — повторный вызов
+        // обязан ничего не добавлять.
+        assert_eq!(plan_rename(None, Some(3)), Rename::Nothing);
+    }
+
+    #[test]
+    fn rename_moves_the_single_record() {
+        assert_eq!(plan_rename(Some(2), None), Rename::Move { at: 2 });
+        // Тот же адрес в другом написании — одна запись, не дубль.
+        assert_eq!(plan_rename(Some(1), Some(1)), Rename::Move { at: 1 });
+    }
+
+    #[test]
+    fn duplicate_keeps_the_newer_record_and_shifts_its_index() {
+        // Новый адрес стоит ПОСЛЕ старого: после remove(i) индекс j
+        // съезжает, и без сдвига key_shared получил бы сосед.
+        assert_eq!(
+            plan_rename(Some(1), Some(4)),
+            Rename::MergeDuplicate { drop: 1, keep: 3 }
+        );
+        // Новый адрес стоит ДО старого — сдвигать нечего.
+        assert_eq!(
+            plan_rename(Some(4), Some(1)),
+            Rename::MergeDuplicate { drop: 4, keep: 1 }
+        );
+    }
+
+    /// Индекс `keep` обязан оставаться в границах списка после удаления —
+    /// иначе мост падает на испорченном groups.json.
+    #[test]
+    fn keep_index_is_always_in_bounds_after_the_removal() {
+        for n in 2..8usize {
+            for i in 0..n {
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+                    let Rename::MergeDuplicate { drop, keep } = plan_rename(Some(i), Some(j))
+                    else {
+                        panic!("ожидался MergeDuplicate для {i}/{j}");
+                    };
+                    assert_eq!(drop, i);
+                    assert!(
+                        keep < n - 1,
+                        "n={n} i={i} j={j}: keep={keep} вышел за список"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn creator_cannot_be_removed_or_demoted() {
+        assert!(!may_remove_member("anna@mail.ru", "ANNA@mail.ru "));
+        assert!(may_remove_member("oleg@mail.ru", "anna@mail.ru"));
+        assert!(!may_set_role("anna@mail.ru", " Anna@Mail.RU ", false));
+        // «Оставить создателя Admin» — не отказ, а идемпотентный вызов.
+        assert!(may_set_role("anna@mail.ru", "anna@mail.ru", true));
+        assert!(may_set_role("oleg@mail.ru", "anna@mail.ru", false));
+        // Кириллическая «а» — ДРУГОЙ адрес, а не вариант написания: снижать
+        // её к латинской значило бы «создатель = любой похожий по буквам».
+        assert!(may_remove_member("анна@mail.ru", "anna@mail.ru"));
+    }
+
+    #[test]
+    fn invite_updates_known_members_and_pushes_unknown() {
+        let existing = ["anna@mail.ru", "oleg@mail.ru"];
+        let incoming = ["ANNA@mail.ru", "petr@mail.ru", ""];
+        let plan = plan_invite(&existing, &incoming, "anna@mail.ru");
+        assert_eq!(plan.update, [(0, 0)]);
+        assert_eq!(plan.push, [1], "пустой адрес инвайта не заводит участника");
+        assert!(!plan.push_sender, "отправитель уже в списке");
+    }
+
+    #[test]
+    fn repeated_address_in_one_invite_adds_one_member() {
+        // Письмо-инват могло перечислить адрес дважды (гонка правок):
+        // вторая строка того же человека — это путь к группе «Четыре».
+        let plan = plan_invite(
+            &["oleg@mail.ru"],
+            &["petr@mail.ru", " PETR@mail.ru ", ""],
+            "anna@mail.ru",
+        );
+        assert_eq!(plan.push, [0]);
+        assert!(plan.push_sender);
+        // А повтор уже известного участника — одна роль, а не две: при
+        // конфликте берётся ПЕРВАЯ строка инвайта (вторая — это то же письмо,
+        // прочитанное дважды, а не свежее решение о роли).
+        let twice = plan_invite(
+            &["petr@mail.ru"],
+            &["petr@mail.ru", "PETR@mail.ru"],
+            "anna@mail.ru",
+        );
+        assert_eq!(twice.update, [(0, 0)]);
+        assert!(twice.push.is_empty());
+    }
+
+    #[test]
+    fn invite_always_adds_the_sender() {
+        let plan = plan_invite(&["oleg@mail.ru"], &["petr@mail.ru"], "anna@mail.ru");
+        assert!(plan.push_sender);
+        // Отправитель уже в инвайте — второй записи о нём не будет.
+        let again = plan_invite(&["oleg@mail.ru"], &["anna@mail.ru"], "ANNA@mail.ru");
+        assert!(!again.push_sender);
+        assert_eq!(again.push, [0]);
+    }
+
+    #[test]
+    fn empty_sender_is_not_a_member() {
+        // Пустой адрес — не участник: иначе `push_sender` заводил бы
+        // безымянную запись, а она позже совпадала бы с кем угодно.
+        assert!(!plan_invite(&["oleg@mail.ru"], &[], "").push_sender);
+    }
+}

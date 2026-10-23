@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use vault_client::vault::group_rules;
 use vault_client::vault::identity;
 
 const GROUPS_FILE: &str = "groups.json";
@@ -255,19 +256,12 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
 pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        // Смена почты собеседником. ДВА случая, оба обязательны:
-        //
-        // (а) Участника под старым адресом нет, но НОВЫЙ адрес уже есть —
-        //     ничего не делаем (идемпотентность: повторный ренейм/гонка
-        //     писем). Без этой ветки вставка создала бы ВТОРОГО участника.
-        // (б) Оба адреса в группе — переименование превратило бы группу в
-        //     «участник дважды с одним отпечатком» (живые данные 06.10.2026,
-        //     группа «Четыре»). Убираем СТАРУЮ запись, оставляем существующую
-        //     НОВУЮ (она авторитетнее: пришла из свежего инвайта/письма).
-        //
-        // «Один и тот же адрес» решает ядро (`identity::same_address`): здесь
-        // было `to_lowercase()` без обрезки, поэтому участник с обрамляющим
-        // пробелом не узнавался и получал вторую запись.
+        // Смена почты собеседником. Какую запись оставить и кого пометить
+        // общим ключом решает ядро (`group_rules::plan_rename`) — случай (а)
+        // «старого нет, новый уже участник» и случай (б) «оба адреса в списке»
+        // (живые данные 06.10.2026, группа «Четыре»). Здесь остаётся поиск
+        // позиций по форме адреса (`identity::same_address`) и применение
+        // плана к `GroupMember`.
         let old_idx = group
             .members
             .iter()
@@ -276,19 +270,16 @@ pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result
             .members
             .iter()
             .position(|m| identity::same_address(&m.email, new_email));
-        match (old_idx, new_idx) {
-            (None, _) => { /* старого нет — ренеймить нечего */ }
-            (Some(i), Some(j)) if i != j => {
-                // Дубль: удаляем старую запись, новой помечаем общий ключ.
-                group.members.remove(i);
-                let k = if i < j { j - 1 } else { j };
-                if let Some(m) = group.members.get_mut(k) {
-                    m.key_shared = true;
-                }
+        match group_rules::plan_rename(old_idx, new_idx) {
+            // Старого адреса нет — ренеймить нечего.
+            group_rules::Rename::Nothing => {}
+            group_rules::Rename::MergeDuplicate { drop, keep } => {
+                group.members.remove(drop);
+                group.members[keep].key_shared = true;
             }
-            (Some(i), _) => {
-                group.members[i].email = new_email.to_string();
-                group.members[i].key_shared = true; // ключ группы у него уже есть
+            group_rules::Rename::Move { at } => {
+                group.members[at].email = new_email.to_string();
+                group.members[at].key_shared = true; // ключ группы у него уже есть
             }
         }
         if identity::same_address(&group.created_by, old_email) {
@@ -315,31 +306,29 @@ pub fn import_group(
     // Слить список участников инвайта с локальным: роли из инвайта авторитетны
     // для уже известных участников; новые участники добавляются с ролью из
     // инвайта (обычно Member). Отправитель инвайта всегда присутствует.
+    //
+    // РЕШЕНИЕ О СЛИЯНИИ — в ядре (`group_rules::plan_invite`): какие строки
+    // обновить, каких добавить, добавлять ли отправителя. Здесь только
+    // применение плана к `GroupMember` и запись файла.
     let merge_members = |existing: &mut Vec<GroupMember>| {
-        if let Some(inv) = invite_members {
-            for im in inv {
-                if im.email.is_empty() {
-                    continue;
-                }
-                match existing
-                    .iter_mut()
-                    .find(|m| identity::same_address(&m.email, &im.email))
-                {
-                    Some(m) => m.role = im.role.clone(),
-                    None => existing.push(GroupMember {
-                        email: im.email.clone(),
-                        role: im.role.clone(),
-                        joined_at: now.clone(),
-                        key_shared: false,
-                        fingerprint: String::new(),
-                    }),
-                }
-            }
+        let no_invitation: Vec<GroupMember> = Vec::new();
+        let inv: &[GroupMember] = invite_members.unwrap_or(&no_invitation);
+        let known: Vec<&str> = existing.iter().map(|m| m.email.as_str()).collect();
+        let invited: Vec<&str> = inv.iter().map(|m| m.email.as_str()).collect();
+        let plan = group_rules::plan_invite(&known, &invited, sender);
+        for (at, from) in plan.update {
+            existing[at].role = inv[from].role.clone();
         }
-        if !existing
-            .iter()
-            .any(|m| identity::same_address(&m.email, sender))
-        {
+        for from in plan.push {
+            existing.push(GroupMember {
+                email: inv[from].email.clone(),
+                role: inv[from].role.clone(),
+                joined_at: now.clone(),
+                key_shared: false,
+                fingerprint: String::new(),
+            });
+        }
+        if plan.push_sender {
             existing.push(GroupMember {
                 email: sender.to_string(),
                 role: GroupRole::Member,
@@ -402,9 +391,9 @@ pub fn remove_member(group_id: &str, email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
         // The group creator cannot be removed by anyone — only leave
-        // voluntarily. Сравнение — форма адреса из ядра: точное сравнение
-        // позволяло «удалить» создателя, написав адрес в другом регистре.
-        if identity::same_address(email, &group.created_by) {
+        // voluntarily. Правило «кого защищаем» — в ядре
+        // (`group_rules::may_remove_member`), форма адреса — в `identity`.
+        if !group_rules::may_remove_member(email, &group.created_by) {
             anyhow::bail!("Cannot remove group creator");
         }
         let before_len = group.members.len();
@@ -425,8 +414,9 @@ pub fn remove_member(group_id: &str, email: &str) -> Result<()> {
 pub fn set_member_role(group_id: &str, email: &str, role: GroupRole) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        // The group creator cannot be demoted from Admin.
-        if identity::same_address(email, &group.created_by) && role != GroupRole::Admin {
+        // The group creator cannot be demoted from Admin — правило в ядре
+        // (`group_rules::may_set_role`).
+        if !group_rules::may_set_role(email, &group.created_by, role == GroupRole::Admin) {
             anyhow::bail!("Cannot change creator role");
         }
         let member = group
@@ -801,6 +791,29 @@ mod tests {
             // Unknown member / unknown group.
             assert!(remove_member(&id, "nobody@example.com").is_err());
             assert!(remove_member("grp_missing", "bob@example.com").is_err());
+        });
+    }
+
+    /// Второе направление слияния: новый адрес стоит в списке ДО старого.
+    /// Тогда сдвигать индекс некуда, и ошибка в сторону условия (`i > j` вместо
+    /// `i < j`) пометила бы общим ключом соседа.
+    #[test]
+    fn test_rename_member_merge_marks_the_right_record_when_new_email_comes_first() {
+        with_tmp_groups(|| {
+            let group = create_group("g", "alice@example.com").unwrap();
+            add_member(&group.id, "bob@new.ru").unwrap();
+            add_member(&group.id, "carol@ya.ru").unwrap();
+            add_member(&group.id, "bob@ya.ru").unwrap();
+            rename_member(&group.id, "bob@ya.ru", "bob@new.ru").unwrap();
+
+            let g = load_groups().unwrap().get(&group.id).unwrap().clone();
+            assert_eq!(g.members.len(), 3, "старая запись удалена, новых нет");
+            let by = |e: &str| g.members.iter().find(|m| m.email == e).unwrap();
+            assert!(by("bob@new.ru").key_shared, "общий ключ у переехавшего");
+            assert!(
+                !by("carol@ya.ru").key_shared,
+                "сосед не получил чужую отметку"
+            );
         });
     }
 

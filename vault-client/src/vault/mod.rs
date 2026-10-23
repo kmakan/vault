@@ -13,6 +13,7 @@ pub mod ephemeral;
 pub mod filter;
 pub mod folders;
 pub mod groups;
+pub mod group_rules;
 pub mod identity;
 pub mod invite;
 pub mod imap_dialect;

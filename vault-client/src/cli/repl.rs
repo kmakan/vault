@@ -1980,7 +1980,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         let mut relay_pushed = 0usize;
                         let fp = ctx.crypto.fingerprint();
                         for m in &group.members {
-                            if m.email == self_email {
+                            // «Это я» решает ядро (identity::same_address):
+                            // точное сравнение пропускало свой адрес в другом
+                            // регистре — клиент отправлял письмо самому себе.
+                            if crate::vault::identity::same_address(&m.email, self_email) {
                                 continue;
                             }
                             match client.send_email(&m.email, &subject, &encrypted).await {

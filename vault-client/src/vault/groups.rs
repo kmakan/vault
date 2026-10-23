@@ -105,7 +105,11 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            if group.members.iter().any(|m| m.email == email) {
+            if group
+                .members
+                .iter()
+                .any(|m| crate::vault::identity::same_address(&m.email, email))
+            {
                 return Err("Member already in group".into());
             }
 
@@ -130,7 +134,16 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            group.members.retain(|m| m.email != email);
+            // Создателя нельзя убрать из группы — то же правило, что у
+            // десктопа (`group_rules::may_remove_member`): до переноса CLI
+            // распускал группу одним `/remove`, а мост тому же действию
+            // отказывал.
+            if !crate::vault::group_rules::may_remove_member(email, &group.created_by) {
+                return Err("Cannot remove group creator".into());
+            }
+            group
+                .members
+                .retain(|m| !crate::vault::identity::same_address(&m.email, email));
             self.save()?;
             Ok(())
         } else {
@@ -162,7 +175,10 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            let member = group.members.iter_mut().find(|m| m.email == email);
+            let member = group
+                .members
+                .iter_mut()
+                .find(|m| crate::vault::identity::same_address(&m.email, email));
             match member {
                 Some(m) => {
                     m.role = match m.role {
@@ -188,17 +204,19 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            // Cannot demote the group creator while they hold Admin.
-            if group.created_by == email {
-                let is_admin = group
-                    .members
-                    .iter()
-                    .any(|m| m.email == email && matches!(m.role, GroupRole::Admin));
-                if is_admin {
-                    return Err("Cannot demote the group creator".into());
-                }
+            // Создателя нельзя понизить — то же правило, что у десктопа
+            // (`group_rules::may_set_role`). Раньше здесь жила своя, более
+            // слабая версия: отказ только «пока держит Admin» и точное
+            // сравнение адреса, поэтому создатель в другом регистре понижался
+            // из CLI, а во втором клиенте группа оставалась без владельца.
+            // Демутация всегда целит не-Admin, поэтому target_is_admin=false.
+            if !crate::vault::group_rules::may_set_role(email, &group.created_by, false) {
+                return Err("Cannot demote the group creator".into());
             }
-            let member = group.members.iter_mut().find(|m| m.email == email);
+            let member = group
+                .members
+                .iter_mut()
+                .find(|m| crate::vault::identity::same_address(&m.email, email));
             match member {
                 Some(m) => {
                     m.role = match m.role {
@@ -224,7 +242,15 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            if group.blocked.iter().any(|e| e == email) {
+            // Список блокировки — те же участники, что и `members`: сравнение
+            // по форме адреса (`identity::same_address`), иначе блокировка
+            // `Bob@X` не скрывает письма от `bob@x`, а разблокировка оставляет
+            // запись висеть.
+            if group
+                .blocked
+                .iter()
+                .any(|e| crate::vault::identity::same_address(e, email))
+            {
                 return Err("User already blocked".into());
             }
             group.blocked.push(email.to_string());
@@ -242,7 +268,9 @@ impl GroupManager {
         email: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(group) = self.groups.get_mut(group_id) {
-            group.blocked.retain(|e| e != email);
+            group
+                .blocked
+                .retain(|e| !crate::vault::identity::same_address(e, email));
             self.save()?;
             Ok(())
         } else {
@@ -277,7 +305,11 @@ impl GroupManager {
         }
 
         // Add the sender as a member if not already present
-        if !group.members.iter().any(|m| m.email == sender_email) {
+        if !group
+            .members
+            .iter()
+            .any(|m| crate::vault::identity::same_address(&m.email, sender_email))
+        {
             group.members.push(GroupMember {
                 email: sender_email.to_string(),
                 role: GroupRole::Member,
@@ -295,7 +327,11 @@ impl GroupManager {
     pub fn is_blocked(&self, group_id: &str, email: &str) -> bool {
         self.groups
             .get(group_id)
-            .map(|g| g.blocked.iter().any(|e| e == email))
+            .map(|g| {
+                g.blocked
+                    .iter()
+                    .any(|e| crate::vault::identity::same_address(e, email))
+            })
             .unwrap_or(false)
     }
 
@@ -373,6 +409,27 @@ mod tests {
         let mut mgr = test_mgr();
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         assert!(mgr.add_member(&group.id, "admin@test.com").is_err());
+    }
+
+    /// Тот же набор правил, что у десктопа: владение и защита создателя
+    /// решаются ядром, а не сравнением строк в каждом клиенте. До переноса
+    /// CLI позволял удалить и понизить создателя, написанного в другом
+    /// регистре, и заводил второго участника вместо того же самого.
+    #[test]
+    fn test_membership_rules_match_the_desktop_for_address_variants() {
+        let mut mgr = test_mgr();
+        let group = mgr.create_group("Test", "Admin@Test.com").unwrap();
+        mgr.add_member(&group.id, "user@test.com").unwrap();
+
+        assert!(
+            mgr.add_member(&group.id, " USER@test.com ").is_err(),
+            "вариант написания — не новый участник"
+        );
+        assert!(mgr.remove_member(&group.id, "ADMIN@test.com").is_err());
+        assert!(mgr.demote_member(&group.id, " admin@test.com ").is_err());
+        assert!(mgr.remove_member(&group.id, "USER@test.com").is_ok());
+        let g = mgr.get_group(&group.id).unwrap();
+        assert_eq!(g.members.len(), 1, "остался только создатель");
     }
 
     #[test]
@@ -481,6 +538,30 @@ mod tests {
         let group = mgr.create_group("Test", "admin@test.com").unwrap();
         mgr.block_user(&group.id, "user@test.com").unwrap();
         assert!(mgr.block_user(&group.id, "user@test.com").is_err());
+    }
+
+    /// Блокировка решает «тот же ли это адрес» так же, как состав группы:
+    /// письмо приходит с `From` в любом написании, и список не должен зависеть
+    /// от того, каким регистром его записали.
+    #[test]
+    fn test_block_list_matches_the_normalized_address_form() {
+        let mut mgr = test_mgr();
+        let group = mgr.create_group("Test", "admin@test.com").unwrap();
+        mgr.add_member(&group.id, "user@test.com").unwrap();
+
+        mgr.block_user(&group.id, " User@Test.com ").unwrap();
+        assert!(
+            mgr.is_blocked(&group.id, "user@test.com"),
+            "заблокированный в другом написании остаётся заблокированным"
+        );
+        assert!(
+            mgr.block_user(&group.id, "user@test.com").is_err(),
+            "вариант написания — не вторая блокировка"
+        );
+
+        mgr.unblock_user(&group.id, "USER@test.com").unwrap();
+        assert!(!mgr.is_blocked(&group.id, "user@test.com"));
+        assert!(mgr.get_blocked(&group.id).is_empty());
     }
 
     #[test]
