@@ -169,6 +169,33 @@ pub fn dismisses_ring(state: &str) -> bool {
     )
 }
 
+/// Гудит ли запись (по имени состояния из kv). Повреждённая строка — не гудит.
+fn is_ringing(state: &str) -> bool {
+    RecordState::parse(state) == Some(RecordState::Ringing)
+}
+
+/// Переживает ли запись TTL-чистку журнала.
+///
+/// Два разных правила в одной строке кода: `ringing` не истекает ВООБЩЕ (его
+/// гасит решение или ring-timeout, иначе уведомление исчезнет раньше, чем
+/// абонент снял трубку), остальные состояния — надгробие, живущее
+/// `tombstone_ms`, чтобы поздняя ретрансляция не оживила завершённый звонок.
+/// Граница исключительная: возраст ровно `tombstone_ms` — запись уже чистится.
+pub fn record_survives(state: &str, updated_at: i64, now: i64, tombstone_ms: i64) -> bool {
+    is_ringing(state) || now - updated_at < tombstone_ms
+}
+
+/// Истёк ли гудок: `ringing` без решения дольше `ring_timeout_ms` → пропущенный.
+///
+/// Граница СТРОГАЯ (`>`), и это контракт: ретрансляции `call_request` не
+/// обновляют `updated_at`, поэтому таймаут меряется от ПЕРВОГО рингтона, а на
+/// самом пороге звонок ещё считается живым. Ошибка в эту сторону (>=) срезала
+/// бы гудок на тике, пришедшем ровно через 45 с, — «пропущенный» появляется у
+/// звонящего, который ещё слышит гудки.
+pub fn ring_expired(state: &str, updated_at: i64, now: i64, ring_timeout_ms: i64) -> bool {
+    is_ringing(state) && now - updated_at > ring_timeout_ms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +213,77 @@ mod tests {
             "Анна",
             "a@b.c",
         )
+    }
+
+    const TOMBSTONE: i64 = 10 * 60 * 1000;
+    const RING: i64 = 45 * 1000;
+
+    #[test]
+    fn ringing_never_expires_by_ttl() {
+        // Гудящий запись чистка не трогает: иначе уведомление пропадёт раньше,
+        // чем абонент снимет трубку. Протухшие — только решённые состояния.
+        assert!(record_survives(
+            "ringing",
+            NOW - 10 * TOMBSTONE,
+            NOW,
+            TOMBSTONE
+        ));
+        for settled in ["accepted", "rejected", "missed", "ended"] {
+            assert!(
+                !record_survives(settled, NOW - TOMBSTONE - 1, NOW, TOMBSTONE),
+                "{settled} старше надгробия обязано вылететь"
+            );
+        }
+    }
+
+    #[test]
+    fn tombstone_boundary_is_exclusive() {
+        assert!(
+            record_survives("missed", NOW - TOMBSTONE + 1, NOW, TOMBSTONE),
+            "за миллисекунду до порога надгробие ещё живое — иначе поздняя \
+             ретрансляция придёт уже без записи и звонок оживёт"
+        );
+        assert!(
+            !record_survives("missed", NOW - TOMBSTONE, NOW, TOMBSTONE),
+            "ровно на пороге — чистим: возраст «< tombstone», не «<=»"
+        );
+        assert!(!record_survives(
+            "missed",
+            NOW - TOMBSTONE - 1,
+            NOW,
+            TOMBSTONE
+        ));
+    }
+
+    #[test]
+    fn unparsable_state_is_treated_as_a_tombstone_not_a_ring() {
+        // Повреждённая строка не должна держать запись вечно.
+        assert!(!record_survives(
+            "RINGING",
+            NOW - TOMBSTONE - 1,
+            NOW,
+            TOMBSTONE
+        ));
+        assert!(
+            record_survives("", NOW - 1000, NOW, TOMBSTONE),
+            "свежая — переживёт"
+        );
+    }
+
+    #[test]
+    fn ring_expires_only_after_the_timeout_and_only_while_ringing() {
+        assert!(!ring_expired("ringing", NOW, NOW, RING), "нулевой возраст");
+        assert!(
+            !ring_expired("ringing", NOW - RING, NOW, RING),
+            "ровно на пороге звонок ещё жив (строгий >) "
+        );
+        assert!(ring_expired("ringing", NOW - RING - 1, NOW, RING));
+        for other in ["accepted", "rejected", "missed", "ended", ""] {
+            assert!(
+                !ring_expired(other, NOW - 10 * RING, NOW, RING),
+                "{other}: таймаут гудка решает только ringing"
+            );
+        }
     }
 
     #[test]

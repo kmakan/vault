@@ -44,10 +44,9 @@ mod vp8_decoder;
 #[cfg(target_os = "android")]
 mod service_monitor;
 
-// Инварианты headless-монитора (таймауты звонков, реплей-защита, лимит дедупа).
-// Без cfg(android) — намеренно: сам монитор android-only, но его предикаты
-// обязаны тестироваться обычным `cargo test` на хосте (см. monitor_invariants).
-mod monitor_invariants;
+// Таймауты/пороги монитора и сравнение версий — в ядре (`vault-client`:
+// `vault::timings`, `vault::semver`), потому что мост не покрывается
+// `rust-mutation-gate`, а CLI-слушатель эти же окна должен видеть общими.
 
 /// M2.3-b: push-режим — сервис остаётся жить в режиме ntfy-подписки
 /// (без IMAP/wakeLock). topic = hex-hash read-токена (вычисляет JS),
@@ -1564,27 +1563,9 @@ const UPDATE_ENDPOINT_HOST: &str = "vault-msg.ru";
 async fn check_app_update(current_version: String) -> Result<Option<serde_json::Value>, String> {
     const TIMEOUT_SECS: u64 = 10;
 
-    // численно по компонентам, не лексикографически.
-    fn version_gt(a: &str, b: &str) -> bool {
-        let parse = |s: &str| -> Vec<u64> {
-            s.trim_start_matches('v')
-                .split(|c: char| !c.is_ascii_digit())
-                .filter(|p| !p.is_empty())
-                .map(|p| p.parse::<u64>().unwrap_or(0))
-                .collect()
-        };
-        let (av, bv) = (parse(a), parse(b));
-        for i in 0..av.len().max(bv.len()) {
-            let (x, y) = (
-                av.get(i).copied().unwrap_or(0),
-                bv.get(i).copied().unwrap_or(0),
-            );
-            if x != y {
-                return x > y;
-            }
-        }
-        false
-    }
+    // Сравнение версий — в ядре (`vault_client::vault::semver`): численное по
+    // компонентам, не лексикографическое, и под меркой `rust-mutation-gate`.
+    let version_gt = vault_client::vault::semver::version_gt;
 
     let response = t_timeout(std::time::Duration::from_secs(TIMEOUT_SECS), async {
         use std::io::Read;

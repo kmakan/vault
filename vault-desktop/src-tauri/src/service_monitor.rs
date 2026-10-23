@@ -56,14 +56,13 @@ fn init_logcat() {
 const IDLE_TICK: Duration = Duration::from_secs(7);
 const MAX_TRIES: u32 = 3; // попыток доставки письма до отриц. дедупа
 
-// Таймауты/лимиты/предикат свежести живут в monitor_invariants: они не тянут
-// JNI/БД, поэтому тестируются на хосте обычным `cargo test` (в этом модуле
-// они были недоступны — сам файл под #[cfg(target_os = "android")]).
-// Форма адреса и переходы журнала звонков — ядро (ADR-005 §W4, `t_bf1d393c`).
+// Таймауты, лимиты и предикат свежести — в ядре (`vault::timings`): это числа
+// протокола, и, пока они лежали во мосту, их не мерил ни один гейт
+// (`rust-mutation-gate` считает наборы по крейту `vault-client`). Форма адреса
+// и переходы журнала звонков — там же (ADR-005 §W4, партии 2-3).
 use vault_client::vault::call_record::{self, Incoming, RecordState};
-
-use crate::monitor_invariants::{
-    date_fresh, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, FRESH_SECS, RING_TIMEOUT_MS, SEEN_CAP,
+use vault_client::vault::timings::{
+    date_fresh, dedup_cut, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, RING_TIMEOUT_MS, SEEN_CAP,
 };
 
 /// Глобальное состояние headless-монитора (один на процесс).
@@ -750,7 +749,7 @@ fn seen_push(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str, mi
         return;
     }
     list.push(mid.to_string());
-    let cut = list.len().saturating_sub(SEEN_CAP);
+    let cut = dedup_cut(list.len(), SEEN_CAP);
     let list = list.split_off(cut);
     kv_save(db, account, &seen_key(), &list);
 }
@@ -784,7 +783,7 @@ struct CallEntry {
     updated_at: i64, // ms, для TTL-чистки
 }
 
-// CALL_TOMBSTONE_MS (надгробие 10 мин) — в monitor_invariants.
+// CALL_TOMBSTONE_MS (надгробие 10 мин) — в ядре (`vault::timings`).
 
 fn call_state_key() -> String {
     "call_state".to_string()
@@ -809,7 +808,7 @@ fn calls_save(
     let live: std::collections::HashMap<String, CallEntry> = calls
         .iter()
         .filter(|(_, c)| {
-            c.state == RecordState::Ringing.as_str() || now - c.updated_at < CALL_TOMBSTONE_MS
+            call_record::record_survives(&c.state, c.updated_at, now, CALL_TOMBSTONE_MS)
         })
         .map(|(k, c)| (k.clone(), c.clone()))
         .collect();
@@ -852,17 +851,18 @@ fn call_get_state(
     calls_load(db, account).get(call_id).cloned()
 }
 
-/// Таймаут звонка без решения (фаза 1): 45с — в monitor_invariants (RING_TIMEOUT_MS).
+// Таймаут звонка без решения (фаза 1): 45 с — в ядре (`vault::timings`,
+// `RING_TIMEOUT_MS`), сам переход — там же (`call_record::ring_expired`).
 
 /// ringing дольше RING_TIMEOUT_MS → missed + пуш + dismiss уведомления.
-/// Вызывается каждым тиком run_loop (7с) — ретрансляции не сбрасывают
+/// Вызывается каждым тиком run_loop (7 с) — ретрансляции не сбрасывают
 /// updated_at (решение/таймаут по ВРЕМЕНИ ПЕРВОГО рингтона).
 fn check_ring_timeouts(ctx: &Ctx<'_>) {
     let calls = calls_load(ctx.db, ctx.account);
     let now = now_ms();
     let mut changed = false;
     for (call_id, c) in calls.iter() {
-        if c.state == RecordState::Ringing.as_str() && now - c.updated_at > RING_TIMEOUT_MS {
+        if call_record::ring_expired(&c.state, c.updated_at, now, RING_TIMEOUT_MS) {
             // missed: надгробие против поздних ретрансляций.
             call_set_state(
                 ctx.db,
@@ -888,8 +888,8 @@ fn check_ring_timeouts(ctx: &Ctx<'_>) {
 
 // ─────────────────────── Классификация письма ───────────────────────
 
-/// Свежесть по заголовку Date — см. `monitor_invariants::date_fresh`.
-// (реализация вынесена отсюда, чтобы тестировалась на хосте)
+// Свежесть по заголовку Date — в ядре (`vault::timings::date_fresh`): и
+// число, и предикат должны быть у гейта, а не у приёмки на телефоне.
 
 /// Новое письмо из fetch_newer: пре-фильтры → pending-очередь.
 /// Сообщения от ОДНОГО отправителя при включённом ephemeral не сливаются:
