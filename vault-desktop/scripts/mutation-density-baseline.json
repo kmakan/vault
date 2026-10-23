@@ -42,6 +42,7 @@
     "vault-client/src/vault/status.rs": 6,
     "vault-client/src/vault/thread.rs": 7,
     "vault-client/src/vault/timings.rs": 21,
+    "vault-core/src/crypto_pq.rs": 19,
     "vault-core/src/identity.rs": 28,
     "vault-core/src/key_store.rs": 8,
     "vault-desktop/src/api.js": 17,

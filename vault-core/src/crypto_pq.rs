@@ -431,7 +431,9 @@ mod tests {
         )
         .unwrap();
         assert!(hdr.kemct.is_some());
-        assert!(hdr.pq.is_some());
+        // pq конверта — именно ek ОТПРАВИТЕЛЯ, чтобы получатель мог сразу
+        // ответить гибридом.
+        assert_eq!(hdr.pq.as_deref(), Some(alice_pq.ek_b64.as_str()));
 
         // Bob расшифровывает: свой priv + PQ-seed, публичный ключ Alice, kemct
         let kemct = hdr.kemct.clone().unwrap();
@@ -581,8 +583,20 @@ mod tests {
             media_hybrid_key_out(&x_ss, &caller_pq.seed_hex, &callee_pq.ek_b64).unwrap();
         let key_in = media_hybrid_key_in(&x_ss, &callee_pq.seed_hex, &kemct).unwrap();
         assert_eq!(key_out, key_in, "media keys must match");
-        // ek звонящего корректен (принимающий сохранит контакт)
+        // ek звонящего корректен (принимающий сохранит контакт) и совпадает
+        // с восстановленным из seed — конверт несёт именно свой ключ.
+        let (_, caller_ek) = pq_from_seed(&caller_pq.seed_hex).unwrap();
         assert!(pq_ek_from_b64(&my_ek).is_some());
+        assert_eq!(
+            my_ek,
+            base64::engine::general_purpose::STANDARD.encode(caller_ek.to_bytes().as_slice())
+        );
+        // kemct в письме/сигналинге может прийти с переносами строк.
+        let folded = fold76(&kemct);
+        assert_eq!(
+            media_hybrid_key_in(&x_ss, &callee_pq.seed_hex, &folded).unwrap(),
+            key_out
+        );
         // Подменённый kemct → другой ключ (не равен)
         let other = pq_generate();
         let (_, fake_ct, _) =
@@ -606,5 +620,136 @@ mod tests {
             .decode(hdr.kemct.unwrap())
             .unwrap();
         assert_eq!(ct_bytes.len(), PQ_CT_LEN);
+    }
+
+    // -----------------------------------------------------------------------
+    // KAT: домены и длины зафиксированы, потому что round-trip их не видит.
+    // Обе стороны считают ОДНОЙ константой, поэтому смена соли или info
+    // оставляет обмен зелёным, а уже отправленные конверты перестают
+    // открываться. Векторы посчитаны независимо (HKDF-SHA256).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hybrid_key_matches_known_vector() {
+        // Соль, префикс info, порядок ikm (x25519 ‖ mlkem) и каноническая
+        // сортировка pub-ключей — часть формата PQ-V1.
+        assert_eq!(
+            hex::encode(hybrid_key(
+                &[1u8; 32],
+                &[2u8; 32],
+                &[3u8; 32],
+                &[4u8; 32]
+            )),
+            "85b06b805875be1c37d4d439df632907a497636132af810360507f44b87b4d5a"
+        );
+    }
+
+    #[test]
+    fn hybrid_key_is_symmetric_in_peer_order() {
+        // Отправитель и получатель передают my/peer в противоположном
+        // порядке. Без канонической сортировки info расходится и получатель
+        // не может прочитать конверт.
+        let from_alice = hybrid_key(&[1u8; 32], &[2u8; 32], &[3u8; 32], &[4u8; 32]);
+        let from_bob = hybrid_key(&[1u8; 32], &[2u8; 32], &[4u8; 32], &[3u8; 32]);
+        assert_eq!(from_alice, from_bob);
+    }
+
+    #[test]
+    fn media_kdf_matches_known_vector() {
+        // Отдельный медиа-домен: звонок и чат никогда не делят ключи.
+        assert_eq!(
+            hex::encode(media_hybrid_kdf(&[1u8; 32], &[2u8; 32])),
+            "acc9d73ee9c72cb6f1a00f642c090696508d6dff3d241e1bfc9ef0c003094b33"
+        );
+    }
+
+    #[test]
+    fn pq_sizes_match_wire_format() {
+        // FIPS 203, wire-сериализация ml-kem 0.3: ek 1184, ct 1088, seed 64.
+        let pq = pq_generate();
+        assert_eq!(hex::decode(&pq.seed_hex).unwrap().len(), PQ_SEED_LEN);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&pq.ek_b64)
+                .unwrap()
+                .len(),
+            PQ_EK_LEN
+        );
+    }
+
+    #[test]
+    fn pq_ek_from_seed_matches_known_vector() {
+        // Канонический seed 00..3f: фиксирует, что из него восстанавливается
+        // именно wire-ek (1184 байта, а не pkcs8/1188) и что сериализация
+        // крейта не дрейфует. Отпечаток — чтобы не держать 1580 символов b64.
+        use sha2::Digest;
+        let seed_hex: String = (0u8..64).map(|b| format!("{b:02x}")).collect();
+        let (_, ek) = pq_from_seed(&seed_hex).expect("canonical 64-byte seed");
+        let ek_bytes = ek.to_bytes();
+        assert_eq!(ek_bytes.len(), PQ_EK_LEN);
+        assert_eq!(
+            hex::encode(sha2::Sha256::digest(ek_bytes.as_slice())),
+            "0b7934c83125c788995e2ba6bd761e33046b3e40571be53e023309a29f398cc9"
+        );
+    }
+
+    #[test]
+    fn pq_from_seed_rejects_malformed_seeds() {
+        let seed_hex: String = (0u8..64).map(|b| format!("{b:02x}")).collect();
+        assert!(pq_from_seed(&seed_hex).is_some());
+        assert!(pq_from_seed("").is_none());
+        assert!(pq_from_seed("zz").is_none());
+        assert!(pq_from_seed(&seed_hex[..126]).is_none()); // 63 байта
+        assert!(pq_from_seed(&format!("{seed_hex}00")).is_none()); // 65 байт
+        assert!(pq_from_seed(&seed_hex[..127]).is_none()); // нечётная длина
+    }
+
+    #[test]
+    fn pq_ek_from_b64_folds_smtp_whitespace() {
+        // Публичный ключ приходит из письма/QR с переносами строк.
+        let pq = pq_generate();
+        let folded = fold76(&pq.ek_b64);
+        let ek = pq_ek_from_b64(&folded).expect("folded ek must parse");
+        let plain = pq_ek_from_b64(&pq.ek_b64).expect("plain ek must parse");
+        assert_eq!(ek.to_bytes(), plain.to_bytes());
+    }
+
+    #[test]
+    fn pq_ek_from_b64_rejects_wrong_length() {
+        let engine = base64::engine::general_purpose::STANDARD;
+        assert!(pq_ek_from_b64(&engine.encode(vec![0u8; PQ_EK_LEN - 1])).is_none());
+        assert!(pq_ek_from_b64(&engine.encode(vec![0u8; PQ_EK_LEN + 1])).is_none());
+    }
+
+    #[test]
+    fn hybrid_roundtrip_folds_smtp_whitespace() {
+        // SMTP переносит base64 по 76 символов — и конверт, и kemct.
+        let (alice, bob, alice_pq, bob_pq) = full_setup();
+        let (wire, hdr) = hybrid_encrypt_vault(
+            "переносы строк",
+            &alice.private_key,
+            &bob.public_key,
+            Some(&alice_pq.seed_hex),
+            &bob_pq.ek_b64,
+        )
+        .unwrap();
+        let pt = hybrid_decrypt_vault(
+            &fold76(&wire),
+            &bob.private_key,
+            &alice.public_key,
+            &bob_pq.seed_hex,
+            &fold76(&hdr.kemct.unwrap()),
+        )
+        .unwrap();
+        assert_eq!(pt, "переносы строк");
+    }
+
+    /// Сложить ASCII-строку «как транспорт»: куски по 76 с CRLF.
+    fn fold76(s: &str) -> String {
+        s.as_bytes()
+            .chunks(76)
+            .map(|c| String::from_utf8_lossy(c).into_owned())
+            .collect::<Vec<_>>()
+            .join("\r\n")
     }
 }
