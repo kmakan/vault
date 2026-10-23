@@ -291,6 +291,81 @@ pub fn question_name(q: CallQuestion) -> &'static str {
     }
 }
 
+/// Проводные имена состояний, событий и действий.
+///
+/// ЗАЧЕМ В ЯДРЕ (ADR-005 §W4, партия 2, `t_bf1d393c`). Мост держал эти таблицы
+/// СВОИМИ копиями: `vault_call_next_state` и `vault_call_can_apply` разбирали
+/// имя события одинаковым `match` на шесть строк, а `vault_call_can` — таблицу
+/// из 14 имён вопроса, хотя ядро уже умело печатать имена (`question_name`).
+/// Копия имени — это копия протокола: расхождение выглядит как «JS прислал
+/// понятное ему слово, а ядро сделало вид, что не заметил» (переход молча не
+/// применялся, и звонок зависал в старом состоянии).
+///
+/// Инвариант, который держит таблицы вместе: `from_name(name(x)) == Some(x)`
+/// для каждого варианта — он проверяется тестом, поэтому переименование на
+/// одной стороне не пройдёт незамеченным.
+impl CallEvent {
+    /// Имя события на проводе (то, что пишет JS).
+    pub fn name(self) -> &'static str {
+        match self {
+            CallEvent::RequestReceived => "request_received",
+            CallEvent::Accepted => "accepted",
+            CallEvent::HungUp => "hung_up",
+            CallEvent::RingTimeout => "ring_timeout",
+            CallEvent::Preempted => "preempted",
+            CallEvent::OutgoingStarted => "outgoing_started",
+        }
+    }
+
+    /// Обратный разбор. Незнакомое имя — `None`: перехода нет, а не «угадываем».
+    pub fn from_name(s: &str) -> Option<CallEvent> {
+        match s {
+            "request_received" => Some(CallEvent::RequestReceived),
+            "accepted" => Some(CallEvent::Accepted),
+            "hung_up" => Some(CallEvent::HungUp),
+            "ring_timeout" => Some(CallEvent::RingTimeout),
+            "preempted" => Some(CallEvent::Preempted),
+            "outgoing_started" => Some(CallEvent::OutgoingStarted),
+            _ => None,
+        }
+    }
+}
+
+impl CallQuestion {
+    /// Обратный разбор имени вопроса (`from_name(question_name(q)) == Some(q)`).
+    pub fn from_name(s: &str) -> Option<CallQuestion> {
+        match s {
+            "arm_ring_timer" => Some(CallQuestion::ArmRingTimer),
+            "start_outgoing" => Some(CallQuestion::StartOutgoing),
+            "accept_incoming" => Some(CallQuestion::AcceptIncoming),
+            "accept_outgoing" => Some(CallQuestion::AcceptOutgoing),
+            "cancel_outgoing" => Some(CallQuestion::CancelOutgoing),
+            "send_dc_hangup" => Some(CallQuestion::SendDcHangup),
+            "can_call_back" => Some(CallQuestion::CanCallBack),
+            "ignore_stale_timeout" => Some(CallQuestion::IgnoreStaleTimeout),
+            "apply_sdp" => Some(CallQuestion::ApplySdp),
+            "media_fallback" => Some(CallQuestion::MediaFallback),
+            "call_active" => Some(CallQuestion::CallActive),
+            "call_idle" => Some(CallQuestion::CallIdle),
+            "call_incoming_ringing" => Some(CallQuestion::CallIncomingRinging),
+            "call_outgoing_ringing" => Some(CallQuestion::CallOutgoingRinging),
+            _ => None,
+        }
+    }
+}
+
+impl RequestAction {
+    /// Имя решения на проводе (читает JS-адаптер).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RequestAction::Accept => "accept",
+            RequestAction::Ignore => "ignore",
+            RequestAction::Busy => "busy",
+            RequestAction::Preempt => "preempt",
+        }
+    }
+}
+
 /// Применим ли переход в текущем состоянии.
 ///
 /// JS не должен сравнивать состояния сам («а не active ли мы сейчас?») — это
@@ -523,6 +598,68 @@ mod tests {
             incoming_request_action(CallState::Idle, false, false),
             RequestAction::Accept
         );
+    }
+
+    #[test]
+    fn event_names_roundtrip_both_ways() {
+        let all = [
+            CallEvent::RequestReceived,
+            CallEvent::OutgoingStarted,
+            CallEvent::Accepted,
+            CallEvent::HungUp,
+            CallEvent::RingTimeout,
+            CallEvent::Preempted,
+        ];
+        for ev in all {
+            assert_eq!(CallEvent::from_name(ev.name()), Some(ev), "{:?}", ev);
+        }
+        // Незнакомое имя не превращается ни в одно состояние.
+        assert_eq!(CallEvent::from_name(""), None);
+        assert_eq!(CallEvent::from_name("Accepted"), None, "регистр значим");
+        assert_eq!(CallEvent::from_name("hangup"), None);
+    }
+
+    #[test]
+    fn question_names_roundtrip_both_ways() {
+        let all = [
+            CallQuestion::ArmRingTimer,
+            CallQuestion::StartOutgoing,
+            CallQuestion::AcceptIncoming,
+            CallQuestion::AcceptOutgoing,
+            CallQuestion::CancelOutgoing,
+            CallQuestion::SendDcHangup,
+            CallQuestion::CanCallBack,
+            CallQuestion::IgnoreStaleTimeout,
+            CallQuestion::ApplySdp,
+            CallQuestion::MediaFallback,
+            CallQuestion::CallActive,
+            CallQuestion::CallIdle,
+            CallQuestion::CallIncomingRinging,
+            CallQuestion::CallOutgoingRinging,
+        ];
+        for q in all {
+            assert_eq!(
+                CallQuestion::from_name(question_name(q)),
+                Some(q),
+                "{:?}",
+                q
+            );
+        }
+        assert_eq!(CallQuestion::from_name("call_active_x"), None);
+        // Имена уникальны: два вопроса с одним именем слились бы в таблице JS.
+        let mut names: Vec<&str> = all.iter().map(|q| question_name(*q)).collect();
+        let before = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), before, "имя вопроса перестало быть уникальным");
+    }
+
+    #[test]
+    fn request_action_names_are_the_wire_vocabulary() {
+        assert_eq!(RequestAction::Accept.as_str(), "accept");
+        assert_eq!(RequestAction::Ignore.as_str(), "ignore");
+        assert_eq!(RequestAction::Busy.as_str(), "busy");
+        assert_eq!(RequestAction::Preempt.as_str(), "preempt");
     }
 
     #[test]

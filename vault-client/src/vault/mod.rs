@@ -2,6 +2,7 @@ pub mod contacts;
 pub mod body_absence;
 pub mod backoff;
 pub mod edit;
+pub mod call_record;
 pub mod call_state;
 pub mod channels;
 pub mod envelope;

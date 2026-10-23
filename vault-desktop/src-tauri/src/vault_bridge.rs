@@ -95,14 +95,11 @@ pub fn vault_call_next_state(current: String, event: String) -> String {
         Some(s) => s,
         None => return current,
     };
-    let ev = match event.as_str() {
-        "request_received" => CallEvent::RequestReceived,
-        "outgoing_started" => CallEvent::OutgoingStarted,
-        "accepted" => CallEvent::Accepted,
-        "hung_up" => CallEvent::HungUp,
-        "ring_timeout" => CallEvent::RingTimeout,
-        "preempted" => CallEvent::Preempted,
-        _ => return current,
+    // Имя события разбирает ядро (`CallEvent::from_name`): таблица имён —
+    // протокол, и вторая её копия была бы второй версией того же контракта.
+    let ev = match CallEvent::from_name(&event) {
+        Some(ev) => ev,
+        None => return current,
     };
     match next_state(st, ev) {
         Some(next) => next.as_str().to_string(),
@@ -237,22 +234,11 @@ pub fn vault_call_can(current: String, question: String) -> bool {
         Some(s) => s,
         None => return false,
     };
-    let q = match question.as_str() {
-        "arm_ring_timer" => CallQuestion::ArmRingTimer,
-        "start_outgoing" => CallQuestion::StartOutgoing,
-        "accept_incoming" => CallQuestion::AcceptIncoming,
-        "accept_outgoing" => CallQuestion::AcceptOutgoing,
-        "cancel_outgoing" => CallQuestion::CancelOutgoing,
-        "send_dc_hangup" => CallQuestion::SendDcHangup,
-        "can_call_back" => CallQuestion::CanCallBack,
-        "ignore_stale_timeout" => CallQuestion::IgnoreStaleTimeout,
-        "apply_sdp" => CallQuestion::ApplySdp,
-        "media_fallback" => CallQuestion::MediaFallback,
-        "call_active" => CallQuestion::CallActive,
-        "call_idle" => CallQuestion::CallIdle,
-        "call_incoming_ringing" => CallQuestion::CallIncomingRinging,
-        "call_outgoing_ringing" => CallQuestion::CallOutgoingRinging,
-        _ => return false,
+    // Имя вопроса разбирает ядро: оно же их и печатает в `can_table`, поэтому
+    // round-trip «напечатал ↔ прочитал» держится тестом `question_names_roundtrip`.
+    let q = match CallQuestion::from_name(&question) {
+        Some(q) => q,
+        None => return false,
     };
     can(st, q)
 }
@@ -265,14 +251,9 @@ pub fn vault_call_can_apply(current: String, event: String) -> bool {
         Some(s) => s,
         None => return false,
     };
-    let ev = match event.as_str() {
-        "request_received" => CallEvent::RequestReceived,
-        "outgoing_started" => CallEvent::OutgoingStarted,
-        "accepted" => CallEvent::Accepted,
-        "hung_up" => CallEvent::HungUp,
-        "ring_timeout" => CallEvent::RingTimeout,
-        "preempted" => CallEvent::Preempted,
-        _ => return false,
+    let ev = match CallEvent::from_name(&event) {
+        Some(ev) => ev,
+        None => return false,
     };
     can_apply(st, ev)
 }
@@ -286,13 +267,9 @@ pub fn vault_call_incoming_action(current: String, same_call: bool, has_current:
         Some(s) => s,
         None => return "ignore".to_string(),
     };
-    match incoming_request_action(st, same_call, has_current) {
-        vault_client::vault::call_state::RequestAction::Accept => "accept",
-        vault_client::vault::call_state::RequestAction::Ignore => "ignore",
-        vault_client::vault::call_state::RequestAction::Busy => "busy",
-        vault_client::vault::call_state::RequestAction::Preempt => "preempt",
-    }
-    .to_string()
+    incoming_request_action(st, same_call, has_current)
+        .as_str()
+        .to_string()
 }
 
 /// Тип терминального сигнала при отбое: `call_end` (разговор был) или

@@ -59,6 +59,9 @@ const MAX_TRIES: u32 = 3; // попыток доставки письма до �
 // Таймауты/лимиты/предикат свежести живут в monitor_invariants: они не тянут
 // JNI/БД, поэтому тестируются на хосте обычным `cargo test` (в этом модуле
 // они были недоступны — сам файл под #[cfg(target_os = "android")]).
+// Форма адреса и переходы журнала звонков — ядро (ADR-005 §W4, `t_bf1d393c`).
+use vault_client::vault::call_record::{self, Incoming, RecordState};
+
 use crate::monitor_invariants::{
     date_fresh, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, FRESH_SECS, RING_TIMEOUT_MS, SEEN_CAP,
 };
@@ -364,7 +367,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
         return;
     };
     // Инвариант: решение принимается ровно один раз (в ringing).
-    if entry.state != "ringing" {
+    if entry.state != RecordState::Ringing.as_str() {
         log::info!(
             "[svc-monitor] decision {dec}: call {cid} already {} — ignore",
             entry.state
@@ -377,12 +380,24 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
 
     match dec.as_str() {
         "reject" => {
-            call_set_state(&db, &account, &cid, "rejected", &entry.caller);
+            call_set_state(
+                &db,
+                &account,
+                &cid,
+                RecordState::Rejected.as_str(),
+                &entry.caller,
+            );
             // call_reject звонящему (тот же путь, что nativeSendCallSignal).
             spawn_call_signal_email(entry.email.clone(), cid.clone(), "call_reject");
         }
         "accept" => {
-            call_set_state(&db, &account, &cid, "accepted", &entry.caller);
+            call_set_state(
+                &db,
+                &account,
+                &cid,
+                RecordState::Accepted.as_str(),
+                &entry.caller,
+            );
             // Поднимаем activity: живой JS увидит accepted (фаза 3: событие
             // call-state-changed) и сгенерирует answer.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -793,7 +808,9 @@ fn calls_save(
     let now = now_ms();
     let live: std::collections::HashMap<String, CallEntry> = calls
         .iter()
-        .filter(|(_, c)| c.state == "ringing" || now - c.updated_at < CALL_TOMBSTONE_MS)
+        .filter(|(_, c)| {
+            c.state == RecordState::Ringing.as_str() || now - c.updated_at < CALL_TOMBSTONE_MS
+        })
         .map(|(k, c)| (k.clone(), c.clone()))
         .collect();
     kv_save(db, account, &call_state_key(), &live);
@@ -845,9 +862,15 @@ fn check_ring_timeouts(ctx: &Ctx<'_>) {
     let now = now_ms();
     let mut changed = false;
     for (call_id, c) in calls.iter() {
-        if c.state == "ringing" && now - c.updated_at > RING_TIMEOUT_MS {
+        if c.state == RecordState::Ringing.as_str() && now - c.updated_at > RING_TIMEOUT_MS {
             // missed: надгробие против поздних ретрансляций.
-            call_set_state(ctx.db, ctx.account, call_id, "missed", "");
+            call_set_state(
+                ctx.db,
+                ctx.account,
+                call_id,
+                RecordState::Missed.as_str(),
+                "",
+            );
             log::info!("[svc-monitor] call {call_id}: ring timeout → missed");
             // Снять уведомление звонка (рингтон+вибро) — если висит.
             crate::audio::audio_android::dismiss_incoming_call_notification();
@@ -1121,85 +1144,100 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         .to_string();
     let env_ts = env_json.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    if typ.starts_with("call_") {
+    if call_record::is_call_signal(&typ) {
         let call_id = env_json
             .get("call_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        // ФАЗА 1: владелец состояния — call_state (kv). Терминальные
-        // сигналы звонящего (cancel/end) = ended (надгробие гасит ретрансляции
-        // и зомби). cancel от ЗВОНЯЩЕГО — не от нас: state=ended.
-        if typ == "call_cancel" || typ == "call_end" {
-            call_set_state(ctx.db, ctx.account, &call_id, "ended", "");
-            log::info!("[svc-monitor] call {call_id}: {typ} → ended");
-            return Outcome::Delivered;
-        }
-        if typ == "call_reject" {
-            // Отклонил СОБЕСЕДНИК (мы звонили) или дублируем наш reject —
-            call_set_state(ctx.db, ctx.account, &call_id, "ended", "");
-            return Outcome::Delivered;
-        }
-        // Свежий call_request.
-        if typ == "call_request" && env_ts > 0 && now_ms() - env_ts < CALL_STALE_MS {
-            // Идемпотентность: у call_id уже есть запись?
-            match call_get_state(ctx.db, ctx.account, &call_id) {
-                Some(existing) => {
-                    match existing.state.as_str() {
-                        // Уже звонит: ретрансляция — НЕ перезапускаем рингтон,
-                        // НЕ обновляем уведомление.
-                        "ringing" => {
-                            log::info!("[svc-monitor] call {call_id}: retransmission while ringing — ignore");
-                            return Outcome::Delivered;
-                        }
-                        // Решение принято / звонок завершён / пропущен:
-                        // надгробие гасит всё навсегда.
-                        "accepted" | "rejected" | "missed" | "ended" => {
-                            log::info!(
-                                "[svc-monitor] call {call_id}: request after {} — silent",
-                                existing.state
-                            );
-                            return Outcome::Delivered;
-                        }
-                        _ => {}
-                    }
+        // ВЛАДЕЛЕЦ ПРАВИЛА — ядро (`vault_client::vault::call_record`): там живёт
+        // порядок переходов и там его ловят мутации (`rust-call-record`). Здесь
+        // остаётся ровно исполнение: чтение и запись kv, JNI-уведомление, пуш.
+        // Раньше правило было написано отсюда, а модуль целиком под
+        // #[cfg(target_os = "android")] — то есть на хосте его тесты не
+        // компилировались вообще, и проверка сводилась к живой приёмке.
+        let name = env_json.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let existing = call_get_state(ctx.db, ctx.account, &call_id).map(|e| e.state);
+        return match call_record::decide_incoming(
+            &typ,
+            env_ts,
+            now_ms(),
+            CALL_STALE_MS,
+            existing.as_deref(),
+            name,
+            &from_lc,
+        ) {
+            // Терминальные сигналы звонящего (cancel/end) и reject от собеседника
+            // = ended: надгробие гасит ретрансляции и зомби.
+            Incoming::Terminate => {
+                call_set_state(
+                    ctx.db,
+                    ctx.account,
+                    &call_id,
+                    RecordState::Ended.as_str(),
+                    "",
+                );
+                log::info!("[svc-monitor] call {call_id}: {typ} → ended");
+                Outcome::Delivered
+            }
+            // Уже гудим: ретрансляция call_request — НЕ перезапускаем рингтон и
+            // НЕ обновляем уведомление.
+            Incoming::Retransmission => {
+                log::info!("[svc-monitor] call {call_id}: retransmission while ringing — ignore");
+                Outcome::Delivered
+            }
+            // Решение принято / звонок завершён / пропущен: молча гасим навсегда.
+            Incoming::Settled(state) => {
+                log::info!(
+                    "[svc-monitor] call {call_id}: request after {} — silent",
+                    state.as_str()
+                );
+                Outcome::Delivered
+            }
+            // Первый раз видим этот call_id → ringing + полный показ.
+            Incoming::Ring { caller } => {
+                call_set_state(
+                    ctx.db,
+                    ctx.account,
+                    &call_id,
+                    RecordState::Ringing.as_str(),
+                    &caller,
+                );
+                // email звонящего — для call_accept/reject из решения
+                // (nativeCallDecision, фаза 2): дописываем в запись.
+                let mut calls = calls_load(ctx.db, ctx.account);
+                if let Some(e2) = calls.get_mut(&call_id) {
+                    e2.email = from_lc.clone();
                 }
-                None => {
-                    // Первый раз видим этот call_id → ringing + полный показ.
-                    let caller = env_json
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or(&from_lc)
-                        .to_string();
-                    call_set_state(ctx.db, ctx.account, &call_id, "ringing", &caller);
-                    // email звонящего — для call_accept/reject из решения
-                    // (nativeCallDecision, фаза 2): дописываем в запись.
-                    let mut calls = calls_load(ctx.db, ctx.account);
-                    if let Some(e2) = calls.get_mut(&call_id) {
-                        e2.email = from_lc.clone();
-                    }
-                    calls_save(ctx.db, ctx.account, &calls);
-                    let jni_ok =
-                        crate::audio::audio_android::show_incoming_call_notification(&caller);
-                    log::info!(
-                        "[svc-monitor] call {call_id} NEW from {from_lc}: ringing, jni_ok={jni_ok}"
-                    );
-                    if jni_ok {
-                        return Outcome::Delivered;
-                    }
+                calls_save(ctx.db, ctx.account, &calls);
+                let jni_ok = crate::audio::audio_android::show_incoming_call_notification(&caller);
+                log::info!(
+                    "[svc-monitor] call {call_id} NEW from {from_lc}: ringing, jni_ok={jni_ok}"
+                );
+                if jni_ok {
+                    Outcome::Delivered
+                } else {
                     // JNI-путь не удался — хотя бы пуш «Пропущенный».
-                    call_set_state(ctx.db, ctx.account, &call_id, "missed", &caller);
-                    return if notify(&from_lc, "Пропущенный звонок Vault") {
+                    call_set_state(
+                        ctx.db,
+                        ctx.account,
+                        &call_id,
+                        RecordState::Missed.as_str(),
+                        &caller,
+                    );
+                    if notify(&from_lc, "Пропущенный звонок Vault") {
                         Outcome::Delivered
                     } else {
                         Outcome::Retry
-                    };
+                    }
                 }
             }
-        }
-        log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
-        return Outcome::Delivered;
+            // Не опознан, устарел или пришёл без ts.
+            Incoming::Silent => {
+                log::info!("[svc-monitor] call signal {typ} (stale or no ts) — silent");
+                Outcome::Delivered
+            }
+        };
     }
     // SOS: критичное письмо «телефон не у меня» — пуш с
     // высоким приоритетом, в чат НЕ пишется (JS тоже фильтрует type:sos).
@@ -1355,17 +1393,14 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
         .flatten()
         .map(|c| c.email.to_lowercase())
         .unwrap_or_default();
-    // state от JS: accepted | rejected | ended (активный разговор = accepted)
-    let mapped = match state.as_str() {
-        "accept" | "accepted" | "active" => "accepted",
-        "reject" | "rejected" => "rejected",
-        "end" | "ended" | "cancel" | "hangup" => "ended",
-        _ => state.as_str(),
-    };
+    // state от JS: глагол действия (accept | reject | end), а журнал хранит
+    // состояние; активный разговор = accepted. Отображение — правило ядра
+    // (`vault_client::vault::call_record::report_state`).
+    let mapped = call_record::report_state(&state);
     call_set_state(&db, &account, &call_id, mapped, "");
     log::info!("[svc-monitor] JS reported call {call_id} → {mapped}");
     // уведомление звонка.
-    if matches!(mapped, "accepted" | "rejected") {
+    if call_record::dismisses_ring(mapped) {
         crate::audio::audio_android::dismiss_incoming_call_notification();
     }
     Ok(())
