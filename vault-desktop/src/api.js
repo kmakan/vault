@@ -1606,6 +1606,16 @@ async mediaSoundStop() {
     const g = await invoke('groups_get', { groupId });
     return (g && g.members) || [];
   }
+  // Числится ли адрес в составе группы. Вопрос формы адреса — у моста:
+  // JS-сравнение не срезает обрамление и не складывает регистр кириллицы,
+  // поэтому «Боб@X» и «боб@x» были для фронта разными людьми.
+  async groupHasMember(groupId, email) {
+    try {
+      return await invoke('groups_has_member', { groupId, email: String(email || '') });
+    } catch (e) {
+      return false;
+    }
+  }
   async inviteGroupMember(groupId, email, groupKeyEnc, senderPublicKey) {
     // этого отправляем письмо VaultGroupInvite. Участник попадёт в группу только
     // после того, как примет приглашение (fetchPendingAccepts → groups_add_member).
@@ -2028,7 +2038,12 @@ async mediaSoundStop() {
   }
 
   // --- Групповые инвайты: ожидающие подтверждения ---
-  async fetchPendingInvites() {
+  //
+  // `identity` — функция, отдающая { email, fingerprint, aliases }. Её зовёт
+  // вызывающий (features/invites.js), потому что отпечаток и алиасы живут у
+  // состояния идентичности, а не у транспорта.
+  async fetchPendingInvites(identity) {
+    const me = typeof identity === 'function' ? identity() || {} : {};
     const { groupInvites } = await this.fetchAllHandshake();
     const declined = await this.getDeclinedInvites();
     const accepted = await this.getAcceptedInvites();
@@ -2052,12 +2067,19 @@ async mediaSoundStop() {
       if (declined.some(k => k.startsWith(gidPrefix))) continue;
       if (accepted.some(k => k.startsWith(gidPrefix))) continue;
       // Группа уже импортирована (я участник/создатель) — все её инвайты мимо.
+      // «Моя ли» решает мост: отпечаток, текущий адрес и алиасы. Раньше здесь
+      // стояли два сравнения адреса в JS — участник, записанный старым адресом
+      // или в другом регистре, получал попап по уже принятой группе заново.
+      // null — группы нет локально (не «не моя»), такой инвайт показываем.
       try {
-        const g = await invoke('groups_get', { groupId: parsed.group_id });
-        if (g && (g.created_by === this.email || (g.members || []).some(mm => mm.email === this.email))) {
-          continue;
-        }
-      } catch (e) { /* группа ещё не импортирована */ }
+        const access = await invoke('groups_access', {
+          groupId: parsed.group_id,
+          email: me.email || this.email || '',
+          fingerprint: String(me.fingerprint || ''),
+          aliases: me.aliases || [],
+        });
+        if (access && access.is_mine) continue;
+      } catch (e) { /* локальный список групп недоступен — попап не теряем */ }
       const prev = byGroup.get(parsed.group_id);
       if (!prev || String(m.date || '') >= String(prev.date || '')) {
         byGroup.set(parsed.group_id, m);

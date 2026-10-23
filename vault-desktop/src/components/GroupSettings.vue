@@ -55,7 +55,7 @@
       <h4>{{ t('members') || 'Members' }}</h4>
       <div class="member-list">
         <div
-          v-for="member in group.members"
+          v-for="(member, i) in group.members"
           :key="member.email"
           class="member-item"
         >
@@ -67,13 +67,13 @@
               {{ member.role }}
             </span>
           </div>
-          <div class="member-item__actions" v-if="canRemove(member)">
+          <div class="member-item__actions" v-if="rowAccess(i).removable">
             <select
               v-if="isAdmin"
               :value="member.role || 'Member'"
               @change="$emit('role-change', member.email, $event.target.value)"
               class="role-select"
-              :disabled="member.email === group.created_by"
+              :disabled="!rowAccess(i).settable_role"
             >
               <option value="Admin">{{ t('role_admin') }}</option>
               <option value="Member">{{ t('role_member') }}</option>
@@ -82,7 +82,7 @@
                  участника у нас — во всех чатах и группах. Не рассылается
                  другим (контент серверу не виден), работает только у нас. -->
             <button
-              v-if="member.email !== currentUser"
+              v-if="!rowAccess(i).is_self"
               class="btn-sm"
               :class="isMemberIgnored(member.email) ? 'btn-success' : 'btn-danger'"
               @click="$emit(isMemberIgnored(member.email) ? 'unblock' : 'block', member.email)"
@@ -157,7 +157,10 @@ const { t } = useI18n()
 
 const props = defineProps({
   group: { type: Object, required: true },
-  currentUser: { type: String, required: true },
+  // Ответ моста `groups_access` для этой группы: кто я и что можно с каждой
+  // строкой состава (позиции совпадают с `group.members`). Пока ответ не
+  // пришёл — null, и управляющие элементы скрыты.
+  access: { type: Object, default: null },
   profiles: { type: Object, default: () => ({}) },
   // Глобальный ignore-лист (App.vue): { email: ts }. Показываем
   // заблокированных участников группы и состояние кнопки ⊘/✓.
@@ -189,24 +192,18 @@ function memberName(email) {
   return (p && p.name) || email
 }
 
-const isAdmin = computed(() => {
-  const member = props.group.members?.find(m => m.email === props.currentUser)
-  return member?.role === 'Admin' || props.group.created_by === props.currentUser
-})
-
-// Кого текущий пользователь имеет право удалить:
-// - только админы удаляют участников;
-// - создателя не удаляет никто (он может только выйти сам);
-// - себя через «Покинуть группу».
-function canRemove(member) {
-  if (!props.group) return false
-  if (!isAdmin.value) return false
-  if (member.email === props.group.created_by) return false
-  if (member.email === props.currentUser) return false
-  return true
+// Права на строку состава — из ответа моста. Индекс, а не адрес: сопоставлять
+// адреса во фронте значило бы держать вторую копию правила их формы.
+const NO_RIGHTS = { removable: false, settable_role: false, is_self: false, is_creator: false }
+function rowAccess(i) {
+  return (props.access && props.access.members && props.access.members[i]) || NO_RIGHTS
 }
 
-const isCreator = computed(() => props.group.created_by === props.currentUser)
+// Управление составом/ролями/аватаром/именем: создатель или назначенный
+// админ — ответ моста, до него элементов управления нет.
+const isAdmin = computed(() => !!(props.access && props.access.can_manage))
+
+const isCreator = computed(() => !!(props.access && props.access.is_creator))
 
 // Rename group
 const editingGroupName = ref(false)

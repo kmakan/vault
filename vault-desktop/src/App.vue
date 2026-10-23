@@ -683,7 +683,7 @@
         <div class="group-settings-panel">
           <GroupSettings
             :group="currentGroup"
-            :currentUser="email"
+            :access="groupAccess"
             :profiles="mergedProfiles"
             :ignoredUsers="ignoredUsers"
             @close="showGroupSettings = false"
@@ -973,6 +973,8 @@ import { contactsStore } from './features/contacts-store.js';
 import { mailboxState } from './features/mailbox-store.js';
 // ADR-004 J.6: identity-store owner для peerKeys/peerPqKeys/peerKeyInput/peerKeysLoaded.
 import { identityStore } from './features/identity-store.js';
+// ADR-005 W4 партия 4d: право в группе — ответ моста (groups_access).
+import { groupAccessStore } from './features/group-access.js';
 // ADR-004 J.5d: channels-store owner для channelPosts/channelUnread.
 import { channelsStore } from './features/channels-store.js';
 // ADR-004 J.7: messages-store owner для состояния ephemeral.
@@ -1112,6 +1114,7 @@ export default {
     liveState(foldersStore);
     liveState(channelsStore);
     liveState(identityStore);
+    liveState(groupAccessStore);
     // Модуль-владелец переписки (ADR-004, Этап A1).
     // reactive() оборачивает стор: методы мутируют this.state через прокси,
     // поэтому Vue видит изменения. Без обёртки мутации шли бы мимо прокси
@@ -1729,6 +1732,8 @@ export default {
         peerKeys: () => this.peerKeys,
         publicKey: () => this.publicKey,
         groupKeys: () => this.groupKeys,
+        // Клон разрешён только создателю — ответ моста, не сравнение адресов.
+        refreshGroupAccess: () => this.refreshGroupAccess(),
         // Применение созданной/клонированной группы — как было в App.vue.
         applyCreated: ({ group: g, avatar: av }) => {
           if (av) this.groupsStore.setGroupAvatar(g.id, av);
@@ -1808,7 +1813,22 @@ export default {
     },
     // Прокси во владельца чата (ADR-004 J.3a).
     activeChat: { get() { return this.chatStore.state.activeChat; }, set(v) { this.chatStore.state.activeChat = v ?? null; } },
-    currentGroup: { get() { return this.chatStore.state.currentGroup; }, set(v) { this.chatStore.state.currentGroup = v ?? null; } },
+    // Открытие группы — повод спросить мост о правах (groups_access): смена
+    // группы без перезапроса оставила бы кнопки от прошлой.
+    currentGroup: {
+      get() { return this.chatStore.state.currentGroup; },
+      set(v) {
+        this.chatStore.state.currentGroup = v ?? null;
+        this.selectGroupAccess();
+      },
+    },
+    // Право в открытой группе — значение моста, не вычисление компонента.
+    groupAccess: { get() { return groupAccessStore.state.access; } },
+    // Идентичность для вопросов мосту («чья группа», «что мне можно»): данные
+    // из владельцев (почта, отпечаток, алиасы), а не правило о их форме.
+    groupIdentity() {
+      return { email: this.email, fingerprint: this.fingerprint, aliases: this.aliasesOf(this.email) };
+    },
     // Прокси во владельца очереди инвайтов (ADR-005 W2 партия 4). Поля писали
     // ДВА модуля (invites.js и contacts.js) — теперь у них есть владелец.
     pendingInvites: { get() { return this.invitesStore.state.pendingInvites; }, set(v) { this.invitesStore.setPendingInvites(v); } },
@@ -2295,6 +2315,7 @@ export default {
         cryptoReady: () => this.cryptoReady,
         api,
         db,
+        refreshGroupAccess: () => this.refreshGroupAccess(),
         loadGroupMessages: (id, force) => this.loadGroupMessages(id, force),
         scrollToBottom: (smooth) => this.scrollToBottom(smooth),
         setGroupAvatar: (id, av) => this.groupsStore.setGroupAvatar(id, av),
@@ -2320,6 +2341,7 @@ export default {
         isGroupAdmin: () => this.isGroupAdmin,
         api,
         refreshGroupMembers: () => this.refreshGroupMembers(),
+        refreshGroupAccess: () => this.refreshGroupAccess(),
         getFormField: (name) => uiStore.getFormField(name),
         setFormField: (name, v) => uiStore.setFormField(name, v),
         setModal: (name, v) => uiStore.setModal(name, v),
@@ -2962,13 +2984,12 @@ export default {
       const c = this.contacts.find(c => c.email === this.activeChat);
       return c ? c.name : this.activeChat;
     },
-    // Я — админ текущей группы (создатель или назначенный админ). Управление
-    // составом (добавление/удаление участников) и ролями — только у админов.
+    // Я — админ текущей группы (создатель или назначенный админ). Ответ даёт
+    // мост (`groups_access.can_manage`): во фронте нет ни формы адреса ядра,
+    // ни отпечатка, поэтому сравнение адресов здесь путало регистр и теряло
+    // участника, опознанного по ключу после смены почты.
     isGroupAdmin() {
-      if (this.activeChatType !== 'group' || !this.currentGroup) return false;
-      if (this.currentGroup.created_by === this.email) return true;
-      const me = (this.currentGroup.members || []).find(m => m.email === this.email);
-      return !!(me && me.role === 'Admin');
+      return this.activeChatType === 'group' && !!(this.groupAccess && this.groupAccess.can_manage);
     },
     // Профили с локальными переопределениями — для GroupSettings (список
     // участников группы тоже показывает локальные имена/аватары).
@@ -3498,6 +3519,10 @@ export default {
     stopCallSound() { return CallsFeature.stopCallSound(this.callsDeps); },
     // ── Профили контактов (логика в features/profiles.js) ──
     aliasesOf(email) { return ProfilesFeature.aliasesOf(this.peerKeys, email); },
+    // Открыта группа или закрыта — мост отвечает, что мне в ней можно.
+    selectGroupAccess() { return groupAccessStore.select(this.currentGroup, () => this.groupIdentity); },
+    // Перечитать права открытой группы: после смены состава или роли.
+    refreshGroupAccess() { return groupAccessStore.refresh(() => this.groupIdentity); },
     profileOf(email) { return ProfilesFeature.profileOf(this.profiles, email); },
     localProfileOf(email) { return ProfilesFeature.localProfileOf(this.localProfiles, email); },
     nameOf(email) { return ProfilesFeature.nameOf({ profiles: this.profiles, localProfiles: this.localProfiles, peerKeys: this.peerKeys }, email); },
@@ -4397,6 +4422,9 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async processInvites() {
       return InvitesFeature.processInvites({
         invites: this.invitesStore,
+        // Кто я — для вопроса «группа уже импортирована?» в мосту (отпечаток,
+        // текущий адрес, алиасы). Сравнение адресов в JS отсюда ушло.
+        identity: () => this.groupIdentity,
         loadGroups: () => this.loadGroups(),
         loadChannels: () => this.loadChannels(),
         loadGroupMessages: (id) => this.loadGroupMessages(id, false),

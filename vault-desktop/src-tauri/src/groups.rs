@@ -256,40 +256,86 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
 pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        // Смена почты собеседником. Какую запись оставить и кого пометить
-        // общим ключом решает ядро (`group_rules::plan_rename`) — случай (а)
-        // «старого нет, новый уже участник» и случай (б) «оба адреса в списке»
-        // (живые данные 06.10.2026, группа «Четыре»). Здесь остаётся поиск
-        // позиций по форме адреса (`identity::same_address`) и применение
-        // плана к `GroupMember`.
-        let old_idx = group
-            .members
-            .iter()
-            .position(|m| identity::same_address(&m.email, old_email));
-        let new_idx = group
-            .members
-            .iter()
-            .position(|m| identity::same_address(&m.email, new_email));
-        match group_rules::plan_rename(old_idx, new_idx) {
-            // Старого адреса нет — ренеймить нечего.
-            group_rules::Rename::Nothing => {}
-            group_rules::Rename::MergeDuplicate { drop, keep } => {
-                group.members.remove(drop);
-                group.members[keep].key_shared = true;
-            }
-            group_rules::Rename::Move { at } => {
-                group.members[at].email = new_email.to_string();
-                group.members[at].key_shared = true; // ключ группы у него уже есть
-            }
+        if apply_rename(group, old_email, new_email) {
+            save_groups(&groups)?;
         }
-        if identity::same_address(&group.created_by, old_email) {
-            group.created_by = new_email.to_string();
-        }
-        save_groups(&groups)?;
     } else {
         anyhow::bail!("Group not found");
     }
     Ok(())
+}
+
+/// Применить переименование адреса к ОДНОЙ группе. Возвращает, было ли что
+/// менять — без этого вызывающий перезаписывал бы groups.json на каждый
+/// холостой проход (файл менялся бы по времени, хотя данные те же).
+///
+/// Смена почты собеседником. Какую запись оставить и кого пометить общим
+/// ключом решает ядро (`group_rules::plan_rename`) — случай (а) «старого нет,
+/// новый уже участник» и случай (б) «оба адреса в списке» (живые данные
+/// 06.10.2026, группа «Четыре»). Здесь остаётся поиск позиций по форме
+/// адреса (`identity::same_address`) и применение плана к `GroupMember`.
+fn apply_rename(group: &mut Group, old_email: &str, new_email: &str) -> bool {
+    let old_idx = group
+        .members
+        .iter()
+        .position(|m| identity::same_address(&m.email, old_email));
+    let new_idx = group
+        .members
+        .iter()
+        .position(|m| identity::same_address(&m.email, new_email));
+    let touched = match group_rules::plan_rename(old_idx, new_idx) {
+        // Старого адреса нет — ренеймить нечего.
+        group_rules::Rename::Nothing => false,
+        group_rules::Rename::MergeDuplicate { drop, keep } => {
+            group.members.remove(drop);
+            group.members[keep].key_shared = true;
+            true
+        }
+        group_rules::Rename::Move { at } => {
+            group.members[at].key_shared = true; // ключ группы у него уже есть
+            if group.members[at].email != new_email {
+                group.members[at].email = new_email.to_string();
+            }
+            true
+        }
+    };
+    if identity::same_address(&group.created_by, old_email) && group.created_by != new_email {
+        group.created_by = new_email.to_string();
+        return true;
+    }
+    touched
+}
+
+/// Переименовать адрес во ВСЕХ группах, где он значится создателем или
+/// участником. Возвращает число затронутых групп.
+///
+/// ПРЕЖДЕ этот перебор делал фронт (`migrations.js::renameMeInGroups`) и
+/// решал «мой ли это адрес» сравнением `String(x).toLowerCase() === old`:
+/// обрамление не срезалось, а `toLowerCase` в JS и `normalize` ядра расходятся
+/// на кириллице и на пробелах — группа с тем же человеком в списке просто
+/// не попадала в перебор. Теперь вопрос формы адреса у ядра, а носителя
+/// (фронта) — только число групп для перезагрузки списка.
+pub fn rename_address(old_email: &str, new_email: &str) -> Result<usize> {
+    let mut groups = load_groups()?;
+    let mut touched = 0usize;
+    for group in groups.values_mut() {
+        if apply_rename(group, old_email, new_email) {
+            touched += 1;
+        }
+    }
+    if touched > 0 {
+        save_groups(&groups)?;
+    }
+    Ok(touched)
+}
+
+/// Числится ли адрес в группе (участником). Пустой адрес — не участник
+/// (`identity::normalize` пустое ни с чем не сравнивает).
+pub fn has_member(group: &Group, address: &str) -> bool {
+    group
+        .members
+        .iter()
+        .any(|m| identity::same_address(&m.email, address))
 }
 
 pub fn import_group(
@@ -489,19 +535,107 @@ pub fn filter_own_groups(
     my_fingerprint: &str,
     aliases: &[String],
 ) -> Vec<Group> {
-    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
     groups
         .iter()
-        .filter(|g| {
-            id.owns_group(
-                &g.created_by,
-                g.members
-                    .iter()
-                    .map(|m| (m.email.as_str(), m.fingerprint.as_str())),
-            )
-        })
+        .filter(|g| is_own_group(g, my_email, my_fingerprint, aliases))
         .cloned()
         .collect()
+}
+
+/// «Моя ли эта группа» — тот же вопрос, что задаёт фильтр списка, но об
+/// одной группе. Нужен фронту там, где раньше он решал его сам: `api.js`
+/// сравнивал `g.created_by === this.email` и `mm.email === this.email`,
+/// `groups-clone.js` — `src.created_by !== email`. Сравнение адреса в JS —
+/// это вторая копия правила формы адреса, и она слепнет на регистре,
+/// обрамлении и на участнике, опознанном по отпечатку.
+pub fn is_own_group(
+    group: &Group,
+    my_email: &str,
+    my_fingerprint: &str,
+    aliases: &[String],
+) -> bool {
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
+    id.owns_group(
+        &group.created_by,
+        group
+            .members
+            .iter()
+            .map(|m| (m.email.as_str(), m.fingerprint.as_str())),
+    )
+}
+
+/// Право участника в списке (позиция совпадает с `group.members`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MemberAccess {
+    /// Можно ли убрать этого участника (кнопка ✕).
+    pub removable: bool,
+    /// Можно ли менять ему роль (строка выбора).
+    pub settable_role: bool,
+    /// Это я.
+    pub is_self: bool,
+    /// Это создатель группы.
+    pub is_creator: bool,
+}
+
+/// Ответ фронту «кто я в этой группе и что мне можно». Раньше эти четыре
+/// вопроса фронт решал сам, сравнивая адреса (`App.vue::isGroupAdmin`,
+/// `GroupSettings.vue:194/204/209`): регистр и обрамление в JS не срезаются,
+/// отпечаток не учитывается вовсе, поэтому права то исчезали (группа моя, а
+/// кнопки нет), то появлялись у чужой строки.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GroupAccess {
+    /// Группа в моём списке (создатель или участник — по отпечатку/адресам).
+    pub is_mine: bool,
+    pub is_creator: bool,
+    /// Роль в моей записи — Admin. Создатель ею не обязан быть, поэтому
+    /// `can_manage` шире этого поля.
+    pub is_admin: bool,
+    /// Управляю ли составом и ролями (создатель ИЛИ назначенный админ).
+    pub can_manage: bool,
+    pub members: Vec<MemberAccess>,
+}
+
+pub fn group_access(
+    group: &Group,
+    my_email: &str,
+    my_fingerprint: &str,
+    aliases: &[String],
+) -> GroupAccess {
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
+    // Своя запись в списке: отпечатком или любым из своих адресов (текущий и
+    // алиасы). Её роль и даёт ответ «назначен ли меня админом».
+    let me = group
+        .members
+        .iter()
+        .find(|m| id.member_matches(&m.email, &m.fingerprint));
+    let access = group_rules::Access {
+        is_creator: id.has_address(&group.created_by)
+            || me
+                .map(|m| identity::same_address(&m.email, &group.created_by))
+                .unwrap_or(false),
+        is_admin: me.map(|m| m.role == GroupRole::Admin).unwrap_or(false),
+    };
+    let members = group
+        .members
+        .iter()
+        .map(|m| {
+            let is_creator = identity::same_address(&m.email, &group.created_by);
+            MemberAccess {
+                is_creator,
+                is_self: id.member_matches(&m.email, &m.fingerprint),
+                removable: access
+                    .may_remove(is_creator, id.member_matches(&m.email, &m.fingerprint)),
+                settable_role: access.may_set_role_of(is_creator),
+            }
+        })
+        .collect();
+    GroupAccess {
+        is_mine: is_own_group(group, my_email, my_fingerprint, aliases),
+        is_creator: access.is_creator,
+        is_admin: access.is_admin,
+        can_manage: access.may_manage(),
+        members,
+    }
 }
 
 /// Массовое заполнение СОБСТВЕННОГО fingerprint у участников во ВСЕХ группах.
@@ -1234,6 +1368,165 @@ mod tests {
         let weird = mk_group("g6", "  Admin@X.COM ", &[("ME@NEW.com", "  ")]);
         let got = filter_own_groups(std::slice::from_ref(&weird), "me@new.com", "", &[]);
         assert_eq!(got.len(), 1);
+    }
+
+    // ─── партия 4d: «чья группа» и «что мне в ней можно» отвечает мост ───
+
+    /// Тот же вопрос, что и фильтр списка, но об одной группе: иначе у
+    /// попапа приглашения и у списка групп были бы разные ответы.
+    #[test]
+    fn test_is_own_group_agrees_with_the_list_filter() {
+        let mine_by_fp = mk_group("g3", "third@x.com", &[("elsewhere@y.com", "aabb1122")]);
+        let stranger = mk_group("g4", "somebody@z.com", &[("somebody@z.com", "deadbeef")]);
+        for g in [&mine_by_fp, &stranger].iter() {
+            assert_eq!(
+                is_own_group(g, "me@new.com", "aabb1122", &["me@old.com".to_string()]),
+                !filter_own_groups(
+                    std::slice::from_ref(g),
+                    "me@new.com",
+                    "aabb1122",
+                    &["me@old.com".to_string()]
+                )
+                .is_empty(),
+                "фильтр и одиночный вопрос расходятся на группе {}",
+                g.id
+            );
+        }
+        assert!(is_own_group(&mine_by_fp, "me@new.com", "aabb1122", &[]));
+        assert!(!is_own_group(&stranger, "me@new.com", "aabb1122", &[]));
+    }
+
+    #[test]
+    fn test_group_access_creator_without_admin_role_still_manages() {
+        // Создатель не помечен Admin (старые groups.json): право следует из
+        // создательства, а не из записанной роли.
+        let g = mk_group(
+            "g",
+            "anna@mail.ru",
+            &[("anna@mail.ru", ""), ("oleg@mail.ru", "")],
+        );
+        let a = group_access(&g, "anna@mail.ru", "", &[]);
+        assert!(a.is_mine);
+        assert!(a.is_creator);
+        assert!(!a.is_admin, "роли Admin в записи нет");
+        assert!(a.can_manage);
+        assert!(!a.members[0].removable, "создателя не удаляет никто");
+        assert!(a.members[0].is_creator);
+        assert!(!a.members[0].settable_role, "роль создателя не меняют");
+        assert!(a.members[1].removable);
+        assert!(a.members[1].settable_role);
+    }
+
+    #[test]
+    fn test_group_access_admin_by_role_and_self_row_is_not_removable() {
+        let mut g = mk_group(
+            "g",
+            "anna@mail.ru",
+            &[
+                ("anna@mail.ru", ""),
+                ("oleg@mail.ru", ""),
+                ("petr@mail.ru", ""),
+            ],
+        );
+        g.members[1].role = GroupRole::Admin;
+        let admin = group_access(&g, "oleg@mail.ru", "", &[]);
+        assert!(admin.is_admin);
+        assert!(admin.can_manage);
+        assert!(!admin.is_creator);
+        assert!(admin.members[1].is_self, "своя строка помечена своей");
+        assert!(!admin.members[1].removable, "себя убирают выходом, а не ✕");
+        assert!(admin.members[2].removable);
+        assert!(
+            !admin.members[0].removable,
+            "создателя не удаляет и назначенный админ"
+        );
+        // Обычный участник: смотрит, но не управляет.
+        let member = group_access(&g, "petr@mail.ru", "", &[]);
+        assert!(member.is_mine);
+        assert!(!member.can_manage);
+        assert!(member.members.iter().all(|m| !m.removable));
+        assert!(member.members.iter().all(|m| !m.settable_role));
+    }
+
+    /// Своя запись найдена по отпечатку, хотя адрес в списке — старый:
+    /// права обязан дать, иначе после смены почты исчезает вся настройка
+    /// группы (регрессия 05–06.10.2026, но уже про кнопки, а не про список).
+    #[test]
+    fn test_group_access_uses_fingerprint_of_the_stale_record() {
+        let g = mk_group(
+            "g",
+            "anna@mail.ru",
+            &[("anna@mail.ru", ""), ("me@old.com", "aabb1122")],
+        );
+        let a = group_access(&g, "me@new.com", "aabb1122", &[]);
+        assert!(a.is_mine);
+        assert!(a.members[1].is_self, "запись со старым адресом — я");
+        assert!(!a.members[1].removable);
+        // Тот же случай без отпечатка и без алиаса — группа не моя.
+        let blind = group_access(&g, "me@new.com", "", &[]);
+        assert!(!blind.is_mine);
+        assert!(!blind.can_manage);
+    }
+
+    #[test]
+    fn test_has_member_ignores_the_address_form() {
+        let g = mk_group(
+            "g",
+            "anna@mail.ru",
+            &[("  Боб@Mail.RU ", ""), ("oleg@mail.ru", "")],
+        );
+        assert!(has_member(&g, "боб@mail.ru"));
+        assert!(
+            !has_member(&g, "BOB@MAIL.RU"),
+            "латинская b — не кириллическая «б»"
+        );
+        assert!(has_member(&g, "oleg@mail.ru"));
+        assert!(!has_member(&g, ""), "пустой адрес не участник");
+        assert!(!has_member(&g, "petr@mail.ru"));
+    }
+
+    #[test]
+    fn test_rename_address_walks_every_group_once_and_is_idempotent() {
+        with_tmp_groups(|| {
+            let mut groups: HashMap<String, Group> = HashMap::new();
+            let mut mine = create_group("мои", "me@old.com").unwrap();
+            mine.members.push(GroupMember {
+                email: "petr@mail.ru".to_string(),
+                role: GroupRole::Member,
+                joined_at: String::new(),
+                key_shared: false,
+                fingerprint: String::new(),
+            });
+            let mine_id = mine.id.clone();
+            groups.insert(mine.id.clone(), mine);
+            // Чужая группа, где я числюсь СТАРЫМ адресом в другом написании.
+            let other = mk_group("grp_other", "Anna@mail.RU", &[(" ME@OLD.COM ", "")]);
+            groups.insert(other.id.clone(), other);
+            // Ни одного моего адреса.
+            let stranger = mk_group("grp_stranger", "oleg@mail.ru", &[("oleg@mail.ru", "")]);
+            groups.insert(stranger.id.clone(), stranger);
+            save_groups(&groups).unwrap();
+
+            // Перебор и «мой ли адрес» — теперь здесь: фронт сравнивал
+            // `toLowerCase()` и на написании с пробелом группу бы пропустил.
+            assert_eq!(rename_address(" me@old.com ", "me@new.com").unwrap(), 2);
+            let after = load_groups().unwrap();
+            assert_eq!(after[&mine_id].created_by, "me@new.com");
+            assert!(after[&mine_id]
+                .members
+                .iter()
+                .any(|m| m.email == "me@new.com"));
+            assert_eq!(
+                after["grp_other"].members[0].email, "me@new.com",
+                "запись чужой группы переименована по форме адреса"
+            );
+            assert_eq!(after["grp_stranger"].members[0].email, "oleg@mail.ru");
+            assert_eq!(
+                rename_address("me@old.com", "me@new.com").unwrap(),
+                0,
+                "повторный проход ничего не меняет"
+            );
+        });
     }
 
     // ─── backfill_my_fingerprint: ленивое заполнение своего fp ───

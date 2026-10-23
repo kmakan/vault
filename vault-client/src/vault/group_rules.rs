@@ -65,6 +65,41 @@ pub fn may_set_role(candidate: &str, created_by: &str, target_is_admin: bool) ->
     target_is_admin || !same_address(candidate, created_by)
 }
 
+/// Право текущего пользователя в группе (партия 4d). Носитель раньше был во
+/// фронте: `member?.role === 'Admin' || group.created_by === currentUser`
+/// (`GroupSettings.vue:194`, `isCreator:209`, `App.vue::isGroupAdmin`) — то есть
+/// решение о роли и о том, чья это группа, принималось СРАВНЕНИЕМ АДРЕСА в JS,
+/// где форма адреса своя и регистрозависимая. Ядро отвечает на тот же вопрос по
+/// УСТАНОВЛЕННЫМ фактам (создатель я или нет, админ ли меня назначили), а
+/// носителю остаётся найти эти факты своей идентичностью
+/// ([`crate::vault::identity::Identity::member_matches`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Access {
+    pub is_creator: bool,
+    pub is_admin: bool,
+}
+
+impl Access {
+    /// Управлять составом и ролями может создатель ИЛИ назначенный админ.
+    pub fn may_manage(&self) -> bool {
+        self.is_creator || self.is_admin
+    }
+
+    /// Удалить участника: только управляющему, не создателя (он выходит сам) и
+    /// не себя этим действием (выход — отдельная операция).
+    pub fn may_remove(&self, target_is_creator: bool, target_is_self: bool) -> bool {
+        self.may_manage() && !target_is_creator && !target_is_self
+    }
+
+    /// Менять ли роль этого участника. Создателя — никто: его запись обязана
+    /// остаться управляющей, иначе группа теряет носителя прав. Для фронта
+    /// это ответ «строку выбора роли прятать/гасить», а не «разрешить и
+    /// получить отказ при попытке».
+    pub fn may_set_role_of(&self, target_is_creator: bool) -> bool {
+        self.may_manage() && !target_is_creator
+    }
+}
+
 /// План слияния локального списка участников со списком из инвайта.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InvitePlan {
@@ -223,5 +258,75 @@ mod tests {
         // Пустой адрес — не участник: иначе `push_sender` заводил бы
         // безымянную запись, а она позже совпадала бы с кем угодно.
         assert!(!plan_invite(&["oleg@mail.ru"], &[], "").push_sender);
+    }
+
+    #[test]
+    fn creator_or_admin_manages_the_roster() {
+        let creator = Access {
+            is_creator: true,
+            is_admin: false,
+        };
+        let admin = Access {
+            is_creator: false,
+            is_admin: true,
+        };
+        let member = Access::default();
+        assert!(creator.may_manage());
+        assert!(admin.may_manage());
+        assert!(
+            !member.may_manage(),
+            "обычный участник не управляет составом"
+        );
+    }
+
+    #[test]
+    fn only_manager_removes_and_never_the_creator_or_self() {
+        let admin = Access {
+            is_creator: false,
+            is_admin: true,
+        };
+        assert!(admin.may_remove(false, false));
+        assert!(
+            !admin.may_remove(true, false),
+            "создателя не удаляет никто, даже админ"
+        );
+        assert!(
+            !admin.may_remove(false, true),
+            "себя убирают выходом из группы, а не удалением"
+        );
+        assert!(!Access::default().may_remove(false, false));
+    }
+
+    #[test]
+    fn creator_who_is_not_marked_admin_still_removes() {
+        // Создатель всегда управляет, даже если роль в записи не проставлена
+        // (старые groups.json): право следует из создательства, а не из роли.
+        let creator = Access {
+            is_creator: true,
+            is_admin: false,
+        };
+        assert!(creator.may_remove(false, false));
+    }
+
+    #[test]
+    fn only_manager_changes_roles_and_never_the_creator_row() {
+        let admin = Access {
+            is_creator: false,
+            is_admin: true,
+        };
+        assert!(admin.may_set_role_of(false));
+        assert!(
+            !admin.may_set_role_of(true),
+            "роль создателя не меняет никто, даже админ"
+        );
+        assert!(Access {
+            is_creator: true,
+            is_admin: false
+        }
+        .may_set_role_of(false));
+        assert!(
+            !Access::default().may_set_role_of(false),
+            "обычный участник не назначает роли"
+        );
     }
 }

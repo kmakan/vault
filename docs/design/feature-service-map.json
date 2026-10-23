@@ -36,6 +36,7 @@
         "ephemeral.js",
         "folders.js",
         "forward.js",
+        "group-access.js",
         "group-avatars.js",
         "group-management.js",
         "group-members.js",

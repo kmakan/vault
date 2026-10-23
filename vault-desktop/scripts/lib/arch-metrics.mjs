@@ -101,6 +101,19 @@ export const PROTOCOL_MARKERS = [
   { id: 'ttl',
     re: /\bttl\b\s*[*+]\s*(?:\d|ttl\b)/g,
     why: 'арифметика TTL/истечения в JS: время жизни сообщения — правило протокола (решение — в Rust)' },
+  // ВЛАДЕЛЕЦ ГРУППЫ (партия 4d). «Чья это группа» и «что мне в ней можно» —
+  // вопрос идентичности: отпечаток ключа, текущий адрес и алиасы. Во фронте нет
+  // ни формы адреса ядра, ни отпечатка, поэтому сравнение `created_by` с
+  // адресом — вторая копия правила, и она расходится на регистре, обрамлении и
+  // на участнике, опознанном по ключу после смены почты. Решение — мост:
+  // `groups_access` (права) и `groups_is_mine`-путь в нём же (`is_mine`).
+  //
+  // Ловится сравнение в ЛЮБУЮ сторону и через промежуточное приведение
+  // (`String(g.created_by).toLowerCase() === old`) — именно такая копия жила в
+  // `migrations.js` и молча пропускала группу с адресом в пробелах.
+  { id: 'identity',
+    re: /\bcreated_by\b[^\n;]{0,80}?(?:===?|!==?)|[=!]==?[^\n;]{0,80}?\bcreated_by\b/g,
+    why: 'сравнение владельца группы в JS: «чья это группа» решает Rust (groups_access)' },
 ];
 
 const hits = (src, markers) => markers
@@ -268,6 +281,13 @@ export function selfTest() {
     { name: 'ttl: поле из Rust — не решение', src: 'const e = msg.expiresAt;',         fn: protocolHits, want: 0, id: null },
     { name: 'ttl: склейка строк — не арифметика', src: "log('ttl=' + ttl + ' chat=' + id);", fn: protocolHits, want: 0, id: null },
     { name: 'ttl: комментарий — не решение', src: '// раньше было base + ttl*1000\n',  fn: protocolHits, want: 0, id: null },
+    // (3b) Владелец группы: сравнение ловится в любую сторону и через
+    // приведение к нижнему регистру; чтение поля и перенос адреса — транспорт.
+    { name: 'identity: сравнение владельца поймано', src: 'if (g.created_by === this.email) return;', fn: protocolHits, want: 1, id: 'identity' },
+    { name: 'identity: обратный порядок поймано', src: 'if (email !== src.created_by) return null;', fn: protocolHits, want: 1, id: 'identity' },
+    { name: 'identity: приведение к нижнему регистру поймано', src: "const mine = String(g.created_by || '').toLowerCase() === old;", fn: protocolHits, want: 1, id: 'identity' },
+    { name: 'identity: чтение поля — не решение', src: 'const owner = group.created_by;', fn: protocolHits, want: 0, id: null },
+    { name: 'identity: перенос адреса — транспорт', src: 'payload.created_by = await this.resolvePeerAlias(payload.created_by);', fn: protocolHits, want: 0, id: null },
     // (4) ctx и App.vue: делегат не считается логикой, свой метод — считается.
     { name: 'ctx: ссылка поймана',          src: 'await ctx.sendMessage(x);',            fn: (s) => [{ id: 'ctx', n: countCtxRefs(s) }], want: 1, id: 'ctx' },
     // Комментарий — не связь. Без этой пары один инструмент считает 686, другой

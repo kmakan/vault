@@ -13,7 +13,7 @@
 // это уже рефакторинг поведения, а не его перенос. Помечено в ADR-003 §5.
 
 import { invoke } from '@tauri-apps/api/core';
-import api, { db } from './api.js';
+import { db } from './api.js';
 import { accountNamespace } from './identity.js';
 
 export async function migrateAccountData(oldEmail, newEmail) {
@@ -39,20 +39,14 @@ export async function migrateAccountData(oldEmail, newEmail) {
 // семантика разная — «сменил почту я» и «сменил почту пир»), но ПЕРЕБОР и
 // ПЕРЕИМЕНОВАНИЕ — одна и та же операция, и две копии правила расходились: в
 // одной был guard «старый == новый», в другой — нет. Правило должно быть одно.
+//
+// Перебор групп и вопрос «мой ли этот адрес» — в мосте
+// (`groups_rename_address`): сравнение адресов — форма, у которой один
+// носитель (`identity` ядра). Прежний перебор жил здесь и сравнивал
+// `toLowerCase()`: обрамление не срезалось, и группа с « me@old.com » в
+// составе под переименование не попадала.
 async function renameMeInGroups(oldEmail, newEmail) {
-  const all = await api.getGroups();
-  const old = String(oldEmail).toLowerCase();
-  let n = 0;
-  for (const g of all || []) {
-    const mine = String(g.created_by || '').toLowerCase() === old
-      || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);
-    if (!mine) continue;
-    await invoke('groups_rename_member', {
-      groupId: g.id, oldEmail, newEmail,
-    });
-    n++;
-  }
-  return n;
+  return await invoke('groups_rename_address', { oldEmail, newEmail });
 }
 
 export async function migrateOwnGroups(oldEmail, newEmail) {
@@ -68,11 +62,11 @@ export async function migrateOwnGroups(oldEmail, newEmail) {
 // ── Переносы при смене почты (ADR-003 Этап 3, партия 9) ───────────────
 // Все три переехали сюда по одной причине: это миграции идентичности, и лежать
 // им надолго в компоненте не место. Побочный эффект переноса — ВИДИМОЕ
-// дублирование: migratePeerGroups и migrateOwnGroups (выше) делают одно и то
-// же — перебор групп и groups_rename_member для всех, где мы создатель или
-// участник. Разница только в возврате (счётчик против ничего) и перезагрузке
-// списка. НЕ СЛИТО: слияние меняет семантику вызова (migrateOwnGroups не
-// перечитывает список), а это не перемещение. Решение вынесено в ADR-003 §5.
+// дублирование: migratePeerGroups и migrateOwnGroups (выше) зовут одну и ту же
+// команду моста (`groups_rename_address`). Разница только в возврате (счётчик
+// против ничего) и перезагрузке списка. НЕ СЛИТО: слияние меняет семантику
+// вызова (migrateOwnGroups не перечитывает список), а это не перемещение.
+// Решение вынесено в ADR-003 §5.
 
 // Ключ ЧАТА С СОБЕСЕДНИКОМ (chat-cache:<email пира>) переименовывается, когда
 // сменил почту ПИР, а не мы. Поэтому account идёт через резолвер (identity =

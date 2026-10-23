@@ -136,6 +136,14 @@ impl Identity {
         same_fingerprint(&self.fingerprint, candidate)
     }
 
+    /// Принадлежит ли мне ЭТА запись участника: адрес (email или алиас) ИЛИ
+    /// отпечаток. Отпечаток стабилен при смене почты, поэтому он и решает, а
+    /// адрес — fallback для записей, где fp ещё не заполнен. Пустой fp ни с
+    /// чем не совпадает.
+    pub fn member_matches(&self, email: &str, fingerprint: &str) -> bool {
+        self.has_address(email) || self.has_fingerprint(fingerprint)
+    }
+
     /// Моя ли группа. `members` — пары (адрес участника, его отпечаток):
     /// форма записи здесь не важна, важен вопрос. Создатель считается по
     /// адресам (email ∪ алиасы), участник — по адресу ИЛИ отпечатку:
@@ -151,7 +159,7 @@ impl Identity {
         }
         members
             .into_iter()
-            .any(|(email, fp)| self.has_address(email) || self.has_fingerprint(fp))
+            .any(|(email, fp)| self.member_matches(email, fp))
     }
 }
 
@@ -252,6 +260,26 @@ mod tests {
             "oleg@mail.ru",
             members(&[("oleg@mail.ru", "ff00"), ("petr@mail.ru", "")])
         ));
+    }
+
+    #[test]
+    fn member_record_is_mine_by_address_or_fingerprint() {
+        // Тот же предикат, по которому `owns_group` находит участника, теперь
+        // доступен носителю отдельно: по нему фронт узнаёт «моя ли это строка»
+        // (права в группе), не сравнивая адреса сам.
+        assert!(id().member_matches(" ANNA@mail.ru ", ""));
+        assert!(id().member_matches("anna@ya.ru", "")); // алиас
+        assert!(id().member_matches("oleg@mail.ru", FP)); // мой отпечаток
+        assert!(!id().member_matches("oleg@mail.ru", ""));
+        // Пустой адрес сам по себе — не я, НО отпечаток решает: строка участника
+        // без адреса с моим ключом принадлежит мне (инвайты без `sender`).
+        assert!(!id().member_matches("", ""));
+        assert!(id().member_matches("", FP));
+        let no_fp = Identity::new(ME, &[], "");
+        assert!(
+            !no_fp.member_matches("oleg@mail.ru", ""),
+            "пустой отпечаток ничего не утверждает"
+        );
     }
 
     #[test]

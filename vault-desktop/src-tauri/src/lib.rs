@@ -1247,6 +1247,43 @@ fn groups_load_own(
     Ok(mine)
 }
 
+/// Права текущего пользователя в группе — один ответ вместо четырёх
+/// сравнений адресов во фронте. `None` — группы нет в локальном списке
+/// (её ещё не импортировали): это НЕ «не моя», а «не знаю», и фронт обязан
+/// различать эти два случая (попап приглашения показывается именно когда
+/// группы нет).
+#[tauri::command]
+fn groups_access(
+    group_id: String,
+    email: String,
+    fingerprint: String,
+    aliases: Vec<String>,
+) -> Result<Option<groups::GroupAccess>, String> {
+    let all = groups::load_groups().map_err(|e| e.to_string())?;
+    Ok(all
+        .get(&group_id)
+        .map(|g| groups::group_access(g, &email, &fingerprint, &aliases)))
+}
+
+/// Числится ли адрес в составе группы (с той же формой адреса, что и в
+/// `groups.json`: регистр и обрамление не значимы).
+#[tauri::command]
+fn groups_has_member(group_id: String, email: String) -> Result<bool, String> {
+    let all = groups::load_groups().map_err(|e| e.to_string())?;
+    let group = all
+        .get(&group_id)
+        .ok_or_else(|| "Group not found".to_string())?;
+    Ok(groups::has_member(group, &email))
+}
+
+/// Переименовать адрес во всех группах сразу (переехал на новую почту я сам
+/// или собеседник). Возвращает число изменённых групп, чтобы фронт перечитал
+/// список только когда это имело смысл.
+#[tauri::command]
+fn groups_rename_address(old_email: String, new_email: String) -> Result<usize, String> {
+    groups::rename_address(&old_email, &new_email).map_err(|e| e.to_string())
+}
+
 /// Заполнить СОБСТВЕННЫЙ fingerprint у участников во ВСЕХ группах (ленивая
 /// миграция старых groups.json: группы, которые никто не открывал в UI,
 /// иначе остаются с пустым fp и не находятся fp-only фильтром groups_load_own).
@@ -2168,6 +2205,9 @@ pub fn run() {
             channels_delete,
             groups_rename_member,
             groups_load_own,
+            groups_access,
+            groups_has_member,
+            groups_rename_address,
             groups_backfill_my_fingerprint,
             groups_save_member_fingerprints,
             android_open_url,

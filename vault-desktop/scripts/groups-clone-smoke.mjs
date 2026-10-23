@@ -15,7 +15,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/groups-clone-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-const state = { order: [], kv: {}, failInviteFor: null, failCreate: false };
+const state = { order: [], kv: {}, failInviteFor: null, failCreate: false, isCreator: true };
 globalThis.__state = state;
 
 const api = {
@@ -55,7 +55,7 @@ const GC = await import(MOCKS + '/groups-clone.mjs');
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } else { fail++; console.log('  ✗ ПРОВАЛ:', name); } };
-const reset = () => { state.order = []; state.kv = {}; state.failInviteFor = null; state.failCreate = false; state.lastEnc = null; };
+const reset = () => { state.order = []; state.kv = {}; state.failInviteFor = null; state.failCreate = false; state.lastEnc = null; state.isCreator = true; };
 
 const SRC = { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [
   { email: 'me@bk.ru', role: 'Admin' },
@@ -152,6 +152,10 @@ console.log('\n10. cloneGroupFlow (поток из UI)');
     applyCreated: (x) => calls.push(['applyCreated', x.group.id]),
     onDone: (inv, skip) => calls.push(['onDone', inv.join(','), skip.join(',')]),
     onError: (e) => calls.push(['onError', e.message]),
+    // Право на клон — ответ моста (groups_access.is_creator), а не сравнение
+    // `src.created_by === email` во фронте. Подставное значение — единственный
+    // способ проверить, что сравнения в модуле больше нет.
+    refreshGroupAccess: async () => ({ is_creator: state.isCreator }),
   };
   reset();
   let r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [{ email: 'a@x', role: 'Member' }] } });
@@ -166,11 +170,28 @@ console.log('\n10. cloneGroupFlow (поток из UI)');
   ok('поток: состояние применено', calls.some((c) => c[0] === 'applyCreated'), calls);
   ok('поток: отчёт по приглашённым', calls.some((c) => c[0] === 'onDone' && c[1] === 'a@x'), calls);
 
-  // Не создатель — клона нет, диалог не открывается.
+  // Не создатель — клона нет, диалог не открывается. Решает ответ моста:
+  // адрес в `created_by` намеренно совпадает с нашим, чтобы проверка ловила
+  // возврат к сравнению адресов в JS.
   reset();
   calls.length = 0;
-  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Чужая', created_by: 'other@bk.ru', members: [] } });
+  state.isCreator = false;
+  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Чужая', created_by: 'me@bk.ru', members: [] } });
   ok('поток: не создатель не клонирует', r === null && calls.length === 0, calls);
+
+  // Мост не ответил о правах (группа не сохранена локально / сбой): без
+  // ответа клон не делаем — «неизвестно» не равно «можно».
+  reset();
+  calls.length = 0;
+  r = await GC.cloneGroupFlow({ ...deps, refreshGroupAccess: async () => null }, { src: { id: 'g1', name: 'Оригинал', created_by: 'me@bk.ru', members: [] } });
+  ok('поток: без ответа моста о правах клона нет', r === null && calls.length === 0, calls);
+
+  // И наоборот: адрес записан в другом написании, но мост говорит «создатель» —
+  // клон разрешён. Это и есть поведение, которого не было при сравнении в JS.
+  reset();
+  calls.length = 0;
+  r = await GC.cloneGroupFlow(deps, { src: { id: 'g1', name: 'Оригинал', created_by: ' ME@BK.RU ', members: [] } });
+  ok('поток: право берётся из ответа моста, а не из сравнения адреса', r !== null, r);
 
   // Пустое имя из диалога — клона нет.
   reset();

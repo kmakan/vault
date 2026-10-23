@@ -6,7 +6,11 @@
 //     профиля должен уцелеть;
 //   · история чата — если ключ нового адреса уже занят, чужая история не
 //     перезаписывается (и старый ключ тоже не удаляется);
-//   · группы — переименовываются только те, где мы создатель или участник.
+//   · группы — переименовываются только те, где мы создатель или участник;
+//     сам перебор и «мой ли этот адрес» — в мосте (`groups_rename_address`),
+//     его поведение измеряет набор моста. Здесь проверяется то, что осталось
+//     фронту: передать пару адресов, вернуть число и перечитать список,
+//     только когда число больше нуля.
 //
 // Плюс перечитывание списка: без него на экране остались бы старые адреса.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -16,17 +20,16 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/migrations-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-const st = { kv: {}, groups: [], renamed: [], nsOf: (e) => 'fp:' + e };
+const st = { kv: {}, renameArgs: [], renameCount: 2, nsOf: (e) => 'fp:' + e };
 globalThis.__st = st;
 globalThis.__invoke = async (cmd, args) => {
-  if (cmd === 'groups_rename_member') { st.renamed.push(args); return null; }
+  if (cmd === 'groups_rename_address') { st.renameArgs.push(args); return st.renameCount; }
   return null;
 };
 writeFileSync(MOCKS + '/core.js', 'export const invoke = (...a) => globalThis.__invoke(...a);');
 writeFileSync(MOCKS + '/identity.js',
   "export const accountNamespace = async (e) => globalThis.__st.nsOf(e);");
 writeFileSync(MOCKS + '/api.js', `
-export default { getGroups: async () => globalThis.__st.groups };
 export const db = {
   kvGet: async (acct, key) => {
     const scope = (globalThis.__st.kv[acct] || {})[key];
@@ -49,7 +52,10 @@ const M = await import(MOCKS + '/migrations.mjs');
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { if (cond) { pass++; console.log('  ✓', name); } else { fail++; console.log('  ✗ ПРОВАЛ:', name); } };
-const reset = () => { st.kv = {}; st.groups = []; st.renamed = []; st.nsOf = (e) => 'fp:' + e; };
+const reset = () => {
+  st.kv = {}; st.renameArgs = []; st.renameCount = 2;
+  st.nsOf = (e) => 'fp:' + e;
+};
 const prof = () => JSON.parse(st.kv['anon'] ? st.kv['anon']['profiles'] : '{}');
 
 console.log('\nADR-003 Этап 3, партия 9 · миграции при смене почты');
@@ -104,26 +110,32 @@ r = await M.migrateOwnProfile('old@bk.ru', 'new@bk.ru');
 ok('нет профиля старого адреса → null', r === null);
 
 // ── migratePeerGroups ─────────────────────────────────────────────────
+// Сам перебор и «мой ли этот адрес» — в мосте; здесь только контракт фронта:
+// одна пара адресов, число из ответа и перечитывание списка ровно тогда, когда
+// число больше нуля.
 reset();
-st.groups = [
-  { id: 'g1', created_by: 'Old@BK.RU', members: [] },
-  { id: 'g2', created_by: 'zzz@x', members: [{ email: 'OLD@bk.ru' }] },
-  { id: 'g3', created_by: 'zzz@x', members: [{ email: 'qqq@x' }] },
-];
 let reloaded = 0;
 let n = await M.migratePeerGroups('old@bk.ru', 'new@bk.ru', async () => { reloaded++; });
-ok('переименованы группы, где мы создатель или участник', n === 2);
-ok('это именно g1 и g2', st.renamed.map(x => x.groupId).sort().join(',') === 'g1,g2');
+ok('число переименованных — из ответа моста', n === 2);
+ok('в мост ушла ОДНА пара адресов, без перебора групп на фронте',
+  st.renameArgs.length === 1
+  && st.renameArgs[0].oldEmail === 'old@bk.ru' && st.renameArgs[0].newEmail === 'new@bk.ru');
 ok('список перечитан один раз', reloaded === 1);
 
 reset();
-st.groups = [{ id: 'g4', created_by: 'zzz@x', members: [] }];
+st.renameCount = 0;
 reloaded = 0;
 n = await M.migratePeerGroups('old@bk.ru', 'new@bk.ru', async () => { reloaded++; });
 ok('если ничего не поменялось — список не перечитывается', n === 0 && reloaded === 0);
+
+reset();
+let calls = st.renameArgs.length;
 ok('пустые адреса отсекаются', (await M.migratePeerGroups('', 'new@bk.ru', null)) === 0);
+ok('и в мост при этом не ходим', st.renameArgs.length === calls);
+
+reset();
+st.renameCount = 1;
 ok('упавший onRenamed не ломает перенос', await (async () => {
-  st.groups = [{ id: 'g5', created_by: 'old@bk.ru', members: [] }];
   return await M.migratePeerGroups('old@bk.ru', 'new@bk.ru', async () => { throw new Error('список не прочитался'); }) === 1;
 })());
 

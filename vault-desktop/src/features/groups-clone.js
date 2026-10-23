@@ -57,13 +57,16 @@ export async function cloneGroup({ src, name, email, peerKeys, publicKey, onCrea
 // ── ADR-005 W3 (партия 11): поток клонирования из UI ────────────────────
 // Диалог (prompt имени), применение состояния, отчёт о приглашённых и
 // пропущенных — в App.vue остались только вызовы. Клонировать может только
-// создатель оригинала — проверка здесь, не в компоненте.
+// создатель оригинала — это ответ моста (`groups_access.is_creator`), а не
+// сравнение `src.created_by !== email` в JS: адрес сравнивался точно, поэтому
+// создатель, чья запись записана в другом регистре, кнопку не получал.
 export async function cloneGroupFlow(deps, { src }) {
   const {
     email, peerKeys, publicKey, promptName, closeSettings, applyCreated,
-    onDone, onError,
+    onDone, onError, refreshGroupAccess,
   } = deps;
-  if (!src || src.created_by !== email) return null;
+  const access = src ? await refreshGroupAccess() : null;
+  if (!src || !access || !access.is_creator) return null;
   const base = (src.name || 'Группа').trim();
   const name = promptName(base + ' 2');
   if (!name || !name.trim()) return null;

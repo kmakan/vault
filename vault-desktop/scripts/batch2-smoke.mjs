@@ -30,7 +30,7 @@ globalThis.__invoke = async (cmd, args) => {
     if (globalThis.__migrateFails) throw new Error('перенос отказан');
     return { total: 7 };
   }
-  if (cmd === 'groups_rename_member') { globalThis.__renameCalls.push(args); return null; }
+  if (cmd === 'groups_rename_address') { globalThis.__renameCalls.push(args); return 2; }
   return null;
 };
 globalThis.__migrateCalls = [];
@@ -52,7 +52,6 @@ writeFileSync(MOCKS + '/identity.js',
 // но мок обязан повторять форму модуля — иначе падает на резолве, и падение
 // выглядит как «сломан продукт», а не «неполный мок».
 writeFileSync(MOCKS + '/api.js', `
-export default { getGroups: async () => globalThis.__groups };
 export const db = {
   kvGet: async () => null, kvSet: async () => {}, kvDelete: async () => {},
 };
@@ -158,17 +157,12 @@ ok('отказ переноса не выходит наружу (ошибка �
 ok('при отказе перенос всё же пытался выполниться', globalThis.__migrateCalls.length === 1);
 globalThis.__migrateFails = false;
 
-// ── migrateOwnGroups: кто считается «своим» ───────────────────────────
-globalThis.__groups = [
-  { id: 'g1', created_by: 'Old@BK.RU', members: [] },              // создатель, другой регистр
-  { id: 'g2', created_by: 'other@x', members: [{ email: 'OLD@bk.ru' }] }, // участник
-  { id: 'g3', created_by: 'other@x', members: [{ email: 'zzz@x' }] },    // не наш
-];
+// ── migrateOwnGroups: перебор — в мосте, фронт передаёт пару ──────────
 reset();
 await MIG.migrateOwnGroups('old@bk.ru', 'new@bk.ru');
-ok('переименованы группы, где мы создатель ИЛИ участник', globalThis.__renameCalls.length === 2);
-ok('и это именно g1 и g2',
-  globalThis.__renameCalls.map(c => c.groupId).sort().join(',') === 'g1,g2');
+ok('вызов моста один, с парой адресов', globalThis.__renameCalls.length === 1
+  && globalThis.__renameCalls[0].oldEmail === 'old@bk.ru'
+  && globalThis.__renameCalls[0].newEmail === 'new@bk.ru', globalThis.__renameCalls);
 reset();
 await MIG.migrateOwnGroups('same@bk.ru', 'same@bk.ru');
 ok('одинаковые адреса → ничего не делает', globalThis.__renameCalls.length === 0);

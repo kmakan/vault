@@ -35,6 +35,7 @@ function makeDeps(over = {}) {
     alerts: [],
     apiCalls: [],
     refreshed: 0,
+    accessRefreshed: 0,
     created: 0,
   };
   // Группа — ОДИН объект на стенд: иначе «обновление роли в локальном
@@ -47,8 +48,14 @@ function makeDeps(over = {}) {
     api: {
       removeGroupMember: async (gid, email) => { st.apiCalls.push(['remove', gid, email]); },
       setGroupMemberRole: async (gid, email, role) => { st.apiCalls.push(['role', gid, email, role]); },
+      // «Уже в группе» решает мост; стенд отвечает как живой groups_has_member.
+      groupHasMember: async (gid, email) => {
+        st.apiCalls.push(['has', gid, email]);
+        return group.members.some((m) => m.email === email);
+      },
     },
     refreshGroupMembers: async () => { st.refreshed += 1; },
+    refreshGroupAccess: async () => { st.accessRefreshed += 1; },
     getFormField: (name) => st.form[name],
     setFormField: (name, v) => { st.form[name] = v; },
     setModal: (name, v) => { st.modals[name] = v; },
@@ -88,22 +95,38 @@ function makeDeps(over = {}) {
 // ── Ввод адреса вручную ────────────────────────────────────────────────
 {
   const deps = makeDeps();
-  check('ручной ввод: пусто — ничего', G.addManualEmail(deps) === false && deps.st.form.addMemberSelected.length === 0);
+  check('ручной ввод: пусто — ничего', (await G.addManualEmail(deps)) === false && deps.st.form.addMemberSelected.length === 0);
   deps.st.form.addMemberQuery = 'не-адрес';
-  check('ручной ввод: без @ — ничего', G.addManualEmail(deps) === false);
+  check('ручной ввод: без @ — ничего', (await G.addManualEmail(deps)) === false);
+  check('ручной ввод: кривой адрес в мост не уходит',
+    deps.st.apiCalls.length === 0, deps.st.apiCalls);
 }
 {
   const deps = makeDeps();
   deps.st.form.addMemberQuery = 'a@x.ru';
   check('ручной ввод: уже в группе — отказ с объяснением',
-    G.addManualEmail(deps) === false && deps.st.alerts.length === 1, deps.st.alerts);
+    (await G.addManualEmail(deps)) === false && deps.st.alerts.length === 1, deps.st.alerts);
   check('ручной ввод: уже в группе — в выборку не попал',
     deps.st.form.addMemberSelected.length === 0, deps.st.form);
 }
 {
+  // Форма адреса — не вопрос фронта: он даже не сравнивает написание, а
+  // спрашивает мост. Отвечает «такой уже есть» — отказ.
+  const deps = makeDeps({
+    api: {
+      groupHasMember: async () => true,
+      removeGroupMember: async () => {},
+      setGroupMemberRole: async () => {},
+    },
+  });
+  deps.st.form.addMemberQuery = 'A@X.RU';
+  check('ручной ввод: «уже в группе» решает мост, а не регистр в JS',
+    (await G.addManualEmail(deps)) === false && deps.st.alerts.length === 1, deps.st.alerts);
+}
+{
   const deps = makeDeps();
   deps.st.form.addMemberQuery = ' new@x.ru ';
-  check('ручной ввод: новый адрес добавлен', G.addManualEmail(deps) === true);
+  check('ручной ввод: новый адрес добавлен', (await G.addManualEmail(deps)) === true);
   check('ручной ввод: адрес обрезан и добавлен',
     deps.st.form.addMemberSelected[0] === 'new@x.ru', deps.st.form);
   check('ручной ввод: поле очищено', deps.st.form.addMemberQuery === '', deps.st.form);
@@ -111,9 +134,9 @@ function makeDeps(over = {}) {
 {
   const deps = makeDeps();
   deps.st.form.addMemberQuery = 'new@x.ru';
-  G.addManualEmail(deps);
+  await G.addManualEmail(deps);
   deps.st.form.addMemberQuery = 'new@x.ru';
-  G.addManualEmail(deps);
+  await G.addManualEmail(deps);
   check('ручной ввод: повтор не дублирует', deps.st.form.addMemberSelected.length === 1, deps.st.form);
 }
 
@@ -137,13 +160,35 @@ function makeDeps(over = {}) {
 }
 {
   const deps = makeDeps();
-  check('удаление: участника нет — ничего', (await G.removeMember(deps, 'no@x.ru')) === false);
+  check('удаление: своего списка участников фронт не перебирает — решает мост',
+    (await G.removeMember(deps, 'no@x.ru')) === true);
 }
 {
-  const deps = makeDeps();
-  check('удаление: создателя нельзя', (await G.removeMember(deps, 'owner@x.ru')) === false);
-  check('удаление: создателя — объяснение', deps.st.alerts.length === 1, deps.st.alerts);
-  check('удаление: создателя — сервер не трогаем', deps.st.apiCalls.length === 0, deps.st.apiCalls);
+  // Отказ «создателя нельзя» приходит ИЗ МОСТА: в JS-списке такой проверки
+  // больше нет. Проверяем, что отказ переведён, а состав не перечитан.
+  const deps = makeDeps({
+    api: {
+      removeGroupMember: async () => { throw new Error('cannot remove creator'); },
+      setGroupMemberRole: async () => {},
+      groupHasMember: async () => false,
+    },
+  });
+  check('удаление: отказ моста по создателю — false', (await G.removeMember(deps, 'owner@x.ru')) === false);
+  check('удаление: отказ по создателю переведён',
+    deps.st.alerts.length === 1 && deps.st.alerts[0] === 'cannot_remove_creator', deps.st.alerts);
+  check('удаление: после отказа состав не перечитываем', deps.st.refreshed === 0, deps.st.refreshed);
+}
+{
+  const deps = makeDeps({
+    api: {
+      removeGroupMember: async () => { throw new Error('сеть недоступна'); },
+      setGroupMemberRole: async () => {},
+      groupHasMember: async () => false,
+    },
+  });
+  check('удаление: прочий отказ показывается как есть',
+    (await G.removeMember(deps, 'a@x.ru')) === false && deps.st.alerts[0] === 'сеть недоступна',
+    deps.st.alerts);
 }
 {
   const deps = makeDeps();
@@ -174,14 +219,17 @@ function makeDeps(over = {}) {
   check('роль: обновлена в локальном составе',
     (deps.group().members.find((m) => m.email === 'a@x.ru') || {}).role === 'admin',
     deps.group().members);
+  check('роль: права перечитаны (роль могла смениться и у меня)',
+    deps.st.accessRefreshed === 1, deps.st.accessRefreshed);
 }
 {
   const deps = makeDeps({
-    api: { setGroupMemberRole: async () => { throw new Error('отказ'); } },
+    api: { setGroupMemberRole: async () => { throw new Error('отказ'); }, groupHasMember: async () => false, removeGroupMember: async () => {} },
   });
   check('роль: сбой сервера — сообщение пользователю',
     (await G.changeMemberRole(deps, 'a@x.ru', 'admin')) === false && deps.st.alerts.length === 1,
     deps.st.alerts);
+  check('роль: после сбоя права не перечитываем', deps.st.accessRefreshed === 0, deps.st.accessRefreshed);
 }
 
 // ── Создание группы и закрытие окна ───────────────────────────────────

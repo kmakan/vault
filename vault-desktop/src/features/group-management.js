@@ -42,6 +42,9 @@ export async function refreshGroupMembers(deps) {
   if (!group) return;
   try {
     group.members = await deps.api.getGroupMembers(group.id);
+    // Состав перечитан — права могли измениться (принят новый участник,
+    // роль из свежего инвайта). Вопрос «что мне можно» — к мосту.
+    await deps.refreshGroupAccess();
   } catch (e) {
     console.error('refreshGroupMembers failed:', e);
   }

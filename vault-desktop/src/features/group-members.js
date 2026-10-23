@@ -5,16 +5,21 @@
 // участника, ввести адрес вручную, добавить, удалить, сменить роль.
 //
 // ЗАЩИТА ОТ ОБХОДА UI (это важно): удаление участников и смена ролей — только
-// у админов. Проверка «я админ» повторяется в фиче, а не только прячется в
-// шаблоне: иначе действие, доступное из консоли, меняло бы состав группы.
+// у админов. «Я админ» здесь — значение, пришедшее из моста (`groups_access`,
+// поле `can_manage`), а не сравнение адресов: у фронта нет ни формы адреса
+// ядра, ни отпечатка, поэтому своё сравнение путало регистр и не узнавало
+// участника, опознанного по ключу после смены почты.
 //
 // СОЗДАТЕЛЬ НЕПРИКОСНОВЕНЕН: удалить его нельзя — может только выйти сам
-// («Покинуть группу»). Попытка удаления показывает объяснение.
+// («Покинуть группу»). Страж — в мосте (`group_rules::may_remove_member`),
+// здесь только перевод его отказа.
 //
 // deps (ADR-001 R3): всё, что нужно снаружи, — явными параметрами:
 //   group() / isGroupAdmin() — что открыто и наши ли мы админ;
-//   api.removeGroupMember / api.setGroupMemberRole — изменения на сервере;
+//   api.removeGroupMember / api.setGroupMemberRole / api.groupHasMember —
+//     вопросы и изменения на стороне моста;
 //   refreshGroupMembers() — перечитать состав после изменения;
+//   refreshGroupAccess() — перечитать права (ответ моста изменился);
 //   getFormField / setFormField — поля формы выбора участников (uiStore);
 //   setModal(name, value) — флаги модалок (uiStore);
 //   alert(msg) / toast(msg) / tr(key) — обратная связь;
@@ -38,11 +43,14 @@ export function toggleAddMember(deps, email) {
 }
 
 // Ввести email вручную: добавляем в выборку, отправка — кнопкой «Пригласить».
-export function addManualEmail(deps) {
+export async function addManualEmail(deps) {
   const email = (deps.getFormField('addMemberQuery') || '').trim();
   if (!email || !email.includes('@')) return false;
-  const members = (deps.group() && deps.group().members) || [];
-  if (members.some((m) => m.email === email)) {
+  const group = deps.group();
+  // «Уже в группе» — вопрос формы адреса, и решает его мост: сравнение в JS
+  // не срезает обрамление и не складывает регистр кириллицы, поэтому
+  // «Боб@X» и «боб@x» проходили как два разных человека.
+  if (group && await deps.api.groupHasMember(group.id, email)) {
     deps.alert(deps.tr('already_in_group') || 'Этот участник уже в группе');
     return false;
   }
@@ -62,18 +70,19 @@ export async function removeMember(deps, email) {
   const group = deps.group();
   if (!group) return false;
   if (!deps.isGroupAdmin()) return false;
-  const member = (group.members || []).find((m) => m.email === email);
-  if (!member) return false;
-  if (email === group.created_by) {
-    deps.alert(deps.tr('cannot_remove_creator') || 'Создателя группы нельзя удалить');
-    return false;
-  }
   try {
     await deps.api.removeGroupMember(group.id, email);
+    // refreshGroupMembers перечитывает и состав, и права (ответ моста).
     await deps.refreshGroupMembers();
     return true;
   } catch (e) {
-    console.error('removeMember failed:', e);
+    // Отказ «создателя удалить нельзя» приходит из моста: там единственный
+    // носитель правила, и он сравнивает адрес по форме ядра. Здесь — перевод
+    // этого отказа; остальные ошибки показываем как есть.
+    const msg = String((e && e.message) || e);
+    deps.alert(msg.includes('creator')
+      ? (deps.tr('cannot_remove_creator') || 'Создателя группы нельзя удалить')
+      : msg);
     return false;
   }
 }
@@ -88,6 +97,9 @@ export async function changeMemberRole(deps, email, role) {
     await deps.api.setGroupMemberRole(group.id, email, role);
     const m = (group.members || []).find((x) => x.email === email);
     if (m) m.role = role;
+    // Роль могла измениться и у МЕНЯ (понижение назначенного админа) —
+    // ответ моста о правах больше не верен, перечитываем его.
+    await deps.refreshGroupAccess();
     return true;
   } catch (e) {
     deps.alert('Failed to set role: ' + e.message);

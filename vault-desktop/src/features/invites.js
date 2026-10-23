@@ -33,7 +33,7 @@ const setContactPopupIndex = (v) => uiStore.setFormField('contactPopupIndex', v)
 
 export async function processInvites(deps) {
   const { invites, loadGroups, loadChannels, loadGroupMessages, refreshGroupMembers,
-          loadStoredPeerKeys, loadContacts, loadProfiles } = deps;
+          loadStoredPeerKeys, loadContacts, loadProfiles, identity } = deps;
       // Сброс кэша handshake-писем (fetchAllHandshake): каждый поллинг
       // перечитывает письма заново — иначе новые инвайты/удаления не видны.
       api._handshakeCache = null;
@@ -76,7 +76,9 @@ export async function processInvites(deps) {
       }
       // Собираем непрочитанные инвайты для попапа согласия.
       try {
-        const invitesList = await api.fetchPendingInvites();
+        // «Группа уже импортирована?» — вопрос мосту: идентичность решает
+        // отпечаток (стабилен при смене почты), адреса — fallback.
+        const invitesList = await api.fetchPendingInvites(identity);
         // Вырезаем инвайты, которые уже обрабатываются (accept в полёте —
         // письмо ещё в ящике, а groups_import мог ещё не завершиться).
         const fresh = invitesList.filter(

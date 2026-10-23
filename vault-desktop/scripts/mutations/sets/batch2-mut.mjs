@@ -24,9 +24,9 @@ export default {
       pattern: "  } catch (e) {\n    console.warn('[identity] migrateAccountData failed:', e);\n  }",
       replacement: "  } catch (e) {\n    throw e;\n  }",
       file: "src/migrations.js" },
-    { name: "свои группы не переименовываются при смене почты",
-      pattern: "    const mine = String(g.created_by || '').toLowerCase() === old\n      || (g.members || []).some(m => String(m.email || '').toLowerCase() === old);",
-      replacement: "    const mine = false;",
+    { name: "свои группы не переименовываются при смене почты (мост не зовётся)",
+      pattern: "  return await invoke('groups_rename_address', { oldEmail, newEmail });",
+      replacement: "  return 0;",
       file: "src/migrations.js" },
   ],
 };
