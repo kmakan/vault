@@ -1,14 +1,19 @@
 // Email transport (IMAP/SMTP) for the serverless Vault desktop client.
 //
 // Desktop talks to the mailbox directly over IMAP/SMTP instead of going through
-// the backend API (localhost:9443). Mirrors the verified vault-client email.rs
-// (which passed e2e tests against real Gmail), carrying over the two critical
-// fixes:
-//   1. fold_lines() — fold long lines to ≤76 columns before sending, otherwise
-//      Gmail's spam filter flags the message.
-//   2. decode_quoted_printable() — SMTP relays (Gmail included) may re-encode
-//      the Vault encrypted base64 block as quoted-printable; decode it on read
-//      so the base64 block doesn't break on provider line wraps.
+// the backend API (localhost:9443).
+//
+// Format rules are NOT mirrored from vault-client any more — they are imported
+// from it (ADR-005 §W4, 23.10). Two copies of the same rule (here and in
+// api/email.rs) drifted apart and each kept its own bug: the CLI listener lost
+// base64 padding when decoding quoted-printable, and folder classification
+// never matched Cyrillic names. What stays in this file is I/O only: sessions,
+// sockets, `UID SEARCH`/`UID FETCH`, clocks and Tauri command wrappers.
+//   1. mail_codec::fold_lines() — fold long lines to ≤76 columns before
+//      sending, otherwise Gmail's spam filter flags the message.
+//   2. mail_codec::quoted_printable() — SMTP relays (Gmail included) may
+//      re-encode the Vault encrypted base64 block as quoted-printable; decode
+//      it on read so the base64 block doesn't break on provider line wraps.
 //
 // Only transport lives here — crypto (X25519/XChaCha20) is handled by the
 // already-registered Tauri crypto commands.
@@ -27,6 +32,19 @@ use std::net::Shutdown;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 use vault_client::vault::body_absence;
+use vault_client::vault::{backoff, imap_dialect, mail_codec, mail_headers, mailbox_names, relay};
+
+/// Кастомные атрибуты LIST-записи — строками. Чистый транспорт: ядро
+/// (`vault::mailbox_names`) не знает тип `imap::NameAttribute`, только текст.
+fn custom_attrs(attrs: &[imap::types::NameAttribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter_map(|a| match a {
+            imap::types::NameAttribute::Custom(s) => Some(s.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailConfig {
@@ -93,24 +111,6 @@ pub enum IdleOutcome {
     TimedOut,
 }
 
-/// Специальные папки, найденные одним LIST-запросом.
-#[derive(Debug, Default)]
-struct SpecialFolders {
-    /// «Вся почта» (\All) — есть у Gmail, отсутствует у Zoho/Mail.ru/Yandex.
-    all: Option<String>,
-    /// Спам (\Junk/\Spam или папка с именем Spam/Junk/Спам).
-    junk: Option<String>,
-    /// Отправленные (\Sent) — нужны провайдерам БЕЗ \All (Zoho и др.):
-    /// только там лежат копии наших исходящих писем (отправитель должен
-    /// видеть свои сообщения в чате).
-    sent: Option<String>,
-    /// «Письма себе» (mail.ru: INBOX/ToMyself) — провайдеры с автосортировкой
-    /// раскладывают письма From==To (эскроу-письмо Key Recovery!) в подпапку
-    /// INBOX, и письмо «самому себе» не видно в INBOX. Без сканирования
-    /// этой папки восстановление аккаунта молча не работает.
-    self_letters: Option<String>,
-}
-
 pub struct EmailClient {
     config: EmailConfig,
     imap_session: Option<Session<TlsStream<TcpStream>>>,
@@ -146,20 +146,17 @@ pub struct EmailClient {
     connect_retry_after: Option<Instant>,
 }
 
-/// Ступени backoff (сек) по номеру неудачи: 2с → 5с → 15с → 30с → плато 60с.
-/// Сбрасывается при первой успешной операции: восстановившееся соединение
-/// возвращается к нормальному темпу сразу, не дожидаясь конца лестницы.
-const BACKOFF_STEPS_SEC: [u64; 5] = [2, 5, 15, 30, 60];
-
 /// Вычислить дедлайн следующей CONNECT-попытки и остаток паузы.
 ///
-/// Вынесено в свободную функцию, чтобы правило можно было покрыть тестом без
-/// `EmailConfig` и без сети. Ключевое свойство — **дедлайн не продлевается**:
-/// если активная пауза ещё не истекла, возвращается тот же самый момент и тот
-/// же остаток, сколько был до этой неудачи. Иначе серия неудач (а фаст-путь
-/// «сессии нет → ошибка → note_failure» повторяется каждые ~3мс) бесконечно
-/// сдвигала бы дедлайн вперёд, и пауза не истекала бы НИКОГДА — сессия не
-/// строилась бы никогда (livelock, телефон X50, 04.10.2026, 0.1.210).
+/// Только ЧАСЫ: ступени лестницы и правило «активную паузу не продлевать»
+/// живут в `vault_client::vault::backoff` и проверяются мутациями
+/// (`rust-backoff`). Здесь `Instant` превращается в `Duration` обратно — без
+/// этого мост не смог бы хранить момент времени.
+///
+/// Ключевое свойство, которое регрессионно проверяют тесты ниже: пока пауза
+/// не истекла, возвращается ТОТ ЖЕ момент (livelock, телефон X50, 04.10.2026,
+/// 0.1.210: серия неудач каждые ~3мс передвигала дедлайн, пауза не истекала
+/// никогда, сессия не строилась).
 ///
 /// `(fail_streak, deadline, now) -> (новый deadline, остаток)`
 fn next_connect_deadline(
@@ -167,13 +164,11 @@ fn next_connect_deadline(
     deadline: Option<Instant>,
     now: Instant,
 ) -> (Option<Instant>, Duration) {
-    match deadline {
-        Some(existing) if existing > now => (Some(existing), existing - now),
-        _ => {
-            let idx = (fail_streak.saturating_sub(1) as usize).min(BACKOFF_STEPS_SEC.len() - 1);
-            let delay = Duration::from_secs(BACKOFF_STEPS_SEC[idx]);
-            (Some(now + delay), delay)
-        }
+    let active = deadline.filter(|t| *t > now).map(|t| t - now);
+    let pause = backoff::plan_pause(fail_streak, active);
+    match active {
+        Some(_) => (deadline, pause),
+        None => (Some(now + pause), pause),
     }
 }
 
@@ -202,33 +197,18 @@ impl EmailClient {
 
     /// Пауза для ТЕКУЩЕЙ серии неудач (без изменения счётчика).
     pub fn backoff_delay(&self) -> Duration {
-        let idx = (self.fail_streak.saturating_sub(1) as usize).min(BACKOFF_STEPS_SEC.len() - 1);
-        Duration::from_secs(BACKOFF_STEPS_SEC[idx])
+        backoff::delay_for_streak(self.fail_streak)
     }
 
-    /// Папка-псевдоним виртуальных писем релея (в JS — `folder: 'RELAY'`).
-    /// Таких писем на IMAP-сервере НЕТ: их тело уже доставлено релеем и лежит
-    /// в кэше фронта. Раньше по этой папке шёл реальный SELECT («No such
-    /// folder»), ошибка считалась сбоем сессии → reconnect-шторм → рассыпалась
-    /// общая IMAP-сессия и висела отправка (маркер сообщения оставался
-    /// красным, хотя письмо доходило релеем). Решение «папка виртуальная» —
-    /// здесь, на границе IMAP; фронт не дублирует его ветвлением.
-    const VIRTUAL_FOLDER: &'static str = "RELAY";
-
-    /// Папка виртуальная (релей): на IMAP её нет, тело уже в кэше фронта.
-    pub fn is_virtual_folder(folder: &str) -> bool {
-        folder.eq_ignore_ascii_case(Self::VIRTUAL_FOLDER)
-    }
-
-    /// Настоящий IMAP uid — только цифры. Виртуальные письма релея
-    /// (uid `rl-<envId>`) и записи без адреса (`''`, `'undefined'`) на сервере
-    /// не существуют: UID FETCH по ним всегда возвращает пусто, а вызывающий
-    /// (lib.rs) принимал это за рассинхрон сессии → reconnect по лестнице
-    /// backoff, рассинхронизация общей сессии и зависшая отправка (маркер
-    /// сообщения оставался красным, хотя письмо доходило релеем).
-    pub fn is_imap_uid(uid: &str) -> bool {
-        !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit())
-    }
+    // Папка-псевдоним виртуальных писем релея и форма их uid (`rl-<envId>`) —
+    // правило живёт в `vault_client::vault::relay` и проверяется мутациями
+    // (`rust-relay-shape`), отсюда вызывается напрямую. Смысл правила на
+    // границе IMAP: таких писем на сервере НЕТ, тело доставлено релеем и лежит
+    // в кэше фронта. Раньше по «папке RELAY» шёл реальный SELECT («No such
+    // folder»), ошибка считалась сбоем сессии -> reconnect-шторм, рассыпалась
+    // общая сессия и висела отправка (маркер оставался красным, хотя письмо
+    // дошло релеем). Пустой FETCH по uid `rl-…` вызывающий принимал за
+    // рассинхрон. Фронт это правило ветвлением не дублирует.
 
     /// Разделение «нет такой папки» и сетевого сбоя. Папки берутся из
     /// настроек и могут отсутствовать на сервере (`select RELAY failed:
@@ -248,43 +228,17 @@ impl EmailClient {
     /// {folder} failed: …»), и верхний слой сам по себе не содержит признака.
     /// Регистр не важен — провайдеры пишут по-разному.
     pub fn is_missing_folder_error(err: &anyhow::Error) -> bool {
-        // Формулировки «папки нет» у разных провайдеров РАЗНЫЕ, и это не
-        // мелочь: нераспознанная формулировка считается сетевым сбоем, а
-        // сетевой сбой в почтовом цикле означает backoff — и вся забор писем
-        // встаёт из-за ОДНОЙ отсутствующей папки.
-        //
-        // Найдено на живом стенде 22.10.2026 (десктоп, аккаунт Zoho):
-        // провайдер отвечает «No Response: [NONEXISTENT] Unknown Mailbox: RELAY
-        // (now in authenticated state) (Failure)». Детектор знал только
-        // «no such folder»/«no such mailbox» — Zoho-формулировка не
-        // распознавалась, и почтовый цикл уходил в бесконечный backoff
-        // (streak=150, «reconnect deferred» каждые 3 мс). Письма не приходили
-        // вообще, включая сигнал входящего звонка.
-        let is_missing = |text: &str| {
-            let t = text.to_ascii_lowercase();
-            t.contains("no such folder")
-                || t.contains("no such mailbox")
-                // Gmail и Zoho: «Unknown Mailbox: <имя>».
-                || t.contains("unknown mailbox")
-                || t.contains("unknown folder")
-                // Некоторые серверы: «Mailbox doesn't exist».
-                || t.contains("doesn't exist")
-                || t.contains("does not exist")
-        };
-        // Строка цепочки целиком — ловит вложенные варианты вроде
-        // «No Response: [CLIENTBUG] SELECT No such folder».
-        if is_missing(&format!("{err:?}")) {
-            return true;
-        }
-        // Пошаговый обход цепочки — не зависит от формата Debug-вывода.
+        // Только вывод цепочки в строки: anyhow-обёртки ядро не знает, а
+        // решение (таблица формулировок + правило «считается ЛЮБОЕ звено») —
+        // в `vault_client::vault::imap_dialect`, мутации `rust-imap-dialect`.
+        let whole = format!("{err:?}");
+        let mut sources = Vec::new();
         let mut src: Option<&(dyn std::error::Error + 'static)> = err.source();
         while let Some(e) = src {
-            if is_missing(&e.to_string()) {
-                return true;
-            }
+            sources.push(e.to_string());
             src = e.source();
         }
-        false
+        imap_dialect::failure_of(&whole, &sources) == imap_dialect::ImapFailure::MailboxAbsent
     }
 
     /// Засчитать неудачу в лестнице backoff; вернуть паузу до следующей попытки.
@@ -444,20 +398,14 @@ impl EmailClient {
             .context("Failed TLS handshake")?;
 
         let client = imap::Client::new(ssl_stream);
-        // Яндекс режет логин с доменом-алиасом (koanmak@ya.com → AUTHENTICATIONFAILED),
-        // хотя тот же ящик принимается как «koanmak» или «koanmak@yandex.ru».
-        // Для @ya.com отправляем bare-логин; остальные провайдеры работают как прежде.
-        let imap_login: &str = if self.config.email.ends_with("@ya.com") {
-            self.config
-                .email
-                .split('@')
-                .next()
-                .unwrap_or(&self.config.email)
-        } else {
-            &self.config.email
-        };
+        // Как представлять ящик при LOGIN — решение провайдера, оно в ядре
+        // (`vault_client::vault::imap_dialect::imap_login_for`, мутации
+        // `rust-imap-dialect`): Яндекс режет логин с доменом-алиасом
+        // (koanmak@ya.com -> AUTHENTICATIONFAILED), хотя тот же ящик
+        // принимается как «koanmak».
+        let imap_login = imap_dialect::imap_login_for(&self.config.email);
         let session = client
-            .login(imap_login, &self.config.password)
+            .login(&imap_login, &self.config.password)
             .map_err(|e| anyhow::anyhow!("IMAP login failed: {}", e.0))?;
 
         // Ручку отмены храним ТОЛЬКО при живых сессии И сокете — пара синхронна.
@@ -468,11 +416,13 @@ impl EmailClient {
     }
 
     /// Один LIST-запрос вместо трёх: находим специальные папки за один
-    /// round-trip. Gmail локализует имена («Вся почта», «Спам»), поэтому
-    /// спам ищем сначала по атрибуту (\Junk/\Spam), потом по имени папки.
-    /// \All — опционально (есть у Gmail, нет у Zoho/Mail.ru/Yandex).
-    fn find_special_folders(&mut self) -> SpecialFolders {
-        let mut out = SpecialFolders::default();
+    /// round-trip. Что считать спамом/«письмами себе»/служебной папкой решает
+    /// ядро (`vault_client::vault::mailbox_names`, мутации
+    /// `rust-mailbox-names`): тот же классификатор видят полный скан,
+    /// инкрементальный путь и слушатель CLI — иначе они расходятся молча
+    /// (в CLI, например, не было «letters to myself»).
+    fn find_special_folders(&mut self) -> mailbox_names::MailboxMap {
+        let mut out = mailbox_names::MailboxMap::default();
         let session = match self.imap_session.as_mut() {
             Some(s) => s,
             None => return out,
@@ -482,51 +432,10 @@ impl EmailClient {
             Err(_) => return out,
         };
         for item in list.iter() {
-            let name = item.name();
-            if name.is_empty() {
+            if item.name().is_empty() {
                 continue;
             }
-            let attrs: Vec<String> = item
-                .attributes()
-                .iter()
-                .filter_map(|a| {
-                    if let imap::types::NameAttribute::Custom(s) = a {
-                        Some(s.to_ascii_lowercase())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let name_l = name.to_ascii_lowercase();
-            if out.all.is_none() && attrs.iter().any(|a| a == "\\all") {
-                out.all = Some(name.to_string());
-            }
-            if out.sent.is_none() && attrs.iter().any(|a| a == "\\sent") {
-                out.sent = Some(name.to_string());
-            }
-            if out.sent.is_none()
-                && (name_l == "sent"
-                    || name_l == "sent items"
-                    || name_l == "sent messages"
-                    || name_l.ends_with("/sent"))
-            {
-                out.sent = Some(name.to_string());
-            }
-            // junk + «письма себе» — общий классификатор с полным сканом
-            // (classify_folder), чтобы оба пути видели одни и те же папки.
-            match classify_folder(&attrs, name) {
-                FolderKind::Junk => {
-                    if out.junk.is_none() {
-                        out.junk = Some(name.to_string());
-                    }
-                }
-                FolderKind::SelfLetters => {
-                    if out.self_letters.is_none() {
-                        out.self_letters = Some(name.to_string());
-                    }
-                }
-                FolderKind::Other => {}
-            }
+            out.absorb(&custom_attrs(item.attributes()), item.name());
         }
         out
     }
@@ -746,17 +655,18 @@ impl EmailClient {
                     let header_str = String::from_utf8_lossy(header);
                     messages.push(EmailMessage {
                         id: uid,
-                        from: extract_header(&header_str, "From:")
+                        from: mail_headers::value(&header_str, "From:")
                             .unwrap_or_else(|| "Unknown".to_string()),
-                        to: extract_header(&header_str, "To:")
+                        to: mail_headers::value(&header_str, "To:")
                             .unwrap_or_else(|| "Unknown".to_string()),
-                        subject: extract_header(&header_str, "Subject:")
+                        subject: mail_headers::value(&header_str, "Subject:")
                             .unwrap_or_else(|| "(no subject)".to_string()),
-                        date: extract_header(&header_str, "Date:")
+                        date: mail_headers::value(&header_str, "Date:")
                             .unwrap_or_else(|| "Unknown".to_string()),
                         is_read,
                         folder: folder.to_string(),
-                        message_id: extract_header(&header_str, "Message-ID:").unwrap_or_default(),
+                        message_id: mail_headers::value(&header_str, "Message-ID:")
+                            .unwrap_or_default(),
                         size: fetch.size.unwrap_or(0),
                     });
                 }
@@ -862,11 +772,11 @@ impl EmailClient {
         // Виртуальное письмо релея / не-IMAP адрес: тела на сервере нет,
         // тело уже в кэше фронта. Пустой ответ БЕЗ ошибки — сессию не трогаем
         // (см. VIRTUAL_FOLDER и is_imap_uid).
-        if Self::is_virtual_folder(folder) {
+        if relay::is_virtual_folder(folder) {
             eprintln!("[email] body fetch: virtual folder {folder} — skipped");
             return Ok(String::new());
         }
-        if !Self::is_imap_uid(uid) {
+        if !relay::is_imap_uid(uid) {
             eprintln!("[email] body fetch: uid {uid:?} is not an IMAP uid — skipped");
             return Ok(String::new());
         }
@@ -915,7 +825,7 @@ impl EmailClient {
         if let Ok(data) = fetch_res {
             for fetch in data.iter() {
                 if let Some(text) = fetch.text() {
-                    body = decode_quoted_printable(&String::from_utf8_lossy(text));
+                    body = mail_codec::quoted_printable(&String::from_utf8_lossy(text));
                     break;
                 }
             }
@@ -1012,18 +922,18 @@ impl EmailClient {
         // ОТЛИЧЕН от «не знаю» — иначе фронт повторяет запрос каждый тик
         // (см. absent_bodies). Поэтому: каждый запрошенный uid возвращается
         // записью с пустым телом = «тела не будет никогда».
-        if Self::is_virtual_folder(folder) {
+        if relay::is_virtual_folder(folder) {
             eprintln!("[fetch_bodies] folder={folder} virtual — skipped");
             return Ok(body_absence::absent_bodies(uids));
         }
         let real_uids: Vec<String> = uids
             .iter()
-            .filter(|u| Self::is_imap_uid(u))
+            .filter(|u| relay::is_imap_uid(u))
             .cloned()
             .collect();
         let pseudo_uids: Vec<String> = uids
             .iter()
-            .filter(|u| !Self::is_imap_uid(u))
+            .filter(|u| !relay::is_imap_uid(u))
             .cloned()
             .collect();
         if real_uids.is_empty() {
@@ -1072,7 +982,7 @@ impl EmailClient {
             if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
                 for fetch in data.iter() {
                     if let Some(text) = fetch.text() {
-                        body = decode_quoted_printable(&String::from_utf8_lossy(text));
+                        body = mail_codec::quoted_printable(&String::from_utf8_lossy(text));
                         break;
                     }
                 }
@@ -1164,7 +1074,7 @@ impl EmailClient {
             builder = builder.message_id(Some(mid.to_string()));
         }
         let email = builder
-            .body(fold_lines(body))
+            .body(mail_codec::fold_lines(body))
             .context("Failed to build email")?;
 
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
@@ -1369,90 +1279,6 @@ impl EmailClient {
     }
 }
 
-/// Decode quoted-printable MIME body — transport-encoded `=XX` and soft line
-/// breaks (`=\r\n`). Needed because SMTP relays (Gmail included) may re-encode
-/// the Vault encrypted block (base64) as quoted-printable on delivery.
-pub(crate) fn decode_quoted_printable(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        match bytes[i] {
-            b'=' => {
-                // Soft line break: "=\r\n" или "=\n" → пропускаем, НО только
-                // если после перевода есть содержимое. "=\r\n" в КОНЦЕ тела =
-                // base64-пэйдинг ('==') + финальный CRLF служебного 7bit-тела,
-                // а не QP-перенос: старая ветка съедала один '=' (68→67 символов,
-                // atob бросал → isEncrypted=false → письмо молча отбрасывалось;
-                // живой баг X50 09.10: hav/meta-письма не распознавались как
-                // зашифрованные — аватарки не восстанавливались).
-                if i + 1 < bytes.len() && (bytes[i + 1] == b'\r' || bytes[i + 1] == b'\n') {
-                    let eol =
-                        if i + 2 < bytes.len() && bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
-                            2
-                        } else {
-                            1
-                        };
-                    let after = i + 1 + eol;
-                    if after < bytes.len() {
-                        i = after; // настоящий QP-перенос: продолжение есть
-                        continue;
-                    }
-                    // Конец тела: '=' — это пэйдинг base64 → литерал
-                    // (CRLF ниже отдаётся как есть; потребители режут пробелы).
-                }
-                // Hex escape: =XX
-                if i + 2 < bytes.len() {
-                    let hi = (bytes[i + 1] as char).to_digit(16);
-                    let lo = (bytes[i + 2] as char).to_digit(16);
-                    if let (Some(h), Some(l)) = (hi, lo) {
-                        out.push((h * 16 + l) as u8);
-                        i += 3;
-                        continue;
-                    }
-                }
-                // Literal '=' (shouldn't happen, but keep)
-                out.push(b'=');
-                i += 1;
-            }
-            b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
-                // Normalize CRLF → LF
-                out.push(b'\n');
-                i += 2;
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Fold long lines to ≤76 columns (RFC 5322 soft wrap) before sending.
-/// SMTP relays and spam filters treat unbroken >100-char base64 lines as
-/// suspicious, and some relays refuse long lines outright. The Vault encrypted
-/// block and raw-base64 bodies are rebuilt by receivers via whitespace-stripping,
-/// so folding is lossless for both codecs.
-fn fold_lines(body: &str) -> String {
-    const MAX: usize = 76;
-    body.lines()
-        .flat_map(|line| {
-            if line.len() <= MAX {
-                vec![line.to_string()]
-            } else {
-                line.as_bytes()
-                    .chunks(MAX)
-                    .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 // Dropping a JoinHandle alone does not stop a running spawn_blocking task.
 // This guard shuts down the socket on deadline AND future cancellation.
 struct ImapScanCancellation(Option<TcpStream>);
@@ -1464,56 +1290,12 @@ impl Drop for ImapScanCancellation {
         }
     }
 }
-
-fn extract_header(header: &str, name: &str) -> Option<String> {
-    header
-        .lines()
-        .find(|line| line.to_lowercase().starts_with(&name.to_lowercase()))
-        .and_then(|line| line.splitn(2, ':').nth(1))
-        .map(|value| value.trim().to_string())
-}
 /// Тип папки по результату классификации одной LIST-записи.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FolderKind {
     Junk,
     SelfLetters,
     Other,
-}
-
-/// Классификация одного LIST-имени папки (junk / «письма себе» / прочее).
-/// Чистая функция над атрибутами+именем — без сетевого I/O, поэтому общая для
-/// `find_special_folders` и для строгого полного скана. Порядок «победила
-/// первая» сохранён как в find_special_folders: junk проверяется раньше
-/// self_letters. Атрибуты передаются как строки Custom(...) — ровно те, что
-/// find_special_folders сравнивает («\\all», «\\junk», …).
-fn classify_folder(attrs: &[String], name: &str) -> FolderKind {
-    let name_l = name.to_ascii_lowercase();
-    // Спам-папка: атрибут \Junk/\Spam, иначе имя Spam/Junk/Спам/[Gmail]/Spam.
-    let junk_attr = attrs.iter().any(|a| a == "\\junk" || a == "\\spam");
-    let junk_name = name_l == "spam"
-        || name_l == "junk"
-        || name_l == "спам"
-        || name_l.ends_with("/spam")
-        || name_l.ends_with("/junk");
-    if junk_attr || junk_name {
-        return FolderKind::Junk;
-    }
-
-    // «Письма себе» — автосортировка провайдера (From==To). Побеждает первая
-    // (см. doc у classify_folder).
-    let self_name = name_l.ends_with("/tomyself")
-        || name_l == "tomyself"
-        || name_l == "myself"
-        || name_l.ends_with("/myself")
-        || name_l == "письма себе"
-        || name_l.ends_with("/письма себе")
-        || name_l.ends_with("/letters to myself")
-        || name_l == "letters to myself";
-    if self_name {
-        return FolderKind::SelfLetters;
-    }
-
-    FolderKind::Other
 }
 
 /// Строгая классификация LIST-имён: `LIST` обязателен и его ошибки НЕ глотаются.
@@ -1528,38 +1310,17 @@ fn list_special_folders_strict(
         .list(None, Some("*"))
         .map_err(|e| anyhow::anyhow!("LIST failed: {e}"))?;
 
-    let mut junk: Option<String> = None;
-    let mut self_letters: Option<String> = None;
-
+    // Тот же классификатор, что у `find_special_folders` и у CLI:
+    // `vault_client::vault::mailbox_names` (мутации `rust-mailbox-names`).
+    let mut found = mailbox_names::MailboxMap::default();
     for name in names.iter() {
-        let folder_name = name.name().to_string();
-        let attrs: Vec<String> = name
-            .attributes()
-            .iter()
-            .filter_map(|a| {
-                if let imap::types::NameAttribute::Custom(s) = a {
-                    Some(s.to_ascii_lowercase())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        match classify_folder(&attrs, &folder_name) {
-            FolderKind::Junk => {
-                if junk.is_none() {
-                    junk = Some(folder_name);
-                }
-            }
-            FolderKind::SelfLetters => {
-                if self_letters.is_none() {
-                    self_letters = Some(folder_name);
-                }
-            }
-            FolderKind::Other => {}
+        if name.name().is_empty() {
+            continue;
         }
+        found.absorb(&custom_attrs(name.attributes()), name.name());
     }
 
-    Ok((junk, self_letters))
+    Ok((found.junk, found.self_letters))
 }
 
 /// Тело полного скана над &mut-сессией. Вынесено из `full_scan_on_session`,
@@ -1688,15 +1449,16 @@ fn scan_folder(
 
             if let Some(header) = fetch.header() {
                 let header_str = String::from_utf8_lossy(header);
-                let from =
-                    extract_header(&header_str, "From:").unwrap_or_else(|| "Unknown".to_string());
-                let to =
-                    extract_header(&header_str, "To:").unwrap_or_else(|| "Unknown".to_string());
-                let subject = extract_header(&header_str, "Subject:")
+                let from = mail_headers::value(&header_str, "From:")
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let to = mail_headers::value(&header_str, "To:")
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let subject = mail_headers::value(&header_str, "Subject:")
                     .unwrap_or_else(|| "(no subject)".to_string());
-                let date =
-                    extract_header(&header_str, "Date:").unwrap_or_else(|| "Unknown".to_string());
-                let message_id = extract_header(&header_str, "Message-ID:").unwrap_or_default();
+                let date = mail_headers::value(&header_str, "Date:")
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let message_id =
+                    mail_headers::value(&header_str, "Message-ID:").unwrap_or_default();
 
                 messages.push(EmailMessage {
                     id: uid,
@@ -1724,32 +1486,6 @@ mod full_scan_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Регрессия X50 09.10.2026: кадр 49Б → base64 68 символов с '==',
-    /// RFC822.TEXT заканчивается CRLF. Старый decode принимал '==\r\n' за
-    /// QP soft-break и съедал '=' (67 символов) → isEncrypted=false →
-    /// hav/meta-письма молча отбрасывались.
-    #[test]
-    fn qp_keeps_base64_padding_before_final_crlf() {
-        // Инвариант потребителей (isEncrypted/decrypt): после strip-whitespace
-        // форма должна совпасть с исходным base64 ЦЕЛИКОМ, включая пэйдинг.
-        // Старый код терял '=' → 67 символов (%4 != 0) → atob/декодер падали.
-        let strip = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
-        let raw = "gbgdGPmguO+L19LJeVo537gZSu3xWjA2FvPb1Jk3HhuGFHnEgR/f/FELEZK/AVIG0A==\r\n";
-        let out = strip(&decode_quoted_printable(raw));
-        assert_eq!(out, strip(raw));
-        assert_eq!(out.len() % 4, 0, "пэйдинг потерян: {} символов", out.len());
-        let single = "YWJjZA=\r\n"; // одинарный пэйдинг + CRLF
-        assert_eq!(strip(&decode_quoted_printable(single)), strip(single));
-    }
-
-    #[test]
-    fn qp_soft_breaks_and_escapes_still_work() {
-        assert_eq!(decode_quoted_printable("abc=\r\ndef"), "abcdef");
-        assert_eq!(decode_quoted_printable("abc=\ndef"), "abcdef");
-        assert_eq!(decode_quoted_printable("a=3Db"), "a=b");
-        assert_eq!(decode_quoted_printable("keep=tail"), "keep=tail");
-    }
 
     /// Регресс на livelock №2 (живой тест, телефон X50, 04.10.2026, 0.1.210):
     /// серия неудач не должна БЕСКОНЕЧНО отодвигать дедлайн следующего CONNECT.
@@ -1875,31 +1611,6 @@ mod tests {
             );
         }
     }
-
-    /// Виртуальные письма релея (uid `rl-…`) и записи без IMAP-адреса
-    /// (`''`, `'undefined'`) не должны доходить до session.select/uid_fetch:
-    /// иначе пустой ответ принимался за рассинхрон и рвал живую сессию.
-    #[test]
-    fn is_virtual_folder_matches_relay_pseudo_folder() {
-        // Имя папки фиксировано контрактом с фронтом (features/relay.js).
-        for v in ["RELAY", "relay", "Relay"] {
-            assert!(EmailClient::is_virtual_folder(v), "должна быть виртуальной: {v}");
-        }
-        for real in ["INBOX", "[Gmail]/Sent Mail", "Junk", ""] {
-            assert!(!EmailClient::is_virtual_folder(real), "реальная папка: {real:?}");
-        }
-    }
-
-    #[test]
-    fn is_imap_uid_accepts_only_digits() {
-        for ok in ["1", "636", "4294967295"] {
-            assert!(EmailClient::is_imap_uid(ok), "должен быть принят: {ok}");
-        }
-        for bad in ["", "undefined", "rl-3fa85f64", "12a", "-5", " "] {
-            assert!(!EmailClient::is_imap_uid(bad), "не IMAP uid: {bad:?}");
-        }
-    }
-
 
     #[test]
     fn is_missing_folder_error_true_for_missing_folder() {

@@ -328,6 +328,51 @@ pub fn poll(my_token: &str) -> Result<Vec<RelayEnvelope>> {
     Ok(out)
 }
 
+// ───────────────── Форма адресов: виртуальные письма релея ─────────────────
+
+/// Папка-псевдоним виртуальных писем релея (во фронте — `folder: 'RELAY'`).
+pub const VIRTUAL_FOLDER: &str = "RELAY";
+
+/// Префикс виртуального id: `rl-<envId>` (тот же контракт у CLI: `listen.rs`).
+pub const VIRTUAL_ID_PREFIX: &str = "rl-";
+
+/// id письма-конверта релея таким, каким его видят UI и почтовые пути.
+/// Строить его нужно в одном месте: `is_virtual_id` обязан узнавать результат.
+pub fn envelope_id(env_id: &str) -> String {
+    format!("{VIRTUAL_ID_PREFIX}{env_id}")
+}
+
+/// Папка виртуальная (релей): на IMAP её нет, тело уже в кэше фронта.
+///
+/// Протокольное решение, а не строка конфига. Раньше по «папке RELAY» шёл
+/// настоящий SELECT («No such folder»), ошибка считалась сбоем сессии →
+/// reconnect-шторм → рассыпалась общая IMAP-сессия, и отправка висела с
+/// красным маркером, хотя письмо доходило релеем.
+pub fn is_virtual_folder(folder: &str) -> bool {
+    folder.eq_ignore_ascii_case(VIRTUAL_FOLDER)
+}
+
+/// Настоящий IMAP uid — только цифры.
+///
+/// Виртуальные письма релея (`rl-<envId>`) и записи без адреса (`''`,
+/// `'undefined'`) на сервере не существуют: `UID FETCH` по ним всегда пуст, а
+/// вызывающий принимал это за рассинхрон сессии → reconnect по лестнице
+/// backoff и зависшая отправка.
+pub fn is_imap_uid(uid: &str) -> bool {
+    !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Это письмо — конверт релея (тела в IMAP нет, читать из кэша).
+///
+/// У CLI (`listen.rs`, `repl.rs`) и десктопного моста был ОДИН вопрос
+/// («это не IMAP-письмо?») и ДВА ответа: `id.starts_with("rl-")` против
+/// `!is_imap_uid(id)`. Здесь — обе формы, чтобы правило сверялось в одном
+/// месте: `is_imap_uid` отвечает «есть ли это на сервере», `is_virtual_id` —
+/// «это наш собственный конверт».
+pub fn is_virtual_id(id: &str) -> bool {
+    id.starts_with(VIRTUAL_ID_PREFIX)
+}
+
 // ───────────────────────── Тесты ─────────────────────────
 
 #[cfg(test)]
@@ -400,5 +445,32 @@ mod tests {
             publish(&mut st, "a@b.c", "id1", "x", "me@x.ru", "fp"),
             PubOutcome::DailyLimit
         );
+    }
+
+    #[test]
+    fn virtual_addresses_are_not_imap_addresses() {
+        // Виртуальная папка и виртуальный id НЕ должны уходить на сервер.
+        for folder in ["RELAY", "relay", "Relay"] {
+            assert!(is_virtual_folder(folder), "{folder}");
+        }
+        for folder in ["INBOX", "Junk", "", "RELAYX"] {
+            assert!(!is_virtual_folder(folder), "{folder:?}");
+        }
+        for uid in ["1", "42", "636"] {
+            assert!(is_imap_uid(uid), "{uid}");
+        }
+        for uid in ["rl-3fa85f64", "", "undefined", "12a", " 12", "-3"] {
+            assert!(!is_imap_uid(uid), "{uid:?}");
+        }
+        assert!(is_virtual_id("rl-3fa85f64"));
+        assert!(!is_virtual_id("42"));
+        assert!(!is_virtual_id(""));
+
+        // Построитель и распознаватель — один контракт: id, который отдаёт
+        // релею, фронт обязан опознать как виртуальный и не-sendить на IMAP.
+        let built = envelope_id("3fa85f64");
+        assert_eq!(built, "rl-3fa85f64");
+        assert!(is_virtual_id(&built), "envelope_id вне формы is_virtual_id");
+        assert!(!is_imap_uid(&built));
     }
 }

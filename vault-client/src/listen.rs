@@ -192,7 +192,7 @@ async fn tick(
         if let Ok(envs) = relay::poll(&relay_state.my_token) {
             for env in envs {
                 messages.push(crate::api::email::EmailMessage {
-                    id: format!("rl-{}", env.id),
+                    id: relay::envelope_id(&env.id),
                     from: env.from,
                     to: me.to_string(),
                     subject: String::new(),
@@ -243,7 +243,7 @@ async fn tick(
             }
         }
         if let Err(reason) = &decrypted {
-            if m.id.starts_with("rl-") {
+            if relay::is_virtual_id(&m.id) {
                 // relay-конверты не ретраятся (destructive poll), поэтому
                 // единственный способ увидеть причину провала — залогировать.
                 tracing::warn!("rl-{} from={} decrypt failed: {}", m.id, m.from, reason);

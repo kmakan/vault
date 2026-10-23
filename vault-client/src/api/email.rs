@@ -8,6 +8,20 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use native_tls::{TlsConnector, TlsStream};
 use std::net::TcpStream;
 
+use crate::vault::{mail_codec, mail_headers, mailbox_names};
+
+/// Кастомные атрибуты LIST-записи — строками. Чистый транспорт: ядро
+/// (`vault::mailbox_names`) не знает типа `imap::NameAttribute`, только текст.
+fn custom_attrs(attrs: &[imap::types::NameAttribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter_map(|a| match a {
+            imap::types::NameAttribute::Custom(s) => Some(s.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
     pub imap_server: String,
@@ -88,17 +102,15 @@ impl EmailClient {
             None => return "[Gmail]/Spam".to_string(),
         };
         if let Ok(names) = session.list(None, Some("*")) {
+            let mut found = mailbox_names::MailboxMap::default();
             for name in names.iter() {
-                let has_junk = name.attributes().iter().any(|a| {
-                    matches!(
-                        a,
-                        imap::types::NameAttribute::Custom(s)
-                            if s == "\\Junk" || s == "\\Spam"
-                    )
-                });
-                if has_junk {
-                    return name.name().to_string();
+                if name.name().is_empty() {
+                    continue;
                 }
+                found.absorb(&custom_attrs(name.attributes()), name.name());
+            }
+            if let Some(junk) = found.junk {
+                return junk;
             }
         }
         "[Gmail]/Spam".to_string()
@@ -106,66 +118,39 @@ impl EmailClient {
 
     /// Найти входящие папки для --listen: INBOX + Junk + «Письма себе».
     /// mail.ru автосортирует From==To в INBOX/ToMyself, и хардкод "ToMyself"
-    /// падает с NONEXISTENT — ищем реальные имена, как find_special_folders
-    /// у Desktop (атрибут, затем фолбэк по имени/локали).
+    /// падает с NONEXISTENT — ищем реальные имена по тому же правилу, что и
+    /// Desktop (`vault::mailbox_names`: атрибут, затем имя/локаль).
+    ///
+    /// РАНЬШЕ ЗДЕСЬ БЫЛА СВОЯ КОПИЯ правила — и она уже разошлась: в ней не
+    /// было «letters to myself», то есть слушатель CLI не читал такую папку.
     pub async fn inbox_folders(&mut self) -> Vec<String> {
+        let fallback = || {
+            vec![
+                "INBOX".to_string(),
+                "Junk".to_string(),
+                "ToMyself".to_string(),
+            ]
+        };
         let session = match self.imap_session.as_mut() {
             Some(s) => s,
-            None => return vec!["INBOX".to_string(), "Junk".to_string(), "ToMyself".to_string()],
+            None => return fallback(),
         };
         let list = match session.list(None, Some("*")) {
             Ok(l) => l,
-            Err(_) => return vec!["INBOX".to_string(), "Junk".to_string(), "ToMyself".to_string()],
+            Err(_) => return fallback(),
         };
-        let mut junk = None;
-        let mut myself = None;
+        let mut found = mailbox_names::MailboxMap::default();
         for m in list.iter() {
-            let name = m.name();
-            if name.is_empty() {
+            if m.name().is_empty() {
                 continue;
             }
-            let attrs: Vec<String> = m
-                .attributes()
-                .iter()
-                .filter_map(|a| {
-                    if let imap::types::NameAttribute::Custom(s) = a {
-                        Some(s.to_ascii_lowercase())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let name_l = name.to_ascii_lowercase();
-            if junk.is_none() && attrs.iter().any(|a| a == "\\junk" || a == "\\spam") {
-                junk = Some(name.to_string());
-            }
-            // Фолбэк по имени — для провайдеров без атрибутов.
-            if junk.is_none()
-                && (name_l == "spam"
-                    || name_l == "junk"
-                    || name_l == "спам"
-                    || name_l.ends_with("/spam")
-                    || name_l.ends_with("/junk"))
-            {
-                junk = Some(name.to_string());
-            }
-            // «Письма себе» (mail.ru: INBOX/ToMyself, локаль «Письма себе»).
-            if myself.is_none()
-                && (name_l.ends_with("/tomyself")
-                    || name_l == "tomyself"
-                    || name_l == "myself"
-                    || name_l.ends_with("/myself")
-                    || name_l == "письма себе"
-                    || name_l.ends_with("/письма себе"))
-            {
-                myself = Some(name.to_string());
-            }
+            found.absorb(&custom_attrs(m.attributes()), m.name());
         }
         let mut out = vec!["INBOX".to_string()];
-        if let Some(j) = junk {
+        if let Some(j) = found.junk {
             out.push(j);
         }
-        if let Some(m) = myself {
+        if let Some(m) = found.self_letters {
             out.push(m);
         }
         out
@@ -199,13 +184,13 @@ impl EmailClient {
 
                     if let Some(header) = fetch.header() {
                         let header_str = String::from_utf8_lossy(header);
-                        let from = extract_header(&header_str, "From:")
+                        let from = mail_headers::value(&header_str, "From:")
                             .unwrap_or_else(|| "Unknown".to_string());
-                        let to = extract_header(&header_str, "To:")
+                        let to = mail_headers::value(&header_str, "To:")
                             .unwrap_or_else(|| "Unknown".to_string());
-                        let subject = extract_header(&header_str, "Subject:")
+                        let subject = mail_headers::value(&header_str, "Subject:")
                             .unwrap_or_else(|| "(no subject)".to_string());
-                        let date = extract_header(&header_str, "Date:")
+                        let date = mail_headers::value(&header_str, "Date:")
                             .unwrap_or_else(|| "Unknown".to_string());
 
                         messages.push(EmailMessage {
@@ -267,25 +252,22 @@ impl EmailClient {
                         // отсутствие тела логируем.
                         let body_raw = fetch.text().unwrap_or_default();
                         if body_raw.is_empty() {
-                            tracing::debug!(
-                                "listen-fetch: uid={} has no TEXT section",
-                                uid_str
-                            );
+                            tracing::debug!("listen-fetch: uid={} has no TEXT section", uid_str);
                         }
-                        let from = extract_header(&header_str, "From:")
+                        let from = mail_headers::value(&header_str, "From:")
                             .unwrap_or_else(|| "Unknown".to_string());
-                        let to = extract_header(&header_str, "To:")
+                        let to = mail_headers::value(&header_str, "To:")
                             .unwrap_or_else(|| "Unknown".to_string());
-                        let subject = extract_header(&header_str, "Subject:")
+                        let subject = mail_headers::value(&header_str, "Subject:")
                             .unwrap_or_else(|| "(no subject)".to_string());
-                        let date = extract_header(&header_str, "Date:")
+                        let date = mail_headers::value(&header_str, "Date:")
                             .unwrap_or_else(|| "Unknown".to_string());
 
                         // BODY[TEXT] (в т.ч. BODY.PEEK[TEXT]<0.N>) imap-proto
                         // парсит как SectionPath::Full(Text) — accessor body()
                         // отдаёт только section:None (BODY[]/RFC822), поэтому
                         // текст берём через text().
-                        let body = decode_quoted_printable(&String::from_utf8_lossy(body_raw));
+                        let body = mail_codec::quoted_printable(&String::from_utf8_lossy(body_raw));
 
                         messages.push(EmailMessage {
                             id: uid_str,
@@ -317,7 +299,7 @@ impl EmailClient {
         if let Ok(data) = session.uid_fetch(uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])") {
             for fetch in data.iter() {
                 if let Some(header) = fetch.header() {
-                    let from = extract_header(&String::from_utf8_lossy(header), "From:")
+                    let from = mail_headers::value(&String::from_utf8_lossy(header), "From:")
                         .unwrap_or_default();
                     // strip display name: "Name <a@b.c>" → a@b.c
                     let from = from
@@ -349,7 +331,7 @@ impl EmailClient {
         if let Ok(data) = session.uid_fetch(uid, "(RFC822.TEXT)") {
             for fetch in data.iter() {
                 if let Some(body) = fetch.text() {
-                    return Ok(decode_quoted_printable(&String::from_utf8_lossy(body)));
+                    return Ok(mail_codec::quoted_printable(&String::from_utf8_lossy(body)));
                 }
             }
         }
@@ -392,7 +374,7 @@ impl EmailClient {
             builder = builder.message_id(Some(mid.to_string()));
         }
         let email = builder
-            .body(fold_lines(body))
+            .body(mail_codec::fold_lines(body))
             .context("Failed to build email")?;
 
         let creds = Credentials::new(self.config.email.clone(), self.config.password.clone());
@@ -420,83 +402,4 @@ impl EmailClient {
             let _ = session.logout();
         }
     }
-}
-
-/// Decode quoted-printable MIME body — transport-encoded `=XX` and soft line
-/// breaks (`=\r\n`). Needed because SMTP relays (Gmail included) may re-encode
-/// the Vault encrypted block (base64) as quoted-printable on delivery.
-fn decode_quoted_printable(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        match bytes[i] {
-            b'=' => {
-                // Soft line break: "=\r\n" or "=\n" → skip entirely
-                if i + 1 < bytes.len() && (bytes[i + 1] == b'\r' || bytes[i + 1] == b'\n') {
-                    i += if i + 2 < bytes.len() && bytes[i + 1] == b'\r' && bytes[i + 2] == b'\n' {
-                        3
-                    } else {
-                        2
-                    };
-                    continue;
-                }
-                // Hex escape: =XX
-                if i + 2 < bytes.len() {
-                    let hi = (bytes[i + 1] as char).to_digit(16);
-                    let lo = (bytes[i + 2] as char).to_digit(16);
-                    if let (Some(h), Some(l)) = (hi, lo) {
-                        out.push((h * 16 + l) as u8);
-                        i += 3;
-                        continue;
-                    }
-                }
-                // Literal '=' (shouldn't happen, but keep)
-                out.push(b'=');
-                i += 1;
-            }
-            b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
-                // Normalize CRLF → LF
-                out.push(b'\n');
-                i += 2;
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Fold long lines to ≤76 columns (RFC 5322 soft wrap) before sending.
-/// SMTP relays and spam filters treat unbroken >100-char base64 lines as suspicious,
-/// and some relays refuse long lines outright. The Vault encrypted block and
-/// raw-base64 bodies are rebuilt by receivers via whitespace-stripping, so folding
-/// is lossless for both codecs.
-fn fold_lines(body: &str) -> String {
-    const MAX: usize = 76;
-    body.lines()
-        .flat_map(|line| {
-            if line.len() <= MAX {
-                vec![line.to_string()]
-            } else {
-                line.as_bytes()
-                    .chunks(MAX)
-                    .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn extract_header(header: &str, name: &str) -> Option<String> {
-    header
-        .lines()
-        .find(|line| line.to_lowercase().starts_with(&name.to_lowercase()))
-        .and_then(|line| line.splitn(2, ':').nth(1))
-        .map(|value| value.trim().to_string())
 }

@@ -270,7 +270,7 @@ fn dedup_relay_email_copies(
     let before = messages.len();
     messages.retain(|m| {
         // сами конверты не трогаем (destructive read их уже забрал)
-        if m.id.starts_with("rl-") || !is_encrypted(&m.body) {
+        if crate::vault::relay::is_virtual_id(&m.id) || !is_encrypted(&m.body) {
             return true;
         }
         let c = strip_ws(&m.body);
@@ -706,11 +706,11 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     let n = envs.len();
                                     for env in envs {
                                         ctx.relay_cache.insert(
-                                            format!("rl-{}", env.id),
+                                            crate::vault::relay::envelope_id(&env.id),
                                             (env.from.clone(), env.body.clone()),
                                         );
                                         messages.push(crate::api::email::EmailMessage {
-                                            id: format!("rl-{}", env.id),
+                                            id: crate::vault::relay::envelope_id(&env.id),
                                             from: env.from,
                                             to: ctx
                                                 .config
