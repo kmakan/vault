@@ -190,7 +190,16 @@ async function routeLetter(deps, m, from) {
     return null; // служебное письмо: не сообщение, в счётчик/уведомления не идёт
   }
 
-  if (!body || !crypto.isEncrypted(body)) return null;
+  if (!body || !crypto.isEncrypted(body)) {
+    // Письмо от известного пира, но тело пустое или не vault-формата —
+    // именно это на приёмке выглядит как «письмо дошло, а вызова нет»:
+    // дальше роутер молчал, и причину нельзя было отличить от недоставки.
+    if (deps.peerKeys[from]) {
+      console.warn('[incoming] skip', m.folder || 'INBOX', m.uid || m.id,
+        'from', from, body ? 'not-vault' : 'no-body');
+    }
+    return null;
+  }
 
   let chatKey = null; // email (1:1) или 'group:<id>'
   let title = '';
@@ -293,7 +302,14 @@ async function routeLetter(deps, m, from) {
           if (cls.kind === 'profile') { deps.processedUnreadIds.add(m.uid + '|' + (m.folder || 'INBOX')); return null; }
         }
       }
-    } catch (e) { /* не наше письмо */ }
+    } catch (e) {
+      // Тело прошло гвард isEncrypted, отправитель известен — значит это
+      // именно НАШ конверт, который не открылся ключом пира (AAD/KEK).
+      // Молчать здесь нельзя: на приёмке это неотличимо от «письмо не дошло»
+      // (живой случай 23.10.2026: тела call_* скачаны, роутер тих).
+      console.warn('[incoming] envelope error', m.folder || 'INBOX', m.uid || m.id,
+        'from', from, '—', e && e.message || e);
+    }
   } else if (crypto.isEncrypted(body)) {
     // Смена почты: отправитель сменил адрес, но ключ тот же.
     // Ключ под НОВЫМ email ещё не зарегистрирован — ищем его среди

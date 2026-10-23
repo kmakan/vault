@@ -4205,6 +4205,10 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         handleCallSignal: (sig, from) => this.handleCallSignal(sig, from),
         canonicalOf: (x) => this.canonicalOf(x),
         parseEnvelope: (plain) => this.parseEnvelope(plain),
+        // Разбор call_* конверта — в ядре (W4). Без этой зависимости ветка
+        // kind='call' падала с TypeError ВНУТРИ try/catch: письмо приходило,
+        // классифицировалось как звонок и молча терялось (регресс 23.10.2026).
+        parseCallSignal: (text) => this.parseCallSignal(text),
         localProfileOf: (x) => this.localProfileOf(x),
         nameOf: (x) => this.nameOf(x),
         setPeerKey: (e, k, pq) => this.setPeerKey(e, k, pq),

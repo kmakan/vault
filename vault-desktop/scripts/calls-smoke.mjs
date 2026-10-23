@@ -83,7 +83,13 @@ const cryptoMock = {
   // Ключ, которым реально шифровали: без этого «зашифровано не тем ключом»
   // неотличимо от «зашифровано правильным» (мутация ключа была невидима).
   peerKeyUsed: null,
-  encryptVault: async (p) => { cryptoMock.encVault.push(p); return 'ENC:' + p; },
+  peerPublicKey: null,
+  setPeerPublicKey(hex, pqEk) { cryptoMock.peerPublicKey = hex; cryptoMock.peerPq = pqEk; },
+  encryptVault: async (p) => {
+    cryptoMock.peerKeyUsed = cryptoMock.peerPublicKey;
+    cryptoMock.encVault.push(p);
+    return 'ENC:' + p;
+  },
 };
 const histMock = {
   store: {},
@@ -314,8 +320,15 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   apiMock.calls.length = 0;
   cryptoMock.encVault.length = 0;
   const ctx = makeCtx();
+  // Регресс 23.10: поллинг оставил в crypto ГЛОБАЛЬНЫЙ ключ чужого пира —
+  // сигнал обязан шифроваться ключом АДРЕСАТА, иначе принимающий молча
+  // отбрасывает конверт (AAD auth failed) и вызова нет ни по релею, ни по почте.
+  cryptoMock.peerPublicKey = 'STALE_OTHER_PEER';
+  cryptoMock.peerKeyUsed = null;
   await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c1', sdp: 'SDP1', kemct: 'K', sender_ek: 'E' });
   await new Promise(r => process.nextTick(r));
+  check('сигнал зашифрован ключом АДРЕСАТА, а не последним выставлявшимся',
+    cryptoMock.peerKeyUsed === 'PUB', cryptoMock.peerKeyUsed);
   check('релей-копия ушла (wake=true для call_request)', relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === true);
   check('релей ушёл с отпечатком КЛЮЧА ПИРА (не пустым/чужим)',
     relayMock.pubs.length === 1 && relayMock.pubs[0].opts.peerFp === 'fp:PUB', relayMock.pubs[0] && relayMock.pubs[0].opts);

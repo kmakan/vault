@@ -230,6 +230,16 @@ export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
     const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
     if (myTok) body.tok = myTok;
   } catch (e) { /* релей опционален */ }
+  // КЛЮЧ АДРЕСАТА — ЯВНО. crypto.encryptVault шифрует ГЛОБАЛЬНЫМ
+  // peerPublicKey, который выставляют открытие чата и каждый расшифрованный
+  // конверт поллинга. Между открытием чата и нажатием «позвонить» поллинг
+  // успевал переставить ключ на другого пира — сигнал уходил под чужой ключ,
+  // принимающий молча отбрасывал его (AAD auth failed), и вызова «не было»
+  // ни по релею, ни по почте: тело конверта одно и то же для обоих каналов.
+  const peerKey = identityStore.getPeerKey(peer);
+  if (peerKey) {
+    crypto.setPeerPublicKey(peerKey, identityStore.getPeerPqKey(peer) || null);
+  }
   const content = await crypto.encryptVault(JSON.stringify(body));
   // M2.2: дублируем сигнал звонка на релей (критично для скорости
   // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
