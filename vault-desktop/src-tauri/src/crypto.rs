@@ -320,18 +320,12 @@ pub fn decrypt_vault_cmd(
     String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))
 }
 
+/// Форма отпечатка — правило ядра (`identity::fingerprint_from_public_key`),
+/// а не вторая реализация: тем же значением пользуются поле
+/// `GroupMember::fingerprint` и проверка «моя ли группа» в CLI.
 pub fn fingerprint_cmd(public_key_hex: &str) -> anyhow::Result<String> {
-    let bytes = hex::decode(public_key_hex)
-        .map_err(|e| anyhow::anyhow!("Invalid public key hex: {}", e))?;
-    if bytes.len() != 32 {
-        anyhow::bail!("Public key must be 32 bytes");
-    }
-    let fp: String = bytes[..8]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(":");
-    Ok(format!("{}:****", fp))
+    vault_client::vault::identity::fingerprint_from_public_key(public_key_hex)
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 /// Symmetric encrypt with a raw 32-byte hex key (for group shared keys)

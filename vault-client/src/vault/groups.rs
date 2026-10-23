@@ -1,38 +1,11 @@
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Group chat (Signal model)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Group {
-    pub id: String,
-    pub name: String,
-    pub created_by: String,
-    pub created_at: String,
-    pub members: Vec<GroupMember>,
-    #[serde(default)]
-    pub blocked: Vec<String>,
-    pub encrypted: bool,
-    /// Hex-encoded 32-byte key for group encryption (XChaCha20-Poly1305)
-    #[serde(default)]
-    pub group_key: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GroupMember {
-    pub email: String,
-    pub role: GroupRole,
-    pub joined_at: String,
-    pub key_shared: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GroupRole {
-    Admin,
-    Moderator,
-    Member,
-}
+// Форма записи одна на CLI и мост десктопа: структуры живут в `vault-core`.
+// Здесь остаётся только хранилище (`GroupManager`), чтобы два клиента на одном
+// `groups.json` не расходились в том, есть ли у участника отпечаток.
+pub use vault_core::group_types::{Group, GroupMember, GroupRole};
 
 /// Group manager
 pub struct GroupManager {
@@ -87,6 +60,7 @@ impl GroupManager {
                 role: GroupRole::Admin,
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
+                fingerprint: String::new(),
             }],
             blocked: Vec::new(),
             encrypted: true,
@@ -118,6 +92,7 @@ impl GroupManager {
                 role: GroupRole::Member,
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
+                fingerprint: String::new(),
             });
 
             self.save()?;
@@ -315,6 +290,7 @@ impl GroupManager {
                 role: GroupRole::Member,
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
+                fingerprint: String::new(),
             });
         }
 

@@ -94,5 +94,23 @@ export default {
     { name: 'гейт смотрит на сырую строку (FP: в верхнем регистре и обрамление проходят)',
       pattern: "    let v = normalize(raw);\n    v.contains('@') && !v.starts_with(\"fp:\")",
       replacement: "    let v = raw;\n    v.contains('@') && !v.starts_with(\"fp:\")" },
+    // Отпечаток из публичного ключа (партия 4e): форма `xx:…:****` — часть
+    // контракта релея и поля `GroupMember::fingerprint`. Срез, длина и
+    // починка старого следа меряются здесь, а не в мосте.
+    { name: 'отпечаток берёт 9 байт вместо 8 (форма не совпадает с релеем и groups.json)',
+      pattern: '    let fp = bytes[..8]',
+      replacement: '    let fp = bytes[..9]' },
+    { name: 'ключ любой длины принимается за публичный (мусор превращается в отпечаток)',
+      pattern: '    if bytes.len() != 32 {\n        return Err("Public key must be 32 bytes".to_string());\n    }',
+      replacement: '    if false {\n        return Err("Public key must be 32 bytes".to_string());\n    }' },
+    { name: 'след публичного ключа не чинится (в groups.json остаётся 64-hex вместо отпечатка)',
+      pattern: '    if existing.is_empty() || existing == normalize(public_key_hex) {',
+      replacement: '    if existing.is_empty() {' },
+    { name: 'старый отпечаток сравнивается без нормализации (ключ в верхнем регистре не узнаётся)',
+      pattern: '    let existing = normalize(existing);\n    if existing.is_empty() || existing == normalize(public_key_hex) {',
+      replacement: '    let existing = existing.to_string();\n    if existing.is_empty() || existing == normalize(public_key_hex) {' },
+    { name: 'пустой вычисленный отпечаток записывается (поле затирается пустым)',
+      pattern: '    if computed.is_empty() {\n        return None;\n    }',
+      replacement: '    if false {\n        return None;\n    }' },
   ],
 };

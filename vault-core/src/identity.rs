@@ -72,6 +72,45 @@ pub fn same_fingerprint(a: &str, b: &str) -> bool {
     !a.is_empty() && a == b
 }
 
+/// Короткий отпечаток публичного ключа в форме десктопа: hex → первые 8 байт →
+/// `xx:xx:…:****`. Форма — часть контракта релея (read-токен привязан к
+/// отпечатку) и поля `GroupMember::fingerprint`, поэтому она одна на мост и
+/// CLI, а не две реализации с разным срезом.
+pub fn fingerprint_from_public_key(public_key_hex: &str) -> Result<String, String> {
+    let bytes =
+        hex::decode(public_key_hex.trim()).map_err(|e| format!("Invalid public key hex: {e}"))?;
+    if bytes.len() != 32 {
+        return Err("Public key must be 32 bytes".to_string());
+    }
+    let fp = bytes[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":");
+    Ok(format!("{fp}:****"))
+}
+
+/// Какой отпечаток записать участнику. Пустой слот заполняется; значение,
+/// равное ПУБЛИЧНОМУ КЛЮЧУ, — след старого backfill (фронт писал ключ в поле
+/// отпечатка) и заменяется настоящим. Всё остальное не трогаем: клиент мог
+/// выяснить отпечаток по живым письмам, и перезапись стёрла бы это знание.
+pub fn fingerprint_to_repair(
+    existing: &str,
+    computed: &str,
+    public_key_hex: &str,
+) -> Option<String> {
+    let computed = normalize(computed);
+    if computed.is_empty() {
+        return None;
+    }
+    let existing = normalize(existing);
+    if existing.is_empty() || existing == normalize(public_key_hex) {
+        Some(computed)
+    } else {
+        None
+    }
+}
+
 /// Ключ записи хранилища для адреса: нормальная форма, а пустой адрес — не
 /// ключ. Реестр присутствия и namespaces-ключи монитора держат одну и ту же
 /// форму, иначе `Bob@X` и `bob@x` — две разные записи об одном человеке.
@@ -402,5 +441,42 @@ mod tests {
     #[test]
     fn normal_form_is_stable_under_second_pass() {
         assert_eq!(normalize(&normalize("  ANNA@YA.RU ")), "anna@ya.ru");
+    }
+
+    #[test]
+    fn fingerprint_is_first_8_bytes_of_the_key() {
+        let key = "00".repeat(32);
+        assert_eq!(
+            fingerprint_from_public_key(&key).as_deref(),
+            Ok("00:00:00:00:00:00:00:00:****")
+        );
+        let key = format!("{}ff{}", "ab".repeat(8), "cd".repeat(23));
+        assert_eq!(
+            fingerprint_from_public_key(&key).as_deref(),
+            Ok("ab:ab:ab:ab:ab:ab:ab:ab:****")
+        );
+        assert!(fingerprint_from_public_key("not-hex").is_err());
+        assert!(
+            fingerprint_from_public_key(&"00".repeat(31)).is_err(),
+            "31 байт — не ключ X25519"
+        );
+    }
+
+    #[test]
+    fn fingerprint_repair_fills_empty_and_replaces_the_public_key_trace() {
+        let key = "ab".repeat(32);
+        let fp = "aa:bb:cc:dd:ee:ff:00:11:****";
+        assert_eq!(fingerprint_to_repair("", fp, &key).as_deref(), Some(fp));
+        assert_eq!(
+            fingerprint_to_repair(&key.to_uppercase(), fp, &key).as_deref(),
+            Some(fp),
+            "поле, где лежит сам ключ, — след старого backfill"
+        );
+        assert_eq!(
+            fingerprint_to_repair("01:02:03:04:05:06:07:08:****", fp, &key),
+            None,
+            "выясненный отпечаток не перезаписывается"
+        );
+        assert_eq!(fingerprint_to_repair("", "", &key), None);
     }
 }

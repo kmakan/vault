@@ -36,7 +36,7 @@ export default {
     // create_group (создатель) и в import_group, и без контекста мутация била
     // не туда строку (урок ADR-005: «мутация не в той функции»).
     { name: 'новый участник сразу считается имеющим ключ (key_shared)',
-      pattern: '            group.members.push(GroupMember {\n                email: email.to_string(),\n                role: GroupRole::Member,\n                joined_at: chrono::Utc::now().to_rfc3339(),\n                key_shared: false,\n            });',
-      replacement: '            group.members.push(GroupMember {\n                email: email.to_string(),\n                role: GroupRole::Member,\n                joined_at: chrono::Utc::now().to_rfc3339(),\n                key_shared: true,\n            });' },
+      pattern: '            group.members.push(GroupMember {\n                email: email.to_string(),\n                role: GroupRole::Member,\n                joined_at: chrono::Utc::now().to_rfc3339(),\n                key_shared: false,\n                fingerprint: String::new(),\n            });',
+      replacement: '            group.members.push(GroupMember {\n                email: email.to_string(),\n                role: GroupRole::Member,\n                joined_at: chrono::Utc::now().to_rfc3339(),\n                key_shared: true,\n                fingerprint: String::new(),\n            });' },
   ],
 };

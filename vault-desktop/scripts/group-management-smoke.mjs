@@ -17,7 +17,17 @@ mkdirSync(MOCKS, { recursive: true });
 const invokeCalls = [];
 globalThis.__invokeMock = async (cmd, args) => {
   invokeCalls.push([cmd, args]);
-  if (cmd === 'groups_save_member_fingerprints') return true;
+  if (cmd === 'groups_backfill_member_fingerprints') {
+    // Мост сам читает peer_keys и считает отпечаток; фронту возвращается
+    // готовый состав. Пустое поле у nobody@x.ru — ключа нет.
+    return {
+      id: 'g1',
+      members: [
+        { email: 'peer@x.ru', fingerprint: 'aa:bb:cc:dd:ee:ff:00:11:****' },
+        { email: 'nobody@x.ru', fingerprint: '' },
+      ],
+    };
+  }
   return null;
 };
 writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);\n');
@@ -176,21 +186,25 @@ function makeDeps(over = {}) {
   const deps = makeDeps();
   const group = { id: 'g1', members: [{ email: 'peer@x.ru' }, { email: 'nobody@x.ru' }] };
   await GM.backfillGroupFingerprints(deps, group);
-  check('отпечатки: восстановлены из peer_keys',
-    group.members[0].fingerprint === 'KEY1', group.members);
+  check('отпечатки: мост вернул починенный состав',
+    group.members[0].fingerprint === 'aa:bb:cc:dd:ee:ff:00:11:****', group.members);
   check('отпечатки: у кого ключа нет — остаётся пустым',
     !group.members[1].fingerprint, group.members[1]);
-  check('отпечатки: сохранены в Rust',
-    invokeCalls.some((c) => c[0] === 'groups_save_member_fingerprints' && c[1].groupId === 'g1'),
+  check('отпечатки: фронт просит починку у моста',
+    invokeCalls.some((c) => c[0] === 'groups_backfill_member_fingerprints' && c[1].groupId === 'g1'),
     invokeCalls);
+  check('отпечатки: публичные ключи из peerKeys в поле не пишутся',
+    !invokeCalls.some((c) => c[0] === 'groups_save_member_fingerprints'), invokeCalls);
 }
 {
   const deps = makeDeps();
-  const group = { id: 'g1', members: [{ email: 'peer@x.ru', fingerprint: 'KEY1' }] };
+  const group = { id: 'g1', members: [{ email: 'peer@x.ru', fingerprint: 'aa:bb:cc:dd:ee:ff:00:11:****' }] };
   invokeCalls.length = 0;
   await GM.backfillGroupFingerprints(deps, group);
-  check('отпечатки: уже есть — моста не касаемся',
-    invokeCalls.filter((c) => c[0] === 'groups_save_member_fingerprints').length === 0, invokeCalls);
+  check('отпечатки: решение «менять ли» — в мосте, вызов один',
+    invokeCalls.filter((c) => c[0] === 'groups_backfill_member_fingerprints').length === 1, invokeCalls);
+  check('отпечатки: выясненный отпечаток не перетёрт',
+    group.members[0].fingerprint === 'aa:bb:cc:dd:ee:ff:00:11:****', group.members[0]);
 }
 
 // ── Выход и удаление ───────────────────────────────────────────────────

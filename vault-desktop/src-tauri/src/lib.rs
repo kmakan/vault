@@ -1171,50 +1171,17 @@ fn groups_rename_member(
         .map_err(|e| e.to_string())?
 }
 
-/// Membership по fingerprint: массовое заполнение fingerprint
-/// участников из peer_keys (ленивая миграция старых groups.json). Идемпотентно:
-/// пустой fingerprint не затирает существующий. Решение — в
-/// `vault::identity::fill_missing_fingerprint` (те же два стража, что у
-/// `backfill_my_fingerprint`), здесь только обход и запись.
+/// Membership по fingerprint: ленивая починка отпечатков участников группы по
+/// `peer_keys`. Заменяет прежний `groups_save_member_fingerprints`, которому
+/// фронт передавал публичные ключи и который писал их в поле отпечатка —
+/// оттуда в живом `groups.json` две формы одного поля. Теперь ключ читает
+/// мост, а форму отпечатка решает ядро, поэтому фронт не знает ни того, ни
+/// другого.
 #[tauri::command]
-fn groups_save_member_fingerprints(
-    group_id: String,
-    members: Vec<MemberFingerprintIn>,
-) -> Result<groups::Group, String> {
-    let mut groups = groups::load_groups().map_err(|e| e.to_string())?;
-    let group = groups
-        .get_mut(&group_id)
-        .ok_or_else(|| "Group not found".to_string())?;
-    for m in members {
-        if let Some(existing) = group
-            .members
-            .iter_mut()
-            .find(|x| vault_client::vault::identity::same_address(&x.email, &m.email))
-        {
-            if let Some(fp) = vault_client::vault::identity::fill_missing_fingerprint(
-                &existing.fingerprint,
-                &m.fingerprint,
-            ) {
-                existing.fingerprint = fp;
-            }
-        }
-    }
-    groups::save_groups(&groups).map_err(|e| e.to_string())?;
-    groups::load_groups()
-        .map(|g| {
-            g.get(&group_id)
-                .cloned()
-                .ok_or_else(|| "Group not found".to_string())
-        })
+fn groups_backfill_member_fingerprints(group_id: String) -> Result<groups::Group, String> {
+    groups::backfill_member_fingerprints(&group_id)
         .map_err(|e| e.to_string())?
-}
-
-/// Вход для groups_save_member_fingerprints (JS-объект { email, fingerprint }).
-#[derive(Debug, serde::Deserialize)]
-struct MemberFingerprintIn {
-    email: String,
-    #[serde(default)]
-    fingerprint: String,
+        .ok_or_else(|| "Group not found".to_string())
 }
 
 /// «Мои группы»: фильтр по fingerprint (первичный) + адресам (текущий и алиасы).
@@ -2209,7 +2176,7 @@ pub fn run() {
             groups_has_member,
             groups_rename_address,
             groups_backfill_my_fingerprint,
-            groups_save_member_fingerprints,
+            groups_backfill_member_fingerprints,
             android_open_url,
             duress_get_config,
             duress_hash_secret,

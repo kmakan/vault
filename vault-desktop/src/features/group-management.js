@@ -93,27 +93,24 @@ export function emailSharesFingerprint(deps, emailA, emailB) {
   return !!(ka && kb && ka === kb);
 }
 
-// Восстановить отпечатки участников, у которых их нет (из peer_keys).
-// Поле некритично для матчинга (тот идёт по peer_keys), но без него группа
-// остаётся с двумя участниками на один отпечаток.
+// Восстановить/починить отпечатки участников по peer_keys.
+//
+// РЕШЕНИЕ — В МОСТЕ. Раньше здесь перебирались `deps.peerKeys()` (это
+// ПУБЛИЧНЫЕ ключи, не отпечатки) и значение писалось в поле `fingerprint`:
+// в живом groups.json появились две формы одного поля — отпечаток и 64-hex
+// ключ, и fp-матчинг для второй записи не работал. Теперь мост сам читает
+// ключи, считает отпечаток ядром и чинит запись; фронт только просит и
+// принимает обновлённый состав.
 export async function backfillGroupFingerprints(deps, group) {
+  if (!group || !group.id) return;
   try {
-    let touched = false;
-    const keys = deps.peerKeys();
-    for (const m of (group.members || [])) {
-      if (m.fingerprint) continue;
-      const k = keys[m.email] || keys[String(m.email || '').toLowerCase()];
-      if (!k) continue;
-      m.fingerprint = k;
-      touched = true;
-    }
-    if (!touched) return;
-    await invoke('groups_save_member_fingerprints', {
+    const updated = await invoke('groups_backfill_member_fingerprints', {
       groupId: group.id,
-      members: (group.members || []).map((m) => ({ email: m.email, fingerprint: m.fingerprint || '' })),
     });
-    console.log('[groups] fingerprints backfilled:', group.id);
-  } catch (e) { /* тихо: поле некритично, матчинг идёт по peer_keys */ }
+    if (updated && Array.isArray(updated.members)) {
+      group.members = updated.members;
+    }
+  } catch (e) { /* тихо: поле некритично для матчинга, идёт по peer_keys */ }
 }
 
 // Покинуть группу: мы больше не участник — группа исчезает из списка.

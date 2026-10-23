@@ -55,6 +55,7 @@ const EXEMPT = new Map([
   ['vault-client/src/storage/sqlite.rs', 'хранилище SQLite: проверяется e2e-сценариями (нужен файл БД)'],
   ['vault-core/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
   ['vault-core/src/key_store_types.rs', 'типы хранения и serde-форма — данных и решений нет'],
+  ['vault-core/src/group_types.rs', 'общая форма groups.json (поля + serde-умолчания) — решений нет; правило владения меряется в rust-identity'],
   ['vault-core/src/crypto_pq.rs', 'примитивы ML-KEM/X25519 с 10 пробами крейта; мутационный набор — отдельная задача ' +
     '(канбан: PQ-примитивы vault-core), здесь не смешивается с переносом адресного правила'],
 ]);

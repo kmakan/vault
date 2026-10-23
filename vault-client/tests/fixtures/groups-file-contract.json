@@ -1,0 +1,141 @@
+{
+  "_comment": "Одна фикстура на оба клиента groups.json (CLI GroupManager и мост src-tauri/groups.rs). Оба обязаны прочитать эти байты, ничего не потерять и одинаково ответить на вопрос «моя ли группа». Ожидания — в expect.owned_ids; порядок не важен, тесты сортируют.",
+  "me": {
+    "email": "anna@mail.ru",
+    "aliases": ["anna@ya.ru"],
+    "fingerprint": "ab:cd:ef:00:11:22:33:44:****"
+  },
+  "groups": {
+    "grp_creator_case": {
+      "id": "grp_creator_case",
+      "name": "Создатель в другом написании",
+      "created_by": " ANNA@Mail.ru ",
+      "created_at": "2026-10-01T10:00:00Z",
+      "members": [
+        {
+          "email": "anna@mail.ru",
+          "role": "Admin",
+          "joined_at": "2026-10-01T10:00:00Z",
+          "key_shared": true,
+          "fingerprint": ""
+        }
+      ],
+      "blocked": [],
+      "encrypted": true,
+      "group_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "grp_fp_only": {
+      "id": "grp_fp_only",
+      "name": "Участник опознан отпечатком",
+      "created_by": "oleg@mail.ru",
+      "created_at": "2026-10-02T10:00:00Z",
+      "members": [
+        {
+          "email": "anna@old.example",
+          "role": "Member",
+          "joined_at": "2025-01-01T00:00:00Z",
+          "key_shared": true,
+          "fingerprint": "AB:CD:EF:00:11:22:33:44:****"
+        },
+        {
+          "email": "oleg@mail.ru",
+          "role": "Admin",
+          "joined_at": "2025-01-01T00:00:00Z",
+          "key_shared": true,
+          "fingerprint": "ff:ff:ff:ff:ff:ff:ff:ff:****"
+        }
+      ],
+      "blocked": [],
+      "encrypted": true,
+      "group_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "grp_alias": {
+      "id": "grp_alias",
+      "name": "Мой алиас",
+      "created_by": "oleg@mail.ru",
+      "created_at": "2026-10-03T10:00:00Z",
+      "members": [
+        {
+          "email": "Anna@Ya.ru",
+          "role": "Member",
+          "joined_at": "2025-02-01T00:00:00Z",
+          "key_shared": false,
+          "fingerprint": ""
+        }
+      ],
+      "blocked": [],
+      "encrypted": true,
+      "group_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "grp_address_fallback": {
+      "id": "grp_address_fallback",
+      "name": "Мой адрес при чужом отпечатке",
+      "created_by": "oleg@mail.ru",
+      "created_at": "2026-10-04T10:00:00Z",
+      "members": [
+        {
+          "email": "anna@mail.ru",
+          "role": "Member",
+          "joined_at": "2025-03-01T00:00:00Z",
+          "key_shared": true,
+          "fingerprint": "ff:ff:ff:ff:ff:ff:ff:ff:****"
+        }
+      ],
+      "blocked": [],
+      "encrypted": true,
+      "group_key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "grp_legacy_no_fields": {
+      "id": "grp_legacy_no_fields",
+      "name": "Старая запись без новых полей",
+      "created_by": "anna@mail.ru",
+      "created_at": "2024-12-01T10:00:00Z",
+      "members": [
+        {
+          "email": "anna@mail.ru",
+          "role": "Admin"
+        },
+        {
+          "email": "bob@mail.ru",
+          "role": "Member"
+        }
+      ],
+      "encrypted": true
+    },
+    "grp_foreign": {
+      "id": "grp_foreign",
+      "name": "Чужая группа",
+      "created_by": "oleg@mail.ru",
+      "created_at": "2026-10-05T10:00:00Z",
+      "members": [
+        {
+          "email": "petr@mail.ru",
+          "role": "Admin",
+          "joined_at": "2025-04-01T00:00:00Z",
+          "key_shared": true,
+          "fingerprint": "12:34:56:78:90:ab:cd:ef:****"
+        },
+        {
+          "email": "oleg@mail.ru",
+          "role": "Member",
+          "joined_at": "2025-04-01T00:00:00Z",
+          "key_shared": true,
+          "fingerprint": "ff:ff:ff:ff:ff:ff:ff:ff:****"
+        }
+      ],
+      "blocked": [],
+      "encrypted": true,
+      "group_key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  },
+  "expect": {
+    "owned_ids": [
+      "grp_creator_case",
+      "grp_fp_only",
+      "grp_alias",
+      "grp_address_fallback",
+      "grp_legacy_no_fields"
+    ],
+    "not_owned_ids": ["grp_foreign"]
+  }
+}

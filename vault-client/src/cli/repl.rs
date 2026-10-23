@@ -862,6 +862,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                         //     GroupSend на stealth-тему (wire-совместимость).
                         let mut group_msgs: Vec<(String, &crate::api::email::EmailMessage)> =
                             Vec::new();
+                        // Участник группы — «адрес ИЛИ отпечаток»: после смены
+                        // почты в записи мог остаться только fp. Ключ берём из
+                        // контактной книги, адрес — fallback (identity::member_matches).
+                        let contact_book = crate::vault::ContactBook::load_default().ok();
                         for m in &messages {
                             if let Some(gid) =
                                 m.subject.strip_prefix("VaultGroup: ").map(str::trim)
@@ -871,15 +875,36 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                 && ctx.crypto.is_encrypted(&m.body)
                             {
                                 // stealth-группа: перебор ключей известных групп
+                                let sender_fp = contact_book.as_ref().and_then(|b| {
+                                    b.all()
+                                        .into_iter()
+                                        .find(|c| {
+                                            crate::vault::identity::same_address(
+                                                &c.email, &m.from,
+                                            )
+                                        })
+                                        .and_then(|c| {
+                                            crate::vault::identity::fingerprint_from_public_key(
+                                                &c.public_key,
+                                            )
+                                            .ok()
+                                        })
+                                });
+                                let sender = crate::vault::identity::Identity::new(
+                                    &m.from,
+                                    &[],
+                                    sender_fp.as_deref().unwrap_or(""),
+                                );
                                 let gm = crate::vault::GroupManager::new();
                                 'outer: for group in gm.list_groups() {
                                     let gid = group.id.clone();
                                     if group.group_key.is_empty() {
                                         continue;
                                     }
-                                    let is_member = group.members.iter().any(|x| {
-                                        crate::vault::identity::same_address(&m.from, &x.email)
-                                    });
+                                    let is_member = group
+                                        .members
+                                        .iter()
+                                        .any(|x| sender.member_matches(&x.email, &x.fingerprint));
                                     if !is_member {
                                         continue;
                                     }

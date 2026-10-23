@@ -9,6 +9,11 @@ use std::path::PathBuf;
 use vault_client::vault::group_rules;
 use vault_client::vault::identity;
 
+// Форма записи одна на CLI и мост: структуры живут в `vault-core`, здесь —
+// только пути хранения и команды. Своя копия `GroupMember` без `fingerprint`
+// уже один раз сделала CLI слепым к участнику, сменившему почту.
+pub use vault_client::vault::groups::{Group, GroupMember, GroupRole};
+
 const GROUPS_FILE: &str = "groups.json";
 
 fn get_groups_dir() -> Result<PathBuf> {
@@ -26,44 +31,7 @@ fn get_groups_path() -> Result<PathBuf> {
     let dir = get_groups_dir()?;
     Ok(dir.join(GROUPS_FILE))
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Group {
-    pub id: String,
-    pub name: String,
-    pub created_by: String,
-    pub created_at: String,
-    pub members: Vec<GroupMember>,
-    #[serde(default)]
-    pub blocked: Vec<String>,
-    pub encrypted: bool,
-    #[serde(default)]
-    pub group_key: String,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GroupMember {
-    pub email: String,
-    pub role: GroupRole,
-    // Инвайт передаёт список участников только с email+role — при десериализации
-    // отсутствующие поля получают значения по умолчанию.
-    #[serde(default)]
-    pub joined_at: String,
-    #[serde(default)]
-    pub key_shared: bool,
-    /// Fingerprint публичного ключа участника
-    /// 128-hex id — стабилен при смене почты. Пустой у старых групп —
-    /// лениво заполняется фронтендом при первом fingerprint-матче.
-    /// Инвайты старых версий его не несут — десериализация остаётся совместимой.
-    #[serde(default)]
-    pub fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum GroupRole {
-    Admin,
-    Moderator,
-    Member,
-}
 pub fn load_groups() -> Result<HashMap<String, Group>> {
     let path = get_groups_path()?;
     if !path.exists() {
@@ -648,7 +616,7 @@ pub fn group_access(
 /// группы). Без этого fp-only фильтр `filter_own_groups` такие группы не
 /// находит.
 ///
-/// Идемпотентно (как groups_save_member_fingerprints): существующие НЕПУСТЫЕ
+/// Идемпотентно (как `backfill_member_fingerprints`): существующие НЕПУСТЫЕ
 /// fingerprint не затираются; пустой fingerprint после trim — no-op (ничего
 /// не пишем, возвращаем 0). Сохранение — только если что-то обновилось.
 ///
@@ -672,6 +640,58 @@ pub fn backfill_my_fingerprint(email: &str, fingerprint: &str) -> Result<usize> 
         save_groups(&groups)?;
     }
     Ok(updates)
+}
+
+/// Ленивая починка отпечатков участников ОДНОЙ группы по `peer_keys`.
+///
+/// Зачем: старый `backfillGroupFingerprints` во фронте писал в поле
+/// `fingerprint` сам публичный ключ. В живом `groups.json` из-за этого лежат
+/// две формы — канонический отпечаток `xx:xx:…:****` и 64-hex ключ. Ключ не
+/// совпадает с отпечатком, который присылает фронт для «моей» идентичности,
+/// поэтому fp-ветка для такой записи мертва, и остаётся только адрес.
+///
+/// Правило «что писать» — в ядре (`identity::fingerprint_to_repair`): пустой
+/// слот заполняется, след публичного ключа заменяется, выясненный отпечаток не
+/// трогается. Здесь — поиск ключа по адресу и запись файла.
+pub fn backfill_member_fingerprints(group_id: &str) -> Result<Option<Group>> {
+    let peers = crate::key_store::load_peer_keys()?;
+    backfill_member_fingerprints_with_peers(group_id, &peers)
+}
+
+/// Та же починка с уже загруженными ключами (тесты не трогают реальный
+/// `~/.vault/keys`).
+pub fn backfill_member_fingerprints_with_peers(
+    group_id: &str,
+    peers: &[vault_core::StoredPeerKey],
+) -> Result<Option<Group>> {
+    let mut groups = load_groups()?;
+    if !groups.contains_key(group_id) {
+        return Ok(None);
+    }
+    let mut updates = 0usize;
+    if let Some(group) = groups.get_mut(group_id) {
+        for m in group.members.iter_mut() {
+            let Some(peer) = peers
+                .iter()
+                .find(|k| identity::same_address(&k.email, &m.email))
+            else {
+                continue;
+            };
+            let Ok(computed) = identity::fingerprint_from_public_key(&peer.public_key) else {
+                continue;
+            };
+            if let Some(fp) =
+                identity::fingerprint_to_repair(&m.fingerprint, &computed, &peer.public_key)
+            {
+                m.fingerprint = fp;
+                updates += 1;
+            }
+        }
+    }
+    if updates > 0 {
+        save_groups(&groups)?;
+    }
+    Ok(groups.get(group_id).cloned())
 }
 
 #[cfg(test)]
@@ -1270,8 +1290,11 @@ mod tests {
             assert_eq!(inv.created_by, "creator@x");
             let mut groups = load_groups().unwrap();
             groups.get_mut(&g.id).unwrap().members.push(GroupMember {
-                email: "alice@x".to_string(), role: GroupRole::Member,
-                joined_at: String::new(), key_shared: false, fingerprint: String::new(),
+                email: "alice@x".to_string(),
+                role: GroupRole::Member,
+                joined_at: String::new(),
+                key_shared: false,
+                fingerprint: String::new(),
             });
             save_groups(&groups).unwrap();
             assert!(group_invite(&g.id, "alice@x").is_err());
@@ -1368,6 +1391,189 @@ mod tests {
         let weird = mk_group("g6", "  Admin@X.COM ", &[("ME@NEW.com", "  ")]);
         let got = filter_own_groups(std::slice::from_ref(&weird), "me@new.com", "", &[]);
         assert_eq!(got.len(), 1);
+    }
+
+    // ─── гейт паритета groups.json: одна фикстура — CLI и мост ───
+
+    fn groups_fixture() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../vault-client/tests/fixtures/groups-file-contract.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("фикстура {} недоступна: {e}", path.display()));
+        serde_json::from_str(&raw).expect("фикстура — валидный JSON")
+    }
+
+    /// Мост читает тот же файл, что CLI-тест `groups_file_contract.rs`, и
+    /// отвечает тем же списком «мои группы». Стороны расходятся не в правиле
+    /// (оно в ядре), а в ФОРМАТЕ записи: своя копия `GroupMember` без
+    /// `fingerprint` уже делала участника невидимым после смены почты.
+    #[test]
+    fn groups_file_contract_parity_with_cli() {
+        use std::collections::BTreeSet;
+
+        with_tmp_groups(|| {
+            let f = groups_fixture();
+            let path = std::env::var("VAULT_GROUPS_FILE").unwrap();
+            std::fs::write(&path, serde_json::to_vec(&f["groups"]).unwrap())
+                .expect("запись фикстуры");
+
+            let loaded = load_groups().expect("мост читает общую фикстуру");
+            let fixture_ids: BTreeSet<String> = f["groups"]
+                .as_object()
+                .expect("groups — объект")
+                .keys()
+                .cloned()
+                .collect();
+            assert_eq!(
+                loaded.keys().cloned().collect::<BTreeSet<_>>(),
+                fixture_ids,
+                "мост потерял или выдумал группы при чтении общей фикстуры"
+            );
+
+            let aliases: Vec<String> = f["me"]["aliases"]
+                .as_array()
+                .expect("me.aliases")
+                .iter()
+                .map(|v| v.as_str().expect("алиас — строка").to_string())
+                .collect();
+            let all: Vec<Group> = loaded.values().cloned().collect();
+            let owned: BTreeSet<String> = filter_own_groups(
+                &all,
+                f["me"]["email"].as_str().expect("me.email"),
+                f["me"]["fingerprint"].as_str().expect("me.fingerprint"),
+                &aliases,
+            )
+            .into_iter()
+            .map(|g| g.id)
+            .collect();
+            let expected: BTreeSet<String> = f["expect"]["owned_ids"]
+                .as_array()
+                .expect("expect.owned_ids")
+                .iter()
+                .map(|v| v.as_str().expect("id — строка").to_string())
+                .collect();
+            let not_owned: BTreeSet<String> = f["expect"]["not_owned_ids"]
+                .as_array()
+                .expect("expect.not_owned_ids")
+                .iter()
+                .map(|v| v.as_str().expect("id — строка").to_string())
+                .collect();
+            assert_eq!(owned, expected, "мост: список «мои группы»");
+            assert!(owned.is_disjoint(&not_owned), "чужие группы попали в «мои»");
+
+            // Запись/чтение без потерь: мост сериализует ровно то, что прочитал.
+            save_groups(&loaded).expect("save_groups");
+            let again = load_groups().expect("повторное чтение");
+            assert_eq!(again, loaded, "round-trip groups.json изменил записи");
+
+            let legacy = &again["grp_legacy_no_fields"];
+            assert_eq!(legacy.group_key, "", "нет group_key — пустая строка");
+            assert!(legacy.blocked.is_empty(), "нет blocked — пустой список");
+            let admin = legacy
+                .members
+                .iter()
+                .find(|m| m.email == "anna@mail.ru")
+                .expect("участник старой группы");
+            assert_eq!(admin.fingerprint, "", "нет fingerprint — пусто");
+            assert_eq!(admin.joined_at, "", "нет joined_at — пусто");
+            assert!(!admin.key_shared, "нет key_shared — false");
+        });
+    }
+
+    // ─── ленивая починка отпечатков участников (две формы groups.json) ───
+
+    fn peer_key(email: &str, public_key: &str) -> vault_core::StoredPeerKey {
+        vault_core::StoredPeerKey {
+            email: email.into(),
+            public_key: public_key.into(),
+            label: None,
+            added_at: "2026-01-01T00:00:00Z".into(),
+            pq_public_key: None,
+        }
+    }
+
+    /// Живой дефект: фронт писал в `GroupMember::fingerprint` ПУБЛИЧНЫЙ КЛЮЧ
+    /// (64 hex) вместо формы `xx:…:****`. Мост обязан заменить этот след
+    /// настоящим отпечатком, заполнить пустые слоты и не трогать уже
+    /// выясненные значения.
+    #[test]
+    fn backfill_repairs_empty_and_public_key_traces_only() {
+        with_tmp_groups(|| {
+            let key = format!("aabbccddeeff0011{}", "00".repeat(24));
+            let canonical = "aa:bb:cc:dd:ee:ff:00:11:****";
+            let mut group = mk_group(
+                "grp_repair",
+                "me@x.com",
+                &[
+                    ("empty@x.com", ""),
+                    ("trace@x.com", ""),
+                    ("known@x.com", "11:22:33:44:55:66:77:88:****"),
+                    ("unknown@x.com", ""),
+                ],
+            );
+            // След старого backfill: в поле отпечатка лежит сам публичный ключ.
+            group
+                .members
+                .iter_mut()
+                .find(|m| m.email == "trace@x.com")
+                .unwrap()
+                .fingerprint = key.to_uppercase();
+            save_groups(&std::collections::HashMap::from([(
+                "grp_repair".to_string(),
+                group,
+            )]))
+            .unwrap();
+
+            let peers = [
+                peer_key("EMPTY@x.com", &key),
+                peer_key("trace@x.com", &key),
+                peer_key("known@x.com", &key),
+            ];
+            let updated = backfill_member_fingerprints_with_peers("grp_repair", &peers)
+                .expect("починка без ошибок")
+                .expect("группа найдена");
+
+            let fp = |email: &str| {
+                updated
+                    .members
+                    .iter()
+                    .find(|m| m.email == email)
+                    .unwrap()
+                    .fingerprint
+                    .clone()
+            };
+            assert_eq!(fp("empty@x.com"), canonical, "пустой слот заполнен");
+            assert_eq!(
+                fp("trace@x.com"),
+                canonical,
+                "публичный ключ заменён настоящим отпечатком"
+            );
+            assert_eq!(
+                fp("known@x.com"),
+                "11:22:33:44:55:66:77:88:****",
+                "выясненный отпечаток не перезаписывается"
+            );
+            assert_eq!(fp("unknown@x.com"), "", "без ключа контакта — не трогаем");
+
+            // Починка записана в файл, а не только в возвращённую копию.
+            let reloaded = load_groups().unwrap();
+            assert_eq!(
+                reloaded["grp_repair"]
+                    .members
+                    .iter()
+                    .find(|m| m.email == "trace@x.com")
+                    .unwrap()
+                    .fingerprint,
+                canonical
+            );
+
+            // Неизвестная группа — не ошибка, а «нечего чинить».
+            assert!(
+                backfill_member_fingerprints_with_peers("no-such-group", &peers)
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
 
     // ─── партия 4d: «чья группа» и «что мне в ней можно» отвечает мост ───
