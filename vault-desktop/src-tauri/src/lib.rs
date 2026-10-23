@@ -2275,6 +2275,7 @@ pub fn run() {
             vault_bridge::vault_call_next_state,
             vault_bridge::vault_call_can,
             vault_bridge::vault_call_can_table,
+            vault_bridge::vault_call_wire_names,
             vault_bridge::vault_call_can_apply,
             vault_bridge::vault_call_incoming_action,
             vault_bridge::vault_call_hangup_signal_kind,

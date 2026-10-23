@@ -259,6 +259,17 @@ pub fn vault_call_can_table() -> serde_json::Value {
     serde_json::to_value(can_table()).unwrap_or(serde_json::Value::Null)
 }
 
+/// Полный словарь проводных имён протокола звонка (события и вопросы) — W4.
+///
+/// Зачем одним вызовом: JS-гейт `scripts/call-wire-names-gate.mjs` сверяет
+/// литералы в фичах с этим словарём. Ядро печатает имена, JS только читает,
+/// поэтому переименование на одной стороне не даёт «понятное JS слово,
+/// которое ядро молча не заметило».
+#[tauri::command]
+pub fn vault_call_wire_names() -> vault_client::vault::call_state::CallWireNames {
+    vault_client::vault::call_state::wire_names()
+}
+
 #[tauri::command]
 pub fn vault_call_can(current: String, question: String) -> bool {
     use vault_client::vault::call_state::{can, CallQuestion, CallState};

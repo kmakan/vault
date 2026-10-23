@@ -19,6 +19,7 @@
 //! `call_cancel`, `call_reject`) — конвенция, а не реализация: она совпадает
 //! с тем, что принимает `vault_client::vault::call::parse_call_signal`.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 /// Состояние звонка на стороне одного абонента.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,6 +289,60 @@ pub fn question_name(q: CallQuestion) -> &'static str {
         CallQuestion::CallIdle => "call_idle",
         CallQuestion::CallIncomingRinging => "call_incoming_ringing",
         CallQuestion::CallOutgoingRinging => "call_outgoing_ringing",
+    }
+}
+
+/// Полный словарь проводных имён звонка — ОДНИМ ответом (ADR-005 §W4,
+/// `t_57ed7152`).
+///
+/// ЗАЧЕМ. Ядро печатало и читало имена, но фронт держал их литералами на
+/// местах вызова (`callNextState(state, 'hung_up')`,
+/// `callCan(state, 'arm_ring_timer')`). Опечатка в литерале не падала:
+/// `vault_call_next_state` возвращал ТЕКУЩЕЕ состояние, а `vault_call_can` —
+/// `false`, и звонок молча не переходил. Гейт `tauri-args-gate` меряет ИМЕНА
+/// аргументов, но не их ЗНАЧЕНИЯ, поэтому словарь отдаётся фронту данными:
+/// JS-гейт сверяет литералы с этим ответом, а фикстура
+/// `tests/fixtures/call-wire-names.json` держит обе стороны на одном
+/// контракте (её читают Rust-тест и JS-гейт).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallWireNames {
+    pub events: Vec<String>,
+    pub questions: Vec<String>,
+}
+
+/// Словарь имён на проводе. Порядок фиксирован: он и есть контракт фикстуры.
+pub fn wire_names() -> CallWireNames {
+    CallWireNames {
+        events: [
+            CallEvent::RequestReceived,
+            CallEvent::OutgoingStarted,
+            CallEvent::Accepted,
+            CallEvent::HungUp,
+            CallEvent::RingTimeout,
+            CallEvent::Preempted,
+        ]
+        .iter()
+        .map(|e| e.name().to_string())
+        .collect(),
+        questions: [
+            CallQuestion::ArmRingTimer,
+            CallQuestion::StartOutgoing,
+            CallQuestion::AcceptIncoming,
+            CallQuestion::AcceptOutgoing,
+            CallQuestion::CancelOutgoing,
+            CallQuestion::SendDcHangup,
+            CallQuestion::CanCallBack,
+            CallQuestion::IgnoreStaleTimeout,
+            CallQuestion::ApplySdp,
+            CallQuestion::MediaFallback,
+            CallQuestion::CallActive,
+            CallQuestion::CallIdle,
+            CallQuestion::CallIncomingRinging,
+            CallQuestion::CallOutgoingRinging,
+        ]
+        .iter()
+        .map(|q| question_name(*q).to_string())
+        .collect(),
     }
 }
 
@@ -780,5 +835,51 @@ mod tests {
         assert!(!ignore_stale_ring_timeout(CallState::OutgoingRinging));
         assert!(!ignore_stale_ring_timeout(CallState::IncomingRinging));
         assert!(!ignore_stale_ring_timeout(CallState::Idle));
+    }
+
+    fn contract_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/call-wire-names.json")
+    }
+
+    /// Фикстура — не «пример для чтения», а вторая сторона контракта: её
+    /// читает JS-гейт `call-wire-names-gate.mjs`. Расхождение ядра с файлом
+    /// значит, что фронт проверяют по устаревшему словарю.
+    #[test]
+    fn wire_names_match_contract_fixture() {
+        use super::CallWireNames;
+        let path = contract_fixture_path();
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("фикстура {} недоступна: {e}", path.display()));
+        let expected: CallWireNames =
+            serde_json::from_str(&raw).expect("фикстура — валидный JSON словаря");
+        assert_eq!(
+            super::wire_names(),
+            expected,
+            "словарь имён ядра разошёлся с tests/fixtures/call-wire-names.json — \
+             поправь ОДНО место: либо ядро, либо фикстуру (и JS-гейт)"
+        );
+    }
+
+    /// Имя, напечатанное дважды, — это два разных решения под одним словом:
+    /// фронт не различит их, а гейт засчитает оба как «знакомые».
+    #[test]
+    fn wire_names_have_no_duplicates() {
+        let names = super::wire_names();
+        let mut events = names.events.clone();
+        events.sort();
+        events.dedup();
+        assert_eq!(events.len(), names.events.len(), "дубли среди событий: {:?}", names.events);
+        let mut questions = names.questions.clone();
+        questions.sort();
+        questions.dedup();
+        assert_eq!(
+            questions.len(),
+            names.questions.len(),
+            "дубли среди вопросов: {:?}",
+            names.questions
+        );
+        assert!(names.events.iter().all(|n| !n.is_empty()));
+        assert!(names.questions.iter().all(|n| !n.is_empty()));
     }
 }

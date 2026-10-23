@@ -34,5 +34,15 @@ export default {
     { name: 'решение «занято» уходит на провод под другим именем (JS не узнает busy)',
       pattern: '            RequestAction::Busy => "busy",',
       replacement: '            RequestAction::Busy => "reject",' },
+    // Ниже — дрейф СЛОВАРЯ при неизменных name()/from_name(): round-trip внутри
+    // ядра остаётся зелёным, ловит только паритет «ядро ↔ фикстура». Без этих
+    // мутаций проверка фикстуры была бы декоративной: неизвестно, заметит ли
+    // она переименование на стороне ядра, которое JS не увидит.
+    { name: 'словарь событий отдаёт имя на букву иначе (JS шлёт прежнее слово — молчаливый no-op)',
+      pattern: '        .map(|e| e.name().to_string())',
+      replacement: '        .map(|e| format!("{}x", e.name()))' },
+    { name: 'словарь вопросов отдаёт имя на букву иначе (таблица «можно ли» разойдётся с JS)',
+      pattern: '        .map(|q| question_name(*q).to_string())',
+      replacement: '        .map(|q| format!("{}x", question_name(*q)))' },
   ],
 };

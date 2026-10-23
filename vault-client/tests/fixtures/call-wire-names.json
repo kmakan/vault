@@ -1,0 +1,26 @@
+{
+  "events": [
+    "request_received",
+    "outgoing_started",
+    "accepted",
+    "hung_up",
+    "ring_timeout",
+    "preempted"
+  ],
+  "questions": [
+    "arm_ring_timer",
+    "start_outgoing",
+    "accept_incoming",
+    "accept_outgoing",
+    "cancel_outgoing",
+    "send_dc_hangup",
+    "can_call_back",
+    "ignore_stale_timeout",
+    "apply_sdp",
+    "media_fallback",
+    "call_active",
+    "call_idle",
+    "call_incoming_ringing",
+    "call_outgoing_ringing"
+  ]
+}
