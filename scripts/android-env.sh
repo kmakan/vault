@@ -28,7 +28,9 @@ _vault_android_home="${ANDROID_HOME:-$HOME/Android/Sdk}"
 if [ -n "${ANDROID_NDK_HOME:-}" ]; then
     _vault_ndk_home="$ANDROID_NDK_HOME"
 else
-    _vault_ndk_home="$(ls -d "$_vault_android_home"/ndk/* 2>/dev/null | sort -V | tail -n 1)"
+    # command ls: в интерактивном zsh `ls` — алиас (eza/lsd), и его вывод
+    # с колонками прав ломает путь (известный ENV-дрейф, см. шапку).
+    _vault_ndk_home="$(command ls -d "$_vault_android_home"/ndk/* 2>/dev/null | sort -V | tail -n 1)"
 fi
 
 _vault_ndk_bin="$_vault_ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin"
