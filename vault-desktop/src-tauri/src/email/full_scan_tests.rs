@@ -21,6 +21,17 @@ enum Mode {
     Drip,
     MissingJunk,
     Broken(&'static str),
+    /// Тела не приходят, и `UID SEARCH` отвечает пусто: писем в выбранной папке
+    /// нет. Вердикт — «тела не будет никогда» (terminal), БЕЗ ошибки.
+    BodiesGone,
+    /// Тела не приходят, но `UID SEARCH` отвечает номер: письмо в папке ЕСТЬ,
+    /// молчит FETCH. Это рассинхрон сессии — обязан быть Err (reconnect).
+    BodyDesync,
+    /// Смешанный батч: одно тело пришло, второе молчит и отсутствует в SEARCH.
+    MixedBodies,
+    /// `UID SEARCH` не доползает до ответа (BAD) — это сбой обращения, а не
+    /// «папки нет»: обязан быть Err, а не terminal-пометка.
+    SearchFailed,
 }
 
 struct Fixture {
@@ -234,7 +245,36 @@ fn serve(stream: TlsStream<TcpStream>, mode: Mode, commands: &Mutex<Vec<String>>
                 )
             }
         } else if cmd.starts_with("UID SEARCH ") {
-            format!("* SEARCH 1 2\r\n{tag} OK search\r\n")
+            if matches!(mode, Mode::SearchFailed) {
+                format!("{tag} BAD [CLIENTBUG] search failed\r\n")
+            } else {
+                // Мёртвый курсор: SEARCH по запрошенным uid отвечает пусто.
+                let found = match mode {
+                    Mode::BodiesGone | Mode::MixedBodies => "",
+                    _ => " 1 2",
+                };
+                format!("* SEARCH{found}\r\n{tag} OK search\r\n")
+            }
+        } else if cmd.starts_with("UID FETCH ") && cmd.contains("RFC822.TEXT") {
+            // Разбор тела (fetch_bodies/fetch_message_body) — отдельный сценарий:
+            // «молчит FETCH» должен отличать стенд, а не только живой ящик.
+            let uid = cmd["UID FETCH ".len()..]
+                .split(' ')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            let body = match mode {
+                Mode::MixedBodies if uid == "1" => Some("Hello fixture"),
+                Mode::Healthy => Some("Hello fixture"),
+                _ => None,
+            };
+            match body {
+                Some(text) => format!(
+                    "* {uid} FETCH (UID {uid} RFC822.TEXT {{{}}}\r\n{text})\r\n{tag} OK fetch\r\n",
+                    text.len()
+                ),
+                None => format!("{tag} OK fetch\r\n"),
+            }
         } else if cmd.starts_with("UID FETCH ") {
             let mut reply = String::new();
             for uid in [2, 1] {
@@ -456,6 +496,163 @@ fn full_scan_tls_optional_missing_folder_is_not_network_success() {
             assert_worker_exited().await;
         });
     }
+}
+
+// ─── ПРОТОКОЛЬНЫЙ СТЕНД РАЗБОРА ТЕЛ (t_eec8a86d, 23.10.2026) ──────────────
+// Единственная непроверенная ветка решения «пустой FETCH ≠ рассинхрон сессии»:
+// сами обращения к сессии (`UID FETCH` молчит → `UID SEARCH` по тем же uid) и
+// разбор ответа. Решение закрыто мутациями в `vault-client`, а этот участок
+// живёт в мосте и без подставного сервера не проверяется. На живом ящике ошибка
+// здесь выглядит как бесконечный перепрос (жалоба 22.10) либо как
+// reconnect-шторм — то есть ровно как то, что уже случалось.
+fn uid_list(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+/// Сценарий 1: FETCH молчит и SEARCH отвечает пусто → письма в папке нет →
+/// каждый uid помечен «тела не будет никогда», ошибки НЕТ, сессия жива.
+#[test]
+fn fetch_bodies_tls_uids_gone_from_folder_are_terminal() {
+    let fixture = Fixture::new(vec![Mode::BodiesGone]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["1", "2"]), "INBOX")
+            .await
+            .expect("письма ушли из папки — это не ошибка сессии");
+        assert_eq!(
+            out,
+            vec![
+                ("1".to_string(), String::new()),
+                ("2".to_string(), String::new())
+            ]
+        );
+        assert!(
+            client.is_connected(),
+            "мёртвый курсор не должен рвать сессию"
+        );
+        assert!(
+            client
+                .fetch_bodies(&uid_list(&["3"]), "INBOX")
+                .await
+                .is_ok(),
+            "по той же сессии должно работать без переподключения"
+        );
+        let cmds = fixture.commands.lock().unwrap().join(" | ");
+        assert!(
+            cmds.contains("UID SEARCH UID 1,2"),
+            "существование не спрашивали: {cmds}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 2: FETCH молчит, но письмо в папке ЕСТЬ (SEARCH отвечает номером)
+/// → настоящий рассинхрон → Err, чтобы вызывающий сделал reconnect и повторил.
+#[test]
+fn fetch_bodies_tls_silent_fetch_with_present_uid_is_desync() {
+    let fixture = Fixture::new(vec![Mode::BodyDesync]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let err = client
+            .fetch_bodies(&uid_list(&["1", "2"]), "INBOX")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("session desync"),
+            "рассинхрон обязан звать reconnect: {err}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 3: смешанный батч — одно тело пришло, одно uid мёртв. Живые тела
+/// отдаём, мёртвый помечаем, сессию НЕ рвём (без пометки фронт переспрашивал бы
+/// письмо каждым поллингом).
+#[test]
+fn fetch_bodies_tls_mixed_batch_marks_dead_uid_and_keeps_live_bodies() {
+    let fixture = Fixture::new(vec![Mode::MixedBodies]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["1", "2", "rl-abc"]), "INBOX")
+            .await
+            .expect("одно живое тело — не рассинхрон");
+        assert_eq!(
+            out,
+            vec![
+                ("1".to_string(), "Hello fixture".to_string()),
+                ("2".to_string(), String::new()),
+                ("rl-abc".to_string(), String::new())
+            ],
+            "порядок: живые тела, затем мёртвые uid, затем псевдо-uid релея"
+        );
+        assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 4: папка не выбрана (`No such folder`) → все запрошенные uid
+/// помечены, сессия цела. Без этой ветки отсутствующая папка устраивала
+/// reconnect-шторм (телефон X50, 04.10.2026).
+#[test]
+fn fetch_bodies_tls_missing_folder_marks_all_uids_without_breaking_session() {
+    let fixture = Fixture::new(vec![Mode::MissingJunk]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["1", "2", "rl-abc"]), "Junk")
+            .await
+            .expect("папки нет — это не сбой сессии");
+        assert_eq!(out.len(), 3);
+        assert!(out.iter().all(|(_, body)| body.is_empty()));
+        assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сбой самого обращения (не «папки нет» и не «письма ушли») остаётся ошибкой:
+/// иначе стенд молча превратит сетевой сбой в terminal-пометку, и письмо будет
+/// потеряно навсегда.
+#[test]
+fn fetch_bodies_tls_failed_search_is_an_error_not_a_terminal_mark() {
+    let fixture = Fixture::new(vec![Mode::SearchFailed]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let err = client
+            .fetch_bodies(&uid_list(&["1", "2"]), "INBOX")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("uid_search existence check failed"),
+            "сбой обращения виден как сбой: {err}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Одиночный разбор тела (`fetch_message_body`) держит тот же контракт:
+/// Ok("") = «этого тела не будет никогда», Err = «повтори после reconnect».
+#[test]
+fn fetch_message_body_tls_absent_uid_is_terminal_not_error() {
+    let fixture = Fixture::new(vec![Mode::BodiesGone]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        assert_eq!(
+            client.fetch_message_body("1", "INBOX").await.unwrap(),
+            String::new()
+        );
+        assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
 }
 
 #[test]
