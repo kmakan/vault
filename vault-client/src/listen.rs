@@ -337,8 +337,10 @@ async fn tick(
         }
         // Self-копии (mail.ru складывает From==To в INBOX/ToMyself) —
         // это исходящий трафик самого аккаунта. Без фильтра бот отвечает
-        // на свои же ответы → бесконечная петля.
-        if m.from.eq_ignore_ascii_case(me) {
+        // на свои же ответы → бесконечная петля. Форма адреса — ядро
+        // (`vault::identity::same_address`): с ASCII-сравнением адрес с
+        // обрамляющими пробелами не узнавался, и бот петлил сам с собой.
+        if crate::vault::identity::same_address(&m.from, me) {
             tracing::debug!(
                 "listen-skip: uid={} env_id={} self-copy from={} (ToMyself self-loop guard)",
                 m.id,

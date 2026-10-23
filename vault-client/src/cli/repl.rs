@@ -877,12 +877,10 @@ async fn handle_command(ctx: &mut CliContext, cmd: Command) -> Result<bool> {
                                     if group.group_key.is_empty() {
                                         continue;
                                     }
-                                    let members: Vec<String> = group
-                                        .members
-                                        .iter()
-                                        .map(|x| x.email.to_lowercase())
-                                        .collect();
-                                    if !members.contains(&m.from.to_lowercase()) {
+                                    let is_member = group.members.iter().any(|x| {
+                                        crate::vault::identity::same_address(&m.from, &x.email)
+                                    });
+                                    if !is_member {
                                         continue;
                                     }
                                     if let Ok(kb) = hex::decode(&group.group_key) {

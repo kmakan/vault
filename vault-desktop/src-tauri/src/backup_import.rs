@@ -181,7 +181,10 @@ fn parse_peers(v: &serde_json::Value) -> Result<Vec<StoredPeerKey>> {
         if peer.added_at.trim().is_empty() {
             bail!(ERR_MALFORMED_PEER);
         }
-        let norm = peer.email.to_ascii_lowercase();
+        // Форма адреса — одна на проект (`vault::identity::normalize`):
+        // `to_ascii_lowercase()` кириллицу не понижает, поэтому два адреса
+        // одного человека с разным регистрным не-ASCII различались как чужие.
+        let norm = vault_client::vault::identity::normalize(&peer.email);
         if !seen_emails.insert(norm) {
             bail!(ERR_DUPLICATE_PEER);
         }

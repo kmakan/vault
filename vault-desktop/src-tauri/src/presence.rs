@@ -8,7 +8,6 @@
 //! Parity с JS presence.js ingestSignal (в JS реализовано в ctx.state).
 
 use anyhow::{anyhow, Result};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -62,14 +61,23 @@ pub fn save_presence(store: &PresenceStore) -> Result<()> {
 }
 
 /// Ingest a heartbeat (idempotent per source envelope).
-/// Дедуп: один и тот же source не добавляем дважды с тем же ts.
+/// Дедуп и форма ключа — в ядре (`vault::identity`, `vault::presence`): ключ
+/// реестра обязан быть нормальной формой адреса, иначе `Bob@X` и `bob@x` —
+/// два реестра об одном человеке, а пустой адрес не собеседник.
 pub fn ingest_heartbeat(email: &str, ts: i64, source: &str) -> Result<()> {
+    let Some(key) = vault_client::vault::identity::ledger_key(email) else {
+        return Ok(());
+    };
     let mut store = load_presence()?;
-    let entry = store.entry(email.to_string()).or_default();
-    let exists = entry.iter().any(|h| h.source == source && h.ts == ts);
-    if !exists {
+    let entry = store.entry(key.clone()).or_default();
+    let known = vault_client::vault::presence::heartbeat_known(
+        entry.iter().map(|h| (h.source.as_str(), h.ts)),
+        source,
+        ts,
+    );
+    if !known {
         entry.push(PresenceHeartbeat {
-            email: email.to_string(),
+            email: key,
             ts,
             source: source.to_string(),
         });
@@ -80,7 +88,11 @@ pub fn ingest_heartbeat(email: &str, ts: i64, source: &str) -> Result<()> {
 /// Last-seen timestamp for a peer (max ts), or None.
 pub fn last_seen(email: &str) -> Result<Option<i64>> {
     let store = load_presence()?;
-    Ok(store.get(email).and_then(|v| v.iter().map(|h| h.ts).max()))
+    let key = vault_client::vault::identity::ledger_key(email);
+    Ok(key
+        .as_deref()
+        .and_then(|k| store.get(k))
+        .and_then(|v| vault_client::vault::presence::latest_ts(v.iter().map(|h| &h.ts))))
 }
 
 /// Prune heartbeats older than `cutoff_ms` (unix ms).
@@ -89,7 +101,7 @@ pub fn prune_older_than(cutoff_ms: i64) -> Result<usize> {
     let mut removed = 0usize;
     for (_email, v) in store.iter_mut() {
         let len_before = v.len();
-        v.retain(|h| h.ts >= cutoff_ms);
+        v.retain(|h| vault_client::vault::presence::survives_prune(h.ts, cutoff_ms));
         removed += len_before - v.len();
     }
     if removed > 0 {
@@ -147,11 +159,28 @@ mod tests {
         with_tmp(|| {
             ingest_heartbeat("a@x", 100, "s1").unwrap();
             ingest_heartbeat("b@x", 200, "s2").unwrap();
+            // Граница включительная: ts == cutoff остаётся.
             let n = prune_older_than(150).unwrap();
             assert_eq!(n, 1);
             let store = load_presence().unwrap();
             assert!(store.get("a@x").unwrap().is_empty());
             assert_eq!(store.get("b@x").unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn test_case_and_space_variants_share_one_ledger() {
+        with_tmp(|| {
+            // Дефект до переноса: ключом был raw email, и `Bob@X` заводил
+            // второй реестр, в котором `last_seen("bob@x")` ничего не видел.
+            ingest_heartbeat("Bob@X ", 1000, "uid1").unwrap();
+            ingest_heartbeat("bob@x", 2000, "uid2").unwrap();
+            assert_eq!(last_seen("BOB@X").unwrap(), Some(2000));
+            assert_eq!(load_presence().unwrap().len(), 1);
+            // Пустой адрес не собеседник: heartbeat «ни от кого» не заводит
+            // собственную запись.
+            ingest_heartbeat("   ", 3000, "uid3").unwrap();
+            assert_eq!(load_presence().unwrap().len(), 1);
         });
     }
 }

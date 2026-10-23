@@ -1169,7 +1169,9 @@ fn groups_rename_member(
 
 /// Membership по fingerprint: массовое заполнение fingerprint
 /// участников из peer_keys (ленивая миграция старых groups.json). Идемпотентно:
-/// пустой fingerprint не затирает существующий.
+/// пустой fingerprint не затирает существующий. Решение — в
+/// `vault::identity::fill_missing_fingerprint` (те же два стража, что у
+/// `backfill_my_fingerprint`), здесь только обход и запись.
 #[tauri::command]
 fn groups_save_member_fingerprints(
     group_id: String,
@@ -1180,16 +1182,16 @@ fn groups_save_member_fingerprints(
         .get_mut(&group_id)
         .ok_or_else(|| "Group not found".to_string())?;
     for m in members {
-        if m.fingerprint.is_empty() {
-            continue;
-        }
         if let Some(existing) = group
             .members
             .iter_mut()
-            .find(|x| x.email.eq_ignore_ascii_case(&m.email))
+            .find(|x| vault_client::vault::identity::same_address(&x.email, &m.email))
         {
-            if existing.fingerprint.is_empty() {
-                existing.fingerprint = m.fingerprint;
+            if let Some(fp) = vault_client::vault::identity::fill_missing_fingerprint(
+                &existing.fingerprint,
+                &m.fingerprint,
+            ) {
+                existing.fingerprint = fp;
             }
         }
     }

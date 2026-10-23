@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use vault_client::vault::identity;
 
 const GROUPS_FILE: &str = "groups.json";
 
@@ -158,8 +159,16 @@ pub fn group_invite(group_id: &str, invitee_email: &str) -> Result<InviteToken> 
     let gid = group.id.clone();
     let gname = group.name.clone();
     let creator = group.created_by.clone();
-    if group.members.iter().any(|m| m.email == invitee_email) {
-        anyhow::bail!("group_invite: {} already a member of {}", invitee_email, gid);
+    if group
+        .members
+        .iter()
+        .any(|m| identity::same_address(&m.email, invitee_email))
+    {
+        anyhow::bail!(
+            "group_invite: {} already a member of {}",
+            invitee_email,
+            gid
+        );
     }
     let mut id_bytes = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut id_bytes);
@@ -190,7 +199,10 @@ pub fn accept_invite(token: &str, invitee_email: &str) -> Result<String> {
     let group = groups.get_mut(&group_id)
         .ok_or_else(|| anyhow::anyhow!("accept_invite: group not found: {}", group_id))?;
     // Ensure invitee registered (idempotent: skip if already member).
-    let needs_push = !group.members.iter().any(|m| m.email == invitee_email);
+    let needs_push = !group
+        .members
+        .iter()
+        .any(|m| identity::same_address(&m.email, invitee_email));
     if needs_push {
         let now = Utc::now().to_rfc3339();
         group.members.push(GroupMember {
@@ -211,8 +223,14 @@ pub fn accept_invite(token: &str, invitee_email: &str) -> Result<String> {
 pub fn add_member(group_id: &str, email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        // Check if member already exists
-        if group.members.iter().any(|m| m.email == email) {
+        // Check if member already exists. Форма адреса — ядро: точное
+        // сравнение заводило ВТОРОГО участника с тем же ключом, если адрес
+        // пришёл в другом регистре или с обрамлением.
+        if group
+            .members
+            .iter()
+            .any(|m| identity::same_address(&m.email, email))
+        {
             return Ok(()); // already a member
         }
         let now = Utc::now().to_rfc3339();
@@ -237,8 +255,6 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
 pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        let old_lc = old_email.to_lowercase();
-        let new_lc = new_email.to_lowercase();
         // Смена почты собеседником. ДВА случая, оба обязательны:
         //
         // (а) Участника под старым адресом нет, но НОВЫЙ адрес уже есть —
@@ -248,14 +264,18 @@ pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result
         //     «участник дважды с одним отпечатком» (живые данные 06.10.2026,
         //     группа «Четыре»). Убираем СТАРУЮ запись, оставляем существующую
         //     НОВУЮ (она авторитетнее: пришла из свежего инвайта/письма).
+        //
+        // «Один и тот же адрес» решает ядро (`identity::same_address`): здесь
+        // было `to_lowercase()` без обрезки, поэтому участник с обрамляющим
+        // пробелом не узнавался и получал вторую запись.
         let old_idx = group
             .members
             .iter()
-            .position(|m| m.email.to_lowercase() == old_lc);
+            .position(|m| identity::same_address(&m.email, old_email));
         let new_idx = group
             .members
             .iter()
-            .position(|m| m.email.to_lowercase() == new_lc);
+            .position(|m| identity::same_address(&m.email, new_email));
         match (old_idx, new_idx) {
             (None, _) => { /* старого нет — ренеймить нечего */ }
             (Some(i), Some(j)) if i != j => {
@@ -271,7 +291,7 @@ pub fn rename_member(group_id: &str, old_email: &str, new_email: &str) -> Result
                 group.members[i].key_shared = true; // ключ группы у него уже есть
             }
         }
-        if group.created_by.to_lowercase() == old_lc {
+        if identity::same_address(&group.created_by, old_email) {
             group.created_by = new_email.to_string();
         }
         save_groups(&groups)?;
@@ -301,7 +321,10 @@ pub fn import_group(
                 if im.email.is_empty() {
                     continue;
                 }
-                match existing.iter_mut().find(|m| m.email == im.email) {
+                match existing
+                    .iter_mut()
+                    .find(|m| identity::same_address(&m.email, &im.email))
+                {
                     Some(m) => m.role = im.role.clone(),
                     None => existing.push(GroupMember {
                         email: im.email.clone(),
@@ -313,7 +336,10 @@ pub fn import_group(
                 }
             }
         }
-        if !existing.iter().any(|m| m.email == sender) {
+        if !existing
+            .iter()
+            .any(|m| identity::same_address(&m.email, sender))
+        {
             existing.push(GroupMember {
                 email: sender.to_string(),
                 role: GroupRole::Member,
@@ -375,12 +401,16 @@ pub fn set_group_key(group_id: &str, group_key: &str) -> Result<()> {
 pub fn remove_member(group_id: &str, email: &str) -> Result<()> {
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
-        // The group creator cannot be removed by anyone — only leave voluntarily.
-        if email == group.created_by {
+        // The group creator cannot be removed by anyone — only leave
+        // voluntarily. Сравнение — форма адреса из ядра: точное сравнение
+        // позволяло «удалить» создателя, написав адрес в другом регистре.
+        if identity::same_address(email, &group.created_by) {
             anyhow::bail!("Cannot remove group creator");
         }
         let before_len = group.members.len();
-        group.members.retain(|m| m.email != email);
+        group
+            .members
+            .retain(|m| !identity::same_address(&m.email, email));
         if group.members.len() == before_len {
             // member not found
             anyhow::bail!("Member not found in group");
@@ -396,10 +426,13 @@ pub fn set_member_role(group_id: &str, email: &str, role: GroupRole) -> Result<(
     let mut groups = load_groups()?;
     if let Some(group) = groups.get_mut(group_id) {
         // The group creator cannot be demoted from Admin.
-        if email == group.created_by && role != GroupRole::Admin {
+        if identity::same_address(email, &group.created_by) && role != GroupRole::Admin {
             anyhow::bail!("Cannot change creator role");
         }
-        let member = group.members.iter_mut().find(|m| m.email == email);
+        let member = group
+            .members
+            .iter_mut()
+            .find(|m| identity::same_address(&m.email, email));
         match member {
             Some(m) => {
                 m.role = role;
@@ -455,37 +488,27 @@ pub fn delete_group(group_id: &str) -> Result<()> {
 ///
 /// История: регрессия 05–06.10.2026 — строгое сравнение по email отсекало все
 /// группы после смены почты (группы «исчезали», данные были целы).
+///
+/// САМО ПРАВИЛО — в ядре (`vault_client::vault::identity`): вопрос «запись моя?»
+/// задают и десктоп, и CLI, и он обязан иметь один носитель, потому что
+/// иначе один клиент видит группу своей, а другой — нет. Здесь остаётся
+/// только форма: `Group` → пары (адрес участника, отпечаток).
 pub fn filter_own_groups(
     groups: &[Group],
     my_email: &str,
     my_fingerprint: &str,
     aliases: &[String],
 ) -> Vec<Group> {
-    let email = my_email.trim().to_lowercase();
-    let fp = my_fingerprint.trim().to_lowercase();
-    let mut mine: std::collections::HashSet<String> = std::iter::once(email.clone()).collect();
-    for a in aliases {
-        let v = a.trim().to_lowercase();
-        if !v.is_empty() {
-            mine.insert(v);
-        }
-    }
-
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
     groups
         .iter()
         .filter(|g| {
-            let cb = g.created_by.trim().to_lowercase();
-            if !cb.is_empty() && (cb == email || mine.contains(&cb)) {
-                return true;
-            }
-            g.members.iter().any(|m| {
-                let me = m.email.trim().to_lowercase();
-                if !me.is_empty() && mine.contains(&me) {
-                    return true;
-                }
-                let mfp = m.fingerprint.trim().to_lowercase();
-                !fp.is_empty() && !mfp.is_empty() && mfp == fp
-            })
+            id.owns_group(
+                &g.created_by,
+                g.members
+                    .iter()
+                    .map(|m| (m.email.as_str(), m.fingerprint.as_str())),
+            )
         })
         .cloned()
         .collect()
@@ -494,10 +517,12 @@ pub fn filter_own_groups(
 /// Массовое заполнение СОБСТВЕННОГО fingerprint у участников во ВСЕХ группах.
 ///
 /// Заполняет поле `fingerprint` участников, чей email совпадает с данным
-/// (без учёта регистра) и у которых поле пустое — ленивая миграция старых
-/// groups.json, которые никто не открывал в UI (там fp заполняется только
-/// при открытии группы). Без этого fp-only фильтр `filter_own_groups` такие
-/// группы не находит.
+/// (форма адреса — ядро, `identity::same_address`: обрамление срезано, регистр
+/// нижний по Юникоду) и у которых поле пустое — ленивая миграция старых
+/// groups.json,
+/// которые никто не открывал в UI (там fp заполняется только при открытии
+/// группы). Без этого fp-only фильтр `filter_own_groups` такие группы не
+/// находит.
 ///
 /// Идемпотентно (как groups_save_member_fingerprints): существующие НЕПУСТЫЕ
 /// fingerprint не затираются; пустой fingerprint после trim — no-op (ничего
@@ -505,25 +530,16 @@ pub fn filter_own_groups(
 ///
 /// Возвращает число обновлённых участников.
 pub fn backfill_my_fingerprint(email: &str, fingerprint: &str) -> Result<usize> {
-    let fp = fingerprint.trim().to_lowercase();
-    // Защита от затирания пустотой: не пишем ничего.
-    if fp.is_empty() {
-        return Ok(0);
-    }
-    let email = email.trim();
-    if email.is_empty() {
-        return Ok(0);
-    }
-
+    // Ни «пустой отпечаток», ни «пустой адрес», ни «совпали ли адреса» не
+    // решаются здесь: это правила ядра (`identity::fingerprint_to_write`).
     let mut groups = load_groups()?;
     let mut updates = 0usize;
     for group in groups.values_mut() {
         for m in group.members.iter_mut() {
-            if !m.fingerprint.is_empty() {
-                continue; // не затираем существующий (идемпотентность)
-            }
-            if m.email.eq_ignore_ascii_case(email) {
-                m.fingerprint = fp.clone();
+            if let Some(fp) =
+                identity::fingerprint_to_write(&m.fingerprint, &fingerprint, &m.email, email)
+            {
+                m.fingerprint = fp;
                 updates += 1;
             }
         }
@@ -691,6 +707,46 @@ mod tests {
             assert_eq!(g.members[1].email, "bob@example.com");
             assert_eq!(g.members[1].role, GroupRole::Member);
             assert!(!g.members[1].key_shared);
+        });
+    }
+
+    /// Все сравнения адресов участника идут через форму ядра
+    /// (`identity::same_address`): до партии 4 каждый вызов сравнивал по-своему
+    /// (`==`, `to_lowercase()` без обрезки, `eq_ignore_ascii_case`), и адрес из
+    /// письма в другом регистре или с обрамляющим пробелом давал ВТОРОУЮ запись
+    /// об том же человеке — а создателя в другом регистре можно было удалить.
+    #[test]
+    fn test_membership_lookup_uses_the_normalized_address_form() {
+        with_tmp_groups(|| {
+            let group = create_group("test group", "Alice@Example.com").unwrap();
+            let id = group.id.clone();
+            add_member(&id, "bob@example.com").unwrap();
+
+            // Тот же участник в другом регистре и с пробелами — не дубль.
+            add_member(&id, " BOB@Example.COM ").unwrap();
+            let groups = load_groups().unwrap();
+            assert_eq!(
+                groups.get(&id).unwrap().members.len(),
+                2,
+                "второй записи о bob быть не должно"
+            );
+
+            // Роли ищет по той же форме.
+            set_member_role(&id, "BOB@example.com", GroupRole::Moderator).unwrap();
+            let groups = load_groups().unwrap();
+            assert_eq!(
+                groups.get(&id).unwrap().members[1].role,
+                GroupRole::Moderator
+            );
+
+            // Создатель защищён, даже если его адрес написан иначе.
+            assert!(remove_member(&id, "alice@EXAMPLE.com").is_err());
+            assert!(set_member_role(&id, " ALICE@example.com ", GroupRole::Member).is_err());
+
+            // Удаление по варианту написания убирает запись, а не оставляет «сироту».
+            remove_member(&id, "Bob@Example.com").unwrap();
+            let groups = load_groups().unwrap();
+            assert_eq!(groups.get(&id).unwrap().members.len(), 1);
         });
     }
 

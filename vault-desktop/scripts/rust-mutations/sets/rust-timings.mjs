@@ -10,7 +10,7 @@
 //
 // Отдельно про константы: тесты окон считают возраст ОТ носителя
 // (`FRESH_SECS - 1`), поэтому сдвиг самого числа ими не заметен — его ловит
-// только пинning literal'ом (`thresholds_are_the_numbers_their_names_claim`).
+// только закрепление литерала (`thresholds_are_the_numbers_their_names_claim`).
 export default {
   id: 'rust-timings',
   file: 'vault-client/src/vault/timings.rs',
