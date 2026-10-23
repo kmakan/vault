@@ -1973,7 +1973,12 @@ serde-умолчания, решений нет); `rust-identity` — 28/28 (б�
 `cargo check --target aarch64-linux-android` exit 0; `npm run build`,
 `feature-coverage`, `service-boundary`, `tauri-args`, `hygiene` — зелёные;
 `./scripts/test-all.sh` — всё зелёное. Ядро и мост входят в APK, поэтому
-после сборки — приёмка на устройстве (0.1.263).
+0.1.263 собран и принят на устройстве: подпись release-ключом, `install -r`
+Success, крэшей нет, рестарты ×3 foreground=1/crash=0, CDP 19/19. Десктоп
+пересобран (`tauri build --bundles deb`), сайты RU/EN сверены живым гейтом
+(`release-site-check --live`, sha256 APK совпал), тег `v0.1.263` — на одном
+коммите на обоих ремоутах (`release-tag-check` 10/10), GitHub-релиз с тремя
+ассетами.
 
 Остаток карты (партии 5+, заведены задачами на канбане): крипто-параметры и
 медиаразбор — KDF в `duress.rs`, контрольная сумма мнемоники в `key_escrow.rs`,
