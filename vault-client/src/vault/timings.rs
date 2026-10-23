@@ -295,15 +295,18 @@ mod tests {
     fn poll_fresh_compares_milliseconds_exactly() {
         let now = now_ms();
         let ts = now - FRESH_SECS * 1000;
+        // Метку строим от ТОГО ЖЕ `now`, что передаём предикату: `iso_offset`
+        // берёт собственный `now_ms()`, и на границе окна тест плавал на 1 мс.
+        let stamp = |ms: i64| {
+            chrono::DateTime::from_timestamp_millis(ms)
+                .expect("valid timestamp")
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
         // На миллисекунду раньше порога — ещё свежее, на пороге — уже нет.
-        assert!(poll_fresh_at(&iso_offset(-(FRESH_SECS * 1000 - 1)), now));
-        assert!(!poll_fresh_at(&iso_offset(-(FRESH_SECS * 1000)), now));
+        assert!(poll_fresh_at(&stamp(ts + 1), now));
+        assert!(!poll_fresh_at(&stamp(ts), now));
         // Дробные миллисекунды не теряются (RFC 2822 их не несёт, ISO — да).
-        let fractional = ts + 499;
-        let header = chrono::DateTime::from_timestamp_millis(fractional)
-            .expect("valid timestamp")
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        assert!(poll_fresh_at(&header, now));
+        assert!(poll_fresh_at(&stamp(ts + 499), now));
     }
 
     #[test]

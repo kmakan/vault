@@ -36,6 +36,8 @@ chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 hkdf = "0.12"
+# hmac — PBKDF2 вручную для замка/дуресс-хэшей и эскроу ключей (без pbkdf2-crate).
+hmac = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"

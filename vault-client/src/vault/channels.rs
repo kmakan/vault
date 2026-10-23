@@ -114,6 +114,40 @@ fn str_field(obj: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
+/// Форматные предикаты канала: что можно записать в `channels.json` и
+/// разослать ссылкой. Держатся в ядре, потому что их спрашивают мост
+/// (импорт/патч) и — через будущий сервис — другие клиенты: копия в двух
+/// местах уже расходилась (ADR-005 §W4, `t_502b6c90`).
+///
+/// Идентификатор начинается с `chn_` — по нему ссылка на канал отличается
+/// от адреса почты и от id группы.
+pub fn is_valid_channel_id(id: &str) -> bool {
+    id.starts_with("chn_")
+}
+
+/// Ключ канала — 32 байта в hex, то есть ровно 64 символа. Длину проверяем,
+/// но не алфавит: ключ приходит из ссылки/QR, и отказ «не та буква» превратил
+/// бы несовместимость формата в «ссылка не работает».
+pub fn is_valid_channel_key(key: &str) -> bool {
+    key.len() == 64
+}
+
+/// Имя канала: пробелы по краям не значимы. Пустое после обрезки — ошибка
+/// (канал без имени неотличим в списке).
+pub fn normalize_channel_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Channel name cannot be empty".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// `last_ts` только растёт: запоздавший meta/пост не откатывает время
+/// канала назад, иначе «последний пост» в списке прыгает.
+pub fn next_last_ts(current: i64, patch: i64) -> i64 {
+    current.max(patch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +205,36 @@ mod tests {
         let e = parse_channel_envelope(r#"{"channel":1,"chan":"ch1","hello":1}"#).expect("разобрано");
         assert!(e.is_hello);
         assert!(!e.is_meta);
+    }
+
+    #[test]
+    fn channel_id_requires_prefix() {
+        assert!(is_valid_channel_id("chn_abc"));
+        assert!(!is_valid_channel_id("abc"));
+        assert!(!is_valid_channel_id(""), "пустой id — не канал");
+        assert!(!is_valid_channel_id("CHN_abc"), "префикс регистрозависим");
+    }
+
+    #[test]
+    fn channel_key_is_64_chars() {
+        assert!(is_valid_channel_key(&"a".repeat(64)));
+        assert!(!is_valid_channel_key(&"a".repeat(63)));
+        assert!(!is_valid_channel_key(&"a".repeat(65)));
+        assert!(!is_valid_channel_key(""), "пустой ключ не подходит");
+    }
+
+    #[test]
+    fn channel_name_is_trimmed_and_not_empty() {
+        assert_eq!(normalize_channel_name("  Канал  ").unwrap(), "Канал");
+        assert!(normalize_channel_name("   ").is_err());
+        assert!(normalize_channel_name("").is_err());
+    }
+
+    #[test]
+    fn last_ts_never_goes_backwards() {
+        assert_eq!(next_last_ts(100, 50), 100, "старый патч не откатывает время");
+        assert_eq!(next_last_ts(100, 150), 150);
+        assert_eq!(next_last_ts(0, 0), 0);
     }
 
     #[test]

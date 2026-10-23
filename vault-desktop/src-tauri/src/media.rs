@@ -63,18 +63,16 @@ use rtc::rtp_transceiver::rtp_sender::{
     RtpCodecKind,
 };
 
-/// Opus dynamic payload type (both ends are our app; registered in MediaEngine).
-const OPUS_PAYLOAD_TYPE: u8 = 120;
-/// VP8 dynamic payload type (video; both ends are our app). 96 — первый
-/// динамический PT, отдельный от OPUS_PAYLOAD_TYPE.
-/// `pub(crate)`: тот же PT передаёт writer кадров камеры (`crate::video`).
-pub(crate) const VP8_PAYLOAD_TYPE: u8 = 96;
+// Payload-типы кодеков и ICE-таймауты — протокол соединения: числа живут в
+// ядре (ADR-005 §W4, `t_502b6c90`), здесь только реэкспорт и обёртка Duration.
+pub(crate) use vault_client::vault::call_media::{OPUS_PAYLOAD_TYPE, VP8_PAYLOAD_TYPE};
+use vault_client::vault::call_media::{
+    ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS,
+};
+
 /// Max time to wait for ICE gathering before giving up (non-trickle).
-/// 4с: было 15с — ответ (SDP) создавался слишком долго, звонок
-/// успевал сгореть по таймеру гудка. Host-кандидаты собираются <1с;
-/// STUN/srflx за 4с успевают, иначе отдаём то, что есть (wait_for_local_sdp
-/// на таймауте не падает, а отдаёт частичные кандидаты).
-const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(4);
+/// Обоснование — в ядре (`call_media::ICE_GATHER_TIMEOUT_SECS`).
+const ICE_GATHER_TIMEOUT: Duration = Duration::from_secs(ICE_GATHER_TIMEOUT_SECS);
 
 /// App-wide media manager: one entry per active call.
 pub struct CallMediaManager {
@@ -462,9 +460,9 @@ impl CallMediaManager {
         // задержку почты (caller-таймер звонка 300с).
         let mut setting_engine = SettingEngine::default();
         setting_engine.set_ice_timeouts(
-            Some(Duration::from_secs(60)),  // disconnected
-            Some(Duration::from_secs(120)), // failed
-            None,                           // keepalive (дефолт 2с)
+            Some(Duration::from_secs(ICE_DISCONNECTED_SECS)),
+            Some(Duration::from_secs(ICE_FAILED_SECS)),
+            None, // keepalive (дефолт 2с)
         );
 
         let (gather_tx, gather_rx) = channel::<()>(1);
@@ -1139,30 +1137,17 @@ impl CallMediaManager {
 /// Group calls share one WebRTC M-line per participant on the SFU-less mesh
 /// (P2P fan-out); for MVP the roster is tracked here so the UI can render
 /// participant tiles without crossing into groups.rs business logic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub enum MediaCallState {
-    Idle,
-    Incoming,
-    Outgoing,
-    InCall,
-    /// M2.8: active group-call session (roster = participants + self).
-    Group,
-}
-
-impl Default for MediaCallState {
-    fn default() -> Self {
-        MediaCallState::Idle
-    }
-}
+///
+/// Имена состояний — проводной словарь для JS, поэтому тип и правило
+/// «известен call_id → InCall» живут в ядре (ADR-005 §W4, `t_502b6c90`).
+pub use vault_client::vault::call_media::MediaCallState;
 
 impl CallMediaManager {
     /// M2.8: current MediaCallState for a call_id (or Idle if none).
     pub fn call_state(&self, call_id: &str) -> MediaCallState {
-        if self.calls.contains_key(&call_id.to_string()) {
-            MediaCallState::InCall
-        } else {
-            MediaCallState::Idle
-        }
+        vault_client::vault::call_media::media_call_state(
+            self.calls.contains_key(&call_id.to_string()),
+        )
     }
 }
 

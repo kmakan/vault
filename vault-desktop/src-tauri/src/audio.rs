@@ -40,6 +40,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(not(target_os = "android"))]
 use cpal::Sample as _;
 use tokio::sync::watch;
+// Формат WAV-ассетов — протокол (ядро): битность, выравнивание чанков,
+// длительность одноразового звука. Плеер остаётся здесь (ADR-005 §W4).
+#[cfg(not(target_os = "android"))]
+use vault_client::vault::audio_wav::{parse_wav, sound_duration_ms};
 
 use rtc::media::Sample;
 use rtc::shared::time::SystemInstant;
@@ -641,57 +645,6 @@ const SND_OUTGOING_CLASSIC: &[u8] = include_bytes!("../sounds/ring_outgoing_clas
 #[cfg(not(target_os = "android"))]
 const SND_CONNECTED: &[u8] = include_bytes!("../sounds/ring_connected.wav");
 
-/// Минимальный парсер WAV: PCM 16-bit mono (наши ассеты генерируются именно
-/// так). Возвращает (samples_f32, sample_rate).
-#[cfg(not(target_os = "android"))]
-fn parse_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32), String> {
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err("not a RIFF/WAVE file".into());
-    }
-    let mut pos = 12usize;
-    let (mut rate, mut bits, mut channels) = (0u32, 0u16, 0u16);
-    let mut data: Option<&[u8]> = None;
-    while pos + 8 <= bytes.len() {
-        let id = &bytes[pos..pos + 4];
-        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
-        let body = pos + 8;
-        if body + size > bytes.len() {
-            break;
-        }
-        if id == b"fmt " {
-            channels = u16::from_le_bytes(bytes[body + 2..body + 4].try_into().unwrap());
-            rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into().unwrap());
-            bits = u16::from_le_bytes(bytes[body + 14..body + 16].try_into().unwrap());
-        } else if id == b"data" {
-            data = Some(&bytes[body..body + size]);
-        }
-        pos = body + size + (size & 1); // чанки выравниваются по 2 байта
-    }
-    let data = data.ok_or("no data chunk")?;
-    if bits != 16 {
-        return Err(format!("unsupported bit depth {bits}"));
-    }
-    let mut samples: Vec<f32> = Vec::with_capacity(data.len() / 2);
-    for chunk in data.chunks_exact(2) {
-        let v = i16::from_le_bytes([chunk[0], chunk[1]]);
-        samples.push(v as f32 / 32768.0);
-    }
-    // Стерео → моно (наши ассеты моно, но на всякий случай).
-    if channels == 2 {
-        let mut mono = Vec::with_capacity(samples.len() / 2);
-        for pair in samples.chunks_exact(2) {
-            mono.push((pair[0] + pair[1]) * 0.5);
-        }
-        samples = mono;
-    } else if channels != 1 {
-        return Err(format!("unsupported channel count {channels}"));
-    }
-    if rate == 0 {
-        return Err("bad sample rate".into());
-    }
-    Ok((samples, rate))
-}
-
 /// Линейный ресемпл моно f32 из src_rate в dst_rate.
 #[cfg(not(target_os = "android"))]
 fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
@@ -781,7 +734,7 @@ macro_rules! build_sound_stream {
         // из отдельного треда по длине звука; сверка поколения защищает
         // новый звук, начавшийся за это время.
         if !looped {
-            let dur_ms = pcm_len as u64 * 1000 / out_rate.max(1) + 250;
+            let dur_ms = sound_duration_ms(pcm_len, out_rate);
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(dur_ms));
                 if RINGTONE_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen {

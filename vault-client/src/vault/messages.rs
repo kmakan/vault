@@ -39,6 +39,74 @@ pub struct VaultMessage {
     pub ttl: Option<u64>,               // ephemeral TTL (сек)
 }
 
+/// Payload расшифрованного конверта → `VaultMessage` (контракт с JS).
+///
+/// Вынесено из моста (ADR-005 §W4, `t_502b6c90`): имена полей — это
+/// `JSON.stringify(cls.msg)` из `features/incoming.js`, то есть формат
+/// протокола, а не деталь команды. `id` берётся по цепочке: `env_id` из JS
+/// (кросс-канальный дедуп relay-копии и email-копии) → `id` payload → legacy
+/// `message_id` → пусто. Не-JSON — ошибка: сообщение не должно сохраниться
+/// «молча с пустым id».
+pub fn message_from_payload(
+    from: &str,
+    to: &str,
+    env_id: Option<&str>,
+    plain: &str,
+) -> Result<VaultMessage, String> {
+    let p: serde_json::Value =
+        serde_json::from_str(plain).map_err(|e| format!("payload parse: {}", e))?;
+    let id = env_id
+        .or_else(|| p.get("id").and_then(|v| v.as_str()))
+        .or_else(|| p.get("message_id").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_string();
+    Ok(VaultMessage {
+        id,
+        from: from.to_string(),
+        to: to.to_string(),
+        ts: p.get("ts").and_then(|v| v.as_i64()).unwrap_or(0),
+        text: p
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        name: p
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        avatar: p
+            .get("avatar")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        reactions: p
+            .get("reactions")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        edited: p.get("edited").and_then(|v| v.as_bool()).unwrap_or(false),
+        replies: p
+            .get("replies")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        in_reply_to: p
+            .get("in_reply_to")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        ttl: p.get("ttl").and_then(|v| v.as_u64()),
+    })
+}
+
 /// Message store: chat_key → Vec<VaultMessage> (history + incoming merge).
 /// Персистентность JSON (~/.vault/messages.json). Инкрементальный: IMAP —
 /// только новые после курсора (правило 07.10), история — источник правды.
@@ -366,5 +434,104 @@ mod tests {
         let mut store = MessageStore::default();
         store.reactions.add_reaction("m1", "👍", "alice@x");
         assert_eq!(store.reactions_for("m1"), vec!["👍".to_string()]);
+    }
+
+    // ── Контракт payload → VaultMessage ──────────────────────────────────
+    // Имена полей — это `JSON.stringify(cls.msg)` из `features/incoming.js`:
+    // переименование на JS-стороне иначе прошло бы молча — сообщения
+    // писались бы с пустыми id/ts.
+
+    #[test]
+    fn test_message_from_payload_full() {
+        let plain = r#"{"vault":1,"id":"msg-1","text":"привет","name":"Аня",
+            "avatar":"data:image/png;base64,AAA","ts":1700000000,
+            "reactions":["👍","❤"],"edited":true,"replies":["m0"],
+            "in_reply_to":"m0","ttl":86400}"#;
+        let vm = message_from_payload("alice@x", "me@x", Some("msg-1"), plain).unwrap();
+        assert_eq!(vm.id, "msg-1");
+        assert_eq!(vm.from, "alice@x");
+        assert_eq!(vm.to, "me@x");
+        assert_eq!(vm.ts, 1700000000);
+        assert_eq!(vm.text, "привет");
+        assert_eq!(vm.name, "Аня");
+        assert!(vm.avatar.starts_with("data:image/png"));
+        assert_eq!(vm.reactions, vec!["👍".to_string(), "❤".to_string()]);
+        assert!(vm.edited);
+        assert_eq!(vm.replies, vec!["m0".to_string()]);
+        assert_eq!(vm.in_reply_to.as_deref(), Some("m0"));
+        assert_eq!(vm.ttl, Some(86400));
+    }
+
+    /// Минимум, который реально шлёт `features/incoming.js` (текст/имя/
+    /// аватар пустые). Маппинг обязан принять его и не выдумать данные.
+    #[test]
+    fn test_message_from_payload_incoming_js_stub() {
+        let plain = r#"{"id":"uid-1|INBOX","from":"alice@x","to":"me@x",
+            "ts":1700000123456,"text":"","name":"","avatar":"",
+            "reactions":[],"edited":false,"replies":[],"in_reply_to":null,"ttl":null}"#;
+        let vm = message_from_payload("alice@x", "me@x", Some("uid-1|INBOX"), plain).unwrap();
+        assert_eq!(vm.id, "uid-1|INBOX");
+        assert_eq!(vm.ts, 1700000123456);
+        assert_eq!(vm.text, "");
+        assert_eq!(vm.name, "");
+        assert_eq!(vm.reactions.len(), 0);
+        assert!(!vm.edited);
+        assert_eq!(vm.in_reply_to, None);
+        assert_eq!(vm.ttl, None);
+    }
+
+    /// Цепочка id: envId из JS важнее `payload.id` (дедуп relay-копии и
+    /// email-копии одного сообщения), затем legacy `message_id`, иначе пусто.
+    #[test]
+    fn test_message_from_payload_id_chain() {
+        let with_both = r#"{"id":"from-payload"}"#;
+        assert_eq!(
+            message_from_payload("a@x", "m@x", Some("from-js"), with_both)
+                .unwrap()
+                .id,
+            "from-js"
+        );
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, with_both)
+                .unwrap()
+                .id,
+            "from-payload"
+        );
+        let legacy = r#"{"message_id":"legacy-1"}"#;
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, legacy).unwrap().id,
+            "legacy-1"
+        );
+        assert_eq!(
+            message_from_payload("a@x", "m@x", None, "{}").unwrap().id,
+            ""
+        );
+    }
+
+    /// Пустой payload: обязательные поля получают нейтральные значения, а не
+    /// выдуманные (`edited = true` или `ts = now` сделали бы «письмо без
+    /// данных» похожим на настоящее).
+    #[test]
+    fn test_message_from_payload_defaults() {
+        let vm = message_from_payload("a@x", "m@x", None, "{}").unwrap();
+        assert_eq!(vm.ts, 0);
+        assert_eq!(vm.text, "");
+        assert_eq!(vm.name, "");
+        assert_eq!(vm.avatar, "");
+        assert!(!vm.edited);
+        assert!(vm.reactions.is_empty());
+        assert!(vm.replies.is_empty());
+        assert_eq!(vm.in_reply_to, None);
+        assert_eq!(vm.ttl, None);
+    }
+
+    /// Не-JSON — ошибка: сообщение не должно сохраниться «молча с пустым id».
+    #[test]
+    fn test_message_from_payload_rejects_non_json() {
+        let err = message_from_payload("a@x", "m@x", None, "просто текст").unwrap_err();
+        assert!(
+            err.starts_with("payload parse:"),
+            "неожиданная ошибка: {err}"
+        );
     }
 }

@@ -7201,6 +7201,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "imap",
  "keyring",
  "lettre",

@@ -1,0 +1,42 @@
+// Набор мутаций: rust-audio-wav — разбор WAV-ассетов (рингтоны).
+//
+// ЗАЧЕМ. Ошибка в разборе заголовка даёт «звонок без звука» или шум, и в UI
+// это неотличимо от тишины в комнате. Проверки ловят порядок полей,
+// выравнивание чанков, битность, стерео-микс и хвост длительности.
+export default {
+  id: 'rust-audio-wav',
+  file: 'vault-client/src/vault/audio_wav.rs',
+  smoke: 'cargo test -p vault-client --lib',
+  mutations: [
+    { name: 'метка WAVE не совпадает (валидный файл отвергается)',
+      pattern: '&bytes[8..12] != b"WAVE"',
+      replacement: '&bytes[8..12] != b"WAVX"' },
+    { name: 'паддинг чанка не учитывается (нечётный чанк сдвигает весь разбор)',
+      pattern: '        pos = end + (size & 1);',
+      replacement: '        pos = end;' },
+    { name: 'битность 16 принимается за 8 (звук читается как мусор)',
+      pattern: '    if bits != 16 {',
+      replacement: '    if bits != 8 {' },
+    { name: 'стерео не сводится к моно (вдвое больше сэмплов, тон выше)',
+      pattern: '    if channels == 2 {',
+      replacement: '    if channels == 1 {' },
+    { name: 'стерео-микс теряет один канал (громкость и фаза врут)',
+      pattern: '            mono.push((pair[0] + pair[1]) * 0.5);',
+      replacement: '            mono.push(pair[0]);' },
+    { name: 'масштаб сэмпла сдвинут (громкость и клиппинг выходят за ожидаемое)',
+      pattern: '        samples.push(v as f32 / 32768.0);',
+      replacement: '        samples.push(v as f32 / 32767.0);' },
+    { name: 'хвост длительности уменьшен (звук обрывается до конца)',
+      pattern: '    pcm_len as u64 * 1000 / out_rate.max(1) + 250',
+      replacement: '    pcm_len as u64 * 1000 / out_rate.max(1) + 200' },
+    { name: 'частота 0 принимается (деление на ноль ниже по потоку)',
+      pattern: '    if rate == 0 {',
+      replacement: '    if false {' },
+    { name: 'частота читается big-endian (скорость воспроизведения врёт)',
+      pattern: '            rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into().unwrap());',
+      replacement: '            rate = u32::from_be_bytes(bytes[body + 4..body + 8].try_into().unwrap());' },
+    { name: 'data-чанк теряет тело (тишина вместо звука)',
+      pattern: '            data = Some(&bytes[body..end]);',
+      replacement: '            data = Some(&bytes[body..body]);' },
+  ],
+};

@@ -56,12 +56,10 @@ use rtc::media::Sample;
 use rtc::shared::time::SystemInstant;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
-/// Частота клока VP8 в RTP (должна совпадать с `media::vp8_codec()`).
-pub const VP8_CLOCK_RATE: u32 = 90_000;
-/// Частота кадров захвата.
-pub const VIDEO_FPS: u32 = 30;
-/// Инкремент RTP-таймстампа на кадр: 90 000 / 30 = 3000.
-pub const FRAME_TS_INCREMENT: u32 = VP8_CLOCK_RATE / VIDEO_FPS;
+// Числа VP8-клока — протокол RTP, поэтому живут в ядре (ADR-005 §W4,
+// `t_502b6c90`). Реэкспорт сохраняет прежние пути (`crate::video::…`),
+// включая константный контекст `FRAME_DURATION` ниже.
+pub use vault_client::vault::call_media::{FRAME_TS_INCREMENT, VIDEO_FPS, VP8_CLOCK_RATE};
 
 /// Длительность кадра для `Sample.duration` — 1/30 с, округлённая ВВЕРХ
 /// (33 333 334 нс). `write_sample` считает инкремент как

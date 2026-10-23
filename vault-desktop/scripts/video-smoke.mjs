@@ -241,7 +241,9 @@ console.log('1. Параметры кодека (JS ↔ Rust)');
 {
   // JS-константы — через поведение конфига энкодера (см. тест 2).
   // Rust-константы — парсим исходник напрямую (объявлены как `pub const NAME: type = expr;`).
-  const rust = readFileSync(ROOT + '/../src-tauri/src/video.rs', 'utf8');
+  // Источник — ядро (`call_media.rs`): мост только реэкспортирует эти числа,
+  // иначе у параметров кодека было бы две копии.
+  const rust = readFileSync(ROOT + '/../../vault-client/src/vault/call_media.rs', 'utf8');
   const g = (name) => {
     const m = rust.match(new RegExp('pub const ' + name + ':\\s*u32\\s*=\\s*([^;]+);'));
     if (!m) return null;

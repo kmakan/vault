@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+// Форматные предикаты канала (префикс id, длина ключа, имя, last_ts) —
+// правила ядра, здесь только применение (ADR-005 §W4, `t_502b6c90`).
+use vault_client::vault::channels::{
+    is_valid_channel_id, is_valid_channel_key, next_last_ts, normalize_channel_name,
+};
 use vault_client::vault::identity;
 
 const CHANNELS_FILE: &str = "channels.json";
@@ -158,10 +163,10 @@ pub fn import_channel(
     owner: &str,
     owner_fpr: &str,
 ) -> Result<Channel> {
-    if !channel_id.starts_with("chn_") {
+    if !is_valid_channel_id(channel_id) {
         anyhow::bail!("Invalid channel id");
     }
-    if key.len() != 64 {
+    if !is_valid_channel_key(key) {
         anyhow::bail!("Invalid channel key length");
     }
     let mut channels = load_channels()?;
@@ -192,11 +197,7 @@ pub fn update_channel(channel_id: &str, patch: &ChannelPatch) -> Result<Channel>
         .get_mut(channel_id)
         .ok_or_else(|| anyhow::anyhow!("Channel not found: {channel_id}"))?;
     if let Some(name) = &patch.name {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            anyhow::bail!("Channel name cannot be empty");
-        }
-        ch.name = trimmed.to_string();
+        ch.name = normalize_channel_name(name).map_err(|e| anyhow::anyhow!(e))?;
     }
     if let Some(about) = &patch.about {
         ch.about = about.clone();
@@ -207,7 +208,7 @@ pub fn update_channel(channel_id: &str, patch: &ChannelPatch) -> Result<Channel>
         }
     }
     if let Some(key) = &patch.key {
-        if key.len() != 64 {
+        if !is_valid_channel_key(key) {
             anyhow::bail!("Invalid channel key length");
         }
         ch.key = key.clone();
@@ -216,9 +217,7 @@ pub fn update_channel(channel_id: &str, patch: &ChannelPatch) -> Result<Channel>
         ch.key_version = kv;
     }
     if let Some(ts) = patch.last_ts {
-        if ts > ch.last_ts {
-            ch.last_ts = ts;
-        }
+        ch.last_ts = next_last_ts(ch.last_ts, ts);
     }
     let cloned = ch.clone();
     save_channels(&channels)?;
