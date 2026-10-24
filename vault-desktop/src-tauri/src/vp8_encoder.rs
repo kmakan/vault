@@ -70,11 +70,7 @@ impl Vp8Encoder {
             // Контекст не создан — освобождать нечего (шим сам чистит).
             return Err(format!("libvpx encoder init failed (code {rc})"));
         }
-        Ok(Self {
-            ctx,
-            width,
-            height,
-        })
+        Ok(Self { ctx, width, height })
     }
 
     /// Закодировать один I420-кадр. `Ok(None)` — кодек не отдал пакет
@@ -82,11 +78,7 @@ impl Vp8Encoder {
     pub fn encode_i420(&mut self, i420: &[u8], force_key: bool) -> Result<Option<Vec<u8>>, String> {
         let need = self.expected_i420_len();
         if i420.len() < need {
-            return Err(format!(
-                "i420 buffer too small: {} < {}",
-                i420.len(),
-                need
-            ));
+            return Err(format!("i420 buffer too small: {} < {}", i420.len(), need));
         }
         let mut data: *const u8 = std::ptr::null();
         let mut size: usize = 0;
@@ -104,7 +96,9 @@ impl Vp8Encoder {
         match rc {
             1 if !data.is_null() && size > 0 => {
                 // Буфер libvpx валиден до следующего encode — копируем сразу.
-                Ok(Some(unsafe { std::slice::from_raw_parts(data, size) }.to_vec()))
+                Ok(Some(
+                    unsafe { std::slice::from_raw_parts(data, size) }.to_vec(),
+                ))
             }
             0 => Ok(None),
             _ => Err(self.last_error(rc)),

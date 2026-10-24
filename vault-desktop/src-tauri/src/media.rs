@@ -65,10 +65,10 @@ use rtc::rtp_transceiver::rtp_sender::{
 
 // Payload-типы кодеков и ICE-таймауты — протокол соединения: числа живут в
 // ядре (ADR-005 §W4, `t_502b6c90`), здесь только реэкспорт и обёртка Duration.
-pub(crate) use vault_client::vault::call_media::{OPUS_PAYLOAD_TYPE, VP8_PAYLOAD_TYPE};
 use vault_client::vault::call_media::{
     ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS,
 };
+pub(crate) use vault_client::vault::call_media::{OPUS_PAYLOAD_TYPE, VP8_PAYLOAD_TYPE};
 
 /// Max time to wait for ICE gathering before giving up (non-trickle).
 /// Обоснование — в ядре (`call_media::ICE_GATHER_TIMEOUT_SECS`).
@@ -397,9 +397,7 @@ impl CallMediaManager {
                 credential,
             });
         } else {
-            log::warn!(
-                "[media] TURN skipped: no credentials (coturn требует auth) — STUN only"
-            );
+            log::warn!("[media] TURN skipped: no credentials (coturn требует auth) — STUN only");
         }
         Self {
             calls: HashMap::new(),

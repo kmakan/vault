@@ -16,8 +16,7 @@ use std::path::PathBuf;
 const PRESENCE_FILE: &str = "presence.json";
 
 fn get_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow!("Cannot determine home directory"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".vault"))
 }
 
@@ -32,7 +31,7 @@ fn get_path() -> Result<PathBuf> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresenceHeartbeat {
     pub email: String,
-    pub ts: i64,       // unix ms (как JS Date.now())
+    pub ts: i64,        // unix ms (как JS Date.now())
     pub source: String, // email/uid конверта (дедуп heartbeat-спама)
 }
 
@@ -54,8 +53,8 @@ pub fn save_presence(store: &PresenceStore) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let data = serde_json::to_string_pretty(store)
-        .map_err(|e| anyhow!("serialize presence: {}", e))?;
+    let data =
+        serde_json::to_string_pretty(store).map_err(|e| anyhow!("serialize presence: {}", e))?;
     fs::write(&path, data).map_err(|e| anyhow!("write presence: {}", e))?;
     Ok(())
 }
@@ -117,8 +116,12 @@ mod tests {
     /// Isolate env per-test: redirect VAULT_PRESENCE_FILE, restore после.
     fn with_tmp<T>(f: impl FnOnce() -> T) -> T {
         let path = std::env::temp_dir().join(format!(
-            "m22_presence-{}-{}.json", std::process::id(), std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            "m22_presence-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
         // Сериализуем env-доступ через общий crate::ENV_MUTEX: две presence-
@@ -128,9 +131,7 @@ mod tests {
         // время работы closure; set_var/remove_var вызываем напрямую
         // (set_env_safe взял бы ENV_MUTEX повторно → self-deadlock).
         // Устойчиво к poisoning: падение одного теста не валит остальные.
-        let _guard = crate::ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("VAULT_PRESENCE_FILE", &path);
         let result = f();
         let _ = std::fs::remove_file(&path);

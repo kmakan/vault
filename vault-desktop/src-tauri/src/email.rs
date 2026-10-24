@@ -899,7 +899,9 @@ impl EmailClient {
         Ok(uids
             .iter()
             .filter(|u| {
-                let Ok(n) = u.trim().parse::<u32>() else { return true };
+                let Ok(n) = u.trim().parse::<u32>() else {
+                    return true;
+                };
                 !found.contains(&n)
             })
             .cloned()

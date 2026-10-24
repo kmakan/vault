@@ -125,8 +125,7 @@ impl ProcessLock {
     /// Заблокировать процесс на время импорта. LOCK_FILE создаётся 0600 и
     /// НИКОГДА не удаляется (живёт постоянно).
     pub(crate) fn acquire(keys_dir: &Path) -> Result<Self> {
-        ensure_dir_0700(keys_dir)
-            .map_err(|e| anyhow!("{ERR_IO}: ensure_dir {e:?}"))?;
+        ensure_dir_0700(keys_dir).map_err(|e| anyhow!("{ERR_IO}: ensure_dir {e:?}"))?;
         let file = OpenOptions::new()
             .create(true)
             .read(true)

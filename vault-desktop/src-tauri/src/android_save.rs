@@ -173,7 +173,11 @@ fn insert_into_mediastore(
         .find_class("android/provider/MediaStore$Downloads")
         .map_err(|e| format!("find MediaStore$Downloads: {e}"))?;
     let collection = env
-        .get_static_field(&downloads_class, "EXTERNAL_CONTENT_URI", "Landroid/net/Uri;")
+        .get_static_field(
+            &downloads_class,
+            "EXTERNAL_CONTENT_URI",
+            "Landroid/net/Uri;",
+        )
         .map_err(|e| format!("EXTERNAL_CONTENT_URI: {e}"))?
         .l()
         .map_err(|e| format!("EXTERNAL_CONTENT_URI cast: {e}"))?;
@@ -234,9 +238,11 @@ fn put_string(env: &mut JNIEnv, cv: &JObject, key: &str, value: &str) -> Result<
         cv,
         "put",
         "(Ljava/lang/String;Ljava/lang/String;)V",
-        &[JValue::Object(jkey.as_ref()), JValue::Object(jvalue.as_ref())],
+        &[
+            JValue::Object(jkey.as_ref()),
+            JValue::Object(jvalue.as_ref()),
+        ],
     )
     .map_err(|e| format!("ContentValues.put({key}): {e}"))?;
     Ok(())
 }
-

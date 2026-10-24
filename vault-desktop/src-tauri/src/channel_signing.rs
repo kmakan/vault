@@ -67,13 +67,26 @@ pub fn public_key_hex(private_key_hex: &str) -> Result<String> {
 /// Проверка подписи — тем же кодом, что и на релее, иначе проверка на клиенте
 /// ничего не значила бы.
 pub fn verify(public_key_hex: &str, sig_b64: &str, kid: u64, env_id: &str, body: &str) -> bool {
-    let Ok(pk) = hex::decode(public_key_hex) else { return false };
-    if pk.len() != 32 { return false; }
-    let Ok(vk) = VerifyingKey::from_bytes(&pk.try_into().expect("32")) else { return false };
-    let Some(sig_raw) = b64url_decode(sig_b64) else { return false };
-    if sig_raw.len() != 64 { return false; }
-    let Ok(sig) = Signature::from_slice(&sig_raw) else { return false };
-    vk.verify_strict(&signing_input(kid, env_id, body), &sig).is_ok()
+    let Ok(pk) = hex::decode(public_key_hex) else {
+        return false;
+    };
+    if pk.len() != 32 {
+        return false;
+    }
+    let Ok(vk) = VerifyingKey::from_bytes(&pk.try_into().expect("32")) else {
+        return false;
+    };
+    let Some(sig_raw) = b64url_decode(sig_b64) else {
+        return false;
+    };
+    if sig_raw.len() != 64 {
+        return false;
+    }
+    let Ok(sig) = Signature::from_slice(&sig_raw) else {
+        return false;
+    };
+    vk.verify_strict(&signing_input(kid, env_id, body), &sig)
+        .is_ok()
 }
 
 /// Сгенерировать пару: (private_hex, public_hex).
@@ -81,7 +94,10 @@ pub fn generate() -> Result<(String, String)> {
     let mut seed = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut seed);
     let sk = SigningKey::from_bytes(&seed);
-    Ok((hex::encode(seed), hex::encode(sk.verifying_key().to_bytes())))
+    Ok((
+        hex::encode(seed),
+        hex::encode(sk.verifying_key().to_bytes()),
+    ))
 }
 
 fn hex_to_32(s: &str) -> Result<[u8; 32]> {
@@ -101,7 +117,9 @@ fn b64url(data: &[u8]) -> String {
 
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     use base64::Engine;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .ok()
 }
 
 use rand::RngCore;
@@ -115,7 +133,9 @@ mod tests {
 
     #[test]
     fn sign_then_verify_roundtrip() {
-        let (priv_h, pub_h) = public_key_hex(SEED_HEX).map(|p| (SEED_HEX.to_string(), p)).unwrap();
+        let (priv_h, pub_h) = public_key_hex(SEED_HEX)
+            .map(|p| (SEED_HEX.to_string(), p))
+            .unwrap();
         let sig = sign_post(&priv_h, 0x0102030405060708, "env-1", "CIPHER").expect("sign");
         assert!(verify(&pub_h, &sig, 0x0102030405060708, "env-1", "CIPHER"));
     }
@@ -138,9 +158,21 @@ mod tests {
         let (_, pub_h) = ((), public_key_hex(SEED_HEX).unwrap());
         assert!(!verify(&pub_h, "не-base64", 1, "e", "b"));
         assert!(!verify(&pub_h, "AAAA", 1, "e", "b"), "короткая подпись");
-        assert!(!verify("zz", &sign_post(SEED_HEX, 1, "e", "b").unwrap(), 1, "e", "b"));
-        assert!(sign_post("abc", 1, "e", "b").is_err(), "плохой приватный ключ");
-        assert!(sign_post(&"z".repeat(64), 1, "e", "b").is_err(), "64 символа, но не hex");
+        assert!(!verify(
+            "zz",
+            &sign_post(SEED_HEX, 1, "e", "b").unwrap(),
+            1,
+            "e",
+            "b"
+        ));
+        assert!(
+            sign_post("abc", 1, "e", "b").is_err(),
+            "плохой приватный ключ"
+        );
+        assert!(
+            sign_post(&"z".repeat(64), 1, "e", "b").is_err(),
+            "64 символа, но не hex"
+        );
     }
 
     #[test]

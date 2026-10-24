@@ -319,10 +319,7 @@ pub fn channel_tokens(broadcast_key: &[u8; 32]) -> (String, String) {
         raw.extend_from_slice(mac);
         base64url(&raw)
     };
-    (
-        pack(b'c', &read_mac),
-        pack(b'C', &write_mac),
-    )
+    (pack(b'c', &read_mac), pack(b'C', &write_mac))
 }
 
 fn base64url(data: &[u8]) -> String {
@@ -426,10 +423,8 @@ mod tests {
     // на этой покраснеет, и «каналы перестали работать» не станет
     // сюрпризом в проде.
     const VEC_KEY: [u8; 32] = [7u8; 32];
-    const VEC_READ: &str =
-        "KNCVvmo4Tz1j_____yjQlb5qOE89lbysuEHHW-wSbSJVc4W5gCAIM5cRNzG9";
-    const VEC_WRITE: &str =
-        "KNCVvmo4Tz1D_____-_z_qnZjNcGJrfF91VU_0h3g96hTAI2uR70lQYl9LNh";
+    const VEC_READ: &str = "KNCVvmo4Tz1j_____yjQlb5qOE89lbysuEHHW-wSbSJVc4W5gCAIM5cRNzG9";
+    const VEC_WRITE: &str = "KNCVvmo4Tz1D_____-_z_qnZjNcGJrfF91VU_0h3g96hTAI2uR70lQYl9LNh";
 
     /// Копия функции релея, дословно. Живёт здесь как исполняемый
     /// «контракт»: пока эта копия и channel_tokens дают один результат на
@@ -454,7 +449,10 @@ mod tests {
             base64url(&raw)
         };
         let read_kid = u64::from_be_bytes(read_mac[..8].try_into().expect("8"));
-        (pack(read_kid, b'c', &read_mac), pack(read_kid, b'C', &write_mac))
+        (
+            pack(read_kid, b'c', &read_mac),
+            pack(read_kid, b'C', &write_mac),
+        )
     }
 
     #[test]
