@@ -570,7 +570,9 @@ pub async fn relay_pub(
             }
         }
     }
-    // §0 company.md: суточный бесплатный лимит конвертов на ИЗДАТЕЛЯ.
+    // §0 company.md: суточный бесплатный лимит конвертов на ИЗДАТЕЛЯ. Порог и
+    // счётчик — на СЕРВЕРЕ: клиентское приложение пользователь вправе собрать
+    // сам, поэтому тумблер/чип в фронте выбирает только канал, но не квоту.
     // Идентичность издателя: tok в теле (read-токен отправителя, шлёт клиент
     // M2.4) → его hash; иначе Authorization (write-токен) → hash; иначе IP.
     // Premium (unlimited) токен отличается expiry: promo выдаётся на 10 лет
@@ -579,15 +581,13 @@ pub async fn relay_pub(
     if app.free_daily_limit > 0 {
         let (pub_key, premium) = publisher_key(&app, &headers, &req, &addr);
         if !premium {
-            let day = now() / 86400;
-            let mut map = app.daily_pub.lock().unwrap();
-            let entry = map.entry(pub_key).or_insert((day, 0));
-            if entry.0 != day {
-                *entry = (day, 0);
-            }
-            if entry.1 >= app.free_daily_limit {
+            let retry_after = {
+                let day = now() / 86400;
+                let mut map = app.daily_pub.lock().unwrap();
+                tally_daily(&mut map, &pub_key, day, app.free_daily_limit, now())
+            };
+            if let Some(retry_after) = retry_after {
                 app.metrics.limit_hit.fetch_add(1, Ordering::Relaxed);
-                let retry_after = (day + 1) * 86400 - now();
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
                     [("retry-after", retry_after.to_string())],
@@ -599,7 +599,6 @@ pub async fn relay_pub(
                 )
                     .into_response();
             }
-            entry.1 += 1;
         }
     }
     let mid = uuid::Uuid::new_v4().to_string();
@@ -1064,6 +1063,49 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Суточный лимит бесплатного релея по умолчанию (требование владельца:
+/// 100 конвертов/сутки, безлимит — покупкой). Числом, а не комментарием:
+/// значение видит только пользователь, а измерить его можно только тестом.
+pub const DEFAULT_FREE_DAILY_LIMIT: u32 = 100;
+
+/// Разбор `VAULT_RELAY_FREE_DAILY_LIMIT`. Отдельной ЧИСТОЙ функцией потому,
+/// что «мусорное значение = дефолт, а не ноль» иначе не проверить: ноль —
+/// штатный выключатель лимита, и путаница «опечатка в конфиге → лимита нет»
+/// открыла бы релей для всех.
+pub fn daily_limit_from_env(raw: Option<&str>) -> u32 {
+    match raw.and_then(|s| s.trim().parse::<u32>().ok()) {
+        Some(v) => v,
+        None => DEFAULT_FREE_DAILY_LIMIT,
+    }
+}
+
+/// Один шаг суточного счётчика издателей: `Some(retry_after)` — публикация
+/// запрещена, `None` — разрешена и ЗАСЧИТАНА.
+///
+/// ЧИСТАЯ функция с ДНЁМ И «СЕЙЧАС» ПАРАМЕТРАМИ. Соблазн оставить счётчик
+/// внутри `relay_pub` («он же три строки») стоит того, что смена суток там не
+/// проверяется НИКАК: тест живёт внутри одной секунды, `entry.0 != day` никогда
+/// не срабатывает, и снятая ветка сброса дала бы зелёный прогон — т.е. лимит
+/// превратился бы в пожизненный для каждого, кто дожил до полуночи. Здесь же
+/// день подставляется фикстурой, и мутация «сброс снят» ловится сразу.
+pub fn tally_daily(
+    map: &mut HashMap<String, (u64, u32)>,
+    publisher: &str,
+    day: u64,
+    limit: u32,
+    now: u64,
+) -> Option<u64> {
+    let entry = map.entry(publisher.to_string()).or_insert((day, 0));
+    if entry.0 != day {
+        *entry = (day, 0);
+    }
+    if entry.1 >= limit {
+        return Some((day + 1) * 86400 - now);
+    }
+    entry.1 += 1;
+    None
 }
 
 /// GET /metrics — счётчики для мониторинга (без пользовательских данных).
@@ -2041,10 +2083,8 @@ async fn main() {
         .filter(|s| !s.trim().is_empty());
     // §0 company.md: бесплатный суточный лимит конвертов на издателя
     // (по умолчанию 100; 0 = выключен; Premium-токены без лимита).
-    let free_daily_limit = std::env::var("VAULT_RELAY_FREE_DAILY_LIMIT")
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(100);
+    let free_daily_limit =
+        daily_limit_from_env(std::env::var("VAULT_RELAY_FREE_DAILY_LIMIT").ok().as_deref());
     if !ntfy_url.is_empty() {
         tracing::info!("ntfy wake-up bridge: {ntfy_url}");
     }
@@ -2188,7 +2228,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vault_relay::tokens::{issue, issue_install, issue_test, parse};
+    use vault_relay::tokens::{issue, issue_install, issue_test, issue_v2, parse, Plan};
 
     fn keys() -> ServerKeys {
         ServerKeys::new([7u8; 32])
@@ -3660,4 +3700,237 @@ mod tests {
         );
     }
 
+    // ── Суточный лимит бесплатного релея (по умолчанию 100 конвертов) ──
+    //
+    // Счёт на ИЗДАТЕЛЯ (не на получателя и не на релей в целом), безлимит —
+    // у ЯВНОГО вида токена (Kind::is_unlimited), а не по сроку: эвристика
+    // «expiry дальше года» делала безлимитным любой долгий токен. Почта
+    // лимита не имеет никогда, поэтому 429 = «только ускорение выключено».
+
+    fn limit_app(k: ServerKeys, limit: u32, anon: bool) -> Arc<AppState> {
+        Arc::new(AppState::new(
+            Store::new(),
+            k,
+            anon,
+            String::new(),
+            None,
+            limit,
+            None,
+            None,
+            None,
+        ))
+    }
+
+    async fn pub_resp(app: &Arc<AppState>, req: PubRequest) -> axum::response::Response {
+        relay_pub(
+            State(app.clone()),
+            ConnectInfo("127.0.0.1:1234".parse().expect("addr")),
+            HeaderMap::new(),
+            AxumJson(req),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn daily_limit_blocks_the_publisher_and_names_midnight_utc() {
+        let k = keys();
+        let (to, hash) = fresh_topic(&k, 4_102_444_920);
+        let sender = issue_install(&k, now() as u32);
+        let app = limit_app(k, 2, false);
+        for _ in 0..2 {
+            let s = pub_resp(&app, pub_req(&to, Some(&sender))).await;
+            assert_eq!(s.status(), StatusCode::OK, "в пределах лимита публикуется");
+        }
+        let blocked = pub_resp(&app, pub_req(&to, Some(&sender))).await;
+        assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS, "третий — за лимит");
+        // Заголовок и тело обязаны назвать ОДНО время: клиент по нему
+        // показывает «до 00:00 UTC», а не «попробуйте позже».
+        let hdr = blocked
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .expect("retry-after в заголовке");
+        let body = body_json(blocked).await;
+        assert_eq!(body["limit"].as_u64(), Some(2), "лимит в ответе = из конфига");
+        assert_eq!(body["retry_after"].as_u64(), Some(hdr), "заголовок и тело разошлись");
+        assert!(hdr > 0 && hdr <= 86400, "retry_after вне суток: {hdr}");
+        assert_eq!((now() + hdr) % 86400, 0, "retry_after обязан указывать на полночь UTC");
+        assert_eq!(
+            app.store.peek(&hash, 0).expect("queue").len(),
+            2,
+            "отклонённый конверт не встал в очередь (иначе 429 — фикция)"
+        );
+        assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn daily_limit_is_per_publisher_not_per_recipient() {
+        let k = keys();
+        let (to, hash) = fresh_topic(&k, 4_102_444_930);
+        let a = issue_install(&k, now() as u32);
+        let b = issue_install(&k, now() as u32);
+        let app = limit_app(k, 2, false);
+        for _ in 0..2 {
+            assert_eq!(pub_resp(&app, pub_req(&to, Some(&a))).await.status(), StatusCode::OK);
+        }
+        assert_eq!(pub_resp(&app, pub_req(&to, Some(&a))).await.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Тот же получатель, другой издатель — своя квота. Иначе общий чат
+        // «замолкал» бы после ста ЧУЖИХ сообщений.
+        assert_eq!(
+            pub_resp(&app, pub_req(&to, Some(&b))).await.status(),
+            StatusCode::OK,
+            "лимит сосчитан по получателю, а не по издателю"
+        );
+        assert_eq!(app.store.peek(&hash, 0).expect("queue").len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_and_paid_tokens_ignore_the_limit_while_install_hits_it() {
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_940);
+        let install = issue_install(&k, now() as u32);
+        let senders = [
+            issue_test(&k, now() as u32),
+            issue_v2(&k, Scope::Read, Plan::Pro, 7, (now() + 86_400) as u32),
+        ];
+        let app = limit_app(k, 1, false);
+        assert_eq!(pub_resp(&app, pub_req(&to, Some(&install))).await.status(), StatusCode::OK);
+        assert_eq!(
+            pub_resp(&app, pub_req(&to, Some(&install))).await.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "Plan::Free обязан лимитироваться, каким бы долгим ни был"
+        );
+        for (i, sender) in senders.iter().enumerate() {
+            for _ in 0..3 {
+                assert_eq!(
+                    pub_resp(&app, pub_req(&to, Some(sender))).await.status(),
+                    StatusCode::OK,
+                    "безлимитный вид токена №{} упёрся в суточный лимит",
+                    i + 1
+                );
+            }
+        }
+        assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 1, "засчитан только установочному");
+    }
+
+    #[test]
+    fn channel_token_does_not_bypass_the_daily_limit() {
+        // Канальный write-токен несёт expiry = u32::MAX: легаси-эвристика
+        // «срок дальше года = premium» сделала бы каждый пост в канал
+        // безлимитным. Вид канала — не признак безлимита.
+        let k = keys();
+        let chan = issue(&k, Scope::ChannelWrite, u32::MAX);
+        let req = pub_req("to-unused", Some(&chan));
+        let app = limit_app(k, 1, false);
+        let addr = "127.0.0.1:1234".parse().expect("addr");
+        let (key, premium) = publisher_key(&app, &HeaderMap::new(), &req, &addr);
+        assert!(!premium, "канал не может обходить суточный лимит");
+        assert!(key.starts_with("t:"), "издатель атрибутирован токеном, а не IP");
+    }
+
+    #[tokio::test]
+    async fn anonymous_publishers_are_counted_per_ip() {
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_950);
+        let app = limit_app(k, 1, true);
+        assert_eq!(pub_status(&app, pub_req(&to, None)).await, StatusCode::OK);
+        assert_eq!(
+            pub_status(&app, pub_req(&to, None)).await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "анонимный издатель считается по IP"
+        );
+        let other_ip = relay_pub(
+            State(app.clone()),
+            ConnectInfo("10.0.0.2:5".parse().expect("addr")),
+            HeaderMap::new(),
+            AxumJson(pub_req(&to, None)),
+        )
+        .await;
+        assert_eq!(
+            other_ip.status(),
+            StatusCode::OK,
+            "лимит не должен быть общим на весь релей"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_daily_limit_disables_the_counter_entirely() {
+        // VAULT_RELAY_FREE_DAILY_LIMIT=0 — выключатель (стенд, отладка):
+        // счётчик не ведётся, 429 нет.
+        let k = keys();
+        let (to, hash) = fresh_topic(&k, 4_102_444_970);
+        let sender = issue_install(&k, now() as u32);
+        let app = limit_app(k, 0, false);
+        for _ in 0..6 {
+            assert_eq!(pub_resp(&app, pub_req(&to, Some(&sender))).await.status(), StatusCode::OK);
+        }
+        assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 0);
+        assert_eq!(app.store.peek(&hash, 0).expect("queue").len(), 6);
+    }
+
+    #[tokio::test]
+    async fn legacy_long_v1_token_keeps_no_limit() {
+        // Промо-токены, выданные до v2, не несут тариф: их вид выводится
+        // эвристикой по сроку. Забыть её — значит дать суточный лимит живым
+        // безлимитным аккаунтам (тот же класс, что «перевыдать адрес очереди»).
+        let k = keys();
+        let (to, _hash) = fresh_topic(&k, 4_102_444_945);
+        let legacy = issue(&k, Scope::Read, (now() + 400 * 86_400) as u32);
+        let app = limit_app(k, 1, false);
+        for _ in 0..3 {
+            assert_eq!(
+                pub_resp(&app, pub_req(&to, Some(&legacy))).await.status(),
+                StatusCode::OK,
+                "легаси-promo упёрся в суточный лимит"
+            );
+        }
+        assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn daily_limit_defaults_to_one_hundred_and_survives_junk() {
+        // Ноль — штатный ВЫКЛЮЧАТЕЛЬ, поэтому «опечатка в конфиге» не имеет
+        // права превратиться в ноль: иначе релей стал бы безлимитным для всех.
+        assert_eq!(daily_limit_from_env(None), DEFAULT_FREE_DAILY_LIMIT);
+        assert_eq!(DEFAULT_FREE_DAILY_LIMIT, 100, "требование: 100 конвертов/сутки");
+        for junk in ["", "   ", "сто", "1e3", "-1", "100.5", &"9".repeat(12)] {
+            assert_eq!(
+                daily_limit_from_env(Some(junk)),
+                DEFAULT_FREE_DAILY_LIMIT,
+                "мусор «{junk}» обязан дать дефолт"
+            );
+        }
+        assert_eq!(daily_limit_from_env(Some(" 250 ")), 250, "пробелы не ломают чтение");
+        assert_eq!(daily_limit_from_env(Some("0")), 0, "ноль — сознательный выключатель");
+    }
+
+    #[test]
+    fn tally_daily_counts_per_publisher_and_resets_at_utc_midnight() {
+        // Смена суток — единственное, что HTTP-тестами не проверяется: они живут
+        // внутри одной секунды, и ветка сброса днём не срабатывает никогда.
+        let mut map: HashMap<String, (u64, u32)> = HashMap::new();
+        let day = 20_000;
+        let start = day * 86_400;
+        assert_eq!(tally_daily(&mut map, "t:a", day, 2, start + 1), None);
+        assert_eq!(tally_daily(&mut map, "t:a", day, 2, start + 2), None);
+        // Отказ не должен засчитываться: иначе издатель «расходует» сутки
+        // попытками, которые сервер отверг.
+        assert_eq!(
+            tally_daily(&mut map, "t:a", day, 2, start + 3),
+            Some(86_400 - 3)
+        );
+        assert_eq!(map.get("t:a"), Some(&(day, 2)), "отклонённый pub не инкремент");
+        // Чужой расход не наследуется.
+        assert_eq!(tally_daily(&mut map, "t:b", day, 2, start + 4), None);
+        // Полночь UTC — счётчик обнуляется, а не становится пожизненным.
+        assert_eq!(
+            tally_daily(&mut map, "t:a", day + 1, 2, start + 86_400),
+            None,
+            "новые сутки застали издателя заблокированным"
+        );
+        assert_eq!(map.get("t:a"), Some(&(day + 1, 1)), "день не обновлён");
+        // retry_after — до ближайшей полуночи UTC, а не «24 часа от запроса».
+        assert_eq!(tally_daily(&mut map, "t:a", day + 1, 1, start + 86_401), Some(86_400 - 1));
+    }
 }
