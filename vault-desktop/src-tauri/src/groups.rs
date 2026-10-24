@@ -678,14 +678,22 @@ pub fn backfill_member_fingerprints_with_peers(
         for m in group.members.iter_mut() {
             // Поиск — не только по адресу: участник мог остаться в составе под
             // СТАРЫМ адресом (смена почты), тогда адрес ничего не находит, а
-            // ключ лежит в peer_keys под новым. След старого backfill (ключ в
-            // поле fingerprint) опознаётся тем же сравнением нормальных форм,
-            // что и `identity::fingerprint_to_repair`.
+            // ключ лежит в peer_keys под новым. Порядок надёжности ВАЖЕН:
+            // адрес — сначала, след backfill — только если адреса в peer_keys
+            // вовсе нет. Иначе чужой ключ, ошибочно записанный в fingerprint
+            // живого аккаунта, перетянул бы участника к неверному пиру (на
+            // этой машине koanmak@gmail.com и koanmak@ya.ru — ДВЕ разные
+            // идентичности).
             let fp = identity::normalize(&m.fingerprint);
-            let Some(peer) = peers.iter().find(|k| {
-                identity::same_address(&k.email, &m.email)
-                    || (!fp.is_empty() && fp == identity::normalize(&k.public_key))
-            }) else {
+            let by_addr = peers
+                .iter()
+                .find(|k| identity::same_address(&k.email, &m.email));
+            let by_trace = (fp.len() >= 64).then(|| {
+                peers
+                    .iter()
+                    .find(|k| fp == identity::normalize(&k.public_key))
+            });
+            let Some(peer) = by_addr.or(by_trace.flatten()) else {
                 continue;
             };
             let Ok(computed) = identity::fingerprint_from_public_key(&peer.public_key) else {
@@ -711,26 +719,40 @@ pub fn backfill_member_fingerprints_with_peers(
 /// в него участников групп (`groups-load`). Сравнение только по адресу
 /// заводило ВТОРОГО «контакта без ключа» на того же человека, когда в
 /// `groups.json` остался его СТАРЫЙ адрес (смена почты) — «призрак» в списке,
-/// открывающий попап «добавить контакт». Решение «тот же ли это» — здесь, по
-/// трём признакам в порядке надёжности: адрес (форма ядра), отпечаток, след
-/// старого backfill (в поле fingerprint лежит сам публичный ключ).
+/// открывающий попап «добавить контакт».
+///
+/// Порядок надёжности — строго адрес → отпечаток → след backfill, и след
+/// НЕ перекрывает найденный адрес: koanmak@gmail.com и koanmak@ya.ru — две
+/// живые идентичности на одной машине (настольный экземпляр под gmail, ya.ru —
+/// его пир), а старый backfill мог записать чужой ключ в `fingerprint`.
+/// Считаем следом ТОЛЬКО сырной hex-ключ (≥64 символов, без разделителей):
+/// настоящая форма отпечатка (`xx:…:****`) короткая и сравнивается прямо.
 pub fn member_known_peer(
     member_email: &str,
     member_fingerprint: &str,
     peers: &[vault_core::StoredPeerKey],
 ) -> Option<String> {
+    if let Some(k) = peers
+        .iter()
+        .find(|k| identity::same_address(&k.email, member_email))
+    {
+        return Some(k.email.clone());
+    }
     let fp = identity::normalize(member_fingerprint);
+    if fp.is_empty() {
+        return None;
+    }
     peers
         .iter()
         .find(|k| {
-            identity::same_address(&k.email, member_email)
-                || (!fp.is_empty()
-                    && (fp == identity::normalize(&k.public_key)
-                        || identity::same_fingerprint(
-                            &fp,
-                            &identity::fingerprint_from_public_key(&k.public_key)
-                                .unwrap_or_default(),
-                        )))
+            if fp.len() >= 64 {
+                fp == identity::normalize(&k.public_key)
+            } else {
+                identity::same_fingerprint(
+                    &fp,
+                    &identity::fingerprint_from_public_key(&k.public_key).unwrap_or_default(),
+                )
+            }
         })
         .map(|k| k.email.clone())
 }
@@ -1944,9 +1966,10 @@ mod tests {
 
     // ─── «призрак» участника и очередь отложенных приглашений ───
 
-    /// Живой дефект: в составе группы адрес koanmak@gmail.com, а ключ этого
-    /// же человека лежит в peer_keys под vault-msg@ya.ru (тесты смены почты).
-    /// Добивка контактов по адресу заводила второго «контакта без ключа».
+    /// Дефект прошлого разбора: в составе группы адрес koanmak@gmail.com, а
+    /// ключ того же человека лежит в peer_keys под СТАРЫМ адресом (смена
+    /// почты) — след backfill (сырой ключ в fingerprint). Добивка контактов по
+    /// адресу заводила второго «контакта без ключа».
     #[test]
     fn member_known_peer_resolves_old_address_by_key_trace() {
         let key = format!("aabbccddeeff0011{}", "00".repeat(24));
@@ -1957,7 +1980,7 @@ mod tests {
             Some("vault-msg@ya.ru"),
             "ключ в fingerprint опознаёт адресата"
         );
-        // Канонический отпечаток — тот же результат.
+        // Настоящая форма отпечатка совпала с вычисленным — тот же результат.
         assert_eq!(
             member_known_peer(
                 "koanmak@gmail.com",
@@ -1975,6 +1998,37 @@ mod tests {
         assert_eq!(
             member_known_peer(" VAULT-MSG@YA.RU ", "", &peers).as_deref(),
             Some("vault-msg@ya.ru")
+        );
+    }
+
+    /// Живые данные десктопа: koanmak@gmail.com — аккаунт приложения,
+    /// koanmak@ya.ru — отдельный пир с другим ключом. Старый backfill мог
+    /// записать в fingerprint чужой ключ; матчинг не обязан перетягивать
+    /// человека с НАЙДЕННЫМ адресом к чужому пиру по этому следу.
+    #[test]
+    fn member_known_peer_address_beats_foreign_key_trace() {
+        let gmail_key = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        let yaru_key = format!("2be1c930d1b91b85{}", "00".repeat(24));
+        let peers = vec![
+            peer_key("koanmak@gmail.com", &gmail_key),
+            peer_key("koanmak@ya.ru", &yaru_key),
+        ];
+        // Адрес найден — остаём при нём, даже если fingerprint — сырой чужой ключ.
+        assert_eq!(
+            member_known_peer("koanmak@gmail.com", &yaru_key, &peers).as_deref(),
+            Some("koanmak@gmail.com"),
+            "найденный адрес сильнее следа чужого ключа"
+        );
+        // Настоящий отпечаток, НЕ совпадающий с ключом пира, — не повод
+        // складывать участника к этому пиру.
+        assert_eq!(
+            member_known_peer(
+                "someone@else.org",
+                "AA:BB:CC:DD:EE:FF:00:11:****",
+                &peers
+            ),
+            None,
+            "несовпадающий отпечаток не матчится"
         );
     }
 
