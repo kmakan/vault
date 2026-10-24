@@ -4511,7 +4511,8 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         pendingContacts: () => this.invitesStore.getPendingContacts(),
         contactPopupIndex: () => this.contactPopupIndex,
         setContactPopupIndex: (v) => { this.contactPopupIndex = v; },
-        setShowContactPopup: (v) => { this.showContactPopup = v; return this.showContactPopup; },
+        showContactPopup: () => this.showContactPopup,
+        setShowContactPopup: (v) => { this.showContactPopup = v; },
       });
     },
     async inviteContactById(email) {

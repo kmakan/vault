@@ -156,12 +156,14 @@ export async function declineContactInvite(c, deps) {
 }
 
 export function showNextContact(deps) {
-  const { clearNextContactTimer, setNextContactTimer, pendingContacts, contactPopupIndex, setContactPopupIndex, setShowContactPopup } = deps;
+  const { clearNextContactTimer, setNextContactTimer, pendingContacts, contactPopupIndex, setContactPopupIndex, showContactPopup, setShowContactPopup } = deps;
   clearNextContactTimer();
   if (pendingContacts().length > 0) {
     if (contactPopupIndex() >= pendingContacts().length) setContactPopupIndex(0);
     setNextContactTimer(() => {
-      if (pendingContacts().length && !setShowContactPopup()) setShowContactPopup(true);
+      // Геттер, не сеттер: !setShowContactPopup() записывал undefined
+      // (попап мигал закрытым) и всегда возвращал true.
+      if (pendingContacts().length && !showContactPopup()) setShowContactPopup(true);
     }, 1200);
   } else {
     setShowContactPopup(false);
