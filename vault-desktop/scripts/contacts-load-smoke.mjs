@@ -22,6 +22,11 @@ mkdirSync(MOCKS, { recursive: true });
 
 globalThis.__contacts = [];
 globalThis.__throw = false;
+// Мост: invoke('contacts_drop_own') возвращает ядро-фильтр. Мок повторяет
+// правило ядра — убираем запись с НАШИМ ключом и наш адрес/алиасы; список
+// вызовов глобален, чтобы кейсы видели, обращался ли код к мосту.
+globalThis.__dropReqs = [];
+globalThis.__dropFail = false;
 writeFileSync(MOCKS + '/api.js', `
 export default {
   getContacts: async () => {
@@ -30,8 +35,25 @@ export default {
   },
 };
 `);
+writeFileSync(MOCKS + '/core.js', `
+export const invoke = async (cmd, args) => {
+  if (cmd !== 'contacts_drop_own') return null;
+  if (globalThis.__dropFail) throw new Error('мост недоступен');
+  if (globalThis.__dropNull) return null; // malformed: не список
+  globalThis.__dropReqs.push(args);
+  const own = 'OURKEY';
+  const mine = new Set([String(args.email).toLowerCase(), ...(args.aliases || []).map(a => String(a).toLowerCase())]);
+  return args.contacts.filter(([e, k]) =>
+    !mine.has(String(e).toLowerCase()) && !(k && k.toLowerCase() === own));
+};
+`);
+writeFileSync(MOCKS + '/crypto.js', `
+export default { publicKey: 'OURKEY', fingerprint: async () => 'FP-ME' };
+`);
 let s = readFileSync(path.join(ROOT, 'src', 'features', 'contacts-load.js'), 'utf8');
-s = s.replace("from '../api.js'", `from "${MOCKS}/api.js"`);
+s = s.replace("from '../api.js'", `from "${MOCKS}/api.js"`)
+     .replace("from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`)
+     .replace("from '../crypto.js'", `from "${MOCKS}/crypto.js"`);
 writeFileSync(MOCKS + '/contacts-load.mjs', s, 'utf8');
 const CL = await import(MOCKS + '/contacts-load.mjs');
 
@@ -111,6 +133,39 @@ globalThis.__throw = false;
 globalThis.__contacts = [];
 r = await CL.loadContacts('me@bk.ru');
 ok('пустой ответ → пустой список', r.contacts.length === 0 && Object.keys(r.contactAliases).length === 0);
+
+// 8. Живой случай X50 (24.10): под сессией koanmak@ya.ru в общем peer-store
+// лежали НАШ ключ под адресом vault-msg@ya.ru и koanmak@gmail.com. Прежний
+// фильтр (строка против строки) оставлял их «контактами»; клик давал попап
+// «Добавить контакт». Теперь «свой» решает ядро по ключу/алиасу.
+globalThis.__dropReqs = [];
+globalThis.__contacts = [
+  { email: 'vault-msg@ya.ru', public_key: 'OURKEY', added_at: '2026-01-01' },
+  { email: 'koanmak@gmail.com', public_key: 'OURKEY', added_at: '2026-02-01' },
+  { email: 'icemaksim@gmail.com', public_key: 'K2', added_at: '2026-03-01' },
+];
+r = await CL.loadContacts('koanmak@ya.ru');
+ok('записи с нашим ключем убраны из контактов',
+  emails(r.contacts).join(',') === 'icemaksim@gmail.com');
+ok('фильтр спросил ядро и передал алиасы своего ключа',
+  globalThis.__dropReqs.length === 1
+  && globalThis.__dropReqs[0].aliases.includes('vault-msg@ya.ru')
+  && globalThis.__dropReqs[0].fingerprint === 'FP-ME');
+
+// 9. Fail-open: мост упал — прежняя строковая фильтрация, список не теряется.
+globalThis.__dropFail = true;
+r = await CL.loadContacts('koanmak@ya.ru');
+ok('при сбое моста список не пуст (прежнее поведение: склейка по ключу, строковый фильтр себя)',
+  emails(r.contacts).join(',') === 'icemaksim@gmail.com,koanmak@gmail.com');
+globalThis.__dropFail = false;
+
+// 10. Malformed-ответ моста (не список) — НЕ должен выливаться в ПУСТОЙ
+// список контактов: страж кидает в тот же fail-open путь.
+globalThis.__dropNull = true;
+r = await CL.loadContacts('koanmak@ya.ru');
+ok('malformed-ответ моста не затирает контакты',
+  emails(r.contacts).join(',') === 'icemaksim@gmail.com,koanmak@gmail.com');
+globalThis.__dropNull = false;
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

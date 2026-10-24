@@ -20,6 +20,14 @@
 // (кроме себя и уже известных), и это не утечка: модель почтового мессенджера,
 // удаление контакта группы НЕ трогает — иначе при удалении контакта из группы
 // пропадала бы история переписки.
+//
+// «КРОМЕ СЕБЯ» РЕШАЕТ КЛЮЧ, А НЕ СТРОКА АДРЕСА (24.10, X50). Сравнивать
+// m.email с email текущей сессии — вторая копия правила формы адреса, и она
+// слепнет там, где идентичность = отпечаток: свой же аккаунт koanmak@gmail.com
+// под сессией koanmak@ya.ru становился «контактом», а клик по нему открывал
+// попап «Добавить контакт». Предикат «это мы?» — в Rust
+// (vault::identity::member_is_account, команда groups_member_is_own), здесь
+// только вызов.
 
 import { invoke } from '@tauri-apps/api/core';
 import { db } from '../api.js';
@@ -58,6 +66,19 @@ export async function loadGroups({ email, fingerprint, aliasesOf, contacts, requ
       if (ic) icons[g.id] = ic;
       for (const m of g.members || []) {
         if (m.email === email || seen.has(m.email)) continue;
+        // «Это наш же аккаунт?» решает ядро по ключу/отпечатку/алиасу.
+        // Ошибка моста не чинит список: остаётся прежнее сравнение адреса.
+        let isOwn = false;
+        try {
+          isOwn = await invoke('groups_member_is_own', {
+            email: email || '',
+            fingerprint: String(fingerprint || ''),
+            aliases,
+            memberEmail: m.email || '',
+            memberFingerprint: m.fingerprint || '',
+          });
+        } catch (e) { /* мост не ответил — не считать своим */ }
+        if (isOwn) continue;
         // Модель почтовый мессенджер: удаление контакта НЕ трогает группы —
         // участник остаётся полноценным контактом в списке.
         seen.add(m.email);

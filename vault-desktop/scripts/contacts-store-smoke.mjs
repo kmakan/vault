@@ -24,13 +24,24 @@ writeFileSync(MOCKS + '/api.js',
   'export default { getContacts: async () => [], getEmailBody: async () => null, saveCursors: async () => {} };\n');
 writeFileSync(MOCKS + '/session-store.js',
   'export const sessionStore = { getCurrentEmail: () => "me@x.ru" };\n');
+// contacts-load зовёт мост и crypto — в этом смоуке они не проверяются,
+// но копия обязана загружаться: даём нейтральные заглушки (мост «ничего не
+// убрал», crypto «ключа нет» — фильтр then падает на прежнюю строку).
+writeFileSync(MOCKS + '/core.js',
+  'export const invoke = async () => null;\n');
+writeFileSync(MOCKS + '/crypto.js',
+  'export default { publicKey: "", fingerprint: async () => "" };\n');
 
 // contacts-load копируется, чтобы contacts-store получил его мок-версию:
 // сам contacts-load здесь не проверяется (для него есть contacts-load-smoke).
 prepareModuleCopy(
   ROOT + '/src/features/contacts-load.js',
   MOCKS + '/contacts-load.js',
-  { '../api.js': 'api.js' },
+  {
+    '../api.js': 'api.js',
+    '@tauri-apps/api/core': 'core.js',
+    '../crypto.js': 'crypto.js',
+  },
   MOCKS,
 );
 prepareModuleCopy(

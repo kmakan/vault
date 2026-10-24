@@ -112,5 +112,24 @@ export default {
     { name: 'пустой вычисленный отпечаток записывается (поле затирается пустым)',
       pattern: '    if computed.is_empty() {\n        return None;\n    }',
       replacement: '    if false {\n        return None;\n    }' },
+    // «Свой аккаунт не контакт» (24.10, живой случай X50): адрес сессии,
+    // алиасы, отпечаток и наш ПУБЛИЧНЫЙ КЛЮЧ, записанный_old backfill в поле
+    // fingerprint. Прежнее сравнение строк во фронте превращало собственный
+    // аккаунт в «контакт без ключа».
+    { name: 'пустой публичный ключ совпадает с любым (контакт без ключа = «свой»)',
+      pattern: 'pub fn same_public_key(a: &str, b: &str) -> bool {\n    let (a, b) = (normalize(a), normalize(b));\n    !a.is_empty() && a == b',
+      replacement: 'pub fn same_public_key(a: &str, b: &str) -> bool {\n    let (a, b) = (normalize(a), normalize(b));\n    a == b' },
+    { name: 'срез 16 hex выдаётся за весь ключ (чужой пир с тем же префиксом — «свой»)',
+      pattern: '    let (a, b) = (normalize(a), normalize(b));\n    !a.is_empty() && a == b\n}\n\n/// Участник — ЭТОТ ЖЕ аккаунт',
+      replacement: '    let (a, b) = (normalize(a).into_bytes(), normalize(b).into_bytes());\n    !a.is_empty() && a[..std::cmp::min(a.len(), 16)] == b[..std::cmp::min(b.len(), 16)]\n}\n\n/// Участник — ЭТОТ ЖЕ аккаунт' },
+    { name: 'свой адрес в составе не узнаётся (регрессия 24.10: аккаунт приложения — «контакт»)',
+      pattern: '    id.has_address(member_email)\n        || id.has_fingerprint(member_fingerprint)',
+      replacement: '    id.has_fingerprint(member_fingerprint)' },
+    { name: 'свой отпечаток не узнаётся (только адрес — починка следа не помогает)',
+      pattern: '    id.has_address(member_email)\n        || id.has_fingerprint(member_fingerprint)',
+      replacement: '    id.has_address(member_email)' },
+    { name: 'след нашего ключа в fingerprint не опознаётся (главная ветка правила)',
+      pattern: '        || same_public_key(member_fingerprint, own_public_key_hex)',
+      replacement: '' },
   ],
 };

@@ -248,6 +248,36 @@ pub fn fingerprint_to_write(
     }
 }
 
+/// Один и тот же публичный ключ с двух сторон границы? Hex нечувствителен к
+/// регистру, сравнивается полная длина (первые 8 байт — отпечаток, это ДРУГОЙ
+/// контракт). Пустой ключ не совпадает ни с чем, включая другой пустой.
+pub fn same_public_key(a: &str, b: &str) -> bool {
+    let (a, b) = (normalize(a), normalize(b));
+    !a.is_empty() && a == b
+}
+
+/// Участник — ЭТОТ ЖЕ аккаунт, что и мы. Три пути, и все — про ключ, а не
+/// про строку адреса:
+///  1. адрес в.Identity (email ∪ алиасы);
+///  2. отпечаток в нормальной форме совпал с нашим (стабилен при смене почты);
+///  3. в поле `fingerprint` лежит НАШ публичный ключ целиком — след старой
+///     добивки, которая писала в отпечаток сам ключ.
+///
+/// ПУНКТ 3 — НЕ «чья угодно запись в peer_keys»: сравнивается именно с ключом
+/// текущей пары. Алиасы своего аккаунта тоже хранятся в peer_keys (см.
+/// `profiles.js::aliasesOf`), поэтому совпадение с ЛЮБЫМ пиром означало бы
+/// «все собеседники — это я».
+pub fn member_is_account(
+    id: &Identity,
+    member_email: &str,
+    member_fingerprint: &str,
+    own_public_key_hex: &str,
+) -> bool {
+    id.has_address(member_email)
+        || id.has_fingerprint(member_fingerprint)
+        || same_public_key(member_fingerprint, own_public_key_hex)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +508,76 @@ mod tests {
             "выясненный отпечаток не перезаписывается"
         );
         assert_eq!(fingerprint_to_repair("", "", &key), None);
+    }
+
+    #[test]
+    fn same_public_key_is_full_hex_and_never_empty() {
+        let key = "ab".repeat(32);
+        assert!(same_public_key(&key.to_uppercase(), &key));
+        assert!(same_public_key(&format!(" {key} "), &key));
+        assert!(!same_public_key("", ""));
+        assert!(
+            !same_public_key(&key[..16], &key),
+            "префикс ключа — не совпадение: иначе один отпечаток выдавался бы за весь ключ"
+        );
+    }
+
+    #[test]
+    fn member_is_account_recognises_own_key_left_in_fingerprint() {
+        // Живой случай 24.10 (X50, groups.json): сессия koanmak@ya.ru, в
+        // составе koanmak@gmail.com, а в fingerprint — публичный ключ десктопа
+        // целиком (след старой добивки). Это СВОЙ аккаунт, не контакт.
+        let own = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        let own_fp = "9c:ad:cd:4d:7d:bf:26:33:****";
+        let me = Identity::new("koanmak@ya.ru", &[], "2b:e1:c9:30:d1:b9:1b:85:****");
+        assert!(member_is_account(&me, "koanmak@gmail.com", &own, &own));
+        // Настоящая форма отпечатка (её пишет backfill по computed fp) —
+        // тот же человек, даже под чужим на вид адресом.
+        let me_fp = Identity::new("koanmak@ya.ru", &[], own_fp);
+        assert!(
+            member_is_account(&me_fp, "someone@else.org", own_fp, &own),
+            "настоящая форма отпечатка тоже опознаёт своего"
+        );
+        // Чужой ключ/чужой отпечаток — не мы.
+        let anna = format!("c73ce55a9f7b466f{}", "00".repeat(24));
+        assert!(!member_is_account(&me, "icemaksim@gmail.com", &anna, &own));
+        assert!(!member_is_account(
+            &me,
+            "icemaksim@gmail.com",
+            "c7:3c:e5:5a:9f:7b:46:6f:****",
+            &own
+        ));
+        // Пустые значения — не совпадение (иначе безключевой участник
+        // складывался бы в каждого второго).
+        assert!(!member_is_account(&me, "x@y.zz", "", &own));
+        assert!(!member_is_account(
+            &me,
+            "",
+            "c7:3c:e5:5a:9f:7b:46:6f:****",
+            &own
+        ));
+        let no_key = Identity::new("x@y.zz", &[], "");
+        assert!(!member_is_account(&no_key, "q@w.ee", "", ""));
+    }
+
+    #[test]
+    fn member_is_account_never_claims_a_foreign_peer_by_alias_entry() {
+        // Алиасы своего аккаунта живут в peer_keys наравне с чужими ключами:
+        // правило обязано сверять с КЛЮЧОМ ПАРЫ, а не со «есть ли такой пир».
+        let own = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        let me = Identity::new("koanmak@gmail.com", &["vault-msg@ya.ru".to_string()], "");
+        assert!(
+            member_is_account(&me, " VAULT-MSG@YA.RU ", "", &own),
+            "алиас — свой адрес"
+        );
+        assert!(
+            !member_is_account(
+                &me,
+                "koanmak@ya.ru",
+                &format!("2be1c930d1b91b85{}", "00".repeat(24)),
+                &own
+            ),
+            "ключ другого человека под своим алиасом не делает его мной"
+        );
     }
 }

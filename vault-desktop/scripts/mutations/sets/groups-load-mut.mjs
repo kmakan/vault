@@ -25,5 +25,11 @@ export default {
     { name: "алиасы не передаются в фильтр групп",
       pattern: "      aliases,",
       replacement: "      aliases: []," },
+    { name: "свой по ключу участник становится контактом (пропуск убран)",
+      pattern: "        if (isOwn) continue;",
+      replacement: "" },
+    { name: "имя команды self-детекта испорчено — ядро не спрашивается",
+      pattern: "          isOwn = await invoke('groups_member_is_own', {",
+      replacement: "          isOwn = await invoke('groups_member_is_own_TYPO', {" },
   ],
 };

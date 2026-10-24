@@ -1,4 +1,3 @@
-
 // Android library entry point — re-exports main.rs for Tauri cdylib
 
 /// Thread-safe set_env: setenv(3) на Android/Linux не является thread-safe.
@@ -13,14 +12,14 @@ pub fn set_env_safe(key: &str, value: impl AsRef<std::ffi::OsStr>) {
 }
 
 mod audio;
-mod channels;
 mod channel_signing;
+mod channels;
 mod credential_store;
 mod crypto;
 pub use vault_core::crypto_pq;
 mod duress;
-mod file_lock;
 mod email;
+mod file_lock;
 mod groups;
 /// M2.2: Presence ledger core + bridge.
 mod presence;
@@ -1218,6 +1217,66 @@ fn groups_load_own(
     Ok(mine)
 }
 
+/// Участник группы — ЭТОТ ЖЕ аккаунт, что и мы (идентичность = ключ, не
+/// строка адреса). Решение принимает ядро (`vault::identity`), фронт только
+/// спрашивает: `groups-load.js` не обязан складывать «себя» в контакты, а
+/// клик по собственному аккаунту не должен превращаться в попап
+/// «Добавить контакт». Алиасы приходят от фронта как есть — их нормализует
+/// ядро; наш публичный ключ берётся из keypair хранилища, а не из peer_keys
+/// (алиасы своих аккаунтов лежат в peer_keys наравне с чужими ключами).
+#[tauri::command]
+fn groups_member_is_own(
+    email: String,
+    fingerprint: String,
+    aliases: Vec<String>,
+    member_email: String,
+    member_fingerprint: String,
+) -> Result<bool, String> {
+    let own_public_key = key_store::load_keypair()
+        .map_err(|e| e.to_string())?
+        .map(|kp| kp.public_key)
+        .unwrap_or_default();
+    // Отпечаток аккаунта: значение фронта может быть пустым (старый фронт,
+    // первый запуск), вычисленный по ключу — всегда настоящий.
+    let fp = match crypto::fingerprint_cmd(&own_public_key) {
+        Ok(computed) => computed,
+        Err(_) => fingerprint,
+    };
+    Ok(groups::member_is_account(
+        &email,
+        &aliases,
+        &fp,
+        &member_email,
+        &member_fingerprint,
+        &own_public_key,
+    ))
+}
+
+/// Отфильтровать список контактов, убрав «себя»: свой адрес (email ∪
+/// алиасы, нормальная форма) и записи с нашим публичным ключом. Контакты —
+/// общий peer-store на машину, прежний фильтр фронта сравнивал строки
+/// регистрозависимо и без ключа, из-за чего собственный аккаунт стоял в
+/// списке контактом. Пара (email, public_key) — форма, решение — в ядре.
+#[tauri::command]
+fn contacts_drop_own(
+    email: String,
+    fingerprint: String,
+    aliases: Vec<String>,
+    contacts: Vec<(String, String)>,
+) -> Result<Vec<(String, String)>, String> {
+    let own_public_key = key_store::load_keypair()
+        .map_err(|e| e.to_string())?
+        .map(|kp| kp.public_key)
+        .unwrap_or_default();
+    Ok(groups::contacts_drop_own(
+        &contacts,
+        &email,
+        &aliases,
+        &fingerprint,
+        &own_public_key,
+    ))
+}
+
 /// Права текущего пользователя в группе — один ответ вместо четырёх
 /// сравнений адресов во фронте. `None` — группы нет в локальном списке
 /// (её ещё не импортировали): это НЕ «не моя», а «не знаю», и фронт обязан
@@ -2195,6 +2254,8 @@ pub fn run() {
             channels_delete,
             groups_rename_member,
             groups_load_own,
+            groups_member_is_own,
+            contacts_drop_own,
             groups_access,
             groups_has_member,
             groups_rename_address,

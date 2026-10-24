@@ -124,7 +124,8 @@ pub struct InviteToken {
 
 pub fn group_invite(group_id: &str, invitee_email: &str) -> Result<InviteToken> {
     let mut groups = load_groups()?;
-    let group = groups.get_mut(group_id)
+    let group = groups
+        .get_mut(group_id)
         .ok_or_else(|| anyhow::anyhow!("group_invite: group not found: {}", group_id))?;
     let gid = group.id.clone();
     let gname = group.name.clone();
@@ -166,7 +167,8 @@ pub fn accept_invite(token: &str, invitee_email: &str) -> Result<String> {
     }
     let group_id = parts[1].to_string();
     let mut groups = load_groups()?;
-    let group = groups.get_mut(&group_id)
+    let group = groups
+        .get_mut(&group_id)
         .ok_or_else(|| anyhow::anyhow!("accept_invite: group not found: {}", group_id))?;
     // Ensure invitee registered (idempotent: skip if already member).
     let needs_push = !group
@@ -537,6 +539,54 @@ pub fn is_own_group(
     )
 }
 
+/// Участник — ЭТОТ ЖЕ аккаунт, что и мы? Правило живёт в ядре
+/// (`identity::member_is_account`), здесь — только форма вопроса для фронта:
+/// адрес сессии, его алиасы, наш отпечаток и НАШ публичный ключ.
+///
+/// ЗАЧЕМ НУЖЕН ИМНОГО КЛЮЧ, а не `member_matches`: добивка контактов из
+/// состава групп решает «свой или нет» сравнением СТРОК с адресом текущей
+/// сессии, а идентичность — это ключ. На живых данных X50 (24.10) сессия
+/// koanmak@ya.ru, а в составе koanmak@gmail.com, в fingerprint которого лежит
+/// публичный ключ десктопа целиком — следа от старого backfill. Фронт
+/// складывал этого «себя» в контакты, и клик по такому контакту открывал
+/// попап «Добавить контакт» вместо чата.
+pub fn member_is_account(
+    my_email: &str,
+    aliases: &[String],
+    my_fingerprint: &str,
+    member_email: &str,
+    member_fingerprint: &str,
+    own_public_key_hex: &str,
+) -> bool {
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
+    identity::member_is_account(&id, member_email, member_fingerprint, own_public_key_hex)
+}
+
+/// Убрать из списка контактов те, что являются НАМИ. Контакты — общий
+/// peer-store на машину, и фронт отсекал «себя» сравнением строк
+/// (`c.email !== email`): регистрозависимо, без алиасов и без ключа. На
+/// живых данных X50 (24.10) так в списке под сессией koanmak@ya.ru стояли
+/// koanmak@gmail.com и vault-msg@ya.ru — обе записи с НАШИМ публичным
+/// ключом; клик по такой записи открывал попап «Добавить контакт» вместо
+/// чата. Предикат тот же, что у участника группы: адрес (email ∪ алиасы)
+/// ИЛИ отпечаток ИЛИ наш ключ в поле public_key.
+pub fn contacts_drop_own(
+    contacts: &[(String, String)],
+    my_email: &str,
+    aliases: &[String],
+    my_fingerprint: &str,
+    own_public_key_hex: &str,
+) -> Vec<(String, String)> {
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
+    contacts
+        .iter()
+        .filter(|(email, public_key)| {
+            !(id.has_address(email) || identity::same_public_key(public_key, own_public_key_hex))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Право участника в списке (позиция совпадает с `group.members`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MemberAccess {
@@ -752,7 +802,11 @@ pub fn pending_invites() -> Result<Vec<PendingInvite>> {
             }
         }
     }
-    out.sort_by(|a, b| a.group_id.cmp(&b.group_id).then_with(|| a.email.cmp(&b.email)));
+    out.sort_by(|a, b| {
+        a.group_id
+            .cmp(&b.group_id)
+            .then_with(|| a.email.cmp(&b.email))
+    });
     Ok(out)
 }
 
@@ -847,7 +901,11 @@ mod tests {
     fn group_order_tiebreaker_is_stable_on_equal_created_at() {
         // Одинаковый created_at: порядок обязан определяться id, а не тем,
         // в каком порядке HashMap выдал элементы.
-        let specs = [("grp_z", "2026-01-01T00:00:00Z"), ("grp_a", "2026-01-01T00:00:00Z"), ("grp_m", "2026-01-01T00:00:00Z")];
+        let specs = [
+            ("grp_z", "2026-01-01T00:00:00Z"),
+            ("grp_a", "2026-01-01T00:00:00Z"),
+            ("grp_m", "2026-01-01T00:00:00Z"),
+        ];
         let map: HashMap<String, Group> = specs
             .iter()
             .map(|(id, ca)| (id.to_string(), mk_group_at(id, ca)))
@@ -1689,6 +1747,79 @@ mod tests {
         assert!(!is_own_group(&stranger, "me@new.com", "aabb1122", &[]));
     }
 
+    /// Живые данные X50 (24.10): сессия koanmak@ya.ru, участник
+    /// koanmak@gmail.com с НАШИМ публичным ключом в fingerprint (след старой
+    /// добивки). Такой участник — свой аккаунт, фронт не должен превращать
+    /// его в контакт.
+    #[test]
+    fn test_member_is_account_recognises_own_key_and_alias() {
+        let own = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        assert!(member_is_account(
+            "koanmak@ya.ru",
+            &[],
+            "2b:e1:c9:30:d1:b9:1b:85:****",
+            "koanmak@gmail.com",
+            &own,
+            &own
+        ));
+        // Алиас своего аккаунта в составе — тоже свой.
+        assert!(member_is_account(
+            "koanmak@gmail.com",
+            &["vault-msg@ya.ru".to_string()],
+            "9c:ad:cd:4d:7d:bf:26:33:****",
+            " VAULT-MSG@YA.RU ",
+            "",
+            &own
+        ));
+        // Чужой ключ под любым адресом — не свой (иначе все собеседники
+        // стали бы «нами»: алиасы пиров тоже лежат в peer_keys).
+        let anna = format!("c73ce55a9f7b466f{}", "00".repeat(24));
+        assert!(!member_is_account(
+            "koanmak@ya.ru",
+            &[],
+            "2b:e1:c9:30:d1:b9:1b:85:****",
+            "icemaksim@gmail.com",
+            &anna,
+            &own
+        ));
+        // Пустые поля не совпадают ни с чем.
+        assert!(!member_is_account("koanmak@ya.ru", &[], "", "", "", &own));
+        assert!(!member_is_account("", &[], "", "", "", ""));
+    }
+
+    /// Тот же предикат на списке контактов: свои адреса и записи с НАШИМ
+    /// ключом из списка уходят, чужие — остаются.
+    #[test]
+    fn test_contacts_drop_own_removes_only_own_entries() {
+        let own = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        let anna = format!("c73ce55a9f7b466f{}", "00".repeat(24));
+        let zoho = format!("2c4450b98459ee7f{}", "00".repeat(24));
+        let contacts = vec![
+            ("icemaksim@gmail.com".to_string(), anna.clone()),
+            ("vault-msg@ya.ru".to_string(), own.clone()),
+            (" VAULT-MSG@YA.RU ".to_string(), own.clone()),
+            ("koanmak@ya.ru".to_string(), own.clone()),
+            ("kmakan@zoho.com".to_string(), zoho.clone()),
+            // Контакт без ключа, но с нашим адресом — тоже мы.
+            ("Иван@Почта.РФ".to_string(), String::new()),
+        ];
+        let kept = contacts_drop_own(
+            &contacts,
+            "VAULT-MSG@YA.RU",
+            &["ИВАН@Почта.РФ".to_string()],
+            "",
+            &own,
+        );
+        assert_eq!(
+            kept,
+            vec![
+                ("icemaksim@gmail.com".to_string(), anna),
+                ("kmakan@zoho.com".to_string(), zoho),
+            ],
+            "свои по ключу и по адресу (регистр/алиас/кириллица) — убраны, чужие — целы"
+        );
+    }
+
     #[test]
     fn test_group_access_creator_without_admin_role_still_manages() {
         // Создатель не помечен Admin (старые groups.json): право следует из
@@ -1921,7 +2052,10 @@ mod tests {
 
             assert!(invite_sent(&g.id, "new@mail.x").unwrap());
             assert!(pending_invites().unwrap().is_empty());
-            assert!(!invite_sent(&g.id, "new@mail.x").unwrap(), "второй раз — no-op");
+            assert!(
+                !invite_sent(&g.id, "new@mail.x").unwrap(),
+                "второй раз — no-op"
+            );
         });
     }
 }
