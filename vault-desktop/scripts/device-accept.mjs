@@ -554,6 +554,8 @@ const PROBES = {
     step('не-429 → other (у фронта своя ветка)',
       other && other.kind === 'other', other);
     return report;
+  })()`,
+};
 
 const which = argOf('--probe', 'ui');
 const probe = PROBES[which];

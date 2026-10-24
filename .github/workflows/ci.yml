@@ -89,6 +89,13 @@ jobs:
       - name: Text hygiene (no CJK, no mojibake)
         working-directory: vault-desktop
         run: npm run gate:hygiene
+      # Разбор самих проверок: смоуки, гейты и наборы мутаций не собираются ни
+      # vite, ни cargo, поэтому сломанный синтаксис живёт в них молча. 24.10
+      # правка пробы flags оставила device-accept.mjs с незакрытым литералом —
+      # все гейты были зелёные, а приёмка на телефоне упала на SyntaxError.
+      - name: Tooling scripts parse
+        working-directory: vault-desktop
+        run: npm run gate:parse
       # Мутационное тестирование RUST-ядра: тесты крейта обязаны ловить
       # подложенную поломку. Ядро — то, куда W4 переносит решения о протоколе,
       # и до 20.10 его тесты проверялись ТОЛЬКО обычными тестами (а обычный
