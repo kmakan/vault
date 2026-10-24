@@ -81,6 +81,7 @@ pub fn create_group(name: &str, creator: &str) -> Result<Group> {
         joined_at: now.clone(),
         key_shared: true,
         fingerprint: String::new(), // creator has the key
+        invited: false,
     });
 
     let group = Group {
@@ -180,6 +181,7 @@ pub fn accept_invite(token: &str, invitee_email: &str) -> Result<String> {
             joined_at: now,
             key_shared: false,
             fingerprint: String::new(),
+            invited: false,
         });
         let gid = group.id.clone();
         save_groups(&groups)?;
@@ -209,6 +211,7 @@ pub fn add_member(group_id: &str, email: &str) -> Result<()> {
             joined_at: now,
             key_shared: false,
             fingerprint: String::new(), // new member does not have the key yet
+            invited: false,
         });
         save_groups(&groups)?;
     } else {
@@ -340,6 +343,7 @@ pub fn import_group(
                 joined_at: now.clone(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             });
         }
         if plan.push_sender {
@@ -349,6 +353,7 @@ pub fn import_group(
                 joined_at: now.clone(),
                 key_shared: true,
                 fingerprint: String::new(), // sender has the key (just invited us)
+                invited: false,
             });
         }
     };
@@ -671,10 +676,16 @@ pub fn backfill_member_fingerprints_with_peers(
     let mut updates = 0usize;
     if let Some(group) = groups.get_mut(group_id) {
         for m in group.members.iter_mut() {
-            let Some(peer) = peers
-                .iter()
-                .find(|k| identity::same_address(&k.email, &m.email))
-            else {
+            // Поиск — не только по адресу: участник мог остаться в составе под
+            // СТАРЫМ адресом (смена почты), тогда адрес ничего не находит, а
+            // ключ лежит в peer_keys под новым. След старого backfill (ключ в
+            // поле fingerprint) опознаётся тем же сравнением нормальных форм,
+            // что и `identity::fingerprint_to_repair`.
+            let fp = identity::normalize(&m.fingerprint);
+            let Some(peer) = peers.iter().find(|k| {
+                identity::same_address(&k.email, &m.email)
+                    || (!fp.is_empty() && fp == identity::normalize(&k.public_key))
+            }) else {
                 continue;
             };
             let Ok(computed) = identity::fingerprint_from_public_key(&peer.public_key) else {
@@ -692,6 +703,120 @@ pub fn backfill_member_fingerprints_with_peers(
         save_groups(&groups)?;
     }
     Ok(groups.get(group_id).cloned())
+}
+
+/// Чисится ли ключ участника на этой машине — и ПОД КАКИМ адресом.
+///
+/// Зачем: список контактов строится из `peer_keys`, а боковая панель добивает
+/// в него участников групп (`groups-load`). Сравнение только по адресу
+/// заводило ВТОРОГО «контакта без ключа» на того же человека, когда в
+/// `groups.json` остался его СТАРЫЙ адрес (смена почты) — «призрак» в списке,
+/// открывающий попап «добавить контакт». Решение «тот же ли это» — здесь, по
+/// трём признакам в порядке надёжности: адрес (форма ядра), отпечаток, след
+/// старого backfill (в поле fingerprint лежит сам публичный ключ).
+pub fn member_known_peer(
+    member_email: &str,
+    member_fingerprint: &str,
+    peers: &[vault_core::StoredPeerKey],
+) -> Option<String> {
+    let fp = identity::normalize(member_fingerprint);
+    peers
+        .iter()
+        .find(|k| {
+            identity::same_address(&k.email, member_email)
+                || (!fp.is_empty()
+                    && (fp == identity::normalize(&k.public_key)
+                        || identity::same_fingerprint(
+                            &fp,
+                            &identity::fingerprint_from_public_key(&k.public_key)
+                                .unwrap_or_default(),
+                        )))
+        })
+        .map(|k| k.email.clone())
+}
+
+/// Тот же вопрос с чтением реального `peer_keys`.
+pub fn canonical_peer_for_member(email: &str, fingerprint: &str) -> Result<Option<String>> {
+    let peers = crate::key_store::load_peer_keys()?;
+    Ok(member_known_peer(email, fingerprint, &peers))
+}
+
+/// Отложенное приглашение в группу: адрес помечен в составе (`invited`), но
+/// публичного ключа получателя ещё нет — шифровать ключ группы не на что.
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingInvite {
+    pub group_id: String,
+    pub email: String,
+}
+
+/// Пометить участника «приглашён, ждём ключ» (в составе его ещё нет —
+/// записываем с `key_shared: false`). Идемпотентно. Возвращает группу, чтобы
+/// фронт перечитал состав из ответа моста, а не из своего копии-массива.
+pub fn mark_invited(group_id: &str, email: &str) -> Result<Group> {
+    let mut groups = load_groups()?;
+    let group = groups
+        .get_mut(group_id)
+        .ok_or_else(|| anyhow::anyhow!("mark_invited: group not found: {}", group_id))?;
+    if let Some(m) = group
+        .members
+        .iter_mut()
+        .find(|m| identity::same_address(&m.email, email))
+    {
+        m.invited = true;
+    } else {
+        group.members.push(GroupMember {
+            email: email.to_string(),
+            role: GroupRole::Member,
+            joined_at: Utc::now().to_rfc3339(),
+            key_shared: false,
+            fingerprint: String::new(),
+            invited: true,
+        });
+    }
+    let cloned = group.clone();
+    save_groups(&groups)?;
+    Ok(cloned)
+}
+
+/// Очередь отложенных приглашений по всем группам: `(группа, адрес)` с
+/// `invited` и ещё не переданным ключом. Порядок детерминированный —
+/// файл перечитывается HashMap'ом, иначе очередь «перемешивалась» бы между
+/// поллингами.
+pub fn pending_invites() -> Result<Vec<PendingInvite>> {
+    let mut out: Vec<PendingInvite> = Vec::new();
+    for (id, group) in load_groups()? {
+        for m in &group.members {
+            if m.invited && !m.key_shared {
+                out.push(PendingInvite {
+                    group_id: id.clone(),
+                    email: m.email.clone(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.group_id.cmp(&b.group_id).then_with(|| a.email.cmp(&b.email)));
+    Ok(out)
+}
+
+/// Ключ группы отправлен — ожидание снято. Возвращает, было ли что снимать.
+pub fn invite_sent(group_id: &str, email: &str) -> Result<bool> {
+    let mut groups = load_groups()?;
+    let Some(group) = groups.get_mut(group_id) else {
+        return Ok(false);
+    };
+    let mut changed = false;
+    if let Some(m) = group
+        .members
+        .iter_mut()
+        .find(|m| identity::same_address(&m.email, email) && m.invited)
+    {
+        m.invited = false;
+        changed = true;
+    }
+    if changed {
+        save_groups(&groups)?;
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]
@@ -1004,6 +1129,7 @@ mod tests {
                     joined_at: String::new(),
                     key_shared: false,
                     fingerprint: String::new(),
+                    invited: false,
                 },
                 GroupMember {
                     email: "carol@example.com".into(),
@@ -1011,6 +1137,7 @@ mod tests {
                     joined_at: String::new(),
                     key_shared: false,
                     fingerprint: String::new(),
+                    invited: false,
                 },
             ];
             let imported = import_group(
@@ -1295,6 +1422,7 @@ mod tests {
                 joined_at: String::new(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             });
             save_groups(&groups).unwrap();
             assert!(group_invite(&g.id, "alice@x").is_err());
@@ -1330,6 +1458,7 @@ mod tests {
                     joined_at: String::new(),
                     key_shared: false,
                     fingerprint: f.to_string(),
+                    invited: false,
                 })
                 .collect(),
             blocked: vec![],
@@ -1702,6 +1831,7 @@ mod tests {
                 joined_at: String::new(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             });
             let mine_id = mine.id.clone();
             groups.insert(mine.id.clone(), mine);
@@ -1809,6 +1939,92 @@ mod tests {
 
             let groups = load_groups().unwrap();
             assert_eq!(groups.get("g1").unwrap().members[0].fingerprint, "fpaa");
+        });
+    }
+
+    // ─── «призрак» участника и очередь отложенных приглашений ───
+
+    /// Живой дефект: в составе группы адрес koanmak@gmail.com, а ключ этого
+    /// же человека лежит в peer_keys под vault-msg@ya.ru (тесты смены почты).
+    /// Добивка контактов по адресу заводила второго «контакта без ключа».
+    #[test]
+    fn member_known_peer_resolves_old_address_by_key_trace() {
+        let key = format!("aabbccddeeff0011{}", "00".repeat(24));
+        let peers = vec![peer_key("vault-msg@ya.ru", &key)];
+        // След старого backfill: в поле fingerprint лежит сам ключ.
+        assert_eq!(
+            member_known_peer("koanmak@gmail.com", &key, &peers).as_deref(),
+            Some("vault-msg@ya.ru"),
+            "ключ в fingerprint опознаёт адресата"
+        );
+        // Канонический отпечаток — тот же результат.
+        assert_eq!(
+            member_known_peer(
+                "koanmak@gmail.com",
+                "AA:BB:CC:DD:EE:FF:00:11:****",
+                &peers
+            )
+            .as_deref(),
+            Some("vault-msg@ya.ru"),
+            "регистр отпечатка не значим"
+        );
+        // Пустой fingerprint и незнакомый адрес — никого не нашли: иначе
+        // любой участник складывался бы в первого пира.
+        assert_eq!(member_known_peer("someone@x.com", "", &peers), None);
+        // Совпадение по адресу — тоже канонический адрес из peer_keys.
+        assert_eq!(
+            member_known_peer(" VAULT-MSG@YA.RU ", "", &peers).as_deref(),
+            Some("vault-msg@ya.ru")
+        );
+    }
+
+    /// Тот же матчинг в ленивой починке: участник под СТАРЫМ адресом с
+    /// ключом-следом в fingerprint получает настоящий отпечаток, хотя по
+    /// адресу peer не находится.
+    #[test]
+    fn backfill_finds_peer_by_key_trace_not_only_address() {
+        with_tmp_groups(|| {
+            let key = format!("aabbccddeeff0011{}", "00".repeat(24));
+            let mut group = mk_group("grp_stale", "me@x.com", &[("koanmak@gmail.com", &key)]);
+            group.members[0].fingerprint = key.clone();
+            let mut all = HashMap::new();
+            all.insert(group.id.clone(), group);
+            save_groups(&all).unwrap();
+
+            let updated = backfill_member_fingerprints_with_peers(
+                "grp_stale",
+                &[peer_key("vault-msg@ya.ru", &key)],
+            )
+            .unwrap()
+            .expect("группа есть");
+            assert_eq!(
+                updated.members[0].fingerprint,
+                "aa:bb:cc:dd:ee:ff:00:11:****",
+                "починка нашла ключ по следу, а не по адресу"
+            );
+        });
+    }
+
+    /// Полный цикл отложенного приглашения: пометили → очередь увидела →
+    /// ключ отправили → ожидание снято.
+    #[test]
+    fn pending_invite_roundtrip() {
+        with_tmp_groups(|| {
+            let g = create_group("t", "me@x.com").unwrap();
+            mark_invited(&g.id, "New@Mail.X").unwrap();
+            let pend = pending_invites().unwrap();
+            assert_eq!(pend.len(), 1);
+            assert_eq!(pend[0].group_id, g.id);
+            assert_eq!(pend[0].email, "New@Mail.X", "адрес храним как прислали");
+
+            // Повторная пометка того же адреса (в другом регистре) не
+            // плодит второй записью — идемпотентность по форме адреса ядра.
+            mark_invited(&g.id, "new@mail.x").unwrap();
+            assert_eq!(pending_invites().unwrap().len(), 1);
+
+            assert!(invite_sent(&g.id, "new@mail.x").unwrap());
+            assert!(pending_invites().unwrap().is_empty());
+            assert!(!invite_sent(&g.id, "new@mail.x").unwrap(), "второй раз — no-op");
         });
     }
 }

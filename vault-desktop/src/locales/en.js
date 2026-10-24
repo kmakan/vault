@@ -385,6 +385,8 @@ export default {
   invite_decline: 'Decline',
   invite_sent: 'Invitation sent',
   invite_pending: 'invited',
+  invite_await_key: 'waiting for their public key, the invite will go out automatically',
+  invite_queued: 'Waiting for their public key — contact request sent, the group invite will go out automatically',
   already_in_group: 'This member is already in the group',
   already_in_groups: 'You are already a member of this group',
   already_in_contacts: 'This contact is already in your list',

@@ -385,6 +385,8 @@ export default {
   invite_decline: '拒绝',
   invite_sent: '邀请已发送',
   invite_pending: '已邀请',
+  invite_await_key: '等待对方公钥，邀请将自动发送',
+  invite_queued: '等待对方公钥——联系人请求已发送，群组邀请将自动发送',
   already_in_group: '该成员已在群组中',
   already_in_groups: '您已是该群组成员',
   already_in_contacts: '该联系人已在您的列表中',

@@ -999,6 +999,7 @@ import * as DraftsFeature from './features/drafts.js';
 import * as DuressFeature from './features/duress.js';
 import * as GroupAvatarsFeature from './features/group-avatars.js';
 import * as IncomingFeature from './features/incoming.js';
+import * as GroupInviteQueueFeature from './features/group-invite-queue.js';
 import * as ReactionsFeature from './features/reactions.js';
 import * as EditsFeature from './features/edits.js';
 import * as NotesFeature from './features/notes.js';
@@ -4191,6 +4192,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async processIncoming(fetched, opts) {
       return IncomingFeature.processIncoming({
         cryptoReady: this.cryptoReady,
+        flushPendingGroupInvites: () => this.flushPendingGroupInvites(),
         email: this.email,
         peerKeys: this.peerKeys,
         peerPqKeys: this.peerPqKeys || {},
@@ -4232,6 +4234,14 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         bounceRecipients: BounceFeature.bounceRecipients,
         bounceReason: BounceFeature.bounceReason,
       }, fetched, opts);
+    },
+    // Очередь отложенных приглашений в группу: решение «кого ждать и когда
+    // снимать» — в ядре (invited/key_shared в groups.json), здесь только
+    // исполнитель (features/group-invite-queue.js).
+    async flushPendingGroupInvites() {
+      return GroupInviteQueueFeature.flushPendingGroupInvites({
+        publicKey: () => this.publicKey,
+      });
     },
     // Виден ли чат сейчас: на mobile чат скрыт, когда пользователь на списке
     // контактов (mobileChatOpen=false), хотя activeChat ещё хранит прошлый чат.

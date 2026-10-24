@@ -57,11 +57,23 @@ export async function loadGroups({ email, fingerprint, aliasesOf, contacts, requ
       const ic = await db.kvGet('anon', 'group-icon:' + g.id);
       if (ic) icons[g.id] = ic;
       for (const m of g.members || []) {
-        if (m.email === email || seen.has(m.email)) continue;
+        // «Тот ли это человек?» решает мост: в peer_keys лежит ключ,
+        // а в groups.json — СТАРЫЙ адрес собеседника (смена почты). Без
+        // этого вопроса добивка по адресу заводила второго «контакта без
+        // ключа» на уже известного человека — призрак в списке.
+        let canonical = null;
+        try {
+          canonical = await invoke('groups_member_canonical', {
+            email: m.email || '',
+            fingerprint: m.fingerprint || '',
+          });
+        } catch (e) { /* мост не ответил — сравнение по адресу, как раньше */ }
+        const addr = canonical || m.email;
+        if (addr === email || seen.has(addr)) continue;
         // Модель почтовый мессенджер: удаление контакта НЕ трогает группы —
         // участник остаётся полноценным контактом в списке.
-        seen.add(m.email);
-        newContacts.push({ id: m.email, email: m.email, name: m.email, online: false });
+        seen.add(addr);
+        newContacts.push({ id: addr, email: addr, name: addr, online: false });
       }
     }
   } catch (error) {

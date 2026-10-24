@@ -401,5 +401,13 @@ console.log('\nмост упал громко (console.error), а не молч�
     seen.some(s => s.includes('Rust-классификатор недоступен')));
 }
 
+console.log('\nтик очереди приглашений: на каждом вызове, даже пустом');
+{
+  let flushes = 0;
+  const deps = { ...makeDeps(), ...DEPS, flushPendingGroupInvites: () => { flushes++; return Promise.resolve(); } };
+  await processIncoming(deps, [], { notify: false });
+  ok('пустой фетч → очередь отложенных приглашений всё равно тикает', flushes === 1);
+}
+
 console.log(`\nincoming-routing: ${checks} проверок, провалов ${failed}`);
 if (failed) process.exit(1);

@@ -27,12 +27,18 @@ export async function inviteSelectedMembers(deps) {
       const sent = [];
       const failed = [];
       const skipped = [];
+      const pending = [];
       for (const email of emails) {
         try {
           // Уже участник ПОД ЭТИМ адресом — явный skip (не тихий continue:
           // «штатный» попап без отправки маскировал недоставленные инвайты).
-          if ((group.members || []).some(m => m.email === email)) {
-            skipped.push(email + ' — ' + (uiStore.tr('already_in_group') || 'уже в группе'));
+          // Отложенный инвайт (ждём ключ) — тоже участник, но скип другой
+          // формулировкой: повторный запрос только спамит.
+          const already = (group.members || []).find(m => m.email === email);
+          if (already) {
+            skipped.push(email + ' — ' + (already.invited && !already.key_shared
+              ? (uiStore.tr('invite_await_key') || 'ждём публичный ключ, приглашение уйдёт автоматически')
+              : (uiStore.tr('already_in_group') || 'уже в группе')));
             continue;
           }
           // Участник ПОД ДРУГИМ адресом с тем же fingerprint (смена почты):
@@ -48,10 +54,16 @@ export async function inviteSelectedMembers(deps) {
             stale.key_shared = true;
           }
           // Ключ группы шифруем на публичном ключе ПОЛУЧАТЕЛЯ (ECDH X25519).
-          // в группу добавляют только установленные контакты.
+          // Ключа ещё нет — НЕ тупик: ядро откладывает приглашение (invited в
+          // groups.json), а мы сразу просим рукопожатие — письмо-инвайт
+          // контакта.
+          // Когда ключ будет получен, features/group-invite-queue.js пришлёт
+          // ключ группы сам, без участия пользователя.
           const peerPub = identityStore.state.peerKeys[email] || null;
           if (!peerPub) {
-            failed.push(email + ' — ' + (uiStore.tr('add_member_no_key') || 'нет ключа: сначала добавьте контакт'));
+            await api.sendContactInvite(email, deps.publicKey());
+            await invoke('groups_mark_invited', { groupId: group.id, email });
+            pending.push(email);
             continue;
           }
           const groupKeys = await api.getGroupKeys(group.id);
@@ -75,6 +87,7 @@ export async function inviteSelectedMembers(deps) {
       const parts = [];
       if (sent.length) parts.push((uiStore.tr('invite_sent') || 'Приглашение отправлено') + ': ' + sent.join(', '));
       if (skipped.length) parts.push((uiStore.tr('invite_skipped') || 'Пропущены') + ':\n' + skipped.join('\n'));
+      if (pending.length) parts.push((uiStore.tr('invite_queued') || 'Ждём публичный ключ — запрос контакта отправлен, приглашение в группу уйдёт автоматически') + ':\n' + pending.join('\n'));
       if (failed.length) parts.push((uiStore.tr('add_member_failed') || 'Не удалось отправить') + ':\n' + failed.join('\n'));
       alert(parts.join('\n\n') || (uiStore.tr('add_member_nothing') || 'Приглашения не отправлены'));
 }

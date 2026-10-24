@@ -137,5 +137,34 @@ r = await GL.loadGroups(deps());
 ok('при сбое invoke groups = null (поле остаётся прежним)', r.groups === null);
 ok('и никаких частичных аватаров', Object.keys(r.avatars).length === 0);
 
+// 9. «Контакт-призрак»: участник под СТАРЫМ адресом, чей ключ лежит в
+// peer_keys под другим (смена почты). Без вопроса мосту добивка по адресу
+// заводила второго «контакта без ключа» на уже известного человека.
+let canonReqs = [];
+globalThis.__invoke = async (cmd, args) => {
+  if (cmd === 'groups_load_own') return [{ id: 'g9', members: [
+    { email: 'ghost@mail.com', fingerprint: 'aa:bb:00:11:****' },
+    { email: 'moved@x.com', fingerprint: 'cc:dd' },
+    { email: 'fresh@x.com', fingerprint: '' },
+  ] }];
+  if (cmd === 'groups_member_canonical') {
+    canonReqs.push(args);
+    if (args.email === 'ghost@mail.com') return 'known@x.com';
+    if (args.email === 'moved@x.com') return 'newcanon@x.com';
+    return null;
+  }
+  return null;
+};
+r = await GL.loadGroups(deps({ contacts: [{ id: 'k', email: 'known@x.com' }] }));
+ok('призрак не добавлен: канонический адрес уже в контактах',
+  !r.newContacts.some(c => c.email === 'ghost@mail.com'));
+ok('канон адрес неизвестен — контакт под адресом моста, не призрак',
+  !r.newContacts.some(c => c.email === 'moved@x.com') &&
+  r.newContacts.some(c => c.email === 'newcanon@x.com'));
+ok('без совпадения — добавляется как раньше, по своему адресу',
+  r.newContacts.some(c => c.email === 'fresh@x.com'));
+ok('запрос канона несёт адрес и fingerprint участника',
+  canonReqs.some(a => a.email === 'ghost@mail.com' && a.fingerprint === 'aa:bb:00:11:****'));
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

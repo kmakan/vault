@@ -38,6 +38,7 @@
         "forward.js",
         "group-access.js",
         "group-avatars.js",
+        "group-invite-queue.js",
         "group-management.js",
         "group-members.js",
         "group-meta.js",

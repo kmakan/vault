@@ -93,6 +93,12 @@ function byArrival(a, b) {
 // ── Драйвер: батч-доставка тел по папкам + цикл классификации ──────────────
 export async function processIncoming(deps, fetched, opts = {}) {
   const { notify = false } = opts;
+  // Очередь отложенных приглашений в группы тикает на КАЖДОМ вызове: ключ
+  // собеседника мог быть получен в предыдущем батче (письмо, QR, вставка),
+  // а пустой фетч — не повод держать приглашение зависшим.
+  if (deps.flushPendingGroupInvites) {
+    Promise.resolve(deps.flushPendingGroupInvites()).catch(() => {});
+  }
   if (!fetched || !fetched.length || !deps.cryptoReady) return;
   const myEmail = (deps.email || '').toLowerCase();
   // Срез ДО сортировки: MAX_POOL отбирает 50 НОВЕЙШИХ писем батча (как было).

@@ -48,6 +48,12 @@ pub struct GroupMember {
     /// первом же чтении `peer_keys`.
     #[serde(default)]
     pub fingerprint: String,
+    /// Приглашение ОТСРОЧЕНО: мы отправили человеку приглашение в группу, но
+    /// его публичный ключ ещё не получен — ключ группы зашифровать не на что.
+    /// Машинное состояние очереди (см. `groups_pending_invites`), а не метка
+    /// «приглашён когда-то»: снимается автоматически после отправки ключа.
+    #[serde(default)]
+    pub invited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +86,7 @@ mod tests {
         assert_eq!(g.members[0].joined_at, "");
         assert!(!g.members[0].key_shared);
         assert_eq!(g.members[0].fingerprint, "");
+        assert!(!g.members[0].invited);
         assert!(g.blocked.is_empty());
         assert_eq!(g.group_key, "");
     }
@@ -99,6 +106,7 @@ mod tests {
                 joined_at: "2025-01-02T00:00:00Z".into(),
                 key_shared: true,
                 fingerprint: "aa:bb:cc:dd:ee:ff:00:11:****".into(),
+                invited: true,
             }],
             blocked: vec!["c@x".into()],
             encrypted: true,

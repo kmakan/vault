@@ -61,6 +61,7 @@ impl GroupManager {
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             }],
             blocked: Vec::new(),
             encrypted: true,
@@ -93,6 +94,7 @@ impl GroupManager {
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             });
 
             self.save()?;
@@ -291,6 +293,7 @@ impl GroupManager {
                 joined_at: chrono::Utc::now().to_rfc3339(),
                 key_shared: false,
                 fingerprint: String::new(),
+                invited: false,
             });
         }
 

@@ -34,5 +34,8 @@ export default {
       // «выживала». Комментарий 211 делает вхождение единственным.
       pattern: "  // 1:1 — расшифровка пир-ключом.\n  if (deps.peerKeys[from]) {",
       replacement: "  // 1:1 — расшифровка пир-ключом.\n  if (true) {" },
+    { name: "очередь отложенных приглашений не тикает на пустом батче",
+      pattern: "  if (deps.flushPendingGroupInvites) {",
+      replacement: "  if (false) {" },
   ],
 };

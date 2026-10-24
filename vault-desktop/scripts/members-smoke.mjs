@@ -14,9 +14,11 @@ globalThis.__alerts = alerts;
 
 const apiMock = {
   addCalls: [],
+  inviteCalls: [],
   groupKeys: null,
   getGroupKeys: async () => apiMock.groupKeys,
   inviteGroupMember: async (...a) => { apiMock.addCalls.push(a); },
+  sendContactInvite: async (...a) => { apiMock.inviteCalls.push(a); return { ok: true }; },
 };
 const cryptoMock = {
   setPeerPublicKey: () => {},
@@ -90,7 +92,7 @@ function makeWorld(over = {}) {
   };
   return { w, deps };
 }
-function reset() { apiMock.addCalls.length = 0; invokeMock.calls.length = 0; alerts.length = 0; apiMock.groupKeys = ['GK1']; cryptoMock.encryptCalls.length = 0; }
+function reset() { apiMock.addCalls.length = 0; apiMock.inviteCalls.length = 0; invokeMock.calls.length = 0; alerts.length = 0; apiMock.groupKeys = ['GK1']; cryptoMock.encryptCalls.length = 0; }
 
 // 1. Нет группы / пустой список → no-op
 reset();
@@ -166,15 +168,26 @@ await inviteSelectedMembers(makeWorld({
 check('нет группового ключа → api не вызван, alert есть',
   apiMock.addCalls.length === 0 && alerts.length === 1);
 
-// 8. Нет ключа контакта (peerKeys) → не отправляем
+// 8. Нет ключа контакта → НЕ тупик: отложенное приглашение. Отправляем
+// запрос контакта, ядро помечает участника invited (ключ группы уйдёт,
+// когда ключ получателя будет получен — features/group-invite-queue.js).
 reset();
-await inviteSelectedMembers(makeWorld({
-  currentGroup: { id: 'G1', members: [] },
-  peerKeys: {},
-  addMemberSelected: ['a@x.ru'],
-}).deps);
-check('нет ключа контакта → не отправляем (сначала добавьте контакт)',
-  apiMock.addCalls.length === 0 && alerts.length === 1);
+{
+  const group = { id: 'G1', members: [] };
+  await inviteSelectedMembers(makeWorld({
+    currentGroup: group,
+    peerKeys: {},
+    addMemberSelected: ['a@x.ru'],
+  }).deps);
+  check('нет ключа → ключ группы НЕ шифруем и не отправляем',
+    apiMock.addCalls.length === 0 && cryptoMock.encryptCalls.length === 0);
+  check('нет ключа → отправлен запрос контакта',
+    apiMock.inviteCalls.length === 1 && apiMock.inviteCalls[0][0] === 'a@x.ru', apiMock.inviteCalls);
+  check('нет ключа → ядро отметило участника отложенным',
+    invokeMock.calls.some(([cmd, args]) => cmd === 'groups_mark_invited'
+      && args.groupId === 'G1' && args.email === 'a@x.ru'), invokeMock.calls);
+  check('нет ключа → отчёт говорит про ожидание', alerts.length === 1, alerts);
+}
 
 // 9. Состав группы перечитывается с диска (Rust правил groups.json)
 {
@@ -209,6 +222,21 @@ check('нет ключа контакта → не отправляем (сна�
   await inviteSelectedMembers(deps);
   apiMock.inviteGroupMember = orig;
   check('ошибка отправки видна в отчёте (alert)', alerts.length === 1 && /SMTP down/.test(alerts[0] || ''), alerts);
+}
+
+// 12. Уже ОТЛОЖЕН (invited, ключа ждём) → повторный запрос не спамим:
+// skip без sendContactInvite и без groups_mark_invited.
+reset();
+{
+  await inviteSelectedMembers(makeWorld({
+    currentGroup: { id: 'G1', members: [{ email: 'wait@x.ru', invited: true, key_shared: false }] },
+    peerKeys: {},
+    addMemberSelected: ['wait@x.ru'],
+  }).deps);
+  check('уже отложен → skip: ни письма, ни метки',
+    apiMock.inviteCalls.length === 0 && invokeMock.calls.length === 0 && apiMock.addCalls.length === 0);
+  check('уже отложен → alert про ожидание ключа',
+    alerts.length === 1 && /invite_await_key/.test(alerts[0] || ''), alerts);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' passed, ' + fail + ' failed');

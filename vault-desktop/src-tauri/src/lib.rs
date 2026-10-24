@@ -1265,6 +1265,33 @@ fn groups_backfill_my_fingerprint(email: String, fingerprint: String) -> Result<
     groups::backfill_my_fingerprint(&email, &fingerprint).map_err(|e| e.to_string())
 }
 
+/// «Тот ли это человек?» — канонический адрес участника группы по peer_keys.
+/// Фронт добивает контакты из состава групп; без этого вопроса старый адрес
+/// собеседника (смена почты) превращался в «контакт-призрак без ключа».
+#[tauri::command]
+fn groups_member_canonical(email: String, fingerprint: String) -> Result<Option<String>, String> {
+    groups::canonical_peer_for_member(&email, &fingerprint).map_err(|e| e.to_string())
+}
+
+/// Отложить приглашение в группу: ключ получателя ещё не получен. Состояние
+/// живёт в groups.json (`invited`), решение о снятии — тоже там.
+#[tauri::command]
+fn groups_mark_invited(group_id: String, email: String) -> Result<groups::Group, String> {
+    groups::mark_invited(&group_id, &email).map_err(|e| e.to_string())
+}
+
+/// Очередь ожидания ключей: кому и в какие группы ещё не ушло приглашение.
+#[tauri::command]
+fn groups_pending_invites() -> Result<Vec<groups::PendingInvite>, String> {
+    groups::pending_invites().map_err(|e| e.to_string())
+}
+
+/// Ключ группы отправлен — ожидание снято.
+#[tauri::command]
+fn groups_invite_sent(group_id: String, email: String) -> Result<bool, String> {
+    groups::invite_sent(&group_id, &email).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn groups_remove_member(group_id: String, email: String) -> Result<groups::Group, String> {
     groups::remove_member(&group_id, &email).map_err(|e| e.to_string())?;
@@ -2181,6 +2208,10 @@ pub fn run() {
             groups_rename_address,
             groups_backfill_my_fingerprint,
             groups_backfill_member_fingerprints,
+            groups_member_canonical,
+            groups_mark_invited,
+            groups_pending_invites,
+            groups_invite_sent,
             android_open_url,
             duress_get_config,
             duress_hash_secret,

@@ -11,7 +11,7 @@ export default {
       pattern: "          await api.inviteGroupMember(group.id, email, enc, deps.publicKey());",
       replacement: "          void 0;" },
     { name: "уже участник НЕ скипается (повторный инвайт)",
-      pattern: "          if ((group.members || []).some(m => m.email === email)) {",
+      pattern: "          if (already) {",
       replacement: "          if (false) {" },
     { name: "участник без ключа отправляется (ключа нет — зашифровать нечем)",
       pattern: "          if (!peerPub) {",
@@ -36,6 +36,9 @@ export default {
       replacement: "          const enc = 'PLAINTEXT';" },
     { name: "участник не помечается «приглашён»",
       pattern: "            members.push({ email, role: 'Member', invited: true });",
+      replacement: "            void 0;" },
+    { name: "отложенное приглашение не помечается в ядре",
+      pattern: "            await invoke('groups_mark_invited', { groupId: group.id, email });",
       replacement: "            void 0;" },
   ],
 };
