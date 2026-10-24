@@ -466,6 +466,80 @@ const PROBES = {
     step('проба ничего не оставила в хранилище', after === before, { before, after });
     return report;
   })()`,
+
+  // Тумблеры возможностей и выбор транспорта (ADR-005 W1: правило дефолта и
+  // план доставки — в Rust). Отдельная проба потому, что ни смоук, ни
+  // статика не видят живую связку «kv → мост → фронт»: на стенде 22.10
+  // расхождение имени аргумента выглядело как «кнопка не работает», а
+  // молчаливый no-op правила состояния — как «приложение глючит».
+  flags: `(async () => {
+    const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+    const report = { steps: [] };
+    const step = (name, cond, extra) => {
+      report.steps.push({ name, pass: cond === null ? null : !!cond,
+        extra: extra === undefined ? undefined : extra });
+    };
+    if (!inv) { step('мост доступен', false); return report; }
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    const account = String(p.email || '').trim().toLowerCase();
+    step('проба на вошедшем аккаунте (есть адрес)', !!account, account || 'адрес пуст');
+
+    // 1. Дефолт считает ядро: без записи звонки включены, видео выключено.
+    const calls = await inv('settings_flag', { name: 'exp-calls' });
+    const video = await inv('settings_flag', { name: 'exp-video' });
+    step('флаги прочитаны мостом (не null, не строка)',
+      typeof calls === 'boolean' && typeof video === 'boolean', { calls, video });
+
+    // 2. Раунд-трип тумблера видео: включённое читается как включённое.
+    await inv('settings_flag_set', { name: 'exp-video', enabled: true });
+    const on = await inv('settings_flag', { name: 'exp-video' });
+    step('видео: включено и читается как включено', on === true, on);
+    await inv('settings_flag_set', { name: 'exp-video', enabled: false });
+    const off = await inv('settings_flag', { name: 'exp-video' });
+    step('видео: выключено и читается как выключено', off === false, off);
+    const callsAfter = await inv('settings_flag', { name: 'exp-calls' });
+    step('тумблер видео не трогает звонки (флаги независимы)', callsAfter === calls,
+      { before: calls, after: callsAfter });
+
+    // 3. Цикл выбора транспорта: имя возвращает Rust, запись читается как запись.
+    const start = await inv('transport_preference', { account });
+    const next = await inv('transport_preference_next', { account });
+    const readBack = await inv('transport_preference', { account });
+    step('сдвиг даёт известное имя транспорта',
+      ['auto', 'mail', 'relay'].includes(next), { start, next });
+    step('сдвинутый выбор читается обратно', readBack === next, { readBack, next });
+    await inv('transport_preference_next', { account });
+    await inv('transport_preference_next', { account });
+    const restored = await inv('transport_preference', { account });
+    step('проба вернула выбор пользователя', restored === start, { start, restored });
+
+    // 4. Гарант доставки: ни один план не остаётся без почтового пути, а
+    // выбор «только почта» не трогает релей (не тратит суточный лимит).
+    const bad = [];
+    for (const name of ['auto', 'mail', 'relay']) {
+      await inv('transport_preference_set', { account, preference: name });
+      for (const avail of [true, false]) {
+        const plan = await inv('transport_plan', { account, relayAvailable: avail });
+        if (!(plan.mail || plan.mailFallback || !plan.relay)) bad.push(name + '/' + avail + ' без почты');
+        if (name === 'mail' && plan.relay) bad.push('mail включил релей');
+        if (!avail && plan.relay) bad.push(name + '/релей выключен, но публикуется');
+      }
+    }
+    step('план Rust держит почту гарантией при каждом выборе', bad.length === 0, bad);
+    await inv('transport_preference_set', { account, preference: start });
+
+    // 5. Проводка интерфейса: чип показывает текущий выбор (тот же класс,
+    // что и значение из моста). Без открытого чата рядку фич нет — не проваливаем.
+    if (p.activeChat) {
+      const chip = document.querySelector('.feature-row .transport-' + start);
+      step('чип транспорта в рядку фич подписан текущим выбором', !!chip,
+        { pref: start, found: !!chip });
+    } else {
+      step('чип транспорта', null, 'нет открытого чата — рядок фич не отрендерен');
+    }
+    return report;
+  })()`,
 };
 
 const which = argOf('--probe', 'ui');

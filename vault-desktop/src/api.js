@@ -1437,6 +1437,77 @@ export class ApiClient {
       console.warn('[call] mediaDismissIncomingCall failed:', e);
     }
   }
+  // Тумблер возможности. Дефолт («пользователь ничего не выбирал») считает
+  // Rust — vault-core::settings, а не строка `=== '1'` во фронте: две копии
+  // правила в JS уже давали расхождение (кнопка появлялась и гасла после
+  // перечитывания kv). Ошибку чтения не превращаем в «выключено»: возвращаем
+  // null, и интерфейс остаётся с уже показанным значением.
+  async settingsFlag(name) {
+    try {
+      return await invoke('settings_flag', { name });
+    } catch (e) {
+      console.warn('[settings] флаг', name, 'не прочитан:', e);
+      return null;
+    }
+  }
+  // Запись выбора тумблера: форма значения («1»/«0») — у Rust, здесь только
+  // воля пользователя.
+  async settingsFlagSet(name, enabled) {
+    try {
+      return await invoke('settings_flag_set', { name, enabled: !!enabled });
+    } catch (e) {
+      console.warn('[settings] флаг', name, 'не записан:', e);
+      return null;
+    }
+  }
+  // План транспорта (почта/релей) для очередного сообщения или сигнала
+  // звонка. Правило — в Rust (vault-core::transport); здесь вызов и
+  // деградация: если мост не ответил, берём «авто» (оба транспорта, как до
+  // появления настройки) — надёжность доставки важнее, а релей и сам
+  // пропускает публикацию, когда пользователь его выключил (KV
+  // 'relay-enabled' внутри relayPublish).
+  async transportPlan(account, relayAvailable) {
+    const AUTO = { mail: true, relay: true, mailFallback: false };
+    try {
+      const p = await invoke('transport_plan', { account, relayAvailable });
+      if (p && typeof p.mail === 'boolean' && typeof p.relay === 'boolean') {
+        return { mail: !!p.mail, relay: !!p.relay, mailFallback: !!p.mailFallback };
+      }
+      console.warn('[transport] план не вернулся целиком:', p);
+    } catch (e) {
+      console.warn('[transport] план не прочитан:', e);
+    }
+    return AUTO;
+  }
+  async transportPreferenceSet(account, preference) {
+    try {
+      return await invoke('transport_preference_set', { account, preference });
+    } catch (e) {
+      console.warn('[transport] настройка не записана:', e);
+      return null;
+    }
+  }
+  // Текущий выбор транспорта для подписи чипа. `null` — мост не ответил:
+  // фронт оставляет то, что уже показывает, а не рисует «auto» взамен
+  // реального «relay» (иначе пользователь жмёт чип, не понимая, где он).
+  async transportPreference(account) {
+    try {
+      return await invoke('transport_preference', { account });
+    } catch (e) {
+      console.warn('[transport] настройка не прочитана:', e);
+      return null;
+    }
+  }
+  // Клик по чипу: следующий выбор считает Rust (порядок и запись в kv),
+  // возвращается новое имя. Здесь — только вызов.
+  async transportPreferenceNext(account) {
+    try {
+      return await invoke('transport_preference_next', { account });
+    } catch (e) {
+      console.warn('[transport] настройка не сдвинута:', e);
+      return null;
+    }
+  }
   // Настройки звонков → Android SharedPreferences (vault_prefs), чтобы
   // нативный FGS-рингтон/таймаут звонка работали при смахнутом приложении.
   // duration — МИЛИСЕКУНДЫ. Desktop — no-op в Rust.

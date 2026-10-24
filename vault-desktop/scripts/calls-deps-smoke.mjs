@@ -45,13 +45,21 @@ const stub = (name, body) => writeFileSync(`${MOCKS}/${name}`, body);
 // relay-client.js (*), crypto.js (default), history.js (save/load).
 await stub('api.js', [
   'export const db = { kvGet: async () => null, kvSet: async () => {} };',
-  'export default { mediaSetMuted: async () => {}, mediaSetSpeaker: async () => {} };',
+  // transportPlan — правило Rust (vault-core::transport). Двойник отвечает
+  // «авто»: при авто оба транспорта, и публикация релея в звонке ведёт себя
+  // ровно как до появления настройки (иначе смоук проверял бы не то).
+  'export default { mediaSetMuted: async () => {}, mediaSetSpeaker: async () => {},',
+  '  transportPlan: async () => ({ mail: true, relay: true, mailFallback: false }) };',
   '',
 ].join('\n'));
 // ADR-001 Этап 2: accountNamespace живёт в identity.js, а не в api.js.
 // Мок повторяет новую форму — иначе копия calls.js не резолвится.
 await stub('identity.js', 'export const accountNamespace = async (e) => "anon:" + e;\n');
 await stub('relay-client.js', 'export const getSettings = async () => ({ enabled: false });\nexport const publish = async () => ({});\n');
+// ADR-005: calls.js читает состояние релей-флага у его владельца (relay-idle),
+// чтобы Rust-план знал, жив ли релей. Двойник: релей включён.
+await stub('features/relay-idle.js',
+  'export const relayState = { state: { relayEnabled: true, ecoMode: false } };\n');
 await stub('crypto.js', 'export default {};\n');
 await stub('history.js', 'export const saveHistory = async () => {};\nexport const loadHistory = async () => [];\n');
 writeFileSync(`${MOCKS}/features/call-watchdog.js`, readFileSync(CALL_WATCHDOG, 'utf8'));

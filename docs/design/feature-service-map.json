@@ -65,6 +65,7 @@
         "receipts.js",
         "send.js",
         "stars.js",
+        "transport.js",
         "unread.js"
       ],
       "owners": [

@@ -264,60 +264,84 @@ export async function sendMessage(deps) {
               deps.saveCurrentHistory(chatUi.activeChat);
               console.error('Failed to send message:', why);
             };
-            let relayP = null;
-            try {
-              // Объект конверта для релей-копии — разбор в Rust (ADR-005 R1 / W4).
-              const envObj = await WireSignalRule.envelopeObject(envelope);
-              // Resolve peer fingerprint from peerKeys for fingerprint-based relay
-              let peerFp = null;
-              try {
-                const publicKey = identityStore.state.peerKeys[chatUi.activeChat];
-                if (publicKey) {
-                  peerFp = await relay.fingerprintOf(publicKey);
-                }
-              } catch (e) {
-                // If fingerprint resolution fails, continue with legacy email-only relay
-                peerFp = null;
-              }
-              relayP = relay.relayPublish(myEmail(), chatUi.activeChat, envObj, content, { peerFp })
-                .then(r => {
-                  // §1: обновляем индикатор доставки по результату pub.
-                  if (r && r.why === 'daily-limit') {
-                    relayState.setRelayMode('email');
-                    // Баннер один раз за день (kv-флаг) — не спамим тостами.
-                    invoke('db_kv_get', { account: myEmail(), key: 'relay-limit-banner' }).then(v => {
-                      const today = String(Math.floor(Date.now() / 86400000));
-                      if (v !== today) {
-                        uiStore.toast(uiStore.tr('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
-                        invoke('db_kv_set', { account: myEmail(), key: 'relay-limit-banner', value: today });
-                      }
-                    }).catch(() => {});
-                  } else if (r && r.ok) {
-                    relayState.setRelayMode('relay');
-                  }
-                  return { ok: !!(r && r.ok), why: r && r.why };
-                })
-                .catch(e => ({ ok: false, err: e }));
-            } catch (e) { /* envelope не JSON — релей пропускаем */ }
-            // SMTP — второй транспорт: его отказ НЕ означает «не отправлено»,
-            // если релей уже доставил.
-            const smtpP = Promise.resolve()
-              .then(() => api.sendMessage(chatUi.activeChat, content))
-              .then(() => ({ ok: true }))
-              .catch(e => ({ ok: false, err: e }));
-            // Первый успех решает сразу; отказ ждёт второй транспорт.
-            const transports = [smtpP, relayP || Promise.resolve({ ok: false, why: 'no-relay' })];
-            let left = transports.length;
+            // План транспорта: правило в Rust (vault-core::transport), здесь
+            // исполнение. plan.mail — письмо стартует сразу, plan.relay —
+            // публикуем в релей, plan.mailFallback — если релей НЕ доставил,
+            // письмо обязано уйти догоняющим каналом (требование «релей не
+            // работает → сообщение всё равно доходит почтой»).
+            const plan = await api.transportPlan(myEmail(), relayState.state.relayEnabled);
+            let left = 0;
             let anyOk = false;
             let firstErr = null;
-            for (const p of transports) {
-              p.then(r => {
-                if (anyOk || settled) return;
-                if (r && r.ok) { anyOk = true; finishOk(); return; }
-                if (firstErr === null && r) firstErr = r.err || r.why || 'delivery failed';
-                left -= 1;
-                if (left === 0 && !anyOk) finishFail(firstErr || 'delivery failed');
-              });
+            let mailStarted = false;
+            const settleOne = (r) => {
+              if (anyOk || settled) return;
+              if (r && r.ok) { anyOk = true; finishOk(); return; }
+              if (firstErr === null && r) firstErr = r.err || r.why || 'delivery failed';
+              left -= 1;
+              if (left === 0 && !anyOk) finishFail(firstErr || 'delivery failed');
+            };
+            const startMail = () => {
+              if (mailStarted) return;
+              mailStarted = true;
+              left += 1;
+              // SMTP — второй транспорт: его отказ НЕ означает «не отправлено»,
+              // если релей уже доставил.
+              Promise.resolve()
+                .then(() => api.sendMessage(chatUi.activeChat, content))
+                .then(() => ({ ok: true }))
+                .catch(e => ({ ok: false, err: e }))
+                .then(settleOne);
+            };
+            if (plan.mail) startMail();
+            if (plan.relay) {
+              left += 1;
+              const settleRelay = (r) => {
+                // Догоняющее письмо стартует ДО уменьшения счётчика: иначе
+                // при единственном транспорте left обнулился бы и сообщение
+                // стало 'failed', хотя почта ещё не пробовала.
+                if (!r.ok && plan.mailFallback) startMail();
+                settleOne(r);
+              };
+              (async () => {
+                // Объект конверта для релей-копии — разбор в Rust (ADR-005 R1 / W4).
+                let envObj;
+                try {
+                  envObj = await WireSignalRule.envelopeObject(envelope);
+                } catch (e) {
+                  return { ok: false, why: 'envelope-not-json' };
+                }
+                // Resolve peer fingerprint from peerKeys for fingerprint-based relay
+                let peerFp = null;
+                try {
+                  const publicKey = identityStore.state.peerKeys[chatUi.activeChat];
+                  if (publicKey) {
+                    peerFp = await relay.fingerprintOf(publicKey);
+                  }
+                } catch (e) {
+                  // If fingerprint resolution fails, continue with legacy email-only relay
+                  peerFp = null;
+                }
+                return relay.relayPublish(myEmail(), chatUi.activeChat, envObj, content, { peerFp })
+                  .then(r => {
+                    // §1: обновляем индикатор доставки по результату pub.
+                    if (r && r.why === 'daily-limit') {
+                      relayState.setRelayMode('email');
+                      // Баннер один раз за день (kv-флаг) — не спамим тостами.
+                      invoke('db_kv_get', { account: myEmail(), key: 'relay-limit-banner' }).then(v => {
+                        const today = String(Math.floor(Date.now() / 86400000));
+                        if (v !== today) {
+                          uiStore.toast(uiStore.tr('relay_limit_banner') || 'Бесплатный лимит релея исчерпан до 00:00 UTC — доставка идёт по почте, ничего не теряется', 6000);
+                          invoke('db_kv_set', { account: myEmail(), key: 'relay-limit-banner', value: today });
+                        }
+                      }).catch(() => {});
+                    } else if (r && r.ok) {
+                      relayState.setRelayMode('relay');
+                    }
+                    return { ok: !!(r && r.ok), why: r && r.why };
+                  })
+                  .catch(e => ({ ok: false, err: e }));
+              })().then(settleRelay);
             }
           } catch (e) {
             // Сбой синхронной части (шифрование/pending): статус failed, иначе

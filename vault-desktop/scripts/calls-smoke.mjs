@@ -3,6 +3,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
+import { transportPlanHandler } from './lib/transport-plan-mock.mjs';
+import { relayState } from '../src/features/relay-idle.js';
 import { createChatStore } from '../src/chat-store.js';
 import { createCallSession, callSession } from '../src/features/call-session.js';
 import { createCallResender, callResender, callRequestResender } from '../src/features/call-resend.js';
@@ -64,6 +66,8 @@ const apiMock = {
   mediaSetSpeaker: async (id, v) => { apiMock.calls.push(['setSpeaker', id, v]); },
   mediaSoundPlay: (name, loop) => { apiMock.calls.push(['soundPlay', name, loop]); },
   mediaSoundStop: async () => { apiMock.calls.push(['soundStop']); },
+  // План транспорта — правило Rust (двойник таблицы в lib/transport-plan-mock).
+  transportPlan: transportPlanHandler(),
 };
 const dbMock = {
   kv: new Map(),
@@ -145,6 +149,10 @@ prepareModuleCopy(
   MOCKS,
 );
 const C = await import(MOCKS + '/features-calls.mjs');
+// Релей «включён»: план транспорта строится по состоянию relay-стора (тот же
+// синглтон, что видит копия calls.js), и без этого публикация сигнала не
+// происходила бы ни в одной проверке.
+relayState.enableRelay(true);
 // ТАБЛИЦА ответов ядра о состоянии звонка (ADR-005 W4): решения «звонков нет?»
 // и «идёт разговор?» читаются из неё СИНХРОННО (шаблон, fire-and-forget
 // hangup), поэтому её надо прогреть ДО проверок. Тот же экземпляр модуля,
@@ -361,6 +369,29 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   relayMock.pubs.length = 0;
   await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_reject', call_id: 'c1' });
   check('терминальный сигнал → wake=false', relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === false);
+  // Выбор транспорта (чип): план из Rust решает ТОЛЬКО публикацию в релей.
+  // Письмо обязан уйти при любом выборе — это гарант вызова.
+  relayMock.pubs.length = 0;
+  apiMock.calls.length = 0;
+  globalThis.__transportPlan = { preference: 'mail' };
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c-m' });
+  await new Promise(r => process.nextTick(r));
+  check('выбор «только почта»: сигнал в релей не публикуется', relayMock.pubs.length === 0, relayMock.pubs);
+  check('выбор «только почта»: письмо со сигналом всё равно ушло',
+    apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
+  relayMock.pubs.length = 0;
+  apiMock.calls.length = 0;
+  globalThis.__transportPlan = { preference: 'relay' };
+  // Релей выключается СОСТОЯНИЕМ стора (его читает calls.js), а не подменой
+  // аргумента: иначе проверка не видит, что модуль передаёт в план флаг стора.
+  relayState.enableRelay(false);
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c-r' });
+  await new Promise(r => process.nextTick(r));
+  relayState.enableRelay(true);
+  check('выбор «релей», но релей недоступен: звонок идёт почтой, а не молча',
+    relayMock.pubs.length === 0 && apiMock.calls.some(c => c[0] === 'sendReadReceipt'),
+    { pubs: relayMock.pubs.length, calls: apiMock.calls.map(c => c[0]) });
+  globalThis.__transportPlan = undefined;
   // SMTP-ретраи: 3 попытки с паузами 3с (фоновая задача)
   apiMock.calls.length = 0;
   const origSend = apiMock.sendReadReceipt;

@@ -387,6 +387,12 @@
           <button class="feature-btn" :title="t('voice_message') || 'Голосовое'" @click="showAudioRecorder = !showAudioRecorder">
             <Icon name="mic" :size="18" />
           </button>
+          <!-- Чип транспорта: кликом переключается «авто → релей → почта».
+               Что именно сделает отправка решает Rust, здесь только подпись. -->
+          <button class="feature-btn" :class="'transport-' + transportPreference"
+                  :title="t(transportChip.titleKey)" @click="cycleTransportPreference">
+            <Icon :name="transportChip.icon" :size="18" />
+          </button>
         </div>
       <!-- Голосование: создание — отдельный компонент (состояние формы внутри) -->
         <PollDialog
@@ -439,6 +445,7 @@
         :muted="callMuted"
         :speaker="callSpeaker"
         :video-on="callVideoOn"
+        :video-enabled="expVideo"
         :media-connected="callMediaConnected"
         :elapsed="callElapsedLabel"
         :texts="callTexts"
@@ -458,7 +465,7 @@
       <div v-if="showSettings" class="modal-overlay" @click.self="showSettings = false">
         <div class="modal-settings">
           <button class="modal-close-x" @click="showSettings = false"><Icon name="x" :size="20" /></button>
-          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" @pro-state="onProState" />
+          <SettingsPage :email="email" :userAvatarUrl="userAvatarUrl" :displayName="displayName" :bio="myBio" @avatar-update="onAvatarUpdate" @icon-changed="onAppIconChanged" @logout="handleLogout" @name-update="onNameUpdate" @change-email="openChangeEmail" @bio-save="onBioSave" @profile-save="onProfileSave" @experiments-calls="onExperimentsCalls" @experiments-video="onExperimentsVideo" @autoclean-change="runAutoclean" @eco-mode="onEcoMode" @relay-enabled="onRelayEnabled" @presence-enabled="onPresenceEnabled" @pro-state="onProState" />
         </div>
       </div>
 
@@ -1019,6 +1026,7 @@ import * as ChatNavigationFeature from './features/chat-navigation.js';
 import * as AuthFlowFeature from './features/auth-flow.js';
 import * as RecoveryUiFeature from './features/recovery-ui.js';
 import * as SettingsUiFeature from './features/settings-ui.js';
+import * as TransportFeature from './features/transport.js';
 import * as ChatUiRulesFeature from './features/chat-ui-rules.js';
 import * as AccountLoadFeature from './features/account-load.js';
 import * as ProPlanFeature from './features/pro-plan.js';
@@ -1384,8 +1392,14 @@ export default {
       // Зелёная точка: email → ts последней активности контакта
       // (входящее письмо/квитанция). Не онлайн-статус: «видели за 10 мин».
       // lastSeenMapinj в contacts-store (J.5a).
-      // Экспериментальные функции: флаг звонков
+      // Экспериментальные функции: «ещё не прочитано» — дефолт считает Rust
+      // (vault-core::settings → api.settingsFlag), здесь не вторая копия правила.
       expCalls: false,
+      expVideo: false,
+      // Выбор транспорта (чип в рядку фич). Значение до прочтения — «авто»:
+      // так же считает Rust для аккаунта без настройки, поэтому подпись чипа
+      // не расходится с поведением до загрузки.
+      transportPreference: 'auto',
       ephemeralOptions: [
         { v: 0, label: 'Выкл' },
         { v: 300, label: '5 мин' },
@@ -2163,9 +2177,25 @@ export default {
         setSmtpPort: (v) => { this.smtpPort = v; },
         setAppIconId: (v) => { this.appIconId = v; },
         setExpCalls: (v) => { this.expCalls = v; },
+        setExpVideo: (v) => { this.expVideo = v; },
+        expCalls: () => this.expCalls,
+        expVideo: () => this.expVideo,
         storage: () => (typeof localStorage !== 'undefined' ? localStorage : null),
         document: () => (typeof document !== 'undefined' ? document : null),
       };
+    },
+    // Контракт чипа транспорта (ADR-005): правило «каким транспортом» и
+    // порядок переключения — в Rust (vault-core::transport); фича
+    // features/transport.js — вызов моста и оформление выбора.
+    transportDeps() {
+      return {
+        setTransportPreference: (v) => { this.transportPreference = v; },
+        showToast: (m, ms) => uiStore.toast(m, ms),
+        t: (key) => uiStore.tr(key),
+      };
+    },
+    transportChip() {
+      return TransportFeature.transportView(this.transportPreference);
     },
     // Контракт входа и смены почты (ADR-005 W3): длинные сценарии — в фиче
     // features/auth-flow.js; компонент отдаёт состояние, ключи и эффекты.
@@ -2631,6 +2661,7 @@ export default {
     // которых не знает модуль, — через deps.
     callVideoDeps() {
       return {
+        expVideo: () => this.expVideo,
         nextTick: () => this.$nextTick(),
         getRemoteCanvas: () => {
           const overlay = this.$refs.callOverlay;
@@ -3056,6 +3087,9 @@ export default {
   async mounted() {
     // Duress-замок: включён ли (до авторизации)
     this.checkDuressLock();
+    // Тумблеры возможностей при старте (на любом экране, до входа): ответ
+    // приходит из Rust, на чистой форме логина он просто не к чему.
+    this.loadExperimentFlags();
     // ТАБЛИЦА ОТВЕТОВ ЯДРА о состоянии звонка (ADR-005 R1 / W4): решения
     // «звонков нет?», «идёт разговор?» читаются в СИНХРОННЫХ местах (шаблон
     // компонента, fire-and-forget hangup), где await недопустим. Один вызов
@@ -3292,7 +3326,12 @@ export default {
           this.userAvatarUrl = (this.profiles[this.email] || {}).avatar || '';
           this.displayName = (await api.getDisplayName()) || this.email || '';
           this.myBio = await this.getBio(); // статус «О себе» (Key: profile-конверт)
-          this.expCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+          // Звонки: флаг перечитывается и на старте (mounted), но после входа
+          // он нужен сразу, поэтому ещё раз.
+          this.loadExperimentFlags();
+          // Транспорт: выбор хранится на аккаунт, поэтому читается здесь, а
+          // не на mounted (там адреса ещё нет).
+          this.loadTransportPreference();
           this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
           // M2.4: кэш relay-enabled для гейтов автообмена токенами
           // (env.tok в исходящих / сохранение входящих tok).
@@ -3605,6 +3644,12 @@ export default {
     async sendDuressSos() { return DuressFeature.sendDuressSos(this.duressDeps); },
     // §1: пояснение индикатора доставки человеческим языком.
     relayExplainDelivery() { return RelayFeature.relayExplainDelivery({ relayDeliveryMode: () => this.relayDeliveryMode }); },
+    // Тумблеры возможностей: правило дефолта в Rust, здесь только delegate.
+    loadExperimentFlags() { return SettingsUiFeature.loadExperimentFlags(this.settingsUiDeps); },
+    // ── Чип транспорта — правило в Rust (vault-core::transport), оформление
+    // и вызов моста в features/transport.js.
+    loadTransportPreference() { return TransportFeature.loadTransportPreference(this.transportDeps); },
+    cycleTransportPreference() { return TransportFeature.cycleTransportPreference(this.transportDeps); },
     // Мобильная навигация: открыть чат на весь экран (портрет телефона).
     openMobileChat() { return ChatUiFeature.openMobileChat(this.chatUiDeps); },
     // Вернуться к списку чатов (кнопка «назад» в шапке чата).
@@ -4008,6 +4053,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
     async mediaQuality() { return MsgStore.mediaQuality(); },
     // Центр-масштаб до maxSide по большей стороне, JPEG q. Возвращает dataURL.
     async onExperimentsCalls(on) { return SettingsUiFeature.onExperimentsCalls(this.settingsUiDeps, on); },
+    async onExperimentsVideo(on) { return SettingsUiFeature.onExperimentsVideo(this.settingsUiDeps, on); },
     // M2.4: тумблер релея в настройках — живое обновление кэша
     // (гейты автообмена токенами env.tok смотрят на this.relayEnabled).
     // --- Исчезающие сообщения

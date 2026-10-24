@@ -46,6 +46,7 @@ import { createTerminalSender } from './call-terminal.js';
 import { delay, later } from './timing.js';
 import { fastFetcher, connLostGuard } from './call-idle.js';
 import { useSession } from './call-session.js';
+import { relayState } from './relay-idle.js';
 import { callResender, callRequestResender } from './call-resend.js';
 
 // Правило состояния звонка — в Rust (ADR-005 R1 / W4, `t_821261f7`).
@@ -254,7 +255,14 @@ export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
   // viaRelay=false — ретранслируем ТОЛЬКО почтой (call_request
   // повторяется каждые 15с: релей-копия уже лежит в очереди, повтор
   // жёг суточный лимит издателя и плодил дубль-пуши).
-  const viaRelay = opts.viaRelay !== false;
+  //
+  // Выбор пользователя («почта или релей») — в плане от Rust
+  // (vault-core::transport). Он решает ТОЛЬКО публиковать ли сигнал в релей:
+  // письмо ниже уходит ВСЕГДА, потому что почта — гарант вызова (требование
+  // «если релей не работает — вызов доходит через почту»).
+  const plan = await api.transportPlan(
+    sessionStore.getCurrentEmail(), relayState.state.relayEnabled);
+  const viaRelay = opts.viaRelay !== false && plan.relay;
   const wake = payload.type === 'call_request';
   if (viaRelay) {
     try {

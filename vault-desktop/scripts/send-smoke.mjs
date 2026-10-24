@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
 import { installEnvelopeMock } from './lib/wire-envelope-mock.mjs';
+import { transportPlanHandler } from './lib/transport-plan-mock.mjs';
 import { createChatStore } from '../src/chat-store.js';
 import { createNotesStore } from '../src/features/notes-store.js';
 import { createSendingStore } from '../src/features/sending-store.js';
@@ -15,6 +16,7 @@ import { createSendingStore } from '../src/features/sending-store.js';
 // настраивает состояние ими же (absolutizeImports ведёт копию в те же файлы →
 // Node отдаёт те же синглтоны).
 import { chatStore, sessionStore } from '../src/features/session-store.js';
+import { relayState } from '../src/features/relay-idle.js';
 import { identityStore } from '../src/features/identity-store.js';
 import * as ChatFeature from '../src/features/chat.js';
 import * as ContactsFeature from '../src/features/contacts.js';
@@ -31,6 +33,10 @@ const apiMock = {
   sent: [],
   sendMessage: async (to, content) => { apiMock.sent.push(['msg', to, content]); (globalThis.__order || []).push('send'); },
   sendGroupMessage: async (gid, content) => { apiMock.sent.push(['grp', gid, content]); },
+  // План транспорта — правило Rust (vault-core::transport); двойник таблицы в
+  // lib/transport-plan-mock.mjs. Поведение по умолчанию — «авто»: письмо и
+  // релей параллельно, как до появления пользовательского выбора.
+  transportPlan: transportPlanHandler(),
 };
 const cryptoMock = {
   encryptVault: async (env) => 'ENC(' + env + ')',
@@ -79,6 +85,10 @@ prepareModuleCopy(
   MOCKS,
 );
 const S = await import(MOCKS + '/send.mjs');
+// Релей «включён», как в живом приложении: план транспорта строится по
+// состоянию relay-стора, и без этого все проверки гонок транспорта видели бы
+// «только почта» и не проверяли бы ничего.
+relayState.enableRelay(true);
 
 // deps injection для sendMessage (chat.js, contacts.js — чистые модули;
 // encryptPeerVaultEnvelope реализована inline — совпадает с features/attachments.js).
@@ -338,6 +348,115 @@ console.log('5c. релей отказал, SMTP прошёл → статус s
   await tick();
   check('статус sent, когда доставил SMTP', d.chat.list()[0] && d.chat.list()[0].status === 'sent');
   globalThis.__relayMock = { ok: true };
+}
+
+// ── 5d. Выбор пользователя (чип транспорта) исполняется, а не советуется ──
+// Правило плана — Rust (здесь его двойник lib/transport-plan-mock.mjs);
+// проверяется ПРОВОДКА: какой транспорт реально стартует при каждом выборе и
+// остаётся ли почтовый путь, когда релей выбран, но молчит.
+console.log('5d. выбор транспорта: mail / relay / авто');
+{
+  // Только почта: релей не публикуется совсем (не тратится суточный лимит).
+  apiMock.sent.length = 0;
+  globalThis.__order = [];
+  globalThis.__transportPlan = { preference: 'mail' };
+  resetWorld();
+  let d = makeDeps();
+  d.chat.setDraft('почтой');
+  await S.sendMessage(d);
+  await tick();
+  check('выбор «только почта»: письмо ушло, релея нет в списке транспортов',
+    globalThis.__order.includes('send') && !globalThis.__order.includes('relay'),
+    globalThis.__order);
+
+  // Только релей, он доставил: письмо не нужно (экономия письма и лимита).
+  globalThis.__order = [];
+  globalThis.__transportPlan = { preference: 'relay' };
+  globalThis.__relayMock = { ok: true };
+  resetWorld();
+  d = makeDeps();
+  d.chat.setDraft('релеем');
+  await S.sendMessage(d);
+  await tick();
+  check('выбор «только релей» при живом релее: письмо не отправлено',
+    globalThis.__order.includes('relay') && !globalThis.__order.includes('send'),
+    globalThis.__order);
+  check('выбор «только релей»: статус sent по доставке релея',
+    d.chat.list()[0] && d.chat.list()[0].status === 'sent', d.chat.list()[0] && d.chat.list()[0].status);
+
+  // Только релей, он молчит → письмо ОБЯЗАНО уйти (гарантия владельца).
+  globalThis.__order = [];
+  globalThis.__transportPlan = { preference: 'relay' };
+  globalThis.__relayMock = { ok: false, why: 'blocked' };
+  resetWorld();
+  d = makeDeps();
+  d.chat.setDraft('релей молчит');
+  await S.sendMessage(d);
+  await tick();
+  check('выбор «только релей», релей не доставил: письмо ушло догоняющим',
+    globalThis.__order.includes('relay') && globalThis.__order.includes('send'),
+    globalThis.__order);
+  check('выбор «только релей», релей не доставил: статус не красный',
+    d.chat.list()[0] && d.chat.list()[0].status === 'sent', d.chat.list()[0] && d.chat.list()[0].status);
+
+  // Релей недоступен совсем (пользователь его выключил) — при любом выборе
+  // остаётся почта. Выключается СОСТОЯНИЕМ стора, а не подменой аргумента:
+  // иначе проверка не видит, что модуль передаёт в план именно флаг стора.
+  globalThis.__order = [];
+  globalThis.__transportPlan = { preference: 'relay' };
+  relayState.enableRelay(false);
+  resetWorld();
+  d = makeDeps();
+  d.chat.setDraft('релей выключен');
+  await S.sendMessage(d);
+  await tick();
+  check('релей выключен: выбор «только релей» деградирует в почту, а не в тишину',
+    globalThis.__order.includes('send') && !globalThis.__order.includes('relay'),
+    globalThis.__order);
+  relayState.enableRelay(true);
+
+  // Возврат к «авто»: оба транспорта параллельно (прежнее поведение).
+  globalThis.__order = [];
+  globalThis.__transportPlan = undefined;
+  globalThis.__relayMock = { ok: true };
+  resetWorld();
+  d = makeDeps();
+  d.chat.setDraft('авто');
+  await S.sendMessage(d);
+  await tick();
+  check('авто: оба транспорта параллельно',
+    globalThis.__order.includes('send') && globalThis.__order.includes('relay'),
+    globalThis.__order);
+}
+
+// ── 5e. Своё сообщение персистится ДО шагов доставки ──────────────────────
+// Порядок важнее факта вызова: saveCurrentHistory зовётся и после успеха, и в
+// конце блока, поэтому «история сохранена» зелёная и на коде без
+// оптимистичной записи. Маркер «plan» — первый реальный шаг доставки (запрос
+// плана транспорта), и он обязан встать ПОСЛЕ первой записи истории: упал
+// SMTP/релей — своё сообщение уже в локальной истории.
+console.log('5e. история сохранена до старта доставки');
+{
+  apiMock.sent.length = 0;
+  globalThis.__relayMock = { ok: true };
+  globalThis.__transportPlan = undefined;
+  relayState.enableRelay(true);
+  resetWorld();
+  const d = makeDeps();
+  globalThis.__order = d.order;         // один журнал: история и доставка
+  const realPlan = apiMock.transportPlan;
+  apiMock.transportPlan = async (...a) => { d.order.push('plan'); return realPlan(...a); };
+  d.chat.setDraft('до отправки');
+  await S.sendMessage(d);
+  await tick();
+  apiMock.transportPlan = realPlan;
+  const iHist = d.order.indexOf('history');
+  const iPlan = d.order.indexOf('plan');
+  check('своё сообщение записано в историю до первого шага доставки',
+    iHist !== -1 && iPlan !== -1 && iHist < iPlan, d.order);
+  check('после доставки история пересохранена со статусом sent',
+    d.chat.list()[0] && d.chat.list()[0].status === 'sent', d.order);
+  globalThis.__order = [];
 }
 
 // ── Исчезающие сообщения: TTL из kv → таймер взводится ────────────────────
