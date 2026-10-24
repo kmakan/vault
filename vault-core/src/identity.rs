@@ -256,6 +256,18 @@ pub fn same_public_key(a: &str, b: &str) -> bool {
     !a.is_empty() && a == b
 }
 
+/// Публичный ключ, записанный В ПОЛЕ отпечатка (след старой добивки).
+/// Some — только если строка и есть полный ключ: 64 hex-символа. Короткий
+/// отпечаток (`xx:…:****`) ключом не является: сравнивать его с ключом
+/// нельзя, иначе восемь байт решают за весь ключ.
+pub fn public_key_from_trace(raw: &str) -> Option<String> {
+    let v = normalize(raw);
+    if v.len() != 64 || !v.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(v)
+}
+
 /// Участник — ЭТОТ ЖЕ аккаунт, что и мы. Три пути, и все — про ключ, а не
 /// про строку адреса:
 ///  1. адрес в.Identity (email ∪ алиасы);
@@ -276,6 +288,56 @@ pub fn member_is_account(
     id.has_address(member_email)
         || id.has_fingerprint(member_fingerprint)
         || same_public_key(member_fingerprint, own_public_key_hex)
+}
+
+/// Кого из участников групп добавить в список контактов.
+///
+/// Порядок вопросов СТРОГИЙ (урок 24.10 — иначе след чужого ключа перетягивал
+/// живой аккаунт к неверному пиру):
+///  1. это НЕ наш собственный аккаунт (`member_is_account`);
+///  2. такого адреса ещё нет в контактах (сравнение — нормальная форма);
+///  3. эта идентичность ещё не представлена другим адресом: отпечаток
+///     участника совпадает с отпечатком, вычисленным из ключа известного
+///     контакта, либо в поле участника лежит сырой ключ (след старой добивки),
+///     который и есть ключ известного контакта.
+///
+/// Пункт 3 — «контакт-призрак» (X50, 24.10): в составе koanmak@gmail.com со
+/// следом ключа, а тот же ключ лежит в peer_keys под vault-msg@ya.ru (пир
+/// сменил почту, группы остались со старым адресом). Фронт ставил второй
+/// строкой адрес БЕЗ ключа: одна аватарка дважды в списке, а тап по дублю
+/// открывал попап «Добавить контакт» вместо чата, который и так был открыт.
+///
+/// Пустой адрес — не контакт. Возврат — адреса в порядке обхода, без дублей.
+pub fn contacts_to_pad<'a>(
+    members: &[(&'a str, &'a str)],
+    contacts: &[(&'a str, &'a str)],
+    id: &Identity,
+    own_public_key_hex: &str,
+) -> Vec<&'a str> {
+    let mut out: Vec<&'a str> = Vec::new();
+    for (email, fingerprint) in members {
+        if email.is_empty() || member_is_account(id, email, fingerprint, own_public_key_hex) {
+            continue;
+        }
+        if contacts.iter().any(|(c, _)| same_address(c, email)) {
+            continue;
+        }
+        let trace = public_key_from_trace(fingerprint);
+        let known = contacts.iter().any(|(_, key)| {
+            let key_norm = normalize(key);
+            fingerprint_from_public_key(&key_norm)
+                .map(|fp| same_fingerprint(&fp, fingerprint))
+                .unwrap_or(false)
+                || trace.as_deref() == Some(key_norm.as_str())
+        });
+        if known {
+            continue;
+        }
+        if !out.iter().any(|e| same_address(e, email)) {
+            out.push(email);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -522,6 +584,17 @@ mod tests {
         );
     }
 
+        #[test]
+    fn public_key_from_trace_takes_only_full_hex_key() {
+        let key = "ab".repeat(32);
+        assert_eq!(public_key_from_trace(&key.to_uppercase()).as_deref(), Some(&key[..]));
+        assert_eq!(public_key_from_trace(&format!(" {key} ")).as_deref(), Some(&key[..]));
+        // Короткий отпечаток — НЕ ключ: восемь байт не решают за весь ключ.
+        assert_eq!(public_key_from_trace("9c:ad:cd:4d:7d:bf:26:33:****"), None);
+        assert_eq!(public_key_from_trace(&key[..16]), None);
+        assert_eq!(public_key_from_trace(""), None);
+    }
+
     #[test]
     fn member_is_account_recognises_own_key_left_in_fingerprint() {
         // Живой случай 24.10 (X50, groups.json): сессия koanmak@ya.ru, в
@@ -578,6 +651,103 @@ mod tests {
                 &own
             ),
             "ключ другого человека под своим алиасом не делает его мной"
+        );
+    }
+
+    // ── contacts_to_pad: кого звать в список контактов из состава групп ──
+
+    const OWN: &str = "2be1c930d1b91b85000000000000000000000000000000000000000000000000";
+    const DESKTOP: &str = "9cadcd4d7dbf2633000000000000000000000000000000000000000000000000";
+    const ANNA: &str = "c73ce55a9f7b466f000000000000000000000000000000000000000000000000";
+
+    fn me_id() -> Identity {
+        Identity::new("koanmak@ya.ru", &[], "2b:e1:c9:30:d1:b9:1b:85:****")
+    }
+
+    #[test]
+    fn contacts_to_pad_skips_self_known_address_and_ghost() {
+        // Живые данные X50 (24.10). Контакт: пир под новым адресом.
+        let contacts = [("vault-msg@ya.ru", DESKTOP), ("icemaksim@gmail.com", ANNA)];
+        let members = [
+            ("koanmak@ya.ru", OWN),                   // это мы
+            ("koanmak@gmail.com", DESKTOP),           // след = ключ известного пира
+            ("icemaksim@gmail.com", ""),              // адрес уже в списке
+            ("kmakan@zoho.com", ""),                  // новый собеседник
+            ("", ""),                                 // пустого адреса нет
+        ];
+        assert_eq!(
+            contacts_to_pad(&members, &contacts, &me_id(), OWN),
+            vec!["kmakan@zoho.com"],
+            "в добивке остаётся только тот, кого в списке ещё нет"
+        );
+    }
+
+    #[test]
+    fn contacts_to_pad_recognises_identity_by_computed_fingerprint() {
+        // Не след, а настоящий отпечаток участника: он совпадает с
+        // отпечатком, вычисленным из ключа известного контакта.
+        let contacts = [("peer-new@mail.ru", ANNA)];
+        let members = [("peer-old@mail.ru", "c7:3c:e5:5a:9f:7b:46:6f:****")];
+        assert_eq!(
+            contacts_to_pad(&members, &contacts, &me_id(), OWN),
+            Vec::<&str>::new(),
+            "тот же человек под другим адресом — не новый контакт"
+        );
+    }
+
+    #[test]
+    fn contacts_to_pad_address_beats_foreign_trace() {
+        // Урок 24.10: адрес сильнее следа. Адрес участника уже в контактах с
+        // ДРУГИМ ключом — вторая строка не появляется, даже если в поле
+        // участника лежит чужой ключ. Форма адреса (регистр, обрамление)
+        // тоже не плодит дубль.
+        let contacts = [("ivan@post.ru", ANNA)];
+        let members = [
+            ("ivan@post.ru", DESKTOP),
+            (" Ivan@Post.RU ", ""),
+            (" PETR@post.ru ", ""),
+        ];
+        assert_eq!(
+            contacts_to_pad(&members, &contacts, &me_id(), OWN),
+            vec![" PETR@post.ru "],
+            "известный адрес не дублируется из-за следа и написания"
+        );
+    }
+
+    #[test]
+    fn contacts_to_pad_compares_the_whole_key_not_its_prefix() {
+        // Совпадение первых 16 hex — это совпадение ОТПЕЧАТКА, а отпечаток
+        // не решает за весь ключ: два разных пира с общим префиксом не должны
+        // сливаться в одного (иначе второй исчезает из списка).
+        let twin = format!("c73ce55a9f7b466f{}", "11".repeat(24));
+        let contacts = [("other-peer@mail.ru", twin.as_str())];
+        let members = [("ghost@mail.ru", ANNA)];
+        assert_eq!(
+            contacts_to_pad(&members, &contacts, &me_id(), OWN),
+            vec!["ghost@mail.ru"],
+            "префикс чужого ключа не делает участника известным"
+        );
+    }
+
+    #[test]
+    fn contacts_to_pad_lists_one_address_once_per_several_groups() {
+        let members = [("petr@post.ru", ""), ("PETR@POST.RU", "")];
+        assert_eq!(
+            contacts_to_pad(&members, &[], &me_id(), OWN),
+            vec!["petr@post.ru"],
+            "один человек в двух группах — одна строка"
+        );
+    }
+
+    #[test]
+    fn contacts_to_pad_never_pads_our_own_alias_account() {
+        // Свой аккаунт под другим адресом (алиас) — не контакт.
+        let me = Identity::new("koanmak@ya.ru", &["koanmak@gmail.com".to_string()], "");
+        let members = [("koanmak@gmail.com", "")];
+        assert_eq!(
+            contacts_to_pad(&members, &[], &me, OWN),
+            Vec::<&str>::new(),
+            "алиас своей сессии в добивку не идёт"
         );
     }
 }

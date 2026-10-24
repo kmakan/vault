@@ -25,9 +25,16 @@
 // m.email с email текущей сессии — вторая копия правила формы адреса, и она
 // слепнет там, где идентичность = отпечаток: свой же аккаунт koanmak@gmail.com
 // под сессией koanmak@ya.ru становился «контактом», а клик по нему открывал
-// попап «Добавить контакт». Предикат «это мы?» — в Rust
-// (vault::identity::member_is_account, команда groups_member_is_own), здесь
-// только вызов.
+// попап «Добавить контакт».
+//
+// ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ПРАВИЛА: участник, чья идентичность УЖЕ стоит в
+// списке другим адресом, — тоже не новый контакт. На X50 в составе висел
+// koanmak@gmail.com со следом ключа 9cadcd4d…, а тот же ключ лежал в peer_keys
+// под vault-msg@ya.ru (пир сменил почту, группы остались со старым адресом).
+// Фронт добавлял второй строкой адрес БЕЗ ключа: та же аватарка дважды, а тап
+// по дублю — попап «Добавить контакт». Решение (свой / известный адрес / та же
+// идентичность) — в Rust `groups::contacts_to_pad`, одним вопросом на всю
+// добивку; здесь — только вызов и сборка строк.
 
 import { invoke } from '@tauri-apps/api/core';
 import { db } from '../api.js';
@@ -50,9 +57,25 @@ export async function loadGroups({ email, fingerprint, aliasesOf, contacts, requ
       fingerprint: String(fingerprint || ''),
       aliases,
     });
-    // Участники групп — тоже контакты (кроме себя): так под приглашённым
-    // аккаунтом виден отправитель инвайта (A → B и наоборот).
+    // Участники групп — тоже контакты (кроме себя и уже известных): так под
+    // приглашённым аккаунтом виден отправитель инвайта (A → B и наоборот).
     const seen = new Set((contacts || []).map(c => c.email));
+    // Кого звать в список — решает ядро одним вызовом. Пустой ответ — тоже
+    // решение (добавлять некого); ошибка моста — прежнее адресное правило,
+    // список не теряется.
+    let pad = null;
+    try {
+      pad = await invoke('groups_contacts_to_pad', {
+        email: email || '',
+        fingerprint: String(fingerprint || ''),
+        aliases,
+        members: (groups || []).flatMap(g => (g.members || []).map(m => [m.email || '', m.fingerprint || ''])),
+        contacts: (contacts || []).map(c => [c.email || '', c.public_key || '']),
+      });
+    } catch (e) { /* мост не ответил — см. fail-open ниже */ }
+    const wanted = Array.isArray(pad)
+      ? new Set(pad.map(e => String(e).toLowerCase()))
+      : null;
     for (const g of groups) {
       // Аватар/иконка группы: sqlite kv_store — аватар устанавливает
       // админ, участникам он приходит письмами (см. конверт).
@@ -66,19 +89,7 @@ export async function loadGroups({ email, fingerprint, aliasesOf, contacts, requ
       if (ic) icons[g.id] = ic;
       for (const m of g.members || []) {
         if (m.email === email || seen.has(m.email)) continue;
-        // «Это наш же аккаунт?» решает ядро по ключу/отпечатку/алиасу.
-        // Ошибка моста не чинит список: остаётся прежнее сравнение адреса.
-        let isOwn = false;
-        try {
-          isOwn = await invoke('groups_member_is_own', {
-            email: email || '',
-            fingerprint: String(fingerprint || ''),
-            aliases,
-            memberEmail: m.email || '',
-            memberFingerprint: m.fingerprint || '',
-          });
-        } catch (e) { /* мост не ответил — не считать своим */ }
-        if (isOwn) continue;
+        if (wanted && !wanted.has(String(m.email || '').toLowerCase())) continue;
         // Модель почтовый мессенджер: удаление контакта НЕ трогает группы —
         // участник остаётся полноценным контактом в списке.
         seen.add(m.email);

@@ -1217,37 +1217,37 @@ fn groups_load_own(
     Ok(mine)
 }
 
-/// Участник группы — ЭТОТ ЖЕ аккаунт, что и мы (идентичность = ключ, не
-/// строка адреса). Решение принимает ядро (`vault::identity`), фронт только
-/// спрашивает: `groups-load.js` не обязан складывать «себя» в контакты, а
-/// клик по собственному аккаунту не должен превращаться в попап
-/// «Добавить контакт». Алиасы приходят от фронта как есть — их нормализует
-/// ядро; наш публичный ключ берётся из keypair хранилища, а не из peer_keys
-/// (алиасы своих аккаунтов лежат в peer_keys наравне с чужими ключами).
+/// Кого из участников групп добавить в список контактов. Одна команда на
+/// всю добивку вместо вопроса «это я?» на каждого участника: решение
+/// («свой», «уже известный адрес», «та же идентичность под другим адресом»)
+/// принимает ядро (`vault::identity` + `groups::contacts_to_pad`), фронт
+/// складывает возвращённые адреса в строки списка.
+///
+/// Алиасы своих аккаунтов лежат в peer_keys наравне с чужими ключами, поэтому
+/// наш публичный ключ берётся из keypair хранилища, а отпечаток — вычисленный
+/// по нему (значение фронта может быть пустым на первом запуске).
 #[tauri::command]
-fn groups_member_is_own(
+fn groups_contacts_to_pad(
     email: String,
     fingerprint: String,
     aliases: Vec<String>,
-    member_email: String,
-    member_fingerprint: String,
-) -> Result<bool, String> {
+    members: Vec<(String, String)>,
+    contacts: Vec<(String, String)>,
+) -> Result<Vec<String>, String> {
     let own_public_key = key_store::load_keypair()
         .map_err(|e| e.to_string())?
         .map(|kp| kp.public_key)
         .unwrap_or_default();
-    // Отпечаток аккаунта: значение фронта может быть пустым (старый фронт,
-    // первый запуск), вычисленный по ключу — всегда настоящий.
     let fp = match crypto::fingerprint_cmd(&own_public_key) {
         Ok(computed) => computed,
         Err(_) => fingerprint,
     };
-    Ok(groups::member_is_account(
+    Ok(groups::contacts_to_pad(
+        &members,
+        &contacts,
         &email,
         &aliases,
         &fp,
-        &member_email,
-        &member_fingerprint,
         &own_public_key,
     ))
 }
@@ -2254,7 +2254,7 @@ pub fn run() {
             channels_delete,
             groups_rename_member,
             groups_load_own,
-            groups_member_is_own,
+            groups_contacts_to_pad,
             contacts_drop_own,
             groups_access,
             groups_has_member,

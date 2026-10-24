@@ -137,44 +137,69 @@ r = await GL.loadGroups(deps());
 ok('при сбое invoke groups = null (поле остаётся прежним)', r.groups === null);
 ok('и никаких частичных аватаров', Object.keys(r.avatars).length === 0);
 
-// 9. «Свой аккаунт не контакт» решает ЯДРО (живой случай X50 24.10: сессия
-// koanmak@ya.ru, участник koanmak@gmail.com с нашим публичным ключом в
-// fingerprint — прежний фронт складывал его в контакты, и клик давал попап
-// «Добавить контакт»). Мок повторяет правило ядра: истинно только для нашего
-// ключа; заодно проверяем, что запрос содержит все шесть аргументов.
+// 9. Кого добивать в контакты, решает ЯДРО — одним вопросом на весь список
+// участников. Живые данные X50 (24.10), сессия koanmak@ya.ru:
+//   · koanmak@phone — наш же аккаунт (в fingerprint наш публичный ключ);
+//   · koanmak@gmail.com — адрес БЕЗ ключа, а тот же ключ 9cadcd4d лежит в
+//     peer_keys под vault-msg@ya.ru: пир сменил почту, группы остались со
+//     старым адресом. Прежний фронт ставил его второй строкой: та же аватарка
+//     дважды и попап «Добавить контакт» вместо чата.
+// Мок повторяет правило ядра (свой / известный адрес / та же идентичность —
+// прочь) и проверяет форму запроса: все пять аргументов и ОДИН вызов.
 reset();
-let ownReqs = [];
+let padReqs = [];
 globalThis.__invoke = async (cmd, args) => {
   if (cmd === 'groups_load_own') return state.own;
-  if (cmd === 'groups_member_is_own') {
-    ownReqs.push(args);
-    return args.memberFingerprint === 'OURKEY';
+  if (cmd === 'groups_contacts_to_pad') {
+    padReqs.push(args);
+    const known = new Set((args.contacts || []).map(([e]) => String(e).toLowerCase()));
+    const keys = new Set((args.contacts || []).map(([, k]) => k));
+    return (args.members || [])
+      .filter(([e, fp]) => fp !== 'OURKEY' && !known.has(String(e).toLowerCase()) && !keys.has(fp))
+      .map(([e]) => e);
   }
   return null;
 };
 state.own = [{ id: 'g9', members: [
-  { email: 'koanmak@gmail.com', fingerprint: 'OURKEY' },
+  { email: 'koanmak@phone', fingerprint: 'OURKEY' },
+  { email: 'koanmak@gmail.com', fingerprint: '9cadcd4d' },
   { email: 'a@b', fingerprint: 'THEIRS' },
 ] }];
-r = await GL.loadGroups(deps({ email: 'koanmak@ya.ru', aliasesOf: () => ['vault-msg@ya.ru'] }));
-ok('свой по ключу участник не стал контактом', !r.newContacts.some(c => c.email === 'koanmak@gmail.com'));
-ok('чужой участник добавлен', r.newContacts.length === 1 && r.newContacts[0].email === 'a@b');
-ok('запрос к ядру полный: адрес, fp, алиасы и участник',
-  ownReqs.length === 2 && ownReqs[0].email === 'koanmak@ya.ru' && ownReqs[0].fingerprint === 'FP-ME'
-  && ownReqs[0].aliases.join(',') === 'vault-msg@ya.ru'
-  && ownReqs[0].memberEmail === 'koanmak@gmail.com' && ownReqs[0].memberFingerprint === 'OURKEY');
+r = await GL.loadGroups(deps({
+  email: 'koanmak@ya.ru',
+  aliasesOf: () => ['vault-msg@ya.ru'],
+  contacts: [{ email: 'vault-msg@ya.ru', public_key: '9cadcd4d' }],
+}));
+ok('свой по ключу участник не стал контактом', !r.newContacts.some(c => c.email === 'koanmak@phone'));
+ok('дубль известной идентичности (адрес без ключа) не добавлен',
+  !r.newContacts.some(c => c.email === 'koanmak@gmail.com'));
+ok('неизвестный участник добавлен', r.newContacts.length === 1 && r.newContacts[0].email === 'a@b');
+ok('ядро спрошено ОДИН раз для всего списка', padReqs.length === 1);
+ok('запрос полный: адрес, fp, алиасы, пары участников и контактов',
+  padReqs[0].email === 'koanmak@ya.ru' && padReqs[0].fingerprint === 'FP-ME'
+  && padReqs[0].aliases.join(',') === 'vault-msg@ya.ru'
+  && padReqs[0].members.length === 3 && padReqs[0].members[1].join('|') === 'koanmak@gmail.com|9cadcd4d'
+  && padReqs[0].contacts.length === 1 && padReqs[0].contacts[0].join('|') === 'vault-msg@ya.ru|9cadcd4d');
 
 // 10. Fail-open: мост не ответил — поведение прежнее (сравнение адреса),
 // список контактов НЕ теряется.
 reset();
 globalThis.__invoke = async (cmd) => {
   if (cmd === 'groups_load_own') return state.own;
-  if (cmd === 'groups_member_is_own') throw new Error('мост недоступен');
+  if (cmd === 'groups_contacts_to_pad') throw new Error('мост недоступен');
   return null;
 };
 state.own = [{ id: 'g10', members: [{ email: 'c@d', fingerprint: 'OURKEY' }] }];
 r = await GL.loadGroups(deps());
 ok('при сбое моста участник добавлен как раньше', r.newContacts.length === 1 && r.newContacts[0].email === 'c@d');
+
+// 11. Пустой ответ ядра — это РЕШЕНИЕ (добавлять некого), а не сбой:
+// contacts не пополняются, но и не затираются.
+reset();
+globalThis.__invoke = async (cmd) => (cmd === 'groups_load_own' ? state.own : []);
+state.own = [{ id: 'g11', members: [{ email: 'ghost@x', fingerprint: '9cadcd4d' }] }];
+r = await GL.loadGroups(deps({ contacts: [{ email: 'real@x', public_key: '9cadcd4d' }] }));
+ok('пустой список от ядра не порождает контактов', r.newContacts.length === 0);
 
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

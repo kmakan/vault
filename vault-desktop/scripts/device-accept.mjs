@@ -351,6 +351,55 @@ const PROBES = {
     const dom = Array.from(document.querySelectorAll('.contact-item')).map((e) => (e.innerText || '').toLowerCase());
     const domGhosts = dom.filter((t) => [...mine].some((m) => m && t.includes(m)));
     step('в отрисованном списке своих нет', domGhosts.length === 0, { domGhosts });
+    // ── второй класс дефекта: ДУБЛЬ известной идентичности без ключа ──
+    // На X50 (24.10) в списке стояли vault-msg@ya.ru (ключ 9cadcd4d…) и
+    // koanmak@gmail.com без ключа — тот же человек: пир сменил почту, а
+    // группы остались со старым адресом. Тап по дублю открывал попап
+    // «Добавить контакт», а аватарка была видна дважды.
+    const keys = p.peerKeys || {};
+    const withKey = (p.contacts || []).filter((c) => keys[norm(c.email)] || keys[c.email]);
+    const keyOf = (c) => norm(keys[norm(c.email)] || keys[c.email] || c.public_key);
+    const seenKey = new Map();
+    for (const c of withKey) {
+      const k = keyOf(c);
+      if (k) seenKey.set(k, (seenKey.get(k) || []).concat(c.email));
+    }
+    const dupKeys = [...seenKey.entries()].filter(([, v]) => v.length > 1);
+    step('одна идентичность (ключ) — одна строка в списке', dupKeys.length === 0, { dupKeys });
+    const step2 = (await inv('groups_load', {})) || [];
+    const members = [];
+    for (const g of step2) for (const m of (g.members || [])) members.push([m.email || '', m.fingerprint || '']);
+    const keyset = new Set(withKey.map(keyOf).filter(Boolean));
+    const traceOf = new Map(members.map(([e, fp]) => [norm(e), norm(fp)]));
+    const dupes = (p.contacts || []).filter((c) => {
+      const k = keyOf(c);
+      if (k) return false;                       // с ключом — чат открывается
+      const fp = traceOf.get(norm(c.email));
+      return !!fp && fp.length === 64 && keyset.has(fp);
+    });
+    step('в списке нет строки без ключа там, где идентичность уже известна',
+      dupes.length === 0, { dupes: dupes.map((d) => d.email || d.id) });
+    // Та же проверка на стороне ядра: ставим РЕАЛЬНУЮ пару (адрес, ключ) из
+    // контактов под другим адресом в members — ровно это делает состав группы
+    // после смены почты пиром — и заведомо нового пира без ключа. Живые адреса
+    // в пробу не подставляются: она должна работать под любым аккаунтом.
+    const known = withKey[0];
+    const knownKey = known && keyOf(known);
+    step('проба добивки осмысленна: в контактах есть ключ', !!knownKey, {});
+    const pad = await inv('groups_contacts_to_pad', {
+      email: p.email || '',
+      fingerprint: String(p.fingerprint || ''),
+      aliases: ownAddrs,
+      members: [
+        ['ghost.probe@example.invalid', knownKey || ''],
+        ['new.probe@example.invalid', ''],
+      ],
+      contacts: withKey.map((c) => [c.email, keyOf(c)]),
+    });
+    step('дубль известной идентичности не зовётся, новый пир — зовётся',
+      Array.isArray(pad)
+      && !pad.includes('ghost.probe@example.invalid')
+      && pad.includes('new.probe@example.invalid'), { pad });
     const dropped = await inv('contacts_drop_own', {
       email: p.email || '',
       fingerprint: String(p.fingerprint || ''),

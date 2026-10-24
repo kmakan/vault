@@ -587,6 +587,32 @@ pub fn contacts_drop_own(
         .collect()
 }
 
+/// Кого из участников групп добавить в список контактов. Правило — в ядре
+/// (`identity::contacts_to_pad`: свой аккаунт, известный адрес и уже
+/// представленная в списке идентичность в добивку не идут); здесь — только
+/// форма вопроса фронта: пары (адрес, отпечаток/след) плюс наши адрес,
+/// алиасы, отпечаток и публичный ключ.
+pub fn contacts_to_pad(
+    members: &[(String, String)],
+    contacts: &[(String, String)],
+    my_email: &str,
+    aliases: &[String],
+    my_fingerprint: &str,
+    own_public_key: &str,
+) -> Vec<String> {
+    let id = identity::Identity::new(my_email, aliases, my_fingerprint);
+    let m: Vec<(&str, &str)> = members
+        .iter()
+        .map(|(e, f)| (e.as_str(), f.as_str()))
+        .collect();
+    let c: Vec<(&str, &str)> = contacts
+        .iter()
+        .map(|(e, k)| (e.as_str(), k.as_str()))
+        .collect();
+    let picked = identity::contacts_to_pad(&m, &c, &id, own_public_key);
+    picked.into_iter().map(|e| e.to_string()).collect()
+}
+
 /// Право участника в списке (позиция совпадает с `group.members`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MemberAccess {
@@ -1817,6 +1843,73 @@ mod tests {
                 ("kmakan@zoho.com".to_string(), zoho),
             ],
             "свои по ключу и по адресу (регистр/алиас/кириллица) — убраны, чужие — целы"
+        );
+    }
+
+    fn pair(email: &str, key: &str) -> (String, String) {
+        (email.to_string(), key.to_string())
+    }
+
+    #[test]
+    fn test_contacts_to_pad_skips_ghost_of_known_identity() {
+        // Живые данные X50 (24.10): сессия koanmak@ya.ru, наш ключ 2be1c930….
+        let own = format!("2be1c930d1b91b85{}", "00".repeat(24));
+        // Пир сменил почту: peer_keys знает его по новому адресу, а в составе
+        // групп остался старый адрес со СЛЕДОМ ключа в поле отпечатка.
+        let desktop = format!("9cadcd4d7dbf2633{}", "00".repeat(24));
+        let anna = format!("c73ce55a9f7b466f{}", "00".repeat(24));
+        let zoho = format!("2c4450b98459ee7f{}", "00".repeat(24));
+        let contacts = vec![pair("vault-msg@ya.ru", &desktop), pair("icemaksim@gmail.com", &anna)];
+        let members = vec![
+            pair("koanmak@gmail.com", &desktop),      // след = ключ известного пира
+            pair("koanmak@ya.ru", &own),               // это мы
+            pair("kmakan@zoho.com", "2c:44:50:b9:84:59:ee:7f:****"), // новый пир
+            pair("nova@mail.ru", ""),                  // новый пир без ключа
+            pair("icemaksim@gmail.com", &anna),        // адрес уже в списке
+        ];
+        assert_eq!(
+            contacts_to_pad(
+                &members,
+                &contacts,
+                "koanmak@ya.ru",
+                &[],
+                "2b:e1:c9:30:d1:b9:1b:85:****",
+                &own
+            ),
+            vec!["kmakan@zoho.com".to_string(), "nova@mail.ru".to_string()],
+            "призрак, свой аккаунт и уже известный адрес в добивку не идут"
+        );
+    }
+
+    #[test]
+    fn test_contacts_to_pad_uses_trace_only_when_address_unknown() {
+        // Урок 24.10: адрес сильнее следа. Если адрес участника уже стоит в
+        // контактах с ДРУГИМ ключом, след чужого ключа не должен ни удалять
+        // его, ни добавлять вторую строку.
+        let own = format!("2be1c930d1b91b85{}", "00".repeat(24));
+        let victim = format!("eeee55a9f7b466ff{}", "00".repeat(24));
+        let contacts = vec![pair("ivan@post.ru", &victim)];
+        let members = vec![pair("ivan@post.ru", &victim), pair("maria@mail.ru", &victim)];
+        assert_eq!(
+            contacts_to_pad(&members, &contacts, "anna@mail.ru", &[], "", &own),
+            Vec::<String>::new(),
+            "идентичность victim уже в списке (и по адресу, и по ключу) — строк не добавляем"
+        );
+    }
+
+    #[test]
+    fn test_contacts_to_pad_dedupes_member_listed_in_several_groups() {
+        let own = format!("2be1c930d1b91b85{}", "00".repeat(24));
+        let members = vec![
+            pair("petr@mail.ru", ""),
+            pair(" PETR@mail.ru ", ""),
+            pair("", ""),
+            pair("olya@mail.ru", ""),
+        ];
+        assert_eq!(
+            contacts_to_pad(&members, &[], "anna@mail.ru", &[], "", &own),
+            vec!["petr@mail.ru".to_string(), "olya@mail.ru".to_string()],
+            "один адрес в двух группах — одна строка; пустой адрес не контакт"
         );
     }
 
