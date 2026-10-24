@@ -9,6 +9,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# VP8-энкодер (V4L2-захват на десктопе): тонкий C-шим к системной libvpx —
+# структуры vpx_codec_enc_cfg_t меняются между версиями, поэтому раскладку
+# берём у заголовков (cc), а не описываем вручную в Rust.
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
@@ -86,6 +90,12 @@ webrtc-audio-processing = { version = "2", features = ["bundled"] }
 # (getUserMedia для голосовых сообщений). Версия совпадает с tauri-runtime-wry.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 webkit2gtk = { version = "2", features = ["v2_40"] }
+
+# Linux-десктоп: захват камеры (V4L2) для видеозвонков. Раньше кадры брались
+# из WebView (VideoFrame(videoEl)), но WebKitGTK не декодирует MediaStream в
+# <video> (readyState 0) — камера и VP8-кодирование живут в Rust (ADR-005).
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14"
 
 # Android: нативный аудио-путь — Oboe/AAudio вместо cpal.
 # cpal на Android идёт через JNI/Java (AAudio через JavaVM) — паникует при

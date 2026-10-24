@@ -5,9 +5,14 @@
 // попадают — нет RTCPeerConnection в JS. Поэтому видео идёт тем же путём,
 // что и аудио: кадры → Rust → E2E-шифр → RTP-трек.
 //
-// Захват и кодирование — WebCodecs в WebView (Chrome 151 на Android):
-//   getUserMedia({video}) → VideoFrame → VideoEncoder('vp8')
-//   → invoke('media_video_frame', ...) → write_video_loop (Rust)
+// Захват и кодирование камеры — платформозависимо:
+//   Android (Chrome WebView): getUserMedia({video}) → VideoFrame
+//     → VideoEncoder('vp8') → invoke('media_video_frame') (здесь, в JS).
+//   Desktop (WebKitGTK): JS не может — движок не декодирует MediaStream в
+//     <video> (readyState остаётся 0, `new VideoFrame(videoEl)` бросает
+//     InvalidStateError). Поэтому камеру и VP8-энкод делает Rust
+//     (V4L2 + libvpx, `video.rs`), а JS лишь открывает writer звонка
+//     `media_camera_start` (ADR-005: логика — в Rust).
 //
 // Приём — событие 'call-video-frame' из Rust (media_video_start):
 //   base64 VP8-фрейм → VideoDecoder('vp8') → VideoFrame → <canvas>
@@ -26,14 +31,17 @@ const VIDEO_FPS = 30;
 const VIDEO_BITRATE = 500_000;
 const KEYFRAME_INTERVAL = 5; // секунд
 
-let encoder = null;       // VideoEncoder
-let mediaStream = null;   // MediaStream с камеры
-let frameTicker = null;   // requestVideoFrameCallback-цикл
+let encoder = null;       // VideoEncoder (только Android/WebView-путь)
+let mediaStream = null;   // MediaStream с камеры (только Android)
+let frameTicker = null;   // цикл чтения кадров (MediaStreamTrackProcessor)
 let decoding = false;     // guard: startCamera один раз на звонок
 let activeCallId = null;  // звонок, чей Rust-writer открыт (для mediaCameraStop)
-let videoEl = null;       // <video> камеры — источник VideoFrame (desktop-путь)
-let frameCbId = null;     // requestVideoFrameCallback-id
-let frameTimer = null;    // setInterval-id (fallback, если нет rVFC)
+// Поколение захвата: stopCamera() его повышает. Старт, который «завис» на
+// await (getUserMedia / mediaCameraStart), видит чужое поколение и
+// прекращается, не трогая уже остановленные ресурсы: иначе старт камеры,
+// завершившийся уже после отбоя, обращался к обнулённым полям
+// (`null is not an object`), и звонок оставался без видео (frames=0).
+let captureGen = 0;
 
 /**
  * Захват камеры + кодирование VP8 → Rust.
@@ -45,6 +53,28 @@ let frameTimer = null;    // setInterval-id (fallback, если нет rVFC)
 export async function startCamera(callId, opts = {}) {
   if (decoding) return;
   decoding = true;
+  const gen = ++captureGen;
+  const stale = () => gen !== captureGen;
+
+  // Десктоп (WebKitGTK): MediaStreamTrackProcessor отсутствует, а <video> из
+  // MediaStream не декодируется вовсе — JS-путь кадров невозможен. Захват и
+  // VP8-энкод делает Rust; здесь только открываем writer звонка (без него
+  // Rust отбрасывает кадры с «camera not started for this call»).
+  if (typeof MediaStreamTrackProcessor === 'undefined') {
+    try {
+      await api.mediaCameraStart(callId);
+    } catch (e) {
+      decoding = false;
+      throw new Error('camera writer: ' + (e && e.message || e));
+    }
+    if (stale()) {
+      api.mediaCameraStop(callId).catch(() => {});
+      return;
+    }
+    activeCallId = callId;
+    console.log('[video] capture in Rust (WebKitGTK: JS frames unavailable)');
+    return;
+  }
 
   try {
     // 1. Захват камеры. facingMode:'user' — фронталка для звонков.
@@ -63,6 +93,14 @@ export async function startCamera(callId, opts = {}) {
     throw new Error('camera: ' + (e && e.message || e));
   }
 
+  // За время getUserMedia звонок могли свернуть/завершить — тогда поток
+  // нужно сразу погасить, иначе камера останется включённой без потребителя.
+  if (stale()) {
+    try { mediaStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    mediaStream = null;
+    return;
+  }
+
   // 1.5. Открыть Rust-писатель кадров ЭТОГО звонка (RTP-writer + видео-трек).
   // Без этого вызова `session.camera` в Rust = None, и КАЖДЫЙ кадр от
   // WebCodecs отбрасывается с «camera not started for this call»: видео не
@@ -76,6 +114,7 @@ export async function startCamera(callId, opts = {}) {
     stopCamera();
     throw new Error('camera writer: ' + (e && e.message || e));
   }
+  if (stale()) return;
 
   // Местное превью (опционально): caller видит себя.
   if (opts.localEl && mediaStream) {
@@ -85,39 +124,56 @@ export async function startCamera(callId, opts = {}) {
   }
 
   // 2. VP8-энкодер. WebCodecs требует явного конфига — совпадает с Rust.
-  encoder = new VideoEncoder({
-    output: (chunk) => {
-      // EncodedVideoChunk → байты → Rust (там E2E-шифр + RTP-пакетизация).
-      const data = new Uint8Array(chunk.byteLength);
-      chunk.copyTo(data);
-      // fire-and-forget: 30fps, ожидать ответ на каждый кадр = падение fps.
-      api.mediaVideoFrame(callId, data).catch((e) => {
-        console.warn('[video] frame send failed:', e);
-      });
-    },
-    error: (e) => {
-      console.error('[video] encoder error:', e);
-    },
-  });
+  let encoded = 0;
+  try {
+    encoder = new VideoEncoder({
+      output: (chunk) => {
+        // EncodedVideoChunk → байты → Rust (там E2E-шифр + RTP-пакетизация).
+        const data = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(data);
+        encoded++;
+        // Первый кадр и далее раз в 100 — видно в логе, что камера реально
+        // кодирует и кадры уходят в Rust (writer frames=0 больше не «молчит»).
+        if (encoded === 1 || encoded % 100 === 0) {
+          console.log('[video] encoded frames=' + encoded + ' bytes=' + chunk.byteLength);
+        }
+        // fire-and-forget: 30fps, ожидать ответ на каждый кадр = падение fps.
+        api.mediaVideoFrame(callId, data).catch((e) => {
+          console.warn('[video] frame send failed:', e);
+        });
+      },
+      error: (e) => {
+        console.error('[video] encoder error:', e);
+      },
+    });
+  } catch (e) {
+    // Нет WebCodecs-энкодера в движке — звонок остаётся аудио, ресурсы
+    // (камера, Rust-writer) закрываем: иначе камера горит без потребителя.
+    stopCamera();
+    throw new Error('encoder: ' + (e && e.message || e));
+  }
 
-  encoder.configure({
-    codec: 'vp8',
-    width: VIDEO_WIDTH,
-    height: VIDEO_HEIGHT,
-    bitrate: VIDEO_BITRATE,
-    framerate: VIDEO_FPS,
-    // Keyframe каждые KEYFRAME_INTERVAL*fps кадров — для устойчивости
-    // к потере пакетов (NACK/PLI пока не реализованы, ключевой кадр
-    // через 5с гарантирует восстановление картинки).
-    keyInterval: KEYFRAME_INTERVAL * VIDEO_FPS,
-  });
+  try {
+    encoder.configure({
+      codec: 'vp8',
+      width: VIDEO_WIDTH,
+      height: VIDEO_HEIGHT,
+      bitrate: VIDEO_BITRATE,
+      framerate: VIDEO_FPS,
+      // Keyframe каждые KEYFRAME_INTERVAL*fps кадров — для устойчивости
+      // к потере пакетов (NACK/PLI пока не реализованы, ключевой кадр
+      // через 5с гарантирует восстановление картинки).
+      keyInterval: KEYFRAME_INTERVAL * VIDEO_FPS,
+    });
+  } catch (e) {
+    stopCamera();
+    throw new Error('encoder configure: ' + (e && e.message || e));
+  }
 
-  // 3. Цикл кодирования: кадр камеры → VideoFrame → encode.
-  // Источник кадров зависит от движка (проверено зондом на живых движках):
-  //  - Android WebView (Chrome): MediaStreamTrackProcessor (Insertable Streams);
-  //  - desktop WebKitGTK: его НЕТ (VideoFrame/VideoEncoder/VideoDecoder есть,
-  //    MediaStreamTrackProcessor отсутствует) → берём <video> с камерой и
-  //    `new VideoFrame(videoEl)`, кадры читает requestVideoFrameCallback.
+  // 3. Цикл кодирования (Android/WebView): кадр камеры → VideoFrame → encode.
+  // Источник — MediaStreamTrackProcessor (Insertable Streams, Chrome 94+).
+  // На десктопе сюда не доходим: WebKitGTK не имеет ни MSTP, ни кадров из
+  // <video> — захват и энкод там в Rust (см. начало startCamera).
   const [track] = mediaStream.getVideoTracks();
   const keyEvery = KEYFRAME_INTERVAL * VIDEO_FPS;
 
@@ -135,60 +191,21 @@ export async function startCamera(callId, opts = {}) {
     }
   };
 
-  if (typeof MediaStreamTrackProcessor !== 'undefined' && track) {
-    const processor = new MediaStreamTrackProcessor({ track });
-    const reader = processor.readable.getReader();
-    frameTicker = (async () => {
-      let frameNum = 0;
-      try {
-        while (true) {
-          const { done, value: frame } = await reader.read();
-          if (done) break;
-          sendFrame(frame, frameNum % keyEvery === 0);
-          frameNum++;
-        }
-      } catch (e) {
-        console.warn('[video] capture loop ended:', e && e.message || e);
-      }
-    })();
-  } else {
-    // desktop-путь: <video> вне экрана (display:none останавливает декод).
-    videoEl = document.createElement('video');
-    videoEl.muted = true;
-    videoEl.autoplay = true;
-    videoEl.setAttribute('playsinline', '');
-    videoEl.style.cssText = 'position:fixed;left:-10000px;top:0;width:320px;height:240px;';
-    videoEl.srcObject = mediaStream;
-    document.body.appendChild(videoEl);
-    try { await videoEl.play(); } catch (e) { /* autoplay — не критично */ }
-
+  const processor = new MediaStreamTrackProcessor({ track });
+  const reader = processor.readable.getReader();
+  frameTicker = (async () => {
     let frameNum = 0;
-    const tick = () => {
-      if (!encoder || !videoEl) return;
-      // readyState < 2 — кадр ещё не декодирован: VideoFrame бросит.
-      if (videoEl.readyState < 2) return;
-      try {
-        const frame = new VideoFrame(videoEl, {
-          timestamp: Math.round(performance.now() * 1000),
-        });
+    try {
+      while (true) {
+        const { done, value: frame } = await reader.read();
+        if (done) break;
         sendFrame(frame, frameNum % keyEvery === 0);
         frameNum++;
-      } catch (e) {
-        // Кадр не готов/размер меняется — пропускаем тик, не роняем звонок.
       }
-    };
-    if (typeof videoEl.requestVideoFrameCallback === 'function') {
-      const pump = () => {
-        tick();
-        frameCbId = videoEl ? videoEl.requestVideoFrameCallback(pump) : null;
-      };
-      frameCbId = videoEl.requestVideoFrameCallback(pump);
-    } else {
-      frameTimer = setInterval(tick, Math.round(1000 / VIDEO_FPS));
+    } catch (e) {
+      console.warn('[video] capture loop ended:', e && e.message || e);
     }
-    frameTicker = Promise.resolve();
-    console.log('[video] desktop capture path: <video> + VideoFrame (no MediaStreamTrackProcessor)');
-  }
+  })();
 }
 
 /**
@@ -196,13 +213,8 @@ export async function startCamera(callId, opts = {}) {
  */
 export function stopCamera() {
   decoding = false;
+  captureGen++; // любой незавершённый startCamera() теперь видит чужое поколение
   try { if (frameTicker) frameTicker.catch(() => {}); frameTicker = null; } catch (e) {}
-  if (frameCbId != null && videoEl && typeof videoEl.cancelVideoFrameCallback === 'function') {
-    try { videoEl.cancelVideoFrameCallback(frameCbId); } catch (e) {}
-  }
-  frameCbId = null;
-  try { if (frameTimer) clearInterval(frameTimer); } catch (e) {}
-  frameTimer = null;
   try { if (encoder) { encoder.flush().catch(() => {}); encoder.close(); } } catch (e) {}
   encoder = null;
   try {
@@ -211,13 +223,6 @@ export function stopCamera() {
     }
   } catch (e) {}
   mediaStream = null;
-  try {
-    if (videoEl) {
-      videoEl.srcObject = null;
-      videoEl.remove();
-    }
-  } catch (e) {}
-  videoEl = null;
   // Закрыть Rust-писатель звонка: writer + RTP-трек (идемпотентно).
   if (activeCallId) {
     const cid = activeCallId;

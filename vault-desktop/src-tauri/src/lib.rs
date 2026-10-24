@@ -43,6 +43,10 @@ mod storage;
 mod video;
 #[cfg(not(target_os = "android"))]
 mod vp8_decoder;
+// VP8-энкодер десктопа (libvpx через C-шим): WebKitGTK не отдаёт кадры
+// камеры в JS, поэтому кодирование кадра звонка живёт в Rust (ADR-005).
+#[cfg(target_os = "linux")]
+mod vp8_encoder;
 // Headless IMAP-монитор для FGS-процесса: уведомления при убитом
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
 #[cfg(target_os = "android")]

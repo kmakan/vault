@@ -46,5 +46,20 @@ fn main() {
         }
         _ => {}
     }
+
+    // VP8-энкодер десктопа (ADR-005): WebKitGTK не отдаёт кадры камеры в JS,
+    // поэтому захват (V4L2) и кодирование (libvpx) живут в Rust. C-шим
+    // компилируется против системных заголовков libvpx — раскладку
+    // vpx_codec_enc_cfg_t не описываем вручную (меняется между версиями).
+    // Android-таргет не трогаем: там кадры даёт WebCodecs в WebView.
+    let host_linux = cfg!(target_os = "linux") && !target.contains("android");
+    if host_linux {
+        cc::Build::new()
+            .file("src/vp8_enc_shim.c")
+            .warnings(true)
+            .compile("vault_vp8_enc");
+        println!("cargo:rerun-if-changed=src/vp8_enc_shim.c");
+        println!("cargo:rustc-link-lib=vpx");
+    }
     tauri_build::build()
 }

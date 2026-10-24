@@ -297,23 +297,196 @@ pub async fn write_video_loop(
 // Платформенный захват камеры
 // ---------------------------------------------------------------------------
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 mod capture {
-    use super::{mpsc, CameraFrame};
+    //! Захват камеры на десктопе: V4L2 (`/dev/video0`) → I420 → VP8 → канал
+    //! RTP-writer'а. Живёт в Rust, потому что WebKitGTK не отдаёт кадры
+    //! MediaStream в `<video>` (readyState 0 → VideoFrame бросает
+    //! InvalidStateError), и JS-путь WebCodecs на десктопе физически
+    //! невозможен. Пиксельный формат — YUYV 4:2:2 (камеры UVC отдают его
+    //! нативно, без JPEG-декодера в дереве зависимостей).
 
-    /// TODO (блокер, см. док модуля): desktop-захвата нет — нужен capture-крейт
-    /// (nokhwa/v4l) И VP8-энкодер, которого в дереве зависимостей нет. Пока
-    /// заглушка: возвращает Ok и не отправляет ни одного кадра (разрешено ТЗ
-    /// шага 2) — writer звонка просто ждёт кадров и завершится на стопе.
-    pub(super) fn start(call_id: &str, _frames: mpsc::Sender<CameraFrame>) -> Result<(), String> {
-        eprintln!(
-            "[video] camera capture STUB (desktop): no capture backend / no VP8 encoder yet \
-             — no frames will be sent for call {call_id} (see video.rs TODO)"
-        );
+    use super::{mpsc, CameraFrame};
+    use crate::vp8_encoder::Vp8Encoder;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+    use v4l::buffer::Type;
+    use v4l::io::traits::CaptureStream;
+    use v4l::prelude::*;
+    use v4l::video::Capture;
+    use v4l::FourCC;
+
+    /// Формат захвата совпадает с RTP-треком звонка (640x480, 30 fps, VP8).
+    const WIDTH: u32 = 640;
+    const HEIGHT: u32 = 480;
+    const FPS: u32 = 30;
+    const BITRATE_KBPS: u32 = 500;
+    const KEYFRAME_EVERY: u32 = 5 * FPS; // 5 с — восстановление после потерь
+    const DEVICE_INDEX: usize = 0;
+
+    /// Активный захват: флаг остановки + поток. Один на процесс (звонок 1:1).
+    struct ActiveCapture {
+        stop: Arc<AtomicBool>,
+        join: Option<JoinHandle<()>>,
+    }
+
+    static ACTIVE: Mutex<Option<ActiveCapture>> = Mutex::new(None);
+
+    fn active() -> std::sync::MutexGuard<'static, Option<ActiveCapture>> {
+        ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Открыть камеру и запустить поток захвата. Ошибки открытия/формата —
+    /// синхронные: `media_camera_start` обязан вернуть настоящий отказ, а не
+    /// «Ok, но кадров нет» (ровно эта тишина и была дефектом заглушки).
+    pub(super) fn start(call_id: &str, frames: mpsc::Sender<CameraFrame>) -> Result<(), String> {
+        stop();
+        let dev = Device::new(DEVICE_INDEX)
+            .map_err(|e| format!("camera /dev/video{DEVICE_INDEX}: {e}"))?;
+        let mut fmt = dev.format().map_err(|e| format!("camera format: {e}"))?;
+        fmt.width = WIDTH;
+        fmt.height = HEIGHT;
+        fmt.fourcc = FourCC::new(b"YUYV");
+        let fmt = dev
+            .set_format(&fmt)
+            .map_err(|e| format!("camera set_format: {e}"))?;
+        if &fmt.fourcc.repr != b"YUYV" {
+            return Err(format!(
+                "camera format: драйвер отдал '{}', нужен YUYV",
+                String::from_utf8_lossy(&fmt.fourcc.repr)
+            ));
+        }
+        let stride = if fmt.stride > 0 {
+            fmt.stride as usize
+        } else {
+            WIDTH as usize * 2
+        };
+        let stream = MmapStream::with_buffers(&dev, Type::VideoCapture, 4)
+            .map_err(|e| format!("camera stream: {e}"))?;
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let flag = stop_flag.clone();
+        let cid = call_id.to_string();
+        let join = thread::Builder::new()
+            .name("vault-camera".into())
+            .spawn(move || run(cid, stream, stride, frames, flag))
+            .map_err(|e| format!("camera thread: {e}"))?;
+        *active() = Some(ActiveCapture {
+            stop: stop_flag,
+            join: Some(join),
+        });
         Ok(())
     }
 
-    /// Нативный ресурс не создавали — освобождать нечего.
+    /// Остановить поток захвата и дождаться его выхода (камера закрывается
+    /// вместе с потоком — драйвер освобождается до следующего звонка).
+    pub(super) fn stop() {
+        let taken = active().take();
+        if let Some(mut a) = taken {
+            a.stop.store(true, Ordering::Relaxed);
+            if let Some(join) = a.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+
+    fn run(
+        call_id: String,
+        mut stream: MmapStream<'static>,
+        stride: usize,
+        frames: mpsc::Sender<CameraFrame>,
+        stop: Arc<AtomicBool>,
+    ) {
+        let mut enc = match Vp8Encoder::new(WIDTH, HEIGHT, FPS, BITRATE_KBPS, KEYFRAME_EVERY) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[video] camera encoder failed (call {call_id}): {e}");
+                return;
+            }
+        };
+        let w = WIDTH as usize;
+        let h = HEIGHT as usize;
+        let mut i420: Vec<u8> = Vec::with_capacity(w * h * 3 / 2);
+        let mut encoded: u64 = 0;
+        while !stop.load(Ordering::Relaxed) && !frames.is_closed() {
+            {
+                let (buf, _meta) = match stream.next() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("[video] camera read error (call {call_id}): {e}");
+                        thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
+                };
+                yuyv_to_i420(buf, w, h, stride, &mut i420);
+            }
+            let key = encoded % KEYFRAME_EVERY as u64 == 0;
+            match enc.encode_i420(&i420, key) {
+                Ok(Some(data)) => {
+                    encoded += 1;
+                    if encoded == 1 || encoded % (FPS as u64 * 5) == 0 {
+                        eprintln!(
+                            "[video] camera frames={encoded} bytes={} (call {call_id})",
+                            data.len()
+                        );
+                    }
+                    // Full — перегрузка writer'а: дропаем кадр (низкая
+                    // задержка важнее fps). Closed — writer уже мёртв.
+                    if frames.try_send(CameraFrame { data }).is_err() && frames.is_closed() {
+                        break;
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("[video] camera encode error (call {call_id}): {e}");
+                }
+            }
+        }
+        eprintln!("[video] camera capture finished (call {call_id}, frames={encoded})");
+    }
+
+    /// YUYV 4:2:2 → I420 (YUV420p). Раскладка YUYV: [Y0 U Y1 V] на две точки;
+    /// для I420 U/V берутся через строку, поэтому фильтр не нужен (усреднение
+    /// по 2x2 даёт драйвер/DSP камеры — здесь только переупаковка).
+    pub(super) fn yuyv_to_i420(src: &[u8], w: usize, h: usize, stride: usize, dst: &mut Vec<u8>) {
+        let y_size = w * h;
+        let uv_size = (w / 2) * (h / 2);
+        dst.clear();
+        dst.resize(y_size + 2 * uv_size, 128);
+        for row in 0..h {
+            let start = row * stride;
+            if start + w * 2 > src.len() {
+                return;
+            }
+            let src_row = &src[start..start + w * 2];
+            for col in (0..w).step_by(2) {
+                let i = col * 2;
+                dst[row * w + col] = src_row[i];
+                dst[row * w + col + 1] = src_row[i + 2];
+                if row % 2 == 0 {
+                    let uv = y_size + (row / 2) * (w / 2) + col / 2;
+                    dst[uv] = src_row[i + 1];
+                    dst[uv + uv_size] = src_row[i + 3];
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+mod capture {
+    use super::{mpsc, CameraFrame};
+
+    /// macOS/Windows: платформенного захвата пока нет — честная ошибка, чтобы
+    /// команда не делала вид, что камера работает (тот же принцип, что Android).
+    pub(super) fn start(call_id: &str, _frames: mpsc::Sender<CameraFrame>) -> Result<(), String> {
+        Err(format!(
+            "camera capture is not implemented on this platform yet (call {call_id})"
+        ))
+    }
+
     pub(super) fn stop() {}
 }
 
@@ -491,16 +664,57 @@ mod tests {
         drop(tx);
     }
 
-    /// Заглушка desktop: старт/стоп идемпотентны, handle помнит звонок.
-    /// (На Android `start_camera` намеренно возвращает Err — см. док модуля.)
-    #[cfg(not(target_os = "android"))]
+    /// Стоп камеры идемпотентен и не требует железа (раньше тест «стартовал
+    /// заглушку»; теперь на Linux старт реально открывает /dev/videoN, поэтому
+    /// в тестах камеру не трогаем — иначе CI без камеры краснеет).
     #[test]
-    fn camera_stub_start_and_stop_are_idempotent() {
-        let (tx, _rx) = mpsc::channel::<CameraFrame>(FRAME_CHANNEL_DEPTH);
-        let handle = start_camera("call-stub", tx).expect("desktop stub must start");
-        assert_eq!(handle.call_id(), "call-stub");
-        drop(handle); // drop = стоп захвата
+    fn stop_camera_is_idempotent() {
         stop_camera();
         stop_camera(); // повторный стоп не паникует
+    }
+
+    /// ЖИВОЙ прогон камеры (не для CI — нужен /dev/video0):
+    /// V4L2 YUYV → I420 → VP8. Помечен `#[ignore]`, запуск явно:
+    ///   cargo test --lib capture_live -- --ignored --nocapture
+    /// Ловит и «камера не открылась», и «кадры не кодируются» — отдельно от
+    /// звонка, чтобы не путать отказ захвата с отказом сигнализации.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore]
+    async fn capture_live_delivers_vp8_frames() {
+        let (tx, mut rx) = mpsc::channel::<CameraFrame>(FRAME_CHANNEL_DEPTH);
+        capture::start("live-test", tx).expect("camera must open");
+        let mut got = 0usize;
+        let mut first_len = 0usize;
+        while got < 3 {
+            let frame = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("кадров нет за 10с")
+                .expect("канал захвата закрылся");
+            assert!(!frame.data.is_empty(), "пустой VP8-кадр");
+            if got == 0 {
+                first_len = frame.data.len();
+                // VP8 frame_tag: бит 0 = 0 → ключевой кадр.
+                assert_eq!(frame.data[0] & 1, 0, "первый кадр обязан быть ключевым");
+            }
+            got += 1;
+        }
+        capture::stop();
+        eprintln!("[test] live camera: {got} VP8-кадров, первый {first_len} байт");
+    }
+
+    /// YUYV → I420: переупаковка без потерь. Кадр 2x2: две пары [Y U Y V].
+    /// Проверяем Y обоих пикселей, U/V одной пары и что размер = 3/2 кадра.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn yuyv_to_i420_packs_planes() {
+        // 2x2: строка 0 = Y0=10 U=100 Y1=20 V=200; строка 1 = 30/40, те же U/V.
+        let src: Vec<u8> = vec![10, 100, 20, 200, 30, 100, 40, 200];
+        let mut out = Vec::new();
+        capture::yuyv_to_i420(&src, 2, 2, 4, &mut out);
+        assert_eq!(out.len(), 6, "2x2 → Y(4) + U(1) + V(1)");
+        assert_eq!(&out[0..4], &[10, 20, 30, 40], "Y-плоскость построчно");
+        assert_eq!(out[4], 100, "U берётся из чётной строки");
+        assert_eq!(out[5], 200, "V берётся из чётной строки");
     }
 }
