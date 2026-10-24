@@ -911,7 +911,7 @@ import { createInvitesStore } from './features/invites-store.js';
 import { sessionStore as sessionState, chatStore as chatState, uiStore, defaultUiState } from './features/session-store.js';
 import { relayState } from './features/relay-idle.js';
 import { connLostGuard } from './features/call-idle.js';
-import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
+import { accountNamespace, ensureAccountNamespace, peerContactFor, resetAccountNamespaceCache } from './identity.js';
 import crypto from './crypto.js';
 import { initNotifications, notifyNewMessage } from './notify.js';
 // убран в serverless-архитектуре. Typing-индикатор вернётся с транспортом на M3.
@@ -2230,6 +2230,7 @@ export default {
     chatNavigationDeps() {
       return {
         peerKeys: () => this.peerKeys,
+        peerContactFor: (email) => peerContactFor(email, this.peerKeys, this.email),
         peerPqKeys: () => this.peerPqKeys,
         groupKeys: () => this.groupKeys,
         cryptoReady: () => this.cryptoReady,
@@ -4494,6 +4495,7 @@ openImageViewer(attachment) { this.viewingImage = attachment; },
         setPeerKey: (email, pub, pq) => identityStore.setPeerKey(email, pub, pq),
         markLoaded: (email) => identityStore.markLoaded(email),
         savePeerKey: (...args) => crypto.savePeerKey(...args),
+        email: () => this.email,
         addContact: (email) => api.addContact(email),
         saveProfile: (...args) => api.saveProfile(...args),
         sendContactAccept: (email, pub) => api.sendContactAccept(email, pub),

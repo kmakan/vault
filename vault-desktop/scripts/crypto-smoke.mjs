@@ -109,6 +109,23 @@ console.log('6. isValidKeypair');
     mod.isValidKeypair({ public_key: pk }) === false);
 }
 
+// ── save_peer_key: OWN-ADDRESS GUARD моста ────────────────────
+// Командный аргумент `own_email` — Option, и `gate:tauri-args` разрешает его
+// не писать. Молча выключенный страж = свой аккаунт снова в контактах, поэтому
+// форма вызова меряется здесь, а не «надеясь на фронт».
+console.log('save_peer_key: своя почта уходит в команду');
+{
+  const calls = [];
+  globalThis.__invoke = async (cmd, args) => { calls.push([cmd, args]); return null; };
+  const cli = new C();
+  await cli.savePeerKey('peer@x.y', 'PEERPK', 'Peer', 'PEERPQ', 'me@x.y');
+  await cli.savePeerKey('p2@x.y', 'PEERPK2');
+  check('команда вызвана дважды', calls.length === 2 && calls[0][0] === 'save_peer_key', calls.map((x) => x[0]));
+  check('своя почта ушла как ownEmail', calls[0][1].ownEmail === 'me@x.y', calls[0][1]);
+  check('PQ-ключ и метка на месте', calls[0][1].pqPublicKey === 'PEERPQ' && calls[0][1].label === 'Peer', calls[0][1]);
+  check('без своей почты — null, а не пустая строка', calls[1][1].ownEmail === null, calls[1][1]);
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
 process.exit(fail ? 1 : 0);

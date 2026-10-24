@@ -237,9 +237,42 @@ pub fn load_peer_keys() -> anyhow::Result<Vec<StoredPeerKey>> {
 }
 
 /// Добавить peer-ключ (ADDR GATE + SELF-KEY GUARD + DEDUP — в vault-core).
+///
+/// Сверху ядра — OWN-ADDRESS GUARD: адрес, под которым в `peer_keys` уже
+/// лежит НАШ ключ (алиас собственной сессии), и адрес самого аккаунта.
+/// Записать под такой адрес чужой ключ — значит выставить свою почту
+/// собеседником: список контактов показывает строку, тап открывает попап
+/// «Добавить контакт» вместо чата, а broadcast профиля шлёт письмо самому
+/// себе (живые данные телефона, 24.10). Мера «это я?» — `vault::identity`.
 pub fn add_peer_key(key: StoredPeerKey) -> anyhow::Result<()> {
+    add_peer_key_as(key, None)
+}
+
+/// То же, но вызывающий знает адрес аккаунта: он попадает в OWN-ADDRESS GUARD
+/// наравне с алиасами, выведенными из хранилища (фронт знает email, мост — нет).
+///
+/// Проверяется ТОЛЬКО адрес: «этот ключ — наш» решает ядро (`add_peer_key_at`,
+/// SELF-KEY GUARD) — два стража с разными сообщениями, и каждый ловит своё.
+pub fn add_peer_key_as(key: StoredPeerKey, own_email: Option<String>) -> anyhow::Result<()> {
+    use vault_core::identity::{self, Identity};
     let keys_dir = get_keys_dir_raw();
     let _guard = acquire_guard_for_dir(&keys_dir)?;
+    if let Some(kp) = vault_core::key_store::load_keypair_at(&keys_dir, false)? {
+        let mut aliases: Vec<String> = vault_core::key_store::load_peer_keys_at(&keys_dir)?
+            .into_iter()
+            .filter(|p| identity::same_public_key(&p.public_key, &kp.public_key))
+            .map(|p| identity::normalize(&p.email))
+            .collect();
+        aliases.sort();
+        aliases.dedup();
+        let id = Identity::new(&own_email.unwrap_or_default(), &aliases, "");
+        if id.has_address(&key.email) {
+            return Err(anyhow::anyhow!(
+                "Refusing to save a peer key under our own address: {}",
+                key.email
+            ));
+        }
+    }
     vault_core::key_store::add_peer_key_at(&keys_dir, key)
 }
 
@@ -348,8 +381,6 @@ pub fn delete_all_peer_keys() -> anyhow::Result<()> {
     vault_core::key_store::delete_all_peer_keys_at(&dir)
 }
 
-
-
 #[cfg(test)]
 mod channel_signing_wipe_tests {
     use super::*;
@@ -367,10 +398,15 @@ mod channel_signing_wipe_tests {
                 created_at: "2026-10-14T00:00:00Z".into(),
             };
             save_channel_signing_key(&k).expect("save");
-            assert!(load_channel_signing_key().expect("load").is_some(), "ключ сохранён");
+            assert!(
+                load_channel_signing_key().expect("load").is_some(),
+                "ключ сохранён"
+            );
             delete_all_keys().expect("wipe");
             assert!(
-                load_channel_signing_key().expect("load after wipe").is_none(),
+                load_channel_signing_key()
+                    .expect("load after wipe")
+                    .is_none(),
                 "ключ подписи канала пережил duress-wipe"
             );
         });
@@ -466,6 +502,50 @@ mod channel_signing_wipe_tests {
             assert!(load_keypair().unwrap().is_some());
             // Повторный вызов (файл уже удалён) — не ошибка
             delete_all_peer_keys().unwrap();
+        });
+    }
+
+    #[test]
+    fn test_add_peer_key_rejects_our_own_address() {
+        // OWN-ADDRESS GUARD: запись, где под НАШИМ адресом лежит чужой ключ,
+        // выставляет свою почту собеседником: строка в списке контактов, тап →
+        // попап «Добавить контакт» вместо чата, плюс письмо-профиль самому себе.
+        with_tmp_keys(|| {
+            let kp = StoredKeyPair {
+                public_key: "abcd1234".to_string(),
+                private_key: "ef567890".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
+            };
+            save_keypair(&kp).unwrap();
+            let foreign = StoredPeerKey {
+                email: "ME@YA.RU".to_string(),
+                public_key: "ffff0000".to_string(),
+                label: None,
+                added_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_public_key: None,
+            };
+            let err = add_peer_key_as(foreign, Some("me@ya.ru".to_string())).unwrap_err();
+            assert!(
+                err.to_string().contains("own address"),
+                "не то сообщение стража: {err}"
+            );
+            assert!(load_peer_keys().unwrap().is_empty(), "запись не состоялась");
+
+            // Чужой адрес тем же ключом — обычная запись.
+            add_peer_key_as(
+                StoredPeerKey {
+                    email: "anna@post.ru".to_string(),
+                    public_key: "ffff0000".to_string(),
+                    label: None,
+                    added_at: "2024-01-01T00:00:00Z".to_string(),
+                    pq_public_key: None,
+                },
+                Some("me@ya.ru".to_string()),
+            )
+            .unwrap();
+            assert_eq!(load_peer_keys().unwrap().len(), 1);
         });
     }
 

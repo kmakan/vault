@@ -13,8 +13,9 @@
 //   3. контакт БЕЗ public_key → нельзя склеивать по ключу (иначе он схлопнется
 //      с чужим), обязан остаться отдельной записью;
 //   4. себя в списке быть не должно.
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { prepareModuleCopy } from './smoke-imports.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/contacts-load-smoke-mocks';
@@ -50,11 +51,21 @@ export const invoke = async (cmd, args) => {
 writeFileSync(MOCKS + '/crypto.js', `
 export default { publicKey: 'OURKEY', fingerprint: async () => 'FP-ME' };
 `);
-let s = readFileSync(path.join(ROOT, 'src', 'features', 'contacts-load.js'), 'utf8');
-s = s.replace("from '../api.js'", `from "${MOCKS}/api.js"`)
-     .replace("from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`)
-     .replace("from '../crypto.js'", `from "${MOCKS}/crypto.js"`);
-writeFileSync(MOCKS + '/contacts-load.mjs', s, 'utf8');
+// Адаптер «это я?» (identity.js::dropOwnEntries) — НАСТОЯЩИЙ, из дерева:
+// смоук проверяет, что contacts-load зовёт его и склеивает по ключу, а не
+// собственную копию правила.
+prepareModuleCopy(
+  path.join(ROOT, 'src', 'identity.js'),
+  MOCKS + '/identity.mjs',
+  { '@tauri-apps/api/core': 'core.js', './crypto.js': 'crypto.js' },
+  MOCKS,
+);
+prepareModuleCopy(
+  path.join(ROOT, 'src', 'features', 'contacts-load.js'),
+  MOCKS + '/contacts-load.mjs',
+  { '../api.js': 'api.js', '../crypto.js': 'crypto.js', '../identity.js': 'identity.mjs' },
+  MOCKS,
+);
 const CL = await import(MOCKS + '/contacts-load.mjs');
 
 let pass = 0, fail = 0;

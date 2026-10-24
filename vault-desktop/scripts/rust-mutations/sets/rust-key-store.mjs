@@ -43,5 +43,15 @@ export default {
     { name: 'удаление перевёрнуто (удаляются все, кроме запрошенного)',
       pattern: '    keys.retain(|k| !identity::same_address(&k.email, email));',
       replacement: '    keys.retain(|k| identity::same_address(&k.email, email));' },
+    // ── SELF-KEY GUARD: сохранить СВОЙ публичный ключ как пирский — ECDH ломается
+    // в обе стороны, а в списке контактов остаётся собственная строка «без ключа».
+    // Мера ядром (`identity::same_public_key`), прежняя строка `==` пропускала
+    // ключ в ВЕРХНЕМ регистре/с обрамлением.
+    { name: 'страж своего ключа выключен (свой аккаунт снова записывается контактом)',
+      pattern: '        if identity::same_public_key(&kp.public_key, &key.public_key) {',
+      replacement: '        if false {' },
+    { name: 'страж своего ключа сравнивает строки (ключ «ABCD1234» проходит как чужой)',
+      pattern: '        if identity::same_public_key(&kp.public_key, &key.public_key) {',
+      replacement: '        if kp.public_key == key.public_key {' },
   ],
 };

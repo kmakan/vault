@@ -31,5 +31,13 @@ export default {
     { name: "шифрование для пира разрешено без ключа",
       pattern: "  return !!cryptoReady && !!peerKeys && !!peerKeys[activeChat];",
       replacement: "  return !!cryptoReady;" },
+    // accept-приглашение: запись ключа (ADR-005 партия 5e — свой аккаунт
+    // возвращался в контакты именно на этом пути).
+    { name: "своя почта не уходит в запись ключа (OWN-ADDRESS GUARD выключен)",
+      pattern: "    await savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined, email());",
+      replacement: "    await savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);" },
+    { name: "уже известный ключ записывается снова (старое accept-письмо воскрешает удалённый контакт)",
+      pattern: "    if (exists) {",
+      replacement: "    if (false) {" },
   ],
 };

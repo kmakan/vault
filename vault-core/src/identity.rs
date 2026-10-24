@@ -26,6 +26,17 @@
 //!    `to_ascii_lowercase()`;
 //!  * `storage/sqlite.rs::normalize_account` — та же форма «fp-first, адрес
 //!    как fallback», реализованная отдельно;
+//!  * `key_store.rs::add_peer_key_at` — SELF-KEY GUARD сравнением СТРОК
+//!    (`kp.public_key == key.public_key`): ключ, записанный в верхнем регистре
+//!    или с обрамлением, стража проходил;
+//!  * `chat-navigation.js` / `messages.js` — гейт «есть ли ключ собеседника»
+//!    по голой строке адреса, без словаря `email-aliases`: после смены почты у
+//!    пира тап по известному адресу открывал попап «Добавить контакт» вместо
+//!    чата. Мера форм адреса — `address_variants` здесь;
+//!  * `profiles.js::broadcastProfile` — обход ВСЕХ `peer_keys`, включая записи
+//!    нашего собственного ключа (алиасы своей сессии лежат там же, где чужие
+//!    ключи): письмо-профиль уходило самому себе. Мера — `peer_is_self`.
+//!
 //!  * `api.js:2057` — `g.created_by === this.email || members.some(… ===
 //!    this.email)`: регистрозависимо, без алиасов и без fp (вне этой мерки,
 //!    заведено отдельной задачей).
@@ -109,6 +120,64 @@ pub fn fingerprint_to_repair(
     } else {
         None
     }
+}
+
+/// Все формы адреса, под которыми может лежать ключ собеседника после смены
+/// почты. Словарь `aliases` — пары (старый, новый) из kv `email-aliases`;
+/// порядок обхода — как в словаре.
+///
+/// ТРИ варианта, в этом порядке:
+///  1. сам адрес (нормальная форма) — быстрый путь, ключ не переезжал;
+///  2. конец цепочки old→new — контакт менял почту дважды, ключ под свежим
+///     адресом; цикл A→B→A обрывается на первом повторе (тот же дефект, что
+///     чинил `rememberAlias`: циклом резолв зависал, а победитель зависел от
+///     порядка перечитывания писем);
+///  3. адреса, которые резолвятся В этот — строка списка/письма осталась
+///     СТАРОЙ, а ключ переехал на новый адрес.
+///
+/// ЗАЧЕМ В ЯДРЕ. Пункт 3 — это то, из-за чего тап по контакту после смены
+/// почты показывал попап «Добавить контакт» вместо открытого чата: гейт
+/// `chat-navigation.js` спрашивал ключ по строке адреса, не зная словаря.
+/// Вопрос «какими формами адреса это один и тот же пир» решает ядро, фронт
+/// лишь перебирает возвращённые формы.
+///
+/// Пустой адрес — ноль вариантов; пустой новый адрес в паре в цепочку не
+/// ведёт (им нельзя затереть смысл ключа).
+pub fn address_variants(aliases: &[(String, String)], address: &str) -> Vec<String> {
+    let start = normalize(address);
+    if start.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = vec![start.clone()];
+    let push = |out: &mut Vec<String>, v: String| {
+        if !v.is_empty() && !out.contains(&v) {
+            out.push(v);
+        }
+    };
+
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(start.clone());
+    let mut cur = start.clone();
+    loop {
+        let next = match aliases.iter().find(|(from, _)| normalize(from) == cur) {
+            Some((_, to)) => normalize(to),
+            None => break,
+        };
+        if next.is_empty() || !seen.insert(next.clone()) {
+            break;
+        }
+        push(&mut out, next.clone());
+        cur = next;
+    }
+
+    for (from, to) in aliases {
+        let (f, t) = (normalize(from), normalize(to));
+        if f.is_empty() || t != start {
+            continue;
+        }
+        push(&mut out, f);
+    }
+    out
 }
 
 /// Ключ записи хранилища для адреса: нормальная форма, а пустой адрес — не
@@ -214,6 +283,26 @@ impl Identity {
             .into_iter()
             .any(|(email, fp)| self.member_matches(email, fp))
     }
+}
+
+/// Запись peer-хранилища — ЭТО МЫ? Два пути, и оба про идентичность, а не про
+/// строку адреса:
+///  1. адрес в `id` (email ∪ алиасы);
+///  2. публичный ключ совпал с нашим (запись могла лежать под адресом, о
+///     котором мост не знает — контакты общий на машину peer-store).
+///
+/// Мера для ЧТЕНИЯ списка контактов, добивки из групп и broadcast профиля.
+/// Запись ключа опирается на те же два предиката, но по отдельности: мост
+/// спрашивает адрес (`Identity::has_address` — «не клади чужой ключ под нашей
+/// почтой»), ядро хранилища — ключ (`same_public_key` — «не клади наш ключ как
+/// пирский»), и у каждого отказа своё сообщение. Прежняя запись
+/// (`key_store::add_peer_key_at`) сравнивала строки ключа без нормализации,
+/// поэтому ключ в верхнем регистре проходил стража, а собственный аккаунт
+/// оставался в `peer_keys` «контактом»: список показывал свою почту строкой,
+/// тап по ней открывал попап «Добавить контакт» вместо чата, а broadcast
+/// профиля писал письмо самому себе (живые данные 24.10).
+pub fn peer_is_self(id: &Identity, address: &str, public_key: &str, own_public_key: &str) -> bool {
+    id.has_address(address) || same_public_key(public_key, own_public_key)
 }
 
 /// Заполнить пустой слот отпечатка: `Some` — записать это значение, `None` — не
@@ -748,6 +837,123 @@ mod tests {
             contacts_to_pad(&members, &[], &me, OWN),
             Vec::<&str>::new(),
             "алиас своей сессии в добивку не идёт"
+        );
+    }
+
+    fn dict(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(f, t)| (f.to_string(), t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn peer_is_self_takes_key_not_string_equality() {
+        let own = "ab".repeat(32);
+        let id = Identity::new("me@post.ru", &["me@ya.ru".to_string()], "");
+        assert!(
+            peer_is_self(&id, "me@YA.RU", &own.to_uppercase(), &own),
+            "ключ в верхнем регистре — тот же ключ: прежняя строка `==` пропускала себя в контакты"
+        );
+        assert!(
+            peer_is_self(&id, "me@post.ru", "", ""),
+            "наш адрес остаётся нашим, даже если ключ записи пуст"
+        );
+        assert!(
+            peer_is_self(&id, "anna@post.ru", &own, &own),
+            "наш ключ под чужим адресом — всё равно мы: peer_store общий на машину, \
+             и мост не обязан знать адрес, под которым легла наша запись"
+        );
+        let peer = "cd".repeat(32);
+        assert!(
+            !peer_is_self(&id, "anna@post.ru", &peer, &own),
+            "чужой ключ под чужим адресом — не я"
+        );
+        assert!(
+            !peer_is_self(&id, "", "", ""),
+            "пустой ключ не совпадает ни с чем, включая пустой наш"
+        );
+    }
+
+    #[test]
+    fn address_variants_starts_with_the_address_itself() {
+        let variants = address_variants(&[], "Petr@Post.RU");
+        assert_eq!(
+            variants,
+            vec!["petr@post.ru"],
+            "без словаря вариант ровно один, в нормальной форме"
+        );
+        assert!(address_variants(&[], "").is_empty(), "пустой адрес — не адрес");
+        assert!(address_variants(&[], "   ").is_empty());
+    }
+
+    #[test]
+    fn address_variants_walks_the_chain_to_the_fresh_address() {
+        let d = dict(&[("a@x", "b@x"), ("b@x", "c@x")]);
+        assert_eq!(
+            address_variants(&d, "a@x"),
+            vec!["a@x", "b@x", "c@x"],
+            "две смены подряд: ключ лежит под свежим адресом"
+        );
+    }
+
+    #[test]
+    fn address_variants_stops_on_a_cycle_instead_of_hanging() {
+        // Словарь {A:B, B:A} от смены A→B→A: резолв не должен ходить по кругу.
+        let d = dict(&[("a@x", "b@x"), ("b@x", "a@x")]);
+        assert_eq!(address_variants(&d, "a@x"), vec!["a@x", "b@x"]);
+        let empty_new = dict(&[("a@x", "")]);
+        assert_eq!(
+            address_variants(&empty_new, "a@x"),
+            vec!["a@x"],
+            "пустой новый адрес не форма пира"
+        );
+    }
+
+    #[test]
+    fn address_variants_adds_stale_addresses_of_the_same_peer() {
+        // Строка списка/письма осталась СТАРОЙ, ключ переехал на новый адрес:
+        // тап по старому должен найти ключ по новому — иначе вместо чата
+        // показывается попап «Добавить контакт» (случай X50, 24.10).
+        let d = dict(&[("old@x", "new@x")]);
+        assert_eq!(
+            address_variants(&d, "new@x"),
+            vec!["new@x", "old@x"],
+            "старый адрес — второй вариант, порядок решает быстрый путь"
+        );
+        assert_eq!(
+            address_variants(&d, "OLD@x"),
+            vec!["old@x", "new@x"],
+            "регистр и обрамление не значимы"
+        );
+    }
+
+    #[test]
+    fn address_variants_uses_only_pairs_of_this_peer() {
+        // Словарь — общий на аккаунт: в нём записи обо ВСЕХ переименованных
+        // пирах. Варианты одного не имеют права тянуть чужие адреса, иначе
+        // `peerContactFor` подставит в чат ключ постороннего.
+        let d = dict(&[("a@x", "b@x"), ("c@x", "d@x")]);
+        assert_eq!(address_variants(&d, "e@x"), vec!["e@x"]);
+        assert_eq!(address_variants(&d, "b@x"), vec!["b@x", "a@x"]);
+    }
+
+    #[test]
+    fn address_variants_reads_a_dirty_dictionary() {
+        // Ключи `email-aliases` приходят из kv как их записали (фронт словарь
+        // не причесывает), поэтому нормализация — обязанность правила, а не
+        // вызывающего: иначе пара «Old@X → New@X» не находится и тап по
+        // известному адресу открывает попап «Добавить контакт».
+        let d = dict(&[(" Old@X ", "New@X")]);
+        assert_eq!(
+            address_variants(&d, "old@x"),
+            vec!["old@x", "new@x"],
+            "грязный ключ словаря всё равно ведёт к свежему адресу"
+        );
+        assert_eq!(
+            address_variants(&d, "new@x"),
+            vec!["new@x", "old@x"],
+            "обратный ход ищет по нормализованному значению, а не по сырому"
         );
     }
 }

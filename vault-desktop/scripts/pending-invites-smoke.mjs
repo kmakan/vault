@@ -125,5 +125,44 @@ ok('без identity отпечаток пуст', calls[0] && calls[0].args.fing
 ok('без identity алиасов нет', calls[0] && Array.isArray(calls[0].args.aliases) && calls[0].args.aliases.length === 0);
 ok('своя группа всё равно скрыта', shown.length === 0, shown);
 
+// ── 4. accept-письмо: запись ключа пира ────────────────────────────────────
+// Здесь свой аккаунт и возвращался в контакты: `fetchPendingContactAccepts`
+// писал `save_peer_key` без `own_email` (Option-аргумент — `gate:tauri-args`
+// его отсутствие прощает), а гейт «это моё письмо» терялся при правке
+// пересылки. Мера — форма вызова команды + поведение на своём отправителе.
+const acceptLetter = (sender, uid = '5') => ({
+  uid,
+  date: '2026-10-24T00:00:00Z',
+  parsed: { sender, public_key: 'PEERPK', sender_name: 'Peer', pq_public_key: 'PEERPQ' },
+});
+{
+  const writes = [];
+  api.fetchAllHandshake = async () => ({ accepts: [
+    acceptLetter('peer@x.example'),
+    acceptLetter('me@local.example', '9'),
+    // Письмо СТАРОГО нашего адреса: резолв alias'а приводит его к текущему —
+    // второй гейт («это мы») иначе пропустил бы свой ключ в peer_keys.
+    acceptLetter('old@local.example', '8'),
+  ] });
+  api.loadPeerKeyEmails = async () => new Set();
+  api.getAcceptedContacts = async () => [];
+  api.getInvitedSenders = async () => ['peer@x.example', 'me@local.example', 'old@local.example'];
+  api.resolvePeerAlias = async (s) => (s === 'old@local.example' ? 'me@local.example' : s);
+  api.saveProfile = async () => {};
+  api.markAcceptedContact = () => {};
+  api.removeInvitedSender = async () => {};
+  api.contacts = [];
+  globalThis.__invoke = async (cmd, args) => { writes.push([cmd, args]); return null; };
+  reset();
+  const out = await api.fetchPendingContactAccepts();
+  const save = writes.find(([cmd]) => cmd === 'save_peer_key');
+  ok('письмо пира записало его ключ', !!save && save[1].email === 'peer@x.example' && save[1].publicKey === 'PEERPK', writes);
+  ok('PQ-ключ ушёл вместе с основным', !!save && save[1].pqPublicKey === 'PEERPQ', save && save[1]);
+  ok('запись ушла со своей почтой (OWN-ADDRESS GUARD включён)', !!save && save[1].ownEmail === 'me@local.example', save && save[1]);
+  ok('СВОИ accept-письма не записывают ключ (ни текущий адрес, ни старый alias)',
+    writes.length === 1 && save[1].email === 'peer@x.example', writes.map(([c, a]) => [c, a.email]));
+  ok('принятый возвращён списком ({sender})', JSON.stringify(out) === JSON.stringify([{ sender: 'peer@x.example' }]), out);
+}
+
 console.log(`\n=== ИТОГ: ${pass} pass, ${fail} fail ===`);
 process.exit(fail ? 1 : 0);

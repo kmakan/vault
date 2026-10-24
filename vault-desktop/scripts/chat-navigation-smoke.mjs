@@ -111,6 +111,18 @@ function makeDeps(over = {}) {
     selectChat: async (email) => { st.order.push('selectChat:' + email); },
     ...over,
   };
+  // Мок адаптера `identity.js::peerContactFor`: формы адреса отдаёт ядро, здесь
+  // — тот же контракт ({ address, key }) и перебор вариантов. st.addressVariants
+  // задаёт ответ ядра для кейса «строка списка — СТАРЫЙ адрес пира».
+  deps.peerContactFor = async (email) => {
+    const keys = deps.peerKeys();
+    const bare = String(email || '').trim().toLowerCase();
+    for (const v of (st.addressVariants || [bare])) {
+      const k = keys[v] || keys[email];
+      if (k) return { address: v, key: k };
+    }
+    return { address: bare, key: '' };
+  };
   return deps;
 }
 
@@ -147,6 +159,20 @@ function makeDeps(over = {}) {
   check('чат: письма загружены', deps.st.loaded.length === 1 && deps.st.loaded[0] === 'peer@x.ru', deps.st.loaded);
   check('чат: прокрутка вниз', deps.st.scrolled === 1, deps.st.scrolled);
   check('чат: избранное перечитано', deps.st.starred.includes('peer@x.ru'), deps.st.starred);
+}
+
+// ── 1:1-чат: смена почты — ключ под НОВЫМ адресом, тап по старому ───────
+{
+  const deps = makeDeps();
+  deps.st.addressVariants = ['old@x.ru', 'peer@x.ru'];
+  cryptoCalls.length = 0;   // утверждения ниже — про ЭТО открытие, а не про прошлые
+  await N.selectChat(deps, 'old@x.ru');
+  check('ренейм: чат открыт, а не показан попап обмена ключами',
+    deps.st.alerts.length === 0 && deps.st.qr === false, [deps.st.alerts, deps.st.qr]);
+  check('ренейм: ключ найден по новой форме адреса',
+    cryptoCalls.some((c) => c[0] === 'peer' && c[1] === 'PK1'), cryptoCalls);
+  check('ренейм: PQ-ключ взят под тем же адресом, где найден обычный',
+    cryptoCalls.some((c) => c[0] === 'peer' && c[2] === 'PQ1'), cryptoCalls);
 }
 
 // ── 1:1-чат: письма ещё не загружены — грузим сразу ────────────────────

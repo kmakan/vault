@@ -33,10 +33,30 @@ const cryptoMock = {
 
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
+// Адаптер идентичности мокан ТОЛЬКО мостом: правило «это я?» живёт в Rust
+// (`contacts_drop_own`, тест `groups::tests::…`), здесь проверяется, что
+// broadcastProfile его ВООБЩЕ спрашивает и не шлёт себе (живые данные, 24.10).
+writeFileSync(MOCKS + '/identity.js', `
+export const accountNamespace = async (email) => globalThis.__accountNamespaceMock(email);
+export const dropOwnEntries = async (list, email) => globalThis.__dropOwnMock(list, email);
+export const peerContactFor = async (address, keys) => ({
+  address: String(address || '').trim().toLowerCase(),
+  key: (keys || {})[address] || (keys || {})[String(address || '').trim().toLowerCase()] || '',
+});
+export const addressVariants = async (address) => [String(address || '').trim().toLowerCase()];
+`);
 globalThis.__apiMock = apiMock;
 globalThis.__dbMock = dbMock;
 globalThis.__accountNamespaceMock = (email) => String(email || '').trim().toLowerCase();
 globalThis.__cryptoMock = cryptoMock;
+// Эмуляция ответа ядра: убираем свой адрес и записи с НАШИМ ключом.
+globalThis.__dropOwnMock = (list, email) => {
+  globalThis.__dropCalls = (globalThis.__dropCalls || 0) + 1;
+  const mine = String(email || '').toLowerCase();
+  const own = globalThis.__cryptoMock.publicKey || '';
+  return list.filter(e => String(e.email || '').toLowerCase() !== mine
+    && !(e.public_key && own && String(e.public_key).toLowerCase() === own.toLowerCase()));
+};
 
 prepareModuleCopy(
   ROOT + '/../src/features/profiles.js',
@@ -44,6 +64,7 @@ prepareModuleCopy(
   {
     '../api.js': 'api.js',
     '../crypto.js': 'crypto.js',
+    '../identity.js': 'identity.js',
   },
   MOCKS,
 );
@@ -232,6 +253,18 @@ console.log('3. broadcastProfile (wire)');
   check('конверт: vault:1+type:profile+name+avatar+bio+key+ts',
     body.vault === 1 && body.type === 'profile' && body.name === 'Максим' && body.avatar === 'FRESH_AVA' && body.bio === 'Статус из kv' && body.key === 'MY_PUB' && typeof body.ts === 'number');
   check('аватар из kv в приоритете (гонка profiles)', body.avatar === 'FRESH_AVA');
+  // Свой аккаунт в peer_keys (алиас своей сессии лежит там же, где чужие
+  // ключи) — рассылателю письмо не уходит: без этого профиль писал сам себе.
+  apiMock.sends.length = 0;
+  globalThis.__dropCalls = 0;
+  const selfCtx = makeCtx({
+    peerKeys: { 'a@x.ru': 'KA', 'me@x.ru': 'MY_PUB', 'me@ya.ru': 'my_pub' },
+    profiles: {},
+  });
+  await P.broadcastProfile(selfCtx);
+  check('broadcast спросил ядро «это я?»', globalThis.__dropCalls === 1, globalThis.__dropCalls);
+  check('себе (адрес или тот же ключ в другом регистре) не шлём',
+    apiMock.sends.length === 1 && apiMock.sends[0].peer === 'a@x.ru', apiMock.sends);
   // без пиров — no-op
   apiMock.sends.length = 0;
   await P.broadcastProfile(makeCtx());

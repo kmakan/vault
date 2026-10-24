@@ -37,5 +37,8 @@ export default {
     { name: "окно загрузки аватара не закрывается",
       pattern: "    deps.setShowAvatarUpload(false);",
       replacement: "    void 0;" },
+    { name: "профиль рассылается и себе (алиас своей сессии лежит в peer_keys)",
+      pattern: "  const peers = (await dropOwnEntries(entries, email)).map(e => e.email);",
+      replacement: "  const peers = entries.map(e => e.email);" },
   ],
 };

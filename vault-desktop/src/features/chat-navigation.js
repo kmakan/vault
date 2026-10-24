@@ -21,8 +21,11 @@ import crypto from '../crypto.js';
 export async function selectChat(deps, email) {
   // Vault chat requires a peer key — without it there is nothing (and nothing
   // encrypted) to show. Contacts without keys are already hidden from the list;
-  // this is a hard guard on top.
-  if (!deps.peerKeys()[email]) {
+  // this is a hard guard on top. Ключ ищем по ЛЮБОЙ форме адреса (contact мог
+  // сменить почту): `peerKeys()[email]` голой строкой открывал попап «Добавить
+  // контакт» вместо чата, который и так был открыт (живые данные, 24.10).
+  const peer = await deps.peerContactFor(email);
+  if (!peer.key) {
     // Не молчим: объясняем, что нужно обменяться ключами, и сразу открываем
     // панель 🔗 (QRCodePanel) — ввод id участника или сканирование QR.
     deps.alert(deps.tr('chat_no_key') || 'Нет ключа собеседника — обменяйтесь ключами: нажмите кнопку «Добавить контакт» (кнопка со значком ссылки вверху) и введите id участника или отсканируйте QR-код.');
@@ -57,9 +60,9 @@ export async function selectChat(deps, email) {
   deps.setCurrentView('chats');
   deps.resetUnread(email); // чат открыт — сбрасываем счётчик непрочитанных
   deps.openMobileChat();
-  const pk = deps.peerKeys()[email];
-  if (pk) {
-    crypto.setPeerPublicKey(pk, deps.peerPqKeys() && deps.peerPqKeys()[email]);
+  const pk = peer.key;
+  if (peer.key) {
+    crypto.setPeerPublicKey(peer.key, deps.peerPqKeys() && deps.peerPqKeys()[peer.address]);
   }
   // Если письма ещё не загружены (клик сразу после входа — поллинг идёт
   // раз в 30 сек), загружаем их немедленно, иначе чат выглядит пустым.

@@ -1188,6 +1188,7 @@ export class ApiClient {
           publicKey: parsed.public_key,
           label: parsed.sender_name || null,
           pqPublicKey: parsed.pq_public_key || null,
+          ownEmail: this.email,
         });
         // Пометка вечная (как tombstones): без неё после удаления контакта
         // это accept-письмо молча вернёт контакт со старым ключом.

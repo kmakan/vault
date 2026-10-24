@@ -329,9 +329,10 @@ fn save_peer_key(
     public_key: String,
     label: Option<String>,
     pq_public_key: Option<String>,
+    own_email: Option<String>,
 ) -> Result<(), String> {
-    // GATE от не-адресов (fp:<fingerprint> и прочее) живёт в
-    // key_store::add_peer_key — единая точка записи всех путей + тест.
+    // GATE от не-адресов (fp:<fingerprint> и прочее) и SELF/OWN-ADDRESS GUARD
+    // — в key_store::add_peer_key: единая точка записи всех путей + тест.
     let key = StoredPeerKey {
         email,
         public_key,
@@ -339,7 +340,7 @@ fn save_peer_key(
         added_at: chrono::Utc::now().to_rfc3339(),
         pq_public_key,
     };
-    key_store::add_peer_key(key).map_err(|e| e.to_string())
+    key_store::add_peer_key_as(key, own_email).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1273,6 +1274,43 @@ fn contacts_drop_own(
         &fingerprint,
         &own_public_key,
     ))
+}
+
+/// Формы адреса, под которыми может лежать ключ собеседника после смены
+/// почты: сам адрес, конец цепочки `email-aliases` и адреса, которые резолвятся
+/// В этот. Правило цепочки (и защита от цикла A→B→A) — в ядре
+/// (`vault_core::identity::address_variants`); здесь только словарь из kv
+/// аккаунта и его разбор.
+///
+/// ЗАЧЕМ. Гейт «есть ли ключ пира» спрашивал ключ по ГОЛОЙ строке адреса, не
+/// зная словаря: после ренейма тап по известному адресу открывал попап
+/// «Добавить контакт» вместо чата (живые данные телефона, 24.10).
+#[tauri::command]
+fn identity_address_variants(
+    account: String,
+    address: String,
+) -> Result<Vec<String>, String> {
+    let raw = open_db()?
+        .kv_get(&account, "email-aliases")
+        .map_err(|e| e.to_string())?;
+    Ok(vault_core::identity::address_variants(&alias_pairs(raw), &address))
+}
+
+/// Словарь `email-aliases` (kv, JSON-объект `{старый: новый}`) в пары ядра.
+/// Неразобранное значение — пустой словарь: фронт тогда резолвит по голому
+/// адресу, как до переноса правила в Rust.
+fn alias_pairs(raw: Option<String>) -> Vec<(String, String)> {
+    let Some(s) = raw else { return Vec::new() };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&s) else {
+        return Vec::new();
+    };
+    match value.as_object() {
+        Some(map) => map
+            .iter()
+            .map(|(from, to)| (from.clone(), to.as_str().unwrap_or_default().to_string()))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Права текущего пользователя в группе — один ответ вместо четырёх
@@ -2260,6 +2298,7 @@ pub fn run() {
             groups_load_own,
             groups_contacts_to_pad,
             contacts_drop_own,
+            identity_address_variants,
             groups_access,
             groups_has_member,
             groups_rename_address,

@@ -22,6 +22,30 @@ export default {
     { name: "перенос legacy-строк выполняется каждый раз (не один раз на пару)",
       pattern: "  if (_nsMigrated || !ns.startsWith('fp:') || !em || em === ns) return ns;",
       replacement: "  if (!ns.startsWith('fp:') || !em || em === ns) return ns;" },
+    { name: "адаптер «это я?» не fail-open: сбой моста стоит списка контактов",
+      pattern: "    return list.filter(e => e.email !== email);",
+      replacement: "    throw e;" },
+    // Три меры приехали сюда вместе с правилом (партия 5e): адаптер
+    // `dropOwnEntries` забрал их у `contacts-load-mut`, иначе они висели бы
+    // «паттерн не найден» на файле, где кода уже нет.
+    { name: "решение ядра выбрасывается даже при корректном ответе (fail-open всегда)",
+      pattern: "    if (!Array.isArray(kept)) throw new Error('contacts_drop_own: не список');",
+      replacement: "    if (true) throw new Error('contacts_drop_own: не список');" },
+    { name: "ответ ядра о «своих» не применяется к списку (свой аккаунт остаётся в контактах)",
+      pattern: "    return list.filter(e => keep.has(String(e.email || '').toLowerCase()));",
+      replacement: "    return list;" },
+    { name: "алиасы своего ключа не собираются (ядро не получает, под какими адресами мы)",
+      pattern: "      .filter(e => e.public_key && ourKey",
+      replacement: "      .filter(e => false && e.public_key && ourKey" },
+    { name: "адаптер не спрашивает ядро и берёт только голый адрес (после ренейма чат не открывается)",
+      pattern: "  const variants = await addressVariants(address, email);",
+      replacement: "  const variants = [String(address || '').trim().toLowerCase()];" },
+    { name: "ключи peer_keys не нормализуются (сырой регистр с диска не находится)",
+      pattern: "    const norm = String(a).trim().toLowerCase();",
+      replacement: "    const norm = String(a);" },
+    { name: "пустой адрес всё-таки резолвится (мост дёргается впустую)",
+      pattern: "  if (!bare) return [];",
+      replacement: "  if (bare === '\u0000') return [];" },
 
   ],
 };

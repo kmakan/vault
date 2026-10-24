@@ -32,5 +32,13 @@ export default {
     { name: 'отказ моста вылетает наружу (попап теряется)',
       pattern: '      } catch (e) { /* локальный список групп недоступен — попап не теряем */ }',
       replacement: '      } catch (e) { throw e; }' },
+    // accept-письмо: запись ключа пира (тот же класс дефекта, что вернул свой
+    // аккаунт в контакты — только на пути письма-подтверждения).
+    { name: 'своё accept-письмо больше не отсекается после резолва алиаса (свой ключ едет в peer_keys)',
+      pattern: "      // Смена почты: accept-письмо старого адреса резолвится в текущий —\n      // гейт invited/пометки/сохранение ключа идут по НОВОМУ адресу.\n      const sender = await this.resolvePeerAlias(senderRaw);\n      if (sender === this.email) continue;",
+      replacement: "      // Смена почты: accept-письмо старого адреса резолвится в текущий —\n      // гейт invited/пометки/сохранение ключа идут по НОВОМУ адресу.\n      const sender = await this.resolvePeerAlias(senderRaw);\n      if (false) continue;" },
+    { name: 'своя почта не уходит в save_peer_key (OWN-ADDRESS GUARD моста выключен)',
+      pattern: '          ownEmail: this.email,',
+      replacement: '          ownEmail: null,' },
   ],
 };

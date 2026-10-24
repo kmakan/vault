@@ -22,5 +22,8 @@ export default {
     { name: "не-hex пара ключей проходит",
       pattern: "  const hex64 = /^[0-9a-f]{64}$/i;",
       replacement: "  const hex64 = /^[0-9a-z]{64}$/i;" },
+    { name: "адаптер не передаёт свою почту (own_email = None → страж адреса в мосте не срабатывает никогда)",
+      pattern: "      ownEmail: ownEmail || null,",
+      replacement: "      ownEmail: null," },
   ],
 };

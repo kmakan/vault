@@ -10,15 +10,9 @@ export default {
     { name: "себя не исключают из списка контактов",
       pattern: "    let list = await dropOwnContacts(all, email);",
       replacement: "    let list = (all || []).filter(() => true);" },
-    { name: "решение ядра выбрасывается даже для корректного ответа (fail-open всегда)",
-      pattern: "    if (!Array.isArray(kept)) throw new Error('contacts_drop_own: не список');",
-      replacement: "    if (true) throw new Error('contacts_drop_own: не список');" },
-    { name: "решение ядра о «своих» не применяется к списку",
-      pattern: "    return (list || []).filter(c => keep.has(String(c.email || '').toLowerCase()));",
-      replacement: "    return (list || []);" },
-    { name: "алиасы своего ключа не собираются из общего store",
-      pattern: "      .filter(c => c.public_key && ourKey",
-      replacement: "      .filter(c => false && c.public_key && ourKey" },
+    // Мутации «адаптер не спрашивает ядро / не применяет его ответ / не собирает
+    // алиасы» переехали в identity-mut: с партией 5e правило «это я?» живёт в
+    // src/identity.js::dropOwnEntries, набор следует за правилом.
     { name: "контакты без ключа склеиваются в один",
       pattern: "      if (!k) { byKey.set(c.email, { contact: c, added_at: c.added_at || '' }); continue; }",
       replacement: "      if (!k) { byKey.set(k, { contact: c, added_at: c.added_at || '' }); continue; }" },

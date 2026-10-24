@@ -153,5 +153,40 @@ export default {
     { name: 'любая hex-строка считается полным ключом (префикс или урезанный отпечаток)',
       pattern: '    if v.len() != 64 || !v.chars().all(|c| c.is_ascii_hexdigit()) {',
       replacement: '    if !v.chars().all(|c| c.is_ascii_hexdigit()) && !v.contains(\':\') {' },
+    // ── address_variants: КАКИМИ формами адреса это один пир (смена почты,
+    // живой случай X50: тап по известному адресу открывал попап «Добавить
+    // контакт», потому что гейт спрашивал голоую строку, не зная словаря
+    // `email-aliases`). Словарь приходит из kv как его записали, поэтому
+    // нормализация — обязанность правила, а не вызывающего.
+    { name: 'адрес не нормализуется (тап по «Petr@Post.RU» не находит ключ)',
+      pattern: '    let start = normalize(address);',
+      replacement: '    let start = address.to_string();' },
+    { name: 'пустой адрес всё-таки резолвится (первая попавшаяся запись выдаётся за ключ пира)',
+      pattern: '    if start.is_empty() {\n        return Vec::new();\n    }',
+      replacement: '    if false {\n        return Vec::new();\n    }' },
+    { name: 'ключ словаря сравнивается сырой строкой (пара « Old@X → New@X» не находится)',
+      pattern: '        let next = match aliases.iter().find(|(from, _)| normalize(from) == cur) {',
+      replacement: '        let next = match aliases.iter().find(|(from, _)| *from == cur) {' },
+    { name: 'свежий адрес возвращается без нормализации (ключ ищется по «New@X» и не находится)',
+      pattern: '            Some((_, to)) => normalize(to),',
+      replacement: '            Some((_, to)) => to.clone(),' },
+    { name: 'обратный ход сравнивает сырые пары (старый адрес пира не догоняется)',
+      pattern: '        let (f, t) = (normalize(from), normalize(to));',
+      replacement: '        let (f, t) = (from.clone(), to.clone());' },
+    { name: 'обратный ход берёт ВСЕ пары словаря (чужие алиасы лезут в варианты и подставляют чужой ключ)',
+      pattern: '        if f.is_empty() || t != start {',
+      replacement: '        if f.is_empty() {' },
+    { name: 'вариант добавляется без проверки повтора (цикл A→B→A плодит дубль в списке форм)',
+      pattern: '        if !v.is_empty() && !out.contains(&v) {',
+      replacement: '        if !v.is_empty() {' },
+    // ── peer_is_self: «эта запись — мы» для чтения списка, добивки и
+    // broadcast профиля. Два независимых пути; каждый снимается своим
+    // утверждением теста.
+    { name: 'предикат забыл про ключ (свой ключ под неизвестным адресом — «контакт», broadcast шлёт себе)',
+      pattern: '    id.has_address(address) || same_public_key(public_key, own_public_key)',
+      replacement: '    id.has_address(address)' },
+    { name: 'предикат забыл про адрес (наша строка без ключа в записи считается чужой)',
+      pattern: '    id.has_address(address) || same_public_key(public_key, own_public_key)',
+      replacement: '    same_public_key(public_key, own_public_key)' },
   ],
 };

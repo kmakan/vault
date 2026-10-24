@@ -108,7 +108,7 @@ export function setPeerKey(deps, email, key, pq = null) {
   // Запись — через владельца identity (ADR-004 J.6).
   identityStore.setPeerKey(email, key, pq);
   crypto.setPeerPublicKey(key, identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[email]);
-  crypto.savePeerKey(email, key, null, pq || undefined).catch(err => {
+  crypto.savePeerKey(email, key, null, pq || undefined, deps.email()).catch(err => {
     console.error('Failed to save peer key:', err);
   });
 }
@@ -146,7 +146,7 @@ export async function addPeerKey(deps, payload) {
       return;
     }
     const normalized = email.trim().toLowerCase();
-    await crypto.savePeerKey(normalized, publicKeyHex, null);
+    await crypto.savePeerKey(normalized, publicKeyHex, null, null, deps.email());
     // ДЕДУП: тот же ключ уже известен под другим адресом (собеседник
     // сменил почту) — удаляем старую запись, чтобы контакт не
     // продублировался (QR от контакта, сменившего почту: одна запись).

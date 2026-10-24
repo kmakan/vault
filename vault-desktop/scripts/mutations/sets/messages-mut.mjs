@@ -8,8 +8,8 @@ export default {
   smoke: 'messages-smoke.mjs',
   mutations: [
     { name: "без ключа пира чат всё равно грузится",
-      pattern: "      if (!identityStore.state.peerKeys[email]) {\n        deps.chat.set([]);\n        return;\n      }",
-      replacement: "      if (false) {\n        deps.chat.set([]);\n        return;\n      }" },
+      pattern: "      if (!(await peerContactFor(email, identityStore.state.peerKeys, myEmail())).key) {",
+      replacement: "      if (false) {" },
     { name: "дубль по id конверта не отсекается",
       pattern: "          if (!dedup.has(r.id)) dedup.set(r.id, r);",
       replacement: "          dedup.set(r.id, r);" },

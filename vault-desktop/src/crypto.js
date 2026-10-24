@@ -77,12 +77,16 @@ export class CryptoClient {
     this.peerPqEk = pqEk;
   }
 
-  async savePeerKey(email, publicKey, label, pqPublicKey = null) {
+  // ownEmail — НАША почта: мост отвергает запись чужого ключа под нашим
+  // адресом (OWN-ADDRESS GUARD). Без него страж молча пропускает свой аккаунт
+  // в peer_keys — именно так он и возвращался в контакты после ренейма.
+  async savePeerKey(email, publicKey, label, pqPublicKey = null, ownEmail = null) {
     await invoke('save_peer_key', {
       email,
       publicKey,
       label: label || null,
       pqPublicKey: pqPublicKey || null,
+      ownEmail: ownEmail || null,
     });
   }
 

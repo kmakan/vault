@@ -24,6 +24,7 @@ import { expireAt } from '../ephemeral-rule.js';
 import { uiStore } from "./session-store.js";
 import api, { db } from '../api.js';
 import crypto from '../crypto.js';
+import { peerContactFor } from '../identity.js';
 import * as PresenceFeature from './presence.js';
 import * as MsgFormat from '../message-format.js';
 import * as WireSignalRule from '../wire-signal-rule.js';
@@ -58,8 +59,9 @@ export async function loadMessages(deps, email) {
         await deps.showHistoryFirst(chat, stale);
       }
       // Vault chat: only show mail FOR this contact, and only decrypt if we
-      // hold their key (contact must be a Vault peer).
-      if (!identityStore.state.peerKeys[email]) {
+      // hold their key (contact must be a Vault peer). Ключ ищем по любой форме
+      // адреса пира (он мог сменить почту), а не по голой строке.
+      if (!(await peerContactFor(email, identityStore.state.peerKeys, myEmail())).key) {
         deps.chat.set([]);
         return;
       }

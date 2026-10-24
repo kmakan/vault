@@ -13,38 +13,17 @@
 // подделки компонента. Поведение при ошибке сохранено буквально: contacts = [],
 // а contactAliases остаётся ПРЕЖНИМ (ошибка не должна затирать уже известные
 // алиасы — иначе потеряется привязка истории чата).
-import { invoke } from '@tauri-apps/api/core';
 import api from '../api.js';
-import crypto from '../crypto.js';
+import { dropOwnEntries } from '../identity.js';
 
-// «Свой или нет» решает ядро (vault::identity через contacts_drop_own):
-// Contacts — общий peer-store на машину, и прежний фильтр `c.email !== email`
-// сравнивал СТРОКИ: регистрозависимо, без алиасов и без ключа. Собственный
-// аккаунт (тот же публичный ключ под другим адресом) оставался в списке
-// «контактом», а клик по нему открывал попап «Добавить контакт».
+// «Свой или нет» решает ядро (vault::identity через contacts_drop_own), адаптер
+// — один на весь фронт (`identity.js::dropOwnEntries`): Contacts — общий
+// peer-store на машину, и прежний фильтр `c.email !== email` сравнивал СТРОКИ:
+// регистрозависимо, без алиасов и без ключа. Собственный аккаунт (тот же
+// публичный ключ под другим адресом) оставался в списке «контактом», а клик по
+// нему открывал попап «Добавить контакт».
 async function dropOwnContacts(list, email) {
-  const pairs = (list || []).map(c => [c.email || '', c.public_key || '']);
-  try {
-    const ourKey = String(crypto.publicKey || '');
-    const aliases = (list || [])
-      .filter(c => c.public_key && ourKey
-        && String(c.public_key).toLowerCase() === ourKey.toLowerCase())
-      .map(c => c.email);
-    const fingerprint = crypto.publicKey ? String((await crypto.fingerprint()) || '') : '';
-    const kept = await invoke('contacts_drop_own', {
-      email: email || '',
-      fingerprint,
-      aliases,
-      contacts: pairs,
-    });
-    if (!Array.isArray(kept)) throw new Error('contacts_drop_own: не список');
-    const keep = new Set(kept.map(([e]) => String(e).toLowerCase()));
-    return (list || []).filter(c => keep.has(String(c.email || '').toLowerCase()));
-  } catch (e) {
-    // Мост не ответил — прежнее поведение (строка против строки), список
-    // не теряется.
-    return (list || []).filter(c => c.email !== email);
-  }
+  return dropOwnEntries(list || [], email);
 }
 
 export async function loadContacts(email) {

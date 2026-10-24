@@ -205,6 +205,10 @@ console.log('6. setPeerKey');
   K.setPeerKey(deps, 'b@x.ru', 'KB', 'PQB');
   check('ключ в owner', identityStore.state.peerKeys['b@x.ru'] === 'KB', identityStore.state.peerKeys);
   check('сохранён в Rust-хранилище', globalThis.__cryptoMock.savedPeerKeys.length === 1, globalThis.__cryptoMock.savedPeerKeys);
+  // OWN-ADDRESS GUARD моста живёт только если фронт принёс НАШУ почту: без
+  // пятого аргумента `own_email = None` и страж молча пропускает чужой ключ
+  // под нашим адресом (gate:tauri-args этого не видит — Option разрешён).
+  check('запись ключа ушла со своей почтой', globalThis.__cryptoMock.savedPeerKeys[0][4] === 'me@x.ru', globalThis.__cryptoMock.savedPeerKeys[0]);
 }
 
 // 7. setPeerKeyFromInput: пустое поле / нет чата → no-op
@@ -242,6 +246,7 @@ console.log('9. addPeerKey: QR с email');
   const hex = 'a'.repeat(64);
   await K.addPeerKey(deps, { publicKey: hex, email: 'Friend@X.RU' });
   check('ключ сохранён под нормализованным email', identityStore.state.peerKeys['friend@x.ru'] === hex, identityStore.state.peerKeys);
+  check('QR-запись ушла со своей почтой', globalThis.__cryptoMock.savedPeerKeys[0][4] === 'me@x.ru', globalThis.__cryptoMock.savedPeerKeys[0]);
   check('взаимный инвайт отправлен', globalThis.__apiMock.calls.some((c) => c[0] === 'sendContactInvite' && c[1] === 'friend@x.ru'), globalThis.__apiMock.calls);
   check('окно QR закрыто', state.qr === false);
 }

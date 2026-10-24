@@ -31,6 +31,11 @@ const state = {
   nsCalls: [],
   migrateCalls: [],
   migrateFails: false,
+  dropCalls: [],
+  dropFails: false,
+  variantCalls: [],
+  variantFails: false,
+  variantAnswer: (a) => [a],
 };
 globalThis.__state = state;
 
@@ -62,6 +67,21 @@ globalThis.__invoke = async (cmd, args) => {
     if (state.migrateFails) throw new Error('миграция отказала');
     return { total: 3 };
   }
+  // Эмуляция ОТВЕТА ядра (правило живёт в Rust: `contacts_drop_own` и
+  // `address_variants`; здесь проверяется адаптер — форма вопроса и fail-open).
+  if (cmd === 'contacts_drop_own') {
+    state.dropCalls.push(args);
+    if (state.dropFails) throw new Error('команда недоступна');
+    const mine = new Set([String(args.email).toLowerCase(), ...(args.aliases || []).map(a => String(a).toLowerCase())]);
+    const own = (args.ownPublicKey || 'PUBKEY1').toLowerCase();
+    return args.contacts.filter(([e, k]) => !mine.has(String(e).toLowerCase())
+      && !(k && String(k).toLowerCase() === own));
+  }
+  if (cmd === 'identity_address_variants') {
+    state.variantCalls.push(args);
+    if (state.variantFails) throw new Error('команда недоступна');
+    return state.variantAnswer(args.address);
+  }
   return null;
 };
 
@@ -81,6 +101,11 @@ function reset() {
   state.nsCalls = [];
   state.migrateCalls = [];
   state.migrateFails = false;
+  state.dropCalls = [];
+  state.dropFails = false;
+  state.variantCalls = [];
+  state.variantFails = false;
+  state.variantAnswer = (a) => [a];
   I.resetAccountNamespaceCache();
 }
 
@@ -183,6 +208,70 @@ function reset() {
   reset();
   const ns = await I.ensureAccountNamespace('');
   ok('пустой адрес → перенос не выполняется', state.migrateCalls.length === 0 && typeof ns === 'string');
+}
+
+// ── dropOwnEntries: «это я?» решает ядро, адаптер — форма и fail-open ────
+{
+  reset();
+  const kept = await I.dropOwnEntries([
+    { email: 'me@bk.ru', public_key: 'PUBKEY1' },
+    { email: 'ME@YA.RU', public_key: 'PUBKEY1' },
+    { email: 'anna@x.ru', public_key: 'K2' },
+  ], 'me@bk.ru');
+  ok('свой адрес и запись с нашим ключем убраны',
+    kept.length === 1 && kept[0].email === 'anna@x.ru', kept);
+  ok('вопрос задан ядру с адресом, fp и алиасами',
+    state.dropCalls.length === 1
+      && state.dropCalls[0].email === 'me@bk.ru'
+      && state.dropCalls[0].fingerprint === state.fp
+      && state.dropCalls[0].aliases.map(a => a.toLowerCase()).join(',') === 'me@bk.ru,me@ya.ru', state.dropCalls);
+}
+{
+  reset();
+  state.dropFails = true;
+  const kept = await I.dropOwnEntries([
+    { email: 'me@bk.ru', public_key: 'K1' }, { email: 'anna@x.ru', public_key: 'K2' },
+  ], 'me@bk.ru');
+  ok('мост молчит — fail-open: список не потерян, себя отсекаем строкой',
+    kept.length === 1 && kept[0].email === 'anna@x.ru', kept);
+}
+
+// ── peerContactFor: ключ пира по любой форме адреса ──────────────────────
+{
+  reset();
+  state.variantAnswer = (a) => (a === 'old@bk.ru' ? ['old@bk.ru', 'new@bk.ru'] : [a]);
+  const peer = await I.peerContactFor('old@bk.ru', { 'new@bk.ru': 'K1' }, 'me@bk.ru');
+  ok('ренейм: ключ найден по новой форме, адрес — тот, где найден',
+    peer.key === 'K1' && peer.address === 'new@bk.ru', peer);
+  ok('формы адреса спросила ядро по namespace аккаунта',
+    state.variantCalls.length === 1 && state.variantCalls[0].account === 'fp:aa:bb:cc:dd:ee:ff'
+      && state.variantCalls[0].address === 'old@bk.ru', state.variantCalls);
+}
+{
+  reset();
+  const peer = await I.peerContactFor('anna@x.ru', { 'anna@x.ru': 'K9' }, 'me@bk.ru');
+  ok('без смены почты: быстрый путь (адрес == ключ в памяти)',
+    peer.key === 'K9' && peer.address === 'anna@x.ru', peer);
+}
+{
+  reset();
+  const mixed = await I.peerContactFor('anna@x.ru', { 'Anna@X.ru': 'K7' }, 'me@bk.ru');
+  ok('ключ находится и под СЫРЫМ адресом из peer_keys (регистр сохранён на диске)',
+    mixed.key === 'K7' && mixed.address === 'anna@x.ru', mixed);
+}
+{
+  reset();
+  state.variantFails = true;
+  const peer = await I.peerContactFor('anna@x.ru', { 'anna@x.ru': 'K9' }, 'me@bk.ru');
+  ok('мост молчит — fail-open по голому адресу, чат не теряется', peer.key === 'K9', peer);
+  const none = await I.peerContactFor('ghost@x.ru', {}, 'me@bk.ru');
+  ok('пустой поиск возвращает адрес без ключа (вызывающий покажет обмен)',
+    none.key === '' && none.address === 'ghost@x.ru', none);
+  reset();
+  const empty = await I.peerContactFor('', { 'a@x': 'K' }, 'me@bk.ru');
+  ok('пустой адрес не резолвится и не дёргает мост',
+    empty.key === '' && empty.address === '' && state.variantCalls.length === 0,
+    { empty, calls: state.variantCalls });
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

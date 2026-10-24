@@ -81,6 +81,78 @@ export function resetAccountNamespaceCache() {
   _nsMigrated = false;
 }
 
+// ── «Это я?» и «какими формами адреса это один и тот же пир» ──────────
+// ОБА вопроса решает ядро (`vault_core::identity`), здесь только транспорт и
+// форма ответа. Раньше «свой или нет» сравнивало строки в трёх местах фронта
+// (список контактов, обход peer_keys при broadcast профиля), а гейт «есть ли
+// ключ собеседника» не знал словаря `email-aliases`: после смены почты у пира
+// тап по известному адресу открывал попап «Добавить контакт» вместо чата, а
+// письмо-профиль уходило самому себе (живые данные телефона, 24.10).
+
+// Записи WITHOUT нашего аккаунта: адрес (email ∪ алиасы) или наш публичный
+// ключ — мера в `contacts_drop_own`. Fail-open: мост молчит → прежнее
+// сравнение строк, список не теряется.
+export async function dropOwnEntries(entries, email) {
+  const list = entries || [];
+  try {
+    const ourKey = String((cryptoClient && cryptoClient.publicKey) || '');
+    const aliases = list
+      .filter(e => e.public_key && ourKey
+        && String(e.public_key).toLowerCase() === ourKey.toLowerCase())
+      .map(e => e.email);
+    const fingerprint = ourKey ? String((await cryptoClient.fingerprint()) || '') : '';
+    const kept = await invoke('contacts_drop_own', {
+      email: email || '',
+      fingerprint,
+      aliases,
+      contacts: list.map(e => [e.email || '', e.public_key || '']),
+    });
+    if (!Array.isArray(kept)) throw new Error('contacts_drop_own: не список');
+    const keep = new Set(kept.map(([e]) => String(e).toLowerCase()));
+    return list.filter(e => keep.has(String(e.email || '').toLowerCase()));
+  } catch (e) {
+    return list.filter(e => e.email !== email);
+  }
+}
+
+// Формы адреса, под которыми может лежать ключ собеседника (сам адрес, конец
+// цепочки old→new, старые адреса, резолвящиеся в этот). Пустой ответ моста —
+// не «нет форм»: остаётся голый адрес, как до переноса правила в Rust.
+export async function addressVariants(address, email) {
+  const bare = String(address || '').trim().toLowerCase();
+  if (!bare) return [];
+  try {
+    const v = await invoke('identity_address_variants', {
+      account: await accountNamespace(email),
+      address: bare,
+    });
+    if (Array.isArray(v) && v.length) return v.map(x => String(x));
+  } catch (e) { /* словарь недоступен — резолв по голому адресу */ }
+  return [bare];
+}
+
+// Ключ пира и адрес, под которым он найден (формы адреса решает ядро, см.
+// `addressVariants`; здесь перебор и возврат первого найденного). Пустой ключ
+// = «ключа нет ни под одной формой» — вызывающий показывает обмен ключами.
+export async function peerContactFor(address, peerKeys, email) {
+  const variants = await addressVariants(address, email);
+  // Ключи `peer_keys.json` — Сырые адреса, как их записали (регистр и
+  // обрамление сохранены), поэтому карта приводится к нормальной форме
+  // ядровского `normalize` = trim + lower. Это механика доступа к памяти, а
+  // не решение: КАКИМИ формами адреса это один пир — решает ядро.
+  const keys = {};
+  for (const [a, k] of Object.entries(peerKeys || {})) {
+    const norm = String(a).trim().toLowerCase();
+    if (k && !keys[norm]) keys[norm] = k;
+  }
+  const bare = String(address || '').trim().toLowerCase();
+  for (const v of variants) {
+    const k = keys[v];
+    if (k) return { address: v, key: k };
+  }
+  return { address: bare, key: '' };
+}
+
 // Резолв + одноразовый перенос legacy-строк (старый емейл → fp-namespace).
 // Вызывается при входе/смене почты, когда ключ уже загружен. Команда
 // db_account_migrate идемпотентна, но и вызываем её мы ровно ОДИН раз на пару.

@@ -19,7 +19,7 @@
 // клиентов; показываем только настоящее имя.
 
 import api, { db } from '../api.js';
-import { accountNamespace } from '../identity.js';
+import { accountNamespace, dropOwnEntries } from '../identity.js';
 import crypto from '../crypto.js';
 // ADR-005 W2 (`t_bcb8927a`), партия 8: состояние — у владельцев.
 //   · uiStore.formState/modalFlags — форма правки контакта и карточка контакта
@@ -165,7 +165,13 @@ export async function onProfileSave({ showToast, t, broadcastProfile: doBroadcas
 // ADR-001: все зависимости в сигнатуре — крипто-пайплайн читает только
 // перечисленное, правка фичи не касается соседних доменов.
 export async function broadcastProfile({ email, displayName, profiles, peerKeys, peerPqKeys }) {
-  const peers = Object.keys(peerKeys || {});
+  // Рассылаем НЕ всем из peer_keys: алиасы собственной сессии лежат там же,
+  // где чужие ключи, и письмо-профиль уходило самому себе (а свой аккаунт
+  // выглядел контактом). «Это я?» решает ядро через dropOwnEntries.
+  const entries = Object.entries(peerKeys || {})
+    .map(([addr, key]) => ({ email: addr, public_key: key }))
+    .filter(e => e.public_key);
+  const peers = (await dropOwnEntries(entries, email)).map(e => e.email);
   if (!peers.length) return;
   const name = displayName || email || '';
   // Актуальный аватар: kv (после onAvatarUpdate/saveProfile) в приоритете,

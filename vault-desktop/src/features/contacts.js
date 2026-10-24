@@ -110,6 +110,7 @@ export async function acceptContactInvite(c, deps) {
   const {
     loadPeerKeyEmails, markAcceptedContact, showToast, t, setPeerKey, markLoaded,
     savePeerKey, addContact, saveProfile, sendContactAccept, publicKey, peerKeys,
+    email,
     markContactHandled, unmarkContactHandled, splicePendingContacts, pushPendingContact,
     loadProfiles, loadContacts, showNextContact,
   } = deps;
@@ -129,7 +130,7 @@ export async function acceptContactInvite(c, deps) {
       return;
     }
     if (c.pq_public_key) setPeerKey(c.sender, c.public_key, c.pq_public_key);
-    await savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined);
+    await savePeerKey(c.sender, c.public_key, c.sender_name || null, c.pq_public_key || undefined, email());
     await markAcceptedContact(key);
     setPeerKey(c.sender, c.public_key);
     markLoaded(c.sender);

@@ -123,10 +123,14 @@ pub fn add_peer_key_at(keys_dir: &Path, key: StoredPeerKey) -> Result<()> {
         ));
     }
     // SELF-KEY GUARD: сохранение своего публичного ключа как peer-ключа
-    // молча ломает ECDH в обе стороны. Read-only (auto_migrate=false) —
-    // миграция при чтении не должна писать в момент add_peer_key.
+    // молча ломает ECDH в обе стороны, а в списке контактов собственной
+    // аккаунт-строкой. Мера — `identity::same_public_key` (регистр и
+    // обрамление ключа не значимы; прежняя строка `==` пропускала ключ в
+    // ВЕРХНЕМ регистре).
+    // Read-only (auto_migrate=false) — миграция при чтении не
+    // должна писать в момент add_peer_key.
     if let Some(kp) = load_keypair_at(keys_dir, false)? {
-        if kp.public_key == key.public_key {
+        if identity::same_public_key(&kp.public_key, &key.public_key) {
             return Err(anyhow!("Refusing to save your own public key as a peer key"));
         }
     }
@@ -367,12 +371,17 @@ mod tests {
     fn add_peer_rejects_own_pubkey() {
         let dir = TempDir::new().unwrap();
         save_keypair_at(dir.path(), &kp_legacy()).unwrap();
-        let own = StoredPeerKey {
-            email: "peer@example.com".into(), public_key: "abcd1234".into(),
-            ..peer("peer@example.com", "abcd1234")
-        };
-        let err = add_peer_key_at(dir.path(), own).unwrap_err();
-        assert!(err.to_string().contains("own public key"));
+        // То же написание и РЕГИСТР/обрамление другой: страж меряет ключ ядром,
+        // а не строкой (прежняя `==` пропускала «ABCD1234», и свой аккаунт
+        // оставался в peer_keys контактом без ключа).
+        for spelling in ["abcd1234", "ABCD1234", " abcd1234 "] {
+            let own = StoredPeerKey {
+                email: "peer@example.com".into(), public_key: spelling.into(),
+                ..peer("peer@example.com", spelling)
+            };
+            let err = add_peer_key_at(dir.path(), own).unwrap_err();
+            assert!(err.to_string().contains("own public key"), "отказ {spelling:?}: {err}");
+        }
         assert!(load_peer_keys_at(dir.path()).unwrap().is_empty());
     }
     /// Гейт адреса — правило `identity::is_contact_address`: служебный

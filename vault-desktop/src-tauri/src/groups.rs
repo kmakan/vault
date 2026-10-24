@@ -581,7 +581,7 @@ pub fn contacts_drop_own(
     contacts
         .iter()
         .filter(|(email, public_key)| {
-            !(id.has_address(email) || identity::same_public_key(public_key, own_public_key_hex))
+            !identity::peer_is_self(&id, email, public_key, own_public_key_hex)
         })
         .cloned()
         .collect()

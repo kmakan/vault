@@ -79,4 +79,47 @@ check('removeIgnored без peerKeys снимает только сам адре
 check('removeIgnored не мутирует вход',
   (() => { const src = { 'a@x.y': 1 }; C.removeIgnored(src, 'a@x.y', {}); return Object.keys(src).length === 1; })());
 
+// acceptContactInvite — запись ключа приславшего инвайт. Проверка появилась
+// вместе с OWN-ADDRESS GUARD моста: save_peer_key без `own_email` — это
+// Option-аргумент, который `gate:tauri-args` прощать вправе, значит молча
+// выключенный страж ловит только этот смоук.
+{
+  const calls = { save: [], added: [], accepted: [], profile: [], toasts: [] };
+  const deps = {
+    loadPeerKeyEmails: async () => new Set(),
+    markAcceptedContact: (k) => calls.accepted.push(k),
+    showToast: (m) => calls.toasts.push(m),
+    t: (k) => k,
+    setPeerKey: () => {},
+    markLoaded: () => {},
+    savePeerKey: async (...a) => { calls.save.push(a); },
+    addContact: async (e) => { calls.added.push(e); },
+    saveProfile: (...a) => { calls.profile.push(a); },
+    sendContactAccept: async (e) => { calls.accepted.push('letter:' + e); },
+    publicKey: () => 'MYPUB',
+    peerKeys: () => ({}),
+    email: () => 'me@x.y',
+    markContactHandled: () => {},
+    unmarkContactHandled: () => {},
+    splicePendingContacts: () => {},
+    pushPendingContact: () => {},
+    loadProfiles: () => {},
+    loadContacts: () => {},
+    showNextContact: () => {},
+  };
+  const c = { sender: 'peer@x.y', uid: '7', public_key: 'PEERPK', sender_name: 'Peer', pq_public_key: 'PEERPQ', date: '2026-10-24T00:00:00Z' };
+  await C.acceptContactInvite(c, deps);
+  check('accept: ключ сохранён', calls.save.length === 1 && calls.save[0][0] === 'peer@x.y' && calls.save[0][1] === 'PEERPK', calls.save);
+  check('accept: сохранение ушло со своей почтой (guard не выключен)', calls.save[0][4] === 'me@x.y', calls.save[0]);
+  check('accept: PQ-ключ передан', calls.save[0][3] === 'PEERPQ', calls.save[0]);
+  check('accept: контакт добавлен', calls.added.join() === 'peer@x.y', calls.added);
+  check('accept: письмо-подтверждение отправлено', calls.accepted.includes('letter:peer@x.y'), calls.accepted);
+
+  // Уже известный ключ → второй записи и письма нет, есть тост «уже в контактах».
+  const dup = { save: [] };
+  const deps2 = { ...deps, peerKeys: () => ({ 'peer@x.y': 'PEERPK' }), savePeerKey: async (...a) => { dup.save.push(a); }, addContact: async () => {}, sendContactAccept: async () => {} };
+  await C.acceptContactInvite(c, deps2);
+  check('accept: существующий ключ не записывается повторно', dup.save.length === 0, dup.save);
+}
+
 console.log('=== ИТОГО: '+p+' pass, '+f+' fail ==='); if (f) process.exit(1);
