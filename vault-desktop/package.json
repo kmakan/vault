@@ -1,7 +1,7 @@
 {
   "name": "vault-desktop",
   "private": true,
-  "version": "0.1.265",
+  "version": "0.1.266",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -57,8 +57,9 @@
     "gate:hygiene": "node scripts/hygiene-gate.mjs",
     "gate:rust-mutations": "node scripts/rust-mutation-gate.mjs",
     "gate:mutation-density": "node scripts/mutation-density-gate.mjs",
+    "gate:delegate-wiring": "node scripts/delegate-wiring-gate.mjs",
     "gate:mutations": "node scripts/mutation-gate.mjs",
-    "quality": "npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
+    "quality": "npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:delegate-wiring && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
     "smoke:send": "node scripts/send-smoke.mjs",
     "smoke:messages": "node scripts/messages-smoke.mjs"

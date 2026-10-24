@@ -274,6 +274,49 @@ const PROBES = {
     p.closeChatMenu();
     await sleep(300);
     step('меню закрылось', !document.querySelector('.chat-menu'));
+
+    // Попап сообщения (24.10.2026): пункт «Реакция» ОБЯЗАН открыть пикер.
+    // Регрессия 49861f5 → c7a1f65: фича «возвращала» состояние, Vue-обработчик
+    // отбрасывал результат, сеттер не вызывался — пикер не открывался.
+    // Смоуки это ловят на модуле; эта проба меряет ПРОВОДКУ в живом DOM.
+    {
+      // Активный чат может быть пустым (проверка «приёмка» не отправляется) —
+      // перебираем контакты, пока не найдём чат с настоящим сообщением.
+      let bubble = document.querySelector('.message:not(.call-event)');
+      if (!bubble) {
+        const items = Array.from(document.querySelectorAll('.contact-item:not(.notes-self)')).slice(0, 8);
+        for (const it of items) {
+          it.click();
+          await sleep(1000);
+          bubble = document.querySelector('.message:not(.call-event)');
+          if (bubble) break;
+        }
+      }
+      if (!bubble) {
+        report.steps.push({ name: 'попап сообщения: пункт «Реакция»', pass: null, extra: 'ни в одном из 8 чатов нет сообщений — проба пропущена' });
+      } else {
+        const mid = bubble.getAttribute('data-msg-id');
+        bubble.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 200 }));
+        await sleep(600);
+        const menu = document.querySelector('.message-menu');
+        step('попап сообщения открывается', !!menu, { found: !!menu });
+        const reactBtn = menu && Array.from(menu.querySelectorAll('button'))
+          .find((b) => /Реакция|React/i.test(b.innerText || ''));
+        step('в попапе есть пункт «Реакция»', !!reactBtn, {
+          items: menu ? Array.from(menu.querySelectorAll('button')).map((b) => (b.innerText || '').trim().slice(0, 22)) : [],
+        });
+        if (reactBtn) {
+          reactBtn.click();
+          await sleep(600);
+          step('пикер реакций: состояние записано сеттером (c7a1f65)', p.reactionPickerMsgId === mid,
+            { reactionPickerMsgId: p.reactionPickerMsgId, expected: mid });
+          step('пикер отрисован в DOM', !!document.querySelector('.reaction-picker'));
+          p.reactionPickerMsgId = null; // убор за собой
+        }
+        p.messageMenu = null;
+        await sleep(200);
+      }
+    }
     return report;
   })()`,
 };
