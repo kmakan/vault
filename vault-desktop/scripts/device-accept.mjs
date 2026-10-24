@@ -319,6 +319,49 @@ const PROBES = {
     }
     return report;
   })()`,
+  // Призрак «свой аккаунт в контактах» (24.10, X50): под сессией koanmak@ya.ru
+  // в списке стояли собственные адреса (koanmak@gmail.com, vault-msg@ya.ru),
+  // а клик по ним открывал попап «Добавить контакт». Решение «это мы?» живёт в
+  // Rust; эта проба меряет ЕГО ПРОВОДКУ на живом устройстве: список контактов
+  // не содержит ни одного адреса с нашим публичным ключом. Идемпотентна и
+  // ничего не трогает в UI.
+  ghosts: `(async () => {
+    const app = document.querySelector('#app').__vue_app__;
+    const p = app._container._vnode.component.proxy;
+    const report = { steps: [] };
+    const step = (name, cond, extra) => {
+      report.steps.push({ name, pass: !!cond, extra: extra === undefined ? undefined : extra });
+    };
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+    step('мост доступен', !!inv);
+    if (!inv) return report;
+    const own = await inv('load_my_keypair');
+    step('наш keypair прочитан', !!(own && own.public_key), {});
+    const all = await inv('load_peer_keys');
+    const ownKey = norm(own && own.public_key);
+    const ownAddrs = (all || []).filter((k) => norm(k.public_key) === ownKey).map((k) => k.email);
+    const mine = new Set([norm(p.email), ...ownAddrs.map(norm)]);
+    const ghosts = (p.contacts || []).filter((c) => mine.has(norm(c.email)) || mine.has(norm(c.id)));
+    step('своих адресов в контактах нет', ghosts.length === 0, {
+      email: p.email, ownAddrs,
+      ghosts: ghosts.map((g) => g.email || g.id),
+      contacts: (p.contacts || []).length,
+    });
+    const dom = Array.from(document.querySelectorAll('.contact-item')).map((e) => (e.innerText || '').toLowerCase());
+    const domGhosts = dom.filter((t) => [...mine].some((m) => m && t.includes(m)));
+    step('в отрисованном списке своих нет', domGhosts.length === 0, { domGhosts });
+    const dropped = await inv('contacts_drop_own', {
+      email: p.email || '',
+      fingerprint: String(p.fingerprint || ''),
+      aliases: ownAddrs,
+      contacts: [['vault-msg@ya.ru', own.public_key || ''], ['icemaksim@gmail.com', 'c73ce55a' + '00'.repeat(28)]],
+    });
+    step('команда contacts_drop_own зарегистрирована и убирает наш ключ',
+      Array.isArray(dropped) && dropped.length === 1 && dropped[0][0] === 'icemaksim@gmail.com',
+      { dropped });
+    return report;
+  })()`,
 };
 
 const which = argOf('--probe', 'ui');
