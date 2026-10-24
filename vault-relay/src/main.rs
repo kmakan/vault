@@ -1944,7 +1944,7 @@ async fn relay_purchase_checkout(
         months: req.months,
         lang: req.lang.unwrap_or_else(|| "ru".to_string()),
     };
-    match provider.create_checkout(&cr) {
+    match provider.create_checkout(&cr).await {
         Ok(c) => {
             app.remember_checkout(c.clone());
             (
@@ -1981,7 +1981,7 @@ async fn relay_purchase_verify(
     if checkout.expires_at < now() {
         return err(StatusCode::GONE, "checkout_expired");
     }
-    match provider.verify(&checkout) {
+    match provider.verify(&checkout).await {
         Ok(vault_relay::payments::PaymentStatus::Paid) => {
             // Подписка — ПЕРСИСТ (persist.rs): купленный Pro не должен
             // теряться при рестарте релея. Токен — v2 (в нём план и срок).
@@ -2064,6 +2064,9 @@ async fn main() {
     }
     // Платёжный провайдер. VAULT_RELAY_PAYMENTS=test — тестовый (оплата
     // подтверждается мгновенно, для выдачи Pro-токенов без реальной оплаты).
+    // yookassa — живой ЮKassa: собирается ТОЛЬКО с ключами
+    // VAULT_RELAY_YOOKASSA_SHOPID/_SECRET_KEY и VAULT_RELAY_PUBLIC_URL;
+    // без них — заглушка «недоступно» и warn, а не полуживой магазин.
     // Иное непустое значение — провайдер-заглушка «недоступно» (честный отказ,
     // а не выдуманный успех). Пусто — платежи выключены: все платёжные роуты
     // отвечают 402.
@@ -2076,6 +2079,15 @@ async fn main() {
             Some("test") | Some("1") | Some("true") => {
                 Some(Arc::new(vault_relay::payments::TestProvider::new()) as Arc<dyn vault_relay::payments::PaymentProvider>)
             }
+            Some("yookassa") => match vault_relay::payments::YkProvider::from_env() {
+                Ok(p) => Some(Arc::new(p) as Arc<dyn vault_relay::payments::PaymentProvider>),
+                Err(why) => {
+                    tracing::warn!("payments=yookassa but provider not configured: {why}");
+                    Some(Arc::new(
+                        vault_relay::payments::UnavailableProvider::new("yookassa"),
+                    ) as Arc<dyn vault_relay::payments::PaymentProvider>)
+                }
+            },
             Some(name) if !name.is_empty() => Some(Arc::new(
                 vault_relay::payments::UnavailableProvider::new(name),
             ) as Arc<dyn vault_relay::payments::PaymentProvider>),

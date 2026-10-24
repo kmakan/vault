@@ -21,7 +21,7 @@ hex = "0.4"
 # FCM Part B: подпись JWT (RS256) и HTTPS-обмен с fcm.googleapis.com
 # (у ntfy — plain HTTP на локальный сокет, у FCM — только https/TLS).
 rsa = "0.9"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"

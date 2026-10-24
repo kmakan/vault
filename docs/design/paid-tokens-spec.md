@@ -278,7 +278,7 @@ trait PaymentProvider: Send + Sync {
 
 | env | провайдер | регион | когда |
 |---|---|---|---|
-| `VAULT_RELAY_YOOKASSA_SHOPID` + `_SECRET_KEY` | ЮKassa (HTTP API, `POST /payments`) | РФ | после ИП |
+| `VAULT_RELAY_PAYMENTS=yookassa` + `VAULT_RELAY_YOOKASSA_SHOPID` + `_SECRET_KEY` + `VAULT_RELAY_PUBLIC_URL` | ЮKassa (HTTP API, `POST /payments`); без ключей или без публичного URL — релей поднимает заглушку «недоступно» и пишет warn | РФ | код готов (`payments::YkProvider`), живые платежи — после ИП |
 | `VAULT_RELAY_REVENUECAT_KEY` | RevenueCat → Google Play Billing | Global | публикация в Play |
 | `VAULT_RELAY_STRIPE_KEY` | Stripe Checkout | Global | не-РФ карты, вне Play |
 | `VAULT_RELAY_PAYMENTS=0` | все `/purchase/*` → 402 | — | текущее состояние, по умолчанию |
@@ -396,6 +396,12 @@ pro_buy, pro_renew, pro_offline_badge, pro_daily_left, pro_devices
 — всё отдаёт 402, как сейчас.
 
 **Шаг 5. `PaymentProvider` + стаб.** — ✅ СДЕЛАНО 22.10: трейт, `TestProvider`, `UnavailableProvider`.
+Дополнено 24.10: `YkProvider` (ЮKassa API v3) — код с юнит-тестами на
+инжецируемом транспорте (create/verify, цены §2, честные коды ошибок);
+трейт стал async (boxed-футур: провайдер живёт как `Arc<dyn …>`, блокировать
+tokio-обработчик HTTP-вызовом нельзя). Живые ключи — после ИП (ORG-2);
+без `VAULT_RELAY_YOOKASSA_SHOPID/_SECRET_KEY/VAULT_RELAY_PUBLIC_URL` релей
+поднимает заглушку и пишет warn.
 Трейт + `TestProvider` (мгновенно `Paid` по фиксированному `checkout_id`) —
 **тестовые токены plan=Pro без реальной оплаты**. ЮKassa/RevenueCat/Stripe —
 пустые заглушки, возвращающие `unavailable`, пока нет ИП.
@@ -460,7 +466,7 @@ pro_buy, pro_renew, pro_offline_badge, pro_daily_left, pro_devices
 | 2. Персистентность | `vault-relay/src/persist.rs` | привязки токенов, подписки, устройства подписки (`sub_tokens`) — всё переживает рестарт релея |
 | 3. Тарифные лимиты | `vault-relay/src/main.rs` | было в коде: v2-тариф → `Kind::of(&t).is_unlimited()` → снятие суточного лимита |
 | 4. Роуты | `vault-relay/src/main.rs` | `POST /relay/purchase/checkout`, `POST /relay/purchase/verify`, `POST /relay/tokens/activate`, `GET /relay/tokens/info` |
-| 5. Провайдер | `vault-relay/src/payments.rs` | трейт `PaymentProvider`, `TestProvider` (мгновенная оплата), `UnavailableProvider` (честный отказ) |
+| 5. Провайдер | `vault-relay/src/payments.rs` | async-трейт `PaymentProvider`, `TestProvider` (мгновенная оплата), `UnavailableProvider` (честный отказ), `YkProvider` (ЮKassa v3, код готов + mock-тесты; ключи — после ИП) |
 | 6. CLI | `vault-relay/src/bin/gen_token.rs` | `--plan pro --months 12 --sub 42`; адрес очереди печатается в stderr |
 | 7. Клиент | `vault-desktop/src/relay-client.js` | четыре функции + офлайн-грейс 7 дней на монотонных часах (`performance.timeOrigin`) |
 | 8. Экран | `vault-desktop/src/features/pro-plan.js` + `components/SettingsPage.vue` | четыре состояния (free/trial/active/expired), 22 ключа в ru/en/zh |
