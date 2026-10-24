@@ -80,19 +80,6 @@
         <AppBehavior />
       </div>
 
-      <!-- ЭКСПЕРИМЕНТАЛЬНЫЕ ФУНКЦИИ -->
-      <div v-if="activeCategory === 'experiments'" class="settings-section">
-        <h2>{{ t('settings_experiments') }}</h2>
-        <p class="setting-hint" style="margin-bottom:16px">
-          {{ t('experiments_warning') }}
-        </p>
-        <div class="setting-row">
-          <span>{{ t('experiments_calls') }}{{ experimentsCalls ? t('experiments_calls_on') : '' }}</span>
-          <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
-        </div>
-        <p v-if="experimentsCalls" class="setting-hint">{{ t('experiments_calls_hint') }}</p>
-      </div>
-
       <!-- ПОЧТА -->
       <div v-if="activeCategory === 'email'" class="settings-section">
         <h2>{{ t('settings_email_accounts') }}</h2>
@@ -152,9 +139,22 @@
         </div>
       </div>
 
-      <!-- ЗВОНКИ: рингтон входящего, сигнал ожидания, превью -->
+      <!-- ЗВОНКИ: тумблеры возможностей, рингтон входящего, сигнал ожидания, превью -->
       <div v-if="activeCategory === 'calls'" class="settings-section">
         <h2>{{ t('settings_calls') }}</h2>
+        <!-- Переключатели самих возможностей живут здесь, а не в отдельной
+             вкладке: пользователь ищет тумблер звонков в разделе «Звонки».
+             Значение дефолта и форма записи — у Rust (vault-core::settings). -->
+        <div class="setting-row">
+          <span>{{ t('experiments_calls') }}{{ experimentsCalls ? t('experiments_calls_on') : '' }}</span>
+          <label class="toggle"><input type="checkbox" v-model="experimentsCalls" @change="$emit('experiments-calls', experimentsCalls)" /><span class="slider"></span></label>
+        </div>
+        <p v-if="experimentsCalls" class="setting-hint">{{ t('experiments_calls_hint') }}</p>
+        <div class="setting-row">
+          <span>{{ t('experiments_video') }}{{ experimentsVideo ? t('experiments_video_on') : '' }}</span>
+          <label class="toggle"><input type="checkbox" v-model="experimentsVideo" @change="$emit('experiments-video', experimentsVideo)" /><span class="slider"></span></label>
+        </div>
+        <p v-if="experimentsVideo" class="setting-hint">{{ t('experiments_video_hint') }}</p>
         <div class="setting-group">
           <label>{{ t('calls_ringtone_incoming') }}</label>
           <div class="ringtone-row">
@@ -440,6 +440,7 @@
 <script>
 import api, { db } from '../api.js';
 import { accountNamespace } from '../identity.js';
+import { EXP_CALLS_FLAG, EXP_VIDEO_FLAG } from '../features/settings-ui.js';
 import { useI18n } from '../i18n.js';
 import { invoke } from '@tauri-apps/api/core';
 import { duressApi } from '../api.js';
@@ -461,7 +462,7 @@ export default {
   name: 'SettingsPage',
   components: { AvatarUpload, ThemeSelector, IconPicker, FontSelector, AppBehavior, LanguageSelector, EmailSettings, Icon },
   props: { email: String, userAvatarUrl: String, displayName: String, bio: String },
-  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed', 'pro-state'],
+  emits: ['avatar-update', 'logout', 'icon-changed', 'name-update', 'change-email', 'bio-save', 'experiments-calls', 'experiments-video', 'autoclean-change', 'eco-mode', 'relay-enabled', 'keys-changed', 'pro-state'],
   setup() { const { t, currentLocale } = useI18n(); return { t, currentLocale }; },
   data() {
     return {
@@ -506,6 +507,7 @@ export default {
       // период автоочистки ('off'|'1d'|'7d'|'30d'|'365d').
       localAutoclean: 'off',
       experimentsCalls: false,
+      experimentsVideo: false,
       notifSound: true,
       // RELEASE-PREP: проверка обновлений через latest.json.
       appVersion: '',
@@ -528,7 +530,6 @@ export default {
         { id: 'appearance', icon: 'palette', label: 'Внешний вид' },
         { id: 'chats', icon: 'chat', label: 'Чаты' },
         { id: 'calls', icon: 'phone', label: 'Звонки' },
-        { id: 'experiments', icon: 'help', label: 'Экспериментальные функции' },
         { id: 'email', icon: 'mail', label: 'Почта' },
         { id: 'notifications', icon: 'bell', label: 'Уведомления' },
         { id: 'privacy', icon: 'lock', label: 'Приватность' },
@@ -571,7 +572,12 @@ export default {
     try {
       this.localMediaQuality = (await db.kvGet('anon', 'media-quality')) || 'high';
       this.localAutoclean = (await db.kvGet('anon', 'autoclean-period')) || 'off';
-      this.experimentsCalls = (await db.kvGet('anon', 'exp-calls')) === '1';
+      // Тумблеры возможностей: значение отдаёт Rust (vault-core::settings),
+      // ошибок чтения не подменяем — остаётся показанное.
+      const calls = await api.settingsFlag(EXP_CALLS_FLAG);
+      if (calls !== null) this.experimentsCalls = calls;
+      const video = await api.settingsFlag(EXP_VIDEO_FLAG);
+      if (video !== null) this.experimentsVideo = video;
       this.ecoMode = (await db.kvGet('anon', 'eco-mode')) === '1';
       // Presence (M2): per-account тумблер heartbeat-зелёной точки.
       this.presenceEnabled = (await db.kvGet(await accountNamespace(this.email), 'presence-enabled')) === '1';

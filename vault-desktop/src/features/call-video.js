@@ -23,9 +23,15 @@ export function toggleCallVideo(deps) {
 
 // Старт видео: сначала поднимаем флаг (canvas рендерится по v-if=videoOn),
 // и только когда DOM готов — стартуем remote-декодер.
+//
+// Гейт экспериментальной возможности: без включённого тумблера видео не
+// поднимается НИКАКИМ путём — ни кнопкой, ни auto-start при чужих кадрах
+// (иначе собеседник с включённым тумблером включал бы видео собеседнику,
+// который его выключал).
 export async function startCallVideo(deps) {
   const c = callSession.state.currentCall;
   if (!c || callSession.state.callVideoOn) return;
+  if (!deps.expVideo()) return;
   const cid = c.call_id;
   callSession.state.callVideoOn = true;
   await deps.nextTick();

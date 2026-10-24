@@ -82,8 +82,10 @@ function reset(over = {}) {
   callSession.state.currentCall = over.currentCall === undefined ? { call_id: 'c1', peer: 'p@x.ru' } : over.currentCall;
   callSession.state.callMediaConnected = over.callMediaConnected === undefined ? true : over.callMediaConnected;
   callSession.state.callVideoOn = over.callVideoOn === undefined ? false : over.callVideoOn;
+  globalThis.__expVideo = over.expVideo === undefined ? true : over.expVideo;
 }
 const deps = {
+  expVideo: () => globalThis.__expVideo,
   nextTick: async () => {},
   getRemoteCanvas: () => ({ tag: 'CANVAS' }),
 };
@@ -177,6 +179,26 @@ console.log('9. Повторный старт при включённом вид
   reset({ callVideoOn: true });
   await V.startCallVideo(deps);
   check('повторный старт не трогает движок', !has('startRemote') && !has('startCamera'));
+}
+
+// 9b. Тумблер экспериментального видео выключен → видео не поднимается НИКАКИМ
+// путём: ни кнопкой (toggle), ни auto-start при чужих кадрах. Иначе собеседник
+// с включённым тумблером включает видео тому, кто его выключал.
+console.log('9b. Тумблер видео выключен → старт невозможен');
+{
+  reset({ expVideo: false });
+  await V.startCallVideo(deps);
+  check('auto-start: флаг не поднят, движок молчит',
+    callSession.state.callVideoOn === false && !has('startRemote') && !apiHas('start'),
+    globalThis.__videoMock.calls);
+  reset({ expVideo: false });
+  V.toggleCallVideo(deps);
+  check('кнопка при выключенном тумблере не включает видео',
+    callSession.state.callVideoOn === false && !has('startRemote'));
+  reset({ expVideo: true });
+  await V.startCallVideo(deps);
+  check('тот же звонок с включённым тумблером включает видео',
+    callSession.state.callVideoOn === true && has('startRemote'));
 }
 
 // 10. decodeFrame/stopVideoTracks — делегаты движку

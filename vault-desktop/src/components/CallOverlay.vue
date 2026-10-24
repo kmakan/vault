@@ -143,9 +143,12 @@
           >
             <Icon name="volume" :size="22" color="#ffffff" />
           </button>
-          <!-- Камера (M3): вкл/выкл видео. Premium-функция — ошибка
-               пермишена/отсутствие камеры не роняет аудио-звонок. -->
+          <!-- Камера (M3): вкл/выкл видео. Экспериментальная возможность —
+               кнопка есть, только когда тумблер включён (дефолт считает Rust).
+               Premium-функция — ошибка пермишена/отсутствие камеры не роняет
+               аудио-звонок. -->
           <button
+            v-if="videoEnabled"
             class="call-orb call-orb-extra"
             :class="{ 'orb-active': videoOn }"
             :title="texts.camera"
@@ -183,6 +186,9 @@ export default {
     speaker: { type: Boolean, default: false },
     // M3: видео включено (камера активна + remote-декодер подписан).
     videoOn: { type: Boolean, default: false },
+    // Экспериментальный тумблер видео: кнопка камеры показывается только при
+    // нём (значение — из Rust, см. vault-core::settings).
+    videoEnabled: { type: Boolean, default: false },
     // Реально ли пошёл звук.
     mediaConnected: { type: Boolean, default: false },
     elapsed: { type: String, default: '00:00' },

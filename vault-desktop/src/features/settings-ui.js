@@ -13,8 +13,11 @@
 //
 // deps (ADR-001 R3): всё, что нужно снаружи, — явными параметрами.
 import api from '../api.js';
-import { db } from '../api.js';
 import { findProvider, CUSTOM_PROVIDER_ID } from '../mailProviders.js';
+
+// Имена хранимых тумблеров (один словарь на фронт; правило — в Rust).
+export const EXP_CALLS_FLAG = 'exp-calls';
+export const EXP_VIDEO_FLAG = 'exp-video';
 
 export function applyMailProvider(deps, id) {
   deps.setMailProvider(id);
@@ -50,5 +53,22 @@ export function onAppIconChanged(deps, id) {
 
 export async function onExperimentsCalls(deps, on) {
   deps.setExpCalls(!!on);
-  try { await db.kvSet('anon', 'exp-calls', on ? '1' : '0'); } catch (e) { /* kv недоступен */ }
+  await api.settingsFlagSet(EXP_CALLS_FLAG, !!on);
+}
+
+export async function onExperimentsVideo(deps, on) {
+  deps.setExpVideo(!!on);
+  await api.settingsFlagSet(EXP_VIDEO_FLAG, !!on);
+}
+
+// Стартовое состояние тумблеров. Дефолт «пользователь не выбирал» считает
+// Rust (vault-core::settings), фронт лишь перекладывает ответ в состояние:
+// раньше он был продублирован в data компонента и в перечитывании kv, и смена
+// решения (звонки — по умолчанию) обязывала помнить обе строки.
+export async function loadExperimentFlags(deps) {
+  const calls = await api.settingsFlag(EXP_CALLS_FLAG);
+  if (calls !== null) deps.setExpCalls(calls);
+  const video = await api.settingsFlag(EXP_VIDEO_FLAG);
+  if (video !== null) deps.setExpVideo(video);
+  return { calls: deps.expCalls(), video: deps.expVideo() };
 }

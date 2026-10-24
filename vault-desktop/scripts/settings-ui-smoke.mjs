@@ -13,7 +13,9 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const MOCKS = '/tmp/settings-ui-smoke-mocks';
 mkdirSync(MOCKS, { recursive: true });
 
-// Мок api: setAppIcon и kv.
+// Мок api: setAppIcon и kv. settings_flag играет РUST-сторону: правило
+// дефолта здесь ЗАШИТО как заглушка ядра (проверяется проводка фронта), само
+// правило меряют юнит-тесты vault-core::settings и живая проба на устройстве.
 globalThis.__apiMock = {
   iconCalls: [],
   kv: {},
@@ -21,8 +23,15 @@ globalThis.__apiMock = {
 };
 writeFileSync(MOCKS + '/api.js', `
 const m = globalThis.__apiMock;
+const DEFAULT_ON = { 'exp-calls': true };
 export const db = { kvSet: async (ns, k, v) => { m.kv[k] = v; } };
-export const api = { setAppIcon: m.setAppIcon };
+export const api = {
+  setAppIcon: m.setAppIcon,
+  settingsFlag: (name) => (m.flagStub
+    ? m.flagStub(name)
+    : (name in m.kv ? m.kv[name] === '1' : !!DEFAULT_ON[name])),
+  settingsFlagSet: async (name, on) => { m.kv[name] = on ? '1' : '0'; return null; },
+};
 export default { ...api, db };
 `);
 
@@ -43,7 +52,7 @@ function check(name, cond, extra) {
 function makeDeps(over = {}) {
   const s = {
     provider: 'gmail', imap: '', imapPort: '', smtp: '', smtpPort: '',
-    iconId: '', expCalls: false,
+    iconId: '', expCalls: false, expVideo: false,
     storageItems: {},
     favicon: { href: '' },
   };
@@ -57,6 +66,9 @@ function makeDeps(over = {}) {
     setSmtpPort: (v) => { s.smtpPort = v; },
     setAppIconId: (v) => { s.iconId = v; },
     setExpCalls: (v) => { s.expCalls = v; },
+    setExpVideo: (v) => { s.expVideo = v; },
+    expCalls: () => s.expCalls,
+    expVideo: () => s.expVideo,
     storage: () => ({
       setItem: (k, v) => { s.storageItems[k] = v; },
       getItem: (k) => s.storageItems[k] || null,
@@ -123,6 +135,50 @@ function makeDeps(over = {}) {
   await S.onExperimentsCalls(deps, false);
   check('эксперимент: выключен и сохранён',
     deps.s.expCalls === false && globalThis.__apiMock.kv['exp-calls'] === '0', globalThis.__apiMock.kv);
+}
+
+// ── Эксперимент «видео» (отдельный тумблер, по умолчанию выключен) ─────
+{
+  globalThis.__apiMock.kv = {};
+  const deps = makeDeps();
+  await S.onExperimentsVideo(deps, true);
+  check('видео: включён только тумблер видео, звонки не тронуты',
+    deps.s.expVideo === true && deps.s.expCalls === false, deps.s);
+  check('видео: записан свой ключ',
+    globalThis.__apiMock.kv['exp-video'] === '1' && !('exp-calls' in globalThis.__apiMock.kv),
+    globalThis.__apiMock.kv);
+  await S.onExperimentsVideo(deps, false);
+  check('видео: выключен и сохранён',
+    deps.s.expVideo === false && globalThis.__apiMock.kv['exp-video'] === '0', globalThis.__apiMock.kv);
+}
+
+// ── Стартовое чтение: фронт обязан слушать ответ Rust, а не свою догадку ──
+{
+  globalThis.__apiMock.kv = {};
+  const deps = makeDeps();
+  const got = await S.loadExperimentFlags(deps);
+  check('чтение: звонки включены, пока записи нет (правило в Rust)',
+    deps.s.expCalls === true && got.calls === true, deps.s);
+  check('чтение: видео выключено, пока записи нет',
+    deps.s.expVideo === false && got.video === false, deps.s);
+
+  globalThis.__apiMock.kv = { 'exp-calls': '0', 'exp-video': '1' };
+  const d2 = makeDeps();
+  await S.loadExperimentFlags(d2);
+  check('чтение: явный выбор пользователя важнее дефолта',
+    d2.s.expCalls === false && d2.s.expVideo === true, d2.s);
+
+  // Ошибку чтения мост превращает в null (см. api.settingsFlag), и фронт
+  // обязан на null ничего не менять: иначе включённые звонки «пропадали» бы
+  // молча при любом сбое чтения БД.
+  globalThis.__apiMock.kv = { 'exp-calls': '1' };
+  const broken = makeDeps();
+  broken.s.expCalls = true;
+  globalThis.__apiMock.flagStub = () => null;
+  await S.loadExperimentFlags(broken);
+  delete globalThis.__apiMock.flagStub;
+  check('чтение: null-ответ моста не переписывает состояние',
+    broken.s.expCalls === true, broken.s);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');
