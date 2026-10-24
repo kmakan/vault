@@ -1265,14 +1265,6 @@ fn groups_backfill_my_fingerprint(email: String, fingerprint: String) -> Result<
     groups::backfill_my_fingerprint(&email, &fingerprint).map_err(|e| e.to_string())
 }
 
-/// «Тот ли это человек?» — канонический адрес участника группы по peer_keys.
-/// Фронт добивает контакты из состава групп; без этого вопроса старый адрес
-/// собеседника (смена почты) превращался в «контакт-призрак без ключа».
-#[tauri::command]
-fn groups_member_canonical(email: String, fingerprint: String) -> Result<Option<String>, String> {
-    groups::canonical_peer_for_member(&email, &fingerprint).map_err(|e| e.to_string())
-}
-
 /// Отложить приглашение в группу: ключ получателя ещё не получен. Состояние
 /// живёт в groups.json (`invited`), решение о снятии — тоже там.
 #[tauri::command]
@@ -2208,7 +2200,6 @@ pub fn run() {
             groups_rename_address,
             groups_backfill_my_fingerprint,
             groups_backfill_member_fingerprints,
-            groups_member_canonical,
             groups_mark_invited,
             groups_pending_invites,
             groups_invite_sent,
