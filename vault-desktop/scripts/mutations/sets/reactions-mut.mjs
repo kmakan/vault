@@ -14,8 +14,10 @@ export default {
       pattern: "    if (sel && String(sel).length > 0) return current;",
       replacement: "    if (false) return current;" },
     { name: "повторный клик не закрывает пикер",
-      pattern: "  return current === msgId ? null : msgId;",
-      replacement: "  return msgId;" },
+      // c7a1f65: возврат обёрнут в set(...) — фича теперь сама пишет
+      // состояние через deps.setReactionPickerMsgId.
+      pattern: "  return set(current === msgId ? null : msgId);",
+      replacement: "  return set(msgId);" },
     { name: "реакция не пишется в сообщение",
       pattern: "      if (!msg.reactions.includes(emoji)) msg.reactions.push(emoji);",
       replacement: "      void 0;" },

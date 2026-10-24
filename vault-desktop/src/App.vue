@@ -296,6 +296,7 @@
            (см. media (hover: none)), всё доступно отсюда. -->
         <div v-if="messageMenu" class="message-menu-overlay" @click="messageMenu = null" @contextmenu.prevent="messageMenu = null">
           <div class="message-menu" :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }" @click.stop>
+            <button v-if="!messageMenu.msg.callEvent" @click="toggleReactionPicker(messageMenu.msg.id); messageMenu = null"><Icon name="smile" :size="14" /> {{ t('add_reaction') || 'Реакция' }}</button>
             <button v-if="!messageMenu.msg.callEvent" @click="setReply(messageMenu.msg); messageMenu = null"><Icon name="reply" :size="14" /> {{ t('chat_reply_to') || 'Ответить' }}</button>
             <button v-if="!messageMenu.msg.callEvent" @click="copyMessageText(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_text') || 'Копировать текст' }}</button>
             <button v-if="!messageMenu.msg.callEvent" @click="copyMessageAll(messageMenu.msg); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_all') || 'Копировать всё' }}</button>
@@ -323,14 +324,17 @@
             <button v-if="!messageMenu.msg.callEvent && messageMenu.msg.from !== 'me' && !messageMenu.msg.deleted" @click="reportMessageContent(messageMenu.msg); messageMenu = null">
               <Icon name="alert" :size="14" /> {{ t('settings_report_content') || 'Пожаловаться' }}
             </button>
-            <!-- Телефоны/ссылки из текста: по кнопке на каждый (может быть несколько) -->
+            <!-- Телефоны/ссылки из текста: копирование явными пунктами;
+                 ссылка ещё и открывается (на телефоне в чате клик по ссылке
+                 уже открывает, в меню просит именно копировать). -->
             <template v-if="messageMenu.phones && messageMenu.phones.length">
               <div class="message-menu-sep"></div>
-              <button v-for="(p, pi) in messageMenu.phones" :key="'ph' + pi" @click="copyText(p); messageMenu = null"><Icon name="phone" :size="14" /> {{ p }}</button>
+              <button v-for="(p, pi) in messageMenu.phones" :key="'ph' + pi" @click="copyText(p); messageMenu = null"><Icon name="phone" :size="14" /> {{ t('copy_phone') || 'Скопировать номер телефона' }}{{ messageMenu.phones.length > 1 ? ': ' + p : '' }}</button>
             </template>
             <template v-if="messageMenu.urls && messageMenu.urls.length">
               <div class="message-menu-sep"></div>
-              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openUrl(u); messageMenu = null"><Icon name="link" :size="14" /> {{ u.length > 40 ? u.slice(0, 40) + '…' : u }}</button>
+              <button v-for="(u, ui) in messageMenu.urls" :key="'cp' + ui" @click="copyText(u); messageMenu = null"><Icon name="copy" :size="14" /> {{ t('copy_link') || 'Скопировать ссылку' }}{{ messageMenu.urls.length > 1 ? ': ' + (u.length > 32 ? u.slice(0, 32) + '…' : u) : '' }}</button>
+              <button v-for="(u, ui) in messageMenu.urls" :key="'ur' + ui" @click="openUrl(u); messageMenu = null"><Icon name="link" :size="14" /> {{ t('open_link') || 'Открыть ссылку' }}{{ messageMenu.urls.length > 1 ? ': ' + (u.length > 32 ? u.slice(0, 32) + '…' : u) : '' }}</button>
             </template>
           </div>
         </div>

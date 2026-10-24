@@ -23,10 +23,16 @@ export default {
       pattern: "  if (deps.isIgnored(from)) return null;",
       replacement: "  void 0;" },
     { name: "незашифрованное тело принимается как конверт",
-      pattern: "  if (!body || !crypto.isEncrypted(body)) return null;",
-      replacement: "  if (!body) return null;" },
+      // Якорь — строка 193 (гвард с блоком warn); old-паттерн «return null»
+      // устарел после появления блока предупреждения.
+      pattern: "  if (!body || !crypto.isEncrypted(body)) {",
+      replacement: "  if (!body) {" },
     { name: "без ключа пира конверт идёт по общему пути",
-      pattern: "  if (deps.peerKeys[from]) {",
-      replacement: "  if (true) {" },
+      // ДВУСТРОЧНЫЙ якорь: «  if (deps.peerKeys[from]) {» без комментария
+      // совпадает и с гвардом warn (внутри блока isEncrypted), а движок
+      // меняет ПЕРВОЕ вхождение — warn-ветка мутировала безвредно, и мутация
+      // «выживала». Комментарий 211 делает вхождение единственным.
+      pattern: "  // 1:1 — расшифровка пир-ключом.\n  if (deps.peerKeys[from]) {",
+      replacement: "  // 1:1 — расшифровка пир-ключом.\n  if (true) {" },
   ],
 };
