@@ -1313,6 +1313,94 @@ fn alias_pairs(raw: Option<String>) -> Vec<(String, String)> {
     }
 }
 
+/// Эффективное значение тумблера возможности: чтение kv + правило дефолта.
+///
+/// ЗАЧЕМ КОМАНДА. До неё дефолт жил в двух местах фронта (`expCalls: false` в
+/// data и `=== '1'` при перечитывании), и смена продуктового решения (звонки
+/// «по умолчанию включены») требует не забыть ни одной строки; забыл — и кнопка
+/// на секунду появляется, потом гаснет. Фронт спрашивает по имени, ответ один.
+/// Ошибку чтения БД дефолтом не подменяем: соврать «выключено» хуже, чем
+/// вернуть ошибку — фронт тогда сохраняет показанное состояние, а сломанное
+/// чтение видно.
+#[tauri::command]
+fn settings_flag(name: String) -> Result<bool, String> {
+    let stored = open_db()?
+        .kv_get("anon", &name)
+        .map_err(|e| e.to_string())?;
+    Ok(vault_core::settings::flag_enabled(&name, stored.as_deref()))
+}
+
+/// Записать выбор пользователя (тумблер). Форма записи — у ядра
+/// (`flag_stored`), та же, что читает `settings_flag`.
+#[tauri::command]
+fn settings_flag_set(name: String, enabled: bool) -> Result<(), String> {
+    open_db()?
+        .kv_set("anon", &name, vault_core::settings::flag_stored(enabled))
+        .map_err(|e| e.to_string())
+}
+
+/// kv-ключ настройки «каким транспортом отправлять» (аккаунта, не 'anon').
+const TRANSPORT_PREFERENCE_KEY: &str = "transport-preference";
+
+/// План доставки для аккаунта: что делать с ОЧЕРЕДНЫМ сообщением/сигналом.
+///
+/// `relay_available` — факт состояния релея (тумблер пользователя, живой ли
+/// ответ, остался ли суточный лимит). Факт знает фронт, а ПРАВИЛО, что с ним
+/// делать, — ядро (`vault_core::transport::plan`): в Rust переезжает решение,
+/// состояние не переезжает.
+///
+/// Испорченное значение настройки разбирается в «auto»: доставка не должна
+/// зависеть от мусора в kv.
+#[tauri::command]
+fn transport_plan(
+    account: String,
+    relay_available: bool,
+) -> Result<vault_core::transport::Plan, String> {
+    let stored = open_db()?
+        .kv_get(&account, TRANSPORT_PREFERENCE_KEY)
+        .map_err(|e| e.to_string())?;
+    Ok(vault_core::transport::plan(
+        vault_core::transport::parse_preference(stored.as_deref()),
+        relay_available,
+    ))
+}
+
+/// Записать выбор транспорта. В kv попадает только нормализованное имя из
+/// ядра — написать «что-то постороннее» нельзя.
+#[tauri::command]
+fn transport_preference_set(account: String, preference: String) -> Result<(), String> {
+    let normalized = vault_core::transport::parse(&preference);
+    open_db()?
+        .kv_set(&account, TRANSPORT_PREFERENCE_KEY, normalized)
+        .map_err(|e| e.to_string())
+}
+
+/// Текущий выбор транспорта (для подписи тумблера во фронте). Возвращается
+/// нормализованное имя: «настройки нет» и «в kv мусор» — оба «auto».
+#[tauri::command]
+fn transport_preference(account: String) -> Result<&'static str, String> {
+    let stored = open_db()?
+        .kv_get(&account, TRANSPORT_PREFERENCE_KEY)
+        .map_err(|e| e.to_string())?;
+    Ok(vault_core::transport::parse_preference(stored.as_deref()))
+}
+
+/// Сдвинуть выбор (клик по чипу транспорта): порядок и форма значения — у
+/// ядра, команда только читает, считает и пишет. Возвращает НОВОЕ имя, чтобы
+/// фронт не пересчитывал цикл по своей копии списка.
+#[tauri::command]
+fn transport_preference_next(account: String) -> Result<&'static str, String> {
+    let stored = open_db()?
+        .kv_get(&account, TRANSPORT_PREFERENCE_KEY)
+        .map_err(|e| e.to_string())?;
+    let next =
+        vault_core::transport::next(vault_core::transport::parse_preference(stored.as_deref()));
+    open_db()?
+        .kv_set(&account, TRANSPORT_PREFERENCE_KEY, next)
+        .map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
 /// Права текущего пользователя в группе — один ответ вместо четырёх
 /// сравнений адресов во фронте. `None` — группы нет в локальном списке
 /// (её ещё не импортировали): это НЕ «не моя», а «не знаю», и фронт обязан
@@ -2342,6 +2430,12 @@ pub fn run() {
             db_kv_delete,
             db_kv_get_all,
             db_kv_set_all,
+            settings_flag,
+            settings_flag_set,
+            transport_plan,
+            transport_preference,
+            transport_preference_next,
+            transport_preference_set,
             db_account_namespace,
             db_account_migrate,
             export_backup,

@@ -20,4 +20,10 @@ pub mod group_types;
 pub mod identity;
 pub mod key_store;
 pub mod key_store_types;
+/// Тумблеры возможностей: дефолт «пользователь не выбирал» — одно правило для
+/// десктопа, Android и тестов (ADR-005).
+pub mod settings;
+/// План доставки (почта/релей) для сообщения и для сигналов звонка — одно
+/// правило на оба случая.
+pub mod transport;
 pub use key_store_types::{KeyStoreMetadata, StoredKeyPair, StoredPeerKey};
