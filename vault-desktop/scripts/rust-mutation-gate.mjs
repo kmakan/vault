@@ -127,11 +127,25 @@ export function runSet(set, opts = {}) {
     writeJournal(mFile, src);
     writeFileSync(mFile, mutated);
     let out;
+    let foreign = null;
     try {
       out = runTests(crate, kind, set.timeoutMs);
     } finally {
-      writeFileSync(mFile, src);   // восстановление побайтно
-      clearJournal(mFile);
+      // Побайтное восстановление — только если файл за прогон не менял никто
+      // кроме нас (см. mutations/engine.mjs: чужую правку откат затирал).
+      const now = readFileSync(mFile, 'utf8');
+      if (now !== src && now !== mutated) {
+        clearJournal(mFile);
+        foreign = 'файл изменён извне во время прогона — восстановление отменено';
+      } else {
+        writeFileSync(mFile, src);
+        clearJournal(mFile);
+      }
+    }
+    if (foreign) {
+      broken.push({ name: m.name, reason: foreign + ': ' + mFile });
+      log('  ✗ ' + m.name + ' — ' + foreign + '; набор остановлен, чужую правку не трогаем');
+      return { id: set.id, total: set.mutations.length, caught, survived, rejected, broken };
     }
     if (out.timedOut) {
       broken.push({ name: m.name, reason: 'тесты зависли (таймаут)' });

@@ -445,6 +445,15 @@ impl Storage {
         Ok(())
     }
 
+    /// Удалить историю ОДНОГО чата. Отсутствующая строка — не ошибка.
+    pub fn clear_chat_history(&self, account: &str, chat_key: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM chat_history WHERE account=?1 AND chat_key=?2",
+            params![account, chat_key],
+        )?;
+        Ok(())
+    }
+
     // Tombstones: deleted messages must never resurrect (DC rfc724_mid analog).
     pub fn add_tombstone(&self, account: &str, msg_id: &str, mid: &str) -> Result<()> {
         self.conn.execute(
@@ -1115,6 +1124,28 @@ mod tests {
         let path = std::env::temp_dir().join(format!("vault-ns-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         Storage::open(Some(&path)).expect("open test db")
+    }
+
+    #[test]
+    fn clear_chat_history_touches_only_that_chat() {
+        let s = test_storage();
+        s.save_history("acc@x", "old@peer", "[{\"id\":\"a\"}]").unwrap();
+        s.save_history("acc@x", "keep@peer", "[{\"id\":\"b\"}]").unwrap();
+        s.save_history("other@x", "old@peer", "[{\"id\":\"c\"}]").unwrap();
+        s.clear_chat_history("acc@x", "old@peer").unwrap();
+        assert!(
+            s.load_history("acc@x", "old@peer").unwrap().is_none(),
+            "старый чат не удалён"
+        );
+        assert!(
+            s.load_history("acc@x", "keep@peer").unwrap().is_some(),
+            "чужой чат того же аккаунта пострадал"
+        );
+        assert!(
+            s.load_history("other@x", "old@peer").unwrap().is_some(),
+            "история другого аккаунта пострадала"
+        );
+        s.clear_chat_history("acc@x", "old@peer").unwrap();
     }
 
     #[test]

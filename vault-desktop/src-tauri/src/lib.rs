@@ -26,8 +26,6 @@ mod presence;
 // Legacy-модуль (первые итерации): не вызывается из lib.rs, оставлен как
 // API-запас.
 mod backup_import;
-#[allow(dead_code)]
-mod history_store;
 mod key_escrow;
 #[cfg(test)]
 mod key_escrow_smoke;
@@ -1561,9 +1559,15 @@ fn db_history_clear(account: String) -> Result<(), String> {
 /// Удалить историю ОДНОГО чата (смена почты собеседником: старый chat_key =
 /// email пира). Отдельная команда, потому что db_history_clear чистит ВСЮ
 /// историю аккаунта — для ренейма это уничтожило бы остальные переписки.
+/// Хранилище — sqlite (`chat_history`, см. db_history_save/load): файл под
+/// history/<email>/<chat>.json нынешний код ни разу не пишет, поэтому прежняя
+/// ссылка на history_store молча НЕ удаляла строку — старый адрес пира
+/// оставлял полную копию переписки в БД после ренейма (живые данные 24.10).
 #[tauri::command]
 fn db_history_clear_chat(account: String, chat_key: String) -> Result<(), String> {
-    crate::history_store::clear_chat_history(&account, &chat_key).map_err(|e| e.to_string())
+    open_db()?
+        .clear_chat_history(&account, &chat_key)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

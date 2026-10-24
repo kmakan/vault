@@ -79,12 +79,25 @@ function applyMutation(file, pattern, replacement) {
   }
   writeJournal(file, src);
   writeFileSync(abs, mutated);
-  return { applied: true, before, after: sha(mutated) };
+  return { applied: true, before, after: sha(mutated), mutated };
 }
 
-function restoreFile(file, content) {
-  writeFileSync(path.join(ROOT, file), content);
+// Побайтное восстановление — только ЕСЛИ файл за время прогона не менял никто
+// кроме нас. Прогон мутаций пишет в рабочие файлы и откатывает их снимком,
+// взятым ДО мутации; параллельная сессия, правящая тот же файл в этот момент,
+// теряет свою правку (проверено на живом дереве 24.10 — откат съел чужие
+// изменения в vault-core/src/identity.rs). Чужую запись не затираем: сигнал,
+// набор остановлен, код выхода — провал.
+function restoreFile(file, content, expectMutated) {
+  const abs = path.join(ROOT, file);
+  const now = readFileSync(abs, 'utf8');
+  if (now !== content && now !== expectMutated) {
+    clearJournal(file);
+    return { ok: false, reason: 'файл изменён извне во время прогона — восстановление отменено' };
+  }
+  writeFileSync(abs, content);
   clearJournal(file);
+  return { ok: true };
 }
 
 // Маркеры ПРОВАЛА УТВЕРЖДЕНИЯ (смоук упал на проверке, а не на ошибке).
@@ -152,10 +165,17 @@ export function runSet(set, opts = {}) {
       continue;
     }
     let out;
+    let foreign = null;
     try {
       out = runSmoke(set.smoke, set.timeoutMs);
     } finally {
-      restoreFile(mFile, backups.get(mFile) || original);
+      const r = restoreFile(mFile, backups.get(mFile) || original, res.mutated);
+      if (!r.ok) foreign = r.reason;
+    }
+    if (foreign) {
+      broken.push({ name: m.name, reason: foreign + ': ' + mFile });
+      log('  ✗ ' + m.name + ' — ' + foreign + ' (' + mFile + '); набор остановлен, чужую правку не трогаем');
+      return { id: set.id, total: set.mutations.length, caught, survived, crashed, broken };
     }
     if (out.timedOut) {
       // Таймаут — тест не отработал: мутацию засчитываем как пойманную только
