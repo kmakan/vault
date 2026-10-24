@@ -74,7 +74,7 @@ for i in 1 2 3; do
   echo "  restart $i: foreground=$RES crash-маркеров=$CRASH"
 done
 
-echo "=== 6. CDP-приёмка (19 проверок) ==="
+echo "=== 6. CDP-приёмка (проверки UI + призраки + проводка стражей) ==="
 # ВЫХОД ЭТОГО ШАГА = ВЫХОД ПРИЁМКИ. Раньше здесь стояло
 #   node scripts/device-accept.mjs 2>&1 | tail -4
 # и код возврата node съедался пайпом: скрипт завершался с 0 даже когда
@@ -95,4 +95,20 @@ if [ "$CDP_RC" -ne 0 ]; then
   echo "✗ CDP-приёмка провалена (код $CDP_RC) — версию не публиковать"
   exit "$CDP_RC"
 fi
+
+# Проба «призраков» и проба ПРОВОДКИ стражей записи ключа. Юниты и мутации
+# меряют правило; эти две меры снимаются только на живом устройстве, потому что
+# дефект 24.10 был именно в проводе: `own_email` — опция, а гейт форматы
+# вызова пропущенную опцию прощает, и страж в выпущенном APK молчал.
+for PROBE in ghosts guards; do
+  echo "--- проба $PROBE"
+  node scripts/device-accept.mjs --probe "$PROBE" > "$CDP_LOG.$PROBE" 2>&1
+  PROBE_RC=$?
+  tail -12 "$CDP_LOG.$PROBE"
+  if [ "$PROBE_RC" -ne 0 ]; then
+    echo "✗ проба $PROBE провалена — версию не публиковать"
+    exit "$PROBE_RC"
+  fi
+done
+
 echo "✓ CDP-приёмка принята"

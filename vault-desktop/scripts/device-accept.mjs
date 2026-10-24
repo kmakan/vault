@@ -411,6 +411,61 @@ const PROBES = {
       { dropped });
     return report;
   })()`,
+  // Проводка стражей записи ключа (24.10, партия 5e). Юниты и мутации меряют
+  // правило; эта проба меряет ПРОВОД на живом устройстве: аргумент `ownEmail`
+  // доезжает до моста. Различающий случай — ЧУЖОЙ ключ под НАШЕЙ почтой: если
+  // own_email не передан, страж молчит и запись сохраняется (так свой аккаунт
+  // и возвращался в контакты). Проба обратима: нормальная запись удаляется
+  // сразу, а записью с НАШИМ ключом хранилище не пачкается — её отсекает
+  // self-key guard ядра независимо от проводки.
+  guards: `(async () => {
+    const inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+    const report = { steps: [] };
+    const step = (name, cond, extra) => {
+      report.steps.push({ name, pass: !!cond, extra: extra === undefined ? undefined : extra });
+    };
+    if (!inv) { step('мост доступен', false); return report; }
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const app = document.querySelector('#app').__vue_app__;
+    const ownEmail = norm(app._container._vnode.component.proxy.email);
+    const own = await inv('load_my_keypair');
+    const bogus = 'b'.repeat(64);            // формально правильный ЧУЖОЙ ключ
+    const probeAddr = 'probe.' + ownEmail;   // пробы не должно остаться в хранилище
+    const before = ((await inv('load_peer_keys')) || []).length;
+
+    let errOwn = null;
+    try {
+      await inv('save_peer_key', { email: ownEmail, publicKey: bogus,
+        label: null, pqPublicKey: null, ownEmail });
+    } catch (e) { errOwn = String(e); }
+    const leaked = ((await inv('load_peer_keys')) || [])
+      .filter((k) => norm(k.email) === ownEmail).length;
+    step('чужой ключ под своей почтой отвергнут мостом',
+      !!errOwn && /our own address/i.test(errOwn) && leaked === 0,
+      { err: errOwn, leaked });
+
+    let errPeer = null;
+    try {
+      await inv('save_peer_key', { email: probeAddr, publicKey: bogus,
+        label: null, pqPublicKey: null, ownEmail });
+    } catch (e) { errPeer = String(e); }
+    step('обычная запись (чужой ключ под чужой почтой) проходит — guard не сжигает её',
+      errPeer === null, { err: errPeer });
+    try { await inv('remove_peer_key', { email: probeAddr }); } catch (e) {}
+
+    let errSelf = null;
+    try {
+      await inv('save_peer_key', { email: probeAddr, publicKey: own.public_key,
+        label: null, pqPublicKey: null, ownEmail });
+    } catch (e) { errSelf = String(e); }
+    step('наш ключ как ключ пира отвергнут ядром',
+      !!errSelf && /own public key/i.test(errSelf), { err: errSelf });
+    try { await inv('remove_peer_key', { email: probeAddr }); } catch (e) {}
+
+    const after = ((await inv('load_peer_keys')) || []).length;
+    step('проба ничего не оставила в хранилище', after === before, { before, after });
+    return report;
+  })()`,
 };
 
 const which = argOf('--probe', 'ui');
