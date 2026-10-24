@@ -20,6 +20,9 @@ pub mod group_types;
 pub mod identity;
 pub mod key_store;
 pub mod key_store_types;
+/// Что значит отказ публикации релея (429 суточного лимита vs 429 вспышки) —
+/// одно протокольное решение для десктопа, Android и тестов (ADR-005).
+pub mod relay;
 /// Тумблеры возможностей: дефолт «пользователь не выбирал» — одно правило для
 /// десктопа, Android и тестов (ADR-005).
 pub mod settings;

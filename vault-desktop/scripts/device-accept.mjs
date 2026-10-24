@@ -538,9 +538,22 @@ const PROBES = {
     } else {
       step('чип транспорта', null, 'нет открытого чата — рядок фич не отрендерен');
     }
+    // 6. Разбор 429 живёт в мосте, а не в строке сравнения фронта. имена
+    // веток — провод: фронт сравнивает 'daily'/'rate', и расхождение имён
+    // видно только здесь (в компиляторе JS не проверяется).
+    const daily = await inv('relay_pub_rejection', {
+      status: 429,
+      body: '{"error":"daily relay limit reached","limit":100,"retry_after":18640}',
+    });
+    const burst = await inv('relay_pub_rejection', { status: 429, body: '{"error":"rate limit"}' });
+    const other = await inv('relay_pub_rejection', { status: 401, body: '' });
+    step('429 суточного лимита → daily (и срок назван)',
+      daily && daily.kind === 'daily' && daily.retryAfter === 18640, daily);
+    step('429 вспышки → rate (релей не гаснет на сутки)',
+      burst && burst.kind === 'rate', burst);
+    step('не-429 → other (у фронта своя ветка)',
+      other && other.kind === 'other', other);
     return report;
-  })()`,
-};
 
 const which = argOf('--probe', 'ui');
 const probe = PROBES[which];

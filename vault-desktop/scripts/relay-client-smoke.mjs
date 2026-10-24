@@ -1,11 +1,14 @@
-// Node-смоук src/relay-client.js — только «заявка» токена (`keep`,
-// t_b8f44bdf). Паттерн остальных смоуков: подменяем Tauri-зависимости
-// заглушками и переписываем импорты копии исходника. Проверяем КОНТРАКТ с
-// сервером: (1) при наличии токена отправляется `keep`; (2) токен без
-// `keep` (чистая установка) — как раньше; (3) заявка уходит один раз за
-// запуск; (4) ответ сервера (тот же токен / новый) кладётся в kv.
+// Node-смоук src/relay-client.js — «заявка» токена (`keep`, t_b8f44bdf) и
+// разбор отказа публикации (два разных 429). Паттерн остальных смоуков:
+// подменяем Tauri-зависимости заглушками и переписываем импорты копии
+// исходника. Проверяем КОНТРАКТ с сервером: (1) при наличии токена
+// отправляется `keep`; (2) токен без `keep` (чистая установка) — как раньше;
+// (3) заявка уходит один раз за запуск; (4) ответ сервера (тот же токен /
+// новый) кладётся в kv; (5) 429 суточного лимита гасит pub до полуночи UTC,
+// а 429 вспышки — нет (иначе пачка сигналов звонка лишала ускорения на сутки).
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { prepareModuleCopy } from './smoke-imports.mjs';
+import { relayRejectionHandler, RELAY_DAILY_BODY, RELAY_RATE_BODY } from './lib/relay-rejection-mock.mjs';
 
 const ROOT = import.meta.dirname;
 const MOCKS = '/tmp/relay-client-smoke-mocks';
@@ -16,9 +19,18 @@ const RELAY_URL = 'https://vault-msg.ru/relay';
 // ── Заглушки Tauri ─────────────────────────────────────────────
 const kv = new Map();
 globalThis.__kv = kv;
+// Разбор 429 — двойник ядра (scripts/lib/relay-rejection-mock.mjs): смоук
+// проверяет ПРОВОДКУ (пишем ли «лимит дня»), а не текст ответа.
+const reject = relayRejectionHandler();
 globalThis.__invoke = async (cmd, args) => {
   if (cmd === 'db_kv_get') return kv.has(args.key) ? kv.get(args.key) : null;
   if (cmd === 'db_kv_set') { kv.set(args.key, String(args.value)); return null; }
+  if (cmd === 'relay_pub_rejection') {
+    // Смоук 11 воспроизводит старую сборку моста БЕЗ команды: поведение —
+    // fail-open на «вспышку», а не на «лимит дня».
+    if (globalThis.__rejectionBroken) throw new Error('No such command: relay_pub_rejection');
+    return reject({ status: args.status, body: args.body });
+  }
   return null;
 };
 globalThis.__fp = 'aa:bb:cc:dd:ee:ff';
@@ -65,11 +77,20 @@ prepareModuleCopy(
 const fetchCalls = [];
 let respToken = 'TOK-NEW';
 let respStatus = 200;
+// Ответ /pub задаётся отдельно (смоуки 9-11 про два разных 429): /register при
+// этом остаётся успешным, иначе публикация не доходит до разбора ответа.
+let pubStatus = 0;
+let pubBody = '';
+const setPub = (status, body) => { pubStatus = status; pubBody = body; };
+const clearPub = () => { pubStatus = 0; pubBody = ''; };
 globalThis.fetch = async (url, opts) => {
   fetchCalls.push({ url, opts });
+  const isPub = /\/pub$/.test(String(url));
+  const status = isPub && pubStatus ? pubStatus : respStatus;
   return {
-    ok: respStatus >= 200 && respStatus < 300,
-    status: respStatus,
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => (isPub ? pubBody : ''),
     json: async () => ({ token: respToken, topic: 'h' + respToken.slice(-2), exp: 9e9,
       unlimited: false, kind: 'install' }),
   };
@@ -88,6 +109,8 @@ const setRelays = (list, key = 'relay-list') => kv.set(key, JSON.stringify(list)
 const getRelays = () => JSON.parse(kv.get('relay-list') || '[]');
 const bodyOf = (i) => JSON.parse(fetchCalls[i].opts.body);
 const ours = () => getRelays().find(r => r.url === RELAY_URL);
+// Запросы именно публикации (в списке fetchCalls есть ещё /register фоном).
+const pubCalls = () => fetchCalls.filter(c => /\/pub$/.test(String(c.url)));
 
 // ── 0. normalizeRelayUrl: адрес релея нормализуется ───────────
 // Только https и без хвостовых слэшей: иначе «тот же» релей заводится
@@ -232,6 +255,67 @@ console.log('8. relayPublish — from = адрес, не fp-namespace');
   globalThis.__nsOf = (e) => e;
 }
 
+// ── 9. 429 суточного лимита: релей молчит до конца UTC-дня ─────
+console.log('9. relayPublish — 429 «daily relay limit» гасит pub до полуночи UTC');
+{
+  const publishCtx = () => {
+    kv.clear();
+    setRelays([{ url: RELAY_URL, myToken: 'TOK-MINE', label: 'Vault' }]);
+    kv.set('relay-enabled', '1');
+    kv.set('relay-peer-tokens', JSON.stringify({ [RELAY_URL]: { 'peer@x.ru': 'TOK-PEER' } }));
+    fetchCalls.length = 0;
+    clearPub();
+  };
+  publishCtx();
+  setPub(429, RELAY_DAILY_BODY);
+  const r = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-d1' }, 'CIPHER');
+  await tick(); await tick();
+  const today = String(Math.floor(Date.now() / 86400000));
+  check('why = daily-limit', r && r.why === 'daily-limit', r);
+  check('UTC-день лимита записан в kv', kv.get('relay-limit-day') === today, kv.get('relay-limit-day'));
+  const pubBefore = pubCalls().length;
+  const r2 = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-d2' }, 'CIPHER');
+  await tick(); await tick();
+  check('до конца дня pub на сервер не дёргается', pubCalls().length === pubBefore, pubCalls().length - pubBefore);
+  check('и сразу отдаёт daily-limit', r2 && r2.why === 'daily-limit', r2);
+
+  // ── 10. 429 вспышки (10 rps): релей остаётся включённым ──────
+  // Тот же код, противоположный смысл: пачка сигналов звонка (setup +
+  // ICE-кандидаты) — штатная вспышка. Записать её как «лимит дня» значило
+  // «дозвонился — потерял ускорение до полуночи».
+  console.log('10. relayPublish — 429 «rate limit» НЕ гасит релей на сутки');
+  publishCtx();
+  setPub(429, RELAY_RATE_BODY);
+  const r3 = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-r1' }, 'CIPHER');
+  await tick(); await tick();
+  check('why = rate-limit', r3 && r3.why === 'rate-limit', r3);
+  check('лимит дня НЕ записан', kv.get('relay-limit-day') === undefined, kv.get('relay-limit-day'));
+  clearPub();
+  const r4 = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-r2' }, 'CIPHER');
+  await tick(); await tick();
+  check('следующая публикация снова уходит на сервер', r4 && r4.ok === true, r4);
+  check('на сервер было два pub-запроса', pubCalls().length === 2, pubCalls().length);
+
+  // ── 11. Fail-open: без команды моста 429 = вспышка, не лимит ─
+  // Старая сборка моста (команды нет) не имеет права молча выключать ускорение
+  // на сутки: недооценить лимит безопасно (лишний запрос), переоценить — нет.
+  console.log('11. relayPublish — разбор недоступен → считаем вспышку');
+  publishCtx();
+  setPub(429, RELAY_DAILY_BODY);
+  globalThis.__rejectionBroken = true;
+  const r5 = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-x1' }, 'CIPHER');
+  await tick(); await tick();
+  check('why = rate-limit (fail-open)', r5 && r5.why === 'rate-limit', r5);
+  check('лимит дня не записан при сбое разбора', kv.get('relay-limit-day') === undefined);
+  globalThis.__rejectionBroken = false;
+  setPub(429, '');
+  const r6 = await RC.relayPublish('me@x.ru', 'peer@x.ru', { id: 'env-x2' }, 'CIPHER');
+  await tick(); await tick();
+  check('пустое тело 429 — тоже вспышка', r6 && r6.why === 'rate-limit', r6);
+  clearPub();
+}
+
 console.log('');
 console.log('ИТОГО: ' + pass + ' pass, ' + fail + ' fail');
+process.exit(fail ? 1 : 0);
 process.exit(fail ? 1 : 0);

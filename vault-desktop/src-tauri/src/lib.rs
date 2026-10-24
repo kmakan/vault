@@ -1375,6 +1375,19 @@ fn transport_preference_set(account: String, preference: String) -> Result<(), S
         .map_err(|e| e.to_string())
 }
 
+/// Что значит отказ публикации: суточный лимит (молчать до полуночи UTC) или
+/// вспышка запросов (повторить почти сразу).
+///
+/// ЗАЧЕМ КОМАНДА. Оба случая приходят одним кодом 429, а для клиента значат
+/// противоположное. Пока фронт различал их сам, любой 429 записывался как
+/// «лимит дня», и после пачки сигналов звонка (setup + ICE-кандидаты) релей
+/// замолкал на сутки. Как читать ОТВЕТ СЕРВЕРА — протокольное решение, оно в
+/// ядре (`vault_core::relay::pub_rejection`); фронт передаёт код и тело.
+#[tauri::command]
+fn relay_pub_rejection(status: u16, body: String) -> vault_core::relay::Rejection {
+    vault_core::relay::pub_rejection(status, &body)
+}
+
 /// Текущий выбор транспорта (для подписи тумблера во фронте). Возвращается
 /// нормализованное имя: «настройки нет» и «в kv мусор» — оба «auto».
 #[tauri::command]
@@ -2436,6 +2449,7 @@ pub fn run() {
             transport_preference,
             transport_preference_next,
             transport_preference_set,
+            relay_pub_rejection,
             db_account_namespace,
             db_account_migrate,
             export_backup,

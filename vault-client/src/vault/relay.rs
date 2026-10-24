@@ -238,9 +238,18 @@ pub fn publish(
         Ok(res) => match res.status {
             200 => PubOutcome::Published,
             429 => {
-                state.limit_day = Some(today);
-                let _ = state.save();
-                PubOutcome::DailyLimit
+                // 429 бывает за суточную квоту ИЗДАТЕЛЯ и за вспышку запросов
+                // (10 rps). Различает ядро — та же мера, что у десктопа; до
+                // неё пачка сигналов звонка гасила pub до полуночи UTC.
+                if vault_core::relay::pub_rejection(res.status, &res.body).kind
+                    == vault_core::relay::REJECTION_DAILY
+                {
+                    state.limit_day = Some(today);
+                    let _ = state.save();
+                    PubOutcome::DailyLimit
+                } else {
+                    PubOutcome::Error("HTTP 429 rate limit".into())
+                }
             }
             other => PubOutcome::Error(format!("HTTP {other}")),
         },

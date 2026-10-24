@@ -91,6 +91,23 @@ function authHeader(token) {
   return { 'Authorization': 'VaultRelay ' + token };
 }
 
+// Чем был 429: «daily» (суточная квота издателя) или «rate» (вспышка 10 rps).
+// Правило читает Rust (`vault_core::relay::pub_rejection`), здесь только тело
+// ответа и вызов. Не прочитали тело или нет команды (старая сборка моста) —
+// считаем ВСПЫШКОЙ: недооценить лимит безопасно (следующее сообщение снова
+// попробует релей), переоценить — сутки без ускорения у живого пользователя.
+async function classifyPubRejection(res) {
+  let body = '';
+  try {
+    if (res && typeof res.text === 'function') body = await res.text();
+  } catch (e) { /* тело недоступно — решение ниже по fail-open */ }
+  try {
+    const r = await invoke('relay_pub_rejection', { status: res.status, body: body || '' });
+    if (r && (r.kind === 'daily' || r.kind === 'rate' || r.kind === 'other')) return r;
+  } catch (e) { /* мост не ответил */ }
+  return { kind: 'rate', retryAfter: null };
+}
+
 export function normalizeRelayUrl(url) {
   const u = String(url || '').trim().replace(/\/+$/, '');
   if (!/^https:\/\//.test(u)) return null; // только https
@@ -473,6 +490,18 @@ export function relayPublish(account, chatId, envelopeObj, encryptedBody, opts =
         connectTimeout: PUB_TIMEOUT_MS,
       });
       if (res.status === 429) {
+        // 429 бывает ДВА разных: суточный лимит издателя и вспышка запросов
+        // (10 rps). Различает их ядро (`relay_pub_rejection`), потому что
+        // это чтение ответа сервера. Раньше любая ветка писала «лимит дня»,
+        // и пачка сигналов звонка (setup + ICE-кандидаты) лишала ускорения до
+        // полуночи UTC — при том, что письмо ушло бы в любом случае.
+        const rejection = await classifyPubRejection(res);
+        if (rejection.kind !== 'daily') {
+          // Вспышка: лимит дня НЕ пишем, следующее сообщение снова попробует
+          // релей. Доставка не пострадала — письмо уже в пути.
+          console.log('[relay] publish rate-limited (transient), relay stays on');
+          return { ok: false, why: 'rate-limit' };
+        }
         // Лимит исчерпан: тихо уходим на почту до конца UTC-дня, баннер
         // покажет App.vue (relayOnLimitReply hook ниже), письмо уже ушло.
         await invoke('db_kv_set', { account, key: KV_LIMIT_DAY, value: String(today) }).catch(() => {});
