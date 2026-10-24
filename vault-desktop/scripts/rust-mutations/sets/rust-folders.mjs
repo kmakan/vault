@@ -21,6 +21,6 @@ export default {
       replacement: "            if false {" },
     { name: "иконка папки не меняется",
       pattern: "            folder.icon = icon.to_string();",
-      replacement: "            void 0;" },
+      replacement: "            folder.icon = String::new();" },
   ],
 };

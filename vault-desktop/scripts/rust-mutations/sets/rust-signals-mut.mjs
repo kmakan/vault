@@ -33,7 +33,7 @@ export default {
       replacement: "        if true {\n            return Some(SignalEnvelope::Edit {" },
     { name: "квитанция принимается без msg_ids (отмечать нечего, но помечаем)",
       pattern: "        if let Some(arr) = obj.get(\"msg_ids\").and_then(|v| v.as_array()) {",
-      replacement: "        if true {\n            let arr = obj.get(\"msg_ids\").and_then(|v| v.as_array()).unwrap_or(&vec![]);" },
+      replacement: "        let empty: Vec<serde_json::Value> = Vec::new();\n        let arr = obj.get(\"msg_ids\").and_then(|v| v.as_array()).unwrap_or(&empty);\n        {" },
     { name: "уровень квитанции всегда read (доставка выглядит как прочтение)",
       pattern: "                level: if is_one(\"read\") { \"read\" } else { \"delivered\" }.to_string(),",
       replacement: "                level: \"read\".to_string()," },

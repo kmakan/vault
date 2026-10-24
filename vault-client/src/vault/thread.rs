@@ -205,19 +205,37 @@ mod tests {
     }
 
     /// Треды сортируются по последней активности (свежие сверху).
+    ///
+    /// ПРЕДЫДУЩАЯ ФОРМУЛИРОВКА НИЧЕГО НЕ МЕРИЛА: два треда создавались без
+    /// сообщений, у обоих `last_activity` — пустая строка, и любое сравнение
+    /// давало «отсортировано». Мутация «компаратор перевёрнут» выжила именно
+    /// поэтому (24.10). Теперь у тредов РАЗНАЯ активность и порядок проверяется
+    /// списком имён, а не «совпадает сам с собой».
     #[test]
     fn test_thread_manager_sorts_by_activity() {
         let mut mgr = ThreadManager::new();
-        mgr.find_or_create_thread("Hello", "t1");
-        mgr.find_or_create_thread("World", "t2");
-        let sorted = mgr.sorted_threads();
-        assert_eq!(sorted.len(), 2);
-        // Порядок детерминирован по last_activity; проверяем, что он совпадает
-        // с сортировкой по убыванию активности.
-        let by_activity: Vec<_> = sorted.iter().map(|t| t.last_activity.clone()).collect();
-        let mut expect = by_activity.clone();
-        expect.sort_by(|a, b| b.cmp(a));
-        assert_eq!(by_activity, expect, "треды отсортированы по активности");
+        {
+            let older = mgr.find_or_create_thread("Старый", "t1");
+            let mut msg = make_msg("m1", None, "alice");
+            msg.timestamp = "2026-01-01T00:00:00Z".to_string();
+            older.add_message(msg);
+        }
+        {
+            let newer = mgr.find_or_create_thread("Свежий", "t2");
+            let mut msg = make_msg("m2", None, "bob");
+            msg.timestamp = "2026-03-01T00:00:00Z".to_string();
+            newer.add_message(msg);
+        }
+        let order: Vec<&str> = mgr
+            .sorted_threads()
+            .iter()
+            .map(|t| t.subject.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["Свежий", "Старый"],
+            "сверху тот тред, у которого новее последняя активность"
+        );
     }
 
     #[test]

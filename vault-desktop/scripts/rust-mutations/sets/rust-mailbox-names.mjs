@@ -15,7 +15,7 @@ export default {
       replacement: '    let name_l = name.to_ascii_lowercase();' },
     { name: 'атрибуты не нормализуются по регистру (\\Junk не узнаётся)',
       pattern: '        attrs.iter().any(|a| a.to_lowercase() == wanted)',
-      replacement: '        attrs.iter().any(|a| a == wanted)' },
+      replacement: '        attrs.iter().any(|a| a.as_str() == wanted)' },
     { name: 'из таблицы имён выпало русское «спам» (локализованные ящики не читаются)',
       pattern: '        || name_l == "спам"\n',
       replacement: '' },
