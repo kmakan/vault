@@ -70,7 +70,15 @@ rewrite('migrations.js', 'migrations.mjs', [
   ["from '@tauri-apps/api/core'", `from "${MOCKS}/core.js"`],
   ["from './api.js'", `from "${MOCKS}/api.js"`],
   ["from './identity.js'", `from "${MOCKS}/identity.js"`],
+  // Правило слияния истории берётся НАСТОЯЩЕЕ: перенос обязан пользоваться тем
+  // же mergeHistoryLists, что и архив чата, иначе смоук проверяет выдуманное
+  // правило. Свой импорт у history.js тоже переписывается на моки этого смоука.
+  ["from './history.js'", `from "${MOCKS}/history.js"`],
 ]);
+let hist = readFileSync(path.join(ROOT, 'src', 'history.js'), 'utf8');
+hist = hist.split("from './api.js'").join(`from "${MOCKS}/api.js"`)
+           .split("from './identity.js'").join(`from "${MOCKS}/identity.js"`);
+writeFileSync(MOCKS + '/history.js', hist, 'utf8');
 
 const EL = await import(MOCKS + '/external-links.mjs');
 const MIG = await import(MOCKS + '/migrations.mjs');

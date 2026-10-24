@@ -15,6 +15,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { db } from './api.js';
 import { accountNamespace } from './identity.js';
+import { mergeHistoryLists, normalizeHistoryList } from './history.js';
 
 export async function migrateAccountData(oldEmail, newEmail) {
   try {
@@ -71,6 +72,14 @@ export async function migrateOwnGroups(oldEmail, newEmail) {
 // Ключ ЧАТА С СОБЕСЕДНИКОМ (chat-cache:<email пира>) переименовывается, когда
 // сменил почту ПИР, а не мы. Поэтому account идёт через резолвер (identity =
 // fp:<fingerprint>), а пир остаётся почтой: она транспорт, и в ключе чата.
+//
+// ЗАНЯТАЯ ЦЕЛЬ — НЕ ОТКАЗ. Два адреса одного ключа — это ОДИН собеседник, а
+// кэш у каждого свой: на X50 (24.10) переписка жила и под koanmak@gmail.com,
+// и под vault-msg@ya.ru. Прежнее правило («цель занята — не трогаем») молча
+// оставляло половину разговора под старым адресом, а старый адрес из списка
+// контактов к этому моменту уже исчезал. Поэтому списки СЛИВАЮТСЯ тем же
+// правилом, что и архив (mergeHistoryLists: свежие выигрывают, остальные
+// остаются), и только тогда старый ключ удаляется.
 export async function migrateChatHistory(oldEmail, newEmail, myEmail) {
   try {
     const ns = myEmail ? await accountNamespace(myEmail) : 'anon';
@@ -79,14 +88,31 @@ export async function migrateChatHistory(oldEmail, newEmail, myEmail) {
     const oldCache = await db.kvGet(ns, oldKey);
     if (!oldCache) return false;
     const existing = await db.kvGet(ns, newKey);
-    if (existing) return false;   // цель уже занята — чужую историю не трогаем
-    await db.kvSet(ns, newKey, oldCache);
+    let value = oldCache;
+    if (existing) {
+      const from = parseCache(oldCache), to = parseCache(existing);
+      // Нечитаемый кэш — основание ОТКАЗАТЬСЯ, а не писать пустой список:
+      // перенос не имеет права уничтожить переписку.
+      if (!Array.isArray(from) || !Array.isArray(to)) return false;
+      value = JSON.stringify(mergeHistoryLists(from, to));
+    }
+    await db.kvSet(ns, newKey, value);
     await db.kvDelete(ns, oldKey);
     console.log('[identity] chat history migrated:', oldEmail, '→', newEmail);
     return true;
   } catch (e) {
     console.warn('[identity] migrateChatHistory failed:', e);
     return false;
+  }
+}
+
+// Кэш чата — JSON-список. Нечитаемый (или не список) — не основание терять
+// запись: возвращаем null, вызывающий отказывается от переноса.
+function parseCache(raw) {
+  try {
+    return normalizeHistoryList(JSON.parse(raw));
+  } catch (e) {
+    return null;
   }
 }
 
@@ -157,10 +183,12 @@ export async function migratePeerGroups(oldEmail, newEmail, onRenamed) {
 // дубликаты при каждом переименовании.
 //
 // ПОРЯДОК — В ШИРИНУ, БЛИЖАЙШИЙ ПЕРВЫМ. Если цепочка a → b → c, обход даёт сначала
-// b, потом a. Перенос b → c первым оставляет историю последнего адреса, а
-// перенос a → c не затирает её (migrateChatHistory не перезаписывает занятый
-// ключ). Более старый ключ при этом НЕ удаляется — он остаётся осиротевшим, то
-// ест данные не уничтожаются молча, а остаются видимыми в возврате.
+// b, потом a. Перенос b → c первым кладёт в цель историю последнего адреса, а
+// перенос a → c доливает к ней более старые записи тем же mergeHistoryLists:
+// при совпадении ключа сообщения выигрывает ЦЕЛЬ (b), то есть более свежий адрес.
+// Каждый успешно слитый ключ после этого удаляется, поэтому осиротевших кэшей в
+// цепочке не остаётся; в `orphans` попадают только адреса, где кэша не было или
+// он нечитаем.
 //
 // КЛЮЧИ АЛИАСОВ НЕ НОРМАЛИЗОВАНЫ. contacts-load пишет c.email как есть, то есть
 // регистр может быть любой. Поэтому индекс строится в нижнем регистре, иначе

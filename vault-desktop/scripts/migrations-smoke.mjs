@@ -4,8 +4,9 @@
 // ЗАТИРАТЬ то, что уже есть у нового адреса. Три места, где это проверяется:
 //   · профиль — заполняются только ПУСТЫЕ поля цели, непустой avatar нового
 //     профиля должен уцелеть;
-//   · история чата — если ключ нового адреса уже занят, чужая история не
-//     перезаписывается (и старый ключ тоже не удаляется);
+//   · история чата — занятый ключ нового адреса НЕ затирается: списки
+//     СЛИВАЮТСЯ правилом архива (свежее выигрывает, остальное остаётся), а
+//     при нечитаемом кэше не происходит вообще ничего;
 //   · группы — переименовываются только те, где мы создатель или участник;
 //     сам перебор и «мой ли этот адрес» — в мосте (`groups_rename_address`),
 //     его поведение измеряет набор моста. Здесь проверяется то, что осталось
@@ -46,8 +47,16 @@ export const db = {
 let s = readFileSync(path.join(ROOT, 'src', 'migrations.js'), 'utf8');
 s = s.split("from './api.js'").join(`from "${MOCKS}/api.js"`)
      .split("from './identity.js'").join(`from "${MOCKS}/identity.js"`)
+     .split("from './history.js'").join(`from "${MOCKS}/history.js"`)
      .split("from '@tauri-apps/api/core'").join(`from "${MOCKS}/core.js"`);
 writeFileSync(MOCKS + '/migrations.mjs', s, 'utf8');
+// Правило слияния истории берётся НАСТОЯЩЕЕ (src/history.js), а не подделка:
+// перенос обязан пользоваться тем же mergeHistoryLists, что и архив чата,
+// иначе смоук проверяет выдуманное правило.
+let h = readFileSync(path.join(ROOT, 'src', 'history.js'), 'utf8');
+h = h.split("from './api.js'").join(`from "${MOCKS}/api.js"`)
+     .split("from './identity.js'").join(`from "${MOCKS}/identity.js"`);
+writeFileSync(MOCKS + '/history.js', h, 'utf8');
 const M = await import(MOCKS + '/migrations.mjs');
 
 let pass = 0, fail = 0;
@@ -72,10 +81,32 @@ ok('старый ключ удалён, новый лежит с тем же с�
 reset();
 st.kv['fp:me@bk.ru'] = { 'chat-cache:old@x': 'CACHE-OLD', 'chat-cache:new@x': 'CACHE-NEW' };
 r = await M.migrateChatHistory('old@x', 'new@x', 'me@bk.ru');
-ok('занятый ключ нового адреса НЕ перезаписывается',
-  st.kv['fp:me@bk.ru']['chat-cache:new@x'] === 'CACHE-NEW');
-ok('и старый ключ остаётся на месте при отказе', st.kv['fp:me@bk.ru']['chat-cache:old@x'] === 'CACHE-OLD');
+ok('нечитаемый кэш — переноса нет: ни запись, ни удаление',
+  st.kv['fp:me@bk.ru']['chat-cache:new@x'] === 'CACHE-NEW'
+  && st.kv['fp:me@bk.ru']['chat-cache:old@x'] === 'CACHE-OLD');
 ok('функция сообщила, что нечего переносить', r === false);
+
+// Занятая цель — НЕ отказ: два адреса одного ключа = один собеседник, и
+// иначе половина разговора остаётся под адресом, который из списка уже ушёл
+// (X50, 24.10: koanmak@gmail.com и vault-msg@ya.ru).
+reset();
+st.kv['fp:me@bk.ru'] = {
+  'chat-cache:old@x': JSON.stringify([{ id: 'a', content: 'старый только тут' },
+                                      { id: 'b', content: 'СТАРЫЙ' }]),
+  'chat-cache:new@x': JSON.stringify([{ id: 'b', content: 'НОВЫЙ' },
+                                      { id: 'c', content: 'новый только тут' }]),
+};
+r = await M.migrateChatHistory('old@x', 'new@x', 'me@bk.ru');
+const merged = JSON.parse(st.kv['fp:me@bk.ru']['chat-cache:new@x'] || '[]');
+ok('занятая цель сливается, а не перезаписывается', r === true
+  && merged.length === 3);
+ok('свежая запись цели выигрывает, старая копия того же id не дублируется',
+  (merged.find(m => m.id === 'b') || {}).content === 'НОВЫЙ'
+  && merged.filter(m => m.id === 'b').length === 1);
+ok('записи, которых в цели не было, уцелевают в перенесённом списке',
+  merged.some(m => m.id === 'a') && merged.some(m => m.id === 'c'));
+ok('старый ключ удалён после удачного слияния',
+  st.kv['fp:me@bk.ru']['chat-cache:old@x'] === undefined);
 
 reset();
 r = await M.migrateChatHistory('old@x', 'new@x', null);
