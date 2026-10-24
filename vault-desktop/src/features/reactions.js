@@ -84,10 +84,17 @@ export function sendReactionEmail({ activeChatType, currentGroup, groupKeys, pee
 }
 
 // deps: { chat, reactionPickerMsgId(), setReactionPickerMsgId(v) }
-// Состояние пикера — у владельца форм (uiStore), ADR-005 W3 п.3.
+// Состояние пикера — у владельца форм (uiStore), ADR-005 W3 п.3. Сеттер
+// вызывается ЗДЕСЬ: обработчик события в Vue отбрасывает возвращаемое значение,
+// поэтому «вернуть и надеяться» = пикер никогда не откроется (регрессия
+// рефакторинга 49861f5).
 export function toggleReactionPicker(deps, msgId) {
   const chat = deps.chat;
   const current = deps.reactionPickerMsgId();
+  const set = (v) => {
+    if (typeof deps.setReactionPickerMsgId === 'function') deps.setReactionPickerMsgId(v);
+    return v;
+  };
   // Пилюли звонков — не сообщения: реакции на них не нужны.
   // chat.byId возвращает null/undefined вне активного чата — optional access.
   const m = chat && typeof chat.byId === 'function' ? chat.byId(msgId) : null;
@@ -97,7 +104,7 @@ export function toggleReactionPicker(deps, msgId) {
     const sel = window.getSelection && window.getSelection();
     if (sel && String(sel).length > 0) return current;
   } catch (e) { /* ignore */ }
-  return current === msgId ? null : msgId;
+  return set(current === msgId ? null : msgId);
 }
 
 // deps: { email(), chat, activeChat(), sendReactionEmail, setReactionPickerMsgId(v) }

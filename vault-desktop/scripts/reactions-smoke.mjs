@@ -59,11 +59,20 @@ const rdeps = (o = {}) => ({
 // toggleReactionPicker
 {
   const chat={byId:(id)=>id==='call'?{callEvent:true}:null};
-  check('toggleReactionPicker default open', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:null}),'m1')==='m1');
-  check('toggleReactionPicker callEvent skip', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:'prev'}),'call')==='prev');
-  check('toggleReactionPicker toggle back to null', R.toggleReactionPicker(rdeps({chat,reactionPickerMsgId:'m1'}),'m1')===null);
+  let set=null, calls=0;
+  const d=(o)=>rdeps({chat,...o,setReactionPickerMsgId:v=>{set=v;calls++}});
+  check('toggleReactionPicker default open', R.toggleReactionPicker(d({reactionPickerMsgId:null}),'m1')==='m1');
+  check('toggleReactionPicker ПИШЕТ состояние через setter (регрессия 49861f5: Vue отбрасывает return)', calls===1 && set==='m1');
+  calls=0; set='SENTINEL';
+  check('toggleReactionPicker callEvent skip', R.toggleReactionPicker(d({reactionPickerMsgId:'prev'}),'call')==='prev');
+  check('toggleReactionPicker callEvent — setter НЕ тронут', calls===0);
+  calls=0; set='SENTINEL';
+  check('toggleReactionPicker toggle back to null', R.toggleReactionPicker(d({reactionPickerMsgId:'m1'}),'m1')===null);
+  check('toggleReactionPicker toggle-off — setter(null)', calls===1 && set===null);
   globalThis.window.getSelection=()=>({toString:()=> 'select'});
-  check('toggleReactionPicker selected text skip', R.toggleReactionPicker(rdeps({chat:{byId:()=>null},reactionPickerMsgId:'p'}),'m1')==='p');
+  calls=0; set='SENTINEL';
+  check('toggleReactionPicker selected text skip', R.toggleReactionPicker(d({chat:{byId:()=>null},reactionPickerMsgId:'p'}),'m1')==='p');
+  check('toggleReactionPicker selected text — setter НЕ тронут', calls===0);
   globalThis.window.getSelection=()=>null;
 }
 
