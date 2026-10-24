@@ -876,13 +876,10 @@ mod tests {
         g
     }
 
-    /// Сортировка для UI: свежие сверху, при равенстве created_at — по id.
+    /// Порядок для UI — ТОТ ЖЕ, что у команды `groups_load_own`: компаратор
+    /// решает ядро, копия компаратора в тесте ничего не измеряла.
     fn ui_sort(mut v: Vec<Group>) -> Vec<Group> {
-        v.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        v.sort_by(|a, b| group_rules::group_order(&a.created_at, &a.id, &b.created_at, &b.id));
         v
     }
 

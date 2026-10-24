@@ -390,20 +390,28 @@ mod tests {
         assert!(!idx.remove_message("m2").unwrap());
     }
 
+    /// Порядок «недавних» задает время. Проверка ОДНОЙ длины ничего не мерит:
+    /// записи идут из HashMap, и без сортировки список отдаёт порядок
+    /// хранилища, а make_entry ставит всем Utc::now() — то есть сравнивать
+    /// было бы нечего.
     #[test]
     fn test_recent() {
         let (mut idx, _dir) = temp_index();
         for i in 0..5 {
-            idx.index_message(make_entry(
+            let mut entry = make_entry(
                 &format!("m{}", i),
                 "a@t.com",
                 &format!("Subject {}", i),
                 "body",
-            ))
-            .unwrap();
+            );
+            // m0 — самое старое (сутки назад), m4 — самое свежее (час назад).
+            entry.timestamp = Utc::now() - chrono::Duration::hours(24 - i);
+            idx.index_message(entry).unwrap();
         }
         let recent = idx.recent(3);
         assert_eq!(recent.len(), 3);
+        let ids: Vec<&str> = recent.iter().map(|e| e.message_id.as_str()).collect();
+        assert_eq!(ids, vec!["m4", "m3", "m2"], "сверху самые свежие");
     }
 
     #[test]

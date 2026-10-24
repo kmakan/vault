@@ -18,6 +18,7 @@
 //! [`crate::vault::identity`], а эти функции принимают уже найденные позиции.
 
 use crate::vault::identity::{normalize, same_address};
+use std::cmp::Ordering;
 
 /// Что сделать со списком участников, когда собеседник переехал на новый
 /// адрес. `drop`/`at` — позиции в списке ДО изменений, `keep` — уже со сдвигом
@@ -137,6 +138,23 @@ pub fn plan_invite(existing: &[&str], incoming: &[&str], sender: &str) -> Invite
         && !existing.iter().any(|e| same_address(e, sender))
         && !plan.push.iter().any(|&j| same_address(incoming[j], sender));
     plan
+}
+
+/// Порядок группы в списке: сравнение двух групп по (created_at, id).
+///
+/// ЗАЧЕМ В ЯДРЕ. Регресс «список групп прыгает сам»: `groups.json` читается в
+/// HashMap, а итерация по нему в Rust случайна на каждый процесс, значит без
+/// детерминированной сортировки порядок выдаётся хранилищем. До переноса
+/// компаратор жил внутри команды моста (`src-tauri/src/lib.rs::groups_load_own`),
+/// а тесты сортировали СВОЮ копию функции — удаление или переворот реальной
+/// строки не сломали бы ни одну проверку (тот же класс, что тавтологический
+/// тест сортировки тредов, `4030f1c`).
+///
+/// ФОРМА — строки, не тип: `created_at` пишется как RFC3339, поэтому
+/// лексикографическое сравнение совпадает с хронологическим; при равенстве
+/// времени решает id, иначе две группы одного момента меняются местами.
+pub fn group_order(created_a: &str, id_a: &str, created_b: &str, id_b: &str) -> Ordering {
+    created_b.cmp(created_a).then_with(|| id_a.cmp(id_b))
 }
 
 #[cfg(test)]
@@ -328,5 +346,50 @@ mod tests {
             !Access::default().may_set_role_of(false),
             "обычный участник не назначает роли"
         );
+    }
+
+    /// Список групп детерминирован БЕЗотносительно к порядку HashMap: свежие
+    /// сверху, при равенстве времени — по id.
+    #[test]
+    fn newer_group_sorts_above_older() {
+        let sorted = {
+            let mut v = vec![
+                ("2026-01-01T10:00:00Z", "grp_a"),
+                ("2026-03-01T10:00:00Z", "grp_b"),
+                ("2026-02-01T10:00:00Z", "grp_c"),
+            ];
+            v.sort_by(|a, b| group_order(a.0, a.1, b.0, b.1));
+            v.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            sorted,
+            vec!["grp_b", "grp_c", "grp_a"],
+            "порядок задает created_at по убыванию"
+        );
+    }
+
+    /// Равные `created_at` — не жребий: порядок замыкает id.
+    #[test]
+    fn equal_created_at_is_broken_by_id() {
+        let sorted = {
+            let mut v = vec![
+                ("2026-01-01T00:00:00Z", "grp_z"),
+                ("2026-01-01T00:00:00Z", "grp_a"),
+                ("2026-01-01T00:00:00Z", "grp_m"),
+            ];
+            v.sort_by(|a, b| group_order(a.0, a.1, b.0, b.1));
+            v.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+        };
+        assert_eq!(sorted, vec!["grp_a", "grp_m", "grp_z"], "тай-брейкер по id");
+    }
+
+    /// Компаратор — строгий порядок: одинаковая группа не «больше самой себя»,
+    /// а разные моменты времени сравниваются в обе стороны согласованно.
+    #[test]
+    fn group_order_is_a_strict_ordering() {
+        let (old, new) = ("2026-01-01T00:00:00Z", "2026-03-01T00:00:00Z");
+        assert_eq!(group_order(old, "x", old, "x"), Ordering::Equal);
+        assert_eq!(group_order(new, "x", old, "x"), Ordering::Less);
+        assert_eq!(group_order(old, "x", new, "x"), Ordering::Greater);
     }
 }

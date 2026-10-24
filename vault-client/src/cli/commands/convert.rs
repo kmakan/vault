@@ -99,13 +99,23 @@ mod tests {
         assert_eq!(parsed.signature_b64, "sig".to_string());
     }
 
+    /// `convert_envelope` ничего не возвращает (он печатает), поэтому
+    /// проверяется его ветвление: пустой ввод не должен быть принят за конверт
+    /// и не должен дойти до парсера.
     #[test]
     fn test_convert_empty() {
-        convert_envelope(""); // should not panic, prints error to stderr
+        convert_envelope(""); // не паникует
+        assert!(!EncryptedEnvelope::is_file_envelope(""));
     }
 
     #[test]
     fn test_convert_non_envelope() {
-        convert_envelope("hello world this is not an envelope");
+        let text = "hello world this is not an envelope";
+        convert_envelope(text);
+        assert!(!EncryptedEnvelope::is_file_envelope(text));
+        assert!(
+            EncryptedEnvelope::parse(text).is_err(),
+            "обычный текст не может разбираться как конверт"
+        );
     }
 }

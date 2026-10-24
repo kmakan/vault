@@ -22,5 +22,14 @@ export default {
     { name: "поиск в папке игнорирует папку (найдено лишнее)",
       pattern: "            .filter(|r| r.entry.folder_id.as_deref() == Some(folder_id))",
       replacement: "            .filter(|_| true)" },
+    // recent() раньше не был измерен: тест кормил 5 записей с ОДИНАКОВЫМ
+    // timestamp (make_entry = Utc::now()) и проверял только длину — сортировку
+    // можно было удалить целиком.
+    { name: "«недавние» не сортируются (порядок выдаёт HashMap)",
+      pattern: "        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));\n        entries.into_iter().take(limit).collect()",
+      replacement: "        entries.into_iter().take(limit).collect()" },
+    { name: "«недавние» отсортированы от старых к новым",
+      pattern: "        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));\n        entries.into_iter().take(limit).collect()",
+      replacement: "        entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));\n        entries.into_iter().take(limit).collect()" },
   ],
 };

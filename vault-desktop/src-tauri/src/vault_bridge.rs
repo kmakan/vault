@@ -581,13 +581,17 @@ mod tests {
         assert_eq!(v["seenCap"], 200);
     }
 
+    /// Новый мост пуст. Раньше проба была «не паникует»: она проходила и когда
+    /// состояние по умолчанию содержит мусор, и когда `messages()` возвращает
+    /// чужой замок.
     #[test]
     fn test_vault_bridge_state_new() {
         let state = VaultBridgeState::new();
-        {
-            let _g = state.messages();
-        }
-        let _ = state.attachments();
+        assert!(
+            state.messages().messages_for("alice@x", None).is_empty(),
+            "в новом мосте нет сообщений ни в одном чате"
+        );
+        assert!(state.messages().find("alice@x", None, "m1").is_none());
     }
 
     #[test]

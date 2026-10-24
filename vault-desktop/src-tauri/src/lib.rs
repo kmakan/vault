@@ -1206,12 +1206,10 @@ fn groups_load_own(
     // HashMap, а итерация по HashMap в Rust рандомизирована на каждый процесс
     // (SipHash со случайным seed). Без сортировки список в UI прыгал между
     // перезапусками/перечитываниями — «список групп меняется сам».
-    // Ключ: created_at по убыванию (свежие сверху), тай-брейкер id — чтобы
-    // группы с одинаковым created_at не менялись местами.
+    // Само решение (created_at по убыванию, тай-брейкер id) — в ядре
+    // (`group_rules::group_order`), здесь только обход.
     mine.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| a.id.cmp(&b.id))
+        vault_client::vault::group_rules::group_order(&a.created_at, &a.id, &b.created_at, &b.id)
     });
     Ok(mine)
 }

@@ -387,15 +387,19 @@ mod tests {
         assert_eq!(store.messages_for("bob@x", None).len(), 1);
     }
 
+    /// Порядок решает ВРЕМЯ, а не порядок вставки: два сообщения идут по
+    /// возрастанию ts — и наивное «новое всегда первым» даёт тот же результат.
+    /// Третье, самое старое, добавлено последним — оно обязано остаться внизу.
     #[test]
     fn test_append_ordering_recent_first() {
         let mut store = MessageStore::default();
-        let msg1 = VaultMessage { id: "m1".into(), from: "a@x".into(), to: "b@x".into(), ts: 1000, text: "old".into(), name: "".into(), avatar: "".into(), edited: false, replies: vec![], in_reply_to: None, reactions: vec![], ttl: None };
-        let msg2 = VaultMessage { id: "m2".into(), from: "a@x".into(), to: "b@x".into(), ts: 2000, text: "new".into(), name: "".into(), avatar: "".into(), edited: false, replies: vec![], in_reply_to: None, reactions: vec![], ttl: None };
-        store.append_message("b@x", None, msg1);
-        store.append_message("b@x", None, msg2); // свежее — должно встать первым
+        let make = |id: &str, ts: i64| VaultMessage { id: id.into(), from: "a@x".into(), to: "b@x".into(), ts, text: id.into(), name: "".into(), avatar: "".into(), edited: false, replies: vec![], in_reply_to: None, reactions: vec![], ttl: None };
+        store.append_message("b@x", None, make("m1", 1000));
+        store.append_message("b@x", None, make("m2", 2000)); // свежее — должно встать первым
+        store.append_message("b@x", None, make("m0", 500)); // самое старое — пришло последним
         let msgs = store.messages_for("b@x", None);
-        assert_eq!(msgs[0].id, "m2"); // newest first
+        let ids: Vec<&str> = msgs.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["m2", "m1", "m0"], "порядок задает ts, а не вставка");
     }
 
     #[test]

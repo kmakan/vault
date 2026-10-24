@@ -79,5 +79,17 @@ export default {
     { name: 'роли назначает любой участник (проверка управления потеряна)',
       pattern: '    pub fn may_set_role_of(&self, target_is_creator: bool) -> bool {\n        self.may_manage() && !target_is_creator',
       replacement: '    pub fn may_set_role_of(&self, target_is_creator: bool) -> bool {\n        !target_is_creator' },
+    // Порядок групп: компаратор лежал в команде моста (groups_load_own), а тесты
+    // сортировали своей копией — удаление реальной строки не ломало ни одной
+    // проверки. Правило переехало в ядро, поломки стали наблюдаемыми.
+    { name: 'порядок групп перевёрнут (старые сверху, «список прыгает» обратно)',
+      pattern: '    created_b.cmp(created_a).then_with(|| id_a.cmp(id_b))',
+      replacement: '    created_a.cmp(created_b).then_with(|| id_a.cmp(id_b))' },
+    { name: 'тай-брейкер по id перевёрнут (группы одного момента меняются местами)',
+      pattern: '    created_b.cmp(created_a).then_with(|| id_a.cmp(id_b))',
+      replacement: '    created_b.cmp(created_a).then_with(|| id_b.cmp(id_a))' },
+    { name: 'тай-брейкер потерян (порядок равных created_at решает HashMap)',
+      pattern: '    created_b.cmp(created_a).then_with(|| id_a.cmp(id_b))',
+      replacement: '    created_b.cmp(created_a)' },
   ],
 };
