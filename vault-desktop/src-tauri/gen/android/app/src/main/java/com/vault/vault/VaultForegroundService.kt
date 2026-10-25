@@ -539,7 +539,7 @@ class VaultForegroundService : Service() {
         try {
             val nm = getSystemService(NotificationManager::class.java) ?: return
             Log.i("VaultRust", "push-notify: building notification")
-            val ch = NotificationChannel("vault_messages", "Vault сообщения",
+            val ch = NotificationChannel("vault_messages", getString(R.string.push_channel_name),
                 NotificationManager.IMPORTANCE_HIGH)
             nm.createNotificationChannel(ch)
             val launch = packageManager.getLaunchIntentForPackage(packageName)
@@ -550,7 +550,7 @@ class VaultForegroundService : Service() {
             val n = NotificationCompat.Builder(this, "vault_messages")
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Vault")
-                .setContentText("Новое сообщение")
+                .setContentText(getString(R.string.msg_notif_text))
                 .setAutoCancel(true)
                 .setContentIntent(pi)
                 .build()
@@ -1161,10 +1161,10 @@ class VaultForegroundService : Service() {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val channel = NotificationChannel(
                         MONITOR_CHANNEL_ID,
-                        "Vault сообщения",
+                        context.getString(R.string.push_channel_name),
                         NotificationManager.IMPORTANCE_HIGH
                     ).apply {
-                        description = "Новые сообщения Vault при свёрнутом приложении"
+                        description = context.getString(R.string.monitor_channel_desc)
                         enableVibration(true)
                         setShowBadge(true)
                         lockscreenVisibility = Notification.VISIBILITY_PUBLIC

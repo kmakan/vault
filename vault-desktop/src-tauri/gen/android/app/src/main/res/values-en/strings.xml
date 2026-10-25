@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Английская пара к значениям по умолчанию. Правило измеряется гейтом
+     scripts/android-locale-keys-gate.mjs: ключей должно быть ровно столько же,
+     и в Kotlin не должно оставаться русских литералов. -->
+<resources>
+    <string name="app_name">Vault</string>
+    <string name="main_activity_title">Vault</string>
+
+    <string name="fg_channel_name">Vault in background</string>
+    <string name="fg_channel_desc">Keeps Vault running to receive calls</string>
+    <string name="fg_notif_title">Vault is running</string>
+    <string name="fg_notif_text">Ready to receive calls</string>
+
+    <string name="call_channel_name">Incoming calls</string>
+    <string name="call_channel_desc">Vault incoming call notifications</string>
+    <string name="call_notif_text">Incoming Vault call — answer in the app</string>
+    <string name="call_info_channel_name">Calls: info</string>
+    <string name="call_info_channel_desc">Missed call information (silent)</string>
+    <string name="call_missed_title">Missed call</string>
+    <string name="call_missed_text">%1$s — call at %2$s</string>
+
+    <string name="msg_channel_name">Messages</string>
+    <string name="msg_channel_desc">New Vault message notifications</string>
+    <string name="msg_notif_text">New message</string>
+    <string name="msg_notif_text_from">New message from %1$s</string>
+
+    <string name="lock_title">🔒 Vault is locked</string>
+    <string name="lock_subtitle">Enter your access code</string>
+    <string name="lock_pin_hint">PIN or password</string>
+    <string name="lock_unlock">Unlock</string>
+    <string name="lock_wrong_code">Wrong code</string>
+    <string name="lock_bio_button">👆 Use fingerprint</string>
+    <string name="bio_title">Vault is locked</string>
+    <string name="bio_subtitle">Touch the sensor or enter your code</string>
+    <string name="bio_negative">Enter code</string>
+
+    <string name="push_channel_name">Vault messages</string>
+    <string name="monitor_channel_desc">New Vault messages while the app is in the background</string>
+</resources>

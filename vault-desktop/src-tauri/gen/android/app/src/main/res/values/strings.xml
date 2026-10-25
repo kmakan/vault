@@ -18,13 +18,28 @@
     <string name="call_info_channel_desc">Информация о пропущенных звонках (без звука)</string>
     <string name="call_missed_title">Пропущенный звонок</string>
     <string name="call_missed_text">%1$s — звонок в %2$s</string>
-    <!-- S5-1: действия в шторке уведомления звонка. -->
-    <string name="call_action_reject">Отклонить</string>
-    <string name="call_action_accept">Ответить</string>
 
     <!-- FCM Part B: тихий канал сообщений (IMPORTANCE_DEFAULT, без звука). -->
     <string name="msg_channel_name">Сообщения</string>
     <string name="msg_channel_desc">Уведомления о новых сообщениях Vault</string>
     <string name="msg_notif_text">Новое сообщение</string>
     <string name="msg_notif_text_from">Новое сообщение от %1$s</string>
+
+    <!-- Экран замка (LockActivity, 26.10): строки были литералами в Kotlin,
+         поэтому на английской системе оставались русскими. -->
+    <string name="lock_title">🔒 Vault заблокирован</string>
+    <string name="lock_subtitle">Введите код доступа</string>
+    <string name="lock_pin_hint">PIN или пароль</string>
+    <string name="lock_unlock">Разблокировать</string>
+    <string name="lock_wrong_code">Неверный код</string>
+    <string name="lock_bio_button">👆 По отпечатку</string>
+    <string name="bio_title">Vault заблокирован</string>
+    <string name="bio_subtitle">Приложите палец или введите код</string>
+    <string name="bio_negative">Ввести код</string>
+
+    <!-- Каналы push/monitor. Имя канала система берёт один раз при создании,
+         поэтому оно не «переводится» вместе с уведомлением — но хотя бы с
+         новой локалью у нового пользователя канал создаётся по-английски. -->
+    <string name="push_channel_name">Vault сообщения</string>
+    <string name="monitor_channel_desc">Новые сообщения Vault при свёрнутом приложении</string>
 </resources>

@@ -31,19 +31,19 @@ class LockActivity : AppCompatActivity() {
     val pad = (resources.displayMetrics.density * 24).toInt()
 
     val title = TextView(this).apply {
-      text = "🔒 Vault заблокирован"
+      text = getString(R.string.lock_title)
       textSize = 20f
       setTextColor(0xFFE7ECF5.toInt())
       gravity = Gravity.CENTER
     }
     val sub = TextView(this).apply {
-      text = "Введите код доступа"
+      text = getString(R.string.lock_subtitle)
       textSize = 14f
       setTextColor(0xFF8B93A7.toInt())
       gravity = Gravity.CENTER
     }
     val pin = EditText(this).apply {
-      hint = "PIN или пароль"
+      hint = getString(R.string.lock_pin_hint)
       setHintTextColor(0xFF8B93A7.toInt())
       setTextColor(0xFFE7ECF5.toInt())
       inputType = android.text.InputType.TYPE_CLASS_TEXT or
@@ -59,7 +59,7 @@ class LockActivity : AppCompatActivity() {
       gravity = Gravity.CENTER
     }
     val btn = Button(this).apply {
-      text = "Разблокировать"
+      text = getString(R.string.lock_unlock)
       setBackgroundColor(0xFFF59E0B.toInt())
       setTextColor(0xFF1A1206.toInt())
     }
@@ -94,7 +94,7 @@ class LockActivity : AppCompatActivity() {
           finish()
         }
         else -> {
-          err.text = "Неверный код"
+          err.text = getString(R.string.lock_wrong_code)
           pin.setText("")
         }
       }
@@ -109,7 +109,7 @@ class LockActivity : AppCompatActivity() {
     // Кнопка «По отпечатку»: повторный вызов промпта, если пользователь
     // отменил системный диалог. Показывается только когда биометрия доступна.
     val bioBtn = Button(this).apply {
-      text = "👆 По отпечатку"
+      text = getString(R.string.lock_bio_button)
       visibility = android.view.View.GONE
       setBackgroundColor(0xFF1F2735.toInt())
       setTextColor(0xFFE7ECF5.toInt())
@@ -164,10 +164,10 @@ class LockActivity : AppCompatActivity() {
           }
         })
       val info = BiometricPrompt.PromptInfo.Builder()
-        .setTitle("Vault заблокирован")
-        .setSubtitle("Приложите палец или введите код")
+        .setTitle(getString(R.string.bio_title))
+        .setSubtitle(getString(R.string.bio_subtitle))
         .setAllowedAuthenticators(bioAuth)
-        .setNegativeButtonText("Ввести код")
+        .setNegativeButtonText(getString(R.string.bio_negative))
         .build()
       prompt.authenticate(info)
     } catch (e: Throwable) {
