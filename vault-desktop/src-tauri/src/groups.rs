@@ -1483,6 +1483,155 @@ mod tests {
         });
     }
 
+    // ─── t_61bd5090 #8: формат токена приглашения (две половины одного договора) ───
+    //
+    // `group_invite` пишет `inv_<group_id>_<16 hex>`, `accept_invite` разбирает.
+    // Прокси-тесты выше сверяли только префикс `inv_` и то, что accept вообще
+    // возвращает id: урезанная энтропия, снятый не тот хвост, проверка длины,
+    // убранная из разбора — всё это проходило мимо.
+
+    /// Оба конца формата: префикс с group_id, ровно 16 hex-символов энтропии и
+    /// то, что повторное приглашение даёт ДРУГОЙ токен (anti-replay).
+    #[test]
+    fn invite_token_carries_the_group_id_and_its_entropy_suffix() {
+        with_tmp_groups(|| {
+            let g = create_group("dev", "creator@x").unwrap();
+            let inv = group_invite(&g.id, "invitee@x").unwrap();
+            let prefix = format!("inv_{}_", g.id);
+            assert!(
+                inv.token.starts_with(&prefix),
+                "токен обязан начинаться с `inv_<group_id>_`, получено {}",
+                inv.token
+            );
+            let entropy = &inv.token[prefix.len()..];
+            assert_eq!(entropy.len(), 16, "8 байт энтропии = 16 hex-символов");
+            assert!(
+                entropy.chars().all(|c| c.is_ascii_hexdigit()),
+                "хвост токена — hex: {entropy}"
+            );
+
+            let inv2 = group_invite(&g.id, "other@x").unwrap();
+            assert_ne!(
+                inv.token, inv2.token,
+                "второе приглашение той же группы не имеет права повторять токен"
+            );
+        });
+    }
+
+    /// Хвост без подчёркивания — это не «группа не найдена», а битый токен:
+    /// разбор обязан отказаться ДО обращения к массиву частей.
+    #[test]
+    fn accept_invite_rejects_a_token_without_an_entropy_suffix() {
+        with_tmp_groups(|| {
+            let err = accept_invite("inv_onlygroupid", "bob@x").unwrap_err();
+            assert!(
+                err.to_string().contains("malformed token"),
+                "токен без хвоста энтропии — отказ, получено: {err}"
+            );
+        });
+    }
+
+    /// group_id сам содержит `_` (импортированные и legacy-группы). Делить токен
+    /// надо по ПОСЛЕДНЕМУ подчёркиванию: деление по первому отдаёт кусок id,
+    /// группы с таким именем нет — и accept либо падает, либо (что хуже)
+    /// работает с другой группой.
+    #[test]
+    fn accept_invite_splits_the_token_at_the_last_underscore() {
+        with_tmp_groups(|| {
+            let g = mk_group("grp_alpha_beta", "creator@x", &[("creator@x", "fp1")]);
+            let mut all: HashMap<String, Group> = HashMap::new();
+            all.insert(g.id.clone(), g);
+            save_groups(&all).unwrap();
+
+            let inv = group_invite("grp_alpha_beta", "carol@x").unwrap();
+            assert_eq!(
+                accept_invite(&inv.token, "carol@x").unwrap(),
+                "grp_alpha_beta",
+                "id с подчёркиванием обязан разбираться целиком"
+            );
+            let groups = load_groups().unwrap();
+            let gm = groups.get("grp_alpha_beta").unwrap();
+            assert!(
+                gm.members.iter().any(|m| m.email == "carol@x"),
+                "участник добавлен в ту же группу, чей id в токене"
+            );
+        });
+    }
+
+    /// Идемпотентность accept'а — это ОДНА строка в списке, а не «такая строка
+    /// там есть». Повторный accept с другим адресом в той же форме заводил
+    /// второго участника-дубля, которого не видно ни в одном `any`.
+    #[test]
+    fn accept_invite_registers_the_member_exactly_once() {
+        with_tmp_groups(|| {
+            let g = create_group("team", "creator@x").unwrap();
+            let inv = group_invite(&g.id, "bob@x").unwrap();
+            accept_invite(&inv.token, "bob@x").unwrap();
+            accept_invite(&inv.token, " BOB@X ").unwrap();
+            let gm = load_groups().unwrap().remove(&g.id).unwrap();
+            assert_eq!(
+                gm.members
+                    .iter()
+                    .filter(|m| identity::same_address(&m.email, "bob@x"))
+                    .count(),
+                1,
+                "повторный accept не плодит дубль участника"
+            );
+        });
+    }
+
+    /// «Уже участник» сверяется по ФОРМЕ адреса из ядра, а не точной строкой:
+    /// приглашение в другом регистре или с обрамлением иначе заводит второго
+    /// участника с тем же ключом.
+    #[test]
+    fn invite_refuses_a_member_whose_address_differs_only_in_form() {
+        with_tmp_groups(|| {
+            let g = create_group("dev", "creator@x").unwrap();
+            let mut groups = load_groups().unwrap();
+            groups
+                .get_mut(&g.id)
+                .unwrap()
+                .members
+                .push(GroupMember {
+                    email: "alice@x".to_string(),
+                    role: GroupRole::Member,
+                    joined_at: String::new(),
+                    key_shared: false,
+                    fingerprint: String::new(),
+                    invited: false,
+                });
+            save_groups(&groups).unwrap();
+
+            let err = group_invite(&g.id, "  ALICE@x ").unwrap_err();
+            assert!(
+                err.to_string().contains("already a member"),
+                "обращение к существующему участнику в другой форме — отказ, получено: {err}"
+            );
+        });
+    }
+
+    /// Холостой проход ренейма не имеет права считаться «трогнутой» группой.
+    /// created_by уже в новой форме, а старый адрес — тот же адрес в другой
+    /// записи: менять нечего, но без проверки `created_by != new_email`
+    /// функция возвращала 1 и перезаписывала groups.json на каждую миграцию.
+    #[test]
+    fn rename_address_of_an_already_renamed_creator_reports_nothing_touched() {
+        with_tmp_groups(|| {
+            let g = mk_group("grp_form", "creator@x", &[("bob@x", "fpBob")]);
+            let mut all: HashMap<String, Group> = HashMap::new();
+            all.insert(g.id.clone(), g);
+            save_groups(&all).unwrap();
+
+            assert_eq!(
+                rename_address("  CREATOR@X ", "creator@x").unwrap(),
+                0,
+                "ренейм на тот же адрес в другой форме не трогает группы"
+            );
+            let gm = load_groups().unwrap().remove("grp_form").unwrap();
+            assert_eq!(gm.created_by, "creator@x", "created_by не переписан");
+        });
+    }
+
     fn mk_group(id: &str, created_by: &str, members: &[(&str, &str)]) -> Group {
         Group {
             id: id.into(),
@@ -1768,6 +1917,104 @@ mod tests {
         }
         assert!(is_own_group(&mine_by_fp, "me@new.com", "aabb1122", &[]));
         assert!(!is_own_group(&stranger, "me@new.com", "aabb1122", &[]));
+    }
+
+    // ─── t_61bd5090 #9: проводка group_access (правила меряются в ядре) ───
+    //
+    // Сами ответы «кто управляющий» и «можно ли трогать эту строку» даёт ядро
+    // (`group_rules::Access`, наборы `rust-group-rules`). Здесь меряется
+    // проводка: каким участником считается «я», чья роль подставляется в
+    // `Access` и чей адрес сравнивается с `created_by`. Ошибиться здесь — значит
+    // отдать кнопки чужой строке или спрятать их у владельца.
+
+    /// Я управляю, потому что группа моя: `created_by` — мой АЛИАС, а не текущая
+    /// почта, и в списке я стою под текущей почтой с ролью Member.
+    #[test]
+    fn group_access_creator_by_alias_keeps_management() {
+        let g = mk_group(
+            "grp_alias",
+            "old@x.ru",
+            &[("me@x.ru", "AA:BB:CC:DD"), ("b@x.ru", "11:22:33:44")],
+        );
+        let a = group_access(&g, "me@x.ru", "AA:BB:CC:DD", &["old@x.ru".to_string()]);
+
+        assert!(a.is_creator, "создатель опознаётся по любому своему адресу, а не только по текущей почте");
+        assert!(!a.is_admin, "роль в списке — Member: админом меня никто не назначал");
+        assert!(a.can_manage, "создатель управляет составом и без роли Admin");
+        assert!(a.is_mine, "группа моя — она обязана остаться в моём списке");
+
+        assert!(a.members[0].is_self, "моя строка помечена как своя");
+        assert!(!a.members[0].removable, "себя нельзя удалить этим действием — выход это отдельная операция");
+        assert!(a.members[1].removable, "рядового участника управляющий удаляет");
+        assert!(!a.members[1].is_creator, "чужая строка не помечена как строка создателя");
+        assert!(a.members[1].settable_role, "роль рядовому участнику управляющий ставит");
+    }
+
+    /// Назначенный админ: управляю, но создатель — другой участник, и его
+    /// строка остаётся закрытой и на удаление, и на смену роли.
+    #[test]
+    fn group_access_assigned_admin_manages_but_creator_row_stays_locked() {
+        let mut g = mk_group(
+            "grp_admin",
+            "boss@x.ru",
+            &[
+                ("boss@x.ru", "BO:SS:00:00"),
+                ("me@x.ru", "AA:BB:CC:DD"),
+                ("b@x.ru", "11:22:33:44"),
+            ],
+        );
+        g.members[1].role = GroupRole::Admin;
+        let a = group_access(&g, "me@x.ru", "AA:BB:CC:DD", &[]);
+
+        assert!(a.is_admin, "назначенный админ получает права админа");
+        assert!(!a.is_creator, "я не создатель");
+        assert!(a.can_manage, "админ управляет составом");
+        assert!(a.is_mine, "группа моя по участию, а не по авторству");
+
+        assert!(a.members[0].is_creator, "строка создателя помечена");
+        assert!(!a.members[0].removable, "создателя нельзя удалить из списка");
+        assert!(!a.members[0].settable_role, "роль создателя никто не ставит — его запись обязана остаться управляющей");
+        assert!(a.members[1].is_self, "моя строка помечена");
+        assert!(!a.members[1].removable, "себя этим действием не удаляют");
+        assert!(a.members[2].removable, "обычный участник удаляется");
+    }
+
+    /// Моя запись в списке лежит под ДРУГИМ адресом и опознаётся только
+    /// отпечатком, причём я — не первый участник.
+    #[test]
+    fn group_access_finds_me_by_fingerprint_under_another_address() {
+        let g = mk_group(
+            "grp_fp",
+            "boss@x.ru",
+            &[("b@x.ru", "11:22:33:44"), ("old@x.ru", "AA:BB:CC:DD")],
+        );
+        let a = group_access(&g, "me@x.ru", "AA:BB:CC:DD", &[]);
+
+        assert!(!a.is_admin, "админом меня не назначали — моей строке роль не выдана");
+        assert!(!a.is_creator, "создатель — boss@x.ru");
+        assert!(a.is_mine, "я в списке по отпечатку, значит группа моя");
+        assert!(a.members[1].is_self, "своя строка найдена по отпечатку, а не по первому совпадению");
+        assert!(!a.members[0].is_self, "чужая строка своей не стала");
+    }
+
+    /// Меня нет в списке и `created_by` — не мой адрес: прав нет ни на что.
+    #[test]
+    fn group_access_stranger_without_membership_gets_no_rights() {
+        let g = mk_group(
+            "grp_stranger",
+            "boss@x.ru",
+            &[("boss@x.ru", "BO:SS:00:00"), ("b@x.ru", "11:22:33:44")],
+        );
+        let a = group_access(&g, "me@x.ru", "AA:BB:CC:DD", &["other@x.ru".to_string()]);
+
+        assert!(!a.is_creator, "чужую группу нельзя объявить своей, если создатель не найден в списке");
+        assert!(!a.is_admin, "чужой админ — не я");
+        assert!(!a.can_manage, "управления нет");
+        assert!(!a.is_mine, "группа не моя");
+        assert!(
+            a.members.iter().all(|m| !m.removable && !m.settable_role),
+            "без прав ни одна строка не управляема"
+        );
     }
 
     /// Живые данные X50 (24.10): сессия koanmak@ya.ru, участник

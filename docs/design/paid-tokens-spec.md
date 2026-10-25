@@ -359,7 +359,7 @@ export const KV_PRO = 'relay-pro-state';   // { plan, paid_until, checkout_id } 
   пометку «офлайн-режим». Сообщения ходят, как у Pro.
 - **Анти-подмена часов:** локальный `paid_until` клиент comparing по `performance.timeOrigin`
   + monotonic-таймеру, а не по `Date.now()` пользователя. Серверное время — единственный
-  авторитетный `paid_until`; gрейс закрывается при первом успешном `/tokens/info`.
+  авторитетный `paid_until`; грейс закрывается при первом успешном `/tokens/info`.
 - `/tokens/info` отдаёт `grace_until` — серверная граница, чтобы клиент не «удлинял» грейс бесконечно.
 
 ### 5.4 i18n

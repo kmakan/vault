@@ -1563,6 +1563,89 @@ mod tests {
         assert_eq!(r2, Duration::from_secs(2), "после успеха лестница с 2с");
     }
 
+    /// Активная пауза обязана отдавать НАСТОЯЩИЙ остаток, а не полную ступень и
+    /// не ноль.
+    ///
+    /// Зачем отдельная проба: тест выше сверяет только МОМЕНТ дедлайна и
+    /// выбрасывает второе значение (`let (new_deadline, _) = …`), поэтому три
+    /// мутации, портящие именно остаток, проходили зелёными. В том числе
+    /// обратная разность `now - t`: на этой платформе она не паникует, а даёт
+    /// `0ns`, то есть молча превращает «осталось 5с» в «пауза уже кончилась».
+    /// Подбираем числа так, чтобы остаток не совпадал ни со ступенью серии (60с),
+    /// ни с первой ступенью (2с) — тогда любая подмена видна по значению.
+    #[test]
+    fn connect_deadline_active_pause_reports_the_remaining_time() {
+        let t0 = Instant::now();
+        // Глубокая серия: пауза 60с, назначена первой неудачей этой серии.
+        let (deadline, rung) = next_connect_deadline(7, None, t0);
+        assert_eq!(rung, Duration::from_secs(60));
+        let deadline = deadline.expect("пауза назначена");
+
+        // Спустя 55с из 60с остаётся ровно 5с.
+        let now = t0 + Duration::from_secs(55);
+        let (d, remaining) = next_connect_deadline(7, Some(deadline), now);
+        assert_eq!(d, Some(deadline), "момент паузы не двигается");
+        assert_eq!(
+            remaining,
+            Duration::from_secs(5),
+            "отдаётся остаток активной паузы, а не ступень лестницы"
+        );
+    }
+
+    /// Граница «пауза истекла» — это `now == deadline`, а не «строго после».
+    /// Расходятся `> now` и `>= now` ТОЛЬКО на равенстве, поэтому проба стоит на
+    /// равенстве: зазор в миллисекунду это утверждение не меряет.
+    #[test]
+    fn connect_deadline_expired_on_the_boundary_starts_the_next_rung() {
+        let t0 = Instant::now();
+        let (deadline, _) = next_connect_deadline(1, None, t0);
+        let deadline = deadline.expect("первая пауза — 2с");
+
+        // now совпадает с дедлайном: пауза больше не активна → streak=2 даёт
+        // ступень 5с, отсчитываемую от границы.
+        let (d, remaining) = next_connect_deadline(2, Some(deadline), deadline);
+        assert_eq!(
+            remaining,
+            Duration::from_secs(5),
+            "на границе ступень считается заново, а не отдаётся нулевой остаток"
+        );
+        assert_eq!(d, Some(deadline + Duration::from_secs(5)));
+    }
+
+    /// Проводка внутри `EmailClient`: какие аргументы мост передаёт в чистую
+    /// функцию. Чистые пробы выше это не видят — там `now` и `deadline` приходят
+    /// параметром, а здесь их берёт из состояния (`self.fail_streak`,
+    /// `self.connect_retry_after`) и их же мутант может подменить.
+    ///
+    /// Дедлайн серии подставлен НАМЕРЕННО далеко (60 с), а ступень следующей
+    /// неудачи (streak 2→3) — 15 с: тогда «остаток активной паузы» и «ступень
+    /// лестницы» различаются на 45 секунд, и проба не зависит от того, как долго
+    /// машина делала паузу между двумя обращениями к часам (допуск — секунды, а
+    /// не наносекунды). Числа выбраны так, чтобы ступень после инкремента streak
+    /// НЕ совпадала с остатком: при глубокой серии (streak 6→7) обе величины
+    /// равны 60 с и подмена стала бы невидимой.
+    #[test]
+    fn connect_deadline_note_failure_returns_remaining_of_active_pause() {
+        let mut client = EmailClient::new(EmailConfig::default());
+        let r1 = client.note_failure();
+        assert_eq!(r1, Duration::from_secs(2), "первая неудача серии — 2с");
+
+        // Активная пауза: осталось ~60с, ступень streak=3 — 15с.
+        let seeded = Instant::now() + Duration::from_secs(60);
+        client.connect_retry_after = Some(seeded);
+        client.fail_streak = 2;
+        let r2 = client.note_failure();
+        assert_eq!(
+            client.connect_retry_after,
+            Some(seeded),
+            "неудача внутри активной паузы не передвигает дедлайн (livelock X50)"
+        );
+        assert!(
+            r2 > Duration::from_secs(45) && r2 <= Duration::from_secs(60),
+            "отдаётся остаток активной паузы (~60с), а не ступень streak=3 (15с): r2={r2:?}"
+        );
+    }
+
     /// Разделение «нет такой папки» и сетевого сбоя (живой тест, телефон X50,
     /// 04.10.2026, 0.1.211): 59 «reconnect deferred» при streak≈60 и 8
     /// реальных переподключений — клиент растил streak на ответ сервера об

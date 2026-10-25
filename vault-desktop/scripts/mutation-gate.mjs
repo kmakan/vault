@@ -77,8 +77,15 @@ if (args.includes('--check-patterns')) {
     process.exit(1);
   }
   if (ambiguous.length) {
-    console.log(`⚠ ${ambiguous.length}/${checked} паттернов встречаются в файле больше одного раза:`);
-    for (const x of ambiguous) console.log('  • ' + x);
+    // Мутация садится на ПЕРВОЕ совпадение, поэтому паттерн, встречающий строку
+    // дважды, мерит НЕ ТО решение, которое называет его именем. С 25.10 это
+    // красное: предупреждение никто не читает в конце долгого прогона, а дыра
+    // выглядит как работающая проверка.
+    console.error(`✗ mutation-gate --check-patterns: ${ambiguous.length}/${checked} паттернов встречаются больше одного раза`);
+    for (const x of ambiguous) console.error('  • ' + x);
+    console.error('\n  Паттерн надо расширить соседними строками так, чтобы совпадение');
+    console.error('  было ровно одно: иначе «имя мутации» не гарантирует, что мутировано то решение.');
+    process.exit(1);
   }
   console.log(`✓ mutation-gate --check-patterns: ${checked} мутаций в ${sets.length} наборах находят свой код`);
   process.exit(0);

@@ -52,7 +52,7 @@ export async function migrateOwnProfile(deps, oldEmail, newEmail) {
   deps.setUserAvatarUrl((r.profile || {}).avatar || deps.userAvatarUrl());
 }
 
-// Локальные кэши аккаунта: тombстоуны и курсоры.
+// Локальные кэши аккаунта: томбстоуны и курсоры.
 export async function initLocalDb(deps) {
   const r = await deps.loadLocalCaches(deps.email());
   if (r.tombstones) deps.setTombstonesCache(r.tombstones);

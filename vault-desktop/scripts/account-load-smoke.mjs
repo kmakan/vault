@@ -121,7 +121,7 @@ function makeDeps(over = {}) {
 {
   const deps = makeDeps();
   await A.initLocalDb(deps);
-  check('кэши: тombстоуны загружены', deps.s.tombstones && deps.s.tombstones.t === 1, deps.s.tombstones);
+  check('кэши: томбстоуны загружены', deps.s.tombstones && deps.s.tombstones.t === 1, deps.s.tombstones);
   check('кэши: mid-томбстоуны загружены', deps.s.midTombstones && deps.s.midTombstones.m === 1, deps.s.midTombstones);
   check('кэши: курсоры загружены', deps.s.cursors && deps.s.cursors.inbox === 'uid', deps.s.cursors);
 }
