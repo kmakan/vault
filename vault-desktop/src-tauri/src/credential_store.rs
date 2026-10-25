@@ -165,14 +165,13 @@ pub fn delete_credentials() -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    // Тесты идут параллельными потоками в одном процессе и делят переменную
-    // окружения VAULT_CREDENTIALS_DIR — сериализуем их мьютексом.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    // Тесты идут параллельными потоками в одном процессе и делят переменные
+    // окружения — редирект обязан стоять под ЕДИНЫМ замком крейта
+    // (`crate::env_test_guard`), а не под собственным: собственный сериализует
+    // только эти тесты, а поток из другого модуля снимает VAULT_* посреди пробы.
     fn with_temp_dir<F: FnOnce(PathBuf)>(f: F) {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = crate::env_test_guard();
         let dir = std::env::temp_dir().join(format!("vault-cred-test-{}", rand::random::<u64>()));
         crate::set_env_safe("VAULT_CREDENTIALS_DIR", &dir);
         f(dir.clone());

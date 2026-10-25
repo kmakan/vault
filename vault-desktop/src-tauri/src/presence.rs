@@ -114,7 +114,15 @@ mod tests {
     use super::*;
 
     /// Isolate env per-test: redirect VAULT_PRESENCE_FILE, restore после.
+    ///
+    /// Замок — ЕДИНЫЙ на крейт (`crate::env_test_guard`), а не `ENV_MUTEX`:
+    /// тот защищает `set_env_safe` раннера и сериализует только внутри себя,
+    /// поэтому редиректы остальных модулей проходили мимо него и перебивали
+    /// этот (25.10, мерит `gate:test-isolation`). Внутрь env ходим через
+    /// `crate::set_env_safe`: порядок захвата (сначала тестовый замок, потом
+    /// `ENV_MUTEX` внутри него) один на весь крейт, рекурсии нет.
     fn with_tmp<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::env_test_guard();
         let path = std::env::temp_dir().join(format!(
             "m22_presence-{}-{}.json",
             std::process::id(),
@@ -124,21 +132,12 @@ mod tests {
                 .as_nanos()
         ));
         let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
-        // Сериализуем env-доступ через общий crate::ENV_MUTEX: две presence-
-        // теста (и любые env-тесты других модулей) в параллельном прогоне
-        // иначе гоняются за одну и ту же процесс-глобальную переменную, и
-        // один тест читает файл другого (ложные FAIL). Держим guard на всё
-        // время работы closure; set_var/remove_var вызываем напрямую
-        // (set_env_safe взял бы ENV_MUTEX повторно → self-deadlock).
-        // Устойчиво к poisoning: падение одного теста не валит остальные.
-        let _guard = crate::ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("VAULT_PRESENCE_FILE", &path);
+        crate::set_env_safe("VAULT_PRESENCE_FILE", &path);
         let result = f();
         let _ = std::fs::remove_file(&path);
-        if let Some(v) = prev {
-            std::env::set_var("VAULT_PRESENCE_FILE", &v);
-        } else {
-            std::env::remove_var("VAULT_PRESENCE_FILE");
+        match prev {
+            Some(v) => crate::set_env_safe("VAULT_PRESENCE_FILE", &v),
+            None => std::env::remove_var("VAULT_PRESENCE_FILE"),
         }
         result
     }

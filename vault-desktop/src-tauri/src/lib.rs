@@ -11,6 +11,27 @@ pub fn set_env_safe(key: &str, value: impl AsRef<std::ffi::OsStr>) {
     std::env::set_var(key, value);
 }
 
+/// ЕДИНЫЙ замок для тестов, которые редиректят переменные окружения
+/// (`VAULT_TEST_DB_FILE`, `VAULT_TEST_KEYS_DIR`, `VAULT_GROUPS_FILE`, …).
+///
+/// ЗАЧЕМ ОН ОБЩИЙ, а не по модулю. Cargo гоняет тесты параллельными потоками в
+/// ОДНОМ процессе, а env — процесс-глобальный. По модульному `static TMP_LOCK`
+/// сериализует тесты только внутри своего модуля: поток из `key_store` снимал
+/// `VAULT_TEST_KEYS_DIR` ровно в тот момент, когда тест `duress` держал
+/// редирект, — и тест дописывался в ЖИВУЮ базу/каталог ключей разработчика
+/// (найено 25.10, пункт 11 очереди `t_61bd5090`). Следствие хуже флейка:
+/// зелёный тест проверял не то, что заявляет, а мутационный гейт ловил ложных
+/// выживших. Живучесть правила меряет `npm run gate:test-isolation`.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Взять [`ENV_TEST_LOCK`]. Отравленный замок не читаем: данные — `()`, а
+/// паника внутри чужого теста не должна превращаться в каскад отказов.
+#[cfg(test)]
+pub(crate) fn env_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 mod audio;
 mod channel_signing;
 mod channels;
@@ -2631,4 +2652,195 @@ pub fn run() {
     // повторный open пересоздавал activity, но wry не перепривязывал
     // поверхность WebView → чёрный экран до полного рестарта. Живучесть
     // процесса для пушей обеспечивает VaultForegroundService; уведомле-
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Проба пункта 11 очереди `t_61bd5090`: разбор kv-словаря `email-aliases`
+// (`alias_pairs`, lib.rs:1300 на момент написания проб).
+//
+// ПРОБЫ ИДУТ ЧЕРЕЗ КОМАНДУ `identity_address_variants`, а не вызывают
+// `alias_pairs` напрямую. Причина: вердикт ядру даёт словарь, собранный мостом,
+// и без команды не измерялась проводка — чья именно строка kv читается и что
+// происходит при ошибке чтения. Мутации `dictionary читается от "anon"` и
+// `ошибку подменяем пустым словарём` ловятся только на уровне команды.
+//
+// Мера до (25.10, прогон `rust-bridge-identity-alias` по существующим 248
+// тестам): 0/10 — ни одна проверка не касалась этого кода.
+// ──────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod identity_alias_tests {
+    use super::*;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    const ME: &str = "me@post.ru";
+    const OTHER: &str = "other@post.ru";
+    const DICT_KEY: &str = "email-aliases";
+
+    /// Тестовая БД + редирект каталога ключей, всё под ЕДИНЫМ env-замком
+    /// крейта (`crate::env_test_guard`, живучесть мерит `gate:test-isolation`).
+    ///
+    /// Паника внутри пробы — ПРОВАЛ, а не «тест упал»: команда обязана отвечать
+    /// ошибкой, а не ронять мост (на устройстве это выглядит как «тап по
+    // контакту не отвечает»).
+    fn with_alias_db<T>(setup: impl FnOnce(&Path), f: impl FnOnce() -> T) -> T {
+        let _guard = crate::env_test_guard();
+        let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("alias_{}-{}", std::process::id(), seq));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("vault.db");
+        crate::set_env_safe("VAULT_TEST_DB_FILE", &db);
+        crate::set_env_safe("VAULT_TEST_KEYS_DIR", &dir);
+        setup(&db);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{}", db.display(), suffix));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("VAULT_TEST_DB_FILE");
+        std::env::remove_var("VAULT_TEST_KEYS_DIR");
+        match r {
+            Ok(v) => v,
+            Err(_) => panic!("команда упала паникой вместо ответа"),
+        }
+    }
+
+    fn open_at(db: &Path) -> Storage {
+        Storage::open(Some(&db.to_path_buf())).expect("тестовая база открыта")
+    }
+
+    fn dict<'a>(rows: &'a [(&'a str, &'a str)]) -> impl FnOnce(&Path) + 'a {
+        move |db: &Path| {
+            let s = open_at(db);
+            for (account, value) in rows {
+                s.kv_set(account, DICT_KEY, value).expect("словарь записан");
+            }
+        }
+    }
+
+    fn variants(account: &str, address: &str) -> Result<Vec<String>, String> {
+        identity_address_variants(account.to_string(), address.to_string())
+    }
+
+    #[test]
+    fn alias_dictionary_absent_reads_as_no_variants() {
+        let got = with_alias_db(|_| {}, || variants(ME, "Petr@Post.RU"));
+        assert_eq!(
+            got,
+            Ok(vec!["petr@post.ru".to_string()]),
+            "без словаря вариант ровно один — нормальная форма адреса"
+        );
+    }
+
+    #[test]
+    fn alias_dictionary_broken_json_fails_soft_to_the_bare_address() {
+        // Оборванный JSON — рабочее состояние: строку kv пишет фронт, а запись
+        // могла прерваться. Ответ — голый адрес, И НЕ паника.
+        let got = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x"#)]),
+            || variants(ME, "a@x"),
+        );
+        assert_eq!(got, Ok(vec!["a@x".to_string()]));
+    }
+
+    #[test]
+    fn alias_dictionary_non_object_json_fails_soft_to_the_bare_address() {
+        // Не-объект (массив, скаляр) — это не словарь алиасов. Проба pin-ит
+        // отсутствие паники и отсутствие вариантов; мутантов у этой ветки нет
+        // (эквивалентный класс — см. заголовок набора).
+        let got = with_alias_db(
+            dict(&[(ME, r#"["a@x","b@x"]"#)]),
+            || variants(ME, "a@x"),
+        );
+        assert_eq!(got, Ok(vec!["a@x".to_string()]));
+    }
+
+    #[test]
+    fn alias_dictionary_walks_two_hops_to_the_fresh_address() {
+        // Две смены подряд (A→B→C): ключ лежит под свежим адресом, и порядок
+        // вариантов решает быстрый путь фронта.
+        let got = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x","b@x":"c@x"}"#)]),
+            || variants(ME, "a@x"),
+        );
+        assert_eq!(
+            got,
+            Ok(vec!["a@x".to_string(), "b@x".to_string(), "c@x".to_string()]),
+            "цепочка читается по направлению old→new"
+        );
+    }
+
+    #[test]
+    fn alias_dictionary_adds_the_stale_address_of_the_same_peer() {
+        // Обратный ход — тот самый регресс 24.10: строка списка осталась
+        // СТАРОЙ, ключ переехал. Тап по старому адресу обязан найти ключ.
+        let by_new = with_alias_db(
+            dict(&[(ME, r#"{"old@x":"new@x"}"#)]),
+            || variants(ME, "new@x"),
+        );
+        assert_eq!(by_new, Ok(vec!["new@x".to_string(), "old@x".to_string()]));
+        let by_old = with_alias_db(
+            dict(&[(ME, r#"{"old@x":"new@x"}"#)]),
+            || variants(ME, " OLD@X "),
+        );
+        assert_eq!(by_old, Ok(vec!["old@x".to_string(), "new@x".to_string()]));
+    }
+
+    #[test]
+    fn alias_dictionary_non_string_value_keeps_other_pairs() {
+        // Значение не-строка портит ОДНУ пару, а не весь словарь: строгий
+        // типизированный разбор (HashMap<String,String>) потерял бы и живые
+        // пары тоже.
+        let d = vec![(ME, r#"{"a@x":5,"b@x":"c@x"}"#)];
+        let good = with_alias_db(dict(&d), || variants(ME, "b@x"));
+        assert_eq!(good, Ok(vec!["b@x".to_string(), "c@x".to_string()]));
+        let dirty = with_alias_db(dict(&d), || variants(ME, "a@x"));
+        assert_eq!(dirty, Ok(vec!["a@x".to_string()]));
+    }
+
+    #[test]
+    fn alias_dictionary_is_read_for_this_account_only() {
+        // Словарь лежит в строке аккаунта: прочитать чужой (или 'anon') — это
+        // резолв адресов постороннего человека.
+        let rows = vec![
+            (ME, r#"{"a@x":"b@x"}"#),
+            (OTHER, r#"{"c@x":"d@x"}"#),
+        ];
+        let mine = with_alias_db(dict(&rows), || variants(ME, "a@x"));
+        assert_eq!(mine, Ok(vec!["a@x".to_string(), "b@x".to_string()]));
+        let theirs = with_alias_db(dict(&rows), || variants(OTHER, "c@x"));
+        assert_eq!(theirs, Ok(vec!["c@x".to_string(), "d@x".to_string()]));
+        let cross = with_alias_db(dict(&rows), || variants(ME, "c@x"));
+        assert_eq!(cross, Ok(vec!["c@x".to_string()]), "чужой словарь не подмешивается");
+    }
+
+    #[test]
+    fn alias_dictionary_unreadable_value_is_an_error_not_an_empty_dictionary() {
+        // Значение, которое нельзя прочесть как текст (BLOB с не-UTF8), —
+        // ошибка наверх, а не «алиасов нет». То же решение, что у `settings_flag`:
+        // соврать «словарь пуст» хуже, чем вернуть ошибку — фронт при ошибке
+        // сохраняет показанное состояние, а пустой словарь молча открывает
+        // попап «Добавить контакт».
+        let got = with_alias_db(
+            |db| {
+                // Схема создаётся нашим же открытием БД, дальше строка кладётся
+                // в обход `kv_set` (тот принимает только текст): BLOB с не-UTF8
+                // — это ровно то, что мост может найти в kv после чужой записи.
+                drop(open_at(db));
+                let s = rusqlite::Connection::open(db).expect("база открыта напрямую");
+                s.execute(
+                    "INSERT INTO kv_store(account, key, value) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ME, DICT_KEY, &[0xffu8, 0xfeu8][..]],
+                )
+                .expect("нечитаемое значение записано");
+            },
+            || variants(ME, "petr@post.ru"),
+        );
+        assert!(
+            got.is_err(),
+            "нечитаемая строка kv должна отдаваться ошибкой, получено {got:?}"
+        );
+    }
 }

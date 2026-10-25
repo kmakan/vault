@@ -334,19 +334,15 @@ pub fn send_sos_headless(recipients: &[String], text: &str) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Mutex;
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
-    /// Env — процесс-глобальный: такие тесты идут по одному, иначе параллельные
-    /// cargo test перебивают друг друга редиректами.
-    static TMP_LOCK: Mutex<()> = Mutex::new(());
 
     /// `load_config`/`save_config` идут через `Storage::open(None)`, а тот
     /// захватывает keys-guard — поэтому редиректим ОБЕ переменные: и файл БД, и
     /// каталог ключей. Настоящий `~/.local/share/com.vault.vault/vault.db` и
     /// `~/.vault/keys` не открываются вообще.
     fn with_tmp_db<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = TMP_LOCK.lock().unwrap();
+        let _guard = crate::env_test_guard();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("duress_{}-{}", std::process::id(), seq));
         let _ = std::fs::create_dir_all(&dir);

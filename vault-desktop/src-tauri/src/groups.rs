@@ -861,7 +861,6 @@ pub fn invite_sent(group_id: &str, email: &str) -> Result<bool> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Mutex;
 
     // ── Стабильность порядка групп (регресс: «список групп прыгает») ──
     //
@@ -968,14 +967,14 @@ mod tests {
     }
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
-    /// Env vars are process-global, so tests that redirect VAULT_GROUPS_FILE
-    /// must run one at a time (cargo runs tests in parallel by default).
-    static TMP_LOCK: Mutex<()> = Mutex::new(());
 
     /// Point VAULT_GROUPS_FILE at a fresh temp file so tests never touch the
     /// real `~/.vault/groups.json`.
+    ///
+    /// Замок единый на крейт (`crate::env_test_guard`): env процесс-глобальный,
+    /// собственный замок сериализовал бы только эти тесты.
     fn with_tmp_groups<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = TMP_LOCK.lock().unwrap();
+        let _guard = crate::env_test_guard();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
             "vault-groups-test-{}-{}.json",

@@ -430,17 +430,17 @@ mod channel_signing_wipe_tests {
     }
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Mutex;
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
-    /// Env vars are process-global, so tests that redirect VAULT_KEYS_DIR
-    /// must run one at a time (cargo runs tests in parallel by default).
-    static TMP_LOCK: Mutex<()> = Mutex::new(());
 
     /// Point VAULT_KEYS_DIR at a fresh temp dir so tests never touch the
     /// real `~/.vault/keys`.
+    ///
+    /// Замок — ЕДИНЫЙ на крейт (`crate::env_test_guard`): env процесс-глобальный,
+    /// а по модульному замку поток из другого модуля снимал бы наш редирект
+    /// посреди теста (25.10, см. `gate:test-isolation`).
     fn with_tmp_keys<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = TMP_LOCK.lock().unwrap();
+        let _guard = crate::env_test_guard();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir =
             std::env::temp_dir().join(format!("vault-keys-test-{}-{}", std::process::id(), seq));
@@ -634,10 +634,11 @@ mod channel_signing_wipe_tests {
 
     /// Дедуп при смене почты: свой tempdir `ks_{pid}-{seq}` + свой env var
     /// VAULT_TEST_KEYS_DIR. Env — процесс-глобальный, поэтому set/remove
-    /// под тем же единственным TMP_LOCK, что и остальные env-тесты:
-    /// параллельные cargo test не гоняются за переменную.
+    /// идут под ЕДИНЫМ замком крейта (`crate::env_test_guard`), а не под
+    /// собственным: параллельные cargo test иначе снимали бы редирект друг у
+    /// друга, и тест дописывался в живые данные разработчика.
     fn with_test_keys<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = TMP_LOCK.lock().unwrap();
+        let _guard = crate::env_test_guard();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("ks_{}-{}", std::process::id(), seq));
         let _ = std::fs::remove_dir_all(&dir);
