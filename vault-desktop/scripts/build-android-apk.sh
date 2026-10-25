@@ -12,7 +12,13 @@
 # ВАЖНО ПЕРЕД СБОРКОЙ: поднять `version` в `src-tauri/tauri.conf.json` выше
 # стоящей на телефоне (versionCode = major*1e6 + minor*1e3 + patch). Иначе
 # `install -r` молча оставит старую версию — и приёмка проверит старый код.
+#
+# РЕЖИМ (первый аргумент): `apk` (по умолчанию) — RuStore, прямой download и
+# device-приёмка; `aab` — Google Play, который принимает только бандлы.
+# Один и тот же ключ подписи в обоих режимах: смена keystore ломает апдейты
+# у существующих установок.
 set -euo pipefail
+MODE="${1:-apk}"
 
 export JAVA_HOME=/usr/lib/jvm/default
 export ANDROID_HOME="$HOME/Android/Sdk"
@@ -30,11 +36,29 @@ export VAULT_KEYSTORE="$HOME/.local/share/vault/vault-release.keystore"
 export VAULT_KEYSTORE_PASS="$(tr -d '\n' < "$HOME/.local/share/vault/keystore-pass.txt")"
 
 cd "$(dirname "$0")/.."
-npx tauri android build --apk --target aarch64 --features barcode-scanner
+AAPT="$HOME/Android/Sdk/build-tools/$(ls "$HOME/Android/Sdk/build-tools" | sort -V | tail -1)/aapt"
 
-APK="src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
+case "$MODE" in
+  apk)
+    npx tauri android build --apk --target aarch64 --features barcode-scanner
+    OUT="src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
+    ;;
+  aab)
+    npx tauri android build --aab --target aarch64 --features barcode-scanner
+    OUT="src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab"
+    ;;
+  *)
+    echo "использование: $(basename "$0") [apk|aab]" >&2
+    exit 2
+    ;;
+esac
+
 echo
-echo "APK: $APK"
-ls -la "$APK"
-"$HOME/Android/Sdk/build-tools/$(ls "$HOME/Android/Sdk/build-tools" | sort -V | tail -1)/aapt" \
-  dump badging "$APK" | grep -E "^package:|native-code"
+echo "$MODE: $OUT"
+ls -la "$OUT"
+sha256sum "$OUT"
+if [ "$MODE" = apk ]; then
+  "$AAPT" dump badging "$OUT" | grep -E "^package:|native-code"
+else
+  echo "бандл проверяет Play Console при загрузке; локально остаётся SHA256 выше"
+fi
