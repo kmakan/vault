@@ -2215,10 +2215,13 @@ function urlSafeB64(obj) {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function urlSafeB64Decode(str) {
-  // Приём ОБЯЗАН убирать whitespace перед base64-декодом: отправка фолдит
-  // строки ≤76 (fold_lines в email.rs), SMTP-хопы тоже могут перекодировать —
-  // без этого atob падает на '\n' и инвайт молча пропускается. Тот же урок,
-  // что в CLI (7b6b978: strip whitespace before base64 decode).
+  // Нагрузочное правило здесь — перевод алфавита: atob бросает
+  // InvalidCharacterError на `-` и `_` (замер 25.10), без него инвайт молча
+  // теряется. Снятие пробелов — ЗАЩИТА, а не требование декодера: atob по
+  // WHATWG «forgiving-base64» сам выкидывает ASCII-пробелы, поэтому мутаций
+  // по этой строке нет и быть не может (urlsafe-body-mut.mjs, t_7d2c1bb1).
+  // Отправка фолдит строки ≤76 (fold_lines в email.rs), SMTP-хопы тоже могут
+  // перекодировать — тот же урок, что в CLI (7b6b978).
   const clean = (str || '').replace(/\s+/g, '');
   const b64 = clean.replace(/-/g, '+').replace(/_/g, '/');
   const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
