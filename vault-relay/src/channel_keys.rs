@@ -300,6 +300,12 @@ mod tests {
             decide_registration(Some('r'), false, None, None, PUB),
             RegisterDecision::Reject { status: 400, error: "bad channel token" }
         );
+        // Read-токен канала без key_id: очередь не названа — привязывать ключ
+        // не к чему. Без этой пробы `unwrap_or(0)` в этом месте не поймать.
+        assert_eq!(
+            decide_registration(Some('r'), false, Some('c'), None, PUB),
+            RegisterDecision::Reject { status: 400, error: "bad channel token" }
+        );
     }
 
     #[test]
