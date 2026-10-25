@@ -21,8 +21,9 @@
 //     `~/.vault/groups.json`;
 //   * `Utc::now()` — wall-часы.
 //
-// ИМЕНА ПРОБ (смоук `group_access` обязан собрать все четыре; поле `smoke` в
-// rust-гейте пока декоративно — долг записан отдельной задачей):
+// ИМЕНА ПРОБ (смоук `group_access` обязан собрать все четыре; живость фильтра с
+// 25.10 меряет `npm run gate:rust-smokes`, но вердикт по-прежнему даёт весь
+// либ-прогон):
 //   group_access_creator_by_alias_keeps_management
 //   group_access_assigned_admin_manages_but_creator_row_stays_locked
 //   group_access_finds_me_by_fingerprint_under_another_address

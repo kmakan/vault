@@ -28,8 +28,9 @@
 //     ключей/кредов, проверяется только на тестовом устройстве;
 //   * `hash_secret`/`verify_secret` — протокол замка, измерен в ядре.
 //
-// ИМЕНА ПРОБ (смоук `duress` обязан собрать все десять; поле `smoke` в
-// rust-гейте пока декоративно — долг записан задачей #36):
+// ИМЕНА ПРОБ (смоук `duress` обязан собрать все десять; живость фильтра с 25.10
+// меряет `npm run gate:rust-smokes`, но вердикт по-прежнему даёт весь
+// либ-прогон):
 //   duress_config_round_trips_through_the_anon_row
 //   second_save_replaces_the_first_config_whole
 //   absent_config_row_reads_as_disabled_lock
