@@ -41,6 +41,9 @@ const ERR_MALFORMED_PEER: &str = "backup: невалидный peer";
 const ERR_MALFORMED_KV: &str = "backup: невалидная KV-запись";
 const ERR_DUPLICATE_PEER: &str = "backup: дублирующийся peer";
 const ERR_DUPLICATE_KV: &str = "backup: дублирующаяся KV-запись";
+/// Пишем ТОЛЬКО разобранные ключи: собрать backup со строкой, которая не JSON,
+/// означало бы выпустить файл без ключей, где пользователь ждёт их.
+const ERR_EXPORT_KEYS_UNPARSED: &str = "backup: ключи для экспорта не разобраны";
 pub(crate) const ERR_MALFORMED_JOURNAL: &str = "recovery: повреждённый журнал";
 pub(crate) const ERR_IO: &str = "recovery: ошибка ввода-вывода";
 /// Разобранный и провалидированный backup. Построение возможно ТОЛЬКО через
@@ -227,6 +230,28 @@ fn parse_kv(v: &serde_json::Value) -> Result<Vec<(String, String, String)>> {
 /// Проверка: строка — ровно 64 шестнадцатеричных символа (32 байта).
 fn is_hex64(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Сборка backup-JSON — обратная операция к [`parse_backup`] (тот же формат).
+///
+/// Вынесена из команды `export_backup`, чтобы писатель был измерим мутациями:
+/// пока он жил только в команде с default-путями, проверялся лишь разбор, и
+/// переименование поля в экспорте (`kv_store` → `kv_items`) дало бы файл,
+/// который не восстанавливается, — зелёный тест над потерянным аккаунтом.
+///
+/// Неразбираемые ключи => Err, а не тихий `{}`: отсутствие ключей в backup
+/// заметно только на восстановлении, когда старого устройства уже нет.
+pub(crate) fn assemble_backup(keys: &str, kv: &[(String, String, String)]) -> Result<String> {
+    let keys_value: serde_json::Value =
+        serde_json::from_str(keys).map_err(|_| anyhow!(ERR_EXPORT_KEYS_UNPARSED))?;
+    let backup = serde_json::json!({
+        "version": 1,
+        "type": "vault-backup",
+        "exported_at": chrono::Utc::now().to_rfc3339(),
+        "keys": keys_value,
+        "kv_store": kv,
+    });
+    serde_json::to_string_pretty(&backup).map_err(|_| anyhow!(ERR_IO))
 }
 
 /// Разрешённая конфигурация операций импорта: RAW-каталог ключей и путь БД.

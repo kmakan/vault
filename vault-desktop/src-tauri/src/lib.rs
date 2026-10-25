@@ -1982,14 +1982,9 @@ fn db_account_migrate(
 fn export_backup() -> Result<String, String> {
     let keys = key_store::export_keys().map_err(|e| e.to_string())?;
     let kv = open_db()?.kv_get_all().map_err(|e| e.to_string())?;
-    let backup = serde_json::json!({
-        "version": 1,
-        "type": "vault-backup",
-        "exported_at": chrono::Utc::now().to_rfc3339(),
-        "keys": serde_json::from_str::<serde_json::Value>(&keys).unwrap_or(serde_json::json!({})),
-        "kv_store": kv,
-    });
-    Ok(serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?)
+    // Сборка формата — в backup_import (обратная операции к parse_backup),
+    // чтобы писатель был измерен теми же тестами, что и разбор.
+    backup_import::assemble_backup(&keys, &kv).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
