@@ -38,8 +38,10 @@ const STATE_VERSION: u32 = 1;
 const MAX_ENTRIES: usize = 50_000;
 
 /// Что переживает рестарт релея. Всё остальное (очереди конвертов,
-/// last_seen, счётчики) намеренно остаётся in-memory: конверты клиент
-/// добудет по почте, счётчики обнуление переживают тривиально.
+/// last_seen) намеренно остаётся in-memory: конверты клиент добудет по
+/// почте, а суточный счётчик публикаций персистится отдельно (daily_pub) —
+/// иначе рестарт обнулял бы квоты и «1000/сутки» превращались бы в
+/// 1000 на каждый деплой.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PersistedState {
     /// Версия формата (на будущее — миграции).
@@ -85,6 +87,16 @@ pub struct PersistedState {
     /// unlimited устройств на один Pro).
     #[serde(default)]
     pub sub_tokens: HashMap<String, Vec<String>>,
+    /// Суточные счётчики публикаций: ключ издателя (`t:<hash>` или
+    /// `ip:<addr>`) → (день UTC = now/86400, счётчик).
+    ///
+    /// ПЕРСИСТ: рестарт релея иначе обнулял бы квоты — free обходил бы
+    /// 100/сутки перезапуском, а оплаченный Pro получал бы 1000 заново
+    /// на каждом деплое. Записи прошлых суток при загрузке отбрасываются
+    /// (sanitize): хранить вчерашние счётчики незачем, а «сегодня» после
+    /// полуночи UTC всё равно начинается с нуля.
+    #[serde(default)]
+    pub daily_pub: HashMap<String, (u64, u32)>,
 }
 
 /// Состояние оплаченной подписки.
@@ -176,6 +188,18 @@ fn valid_token(v: &str) -> bool {
         && v.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
+
+/// Ключ издателя суточного счётчика: `t:<64 hex>` (hash токена) или
+/// `ip:<адрес>`. Всё прочее — мусор из повреждённого файла.
+fn valid_publisher(v: &str) -> bool {
+    if let Some(hash) = v.strip_prefix("t:") {
+        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+    } else if let Some(ip) = v.strip_prefix("ip:") {
+        ip.parse::<std::net::IpAddr>().is_ok()
+    } else {
+        false
+    }
+}
 impl PersistedState {
     /// Снимок текущих in-memory карт.
     pub fn snapshot(
@@ -186,6 +210,7 @@ impl PersistedState {
         token_bindings: &HashMap<String, String>,
         subscriptions: &HashMap<String, Subscription>,
         sub_tokens: &HashMap<String, Vec<String>>,
+        daily_pub: &HashMap<String, (u64, u32)>,
     ) -> Self {
         Self {
             v: STATE_VERSION,
@@ -197,6 +222,7 @@ impl PersistedState {
             token_bindings: token_bindings.clone(),
             subscriptions: subscriptions.clone(),
             sub_tokens: sub_tokens.clone(),
+            daily_pub: daily_pub.clone(),
         }
     }
 
@@ -288,6 +314,28 @@ impl PersistedState {
                 self.sub_tokens.remove(&k);
             }
             tracing::warn!(dropped = extra, "state: subscription devices over cap dropped");
+        }
+        // Счётчики прошлых суток бесполезны: лимит считается по дню UTC,
+        // и после полуночи запись всё равно сбросилась бы первым же pub.
+        // Устаревшие записи не должны переживать рестарт (иначе файл рос бы
+        // вечно на каждого когда-либо писавшего издателя).
+        let today = now_unix() / 86_400;
+        let before = self.daily_pub.len();
+        self.daily_pub
+            .retain(|k, (day, _)| valid_publisher(k) && *day == today);
+        if before != self.daily_pub.len() {
+            tracing::info!(
+                dropped = before - self.daily_pub.len(),
+                "state: stale or invalid daily counters dropped"
+            );
+        }
+        if self.daily_pub.len() > MAX_ENTRIES {
+            let extra = self.daily_pub.len() - MAX_ENTRIES;
+            let drop: Vec<String> = self.daily_pub.keys().take(extra).cloned().collect();
+            for k in drop {
+                self.daily_pub.remove(&k);
+            }
+            tracing::warn!(dropped = extra, "state: daily counters over cap dropped");
         }
     }
 
@@ -394,6 +442,7 @@ mod tests {
             &bindings,
             &subs,
             &HashMap::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -445,6 +494,7 @@ mod tests {
             &HashMap::new(),
             &subs,
             &HashMap::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("state saved");
         let loaded = PersistedState::load(&path);
@@ -489,6 +539,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         );
         st.save_atomic(&path).expect("save");
 
@@ -522,6 +573,7 @@ mod tests {
         let t = topic('b');
         PersistedState::snapshot(
             &HashMap::from([(t.clone(), "tok".to_string())]),
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
@@ -610,11 +662,66 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         )
         .save_atomic(&path)
         .expect("save");
         let loaded = PersistedState::load(&path);
         assert_eq!(loaded.fp_tokens.get(&fp), Some(&rec));
+        cleanup(&path);
+    }
+
+    /// СУТОЧНЫЙ СЧЁТЧИК ПЕРЕЖИВАЕТ РЕСТАРТ.
+    ///
+    /// Без этого рестарт/деплой релея обнулял квоты: free обходил бы
+    /// 100 конвертов простым перезапуском, а оплаченный Pro получал бы
+    /// свои 1000 заново на каждом деплое.
+    #[test]
+    fn daily_counters_survive_restart_within_the_day() {
+        let path = tmp_path("dailyrestart");
+        let today = now_unix() / 86_400;
+        let hash_key = format!("t:{}", topic('c'));
+        let ip_key = "ip:10.0.0.2".to_string();
+        let counters = HashMap::from([
+            (hash_key.clone(), (today, 7_u32)),
+            (ip_key.clone(), (today, 3_u32)),
+        ]);
+        PersistedState::snapshot(
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &counters,
+        )
+        .save_atomic(&path)
+        .expect("save");
+        let loaded = PersistedState::load(&path);
+        assert_eq!(loaded.daily_pub.get(&hash_key), Some(&(today, 7)));
+        assert_eq!(loaded.daily_pub.get(&ip_key), Some(&(today, 3)));
+        cleanup(&path);
+    }
+
+    /// Вчерашние счётчики и мусорные ключи не переживают загрузку: лимит
+    /// считается по дню UTC, а «позавчерашний» счётчик после полуночи
+    /// обнулился бы при первой же публикации — хранить его незачем.
+    #[test]
+    fn stale_daily_counters_and_junk_are_dropped_on_load() {
+        let path = tmp_path("dailystale");
+        let today = now_unix() / 86_400;
+        let good = topic('a');
+        let yesterday = topic('b');
+        let raw = format!(
+            r#"{{"v":1,"daily_pub":{{"t:{good}":[{today},5],"t:{yesterday}":[{},5],"junk":[{today},1],"ip:10.0.0.2":[{today},2],"ip:not-an-ip":[{today},1]}}}}"#,
+            today.saturating_sub(1)
+        );
+        std::fs::write(&path, raw.as_bytes()).expect("write");
+        let st = PersistedState::load(&path);
+        assert_eq!(st.daily_pub.len(), 2, "остались только сегодняшние валидные: {:?}", st.daily_pub);
+        assert_eq!(st.daily_pub.get(&format!("t:{good}")), Some(&(today, 5)));
+        assert_eq!(st.daily_pub.get("ip:10.0.0.2"), Some(&(today, 2)));
         cleanup(&path);
     }
 

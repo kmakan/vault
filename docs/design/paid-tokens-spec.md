@@ -147,11 +147,15 @@ impl Plan { fn from_byte(b: u8) -> Self { match b { 2=>Pro, 3=>Business, 1=>Tria
 устройств. Правило: для v2-токенов `fp` **обязателен** (иначе 400/403 и `daily_pub` по
 `t:<hash>`); легаси-семантика без `fp` сохраняется только для v1.
 
-**Персистентность (шаг 2) — жёсткий блокер, а не «M2.3»**: `token_bindings` (`main.rs:48`),
-`daily_pub` и предстоящие `subscriptions` в памяти (`Mutex<HashMap>`) означают, что
+**Персистентность (шаг 2) — жёсткий блокер, а не «M2.3»**: `token_bindings`,
+`daily_pub` и `subscriptions` в памяти (`Mutex<HashMap>`) означали, что
 рестарт/деплой релея мгновенно и **незаметно** (клиент авто-даунгрейдит до Free,
-см. §5.2) превращает покупателя Pro в Free. Потеря непрочитанных очередей допустима,
-потеря подписок — нет: подписки, лимиты и привязки — в SQLite (`store.rs`).
+см. §5.2) превращает покупателя Pro в Free, а также обнуляет суточные квоты.
+Решение владельца (25.10.2026): **JSON state с троттлингом** — подписки,
+привязки, устройства и суточные счётчики лежат в `VaultRelay.state.json`
+(`persist.rs`); счётчик пишется не чаще раза в 5 с, записи прошлых суток
+отбрасываются при загрузке. SQLite не вводится: формат уже есть, объём
+маленький, атомарная запись temp+rename проверена.
 
 **Миграция уже выданных промо-токенов** (спека ранее молчала, а §2.3 фактически
 ломает безлимит тестеров — `main.rs:505-512`): выбирается вариант
@@ -184,7 +188,8 @@ pub fn issue_v2(keys: &ServerKeys, scope: Scope, plan: Plan, sub: u64, paid_unti
 
 Канальные токены (`channel_tokens`, `tokens.rs:173`) — **не трогать**: они выводятся из
 `broadcast_key` канала и платными не являются. `is_channel()` остаётся стражем:
-`publisher_key` уже исключает канальные токены из premium-логики (`main.rs:505-507`).
+`daily_limit_for_token` лимитирует канал по free-квоте (hash write-токена), а не
+снимает лимит; sentinel `u32::MAX` в expiry — не признак premium.
 
 ### 2.3 Замена expiry-хака
 
@@ -477,8 +482,8 @@ tokio-обработчик HTTP-вызовом нельзя). Живые клю�
 | Шаг | Где | Состояние |
 |---|---|---|
 | 1. v2-формат токена | `vault-relay/src/tokens.rs` | было в коде; проверено тестом `test_pq_hybrid_body_matches_contract_fixture` (в ядре) и `crypto-mut` |
-| 2. Персистентность | `vault-relay/src/persist.rs` | привязки токенов, подписки, устройства подписки (`sub_tokens`) — всё переживает рестарт релея |
-| 3. Тарифные лимиты | `vault-relay/src/main.rs` | было в коде: v2-тариф → `Kind::of(&t).is_unlimited()` → снятие суточного лимита |
+| 2. Персистентность | `vault-relay/src/persist.rs` | привязки токенов, подписки, устройства подписки (`sub_tokens`) и суточные счётчики `daily_pub` — всё переживает рестарт релея (JSON + троттлинг 1/5с) |
+| 3. Тарифные лимиты | `vault-relay/src/main.rs` | `daily_limit_for_token`: Free 100, Trial без лимита, Pro 1000, Business 10000; канал — free-квота; легаси-promo без лимита |
 | 4. Роуты | `vault-relay/src/main.rs` | `POST /relay/purchase/checkout`, `POST /relay/purchase/verify`, `POST /relay/tokens/activate`, `GET /relay/tokens/info` |
 | 5. Провайдер | `vault-relay/src/payments.rs` | async-трейт `PaymentProvider`, `TestProvider` (мгновенная оплата), `UnavailableProvider` (честный отказ), `YkProvider` (ЮKassa v3, код готов + mock-тесты; ключи — после ИП) |
 | 6. CLI | `vault-relay/src/bin/gen_token.rs` | `--plan pro --months 12 --sub 42`; адрес очереди печатается в stderr |

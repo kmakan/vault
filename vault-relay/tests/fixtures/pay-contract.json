@@ -19,7 +19,7 @@
     "plan": "pro",
     "paid_until": 4102444800,
     "daily_used": 12,
-    "daily_limit": 0,
+    "daily_limit": 1000,
     "devices": 1,
     "max_devices": 3,
     "grace_until": 4102444800

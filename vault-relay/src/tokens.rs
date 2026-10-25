@@ -58,7 +58,8 @@ impl Scope {
 /// знающие старый адрес, молча теряют канал (инцидент 12.10: миграция kv
 /// потеряла relay-list → перерегистрация → вызовы уходили в мёртвую очередь).
 /// Поэтому «простой» токен живёт 10 лет, а ограничение — суточный лимит
-/// конвертов (VAULT_RELAY_FREE_DAILY_LIMIT). Тестовый/платный — без лимита.
+/// конвертов (VAULT_RELAY_FREE_DAILY_LIMIT). Тестовый — без лимита; платный —
+/// квота по тарифу (Pro/Business, см. daily_limit_for_token в main.rs).
 pub const TOKEN_LIFETIME_DAYS: u32 = 3650;
 
 /// Вид токена — ЯВНЫЙ, вместо прежней эвристики «expiry > now+365д = premium».
@@ -66,14 +67,15 @@ pub const TOKEN_LIFETIME_DAYS: u32 = 3650;
 /// → смена адреса очереди; (б) эвристика не давала выдать долгий простой
 /// токен (он бы сразу стал «premium»). Теперь вид зашит в тариф v2-токена:
 /// Free = установочный (суточный лимит), Trial = тестовый (безлимит),
-/// Pro/Business = платный (каркас, биллинга пока нет).
+/// Pro/Business = платный (квота тарифа; срок — оплаченный период).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     /// Установка приложения: 100 конвертов/сутки, живёт 10 лет.
     Install,
     /// Тестовый (промо-ключ): без суточного лимита, живёт 10 лет.
     Test,
-    /// Платный: без лимита; срок — оплаченный период (402-гейт).
+    /// Платный: квота тарифа (Pro/Business); срок — оплаченный период
+    /// (402-гейт).
     Paid,
 }
 
@@ -92,9 +94,11 @@ impl Kind {
             Kind::Paid => "paid",
         }
     }
-    /// Есть ли суточный лимит конвертов.
+    /// Нет ли суточного лимита конвертов. Безлимит — только тестовый вид:
+    /// у платного квота тарифа (Pro 1000, Business 10000), у установочного —
+    /// бесплатная квота релея.
     pub fn is_unlimited(self) -> bool {
-        !matches!(self, Kind::Install)
+        matches!(self, Kind::Test)
     }
 }
 
@@ -735,6 +739,23 @@ mod tests {
         assert_eq!(p.plan, Plan::Trial);
         assert_eq!(Kind::of(&p), Kind::Test);
         assert!(Kind::of(&p).is_unlimited());
+    }
+
+    #[test]
+    fn paid_token_is_not_unlimited() {
+        // Покупка даёт БОЛЬШУЮ квоту, а не безлимит: поле unlimited в ответе
+        // регистрации означает именно «лимита нет», и клиент обязан видеть
+        // правду (иначе экран Pro обещает безлимит, которого нет).
+        let k = keys();
+        for plan in [Plan::Pro, Plan::Business] {
+            let p = parse(
+                &k,
+                &issue_v2(&k, Scope::Read, plan, 1, 4_102_444_800),
+            )
+            .expect("paid parses");
+            assert_eq!(Kind::of(&p), Kind::Paid);
+            assert!(!Kind::of(&p).is_unlimited(), "{plan:?} не безлимит");
+        }
     }
 
     #[test]

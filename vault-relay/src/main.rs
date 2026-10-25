@@ -44,11 +44,16 @@ pub struct AppState {
     pub require_sig: bool,
     /// Промо-ключ безлимита (VAULT_RELAY_UNLIMITED_KEY): тестерам/владельцу.
     pub unlimited_key: Option<String>,
-    /// §0 company.md: суточный лимит бесплатных конвертов на издателя.
-    /// Ключ — hash токена издателя (или IP при анонимном pub без tok),
-    /// значение — (день UTC = now/86400, счётчик). In-memory: рестарт
-    /// обнуляет счётчики — приемлемо (лимит щедрый, abuse-сценарий редок).
+    /// §0 company.md: суточный лимит конвертов на издателя. Ключ — hash
+    /// токена издателя (или IP при анонимном pub без tok), значение —
+    /// (день UTC = now/86400, счётчик). ПЕРСИСТ: рестарт релея иначе
+    /// обнулял бы квоты (free обходил бы 100/сут, Pro получал бы 1000
+    /// заново на каждом деплое). Записи прошлых суток отбрасываются при
+    /// загрузке.
     pub daily_pub: std::sync::Mutex<std::collections::HashMap<String, (u64, u32)>>,
+    /// unix-сек последней записи daily_pub на диск: троттлинг, чтобы
+    /// счётчик не бил по диску на каждом конверте (запись не чаще ~1/5с).
+    pub daily_persist_at: AtomicU64,
     /// Сколько конвертов в сутки бесплатно (0 = лимит выключен).
     pub free_daily_limit: u32,
     /// Привязка токена к аккаунту: token_hash → fingerprint (один токен =
@@ -137,7 +142,7 @@ impl AppState {
         state_path: Option<std::path::PathBuf>,
         payment: Option<Arc<dyn vault_relay::payments::PaymentProvider>>,
     ) -> Self {
-        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens) =
+        let (topic_fcm, topic_ringtone, fp_tokens, channel_keys, token_bindings, subscriptions, sub_tokens, daily_pub) =
             match &state_path {
                 Some(p) => {
                     let st = PersistedState::load(p);
@@ -149,9 +154,11 @@ impl AppState {
                         st.token_bindings,
                         st.subscriptions,
                         st.sub_tokens,
+                        st.daily_pub,
                     )
                 }
                 None => (
+                    HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
                     HashMap::new(),
@@ -174,7 +181,8 @@ impl AppState {
             require_sig,
             ntfy_url,
             unlimited_key,
-            daily_pub: std::sync::Mutex::new(HashMap::new()),
+            daily_pub: std::sync::Mutex::new(daily_pub),
+            daily_persist_at: AtomicU64::new(0),
             free_daily_limit,
             // Привязки токенов и подписки ПЕРЕЖИВАЮТ рестарт (см. persist.rs):
             // иначе платный токен отвязывался бы и перехватывался первым же
@@ -321,10 +329,41 @@ impl AppState {
             &self.token_bindings.lock().expect("token_bindings lock"),
             &self.subscriptions.lock().expect("subscriptions lock"),
             &self.sub_tokens.lock().expect("sub_tokens lock"),
+            &self.daily_pub.lock().expect("daily_pub lock"),
         );
         if let Err(e) = st.save_atomic(path) {
             tracing::error!(path = %path.display(), error = %e, "state: save failed");
         }
+    }
+
+    /// Записать состояние из-за изменения суточного счётчика, не чаще раза
+    /// в 5 секунд. Счётчик меняется на каждом конверте, а запись — fsync
+    /// всего state.json: без троттлинга релей бил бы по диску на каждый pub.
+    /// Потеря до 5 секунд счётчика при жёстком креше допустима (лимит
+    /// мягкий и проверяется по серверу, а не по клиенту).
+    pub fn persist_daily_quota_at(&self, now_secs: u64) {
+        const MIN_INTERVAL: u64 = 5;
+        if self.state_path.is_none() {
+            return;
+        }
+        let last = self.daily_persist_at.load(Ordering::Relaxed);
+        if now_secs.saturating_sub(last) < MIN_INTERVAL {
+            return;
+        }
+        // Право записи получает только один поток: остальные не дублируют
+        // fsync (и не перезаписывают файл устаревшим снимком).
+        if self
+            .daily_persist_at
+            .compare_exchange(last, now_secs, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        self.persist();
+    }
+
+    pub fn persist_daily_quota(&self) {
+        self.persist_daily_quota_at(now());
     }
 }
 
@@ -570,36 +609,38 @@ pub async fn relay_pub(
             }
         }
     }
-    // §0 company.md: суточный бесплатный лимит конвертов на ИЗДАТЕЛЯ. Порог и
-    // счётчик — на СЕРВЕРЕ: клиентское приложение пользователь вправе собрать
-    // сам, поэтому тумблер/чип в фронте выбирает только канал, но не квоту.
+    // §0 company.md: суточный лимит конвертов на ИЗДАТЕЛЯ. Порог и счётчик —
+    // на СЕРВЕРЕ: клиентское приложение пользователь вправе собрать сам,
+    // поэтому тумблер/чип в фронте выбирает только канал, но не квоту.
     // Идентичность издателя: tok в теле (read-токен отправителя, шлёт клиент
     // M2.4) → его hash; иначе Authorization (write-токен) → hash; иначе IP.
-    // Premium (unlimited) токен отличается expiry: promo выдаётся на 10 лет
-    // (>now+365д) — такие издатели лимита не имеют. Почта не ограничивается
-    // никогда: 429 = только «ускорение» выключено, письмо уйдёт как обычно.
-    if app.free_daily_limit > 0 {
-        let (pub_key, premium) = publisher_key(&app, &headers, &req, &addr);
-        if !premium {
-            let retry_after = {
-                let day = now() / 86400;
-                let mut map = app.daily_pub.lock().unwrap();
-                tally_daily(&mut map, &pub_key, day, app.free_daily_limit, now())
-            };
-            if let Some(retry_after) = retry_after {
-                app.metrics.limit_hit.fetch_add(1, Ordering::Relaxed);
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    [("retry-after", retry_after.to_string())],
-                    AxumJson(serde_json::json!({
-                        "error": "daily relay limit reached",
-                        "limit": app.free_daily_limit,
-                        "retry_after": retry_after,
-                    })),
-                )
-                    .into_response();
-            }
+    // Квота зависит от тарифа: Free — лимит релея, Trial — безлимит,
+    // Pro/Business — свои пороги (daily_limit_for_token). Почта не
+    // ограничивается никогда: 429 = только «ускорение» выключено, письмо
+    // уйдёт как обычно.
+    let (pub_key, quota) = publisher_key(&app, &headers, &req, &addr);
+    if let Some(limit) = quota.filter(|l| *l > 0) {
+        let retry_after = {
+            let day = now() / 86400;
+            let mut map = app.daily_pub.lock().unwrap();
+            tally_daily(&mut map, &pub_key, day, limit, now())
+        };
+        if let Some(retry_after) = retry_after {
+            app.metrics.limit_hit.fetch_add(1, Ordering::Relaxed);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("retry-after", retry_after.to_string())],
+                AxumJson(serde_json::json!({
+                    "error": "daily relay limit reached",
+                    "limit": limit,
+                    "retry_after": retry_after,
+                })),
+            )
+                .into_response();
         }
+        // Счётчик обязан пережить рестарт (иначе квоту обходит деплой);
+        // запись троттлится внутри, блокировка карты уже отпущена.
+        app.persist_daily_quota();
     }
     let mid = uuid::Uuid::new_v4().to_string();
     // S4: отправитель нужен дальше (клик по звонку ведёт в чат), а req.from
@@ -933,15 +974,15 @@ fn check_token_binding(app: &Arc<AppState>, token_hash: &str, fp: &Option<String
     }
 }
 
-/// §0: идентичность издателя для суточного лимита + признак Premium.
-/// Приоритет: tok в теле (read-токен отправителя) → Authorization → IP.
-/// Premium = токен с expiry > now+365д (promo-выдача на 10 лет).
+/// §0: идентичность издателя для суточного лимита и его квота.
+/// Приоритет ключа: tok в теле (read-токен отправителя) → Authorization → IP.
+/// `None` в квоте = лимита нет (Trial, легаси-promo, выключенный счётчик).
 fn publisher_key(
     app: &Arc<AppState>,
     headers: &HeaderMap,
     req: &PubRequest,
     addr: &std::net::SocketAddr,
-) -> (String, bool) {
+) -> (String, Option<u32>) {
     let auth = auth_header(headers);
     let candidates = req
         .tok
@@ -951,24 +992,50 @@ fn publisher_key(
         .filter(|s| !s.is_empty());
     for tok in candidates {
         if let Some(t) = vault_relay::parse(&app.keys, tok) {
-            // Вид токена — ЯВНЫЙ (вместо эвристики по сроку): v2 несёт тариф,
-            // Free = установочный (суточный лимит), Trial/Pro/Business =
-            // безлимит. Легаси-v1 вид выводим старым правилом по сроку — иначе
-            // promo-токены, выданные до появления v2, внезапно получили бы
-            // лимит 100/сут. Канальные токены — sentinel u32::MAX по
-            // построению, это НЕ premium-признак: иначе pub в канал обходил бы
-            // лимит вообще (лимит на канал = по hash write-токена).
-            let premium = if t.scope.is_channel() {
-                false
-            } else if t.v >= 2 {
-                Kind::of(&t).is_unlimited()
-            } else {
-                u64::from(t.expiry) > now() + 365 * 86400
-            };
-            return (format!("t:{}", t.hash), premium);
+            return (
+                format!("t:{}", t.hash),
+                daily_limit_for_token(&t, app.free_daily_limit),
+            );
         }
     }
-    (format!("ip:{}", addr.ip()), false)
+    let anon_quota = (app.free_daily_limit > 0).then_some(app.free_daily_limit);
+    (format!("ip:{}", addr.ip()), anon_quota)
+}
+
+/// Квота конвертов в сутки для токена издателя.
+///
+/// Вид токена — ЯВНЫЙ, а не эвристика по сроку: v2 несёт тариф.
+///  - Free/установочный — бесплатный лимит релея (env);
+///  - Trial — без лимита (промо-тестеры);
+///  - Pro/Business — квоты тарифа, НЕ безлимит: покупка даёт больше
+///    конвертов, но релей остаётся защищён от одной «качалки»;
+///  - канальные токены — общий write-токен канала, лимит по его hash;
+///  - легаси-v1 с долгим сроком — промо-выдача, без лимита (старое правило).
+///
+/// `free_limit = 0` (VAULT_RELAY_FREE_DAILY_LIMIT) выключает счётчик
+/// БЕСПЛАТНОГО тарифа и анонимов (стенд/отладка): у Pro/Business остаются
+/// их квоты — выключатель free-лимита не должен отключать монетизацию.
+pub fn daily_limit_for_token(
+    t: &vault_relay::tokens::Token,
+    free_limit: u32,
+) -> Option<u32> {
+    if t.scope.is_channel() {
+        return Some(free_limit);
+    }
+    if t.v >= 2 {
+        match Kind::of(t) {
+            Kind::Install => Some(free_limit),
+            Kind::Test => None,
+            Kind::Paid => Some(match t.plan {
+                vault_relay::tokens::Plan::Business => BUSINESS_DAILY_LIMIT,
+                _ => PRO_DAILY_LIMIT,
+            }),
+        }
+    } else if u64::from(t.expiry) > now() + 365 * 86400 {
+        None
+    } else {
+        Some(free_limit)
+    }
 }
 
 fn auth_header(headers: &HeaderMap) -> Option<String> {
@@ -1066,9 +1133,15 @@ fn now() -> u64 {
 }
 
 /// Суточный лимит бесплатного релея по умолчанию (требование владельца:
-/// 100 конвертов/сутки, безлимит — покупкой). Числом, а не комментарием:
+/// 100 конвертов/сутки, больше — покупкой). Числом, а не комментарием:
 /// значение видит только пользователь, а измерить его можно только тестом.
 pub const DEFAULT_FREE_DAILY_LIMIT: u32 = 100;
+
+/// Суточные квоты платных тарифов (design §2.3): Pro — 1000, Business —
+/// 10000. Покупка НЕ делает релей безлимитным: квота защищает сервер от
+/// одной «качалки», а тариф — это размер квоты, а не её отсутствие.
+pub const PRO_DAILY_LIMIT: u32 = 1_000;
+pub const BUSINESS_DAILY_LIMIT: u32 = 10_000;
 
 /// Разбор `VAULT_RELAY_FREE_DAILY_LIMIT`. Отдельной ЧИСТОЙ функцией потому,
 /// что «мусорное значение = дефолт, а не ноль» иначе не проверить: ноль —
@@ -1561,6 +1634,7 @@ async fn relay_register(
                             "register: kept PAID token (paid beats free record)"
                         );
                         let keep_kind = Kind::of(&t).as_str().to_string();
+                        let keep_unlimited = Kind::of(&t).is_unlimited();
                         let keep_hash = t.hash.clone();
                         let keep_exp = t.expiry;
                         return (
@@ -1569,7 +1643,7 @@ async fn relay_register(
                                 token: keep_tok.to_string(),
                                 topic: keep_hash,
                                 exp: keep_exp,
-                                unlimited: true,
+                                unlimited: keep_unlimited,
                                 kind: keep_kind,
                             }),
                         )
@@ -1904,16 +1978,19 @@ async fn relay_tokens_info(
         return err(StatusCode::PAYMENT_REQUIRED, "subscription expired");
     }
     // Суточный расход издателя по этому токену (ключ — как у гейта лимита).
+    // Счётчик прошлых суток не показываем: после полуночи UTC он обнулится
+    // при первой же публикации, и «осталось 0» до неё было бы ложью.
     let pub_key = format!("t:{}", t.hash);
+    let today = now() / 86400;
     let daily_used = {
         let map = app.daily_pub.lock().expect("daily_pub lock");
-        map.get(&pub_key).map(|(_, n)| *n).unwrap_or(0)
+        map.get(&pub_key)
+            .filter(|(day, _)| *day == today)
+            .map(|(_, n)| *n)
+            .unwrap_or(0)
     };
-    let daily_limit = if matches!(t.plan, vault_relay::tokens::Plan::Free) {
-        app.free_daily_limit
-    } else {
-        0 // безлимит: 0 = «лимита нет»
-    };
+    // 0 = «лимита нет» (Trial / выключенный счётчик): контракт с клиентом.
+    let daily_limit = daily_limit_for_token(&t, app.free_daily_limit).unwrap_or(0);
     (
         StatusCode::OK,
         AxumJson(serde_json::json!({
@@ -2968,7 +3045,10 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(j["token"], paid, "платный токен обязан пережить регистрацию");
         assert_ne!(j["token"], free_tok, "бесплатный токен не должен вытеснять платный");
-        assert_eq!(j["unlimited"], true, "платный токен — безлимит");
+        assert_eq!(
+            j["unlimited"], false,
+            "платный тариф — квота (Pro 1000/сут), а не безлимит"
+        );
 
         // Запись fp переведена на платный токен: даже регистрация БЕЗ keep
         // вернёт именно его (иначе покупка снова отменилась бы).
@@ -3022,7 +3102,7 @@ mod tests {
             "регистрация обязана вернуть платный токен, иначе покупка пропала"
         );
         assert_ne!(j2["token"], free_tok);
-        assert_eq!(j2["unlimited"], true);
+        assert_eq!(j2["unlimited"], false, "покупка даёт квоту, а не безлимит");
 
         // И бесплатный keep не понижает вид записи: платный остаётся.
         let (_s3, j3) = reg_full(&app, Some(fp), None, Some(&free_tok)).await;
@@ -3782,7 +3862,10 @@ mod tests {
         .expect("json");
         assert_eq!(body["plan"], "pro");
         assert_eq!(body["max_devices"], 3);
-        assert!(body["daily_limit"].as_u64().is_some(), "лимит конвертов в сутки отдаётся");
+        assert_eq!(
+            body["daily_limit"], PRO_DAILY_LIMIT,
+            "экран Pro обязан видеть квоту тарифа, а не 0/безлимит"
+        );
     }
 
     // ── Контракт с клиентом (общая фикстура) ───────────────────────────
@@ -3954,12 +4037,13 @@ mod tests {
         );
     }
 
-    // ── Суточный лимит бесплатного релея (по умолчанию 100 конвертов) ──
+    // ── Суточный лимит релея (по умолчанию 100 конвертов free) ──
     //
-    // Счёт на ИЗДАТЕЛЯ (не на получателя и не на релей в целом), безлимит —
-    // у ЯВНОГО вида токена (Kind::is_unlimited), а не по сроку: эвристика
-    // «expiry дальше года» делала безлимитным любой долгий токен. Почта
-    // лимита не имеет никогда, поэтому 429 = «только ускорение выключено».
+    // Счёт на ИЗДАТЕЛЯ (не на получателя и не на релей в целом), квота — по
+    // ЯВНОМУ тарифу токена (Kind/daily_limit_for_token), а не по сроку:
+    // эвристика «expiry дальше года» делала безлимитным любой долгий токен.
+    // Trial — без лимита, Pro/Business — свои пороги. Почта лимита не имеет
+    // никогда, поэтому 429 = «только ускорение выключено».
 
     fn limit_app(k: ServerKeys, limit: u32, anon: bool) -> Arc<AppState> {
         Arc::new(AppState::new(
@@ -4040,14 +4124,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_and_paid_tokens_ignore_the_limit_while_install_hits_it() {
+    async fn trial_is_unlimited_while_paid_has_its_own_quota() {
         let k = keys();
         let (to, _hash) = fresh_topic(&k, 4_102_444_940);
         let install = issue_install(&k, now() as u32);
-        let senders = [
-            issue_test(&k, now() as u32),
-            issue_v2(&k, Scope::Read, Plan::Pro, 7, (now() + 86_400) as u32),
-        ];
+        let trial = issue_test(&k, now() as u32);
+        let pro = issue_v2(&k, Scope::Read, Plan::Pro, 7, (now() + 86_400) as u32);
         let app = limit_app(k, 1, false);
         assert_eq!(pub_resp(&app, pub_req(&to, Some(&install))).await.status(), StatusCode::OK);
         assert_eq!(
@@ -4055,15 +4137,20 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS,
             "Plan::Free обязан лимитироваться, каким бы долгим ни был"
         );
-        for (i, sender) in senders.iter().enumerate() {
-            for _ in 0..3 {
-                assert_eq!(
-                    pub_resp(&app, pub_req(&to, Some(sender))).await.status(),
-                    StatusCode::OK,
-                    "безлимитный вид токена №{} упёрся в суточный лимит",
-                    i + 1
-                );
-            }
+        for _ in 0..3 {
+            assert_eq!(
+                pub_resp(&app, pub_req(&to, Some(&trial))).await.status(),
+                StatusCode::OK,
+                "тестовый вид токена обязан остаться безлимитным"
+            );
+        }
+        // Pro не упирается в БЕСПЛАТНЫЙ лимит: у него своя квота 1000/сут.
+        for _ in 0..3 {
+            assert_eq!(
+                pub_resp(&app, pub_req(&to, Some(&pro))).await.status(),
+                StatusCode::OK,
+                "платный тариф не должен считать чужую (free) квоту"
+            );
         }
         assert_eq!(app.metrics.limit_hit.load(Ordering::Relaxed), 1, "засчитан только установочному");
     }
@@ -4078,9 +4165,105 @@ mod tests {
         let req = pub_req("to-unused", Some(&chan));
         let app = limit_app(k, 1, false);
         let addr = "127.0.0.1:1234".parse().expect("addr");
-        let (key, premium) = publisher_key(&app, &HeaderMap::new(), &req, &addr);
-        assert!(!premium, "канал не может обходить суточный лимит");
+        let (key, quota) = publisher_key(&app, &HeaderMap::new(), &req, &addr);
+        assert_eq!(quota, Some(1), "канал не может обходить суточный лимит");
         assert!(key.starts_with("t:"), "издатель атрибутирован токеном, а не IP");
+    }
+
+    #[test]
+    fn daily_quota_is_per_plan_and_independent_of_token_lifetime() {
+        let k = keys();
+        let now32 = now() as u32;
+        let free = parse(&k, &issue_install(&k, now32)).expect("install");
+        let trial = parse(&k, &issue_test(&k, now32)).expect("trial");
+        let pro = parse(
+            &k,
+            &issue_v2(&k, Scope::Read, Plan::Pro, 1, 4_102_444_800),
+        )
+        .expect("pro");
+        let business = parse(
+            &k,
+            &issue_v2(&k, Scope::Read, Plan::Business, 1, 4_102_444_800),
+        )
+        .expect("business");
+        let channel = parse(&k, &issue(&k, Scope::ChannelWrite, u32::MAX)).expect("channel");
+        let legacy_promo =
+            parse(&k, &issue(&k, Scope::Read, (now() + 400 * 86_400) as u32)).expect("legacy");
+        let legacy_short =
+            parse(&k, &issue(&k, Scope::Read, (now() + 30 * 86_400) as u32)).expect("legacy");
+
+        assert_eq!(daily_limit_for_token(&free, 100), Some(100));
+        assert_eq!(daily_limit_for_token(&trial, 100), None, "Trial — безлимит");
+        assert_eq!(PRO_DAILY_LIMIT, 1_000, "квота Pro из спеки");
+        assert_eq!(BUSINESS_DAILY_LIMIT, 10_000, "квота Business из спеки");
+        assert_eq!(daily_limit_for_token(&pro, 100), Some(1_000));
+        assert_eq!(daily_limit_for_token(&business, 100), Some(10_000));
+        assert_eq!(
+            daily_limit_for_token(&channel, 100),
+            Some(100),
+            "канал лимитируется free-квотой по hash write-токена"
+        );
+        assert_eq!(
+            daily_limit_for_token(&legacy_promo, 100),
+            None,
+            "легаси-promo (долгий v1) остаётся без лимита"
+        );
+        assert_eq!(daily_limit_for_token(&legacy_short, 100), Some(100));
+        assert_eq!(
+            daily_limit_for_token(&pro, 0),
+            Some(PRO_DAILY_LIMIT),
+            "free-выключатель не отключает квоту платного тарифа"
+        );
+    }
+
+    /// Счётчик переживает рестарт релея: иначе квоту (и free, и Pro) можно
+    /// было бы обходить простым деплоем.
+    #[tokio::test]
+    async fn daily_counter_survives_relay_restart() {
+        let (to, _hash) = fresh_topic(&keys(), 4_102_444_960);
+        let sender = issue_install(&keys(), now() as u32);
+        let path = std::env::temp_dir().join(format!(
+            "vault-relay-daily-{}-{}.json",
+            std::process::id(),
+            now()
+        ));
+        let state_app = |limit| {
+            Arc::new(AppState::new(
+                Store::new(),
+                keys(),
+                false,
+                String::new(),
+                None,
+                limit,
+                None,
+                Some(path.clone()),
+                None,
+            ))
+        };
+
+        let first = state_app(2);
+        assert_eq!(
+            pub_resp(&first, pub_req(&to, Some(&sender))).await.status(),
+            StatusCode::OK
+        );
+        drop(first);
+
+        let second = state_app(2);
+        assert_eq!(
+            pub_resp(&second, pub_req(&to, Some(&sender))).await.status(),
+            StatusCode::OK,
+            "второй конверт в пределах квоты после рестарта"
+        );
+        drop(second);
+
+        let third = state_app(2);
+        assert_eq!(
+            pub_resp(&third, pub_req(&to, Some(&sender))).await.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "рестарт релея не обнуляет суточную квоту"
+        );
+        assert_eq!(third.metrics.limit_hit.load(Ordering::Relaxed), 1);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
