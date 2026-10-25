@@ -228,12 +228,30 @@ check('Регрессия: нет ctx в переведённых', clean);
     await edits.deleteMessage(deps, { id: 'n1', from: 'me', content: 'заметка' });
     check('deleteMessage: заметка удаляется без письма', notes.removed === true && calls.mails.length === 0, calls.mails);
 
+    // 3d. Охрана в deleteMessage — ОТДЕЛЬНАЯ от охраны правки (одинаковая строка
+    //     в двух функциях). Пока мутация садилась на первую, этот участок
+    //     оставался не измерен: удаление чужого письма ушло бы на всех.
+    reset();
+    const foreign = { id: 'm1', mid: 'mid1', from: 'peer@x.ru', content: 'чужое' };
+    chat.state.messages = [foreign];
+    await edits.deleteMessage(deps, foreign);
+    check('deleteMessage: чужое сообщение → ни tombstone, ни письма',
+      calls.tomb.length === 0 && calls.mid.length === 0 && calls.mails.length === 0
+      && foreign.deleted === undefined, calls);
+    reset();
+    const gone = { id: 'm1', mid: 'mid1', from: 'me', content: '', deleted: true };
+    chat.state.messages = [gone];
+    await edits.deleteMessage(deps, gone);
+    check('deleteMessage: уже удалённое → повторного write-эффекта нет',
+      calls.tomb.length === 0 && calls.mails.length === 0 && calls.edits.length === 0, calls);
+
     // 4. deleteMessageForMe: tombstone без письма
     reset();
     const msg2 = { id: 'm5', mid: 'mid5', from: 'peer@x.ru', content: 'чужое' };
     chat.state.messages = [msg2];
     await edits.deleteMessageForMe(deps, msg2);
-    check('deleteMessageForMe: tombstone, но письма НЕТ', calls.tomb[0] === 'm5' && calls.mails.length === 0, calls);
+    check('deleteMessageForMe: tombstone (id И mid), но письма НЕТ',
+      calls.tomb[0] === 'm5' && calls.mid[0] === 'mid5' && calls.mails.length === 0, calls);
     check('deleteMessageForMe: история и кэш сохранены', calls.hist.length === 1 && calls.cache.length === 1, calls);
     check('deleteMessageForMe: сообщение убрано из списка', chat.state.messages.length === 0, chat.state.messages);
     check('deleteMessageForMe: кэш сохранён БЕЗ удалённого',

@@ -1,6 +1,12 @@
 // Набор мутаций: edits-mut
 // Цель: убедиться, что смоук edits-smoke.mjs ЛОВИТ эти поломки.
 // Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+//
+// САЙТЫ (разделка 25.10). Движок берёт ПЕРВОЕ совпадение, поэтому каждый
+// паттерн заякорен следующей строкой: охранное условие `from !== 'me'` стоит
+// в двух функциях (правка и удаление), а tombstone/mid-tombstone/deleted/
+// content пишутся и в пути «удалить у всех», и в пути «только у меня» (заметки).
+// Без якоря набор молча мерил только первый из двух сайтов.
 
 export default {
   id: 'edits-mut',
@@ -8,8 +14,8 @@ export default {
   smoke: 'edits-smoke.mjs',
   mutations: [
     { name: "чужое сообщение редактируется",
-      pattern: "  if (!msg || msg.from !== 'me' || msg.deleted) return;",
-      replacement: "  if (!msg || msg.deleted) return;" },
+      pattern: "  if (!msg || msg.from !== 'me' || msg.deleted) return;\n  // Вложения редактировать нельзя — только текст.",
+      replacement: "  if (!msg || msg.deleted) return;\n  // Вложения редактировать нельзя — только текст." },
     { name: "вложение редактируется",
       pattern: "  if (msg.attachment) return;",
       replacement: "  void 0;" },
@@ -32,23 +38,29 @@ export default {
       pattern: "  deps.setNewMessage('');",
       replacement: "  void 0;" },
     { name: "чужое/удалённое сообщение удаляется",
-      pattern: "  if (!msg || msg.from !== 'me' || msg.deleted) return;",
-      replacement: "  if (!msg) return;" },
+      pattern: "  if (!msg || msg.from !== 'me' || msg.deleted) return;\n  const email = deps.email();",
+      replacement: "  if (!msg) return;\n  const email = deps.email();" },
     { name: "удаление без подтверждения",
       pattern: "  const ok = await deps.confirm(uiStore.tr('delete_message_confirm') || 'Удалить сообщение у всех?');",
       replacement: "  const ok = true;" },
     { name: "tombstone не ставится (сообщение воскреснет)",
-      pattern: "  deps.addTombstone(msg.id);",
-      replacement: "  void 0;" },
-    { name: "mid-tombstone не ставится",
-      pattern: "  deps.addMidTombstone(msg.mid);",
-      replacement: "  void 0;" },
+      pattern: "  deps.addTombstone(msg.id);\n  deps.addMidTombstone(msg.mid);\n  msg.deleted = true;",
+      replacement: "  void 0;\n  deps.addMidTombstone(msg.mid);\n  msg.deleted = true;" },
+    { name: "tombstone не ставится при удалении «только у меня»",
+      pattern: "  deps.addTombstone(msg.id);\n  deps.addMidTombstone(msg.mid);\n  const list = deps.chat.state.messages;",
+      replacement: "  void 0;\n  deps.addMidTombstone(msg.mid);\n  const list = deps.chat.state.messages;" },
+    { name: "mid-tombstone не ставится (письмо-оригинал воскресит сообщение)",
+      pattern: "  deps.addMidTombstone(msg.mid);\n  msg.deleted = true;",
+      replacement: "  void 0;\n  msg.deleted = true;" },
+    { name: "mid-tombstone не ставится в пути «только у меня»",
+      pattern: "  deps.addMidTombstone(msg.mid);\n  const list = deps.chat.state.messages;",
+      replacement: "  void 0;\n  const list = deps.chat.state.messages;" },
     { name: "локально не помечается удалённым",
-      pattern: "  msg.deleted = true;",
-      replacement: "  void 0;" },
+      pattern: "  msg.deleted = true;\n  msg.content = '';",
+      replacement: "  void 0;\n  msg.content = '';" },
     { name: "тело сообщения не очищается",
-      pattern: "  msg.content = '';",
-      replacement: "  void 0;" },
+      pattern: "  msg.content = '';\n  // (у получателей — после доставки delete-письма).",
+      replacement: "  void 0;\n  // (у получателей — после доставки delete-письма)." },
     { name: "письмо удаления не уходит",
       pattern: "  await deps.sendEditEmail(msg.id, null, 'delete');",
       replacement: "  void 0;" },
