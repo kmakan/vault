@@ -106,6 +106,7 @@ function makeDeps(over = {}) {
   check('экспорт TXT: тип text/plain', deps.st.files[0].mime === 'text/plain', deps.st.files[0].mime);
   check('экспорт TXT: содержимое собрано сборщиком',
     deps.st.files[0].data === 'chat=peer@x.ru;n=1', deps.st.files[0].data);
+  check('экспорт TXT: меню экспорта закрыто', deps.st.closed === 1, deps.st);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

@@ -337,6 +337,8 @@ ok('ingest meta: avatar → kv channel-avatar:', avatarKv.some(([a, k, v]) => a 
   await m.publishChannelPost(deps);
   ok('publishChannelPost: пост ушёл в транспорт', rcMock.pubs.length === 1, rcMock.pubs);
   ok('publishChannelPost: локальное эхо появилось', (channelsStore.state.channelPosts.chn_1 || []).length === 1);
+  ok('publishChannelPost: чат обновлён — пост виден сразу (не только в сторе)',
+    chatStub.state.messages.length === 1, chatStub.state.messages);
   ok('publishChannelPost: черновик очищен', chatStub.state.newMessage === '');
   ok('publishChannelPost: флаг posting снят', uiStore.getModal('postingChannel') === false);
 

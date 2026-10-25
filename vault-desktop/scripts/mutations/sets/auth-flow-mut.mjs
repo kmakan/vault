@@ -16,9 +16,14 @@ export default {
     { name: "кэш имени не сбрасывается (миграция не запустится, аккаунт «потеряется»)",
       pattern: "    resetAccountNamespaceCache();",
       replacement: "    void 0;" },
-    { name: "пользовательские серверы не передаются (вход через Gmail вместо своего)",
-      pattern: "    if (imapServer) config.imap_server = imapServer;",
-      replacement: "    void 0;" },
+    // Блок своих серверов собран дважды (login и changeEmail) — якорь по
+    // строке входа, иначе мутировался только один из двух путей.
+    { name: "login: пользовательские серверы не передаются (вход через Gmail вместо своего)",
+      pattern: "    if (imapServer) config.imap_server = imapServer;\n    if (imapPort) config.imap_port = parseInt(imapPort, 10);\n    if (smtpServer) config.smtp_server = smtpServer;\n    if (smtpPort) config.smtp_port = parseInt(smtpPort, 10);\n    const data = await api.login(",
+      replacement: "    if (imapPort) config.imap_port = parseInt(imapPort, 10);\n    if (smtpServer) config.smtp_server = smtpServer;\n    if (smtpPort) config.smtp_port = parseInt(smtpPort, 10);\n    const data = await api.login(" },
+    { name: "changeEmail: новые серверы не передаются (переход на чужой Gmail)",
+      pattern: "    if (imapServer) config.imap_server = imapServer;\n    if (imapPort) config.imap_port = parseInt(imapPort, 10);\n    if (smtpServer) config.smtp_server = smtpServer;\n    if (smtpPort) config.smtp_port = parseInt(smtpPort, 10);\n    // Входим на новый ящик",
+      replacement: "    if (imapPort) config.imap_port = parseInt(imapPort, 10);\n    if (smtpServer) config.smtp_server = smtpServer;\n    if (smtpPort) config.smtp_port = parseInt(smtpPort, 10);\n    // Входим на новый ящик" },
     { name: "ошибка входа не показывается (пользователь видит «вход выполнен»)",
       pattern: "    deps.setLoginError(error.message);",
       replacement: "    void 0;" },

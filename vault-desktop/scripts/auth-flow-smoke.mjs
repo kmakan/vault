@@ -273,6 +273,23 @@ function resetMocks() {
   check('смена: настройки закрыты', deps.s.showSettings === false, deps.s);
   check('смена: индикатор загрузки снят', deps.s.changeEmailLoading === false, deps.s.changeEmailLoading);
 }
+// Своя почта при смене адреса: конфиг серверов собирается ЗАНОВО (второй
+// сайт того же блока), и потеря его = вход на Gmail под чужим ящиком.
+{
+  resetMocks();
+  const deps = makeDeps();
+  deps.s.newEmail = 'new@x.ru';
+  deps.s.newPassword = 'newpw';
+  deps.s.imapServer = ' imap.example.com ';
+  deps.s.imapPort = '993';
+  deps.s.smtpServer = 'smtp.example.com';
+  deps.s.smtpPort = ' 465 ';
+  await A.changeEmail(deps);
+  const cfg = st.loginCalls[0][2].config;
+  check('смена: свои серверы переданы (обрезаны, порты — числа)',
+    cfg.imap_server === 'imap.example.com' && cfg.smtp_server === 'smtp.example.com'
+    && cfg.imap_port === 993 && cfg.smtp_port === 465, cfg);
+}
 {
   resetMocks();
   st.loginFail = true;

@@ -126,6 +126,14 @@ function reset() {
   ok('адрес нормализован: регистр снят, пробелы обрезаны (иначе кэш раздваивается)',
     state.nsCalls.length === 1 && state.nsCalls[0].email === 'me@bk.ru', state.nsCalls);
 }
+{
+  // Второе место нормализации — путь переноса legacy-строк: там регистр
+  // стоит уже в имени namespace, откуда реально читают письма.
+  reset();
+  await I.ensureAccountNamespace('  Me@BK.RU  ');
+  ok('перенос спрашивается по нормализованному адресу (ищем старый регистр → переносим не то)',
+    state.migrateCalls.length === 1 && state.migrateCalls[0].fromAccount === 'me@bk.ru', state.migrateCalls);
+}
 
 // ── FAIL-OPEN: команда недоступна ───────────────────────────────────────
 {

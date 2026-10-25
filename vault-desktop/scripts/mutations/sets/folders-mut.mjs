@@ -16,9 +16,18 @@ export default {
     { name: "флаги не сохраняются в kv",
       pattern: "    await db.kvSet(await accountNamespace(sessionStore.getCurrentEmail()), 'chat-flags',\n      JSON.stringify(foldersStore.state.chatFlags));",
       replacement: "    void 0;" },
+    // РАЗДЕЛКА 25.10: `foldersStore.setFlag(key, f);` стоит в трёх функциях
+    // одинаково (архив, mute, папка), и «папка не назначается» на самом деле
+    // бил архив. Каждый сайт заякорен своей строкой выше/ниже.
     { name: "папка не назначается чату",
-      pattern: "  foldersStore.setFlag(key, f);",
-      replacement: "  void 0;" },
+      pattern: "  if (name) f.folder = name.slice(0, 24);\n  else delete f.folder;\n  foldersStore.setFlag(key, f);",
+      replacement: "  if (name) f.folder = name.slice(0, 24);\n  else delete f.folder;\n  void 0;" },
+    { name: "архив не попадает в стор флага (после перезапуска чат снова в списке)",
+      pattern: "  f.archived = !f.archived;\n  foldersStore.setFlag(key, f);",
+      replacement: "  f.archived = !f.archived;\n  void 0;" },
+    { name: "mute не попадает в стор флага (звук возвращается после перезапуска)",
+      pattern: "  f.muted = !f.muted;\n  foldersStore.setFlag(key, f);",
+      replacement: "  f.muted = !f.muted;\n  void 0;" },
     // Паттерн должен быть УНИКАЛЬНЫМ: `deps.closeChatMenu();` встречается и в
     // toggleArchive/toggleMute — иначе мутация била бы не ту строку, а
     // проверка папки проходила бы на сломанном коде.

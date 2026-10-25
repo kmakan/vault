@@ -1,6 +1,11 @@
 // Набор мутаций: group-members-mut
 // Цель: убедиться, что смоук group-members-smoke.mjs ЛОВИТ эти поломки.
 // Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+//
+// РАЗДЕЛКА 25.10: охрана «только админ» написана одинаково в двух функциях
+// (удаление участника и смена роли). Оба мутанта били ПЕРВОЕ совпадение, то
+// есть удаление; ветка смены роли, где тест «не админ — сервер не трогаем»
+// есть, не мутировалась никогда. Каждый сайт заякорен вызовом сервера ниже.
 
 export default {
   id: 'group-members-mut',
@@ -8,8 +13,8 @@ export default {
   smoke: 'group-members-smoke.mjs',
   mutations: [
     { name: "удаление участника проходит и не-админу (состав меняет кто попало)",
-      pattern: "  if (!deps.isGroupAdmin()) return false;",
-      replacement: "  if (false) return false;" },
+      pattern: "  if (!deps.isGroupAdmin()) return false;\n  try {\n    await deps.api.removeGroupMember(group.id, email);",
+      replacement: "  if (false) return false;\n  try {\n    await deps.api.removeGroupMember(group.id, email);" },
     { name: "отказ моста «создателя нельзя» показывается сырым текстом (пользователь не понимает причину)",
       pattern: "    deps.alert(msg.includes('creator')",
       replacement: "    deps.alert(false" },
@@ -20,8 +25,8 @@ export default {
       pattern: "    await deps.refreshGroupMembers();",
       replacement: "    void 0;" },
     { name: "смена роли проходит и не-админу",
-      pattern: "  if (!deps.isGroupAdmin()) return false;\n  try {",
-      replacement: "  if (false) {\n  try {" },
+      pattern: "  if (!deps.isGroupAdmin()) return false;\n  try {\n    await deps.api.setGroupMemberRole(group.id, email, role);",
+      replacement: "  if (false) return false;\n  try {\n    await deps.api.setGroupMemberRole(group.id, email, role);" },
     { name: "роль не сохраняется в локальном составе (UI покажет старую)",
       pattern: "    if (m) m.role = role;",
       replacement: "    void 0;" },

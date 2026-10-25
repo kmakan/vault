@@ -1,6 +1,12 @@
 // Набор мутаций: keys-mut
 // Цель: убедиться, что смоук keys-smoke.mjs ЛОВИТ эти поломки.
 // Если мутация выжила — смоук ничего не проверяет (урок ADR-005 §2.3).
+//
+// РАЗДЕЛКА 25.10: «отпечаток не считается» и «отпечаток не пересчитывается»
+// были ОДНИМ И ТЕМ ЖЕ паттерном — движок бил одну и ту же строку
+// инициализации (L36), а участок onKeysChanged (после восстановления ключей)
+// не мутировался никогда, хотя тест для него есть. Теперь у каждого сайта свой
+// якорь.
 
 export default {
   id: 'keys-mut',
@@ -19,9 +25,9 @@ export default {
     { name: "готовность не включается",
       pattern: "    deps.setCryptoReady(true);",
       replacement: "    void 0;" },
-    { name: "отпечаток не считается",
-      pattern: "    deps.setFingerprint(await crypto.fingerprint());",
-      replacement: "    void 0;" },
+    { name: "отпечаток не считается при инициализации",
+      pattern: "    deps.setFingerprint(await crypto.fingerprint());\n    // Fire-and-forget: заполняем свой fingerprint у участников групп, которые",
+      replacement: "    void 0;\n    // Fire-and-forget: заполняем свой fingerprint у участников групп, которые" },
     { name: "namespace не пересчитывается (fp-трек мёртв)",
       pattern: "    resetAccountNamespaceCache();",
       replacement: "    void 0;" },
@@ -70,8 +76,8 @@ export default {
     { name: "окно QR не закрывается",
       pattern: "    deps.setShowQRCode(false);",
       replacement: "    void 0;" },
-    { name: "отпечаток не пересчитывается",
-      pattern: "    deps.setFingerprint(await crypto.fingerprint());",
-      replacement: "    void 0;" },
+    { name: "отпечаток не пересчитывается после восстановления ключей (onKeysChanged)",
+      pattern: "  if (deps.cryptoReady()) {\n    deps.setFingerprint(await crypto.fingerprint());",
+      replacement: "  if (deps.cryptoReady()) {\n    void 0;" },
   ],
 };

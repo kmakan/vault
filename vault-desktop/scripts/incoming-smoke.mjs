@@ -308,8 +308,15 @@ console.log('1. пустой батч / своё письмо — ничего �
 // Если JS решает сам — письмо, которое Rust отверг, будет обработано.
 console.log('1b. классификатор отверг письмо — не обрабатываем');
 {
-  resetWorld();
-  const deps = makeDeps({ classify: () => null });
+  // Ключ пира ЕСТЬ и тело расшифровывается: иначе письмо не дошло бы до
+  // классификатора вообще, и проверка была бы беззубой (мёртвый `classify`
+  // в makeDeps ровно это и маскировал до 25.10 — стенд читает classify из
+  // resetWorld, а не из deps).
+  resetWorld({
+    plain: JSON.stringify({ vault: 1, id: 'e1b', key: 'PEERK', text: 'x' }),
+    classify: () => null,
+  });
+  const deps = makeDeps({ peerKeys: { 'peer@x.ru': 'PEERK' } });
   const m = letter();
   withBody(deps, m, 'ENC:x');
   await processIncoming(deps, [m], { notify: true });
@@ -702,6 +709,92 @@ console.log('19. мост Rust упал: письмо повторится на 
     classifyCalls === 1, classifyCalls);
   check('падение моста громкое (console.error), а не молча',
     seen.some(s => s.includes('Rust-классификатор недоступен')), seen);
+}
+
+// ── 19b/19c/19d. Тот же отказ моста на ТРЁХ остальных сайтах guard'а ──────
+// Одинаковая строка `if (cls === undefined) return null;` стоит в четырёх
+// местах роутера (1:1, перебор ключей при смене почты, каналы, группы).
+// Пока паттерн мутации был не заякорен, движок бил только первое место, и
+// три остальных жили без проверки. Разница настоящая: без guard'а отказ
+// («мы не знаем, что это за письмо») превращается в «пробуем СЛЕДУЮЩИЙ
+// ключ/канал/группу» — а там классификатор мог уже ожить, и письмо
+// переедет/посчитается по результату, которого быть не должно.
+const classifyCount = (st) =>
+  st.bridgeCalls.filter((c) => c.cmd === 'vault_classify_incoming').length;
+
+console.log('19b. отказ моста на переборе ключей — список ключей не «доим»');
+{
+  // Конверт принадлежит ВТОРОМУ ключу: с снятым guard'ом цикл доходит до него
+  // и делает полный ренейм личности по письму, которое никто не прочитал.
+  let n = 0;
+  resetWorld({
+    plain: JSON.stringify({ vault: 1, id: 'e19b', key: 'OTHERK', name: 'Пир' }),
+    classify: () => (n++ === 0 ? undefined : { kind: 'profile' }),
+  });
+  const deps = makeDeps({
+    peerKeys: { 'old@x.ru': 'OLDK', 'second@x.ru': 'OTHERK' },
+  });
+  const m = letter({ from: 'new@x.ru', uid: 20, message_id: '<bd2@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  const st = globalThis.__state;
+  check('19b: классификатор позван один раз (перебор остановлен)',
+    classifyCount(st) === 1, classifyCount(st));
+  check('19b: личность не переименована по непрочитанному письму',
+    st.migratedGroups.length === 0 && st.setPeerKey.length === 0, st.migratedGroups);
+  check('19b: письмо не помечено обработанным',
+    deps.processedUnreadIds.size === 0, [...deps.processedUnreadIds]);
+}
+
+console.log('19c. отказ моста в канале — письмо не уходит в группы');
+{
+  let n = 0;
+  resetWorld({
+    plain: '',
+    groupPlain: JSON.stringify({ vault: 1, id: 'e19c', key: 'GK', text: 'gm' }),
+    classify: () => (n++ === 0 ? undefined : { kind: 'message' }),
+  });
+  const deps = makeDeps({
+    peerKeys: {},
+    channels: () => [{ id: 'ch1', key: 'CHKEY', name: 'Chan' }],
+    groups: () => [{ id: 'g1', name: 'Группа', members: [{ email: 'peer@x.ru' }] }],
+    groupKeys: { g1: 'GK' },
+  });
+  const m = letter({ uid: 21, message_id: '<bd3@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  const st = globalThis.__state;
+  check('19c: классификатор позван один раз (на группах не пробуем снова)',
+    classifyCount(st) === 1, classifyCount(st));
+  check('19c: бейдж группы НЕ вырос, письмо не помечено',
+    st.unread['group:g1'] === undefined && deps.processedUnreadIds.size === 0, st.unread);
+}
+
+console.log('19d. отказ моста в группе — следующая группа не проверяется');
+{
+  let n = 0;
+  resetWorld({
+    plain: '',
+    groupPlain: JSON.stringify({ vault: 1, id: 'e19d', key: 'GK2', text: 'gm' }),
+    classify: () => (n++ === 0 ? undefined : { kind: 'message' }),
+  });
+  const deps = makeDeps({
+    peerKeys: {},
+    groups: () => [
+      { id: 'g1', name: 'Первая', members: [{ email: 'peer@x.ru' }] },
+      { id: 'g2', name: 'Вторая', members: [{ email: 'peer@x.ru' }] },
+    ],
+    groupKeys: { g1: 'GK1', g2: 'GK2' },
+  });
+  const m = letter({ uid: 22, message_id: '<bd4@x>' });
+  withBody(deps, m, 'ENC:1');
+  await processIncoming(deps, [m], { notify: true });
+  const st = globalThis.__state;
+  check('19d: классификатор позван один раз (вторая группа не тронута)',
+    classifyCount(st) === 1, classifyCount(st));
+  check('19d: бейдж НЕ вырос ни на одной группе, письмо не помечено',
+    st.unread['group:g1'] === undefined && st.unread['group:g2'] === undefined
+    && deps.processedUnreadIds.size === 0, st.unread);
 }
 
 // Кэш снапшота — на сессию, а не на письмо/сценарий.

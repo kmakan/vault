@@ -34,6 +34,14 @@ ok('регистр домена не важен', detectProvider('A@GMail.COM') 
 ok('лимит gmail — 25 МБ', getLimit('gmail').maxAttachment === 25 * 1024 * 1024, getLimit('gmail'));
 ok('лимит outlook — 20 МБ', getLimit('outlook').maxAttachment === 20 * 1024 * 1024);
 ok('неизвестный провайдер → conservative default (custom)', getLimit('nope').id === 'custom' || getLimit('nope').maxAttachment === 10 * 1024 * 1024, getLimit('nope'));
+// Каждый предел таблицы — своей проверкой. Одна строка на gmail не меряла
+// Mail.ru (та же литеральная 25 МБ, второй совпавший паттерн) и не меряла
+// «или» в предыдущей проверке (25.10).
+ok('лимит mail.ru — 25 МБ (транспорт этого приложения)',
+  getLimit('mailru').maxAttachment === 25 * 1024 * 1024, getLimit('mailru'));
+ok('лимит yandex — 30 МБ', getLimit('yandex').maxAttachment === 30 * 1024 * 1024, getLimit('yandex'));
+ok('консервативный default — ровно 10 МБ (не «или»)',
+  getLimit('nope').maxAttachment === 10 * 1024 * 1024, getLimit('nope'));
 ok('в лимите есть предостережение (текст)', typeof getLimit('gmail').warning === 'string' && getLimit('gmail').warning.length > 0);
 ok('у всех провайдеров maxTotal есть', Object.values(providerLimits).every((l) => typeof l.maxTotal === 'number' && l.maxTotal > 0));
 

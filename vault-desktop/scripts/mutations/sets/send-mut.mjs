@@ -10,9 +10,14 @@ export default {
     { name: "пустой черновик отправляется",
       pattern: "      if (!draft().trim()) return;",
       replacement: "      void 0;" },
-    { name: "оптимистичное сообщение не показывается",
-      pattern: "          deps.chat.append(pendingMsg);",
-      replacement: "          void 0;" },
+    // deps.chat.append(pendingMsg) стоит в двух ветках (группа и 1:1) с
+    // одинаковым отступом: без якоря мутировалась только одна.
+    { name: "группа: оптимистичное сообщение не показывается",
+      pattern: "          deps.chat.append(pendingMsg);\n          deps.markPending('group:' + chatUi.currentGroup.id, pendingMsg);",
+      replacement: "          deps.markPending('group:' + chatUi.currentGroup.id, pendingMsg);" },
+    { name: "1:1: оптимистичное сообщение не показывается",
+      pattern: "          deps.chat.append(pendingMsg);\n          deps.markPending(chatUi.activeChat, pendingMsg);",
+      replacement: "          deps.markPending(chatUi.activeChat, pendingMsg);" },
     { name: "исходящее не помечается pending (потеряется при перезагрузке)",
       pattern: "          deps.markPending(chatUi.activeChat, pendingMsg);",
       replacement: "          void 0;" },

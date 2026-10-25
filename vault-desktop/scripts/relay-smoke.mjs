@@ -253,6 +253,21 @@ console.log('2. loadEmailsFast (звонковый фетч)');
   check('сбой fetch — тихо, список цел', mailboxStore.state.emails.length === before);
   apiMock.fetchEmailsIncrementalFast = async (acc, cursors) => { apiMock.calls.push(['fetchFast', acc, cursors]); return { messages: [], cursors }; };
 }
+// Сортировка fast-fetch — ОТДЕЛЬНЫЙ сайт от сортировки relayConsume. Без
+// порядка свежий call_request лежит в хвосте двухтысячного списка.
+{
+  resetWorld();
+  mailboxStore.setEmails([{ uid: 11, folder: 'INBOX', from: 'a@x.ru', date: '2025-12-01T00:00:00Z' }]);
+  apiMock.fetchEmailsIncrementalFast = async (acc, cursors) => {
+    apiMock.calls.push(['fetchFast', acc, cursors]);
+    return { messages: [{ uid: 10, folder: 'INBOX', from: 'b@x.ru', date: '2026-01-01T00:00:00Z' }], cursors };
+  };
+  await R.loadEmailsFast(true);
+  check('fast-fetch: порядок по дате (новые первыми), а не «дописан в хвост»',
+    mailboxStore.state.emails.map((m) => m.uid).join(',') === '10,11',
+    mailboxStore.state.emails.map((m) => m.uid));
+  apiMock.fetchEmailsIncrementalFast = async (acc, cursors) => { apiMock.calls.push(['fetchFast', acc, cursors]); return { messages: [], cursors }; };
+}
 
 // ── 3. startPolling / stopPolling ──────────────────────────────
 console.log('3. startPolling/stopPolling');

@@ -149,6 +149,18 @@ function makeDeps(over = {}) {
   await B.blockSenderOfMessage(deps, { from: 'peer', sender_id: 'author@x.ru' });
   check('сообщение: повторный клик снимает блокировку',
     deps.st.unignoredCalls.length === 1 && deps.st.ignoredCalls.length === 0, deps.st);
+  check('сообщение: тост о разблокировке есть (иначе пользователь не знает, что произошло)',
+    deps.st.toasts.length === 1, deps.st.toasts);
+}
+{
+  // Тот же экран, что и в меню чата, но другая ветка кода: блок из меню
+  // сообщения при открытом 1:1 с этим же собеседником обязан перерисовать
+  // чат, иначе «блок не работает» выглядит как работающих два входа из четырёх.
+  const deps = makeDeps();
+  await B.blockSenderOfMessage(deps, { from: 'peer', sender_id: 'peer@x.ru' });
+  check('сообщение: открытый чат с этим же адресом перерисован',
+    deps.st.ignoredCalls.length === 1 && deps.st.loaded.length === 1
+    && deps.st.loaded[0] === 'peer@x.ru', deps.st);
 }
 
 // ── Участник группы ────────────────────────────────────────────────────

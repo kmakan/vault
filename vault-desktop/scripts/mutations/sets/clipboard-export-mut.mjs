@@ -28,9 +28,14 @@ export default {
     { name: "экспорт TXT сохраняет не тот тип файла",
       pattern: "  deps.downloadFile(txt, `vault-${deps.activeChat()}-${Date.now()}.txt`, 'text/plain');",
       replacement: "  deps.downloadFile(txt, `vault-${deps.activeChat()}-${Date.now()}.txt`, 'application/json');" },
-    { name: "меню экспорта не закрывается (меню остаётся поверх чата)",
-      pattern: "  deps.closeExportMenu();",
-      replacement: "  void 0;" },
+    // closeExportMenu() одинаков в exportAsJSON и exportAsTXT: без якоря
+    // мутировался только JSON-сайт, TXT-путь оставался неизмеренным.
+    { name: "экспорт JSON не закрывает меню (меню остаётся поверх чата)",
+      pattern: "  deps.downloadFile(json, `vault-${deps.activeChat()}-${Date.now()}.json`, 'application/json');\n  deps.closeExportMenu();",
+      replacement: "  deps.downloadFile(json, `vault-${deps.activeChat()}-${Date.now()}.json`, 'application/json');\n  void 0;" },
+    { name: "экспорт TXT не закрывает меню (меню остаётся поверх чата)",
+      pattern: "  deps.downloadFile(txt, `vault-${deps.activeChat()}-${Date.now()}.txt`, 'text/plain');\n  deps.closeExportMenu();",
+      replacement: "  deps.downloadFile(txt, `vault-${deps.activeChat()}-${Date.now()}.txt`, 'text/plain');\n  void 0;" },
     { name: "экспорт выгружает не тот чат (имя файла не совпадает с чатом)",
       pattern: "  const json = deps.exportChatJSON(deps.messages(), deps.activeChat());",
       replacement: "  const json = deps.exportChatJSON(deps.messages(), 'other');" },

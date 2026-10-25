@@ -25,8 +25,13 @@ export default {
     { name: "снятие блокировки ничего не убирает (заблокирован навсегда)",
       pattern: "  deps.contactsStore.setIgnored(\n    deps.removeIgnored(deps.contactsStore.state.ignoredUsers, email, deps.peerKeys),\n  );",
       replacement: "  void 0;" },
+    // `  await saveIgnoredUsers(deps);` — подстрока строки с 4 отступами в
+    // ignoreUser, поэтому якорь — предыдущая строка с переводом.
+    { name: "блокировка не сохраняется (перезапуск — и адрес снова открыт)",
+      pattern: "      deps.addIgnored(deps.contactsStore.state.ignoredUsers, key, Date.now()),\n    );\n    await saveIgnoredUsers(deps);",
+      replacement: "      deps.addIgnored(deps.contactsStore.state.ignoredUsers, key, Date.now()),\n    );" },
     { name: "снятие блокировки не сохраняется (после перезапуска блок вернётся)",
-      pattern: "  await saveIgnoredUsers(deps);",
-      replacement: "  void 0;" },
+      pattern: "    deps.removeIgnored(deps.contactsStore.state.ignoredUsers, email, deps.peerKeys),\n  );\n  await saveIgnoredUsers(deps);",
+      replacement: "    deps.removeIgnored(deps.contactsStore.state.ignoredUsers, email, deps.peerKeys),\n  );" },
   ],
 };
