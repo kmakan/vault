@@ -22,7 +22,10 @@
 //   * после прогона файл ВОССТАНАВЛИВАЕТСЯ побайтно (всегда, даже при ошибке);
 //   * базовый прогон обязателен: набор, чей тест не проходит на чистом дереве,
 //     бессмысленен (сломанный тест «ловит» любую поломку);
-//   * крейт берётся из поля `crate` набора (по умолчанию `vault-client`).
+//   * крейт берётся из поля `crate` набора (по умолчанию `vault-client`) — это
+//     КАТАЛОГ, где лежат тесты. Имя пакета для `cargo test -p` может быть
+//     другим (`pkg`): мост живёт в `vault-desktop/src-tauri`, а пакет
+//     называется `vault-desktop`, и путь cargo именем пакета не принимает.
 //     Файл мутации может лежать в другом крейте: cargo соберёт его как path-
 //     зависимость. Так `vault-core` (общий слой хранилищ) перестаёт быть
 //     слепой зоной, не превращаясь во второй гейт.
@@ -71,10 +74,14 @@ async function loadSets() {
 
 // Запуск тестов крейта. kind: 'lib' (юнит-тесты) | 'all' (включая интеграционные)
 // | произвольная строка cargo-фильтра.
-function runTests(crate, kind = 'lib', timeoutMs = 600000) {
+// Каталог крейта (cwd) и ИМЯ пакета для `-p` — разные вещи: мост лежит в
+// `vault-desktop/src-tauri`, а пакет называется `vault-desktop`. cargo не
+// принимает путь в качестве имени пакета, поэтому набор задаёт `pkg`.
+function runTests(crate, kind = 'lib', timeoutMs = 600000, pkg = null) {
+  const target = pkg || crate;
   const args = kind === 'all'
-    ? ['test', '-p', crate, '--quiet']
-    : ['test', '-p', crate, '--lib', '--quiet'];
+    ? ['test', '-p', target, '--quiet']
+    : ['test', '-p', target, '--lib', '--quiet'];
   const res = spawnSync('cargo', args, {
     cwd: path.join(REPO, crate),
     timeout: timeoutMs,
@@ -107,11 +114,20 @@ export function runSet(set, opts = {}) {
   const broken = [];
 
   // Базовый прогон: тест обязан проходить на чистом дереве.
-  const base = runTests(crate, kind, set.timeoutMs);
+  const base = runTests(crate, kind, set.timeoutMs, set.pkg);
   if (base.code !== 0) {
+    // причину надо печатать: «тесты не проходят» без неё одинаково означает
+    // таймаут сборки, ошибку компиляции и упавший тест, а чинить надо разные
+    // вещи (набор, код, тест соответственно).
+    const why = base.timedOut
+      ? `прогон превысил ${set.timeoutMs || 600000} мс (холодная сборка крейта?)`
+      : !base.compiled
+        ? 'крейт не собрался'
+        : `тесты упали (код ${base.code})`;
+    const tail = base.output.trim().split('\n').slice(-6).join('\n');
     return {
       id: set.id, total: set.mutations.length, caught, survived, rejected, broken,
-      broken: [{ name: '(базовый прогон)', reason: 'тесты не проходят на чистом дереве — набор бессмысленен' }],
+      broken: [{ name: '(базовый прогон)', reason: `набор бессмысленен: ${why}\n${tail}` }],
     };
   }
 
@@ -129,7 +145,7 @@ export function runSet(set, opts = {}) {
     let out;
     let foreign = null;
     try {
-      out = runTests(crate, kind, set.timeoutMs);
+      out = runTests(crate, kind, set.timeoutMs, set.pkg);
     } finally {
       // Побайтное восстановление — только если файл за прогон не менял никто
       // кроме нас (см. mutations/engine.mjs: чужую правку откат затирал).

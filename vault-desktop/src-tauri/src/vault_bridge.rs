@@ -6,12 +6,11 @@
 //! - vault_download_attachment: decrypt an EncryptedEnvelope → native file
 //! - vault_save_file: save already-decrypted base64 data → native file
 //!
-//! State (MessageStore/AttachmentStore) инициализируется лениво и хранится в
+//! State (MessageStore) инициализируется лениво и хранится в
 //! Tauri State[VaultBridgeState].
 
 use serde::Deserialize;
 use std::path::PathBuf;
-use vault_client::vault::AttachmentStore;
 use vault_client::vault::ClassifyResult;
 use vault_client::vault::MessageStore;
 // ClassifyKind нужен только тестам (test_classify_kind_display) — в прод-сборке не используется.
@@ -33,10 +32,6 @@ impl VaultBridgeState {
 
     pub fn messages(&self) -> std::sync::MutexGuard<'_, MessageStore> {
         self.messages.lock().unwrap()
-    }
-
-    pub fn attachments(&self) -> AttachmentStore {
-        AttachmentStore::new().unwrap_or_default()
     }
 }
 
