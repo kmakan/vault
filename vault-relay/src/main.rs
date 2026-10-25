@@ -8,9 +8,9 @@
 
 
 use axum::{
-    extract::{connect_info::ConnectInfo, Json, Query, State, WebSocketUpgrade, ws::Message},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json as AxumJson, Response},
+    extract::{connect_info::ConnectInfo, Json, Path, Query, State, WebSocketUpgrade, ws::Message},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Json as AxumJson, Response},
     routing::{get, post},
     Router,
 };
@@ -2065,6 +2065,134 @@ async fn relay_purchase_verify(
 }
 
 
+/// Параметры страницы возврата: язык интерфейса платежа (`ru` по умолчанию).
+#[derive(Debug, Deserialize)]
+struct PayReturnQuery {
+    #[serde(default)]
+    lang: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum PayReturnKind {
+    Ok,
+    Expired,
+    NotFound,
+}
+
+/// GET /pay-return/:id — страница возврата с платёжной страницы провайдера.
+///
+/// Ничего не подтверждает и НЕ выдаёт токен: оплату подтверждает только
+/// `/relay/purchase/verify` у провайдера (клиент опрашивает его сам). Здесь —
+/// человеческий ответ вместо 404 на `return_url` ЮKassa и подсказка вернуться
+/// в приложение. Данные покупателя (fp) и id сессии на страницу не попадают.
+async fn pay_return(
+    State(app): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<PayReturnQuery>,
+) -> Response {
+    let en = q.lang.as_deref().unwrap_or("").eq_ignore_ascii_case("en");
+    let (status, kind) = match app.get_checkout(&id) {
+        None => (StatusCode::NOT_FOUND, PayReturnKind::NotFound),
+        Some(c) if c.expires_at < now() => (StatusCode::GONE, PayReturnKind::Expired),
+        Some(_) => (StatusCode::OK, PayReturnKind::Ok),
+    };
+    let mut resp = Html(pay_return_page(en, kind)).into_response();
+    *resp.status_mut() = status;
+    let h = resp.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'"),
+    );
+    resp
+}
+
+/// Тексты страницы возврата: только статические строки, без подстановки данных
+/// запроса (нечего экранировать и нечего утекать).
+fn pay_return_page(en: bool, kind: PayReturnKind) -> String {
+    let (lang, title, heading, body, hint) = match (en, kind) {
+        (false, PayReturnKind::Ok) => (
+            "ru",
+            "Vault — проверка оплаты",
+            "Проверяем оплату",
+            "Вернитесь в приложение Vault — статус тарифа обновится после подтверждения платежа.",
+            "Если приложение не открылось, запустите его и откройте «Настройки → Тариф Pro».",
+        ),
+        (false, PayReturnKind::Expired) => (
+            "ru",
+            "Vault — сессия оплаты истекла",
+            "Сессия оплаты истекла",
+            "Вернитесь в приложение и начните покупку заново.",
+            "Деньги за неоплаченную сессию не списываются.",
+        ),
+        (false, PayReturnKind::NotFound) => (
+            "ru",
+            "Vault — ссылка устарела",
+            "Ссылка устарела",
+            "Не удалось найти эту платёжную сессию. Вернитесь в приложение и начните покупку заново.",
+            "Если оплата уже прошла, откройте «Настройки → Тариф Pro» — статус подтянется с сервера.",
+        ),
+        (true, PayReturnKind::Ok) => (
+            "en",
+            "Vault — payment check",
+            "Checking your payment",
+            "Return to the Vault app — your plan status will update once the payment is confirmed.",
+            "If the app did not open, start it and go to Settings → Pro plan.",
+        ),
+        (true, PayReturnKind::Expired) => (
+            "en",
+            "Vault — payment session expired",
+            "Payment session expired",
+            "Return to the app and start the purchase again.",
+            "No money is charged for an unpaid session.",
+        ),
+        (true, PayReturnKind::NotFound) => (
+            "en",
+            "Vault — link expired",
+            "Link expired",
+            "This payment session could not be found. Return to the app and start the purchase again.",
+            "If you already paid, open Settings → Pro plan — the status will be fetched from the server.",
+        ),
+    };
+    PAY_RETURN_TEMPLATE
+        .replace("__LANG__", lang)
+        .replace("__TITLE__", title)
+        .replace("__HEADING__", heading)
+        .replace("__BODY__", body)
+        .replace("__HINT__", hint)
+}
+
+const PAY_RETURN_TEMPLATE: &str = r#"<!doctype html>
+<html lang="__LANG__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>__TITLE__</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: #0f1115; color: #f4f6fb; }
+  main { max-width: 34rem; padding: 2rem; text-align: center; }
+  h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+  p { line-height: 1.5; margin: 0 0 .75rem; color: #c9d0de; }
+  .hint { font-size: .9rem; color: #8d97aa; }
+</style>
+</head>
+<body>
+<main>
+  <h1>__HEADING__</h1>
+  <p>__BODY__</p>
+  <p class="hint">__HINT__</p>
+</main>
+</body>
+</html>
+"#;
+
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().init();
@@ -2154,6 +2282,8 @@ async fn main() {
         // Платёжные роуты (шаг 4 плана платных токенов).
         .route("/relay/purchase/checkout", post(relay_purchase_checkout))
         .route("/relay/purchase/verify", post(relay_purchase_verify))
+        // return_url провайдера (ЮKassa): человеку — страница, не 404.
+        .route("/pay-return/:id", get(pay_return))
         .route("/relay/tokens/activate", post(relay_tokens_activate))
         .route("/relay/tokens/info", get(relay_tokens_info))
         .route("/relay/poll", get(relay_poll))
@@ -3336,6 +3466,130 @@ mod tests {
         )
         .await;
         assert_eq!(vresp.status(), StatusCode::CONFLICT);
+    }
+
+    async fn body_text(resp: axum::response::Response) -> String {
+        String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .expect("body")
+                .to_vec(),
+        )
+        .expect("utf-8")
+    }
+
+    fn pay_return_query(lang: Option<&str>) -> Query<PayReturnQuery> {
+        Query(PayReturnQuery {
+            lang: lang.map(str::to_string),
+        })
+    }
+
+    async fn create_checkout_id(app: Arc<AppState>) -> String {
+        let resp = relay_purchase_checkout(
+            State(app),
+            Json(checkout_req("pro", 1, "fp-alice")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        body_json(resp).await["checkout_id"]
+            .as_str()
+            .expect("checkout_id")
+            .to_string()
+    }
+
+    /// Страница возврата НЕ подтверждает оплату: она только показывает текст.
+    /// Токен и подписка появляются исключительно через /purchase/verify.
+    #[tokio::test]
+    async fn pay_return_known_checkout_shows_page_without_issuing_token() {
+        let app = pay_app_state(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let checkout_id = create_checkout_id(app.clone()).await;
+
+        let resp = pay_return(
+            State(app.clone()),
+            Path(checkout_id),
+            pay_return_query(None),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "страница оплаты не кэшируется"
+        );
+        let html = body_text(resp).await;
+        assert!(html.contains("Вернитесь в приложение"), "{html}");
+        assert!(!html.contains("fp-alice"), "страница не раскрывает fingerprint");
+        assert!(
+            app.subscriptions.lock().expect("subscriptions").is_empty(),
+            "просмотр страницы не выдаёт подписку"
+        );
+        assert!(
+            app.token_bindings.lock().expect("bindings").is_empty(),
+            "просмотр страницы не выпускает токен"
+        );
+    }
+
+    /// Язык берётся из `?lang=en` (ЮKassa передаёт его из чекаута).
+    #[tokio::test]
+    async fn pay_return_page_honours_lang() {
+        let app = pay_app_state(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let checkout_id = create_checkout_id(app.clone()).await;
+        let resp = pay_return(
+            State(app),
+            Path(checkout_id),
+            pay_return_query(Some("en")),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let html = body_text(resp).await;
+        assert!(html.contains("Checking your payment"), "{html}");
+        assert!(html.contains(r#"lang="en""#), "{html}");
+    }
+
+    /// Неизвестный id (релей перезапускался, сессия потеряна) — 404, а не 500.
+    #[tokio::test]
+    async fn pay_return_unknown_session_is_404() {
+        let app = pay_app_state(keys(), None);
+        let resp = pay_return(
+            State(app),
+            Path("co_missing".to_string()),
+            pay_return_query(None),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let html = body_text(resp).await;
+        assert!(html.contains("Ссылка устарела"), "{html}");
+    }
+
+    /// Истёкшая сессия — 410 Gone: человеку ясно, что оплата не ждёт.
+    #[tokio::test]
+    async fn pay_return_expired_session_is_410() {
+        let app = pay_app_state(
+            keys(),
+            Some(Arc::new(vault_relay::payments::TestProvider::new())),
+        );
+        let checkout_id = create_checkout_id(app.clone()).await;
+        {
+            let mut map = app.checkouts.lock().expect("checkouts");
+            map.get_mut(&checkout_id).expect("checkout").expires_at = now() - 1;
+        }
+        let resp = pay_return(
+            State(app),
+            Path(checkout_id),
+            pay_return_query(None),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::GONE);
+        let html = body_text(resp).await;
+        assert!(html.contains("Сессия оплаты истекла"), "{html}");
     }
 
     /// Идемпотентность: повторный чекаут того же fp/плана/срока возвращает
