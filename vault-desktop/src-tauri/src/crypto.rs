@@ -342,10 +342,9 @@ pub fn encrypt_symmetric_cmd(plaintext: &str, key_hex: &str) -> anyhow::Result<S
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     use chacha20poly1305::aead::Payload;
-    // Стелс-метка: аутентифицируем групповые письма AAD="VAULT" — тот же
-    // маркер, что у 1-на-1 (encrypt_vault_cmd).
-    // БЕЗ AAD и определялись только по видимой теме `VaultGroup: <id>` —
-    // не стелс и не надёжно. С меткой приём проверяет «это письмо Vault»
+    // Стелс-метка: групповые письма аутентифицируются тем же AAD="VAULT", что
+    // и 1-на-1 (encrypt_vault_cmd). Без метки они определялись только по
+    // видимой теме `VaultGroup: <id>` — это не стелс. Приём проверяет метку.
     let payload = Payload {
         msg: plaintext.as_bytes(),
         aad: b"VAULT",
@@ -383,8 +382,9 @@ pub fn decrypt_symmetric_cmd(ciphertext: &str, key_hex: &str) -> anyhow::Result<
     let nonce = XNonce::from_slice(nonce_bytes);
 
     use chacha20poly1305::aead::Payload;
-    // Сначала пробуем формат со стелс-меткой (AAD="VAULT", текущий); при
-    // до введения метки, продолжали расшифровываться.
+    // Сначала пробуем формат со стелс-меткой (AAD="VAULT", текущий); если не
+    // вышло — письмо могло быть написано до её введения, и пробуем без AAD.
+    // Порядок важен: обратный сделал бы нечитаемыми ВСЕ текущие письма.
     let plaintext = match cipher.decrypt(
         nonce,
         Payload {
@@ -488,5 +488,145 @@ mod tests {
         let legacy_b64 = base64::engine::general_purpose::STANDARD.encode(&out);
         let decrypted = decrypt_symmetric_cmd(&legacy_b64, &key).unwrap();
         assert_eq!(decrypted, "legacy group msg");
+    }
+
+    // ── 1-на-1: стелс-приём и та же форма письма ──
+    //
+    // encrypt_vault_cmd/decrypt_vault_cmd — путь ВСЕЙ личной переписки, и до
+    // этих проб у него не было ни одного теста: «Not a vault message» решает,
+    // считать ли письмо нашим, а копия формы письма (b64_decode_mail) здесь
+    // вызывается вторая. Мутируются ровно эти решения.
+
+    /// SMTP-перенос по 76 колонкам — как его оставляет транспорт.
+    fn fold(body: &str) -> String {
+        body.as_bytes()
+            .chunks(76)
+            .map(|c| std::str::from_utf8(c).expect("base64 — ascii"))
+            .collect::<Vec<_>>()
+            .join("\r\n")
+    }
+
+    #[test]
+    fn vault_1on1_roundtrip_peer_and_self() {
+        let alice = generate_keypair_cmd();
+        let bob = generate_keypair_cmd();
+        let plain = "private note";
+        let body = encrypt_vault_cmd(plain, &alice.private_key, Some(&bob.public_key)).unwrap();
+        assert_eq!(
+            decrypt_vault_cmd(&body, &bob.private_key, Some(&alice.public_key)).unwrap(),
+            plain
+        );
+        // Самошифровка (без ключа собеседника) читается тем же ключом.
+        let own = encrypt_vault_cmd(plain, &alice.private_key, None).unwrap();
+        assert_eq!(
+            decrypt_vault_cmd(&own, &alice.private_key, None).unwrap(),
+            plain
+        );
+    }
+
+    #[test]
+    fn vault_1on1_rejects_mail_without_marker() {
+        // Письмо без стелс-метки не имеет становиться «нашим».
+        let kp = generate_keypair_cmd();
+        let plain_mail = encrypt_cmd("just mail", &kp.private_key, None).unwrap();
+        let err = decrypt_vault_cmd(&plain_mail, &kp.private_key, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Not a vault message"), "текст ошибки: {err}");
+    }
+
+    #[test]
+    fn vault_1on1_folded_and_unpadded_body_decrypts() {
+        let kp = generate_keypair_cmd();
+        // 46 байт текста + 24 nonce + 16 tag = 86 → base64 с одним «=».
+        let plain = "a".repeat(46);
+        let body = encrypt_vault_cmd(&plain, &kp.private_key, None).unwrap();
+        assert!(body.ends_with('='), "тело без пэйдинга ничего не проверяет");
+        assert_eq!(
+            decrypt_vault_cmd(&fold(&body), &kp.private_key, None).unwrap(),
+            plain
+        );
+        let unpadded = body.trim_end_matches('=').to_string();
+        assert_eq!(
+            decrypt_vault_cmd(&unpadded, &kp.private_key, None).unwrap(),
+            plain
+        );
+    }
+
+    #[test]
+    fn short_body_is_rejected_by_every_decrypt_site() {
+        // split_at(NONCE_LEN) на коротком теле паникует: каждая копия проверки
+        // обязана остаться, иначе письмо-обрубок роняет мост.
+        let kp = generate_keypair_cmd();
+        let tiny = base64::engine::general_purpose::STANDARD.encode([0u8; 8]);
+        for result in [
+            decrypt_cmd(&tiny, &kp.private_key, None),
+            decrypt_vault_cmd(&tiny, &kp.private_key, None),
+            decrypt_symmetric_cmd(&tiny, &hex::encode([1u8; 32])),
+        ] {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("too short"), "текст ошибки: {err}");
+        }
+    }
+
+    #[test]
+    fn short_group_key_is_rejected_on_encrypt() {
+        let short = hex::encode([1u8; 16]);
+        let err = encrypt_symmetric_cmd("x", &short).unwrap_err().to_string();
+        assert!(err.contains("32 bytes"), "текст ошибки: {err}");
+    }
+
+    // ── b64_decode_mail: письмо приходит через SMTP, а не из памяти ──
+    //
+    // Per-line limit 76 символов и decode_quoted_printable в email.rs рвут и
+    // съедает хвост base64. Это единственное место, где форма письма лечится,
+    // и до этих проб она не проверялась НИКЕМ: roundtrip-тесты выше подают
+    // тело целиком, без переносов и без потерь пэйдинга.
+
+    #[test]
+    fn folded_base64_body_still_decrypts() {
+        let key = hex::encode([11u8; 32]);
+        let plain = "group message long enough to be wrapped by the smtp transport";
+        let encrypted = encrypt_symmetric_cmd(plain, &key).unwrap();
+        let folded = encrypted
+            .as_bytes()
+            .chunks(76)
+            .map(|c| std::str::from_utf8(c).expect("base64 — ascii"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        assert_ne!(folded, encrypted, "переносы обязаны быть внутри тела");
+        assert_eq!(decrypt_symmetric_cmd(&folded, &key).unwrap(), plain);
+    }
+
+    #[test]
+    fn stripped_padding_is_repaired() {
+        let key = hex::encode([12u8; 32]);
+        // Длина тела подбирается НЕ наугад: 24 nonce + 16 tag + 45 байт открытого
+        // текста = 85 байт → base64 обязано кончаться двумя «=». Иначе тест
+        // снимал бы пэйдинг с тела, где его нет, и проверял бы пустоту.
+        let plain = "p".repeat(45);
+        let encrypted = encrypt_symmetric_cmd(&plain, &key).unwrap();
+        assert!(
+            encrypted.ends_with("=="),
+            "тело без padding ничего не проверяет: {encrypted}"
+        );
+        let unpadded = encrypted.trim_end_matches('=').to_string();
+        assert_eq!(decrypt_symmetric_cmd(&unpadded, &key).unwrap(), plain);
+    }
+
+    #[test]
+    fn garbage_base64_is_error_not_panic() {
+        let key = hex::encode([13u8; 32]);
+        assert!(decrypt_symmetric_cmd("%%%% не base64", &key).is_err());
+    }
+
+    #[test]
+    fn group_key_of_wrong_length_is_rejected() {
+        let short = hex::encode([1u8; 16]);
+        let body = encrypt_symmetric_cmd("x", &hex::encode([1u8; 32])).unwrap();
+        let err = decrypt_symmetric_cmd(&body, &short)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("32 bytes"), "текст ошибки: {err}");
     }
 }
