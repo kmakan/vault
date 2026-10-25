@@ -60,15 +60,18 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 // `t_502b6c90`). Реэкспорт сохраняет прежние пути (`crate::video::…`),
 // включая константный контекст `FRAME_DURATION` ниже.
 pub use vault_client::vault::call_media::{FRAME_TS_INCREMENT, VIDEO_FPS, VP8_CLOCK_RATE};
+use vault_client::vault::call_media::frame_duration_nanos;
 
 /// Длительность кадра для `Sample.duration` — 1/30 с, округлённая ВВЕРХ
 /// (33 333 334 нс). `write_sample` считает инкремент как
 /// `(duration.as_secs_f64() * clock_rate) as u32`, поэтому «ровные» 33 333 333
 /// нс дали бы 2999 тиков вместо 3000 (truncation), а округление вверх —
 /// ровно `FRAME_TS_INCREMENT`.
-const FRAME_DURATION: Duration = Duration::from_nanos(
-    (1_000_000_000u64 * FRAME_TS_INCREMENT as u64).div_ceil(VP8_CLOCK_RATE as u64),
-);
+///
+/// Формула округления — ядровая (`call_media::frame_duration_nanos`), здесь
+/// только превращение в `Duration`: два крейта не должны хранить одну
+/// протокольную формулу в двух копиях.
+const FRAME_DURATION: Duration = Duration::from_nanos(frame_duration_nanos());
 
 /// Глубина очереди «кадр камеры → RTP-writer». Кадр VP8 = десятки КБ: при
 /// отставании writer'а лучше уронить кадр (`try_send` в бэкенде), чем копить

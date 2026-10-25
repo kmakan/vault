@@ -32,7 +32,11 @@ pub const FRAME_TS_INCREMENT: u32 = VP8_CLOCK_RATE / VIDEO_FPS;
 
 /// Длительность кадра в наносекундах — округление ВВЕРХ, иначе 33 333 333 нс
 /// дают 2999 тиков вместо 3000 (`write_sample` усекает произведение).
-pub fn frame_duration_nanos() -> u64 {
+///
+/// `const fn`: мосту нужна константа (`Sample.duration` задаётся в const
+/// контексте), и формула обязана быть в ОДНОЙ копии — иначе число протокола
+/// пришлось бы править в двух крейтах.
+pub const fn frame_duration_nanos() -> u64 {
     (1_000_000_000u64 * FRAME_TS_INCREMENT as u64).div_ceil(VP8_CLOCK_RATE as u64)
 }
 

@@ -66,7 +66,7 @@ use rtc::rtp_transceiver::rtp_sender::{
 // Payload-типы кодеков и ICE-таймауты — протокол соединения: числа живут в
 // ядре (ADR-005 §W4, `t_502b6c90`), здесь только реэкспорт и обёртка Duration.
 use vault_client::vault::call_media::{
-    ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS,
+    ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS, VP8_CLOCK_RATE,
 };
 pub(crate) use vault_client::vault::call_media::{OPUS_PAYLOAD_TYPE, VP8_PAYLOAD_TYPE};
 
@@ -220,7 +220,9 @@ fn opus_codec() -> RTCRtpCodec {
 pub(crate) fn vp8_codec() -> RTCRtpCodec {
     RTCRtpCodec {
         mime_type: MIME_TYPE_VP8.to_owned(),
-        clock_rate: 90000,
+        // Частота клока — ядровое число протокола (`call_media::VP8_CLOCK_RATE`),
+        // то же, из которого считается инкремент таймстампа в `crate::video`.
+        clock_rate: VP8_CLOCK_RATE,
         channels: 0,
         sdp_fmtp_line: String::new(),
         rtcp_feedback: vec![],
