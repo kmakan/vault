@@ -47,6 +47,7 @@ const LOCALES = {
   pro_buy_failed: 'Не удалось оформить покупку: {why}',
   pro_buy_ok: 'Pro активирован',
   pro_err_generic: 'Не удалось оформить покупку ({why})',
+  pro_daily: 'конвертов сегодня {used}/{limit}',
 };
 const tl = (key, params) => {
   let s = LOCALES[key] || key;
@@ -104,6 +105,27 @@ console.log('2. тексты');
   const details = P.proDetailsText(active, t, 'ru');
   check('active: в деталях есть срок', details.includes('pro_until'), details);
   check('active: в деталях есть устройства', details.includes('pro_devices'), details);
+  // Без квоты от сервера строку не рисуем: «0/0» выглядело бы как нулевой лимит.
+  check('active без квоты: строки pro_daily нет', !details.includes('pro_daily'), details);
+
+  // Действующий тариф с серверной квотой: расход и предел доходят до текста.
+  const activeQ = P.proView({ plan: 'pro', paid_until: NOW + 30 * DAY, daily_used: 12, daily_limit: 1000 }, NOW);
+  const qDetails = P.proDetailsText(activeQ, t, 'ru');
+  check('active с квотой: в деталях есть pro_daily', qDetails.includes('pro_daily'), qDetails);
+  check('active с квотой: видны расход и предел',
+    P.proDetailsText(activeQ, tl, 'ru').includes('12/1000'), P.proDetailsText(activeQ, tl, 'ru'));
+
+  // У истёкшего тарифа релей уже работает по лимиту Free: остаток оплаченной
+  // квоты показывать нельзя.
+  const expiredQ = P.proView({ plan: 'pro', paid_until: NOW - DAY, daily_used: 5, daily_limit: 1000 }, NOW);
+  check('expired: строки pro_daily нет',
+    !P.proDetailsText(expiredQ, t, 'ru').includes('pro_daily'), P.proDetailsText(expiredQ, t, 'ru'));
+
+  // Офлайн-грейс хранит последний известный счётчик без даты: подписывать его
+  // «сегодня» нельзя.
+  const offlineQ = P.proView({ plan: 'pro', paid_until: NOW + 30 * DAY, daily_used: 5, daily_limit: 1000, offline: true }, NOW);
+  check('offline: строки pro_daily нет',
+    !P.proDetailsText(offlineQ, t, 'ru').includes('pro_daily'), P.proDetailsText(offlineQ, t, 'ru'));
 
   const expired = P.proView({ plan: 'pro', paid_until: NOW - DAY }, NOW);
   check('expired: кнопка «продлить»', P.proActionLabel(expired, t) === 'pro_action_extend');
@@ -111,6 +133,9 @@ console.log('2. тексты');
 
   const trial = P.proView({ plan: 'trial', paid_until: NOW + 12 * DAY }, NOW);
   check('trial: кнопка «купить»', P.proActionLabel(trial, t) === 'pro_action_buy');
+  // Пробный период безлимитен: сервер отдаёт daily_limit = 0 — строки нет.
+  check('trial безлимитный: строки pro_daily нет',
+    !P.proDetailsText(trial, t, 'ru').includes('pro_daily'), P.proDetailsText(trial, t, 'ru'));
 }
 
 // ── 3. Человеческие тексты ошибок ───────────────────────────────────────

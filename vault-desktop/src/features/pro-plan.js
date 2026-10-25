@@ -126,6 +126,15 @@ export function proDetailsText(view, t, locale) {
   if (view.maxDevices) {
     parts.push(t('pro_devices', { used: view.devices, max: view.maxDevices }));
   }
+  // Суточная квота — только у действующего тарифа и только с живым ответом
+  // сервера. У истёкшего релей уже работает по лимиту Free, и «0 из 1000»
+  // читалось бы как остаток оплаченного. Офлайн-грейс хранит последний
+  // известный счётчик без даты: подписывать его «сегодня» нельзя.
+  // Безлимитный тариф сервер отдаёт как daily_limit = 0 — строки нет.
+  if ((view.kind === PRO_KIND.ACTIVE || view.kind === PRO_KIND.TRIAL)
+      && view.dailyLimit > 0 && !view.offline) {
+    parts.push(t('pro_daily', { used: view.dailyUsed, limit: view.dailyLimit }));
+  }
   return parts.join(' · ');
 }
 

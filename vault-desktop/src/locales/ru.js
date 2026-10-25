@@ -674,6 +674,7 @@ export default {
   pro_status_expired: '⚠ Pro закончился — релей работает в режиме Free',
   pro_until: 'до {date}',
   pro_devices: 'устройств {used}/{max}',
+  pro_daily: 'конвертов сегодня {used}/{limit}',
   pro_action_buy: 'Купить Pro',
   pro_action_extend: 'Продлить',
   pro_buy_failed: 'Не удалось оформить покупку: {why}',

@@ -666,6 +666,7 @@ export default {
   pro_status_expired: '⚠ Pro 已到期 — 中继以免费模式运行',
   pro_until: '至 {date}',
   pro_devices: '设备 {used}/{max}',
+  pro_daily: '今日信封 {used}/{limit}',
   pro_action_buy: '购买 Pro',
   pro_action_extend: '续期',
   pro_buy_failed: '无法完成购买：{why}',

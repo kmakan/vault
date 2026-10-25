@@ -672,6 +672,7 @@ export default {
   pro_status_expired: '⚠ Pro has expired — the relay runs in Free mode',
   pro_until: 'until {date}',
   pro_devices: 'devices {used}/{max}',
+  pro_daily: 'envelopes today {used}/{limit}',
   pro_action_buy: 'Buy Pro',
   pro_action_extend: 'Extend',
   pro_buy_failed: 'Could not complete the purchase: {why}',
