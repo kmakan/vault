@@ -189,8 +189,8 @@
     "vault-desktop/src/themes.js": 4,
     "vault-desktop/src/ui.js": 7,
     "vault-desktop/src/wire-signal-rule.js": 13,
-    "vault-relay/src/channel_keys.rs": 0,
-    "vault-relay/src/fcm.rs": 0,
+    "vault-relay/src/channel_keys.rs": 15,
+    "vault-relay/src/fcm.rs": 17,
     "vault-relay/src/main.rs": 18,
     "vault-relay/src/payments.rs": 22,
     "vault-relay/src/persist.rs": 24,
@@ -214,8 +214,6 @@
     "vault-desktop/src-tauri/src/media.rs",
     "vault-desktop/src-tauri/src/presence.rs",
     "vault-desktop/src-tauri/src/service_monitor.rs",
-    "vault-desktop/src-tauri/src/video.rs",
-    "vault-relay/src/channel_keys.rs",
-    "vault-relay/src/fcm.rs"
+    "vault-desktop/src-tauri/src/video.rs"
   ]
 }
