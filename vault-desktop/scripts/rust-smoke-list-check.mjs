@@ -8,9 +8,15 @@ import { spawnSync } from 'node:child_process';
 
 const REPO = '/home/maksim/whisper';
 const DIR = path.join(REPO, 'vault-desktop/scripts/rust-mutations/sets');
-const DEFAULT_CRATE = 'vault-desktop/src-tauri';
+// Должно совпадать с DEFAULT_CRATE в rust-mutation-gate.mjs: набор без поля
+// `crate` живёт там же, где его мутации. Раньше здесь стоял
+// 'vault-desktop/src-tauri' — и для сотен наборов без `crate` список тестов
+// запрашивался не из того каталога: cargo ошибался, список выходил пустым,
+// а проверка «фильтр собирает хотя бы один тест» молча не проверяла ничего.
+const DEFAULT_CRATE = 'vault-client';
 
 const cache = new Map();
+const broken = [];
 function listOf(crate, pkg, lib) {
   const key = `${crate}|${pkg}|${lib}`;
   if (cache.has(key)) return cache.get(key);
@@ -28,6 +34,9 @@ function listOf(crate, pkg, lib) {
   if (!names.length) {
     console.error(`✗ крейт ${crate} (pkg ${pkg}): --list не вернул ни одного теста — прогон сломан?`);
     console.error(out.split('\n').slice(-8).join('\n'));
+    // Пустой список — это не «ок, фильтра нет»: сверять не с чем, проверка
+    // ничего не утверждает. Зелёный прогон без измерения хуже красного.
+    broken.push(`${crate}/${pkg}`);
   }
   cache.set(key, names);
   return names;
@@ -60,4 +69,5 @@ for (const f of files) {
 }
 console.log(`\n=== проверено наборов: ${checked}, мёртвых фильтров: ${dead}, не-cargo смоуков: ${notCargo}`);
 console.log(`    (суммарно тестов в крейтах: ${[...cache.values()].reduce((a, v) => a + v.length, 0)}, уникальных крейтов: ${cache.size})`);
-process.exit(dead ? 1 : 0);
+if (broken.length) console.error(`✗ крейтов, где --list не дал тестов: ${broken.join(', ')}`);
+process.exit(dead || broken.length ? 1 : 0);
