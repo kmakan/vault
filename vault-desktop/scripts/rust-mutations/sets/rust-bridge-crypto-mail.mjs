@@ -34,7 +34,7 @@ export default {
     { name: 'переносы SMTP не вычищаются (76 колонок = мусор в base64, письмо не читается)',
       pattern: '    let mut cleaned: String = ciphertext.chars().filter(|c| !c.is_whitespace()).collect();',
       replacement: '    let mut cleaned: String = ciphertext.to_string();' },
-    { name: 'пэйдинг не восстанавливается (transpose-потеря «==» = ошибка декодера)',
+    { name: 'пэйдинг не восстанавливается (потеря «==» транспортом = ошибка декодера)',
       pattern: '    if rem != 0 {',
       replacement: '    if false {' },
     { name: 'пэйдинг дописывается к каждому телу (валидное становится кратным 4 + 4)',
