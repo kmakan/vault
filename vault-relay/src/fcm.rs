@@ -418,6 +418,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_required_fields_even_with_a_valid_key() {
+        // Пустой project_id уехал бы в URL (…/projects//messages:send), пустой
+        // client_email — в JWT. Проверка обязательна ДО разбора PEM, иначе
+        // валидный ключ оправдывает пустые поля. Без пробы эта проверка —
+        // незамечаемый код (набор rust-relay-fcm).
+        let (json, _pk) = test_key_json();
+        for field in ["project_id", "client_email"] {
+            let mut v: serde_json::Value = serde_json::from_str(&json).expect("test json");
+            v[field] = serde_json::Value::String("   ".into());
+            assert!(
+                FcmSender::from_key_json(&v.to_string()).is_err(),
+                "{field} обязана быть непустой"
+            );
+        }
+    }
+
+    #[test]
     fn loads_key_from_temp_file() {
         let (json, _pk) = test_key_json();
         let path = std::env::temp_dir().join(format!("vault-relay-fcm-test-{}.json", unix_now()));

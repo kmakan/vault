@@ -323,4 +323,19 @@ mod tests {
         let e = Entry { owner_hash: "x".into(), pubkey: zero, created_at: 0 };
         assert!(matches!(verify(&e, SIG, KID, "env-42", "body"), Verdict::Invalid));
     }
+
+    #[test]
+    fn whitespace_around_a_public_key_is_tolerated_on_both_sides() {
+        // Ключ вставляют из буфера обмена / читают из JSON — пробелы и перевод
+        // строки вокруг значения НЕ должны ни отклонять регистрацию, ни ломать
+        // проверку уже сохранённого ключа. Без этой пробы `trim()` на обеих
+        // сторонах — незамечаемый код (набор rust-relay-channel-keys).
+        let spaced = format!("  {PUB}\n ");
+        assert!(matches!(
+            decide_registration(Some('r'), false, Some('c'), Some(KID), &spaced),
+            RegisterDecision::Accept { .. }
+        ));
+        let e = Entry { owner_hash: "x".into(), pubkey: spaced, created_at: 0 };
+        assert!(matches!(verify(&e, SIG, KID, "env-42", "body"), Verdict::Ok));
+    }
 }

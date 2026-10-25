@@ -9,13 +9,17 @@
 //
 // ЗАПУСК (из vault-desktop; пути наборов — относительно него):
 //   node scripts/mutations/context.mjs scripts/rust-mutations/sets/<набор>.mjs "имя мутации" ["имя 2" …]
+//   node scripts/mutations/context.mjs scripts/mutations/sets/<набор>.mjs "имя" ["имя 2" …]
+// Исходник ищется и относительно vault-desktop (JS-наборы: `src/api.js`), и
+// относительно корня whisper (Rust-наборы: `vault-relay/src/fcm.rs`).
 // Только чтение исходников + печать кандидатов; ничего не меняет.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const [,, setPath, ...names] = process.argv;
 const set = (await import('file://' + path.resolve(setPath))).default;
-const src = readFileSync(path.isAbsolute(set.file) ? set.file : path.resolve('..', set.file), 'utf8');
+const forSource = (p) => (path.isAbsolute(p) ? p : existsSync(p) ? path.resolve(p) : path.resolve('..', p));
+const src = readFileSync(forSource(set.file), 'utf8');
 const lines = src.split('\n');
 
 function count(s) { return src.split(s).length - 1; }
