@@ -264,8 +264,11 @@ fn serve(stream: TlsStream<TcpStream>, mode: Mode, commands: &Mutex<Vec<String>>
                 .unwrap_or("")
                 .to_string();
             let body = match mode {
-                Mode::MixedBodies if uid == "1" => Some("Hello fixture"),
-                Mode::Healthy => Some("Hello fixture"),
+                // Тело приходит РАЗвёрнутым в quoted-printable: так отвечают
+                // реальные провайдеры, и это единственный способ проверить, что
+                // мост разбирает его на границе, а не отдаёт как лежало.
+                Mode::MixedBodies if uid == "1" => Some("Hello=20fixture"),
+                Mode::Healthy => Some("Hello=20fixture"),
                 _ => None,
             };
             match body {
@@ -650,6 +653,231 @@ fn fetch_message_body_tls_absent_uid_is_terminal_not_error() {
             String::new()
         );
         assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+// ─── t_61bd5090 #4: проводка правил выборки тел на границе IMAP ────────────
+// Ниже — ветки, которые без стенда не наблюдаемы вовсе: «виртуальная папка и
+// безадресные uid НЕ должны доходить до сервера» (до этого они лишь
+// декларировались комментарием), «после чужой папки сессия возвращается в
+// INBOX» и «тело разбирается из quoted-printable, а не отдаётся как пришло».
+// Каждая проба обязана быть разной по форме ответа, иначе мутация гейта
+// `rust-bridge-batch-bodies` пройдёт незамеченной.
+
+/// Команды стенда, кроме LOGIN (их `serve` не пишет) и LIST.
+fn mailbox_traffic(fixture: &Fixture) -> Vec<String> {
+    fixture
+        .commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.starts_with("SELECT") || c.starts_with("UID FETCH"))
+        .cloned()
+        .collect()
+}
+
+/// Сценарий 7: «папка RELAY» — псевдоним писем, доставленных релеем. На
+/// сервере такой папки нет: SELECT дал бы «No such folder», вызывающий счёл бы
+/// это рассинхроном и порвал живую сессию (reconnect-шторм, 04.10.2026).
+/// Ответ — пометка «тела не будет никогда» на КАЖДЫЙ запрошенный uid.
+#[test]
+fn fetch_bodies_tls_virtual_relay_folder_never_reaches_the_server() {
+    let fixture = Fixture::new(vec![Mode::Healthy]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["1", "rl-abc"]), "RELAY")
+            .await
+            .expect("виртуальная папка — не сбой сессии");
+        assert_eq!(
+            out,
+            vec![
+                ("1".to_string(), String::new()),
+                ("rl-abc".to_string(), String::new())
+            ],
+            "пометка ставится каждому запрошенному uid, включая числовые"
+        );
+        assert!(
+            mailbox_traffic(&fixture).is_empty(),
+            "по виртуальной папке не было ни одного обращения к серверу"
+        );
+        assert!(client.is_connected(), "сессию трогать нечем");
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 8: батч из одних НЕ-IMAP адресов (`rl-<envId>`, `undefined`).
+/// Спрашивать сервер нечего, но и «не знаю» отвечать нельзя — фронт повторял
+/// бы запрос каждым поллингом. Поэтому тот же terminal-ответ без трафика.
+#[test]
+fn fetch_bodies_tls_batch_without_imap_uids_is_marked_without_the_server() {
+    let fixture = Fixture::new(vec![Mode::Healthy]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["rl-abc", "undefined"]), "INBOX")
+            .await
+            .expect("безадресный батч — не сбой сессии");
+        assert_eq!(
+            out,
+            vec![
+                ("rl-abc".to_string(), String::new()),
+                ("undefined".to_string(), String::new())
+            ]
+        );
+        assert!(
+            mailbox_traffic(&fixture).is_empty(),
+            "на сервере этих писем нет — гонять UID FETCH бессмысленно"
+        );
+        assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 9: батч из ЧУЖОЙ папки. Папка выбирается (на новом соединении ни
+/// одна не выбрана), тела разбираются из quoted-printable, а сессия ПОСЛЕ
+/// возвращается в INBOX — иначе следующий шаг читает не ту папку и выдаёт
+/// чужие тела (живой баг: тело из INBOX по uid из Спама → «decrypt failed»
+/// навсегда).
+#[test]
+fn fetch_bodies_tls_non_inbox_folder_is_selected_and_session_returned_to_inbox() {
+    let fixture = Fixture::new(vec![Mode::Healthy]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let out = client
+            .fetch_bodies(&uid_list(&["1", "2"]), "Junk")
+            .await
+            .expect("папка есть, тела придут");
+        assert_eq!(
+            out,
+            vec![
+                ("1".to_string(), "Hello fixture".to_string()),
+                ("2".to_string(), "Hello fixture".to_string())
+            ],
+            "тело отдаётся РАЗОБРАННЫМ: стенд шлёт quoted-printable `Hello=20fixture`"
+        );
+        let traffic = mailbox_traffic(&fixture);
+        assert!(
+            traffic.iter().any(|c| c.contains("Junk")),
+            "без SELECT чужой папки UID FETCH читает INBOX: {traffic:?}"
+        );
+        assert_eq!(
+            traffic.last().map(|c| c.as_str()),
+            Some("SELECT \"INBOX\""),
+            "сессию нужно вернуть в INBOX, а не оставлять в {traffic:?}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 10: одиночный разбор держит те же две границы — виртуальная папка и
+/// НЕ-IMAP uid не должны доходить до сервера. Форма uid решается ядром
+/// (`relay::is_imap_uid`: только цифры), а не префиксом конверта: в UI бывают
+/// `undefined` и пустые адреса, и это тоже не письма IMAP.
+#[test]
+fn fetch_message_body_tls_virtual_or_non_imap_ids_never_reach_the_server() {
+    let fixture = Fixture::new(vec![Mode::Healthy]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        for (uid, folder) in [
+            ("1", "RELAY"),
+            ("rl-abc", "INBOX"),
+            ("undefined", "INBOX"),
+            ("", "INBOX"),
+        ] {
+            assert_eq!(
+                client.fetch_message_body(uid, folder).await.unwrap(),
+                String::new(),
+                "письма {uid:?} в папке {folder:?} на сервере нет"
+            );
+        }
+        assert!(
+            mailbox_traffic(&fixture).is_empty(),
+            "ни одного обращения к серверу по виртуальным адресам"
+        );
+        assert!(client.is_connected());
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 11: одиночный разбор различает «письмо ушло» (уже есть) и «письмо
+/// в папке ЕСТЬ, а FETCH молчит» — последнее обязан быть Err, иначе письмо
+/// теряет тело навсегда без попытки.
+#[test]
+fn fetch_message_body_tls_silent_fetch_with_present_uid_is_desync() {
+    let fixture = Fixture::new(vec![Mode::BodyDesync]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let err = client
+            .fetch_message_body("1", "INBOX")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("session desync"),
+            "рассинхрон обязан звать reconnect: {err}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 12: «папки нет» для одиночного разбора — то же, что и для батча:
+/// пустое тело БЕЗ ошибки. Сбой самого обращения (`BAD`) остаётся ошибкой.
+#[test]
+fn fetch_message_body_tls_missing_folder_is_empty_body_not_an_error() {
+    let fixture = Fixture::new(vec![Mode::MissingJunk]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        assert_eq!(
+            client.fetch_message_body("1", "Junk").await.unwrap(),
+            String::new(),
+            "переподключение папку не создаст"
+        );
+        assert!(client.is_connected(), "отсутствующая папка не рвёт сессию");
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+#[test]
+fn fetch_message_body_tls_failed_search_is_an_error_not_a_terminal_mark() {
+    let fixture = Fixture::new(vec![Mode::SearchFailed]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        let err = client
+            .fetch_message_body("1", "INBOX")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("uid_search existence check failed"),
+            "сбой обращения виден как сбой, а не как «письма нет»: {err}"
+        );
+        client.disconnect();
+        fixture.closed();
+    });
+}
+
+/// Сценарий 13: тело одиночного разбора тоже проходит quoted-printable —
+/// провайдеры переносят тела так, и «пришло ровно то, что лежало на сервере»
+/// проверяется именно здесь.
+#[test]
+fn fetch_message_body_tls_decodes_quoted_printable() {
+    let fixture = Fixture::new(vec![Mode::MixedBodies]);
+    let mut client = fixture.client();
+    runtime().block_on(async {
+        assert_eq!(
+            client.fetch_message_body("1", "INBOX").await.unwrap(),
+            "Hello fixture",
+            "стенд отдал `Hello=20fixture` — наружу обязано выйти пробел"
+        );
         client.disconnect();
         fixture.closed();
     });

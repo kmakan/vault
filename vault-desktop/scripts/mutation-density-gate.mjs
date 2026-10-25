@@ -71,29 +71,47 @@ const EXEMPT = new Map([
 
 const MIN_LOC = 40;   // модули короче — не сигнал (обычно это константы/структуры)
 
-function collectMutations() {
+// Счёт по РЕГУЛЯРКЕ молча недоглядел набор: `{ name: … }` на новой строке
+// (26 мутаций rust-bridge-batch-bodies) не матчился, и ратчет показал прежнее
+// число, хотя дыра закрылась. Измерение, которое врёт в пользу «всё хорошо»,
+// хуже отсутствия измерения — теперь счёт идёт по фактическим модулям набора
+// (те же объекты, что читает мутационный гейт).
+async function collectMutations() {
   const counts = new Map();
+  const unreadable = [];
   for (const dir of [
     path.join(DESKTOP, 'scripts', 'mutations', 'sets'),
     path.join(DESKTOP, 'scripts', 'rust-mutations', 'sets'),
   ]) {
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir).filter((x) => x.endsWith('.mjs'))) {
-      const src = readFileSync(path.join(dir, f), 'utf8');
-      const defaultFile = (src.match(/file: ['"]([^'"]+)['"]/) || [])[1];
-      for (const block of src.match(/\{ name: .*?\}/gs) || []) {
-        const mf = block.match(/file: ['"]([^'"]+)['"]/);
-        let target = mf ? mf[1] : defaultFile;
-        if (!target) continue;
+      const abs = path.join(dir, f);
+      let set;
+      try {
+        const mod = await import(abs);
+        set = mod.default || mod;
+      } catch (e) {
+        unreadable.push(`${f}: ${e.message.split('\n')[0]}`);
+        continue;
+      }
+      if (!set || !set.file || !Array.isArray(set.mutations)) {
+        unreadable.push(`${f}: нет { file, mutations[] } — ратчет его не видит`);
+        continue;
+      }
+      for (const m of set.mutations) {
+        let target = (m && m.file) || set.file;
         // JS-наборы адресуют модули от корня vault-desktop ('src/features/…'),
         // Rust-наборы — от корня репозитория ('vault-client/src/…'). Приводим к
         // одному виду, иначе JS-модули выглядят непокрытыми.
-        if (!target.includes('/') || target.startsWith('src/')) {
-          if (target.startsWith('src/')) target = 'vault-desktop/' + target;
-        }
+        if (target.startsWith('src/')) target = 'vault-desktop/' + target;
         counts.set(target, (counts.get(target) || 0) + 1);
       }
     }
+  }
+  if (unreadable.length) {
+    console.error('═══ РАТЧЕТ ПЛОТНОСТИ: НАБОРЫ ВНЕ СЧЁТА ═══');
+    for (const u of unreadable) console.error('  • ' + u);
+    process.exit(1);
   }
   return counts;
 }
@@ -134,7 +152,7 @@ function moduleFiles() {
   return out;
 }
 
-const mutations = collectMutations();
+const mutations = await collectMutations();
 const files = moduleFiles();
 
 // Фактические счётчики по модулям.
