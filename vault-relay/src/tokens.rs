@@ -560,6 +560,9 @@ mod tests {
         let p_rd = parse(&k, &rd).unwrap();
         let p_wr = parse(&k, &wr).unwrap();
         assert!(p_wr.channel_matches(&p_rd));
+        // Право publish даёт именно write-scope: read-токен своей же очереди
+        // не является правами на запись.
+        assert!(!p_rd.channel_matches(&p_rd), "read не даёт publish");
         // Чужой канал не матчится: write-токен канала B не публикует в A.
         let (rd_b, _) = issue_channel_pair(&k, &[6u8; 32]);
         let p_rd_b = parse(&k, &rd_b).unwrap();
@@ -730,6 +733,13 @@ mod tests {
         // каждые 30 дней меняла бы адрес очереди).
         assert_eq!(p.expiry, now + TOKEN_LIFETIME_DAYS * 86400);
         assert!(!p.is_expired());
+        // Нижняя граница срока — тоже решение, и оно обязано быть в пробе:
+        // без неё константу можно молча вернуть к 30 дням (тот же тест
+        // просчитывает ожидание той же константой).
+        assert!(
+            p.expiry > now + 365 * 86400,
+            "простой токен живёт меньше года: перерегистрация поменяла бы адрес очереди"
+        );
     }
 
     #[test]
@@ -764,5 +774,115 @@ mod tests {
         assert_eq!(Kind::Install.as_str(), "install");
         assert_eq!(Kind::Test.as_str(), "test");
         assert_eq!(Kind::Paid.as_str(), "paid");
+    }
+
+    #[test]
+    fn v1_forged_scope_or_expiry_rejected() {
+        // MAC v1 обязан покрывать scope и срок: иначе «read» превращается в
+        // «write» или в неprotухший токен правкой одного байта на транспорте.
+        use base64::Engine;
+        let k = keys();
+        let t = issue(&k, Scope::Read, 4_102_444_800);
+        for (field, at, byte) in [("scope", 8usize, b'w'), ("expiry", 9usize, 0xFF)] {
+            let mut raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(&t)
+                .unwrap();
+            raw[at] = if field == "scope" {
+                byte
+            } else {
+                raw[at] ^ byte
+            };
+            let forged = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+            assert!(
+                parse(&k, &forged).is_none(),
+                "подмена {field} в байте {at} прошла проверку MAC"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_forged_profile_fields_rejected() {
+        // В MAC v2 входит весь профиль, которым считается квота: sub,
+        // dev_nonce, paid_until. Вынутая из HMAC-сообщения поля делают токен
+        // «редактируемым» — подписчик Pro становится Business на одном байте.
+        use base64::Engine;
+        let k = keys();
+        let t = issue_v2(&k, Scope::Read, Plan::Pro, 7, 4_102_444_800);
+        for (field, at) in [("sub", 11), ("dev_nonce", 19), ("paid_until", 27)] {
+            let mut raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(&t)
+                .unwrap();
+            raw[at] ^= 0xFF;
+            let forged = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+            assert!(
+                parse(&k, &forged).is_none(),
+                "подмена {field} в байте {at} прошла проверку MAC"
+            );
+        }
+    }
+
+    #[test]
+    fn channel_token_without_sentinel_expiry_rejected() {
+        // Capability-токен канала признаётся каналом только по sentinel-сроку
+        // (u32::MAX). Без этой проверки — тот же инцидент, что с 55-байтовым
+        // токеном: подделка адреса очереди канала без знания broadcast-ключа.
+        use base64::Engine;
+        let k = keys();
+        let mut raw = vec![0u8; V1_LEN];
+        raw[..8].copy_from_slice(&1u64.to_be_bytes());
+        raw[8] = b'c';
+        raw[9..13].copy_from_slice(&(now_u32() + 3600).to_be_bytes());
+        let forged = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+        assert!(parse(&k, &forged).is_none());
+    }
+
+    #[test]
+    fn unknown_plan_byte_maps_to_free() {
+        // Fail-open по тарифу и fail-closed по HMAC: MAC считается по сырому
+        // байту plan, поэтому токен с неизвестным значением валиден — и ровно
+        // поэтому он не имеет получать право на платную квоту.
+        use base64::Engine;
+        let k = keys();
+        let key_id = k.keys[0].0;
+        let mac = k
+            .mac_v2(key_id, Scope::Read, 5, 7, 0xABCD, 4_102_444_800)
+            .unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&key_id.to_be_bytes());
+        raw.push(Scope::Read.to_byte());
+        raw.push(2u8);
+        raw.push(5u8); // плана с таким байтом нет
+        raw.extend_from_slice(&7u64.to_be_bytes());
+        raw.extend_from_slice(&0xABCDu64.to_be_bytes());
+        raw.extend_from_slice(&4_102_444_800u32.to_be_bytes());
+        raw.extend_from_slice(&mac);
+        assert_eq!(raw.len(), V2_LEN);
+        let tok = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+        let p = parse(&k, &tok).expect("по MAC токен правилен");
+        assert_eq!(p.plan, Plan::Free);
+        assert_eq!(Kind::of(&p), Kind::Install);
+    }
+
+    #[test]
+    fn channel_queue_hash_is_the_mac_field() {
+        // Адрес очереди канала = hex(mac-поля токена) — то же адресное правило,
+        // что у личных очередей: его обязаны повторять клиент и smoke-скрипт,
+        // иначе подписчики смотрят в одну очередь, а publish едет в другую.
+        use base64::Engine;
+        let k = keys();
+        let (rd, _) = channel_tokens(&[7u8; 32]);
+        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&rd)
+            .unwrap();
+        assert_eq!(parse(&k, &rd).unwrap().hash, hex(&raw[13..45]));
+    }
+
+    #[test]
+    fn ct_eq_requires_equal_lengths() {
+        // Сравнение по zip на коротком молчит: обрезанный tag
+        // обязан не совпасть с длинным, а не сравняться с его префиксом.
+        assert!(ct_eq(&[1, 2, 3], &[1, 2, 3]));
+        assert!(!ct_eq(&[1, 2, 3], &[1, 2, 3, 4]));
+        assert!(!ct_eq(&[1, 2, 4], &[1, 2, 3]));
     }
 }

@@ -1,0 +1,107 @@
+// Набор мутаций: rust-relay-tokens — чем сервер считает токен подлинным и
+// какой тариф в нём зашит.
+//
+// ЗАЧЕМ. Токен — единственное, на чём держатся квоты: порог «100 конвертов в
+// сутки» имеет смысл ровно настолько, насколько нельзя подделать поля, из
+// которых квота читается. Клиентскую часть менять нельзя («в коде приложения
+// можно поменять что угодно»), поэтому решение живёт здесь: версия выбирается
+// СТРОГО по длине, MAC считается по всему профилю, сравнение тега — за
+// постоянном времени, неизвестный байт тарифа не имеет превращаться в Pro,
+// канальный capability-токен признаётся каналом только по sentinel-сроку.
+//
+// Это первый набор, меряющий tokens.rs: до него в модуле с 30 пробами не было
+// ни одной мутации (ратчет плотности показывал 24 дыры, и это одна из них).
+//
+// Что осталось неизмеримым осознанно: `assert!(!scope.is_channel())` в
+// issue_v2 — это проверка автора генератора, а не формата (ручной токен с
+// канальным scope и корректным MAC покрыт мутацией «канальный scope в v2
+// принят»); ротация ключей (ServerKeys с набором) — покрытие живёт в main.rs.
+export default {
+  id: 'rust-relay-tokens',
+  crate: 'vault-relay',
+  pkg: 'vault-relay',
+  kind: 'lib',
+  file: 'vault-relay/src/tokens.rs',
+  smoke: 'cargo test -p vault-relay --lib tokens',
+  timeoutMs: 600_000,
+  mutations: [
+    { name: 'write-токен канала читается как read (publish теряет право записи)',
+      pattern: "            b'C' => Some(Scope::ChannelWrite),",
+      replacement: "            b'C' => Some(Scope::ChannelRead)," },
+    { name: 'write-токен канала перестаёт быть канальным (уходит в server_key-MAC и отвергается)',
+      pattern: "        matches!(self, Scope::ChannelRead | Scope::ChannelWrite)",
+      replacement: "        matches!(self, Scope::ChannelRead)" },
+    { name: 'простой токен живёт 30 дней (перерегистрация меняет адрес очереди)',
+      pattern: "pub const TOKEN_LIFETIME_DAYS: u32 = 3650;",
+      replacement: "pub const TOKEN_LIFETIME_DAYS: u32 = 30;" },
+    { name: 'оплаченный тариф считается безлимитным видом (Pro/Business → Test)',
+      pattern: "            Plan::Pro | Plan::Business => Kind::Paid,",
+      replacement: "            Plan::Pro | Plan::Business => Kind::Test," },
+    { name: 'пробный тариф считается установочным (безлимитный ключ получает квоту Free)',
+      pattern: "            Plan::Trial => Kind::Test,",
+      replacement: "            Plan::Trial => Kind::Install," },
+    { name: 'безлимит выдаётся любому виду токена (квоты умерли)',
+      pattern: "        matches!(self, Kind::Test)",
+      replacement: "        true" },
+    { name: 'байт Pro читается как Trial (оплаченная квота превращается в безлимит)',
+      pattern: "            2 => Plan::Pro,",
+      replacement: "            2 => Plan::Trial," },
+    { name: 'неизвестный байт тарифа получает Pro (fail-open по деньгам)',
+      pattern: "            _ => Plan::Free,",
+      replacement: "            _ => Plan::Pro," },
+    { name: 'Pro сериализуется байтом Trial (выданный токен читается другим тарифом)',
+      pattern: "            Plan::Pro => 2,",
+      replacement: "            Plan::Pro => 1," },
+    { name: 'версия берётся не по длине (63-байтовый платный токен едет в v1-ветку)',
+      pattern: "    if raw.len() == V1_LEN {",
+      replacement: "    if true {" },
+    { name: 'v2-ветка закрыта (платные токены перестают читаться вовсе)',
+      pattern: "    } else if raw.len() == V2_LEN {",
+      replacement: "    } else if false {" },
+    { name: 'sentinel-срок канала не проверяется (подделка адреса очереди без broadcast-ключа)',
+      pattern: "        if expiry != u32::MAX {",
+      replacement: "        if false {" },
+    { name: 'адрес очереди канала берётся не из mac-поля (клиент и сервер смотрят в разные очереди)',
+      pattern: "            hash: hex(&raw[13..45]),",
+      replacement: "            hash: hex(&raw[..32])," },
+    { name: 'канальный scope в v2 разрешён (capability-токен едет в платную ветку)',
+      pattern: "    // v2 — только relay (r/w); канальный scope в v2 запрещён (design §2.1).\n    if scope.is_channel() {",
+      replacement: "    // v2 — только relay (r/w); канальный scope в v2 запрещён (design §2.1).\n    if false {" },
+    { name: 'версия v2 не закреплена (raw[9] = 3 проходит как валидный профиль)',
+      pattern: "    if raw[9] != 2 {",
+      replacement: "    if false {" },
+    { name: 'сравнение MAC не смотрит на длину (обрезанный тег совпадает с префиксом)',
+      pattern: "    if a.len() != b.len() {",
+      replacement: "    if false {" },
+    { name: 'сравнение MAC вместо xor складывает побитово И (чужие подписи проходят)',
+      pattern: "        acc |= x ^ y;",
+      replacement: "    acc |= x & y;" },
+    { name: 'v1: scope вне MAC (read превращается в write правкой одного байта)',
+      pattern: "                mac.update(&[scope.to_byte()]);\n                mac.update(&expiry.to_be_bytes());",
+      replacement: "                mac.update(&expiry.to_be_bytes());" },
+    { name: 'v1: срок вне MAC (протухший токен оживает правкой байта)',
+      pattern: "                mac.update(&expiry.to_be_bytes());",
+      replacement: "" },
+    { name: 'v2: scope вне MAC (право чтения становится правом записи)',
+      pattern: "                mac.update(&[scope.to_byte()]);\n                mac.update(&[2u8]);",
+      replacement: "                mac.update(&[2u8]);" },
+    { name: 'v2: байт тарифа вне MAC (Pro ↔ Business на одном байте)',
+      pattern: "                mac.update(&[plan_raw]);",
+      replacement: "" },
+    { name: 'v2: подписка вне MAC (чужую подписку можно присвоить)',
+      pattern: "                mac.update(&sub.to_be_bytes());",
+      replacement: "" },
+    { name: 'v2: dev_nonce вне MAC (уникальность устройства не защищена)',
+      pattern: "                mac.update(&dev_nonce.to_be_bytes());",
+      replacement: "" },
+    { name: 'v2: оплаченный период вне MAC (402-гейт обходится правкой даты)',
+      pattern: "                mac.update(&paid_until.to_be_bytes());",
+      replacement: "" },
+    { name: 'привязка write-токена к очереди снята (публикация в чужой канал)',
+      pattern: "            && self.key_id == read_tok.key_id",
+      replacement: "" },
+    { name: 'право publish больше не отличается от права чтения',
+      pattern: "        self.scope == Scope::ChannelWrite && read_tok.scope == Scope::ChannelRead",
+      replacement: "        read_tok.scope == Scope::ChannelRead" },
+  ],
+};
