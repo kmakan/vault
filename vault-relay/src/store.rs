@@ -176,20 +176,40 @@ mod tests {
         // TTL обязан фильтровать на месте во ВСЕХ точках чтения: drain,
         // peek и len (hello-кадр WS). Иначе клиент год спустя получит
         // просроченный конверт, а счётчик будет обещать то, чего нет.
+        //
+        // ПОЧЕМУ ТРИ ОТДЕЛЬНЫЕ ОЧЕРЕДИ (25.10, первая версия теста на этом и
+        // провалилась): retain у peek и drain удаляет просрочку ИЗ ОБЩЕЙ
+        // очереди, поэтому проверка «drain не отдал мёртвый» после peek
+        // меряет уже НЕ drain — мутация «убрать retain в drain» выживала на
+        // зелёном тесте. Каждая точка чтения получает свой ключ.
         let s = Store::new();
         let now = now_unix();
-        s.push("e", alive("live", now), 10);
-        s.push("e", env("dead", now, now - 10), 10);
-        assert_eq!(s.len("e"), 1, "len посчитал просроченный конверт");
-        let peeked = s.peek("e", 0).expect("очередь есть");
-        assert_eq!(peeked.len(), 1, "peek отдал просроченный конверт");
-        let drained = s.drain("e").expect("очередь есть");
-        assert_eq!(drained.len(), 1, "drain отдал просроченный конверт");
-        assert_eq!(drained[0].id, "live");
+
+        s.push("l", alive("live", now), 10);
+        s.push("l", env("dead", now, now - 10), 10);
+        assert_eq!(s.len("l"), 1, "len посчитал просроченный конверт");
+
+        s.push("p", alive("live", now), 10);
+        s.push("p", env("dead", now, now - 10), 10);
+        let peeked = s.peek("p", 0).expect("очередь есть");
+        assert_eq!(
+            peeked.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["live"],
+            "peek отдал просроченный конверт"
+        );
+
+        s.push("d", alive("live", now), 10);
+        s.push("d", env("dead", now, now - 10), 10);
+        let drained = s.drain("d").expect("очередь есть");
+        assert_eq!(
+            drained.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["live"],
+            "drain отдал просроченный конверт"
+        );
         // Очередь существует, но пуста — это Some([]), а не None: клиент по
         // None идёт регистрироваться заново, хотя очередь у него уже есть.
         assert!(
-            matches!(s.drain("e"), Some(v) if v.is_empty()),
+            matches!(s.drain("d"), Some(v) if v.is_empty()),
             "пустая очередь вернулась как None"
         );
     }
@@ -210,6 +230,11 @@ mod tests {
         );
         // peek не забирает: очередь канала общая (fan-out на read-стороне).
         assert_eq!(s.len("c"), 2, "peek забрал конверты из общей очереди");
+        assert_eq!(
+            s.peek("c", now - 5).map(|v| v.len()),
+            Some(1),
+            "второй подписчик канала ничего не получил — peek изымает очередь"
+        );
     }
 
     #[test]

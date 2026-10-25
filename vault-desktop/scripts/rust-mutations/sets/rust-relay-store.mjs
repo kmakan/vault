@@ -45,7 +45,10 @@ export default {
       pattern: '            return Some(Vec::new());',
       replacement: '            return None;' },
     { name: 'peek изымает конверты (второй подписчик канала ничего не получает)',
+      // Вариант `.drain(..)` отвергается компилятором (замер 25.10) — а
+      // «пойманный компилятором» это не покрытие, поэтому мутация наблюдает
+      // то же свойство читаемым способом: собрать и очистить очередь.
       pattern: '        Some(deque.iter().filter(|e| e.ts > since).cloned().collect())',
-      replacement: '        Some(deque.drain(..).filter(|e| e.ts > since).cloned().collect())' },
+      replacement: '        let out: Vec<Envelope> = deque.iter().filter(|e| e.ts > since).cloned().collect();\n        deque.clear();\n        Some(out)' },
   ],
 };
