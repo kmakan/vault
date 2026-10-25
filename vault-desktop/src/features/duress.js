@@ -141,11 +141,20 @@ export async function onLockPanic(deps) {
 
 // SOS: скрытое письмо выбранным контактам. НЕ сохраняется в чат получателя:
 // тип sos обрабатывается получателем отдельно (push), в историю не пишется.
+//
+// Тишина — только для человека: никаких тостов и экранов ошибки, уведомление
+// об отказе выдало бы сигнал под принуждением. Для журнала тишины быть не
+// должно: «SOS не ушёл» обязан отличаться от «SOS ушёл» хотя бы в логе
+// (25.10, диагностика на устройстве: раньше здесь писалось «sent to N» даже
+// когда не ушло ни одного).
 export async function sendDuressSos(deps) {
   try {
     const cfg = await invoke('duress_get_config');
     const rcpts = (cfg.sos_recipients || []).filter(Boolean);
-    if (!rcpts.length) return;
+    if (!rcpts.length) {
+      console.error('[duress] SOS НЕ ОТПРАВЛЕН: получатели не настроены (замок, скорее всего, не настраивался)');
+      return;
+    }
     // Гео: если включено — координаты через WebView geolocation
     // (на Android нативный запрос разрешения идёт при включении флага).
     let coords = '';
@@ -182,11 +191,14 @@ export async function sendDuressSos(deps) {
         }
       } catch (e) { console.warn('[duress] loadPeerKeys failed:', e); }
     }
+    let sent = 0;
+    const failed = [];
     for (const rcpt of rcpts) {
       try {
         const pk = identityStore.state.peerKeys && identityStore.state.peerKeys[rcpt];
         if (!pk) {
           console.warn('[duress] SOS: no peer key for', rcpt, '— skip');
+          failed.push(`${rcpt}: нет ключа получателя`);
           continue;
         }
         crypto.setPeerPublicKey(pk, identityStore.state.peerPqKeys && identityStore.state.peerPqKeys[rcpt]);
@@ -203,11 +215,22 @@ export async function sendDuressSos(deps) {
         if (!envelope) throw new Error('sos: Rust-сборка конверта недоступна');
         const content = await crypto.encryptVault(envelope);
         await api.sendEmail('local', { to: rcpt, subject: '', body: content });
+        sent += 1;
       } catch (e) {
         console.warn('[duress] SOS to', rcpt, 'failed:', e);
+        failed.push(`${rcpt}: ${e && e.message ? e.message : e}`);
       }
     }
-    console.log('[duress] SOS sent to', rcpts.length, 'recipients');
+    // Учёт отправок: «отправлено N» раньше печаталось всегда, включая случай,
+    // когда каждый получатель отвалился. Теперь строка об успехе пишется только
+    // когда ушло хотя бы одно письмо, и говорит, сколько не ушло.
+    if (sent === 0) {
+      console.error(`[duress] SOS не дошёл ни до одного из ${rcpts.length}: ${failed.join('; ')}`);
+    } else if (failed.length) {
+      console.warn(`[duress] SOS ушёл ${sent} из ${rcpts.length}, не ушёл: ${failed.join('; ')}`);
+    } else {
+      console.log('[duress] SOS sent to', rcpts.length, 'recipients');
+    }
   } catch (e) {
     console.warn('[duress] sendSos failed:', e);
   } finally {

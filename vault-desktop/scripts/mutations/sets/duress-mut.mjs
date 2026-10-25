@@ -43,5 +43,21 @@ export default {
     { name: "SOS уходит с плейсхолдером {coords} вместо координат",
       pattern: "    let text = rawText.replace('{coords}', coords);",
       replacement: "    let text = rawText;" },
+    // Учёт доставки (25.10, диагностика на устройстве): строка «sent to N»
+    // печаталась ВСЕГДА, включая проход, где не ушло ни одного письма. Пока
+    // журнал врал, тихий отказ SOS был неотличим от работающего сигнала —
+    // поэтому эти четыре мутации бьют по самому факту учёта, а не по тексту.
+    { name: "SOS без получателей пишется в журнал как успех",
+      pattern: "      console.error('[duress] SOS НЕ ОТПРАВЛЕН: получатели не настроены (замок, скорее всего, не настраивался)');",
+      replacement: "      console.log('[duress] SOS sent (no recipients configured)');" },
+    { name: "успешная отправка не засчитывается",
+      pattern: "        sent += 1;",
+      replacement: "        sent += 0;" },
+    { name: "нулевая доставка не считается отказом",
+      pattern: "    if (sent === 0) {",
+      replacement: "    if (false) {" },
+    { name: "частичная доставка выдаётся за полную",
+      pattern: "    } else if (failed.length) {",
+      replacement: "    } else if (false) {" },
   ],
 };

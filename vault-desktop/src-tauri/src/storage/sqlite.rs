@@ -15,6 +15,13 @@ pub struct Storage {
 /// Per-HOME isolation works because data_local_dir() resolves
 /// under the test HOME (vault-test/<acc>-home) too.
 pub(crate) fn default_db_path() -> Result<PathBuf> {
+    // Тестовый редирект проверяется ПЕРВЫМ и в проде не задаётся — поведение не
+    // меняется. Имя с префиксом VAULT_TEST_ (как VAULT_TEST_KEYS_DIR), а не
+    // VAULT_DB_FILE: такой переменной в коде нет, и если бы кто-то завёл её
+    // случайно в оболочке, НАСТОЯЩИЕ данные молча ушли бы в другой файл.
+    if let Ok(p) = std::env::var("VAULT_TEST_DB_FILE") {
+        return Ok(PathBuf::from(p));
+    }
     let home = dirs::data_local_dir().context("Cannot determine local data directory")?;
     Ok(home.join("com.vault.vault").join("vault.db"))
 }

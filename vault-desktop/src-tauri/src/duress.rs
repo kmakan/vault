@@ -28,7 +28,7 @@ pub use vault_client::vault::duress::{hash_secret, verify_secret};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DuressConfig {
     #[serde(default)]
     pub lock_enabled: bool,
@@ -204,6 +204,41 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
     }));
 }
 
+/// Текст SOS-письма: правило подстановки координат. Отделено от JNI-обёртки,
+/// чтобы жить НЕ под `cfg(target_os = "android")`: внутри обёртки правило
+/// недостижимо для проверок с хоста (ни одна правка строки там не измеряется
+/// никогда), а ошибка в нём — это письмо без текста или без места, где человек
+/// есть.
+///
+/// Текущий смысл правила (без изменений против того, что было в обёртке):
+///   * координат нет — плейсхолдер снимается;
+///   * плейсхолдер есть — подставляется на его месте;
+///   * плейсхолдера нет, но гео включено и координаты есть — они дописываются
+///     в конец через ` | `.
+///
+/// У ПРАВИЛА ЕСТЬ ВТОРАЯ КОПИЯ — `features/duress.js:166-169` (настольная
+/// ветка), и копии РАЗОШЛИСЬ: JS берёт дефолтный текст из локали, когда
+/// `sos_text` пуст (здесь остаётся пустой строка), JS меняет только ПЕРВЫЙ
+/// `{coords}` (здесь — все), и разделитель хвоста у них разный. Сведение копий
+/// — отдельный шаг (канбан), потому что дефолтный текст — решение о том, ЧТО
+/// пишет человек под принуждением.
+pub fn compose_sos_text(cfg: &DuressConfig, geo: &str) -> String {
+    if geo.is_empty() {
+        return cfg.sos_text.replace("{coords}", "");
+    }
+    if cfg.sos_text.contains("{coords}") {
+        return cfg.sos_text.replace("{coords}", geo);
+    }
+    if cfg.sos_geo {
+        return format!("{} | {}", cfg.sos_text, geo);
+    }
+    // Сюда доходят только тексты БЕЗ плейсхолдера (ветка выше его уже сняла),
+    // поэтому подстановка здесь была бы проверена на входе, который её никогда
+    // не увидит: 25.10 мутант «убрать replace» выжил ровно потому, что на
+    // достижимом входе он тождествен. Текст возвращается как есть.
+    cfg.sos_text.clone()
+}
+
 /// Тихий SOS при duress-коде: headless-отправка письма выбранным контактам
 /// (текст + координаты, если включены) без открытия UI.
 #[cfg(target_os = "android")]
@@ -218,22 +253,13 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_00024Compan
         let geo: String = env.get_string(&geo).map_err(|e| e.to_string())?.into();
         let cfg = crate::duress::load_config();
         if cfg.sos_recipients.is_empty() {
-            log::warn!("[duress] SOS: no recipients configured");
-            return Ok(());
+            // Громко: это тот случай, когда «SOS не ушёл» неотличим от «SOS ушёл».
+            // Ни один экран об отказе не сообщает, а человек под принуждением
+            // считает, что сигнал отправлен.
+            log::error!("[duress] SOS НЕ ОТПРАВЛЕН: получатели не настроены (замок, скорее всего, не настраивался)");
+            return Err("sos: no recipients".into());
         }
-        // Гео: {coords} в тексте подставляется; если плейсхолдера нет,
-        // а гео включено (sos_geo) и пришло — координаты дописываются в конец.
-        let text = if geo.is_empty() {
-            cfg.sos_text.replace("{coords}", "")
-        } else {
-            if cfg.sos_text.contains("{coords}") {
-                cfg.sos_text.replace("{coords}", &geo)
-            } else if cfg.sos_geo {
-                format!("{} | {}", cfg.sos_text, geo)
-            } else {
-                cfg.sos_text.replace("{coords}", "")
-            }
-        };
+        let text = crate::duress::compose_sos_text(&cfg, &geo);
         crate::duress::send_sos_headless(&cfg.sos_recipients, &text);
         Ok(())
     }));
@@ -276,9 +302,15 @@ pub fn clear_prefs_android() -> Result<(), String> {
     }
 }
 
-/// Headless SOS-отправка: plaintext-письмо с маркером [VAULT-SOS] (скорость
-/// важнее конфиденциальности — телефон у посторонних). Монитор получателя
-/// покажет системное уведомление по маркеру, JS-клиент — как обычное письмо.
+/// Headless SOS-отправка: письмо выбранным контактам без открытия UI.
+///
+/// Форма (проверена по коду, 25.10): конверт `{"vault":1,"id":"<ms>sos",
+/// "type":"sos","text":…,"ts":…}` шифруется `crypto::encrypt_vault_cmd`, ТЕМА
+/// письма пустая (`send_email(rcpt, "", cipher)`). Маркера `[VAULT-SOS]` в
+/// открытом тексте НИКОГДА не было — получатель распознаёт SOS по
+/// `env.type === "sos"` уже после расшифровки. Если ключ получателя не найден,
+/// шифрование идёт на производном от МОЕГО публичного ключа — письмо читает
+/// только я (для «доказательства, что сигнал был»), а не адресат.
 #[cfg(target_os = "android")]
 pub fn send_sos_headless(recipients: &[String], text: &str) {
     let recipients: Vec<String> = recipients.to_vec();
@@ -288,9 +320,190 @@ pub fn send_sos_headless(recipients: &[String], text: &str) {
             crate::service_monitor::send_sos_mails(&recipients, &text)
         }));
         match r {
-            Ok(Ok(())) => log::info!("[duress] SOS sent to {} recipients", recipients.len()),
+            Ok(Ok(())) => log::info!(
+                "[duress] SOS: хотя бы одному из {} получателей отправлено",
+                recipients.len()
+            ),
             Ok(Err(e)) => log::error!("[duress] SOS send failed: {e}"),
             Err(_) => log::error!("[duress] SOS send panicked"),
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Mutex;
+
+    static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+    /// Env — процесс-глобальный: такие тесты идут по одному, иначе параллельные
+    /// cargo test перебивают друг друга редиректами.
+    static TMP_LOCK: Mutex<()> = Mutex::new(());
+
+    /// `load_config`/`save_config` идут через `Storage::open(None)`, а тот
+    /// захватывает keys-guard — поэтому редиректим ОБЕ переменные: и файл БД, и
+    /// каталог ключей. Настоящий `~/.local/share/com.vault.vault/vault.db` и
+    /// `~/.vault/keys` не открываются вообще.
+    fn with_tmp_db<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = TMP_LOCK.lock().unwrap();
+        let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("duress_{}-{}", std::process::id(), seq));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("vault.db");
+        crate::set_env_safe("VAULT_TEST_DB_FILE", &db);
+        crate::set_env_safe("VAULT_TEST_KEYS_DIR", &dir);
+        // Уборка и снятие редиректов — даже когда внутри аSSERTION FAILED:
+        // брошенная VAULT_TEST_DB_FILE увела бы остальные тесты в чужой файл.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{}", db.display(), suffix));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("VAULT_TEST_DB_FILE");
+        std::env::remove_var("VAULT_TEST_KEYS_DIR");
+        match r {
+            Ok(v) => v,
+            Err(_) => panic!("паника внутри duress-теста"),
+        }
+    }
+
+    fn raw_kv(account: &str, key: &str) -> Option<String> {
+        crate::storage::sqlite::Storage::open(None)
+            .ok()
+            .and_then(|s| s.kv_get(account, key).ok().flatten())
+    }
+
+    fn cfg(lock_hash: &str, text: &str) -> DuressConfig {
+        DuressConfig {
+            lock_enabled: true,
+            lock_hash: lock_hash.into(),
+            panic_hash: "aa:bb".into(),
+            duress_hash: "cc:dd".into(),
+            sos_recipients: vec!["a@x".into(), "b@x".into()],
+            sos_text: text.into(),
+            sos_geo: true,
+            bio_enabled: true,
+        }
+    }
+
+    #[test]
+    fn duress_config_round_trips_through_the_anon_row() {
+        with_tmp_db(|| {
+            let written = cfg("11:22", "Телефон не у меня");
+            save_config(&written).expect("save_config");
+            // Запись лежит именно под ('anon','duress-config') — иначе Kotlin-замок
+            // и JS-фронт читают другую строку.
+            let row = raw_kv("anon", "duress-config").expect("строка конфига не найдена");
+            assert!(row.contains("11:22"), "хэш замка не в строке: {row}");
+            let read = load_config();
+            assert_eq!(read.lock_enabled, written.lock_enabled);
+            assert_eq!(read.lock_hash, written.lock_hash);
+            assert_eq!(read.panic_hash, written.panic_hash);
+            assert_eq!(read.duress_hash, written.duress_hash);
+            assert_eq!(read.sos_recipients, written.sos_recipients);
+            assert_eq!(read.sos_text, written.sos_text);
+            assert_eq!(read.sos_geo, written.sos_geo);
+            assert_eq!(read.bio_enabled, written.bio_enabled);
+        });
+    }
+
+    #[test]
+    fn second_save_replaces_the_first_config_whole() {
+        with_tmp_db(|| {
+            save_config(&cfg("11:22", "первый текст")).expect("save 1");
+            let mut changed = cfg("99:88", "второй текст");
+            changed.sos_recipients = vec!["only@x".into()];
+            changed.sos_geo = false;
+            save_config(&changed).expect("save 2");
+            let read = load_config();
+            assert_eq!(read.lock_hash, "99:88");
+            assert_eq!(read.sos_text, "второй текст");
+            assert_eq!(read.sos_recipients, vec!["only@x".to_string()]);
+            assert_eq!(read.sos_geo, false);
+        });
+    }
+
+    #[test]
+    fn absent_config_row_reads_as_disabled_lock() {
+        with_tmp_db(|| {
+            // Строки нет вовсе: замок выключен, получателей нет, текст пустой.
+            assert_eq!(load_config(), DuressConfig::default());
+            assert!(!load_config().lock_enabled);
+        });
+    }
+
+    /// ХАРАКТЕРИСТИЧЕСКИЙ тест (не одобрение!). Сейчас испорченная строка
+    /// конфига читается как «замка нет»: `from_str(...).ok().unwrap_or_default()`.
+    /// Fail-open на аварийном канале означает, что человек думает, будто замок с
+    /// SOS настроен, а приложение стартует открытым и без получателей.
+    /// Перевод в fail-closed — РЕШЕНИЕ ВЛАДЕЛЬЦА (что делать, если конфиг не
+    /// читается: открыть экран настройки или сохранить прошлый), поэтому здесь
+    /// зафиксировано ФАКТИЧЕСКОЕ поведение, а не желаемое.
+    #[test]
+    fn broken_config_json_currently_fails_open_to_default() {
+        with_tmp_db(|| {
+            let s = crate::storage::sqlite::Storage::open(None).expect("open");
+            s.kv_set("anon", "duress-config", "{ это не json")
+                .expect("kv_set");
+            assert_eq!(load_config(), DuressConfig::default());
+        });
+    }
+
+    #[test]
+    fn partial_config_json_fills_absent_fields_with_defaults() {
+        with_tmp_db(|| {
+            let s = crate::storage::sqlite::Storage::open(None).expect("open");
+            s.kv_set("anon", "duress-config", r#"{"lock_enabled":true,"lock_hash":"11:22"}"#)
+                .expect("kv_set");
+            let read = load_config();
+            assert!(read.lock_enabled);
+            assert_eq!(read.lock_hash, "11:22");
+            // Каждый отсутствующий ключ подставляется дефолтом (по `#[serde(default)]`).
+            assert_eq!(read.panic_hash, "");
+            assert_eq!(read.duress_hash, "");
+            assert!(read.sos_recipients.is_empty());
+            assert_eq!(read.sos_text, "");
+            assert_eq!(read.sos_geo, false);
+            assert_eq!(read.bio_enabled, false);
+        });
+    }
+
+    #[test]
+    fn sos_text_drops_the_placeholder_without_coordinates() {
+        let c = cfg("11:22", "Телефон не у меня{coords}");
+        assert_eq!(compose_sos_text(&c, ""), "Телефон не у меня");
+    }
+
+    #[test]
+    fn sos_text_puts_coordinates_at_the_placeholder() {
+        let c = cfg("11:22", "Телефон не у меня{coords}, помоги");
+        assert_eq!(
+            compose_sos_text(&c, ": 55.75, 37.61"),
+            "Телефон не у меня: 55.75, 37.61, помоги"
+        );
+    }
+
+    #[test]
+    fn sos_text_appends_coordinates_when_flag_is_on_and_placeholder_is_absent() {
+        let mut c = cfg("11:22", "Меня заставляют открыть приложение");
+        c.sos_geo = true;
+        assert_eq!(
+            compose_sos_text(&c, "координаты: 55.75, 37.61"),
+            "Меня заставляют открыть приложение | координаты: 55.75, 37.61"
+        );
+    }
+
+    #[test]
+    fn sos_text_keeps_the_text_alone_when_geo_flag_is_off() {
+        let mut c = cfg("11:22", "Меня заставляют открыть приложение");
+        c.sos_geo = false;
+        assert_eq!(compose_sos_text(&c, "координаты: 1, 2"), c.sos_text);
+    }
+
+    #[test]
+    fn sos_text_without_placeholder_and_without_coordinates_stays_untouched() {
+        let c = cfg("11:22", "Просто текст");
+        assert_eq!(compose_sos_text(&c, ""), "Просто текст");
+    }
 }

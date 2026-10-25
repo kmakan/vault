@@ -1421,19 +1421,32 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
 /// контекста. Тело
 /// Vault-конверт type:"sos", как sendDuressSos JS — получатели видят сообщение
 /// в чате от нас + системное уведомление от своего монитора.
+///
+/// Возвращает Err, если НЕ отправлено ни одного письма: тихий `Ok(())`
+/// при сломанной цепочке (нет keypair, нет кредов, зашифрование не удалось)
+/// делал аварийный канал невидимо мёртвым. Вызывается с обычной std-нити
+/// (`duress::send_sos_headless`), поэтому `block_on` здесь безопасен.
 pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
     let recipients: Vec<String> = recipients.to_vec();
     let text = text.to_string();
-    let handle = runtime().spawn(async move {
+    runtime().block_on(async move {
         let priv_key = match crate::key_store::load_keypair() {
             Ok(Some(k)) => k.private_key,
-            _ => return,
+            Ok(None) => {
+                return Err(
+                    "SOS не отправлен: нет моей пары ключей (аккаунт не восстановлен на этом устройстве)"
+                        .into(),
+                )
+            }
+            Err(e) => return Err(format!("SOS не отправлен: не удалось прочитать мою пару ключей: {e}")),
         };
         let peers = crate::key_store::load_peer_keys().unwrap_or_default();
         let Some(creds) = crate::credential_store::load_credentials().ok().flatten() else {
-            log::warn!("[duress] SOS: no credentials");
-            return;
+            return Err("SOS не отправлен: нет сохранённых почтовых кредов".into());
         };
+        if recipients.is_empty() {
+            return Err("SOS не отправлен: список получателей пуст".into());
+        }
         let mut client = EmailClient::new(EmailConfig {
             email: creds.email.clone(),
             password: creds.password.clone(),
@@ -1442,6 +1455,8 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
             smtp_server: creds.smtp_server,
             smtp_port: creds.smtp_port,
         });
+        let mut sent = 0usize;
+        let mut failures: Vec<String> = Vec::new();
         for rcpt in &recipients {
             let peer_key = peer_key_for(&peers, rcpt);
             let envelope = serde_json::json!({
@@ -1459,15 +1474,36 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
                 Ok(c) => c,
                 Err(e) => {
                     log::warn!("[duress] SOS encrypt failed for {rcpt}: {e}");
+                    failures.push(format!("{rcpt}: зашифрование не удалось ({e})"));
                     continue;
                 }
             };
             match client.send_email(rcpt.as_str(), "", &cipher).await {
-                Ok(()) => log::info!("[duress] SOS sent to {rcpt}"),
-                Err(e) => log::warn!("[duress] SOS send failed for {rcpt}: {e}"),
+                Ok(()) => {
+                    log::info!("[duress] SOS sent to {rcpt}");
+                    sent += 1;
+                }
+                Err(e) => {
+                    log::warn!("[duress] SOS send failed for {rcpt}: {e}");
+                    failures.push(format!("{rcpt}: отправка не удалась ({e})"));
+                }
             }
         }
-    });
-    let _ = handle;
-    Ok(())
+        if sent == 0 {
+            return Err(format!(
+                "SOS не дошёл ни до одного получателя из {} ({}): {}",
+                recipients.len(),
+                failures.len(),
+                failures.join("; ")
+            ));
+        }
+        if !failures.is_empty() {
+            log::warn!(
+                "[duress] SOS дошёл до {sent}, не дошёл до {}: {}",
+                failures.len(),
+                failures.join("; ")
+            );
+        }
+        Ok(())
+    })
 }

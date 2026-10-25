@@ -119,6 +119,20 @@ function check(name, cond, extra) {
   else { fail++; console.log('  ✗ ' + name + (extra !== undefined ? ' — ' + JSON.stringify(extra) : '')); }
 }
 
+// Логи SOS-пути — часть проверки. Тихий отказ ровно тем и плох, что его нигде
+// не видно: «не ушло ни одного письма» обязано отличаться от «ушло», и здесь
+// это меряет смоук, а не человек, всматривающийся в logcat.
+const logs = [];
+for (const level of ['log', 'warn', 'error']) {
+  const orig = console[level].bind(console);
+  console[level] = (...a) => {
+    const line = a.map((x) => (x && x.message ? x.message : String(x))).join(' ');
+    if (line.includes('[duress]')) logs.push(level + ': ' + line);
+    orig(...a);
+  };
+}
+const duressLogged = (re) => logs.some((l) => re.test(l));
+
 // ── Стенд ──────────────────────────────────────────────────────────────────
 const state = { locked: false, unlockedThisSession: false, pending: false, loggedOut: 0 };
 function makeDeps(over = {}) {
@@ -228,6 +242,9 @@ console.log('4. onLockDuress: декой-режим + отправка SOS');
     body.vault === 1 && body.type === 'sos' && body.text.startsWith('SOS')
     && !body.text.includes('{coords}') && body.name === 'Максим', body);
   check('pending сброшен после отправки', state.pending === false);
+  // Учёт-отправки: успешный проход обязан быть записан как успех и НЕ как отказ.
+  check('успех записан в лог, ложного отказа нет',
+    duressLogged(/^log: \[duress\] SOS sent to 1/) && !duressLogged(/не дошёл/), logs.slice(-3));
 }
 
 // ── 5. SOS без peer-ключа — получатель пропущен, не роняем остальных ────
@@ -238,6 +255,34 @@ console.log('5. sendDuressSos: без peer-ключа получатель пр�
   await sendDuressSos(makeDeps());
   check('письмо не отправлено (нет ключа)', apiMock.sends.length === 0, apiMock.sends);
   check('pending сброшен даже без успеха', state.pending === false);
+  // До 25.10 здесь печаталось «SOS sent to 1 recipients» при нулевой отправке.
+  check('нулевая доставка записана как ошибка, а не как отправка',
+    duressLogged(/^error: \[duress\] SOS не дошёл ни до одного из 1/), logs.slice(-3));
+}
+
+// ── 5b. Получатели не настроены: громко в журнал, человеку — по-прежнему тишина ──
+console.log('5b. sendDuressSos: получатели не настроены');
+{
+  resetWorld({ sos_recipients: [], sos_text: 'SOS' });
+  const before = logs.length;
+  await sendDuressSos(makeDeps());
+  check('ни одного письма не отправлено', apiMock.sends.length === 0, apiMock.sends);
+  check('отсутствие получателей записано как ошибка',
+    logs.slice(before).some((l) => /^error: .*НЕ ОТПРАВЛЕН: получатели не настроены/.test(l)),
+    logs.slice(before));
+  check('человек ничего не увидел: без тоста и без смены экрана', state.pending === false && !state.locked);
+}
+
+// ── 5c. Частичная доставка: сколько ушло, а сколько — нет ────────────────
+console.log('5c. sendDuressSos: один получатель без ключа, второй доставлен');
+{
+  resetWorld({ sos_recipients: ['peer@x.ru', 'other@x.ru'], sos_text: 'SOS' });
+  identityStore.state.peerKeys = { 'other@x.ru': 'PUB' };
+  await sendDuressSos(makeDeps());
+  check('доставка состоялась только туда, где был ключ',
+    apiMock.sends.length === 1 && apiMock.sends[0].payload.to === 'other@x.ru', apiMock.sends);
+  check('частичная записана как частичная, а не как полный успех',
+    duressLogged(/^warn: \[duress\] SOS ушёл 1 из 2, не ушёл: peer@x\.ru/), logs.slice(-3));
 }
 
 // ── 6. Panic-PIN: данные стёрты, выход на login ─────────────────────────
