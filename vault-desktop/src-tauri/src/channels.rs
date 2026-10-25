@@ -414,6 +414,60 @@ mod tests {
         add_known_subscriber(&ch.id, "").unwrap();
         assert_eq!(load_channels().unwrap()[&ch.id].known_subscribers.len(), 1);
     }
+    #[test]
+    fn patch_cannot_erase_owner_identity_or_install_a_broken_key() {
+        let _path = redirect("patch");
+        let ch = create_channel("News", "a@x.y", "fpr1", "about").unwrap();
+        // Пустой owner_fpr — не «новое значение», а «не трогать»: иначе
+        // случайная правка стирает стабильную идентичность владельца, по
+        // которой проверяются hello-подписчики.
+        let upd = update_channel(
+            &ch.id,
+            &ChannelPatch {
+                owner_fpr: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(upd.owner_fpr, "fpr1", "пустой отпечаток не перезаписывает владельца");
+        // Ключ канала обязан остаться форматом: битый ключ = ни один пост не
+        // расшифровывается, а канал выглядит живым.
+        assert!(
+            update_channel(
+                &ch.id,
+                &ChannelPatch {
+                    key: Some("abc".into()),
+                    ..Default::default()
+                }
+            )
+            .is_err(),
+            "короткий ключ не принимается"
+        );
+        // Алфавит ядро здесь СОЗНАТЕЛЬНО не проверяет: `is_valid_channel_key`
+        // меряет только длину, потому что ключ приходит из ссылки/QR, и отказ
+        // «не та буква» превратил бы несовместимость формата в «ссылка не
+        // работает». Проба крепит эту границу: если правило ядра изменится,
+        // здесь это будет видно как упавший тест, а не как тихо разъехавшиеся
+        // валидаторы (мостовой `channel_tokens_cmd` hex требует).
+        assert!(
+            update_channel(
+                &ch.id,
+                &ChannelPatch {
+                    key: Some("z".repeat(64)),
+                    ..Default::default()
+                }
+            )
+            .is_ok(),
+            "64 символа принимаются независимо от алфавита"
+        );
+        // Несуществующий канал: удалением владеть нельзя молча — иначе
+        // duress-wipe отчитается успехом, пропустив канал.
+        assert!(
+            delete_channel("chn_deadbeefdead").is_err(),
+            "нет такого канала — ошибка, а не успех"
+        );
+    }
+
     // ── Общие тест-векторы клиента и релея ───────────────────────────
     //
     // Эталон зафиксирован сверкой с ~/vault-relay-src/src/tokens.rs
