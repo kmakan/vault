@@ -181,6 +181,10 @@ mod tests {
             "encrypted",
         );
         assert_eq!(msg.envelope.in_reply_to, Some("msg-1".to_string()));
+        // Версия закрепляется в КАЖДОМ конструкторе: набор мутаций меряет эту
+        // строку отдельно от new/receipt, иначе «1 не значит» живёт в ветке,
+        // куда тест не заглядывает.
+        assert_eq!(msg.envelope.version, "1");
     }
 
     #[test]
@@ -192,6 +196,7 @@ mod tests {
             MessageStatus::Delivered,
         );
         assert_eq!(msg.envelope.msg_type, VaultMsgType::Receipt);
+        assert_eq!(msg.envelope.version, "1");
     }
 
     #[test]

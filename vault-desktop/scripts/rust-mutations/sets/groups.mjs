@@ -20,9 +20,19 @@ export default {
     { name: 'роль не повышается (Member остаётся Member)',
       pattern: '                        GroupRole::Member => GroupRole::Admin,',
       replacement: '                        GroupRole::Member => GroupRole::Member,' },
-    { name: 'модератор становится админом (повышение прав чужого участника)',
-      pattern: '                        GroupRole::Moderator => GroupRole::Member,',
-      replacement: '                        GroupRole::Moderator => GroupRole::Admin,' },
+    // Роль меняют ДВЕ функции (`promote_member` и `demote_member`), и ветка
+    // legacy-Moderator продублирована в обеих. Без контекста `src.replace`
+    // брал первую: вторая жила вообще без проверки, как и вся понижалка Admin
+    // → Member (тесты на неё добавлены 25.10, t_e1dbc7c7).
+    { name: 'модератор становится админом при повышении (права чужого участника)',
+      pattern: '                        GroupRole::Admin => GroupRole::Admin,\n                        // Legacy role: a stored Moderator becomes a plain member.\n                        GroupRole::Moderator => GroupRole::Member,',
+      replacement: '                        GroupRole::Admin => GroupRole::Admin,\n                        // Legacy role: a stored Moderator becomes a plain member.\n                        GroupRole::Moderator => GroupRole::Admin,' },
+    { name: 'модератор становится админом при понижении (та же ветка во второй функции)',
+      pattern: '                        GroupRole::Member => GroupRole::Member,\n                        // Legacy role: a stored Moderator becomes a plain member.\n                        GroupRole::Moderator => GroupRole::Member,',
+      replacement: '                        GroupRole::Member => GroupRole::Member,\n                        // Legacy role: a stored Moderator becomes a plain member.\n                        GroupRole::Moderator => GroupRole::Admin,' },
+    { name: 'понижение не понижает: админ остаётся админом',
+      pattern: '                        GroupRole::Admin => GroupRole::Member,',
+      replacement: '                        GroupRole::Admin => GroupRole::Admin,' },
     { name: 'блокировка добавляется дважды',
       pattern: '            if group\n                .blocked\n                .iter()\n                .any(|e| crate::vault::identity::same_address(e, email))\n            {\n                return Err("User already blocked".into());\n            }',
       replacement: '            if false {\n                return Err("User already blocked".into());\n            }' },

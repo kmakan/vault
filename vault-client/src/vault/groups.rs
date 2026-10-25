@@ -453,6 +453,29 @@ mod tests {
         assert!(matches!(m.role, GroupRole::Member), "legacy Moderator → Member, не Admin");
     }
 
+    /// То же правило на обратной ветке: при понижении legacy-Moderator обязан
+    /// стать обычным участником. Веток две (`promote_member` и `demote_member`),
+    /// и паттерн мутации без контекста матчил первую — вторая жила без проверки
+    /// (25.10, разделка амбивалентных паттернов — t_e1dbc7c7).
+    #[test]
+    fn test_demote_legacy_moderator_becomes_member() {
+        let mut mgr = test_mgr();
+        let group = mgr.create_group("Test", "admin@test.com").unwrap();
+        mgr.add_member(&group.id, "user@test.com").unwrap();
+        mgr.groups
+            .get_mut(&group.id)
+            .unwrap()
+            .members
+            .iter_mut()
+            .find(|m| m.email == "user@test.com")
+            .unwrap()
+            .role = GroupRole::Moderator;
+        mgr.demote_member(&group.id, "user@test.com").unwrap();
+        let g = mgr.get_group(&group.id).unwrap();
+        let m = g.members.iter().find(|m| m.email == "user@test.com").unwrap();
+        assert!(matches!(m.role, GroupRole::Member), "legacy Moderator → Member, не Admin");
+    }
+
     /// Новый участник НЕ имеет общего ключа группы: ключ он получит отдельным
     /// сообщением. Флаг `key_shared` означает «ключ уже отдан», и по нему
     /// приложение решает, можно ли шифровать ему сообщение. Если флаг сразу

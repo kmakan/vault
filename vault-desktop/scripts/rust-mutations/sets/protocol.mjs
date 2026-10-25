@@ -40,8 +40,19 @@ export default {
     { name: 'маркер шифрования не пишется (письмо не распознается как наше)',
       pattern: '            "X-Vault-Encrypted: 1\\nX-Vault-Type: {}\\nX-Vault-ID: {}\\nX-Vault-From: {}\\nX-Vault-Reply-To: {}\\n\\n{}\\n{}",',
       replacement: '            "X-Vault-Type: {}\\nX-Vault-ID: {}\\nX-Vault-From: {}\\nX-Vault-Reply-To: {}\\n\\n{}\\n{}",' },
-    { name: 'версия конверта не закрепляется (1 не значит)',
-      pattern: '                version: "1".to_string(),',
-      replacement: '                version: "2".to_string(),' },
+    // Версия конверта пишется в ТРЁХ конструкторах (new / reply / receipt).
+    // Одна общая строка-паттерн ловила только первый из них: `src.replace`
+    // берёт первое совпадение, а тестов на версию у reply и receipt не было
+    // (добавлены 25.10 рядом с разделкой паттернов — t_e1dbc7c7). Поэтому
+    // каждый конструктор называется своим паттерном со своим контекстом.
+    { name: 'версия не закреплена в new (1 не значит)',
+      pattern: '                version: "1".to_string(),\n                msg_type: VaultMsgType::Message,\n                from: from.to_string(),\n                to: to.to_string(),\n                message_id: message_id.to_string(),\n                in_reply_to: None,',
+      replacement: '                version: "2".to_string(),\n                msg_type: VaultMsgType::Message,\n                from: from.to_string(),\n                to: to.to_string(),\n                message_id: message_id.to_string(),\n                in_reply_to: None,' },
+    { name: 'версия не закреплена в reply (ответ уезжает другим протоколом)',
+      pattern: '                version: "1".to_string(),\n                msg_type: VaultMsgType::Message,\n                from: from.to_string(),\n                to: to.to_string(),\n                message_id: message_id.to_string(),\n                in_reply_to: Some(reply_to.to_string()),',
+      replacement: '                version: "2".to_string(),\n                msg_type: VaultMsgType::Message,\n                from: from.to_string(),\n                to: to.to_string(),\n                message_id: message_id.to_string(),\n                in_reply_to: Some(reply_to.to_string()),' },
+    { name: 'версия не закреплена в receipt (квитанция читается другим парсером)',
+      pattern: '                version: "1".to_string(),\n                msg_type: VaultMsgType::Receipt,',
+      replacement: '                version: "2".to_string(),\n                msg_type: VaultMsgType::Receipt,' },
   ],
 };
