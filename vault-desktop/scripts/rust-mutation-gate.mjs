@@ -44,7 +44,9 @@ import path from 'node:path';
 // `if false { return PubOutcome::Disabled; }` в relay.rs ронял базовый прогон
 // ВСЕХ наборов сразу («тесты не проходят на чистом дереве»), и 187 мутаций
 // мерились по сломанному дереву.
-import { recoverJournal, writeJournal, clearJournal } from './mutations/engine.mjs';
+import { recoverJournal, recoverForeignJournal, foreignJournal, writeJournal, clearJournal, setJournalOwner } from './mutations/engine.mjs';
+
+setJournalOwner('rust');
 
 const HERE = import.meta.dirname;                       // vault-desktop/scripts
 const REPO = path.resolve(HERE, '..', '..');             // корень репозитория
@@ -262,7 +264,21 @@ if (args.includes('--check-patterns')) {
   process.exit(0);
 }
 
+// Свой leftover после убитого прогона — поднять; ЧУЖОЙ (идёт прогон JS-гейта) —
+// не трогать и не стартовать: 25.10 JS-гейт откатил файл посреди Rust-прогона,
+// и мутант проверился на целом коде (ложный ВЫЖИВШИЙ).
 {
+  const foreign = foreignJournal();
+  if (foreign.length && !args.includes('--takeover')) {
+    console.error('✗ rust-mutation-gate: журнал принадлежит другому гейту — идёт его прогон:');
+    for (const f of foreign) console.error(`  • ${f.file} (владелец ${f.owner})`);
+    console.error('\n  Дождаться чужого прогона, либо — если он был УБИТ и мутант');
+    console.error('  остался в дереве — поднять его явно: --takeover.');
+    process.exit(1);
+  }
+  if (foreign.length) {
+    console.log(`  журнал: --takeover подняты чужие leftovers — ${recoverForeignJournal().join(', ')}`);
+  }
   const restored = recoverJournal();
   if (restored.length) {
     console.log(`  журнал: восстановлено после убитого прогона — ${restored.join(', ')}`);

@@ -34,8 +34,67 @@ const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
 // через 40 секунд, и выглядит как поломка кода, а не как мусор после гейта).
 // Копия пишется ДО мутации и снимается ПОСЛЕ восстановления; leftover
 // подхватывает recoverJournal() на следующем старте.
+//
+// У ЗАПИСИ ЖУРНАЛА ЕСТЬ ВЛАДЕЛЕЦ (25.10): JS-гейт и Rust-гейт живут в одном
+// каталоге, и `recoverJournal()` запускается перед каждым прогоном. Без префикса
+// владельца JS-прогон поднимал «leftover от убитого прогона» — активный мутант
+// Rust-гейта — и откатывал файл прямо во время чужого прогона: тот мутант
+// проверялся на целом коде и записывался как ВЫЖИВШИЙ. Теперь запись помечена
+// префиксом, чужые прогону не трогаются, а одновременный запуск — ошибка.
 const JOURNAL_DIR = '/tmp/vault-mutation-journal';
-const journalPath = (file) => path.join(JOURNAL_DIR, Buffer.from(file, 'utf8').toString('hex') + '.bak');
+const OWNER_PREFIX = { js: 'js-', rust: 'rs-' };
+let owner = 'js';
+
+export function setJournalOwner(o) {
+  if (!OWNER_PREFIX[o]) throw new Error('неизвестный владелец журнала: ' + o);
+  owner = o;
+}
+const ownPrefix = () => OWNER_PREFIX[owner];
+const hexOf = (file) => Buffer.from(file, 'utf8').toString('hex');
+const journalPath = (file) => path.join(JOURNAL_DIR, ownPrefix() + hexOf(file) + '.bak');
+
+// Кому принадлежит запись: 'js', 'rust' или 'legacy' (журнал до появления
+// владельцев — его восстанавливает кто первый пришёл, это безопасно).
+function entryOwner(name) {
+  for (const [o, p] of Object.entries(OWNER_PREFIX)) if (name.startsWith(p)) return o;
+  return 'legacy';
+}
+const HEX_ONLY = /^[0-9a-f]+$/;
+function entryFile(name) {
+  const hex = name.replace(/^(?:js-|rs-)/, '').replace(/\.bak$/, '');
+  if (!HEX_ONLY.test(hex)) return null;
+  return Buffer.from(hex, 'hex').toString('utf8');
+}
+
+// Чужие записи журнала = идёт прогон другого гейта. Пустой список — можно стартовать.
+export function foreignJournal() {
+  if (!existsSync(JOURNAL_DIR)) return [];
+  const out = [];
+  for (const name of readdirSync(JOURNAL_DIR)) {
+    if (!name.endsWith('.bak')) continue;
+    const o = entryOwner(name);
+    if (o === 'legacy' || o === owner) continue;
+    const file = entryFile(name);
+    if (file) out.push({ file, owner: o, name });
+  }
+  return out;
+}
+
+/// `--takeover`: поднять чужой leftover (прогон другого гейта был убит, и его
+/// мутант остался в рабочем дереве). По умолчанию этого НЕ делать — см. выше.
+export function recoverForeignJournal() {
+  const restored = [];
+  for (const e of foreignJournal()) {
+    const abs = path.isAbsolute(e.file) ? e.file : path.join(ROOT, e.file);
+    const backup = readFileSync(path.join(JOURNAL_DIR, e.name), 'utf8');
+    if (existsSync(abs) && readFileSync(abs, 'utf8') !== backup) {
+      writeFileSync(abs, backup);
+    }
+    try { unlinkSync(path.join(JOURNAL_DIR, e.name)); } catch (e2) { /* уже снят */ }
+    restored.push(`${e.file} (владелец ${e.owner})`);
+  }
+  return restored;
+}
 
 export function writeJournal(file, content) {
   mkdirSync(JOURNAL_DIR, { recursive: true });
@@ -46,7 +105,8 @@ export function clearJournal(file) {
   try { unlinkSync(journalPath(file)); } catch (e) { /* журнала нет — и ладно */ }
 }
 
-// Восстановить всё, что оставил убитый прогон. Возвращает список файлов.
+// Восстановить всё, что оставил убитый прогон СВОЕГО гейта. Возвращает список
+// файлов; чужие записи не трогаются (они и есть признак живого прогона).
 // Ключ журнала — ПУТЬ КАК ЕСТЬ: rust-гейт мутирует крейты ВНЕ vault-desktop
 // (vault-client/…), и для абсолютного пути join(ROOT, file) дал бы мусор.
 export function recoverJournal() {
@@ -54,14 +114,17 @@ export function recoverJournal() {
   const restored = [];
   for (const name of readdirSync(JOURNAL_DIR)) {
     if (!name.endsWith('.bak')) continue;
-    const file = Buffer.from(name.slice(0, -4), 'hex').toString('utf8');
+    const o = entryOwner(name);
+    if (o !== 'legacy' && o !== owner) continue;
+    const file = entryFile(name);
+    if (!file) continue;
     const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
     const backup = readFileSync(path.join(JOURNAL_DIR, name), 'utf8');
     if (existsSync(abs) && readFileSync(abs, 'utf8') !== backup) {
       writeFileSync(abs, backup);
       restored.push(file);
     }
-    clearJournal(file);
+    try { unlinkSync(path.join(JOURNAL_DIR, name)); } catch (e) { /* уже снят */ }
   }
   return restored;
 }

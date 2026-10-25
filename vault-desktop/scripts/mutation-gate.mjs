@@ -24,10 +24,12 @@
 //   node scripts/mutation-gate.mjs --set keys  # один набор (быстрый цикл)
 //   node scripts/mutation-gate.mjs --list      # что есть
 //   node scripts/mutation-gate.mjs --check-patterns  # наборы ещё находят свой код
-import { runSet, recoverJournal } from './mutations/engine.mjs';
+import { runSet, recoverJournal, recoverForeignJournal, foreignJournal, setJournalOwner } from './mutations/engine.mjs';
 import { loadAllSets, loadSets } from './mutations/index.mjs';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+
+setJournalOwner('js');
 
 const args = process.argv.slice(2);
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : null;
@@ -94,7 +96,23 @@ if (args.includes('--check-patterns')) {
 // Убитый прогон (SIGTERM/SIGKILL) не исполняет finally и оставляет в коде
 // СТРОКУ МУТАЦИИ. Поднимаем это до первого смоука: иначе следующий запуск
 // падает на «сломанном коде», которого не было.
+//
+// ЧУЖУЮ запись журнала не поднимаем: 25.10 JS-прогон восстановил «leftover»
+// активного Rust-прогона, и тот мутант проверялся на целом коде (ложный
+// ВЫЖИВШИЙ). Одновременный запуск двух гейтов — ошибка, а не гонка.
 {
+  const foreign = foreignJournal();
+  if (foreign.length && !args.includes('--takeover')) {
+    console.error('✗ mutation-gate: журнал принадлежит другому гейту — идёт его прогон:');
+    for (const f of foreign) console.error(`  • ${f.file} (владелец ${f.owner})`);
+    console.error('\n  Дождаться чужого прогона, либо — если он был УБИТ и мутант');
+    console.error('  остался в дереве — поднять его явно: --takeover.');
+    process.exit(1);
+  }
+  if (foreign.length) {
+    console.log('⚠ mutation-gate: --takeover — подняты чужие leftovers: ' +
+      recoverForeignJournal().join(', '));
+  }
   const restored = recoverJournal();
   if (restored.length) {
     console.log('⚠ mutation-gate: восстановлены файлы после убитого прогона: ' + restored.join(', '));
