@@ -200,6 +200,19 @@ mod tests {
         assert!(!verify(&pub2, &sig, 7, "e", "b"), "чужой ключ не подходит");
     }
 
+    #[test]
+    fn key_with_surrounding_whitespace_is_accepted() {
+        // Приватный ключ читают из ~/.vault/keys/channel_signing.json и
+        // вставляют из буфера обмена: перевод строки или пробел вокруг значения
+        // не делают ключ непригодным. Без этой пробы `trim()` здесь —
+        // незамечаемый код (набор rust-bridge-channel-signing).
+        let spaced = format!("  {SEED_HEX}\n");
+        let sig = sign_post(&spaced, 1, "e", "b").expect("пробелы вокруг ключа не портят подпись");
+        let pub_h = public_key_hex(SEED_HEX).unwrap();
+        assert!(verify(&pub_h, &sig, 1, "e", "b"), "подпись этим ключом читается");
+        assert_eq!(public_key_hex(&spaced).unwrap(), pub_h, "публичный ключ тот же");
+    }
+
     /// Вектор для сверки с релеем: клиент и релей должны подписать одно и то же
     /// и получить БАЙТ-в-байт одну строку. Значение пересчитать, если сменится
     /// домен или формат (тогда тест упадёт — и это правильно).
