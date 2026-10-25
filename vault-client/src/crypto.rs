@@ -41,9 +41,13 @@ fn keys_dir() -> PathBuf {
 /// — транспорт также может вставлять `=\r\n` soft line breaks).
 fn clean_base64_body(text: &str) -> String {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    // Быстрый путь: ни одного QP-escape — ничего раскодировать не нужно.
+    // Быстрый путь: ни одного QP-escape — раскодировать не нужно. Пэйдинг
+    // всё равно обязан быть восстановлен: транспорт снимает хвостовые `=` и
+    // без QP-кодирования (и мост b64_decode_mail такое лечит). Расхождение
+    // значит «письмо читается на телефоне и не читается в CLI» — а это
+    // M0-паритет формата, а не мелочь стиля.
     if !compact.contains('=') {
-        return compact;
+        return repair_base64_padding(compact);
     }
 
     let bytes = compact.as_bytes();
@@ -70,18 +74,24 @@ fn clean_base64_body(text: &str) -> String {
         }
     }
 
-    // Декодер мог вернуть хвост, некратный 4 (оторванный padding).
-    // Base64-провайдер ругается на такую длину — восстанавливаем padding
-    // по кратности: дописываем `=` до кратного 4 размера.
-    while out.len() % 4 != 0 {
-        out.push(b'=');
-    }
-
+    // Декодер мог вернуть хвост, некратный 4 (оторванный padding) — правило
+    // то же, что для быстрого пути, и живёт в одном месте.
     match String::from_utf8(out) {
-        Ok(s) => s,
+        Ok(s) => repair_base64_padding(s),
         // Невозможно в теории: все исходные символы были ASCII.
-        Err(_) => compact,
+        Err(_) => repair_base64_padding(compact),
     }
+}
+
+/// Валидный base64 всегда кратен 4: дописываем недостающие `=`. Лечит тела,
+/// у которых транспорт (IMAP/QP) снял хвостовой пэйдинг — без этого decode
+/// падает и письмо выбрасывается как «не зашифрованное».
+fn repair_base64_padding(body: String) -> String {
+    let mut body = body;
+    while body.len() % 4 != 0 {
+        body.push('=');
+    }
+    body
 }
 
 pub struct CryptoClient {
@@ -837,5 +847,44 @@ mod tests {
         other.generate_keypair();
         let result = other.decrypt_vault(&vault_enc);
         assert!(result.is_err(), "wrong key must fail AAD auth");
+    }
+
+    // M0-паритет формата письма: ядро обязано читать те же тела, что читает
+    // мост. Транспорт снимает хвостовой padding и без QP-кодирования;
+    // b64_decode_mail в мосте такое лечил всегда, в ядровом чистильщике
+    // правила не было — письмо считалось «не зашифрованным» и молча
+    // выбрасывалось на телефонной почте, работая в CLI (и наоборот).
+    #[test]
+    fn clean_base64_body_output_is_always_multiple_of_four() {
+        assert_eq!(clean_base64_body("QUJD"), "QUJD"); // уже кратен 4 — не трогаем
+        assert_eq!(clean_base64_body("QUJD\r\n"), "QUJD"); // переносы транспорта
+        assert_eq!(clean_base64_body("QUJ"), "QUJ="); // снят padding, QP нет
+        // Тело с QP-escape'ом и снятым padding: декодер обязан вернуть кратность 4.
+        for body in ["QUJE=3D", "QUJFI=3D", "aGVsbG8g=3D", "QUJD\ndEVT=3D"] {
+            let cleaned = clean_base64_body(body);
+            assert_eq!(
+                cleaned.len() % 4,
+                0,
+                "инвариант кратности сломан: {body:?} → {cleaned:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_accepts_envelope_with_padding_stripped() {
+        let mut crypto = CryptoClient::new();
+        crypto.generate_keypair();
+        let plaintext = "kernel parity body";
+        let envelope = crypto.encrypt(plaintext);
+        assert!(
+            envelope.ends_with('='),
+            "фикстура без padding — тест ничего не меряет"
+        );
+        let stripped = envelope.trim_end_matches('=');
+        assert!(
+            crypto.is_encrypted(stripped),
+            "is_encrypted теряет тело без хвостового padding"
+        );
+        assert_eq!(crypto.decrypt(stripped).unwrap(), plaintext);
     }
 }

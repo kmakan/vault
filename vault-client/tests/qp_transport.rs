@@ -29,3 +29,47 @@ fn is_encrypted_detects_quoted_printable_body() {
     // Санити-проверка: сырой конверт тоже распознаётся.
     assert!(crypto.is_encrypted(&envelope));
 }
+
+// M0-паритет формата (t_85ea2eea): транспорт снимает хвостовые `=` и без
+// quoted-printable. Мост (b64_decode_mail) такое всегда лечил, ядро — нет,
+// и письмо читалось на телефоне, но не читалось в CLI.
+#[test]
+fn unpadded_folded_envelope_decrypts_in_kernel() {
+    let mut crypto = CryptoClient::new();
+    crypto.generate_keypair();
+
+    let plaintext = "unpadded envelope parity";
+    let envelope = crypto.encrypt(plaintext);
+    assert!(
+        envelope.ends_with('='),
+        "фикстура без padding — тест ничего не проверяет"
+    );
+
+    // 1) Только снятый padding (без QP и без переносов).
+    let stripped = envelope.trim_end_matches('=');
+    assert!(
+        crypto.is_encrypted(stripped),
+        "is_encrypted обязан распознавать тело без хвостовых `=`"
+    );
+    assert_eq!(
+        crypto.decrypt(stripped).expect("decrypt без padding"),
+        plaintext
+    );
+
+    // 2) Снят padding + письмо разрезано транспортом по 76 символов.
+    let folded = stripped
+        .as_bytes()
+        .chunks(76)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    assert!(folded.contains("\r\n"), "фикстура должна быть разрезана");
+    assert!(
+        crypto.is_encrypted(&folded),
+        "is_encrypted обязан распознавать разрезанное тело без padding"
+    );
+    assert_eq!(
+        crypto.decrypt(&folded).expect("decrypt свёрнутого тела"),
+        plaintext
+    );
+}
