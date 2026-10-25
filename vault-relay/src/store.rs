@@ -107,3 +107,119 @@ fn now_unix() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(id: &str, ts: u64, exp: u64) -> Envelope {
+        Envelope {
+            id: id.to_string(),
+            body: format!("body-{id}"),
+            exp,
+            ts,
+            from: None,
+            tok: None,
+        }
+    }
+
+    /// Живые конверты: срок — через сутки.
+    fn alive(id: &str, ts: u64) -> Envelope {
+        env(id, ts, now_unix() + 86_400)
+    }
+
+    #[test]
+    fn push_dedups_by_envelope_id() {
+        // Email-дубль (одно письмо доставлено дважды) не должен занимать слот
+        // дважды: иначе очередь забивается копиями и вытесняет живые конверты.
+        let s = Store::new();
+        let now = now_unix();
+        s.push("t1", alive("dup", now), 10);
+        s.push("t1", alive("dup", now), 10);
+        s.push("t1", alive("other", now), 10);
+        assert_eq!(s.len("t1"), 2, "дубль с тем же id добавился повторно");
+    }
+
+    #[test]
+    fn push_evicts_the_oldest_and_push_front_evicts_the_newest() {
+        // Разные направления вытеснения — не деталь, а смысл: обычная
+        // публикация теряет СТАРЕЙШИЙ непрочитанный, а возврат не-ack'нутых
+        // при обрыве WS — НОВЕЙШИЙ (голову очереди трогать нельзя).
+        let s = Store::new();
+        let now = now_unix();
+        for i in 0..3 {
+            s.push("p", alive(&format!("p{i}"), now + i), 3);
+        }
+        s.push("p", alive("p3", now + 3), 3);
+        let got = s.drain("p").expect("очередь есть");
+        assert_eq!(
+            got.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["p1", "p2", "p3"],
+            "push вытеснил не старейший конверт"
+        );
+
+        let s = Store::new();
+        for i in 0..3 {
+            s.push("f", alive(&format!("f{i}"), now + i), 3);
+        }
+        s.push_front("f", alive("head", now + 3), 3);
+        let got = s.drain("f").expect("очередь есть");
+        assert_eq!(
+            got.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["head", "f0", "f1"],
+            "push_front вытеснил не новейший конверт"
+        );
+    }
+
+    #[test]
+    fn expired_are_dropped_by_every_read_path() {
+        // TTL обязан фильтровать на месте во ВСЕХ точках чтения: drain,
+        // peek и len (hello-кадр WS). Иначе клиент год спустя получит
+        // просроченный конверт, а счётчик будет обещать то, чего нет.
+        let s = Store::new();
+        let now = now_unix();
+        s.push("e", alive("live", now), 10);
+        s.push("e", env("dead", now, now - 10), 10);
+        assert_eq!(s.len("e"), 1, "len посчитал просроченный конверт");
+        let peeked = s.peek("e", 0).expect("очередь есть");
+        assert_eq!(peeked.len(), 1, "peek отдал просроченный конверт");
+        let drained = s.drain("e").expect("очередь есть");
+        assert_eq!(drained.len(), 1, "drain отдал просроченный конверт");
+        assert_eq!(drained[0].id, "live");
+        // Очередь существует, но пуста — это Some([]), а не None: клиент по
+        // None идёт регистрироваться заново, хотя очередь у него уже есть.
+        assert!(
+            matches!(s.drain("e"), Some(v) if v.is_empty()),
+            "пустая очередь вернулась как None"
+        );
+    }
+
+    #[test]
+    fn peek_cursor_is_strictly_newer_than_since() {
+        // Курсор клиента: `since` — уже полученная секунда. Возврат равной
+        // (=) снова отдаёт тот же пост каждому подписчику на каждый поллинг.
+        let s = Store::new();
+        let now = now_unix();
+        s.push("c", alive("old", now - 5), 10);
+        s.push("c", alive("new", now + 5), 10);
+        let got = s.peek("c", now - 5).expect("очередь есть");
+        assert_eq!(
+            got.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["new"],
+            "peek вернул пост на границе курсора"
+        );
+        // peek не забирает: очередь канала общая (fan-out на read-стороне).
+        assert_eq!(s.len("c"), 2, "peek забрал конверты из общей очереди");
+    }
+
+    #[test]
+    fn unknown_queue_is_none_not_empty_vec() {
+        // Разница для клиента: «очереди нет» (нужен register) против
+        // «очередь есть, пусто». Подмена молча ломает регистрацию.
+        let s = Store::new();
+        assert!(s.drain("нет-такой").is_none());
+        assert!(s.peek("нет-такой", 0).is_none());
+        assert_eq!(s.len("нет-такой"), 0);
+        assert_eq!(s.total(), 0);
+    }
+}

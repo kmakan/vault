@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn v1_forged_scope_or_expiry_rejected() {
         // MAC v1 обязан покрывать scope и срок: иначе «read» превращается в
-        // «write» или в неprotухший токен правкой одного байта на транспорте.
+        // «write» или в непротухший токен правкой одного байта на транспорте.
         use base64::Engine;
         let k = keys();
         let t = issue(&k, Scope::Read, 4_102_444_800);
@@ -819,6 +819,31 @@ mod tests {
                 "подмена {field} в байте {at} прошла проверку MAC"
             );
         }
+    }
+
+    #[test]
+    fn v2_forged_scope_read_to_write_rejected() {
+        // Scope — байт 8 (девятый — версия), и он входит в HMAC отдельно:
+        // без него право чтения превращается в право публикации правкой
+        // одного байта на транспорте.
+        use base64::Engine;
+        let k = keys();
+        let t = issue_v2(&k, Scope::Read, Plan::Pro, 7, 4_102_444_800);
+        let mut raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&t)
+            .unwrap();
+        assert_eq!(raw[8], b'r', "исходный токен — право чтения");
+        assert_eq!(raw[9], 2, "следом байт версии — чтобы не перепутать индекс");
+        raw[8] = b'w';
+        let forged = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw);
+        assert!(
+            parse(&k, &forged).is_none(),
+            "scope не в MAC: read-токен читается как write"
+        );
+        // Санити: write-скоуп сам по себе легален (его и выдаёт релей), значит
+        // подделку отвергает подпись, а не алфавит байта.
+        let legit = issue_v2(&k, Scope::Write, Plan::Pro, 7, 4_102_444_800);
+        assert_eq!(parse(&k, &legit).map(|p| p.scope), Some(Scope::Write));
     }
 
     #[test]
