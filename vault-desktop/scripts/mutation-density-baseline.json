@@ -1,7 +1,7 @@
 {
   "note": "Счётчики мутаций по модулям (уменьшаться нельзя) и список модулей без мутаций (может только сокращаться: закрытая дыра удаляется из списка).",
   "counts": {
-    "vault-client/src/crypto.rs": 10,
+    "vault-client/src/crypto.rs": 14,
     "vault-client/src/crypto/encryptor.rs": 8,
     "vault-client/src/vault/attachments.rs": 7,
     "vault-client/src/vault/audio_wav.rs": 10,
@@ -20,7 +20,7 @@
     "vault-client/src/vault/filter.rs": 8,
     "vault-client/src/vault/folders.rs": 5,
     "vault-client/src/vault/group_rules.rs": 23,
-    "vault-client/src/vault/groups.rs": 8,
+    "vault-client/src/vault/groups.rs": 10,
     "vault-client/src/vault/imap_dialect.rs": 6,
     "vault-client/src/vault/incoming.rs": 8,
     "vault-client/src/vault/invite.rs": 5,
@@ -32,7 +32,7 @@
     "vault-client/src/vault/media.rs": 4,
     "vault-client/src/vault/messages.rs": 15,
     "vault-client/src/vault/presence.rs": 7,
-    "vault-client/src/vault/protocol.rs": 7,
+    "vault-client/src/vault/protocol.rs": 9,
     "vault-client/src/vault/reactions.rs": 7,
     "vault-client/src/vault/read_receipts.rs": 7,
     "vault-client/src/vault/relay.rs": 10,
@@ -42,7 +42,7 @@
     "vault-client/src/vault/status.rs": 6,
     "vault-client/src/vault/thread.rs": 7,
     "vault-client/src/vault/timings.rs": 21,
-    "vault-core/src/crypto_pq.rs": 19,
+    "vault-core/src/crypto_pq.rs": 25,
     "vault-core/src/identity.rs": 49,
     "vault-core/src/key_store.rs": 10,
     "vault-core/src/relay.rs": 12,
@@ -54,7 +54,7 @@
     "vault-desktop/src-tauri/src/channel_signing.rs": 0,
     "vault-desktop/src-tauri/src/channels.rs": 0,
     "vault-desktop/src-tauri/src/credential_store.rs": 0,
-    "vault-desktop/src-tauri/src/crypto.rs": 0,
+    "vault-desktop/src-tauri/src/crypto.rs": 19,
     "vault-desktop/src-tauri/src/duress.rs": 0,
     "vault-desktop/src-tauri/src/email.rs": 0,
     "vault-desktop/src-tauri/src/file_lock.rs": 0,
@@ -68,7 +68,7 @@
     "vault-desktop/src-tauri/src/storage/sqlite.rs": 9,
     "vault-desktop/src-tauri/src/vault_bridge.rs": 4,
     "vault-desktop/src-tauri/src/video.rs": 0,
-    "vault-desktop/src/api.js": 19,
+    "vault-desktop/src/api.js": 29,
     "vault-desktop/src/avatar-image.js": 6,
     "vault-desktop/src/call-state-rule.js": 10,
     "vault-desktop/src/channels-tokens.js": 2,
@@ -192,11 +192,11 @@
     "vault-relay/src/channel_keys.rs": 0,
     "vault-relay/src/fcm.rs": 0,
     "vault-relay/src/main.rs": 18,
-    "vault-relay/src/payments.rs": 0,
-    "vault-relay/src/persist.rs": 0,
-    "vault-relay/src/rate.rs": 0,
-    "vault-relay/src/store.rs": 0,
-    "vault-relay/src/tokens.rs": 0
+    "vault-relay/src/payments.rs": 22,
+    "vault-relay/src/persist.rs": 24,
+    "vault-relay/src/rate.rs": 9,
+    "vault-relay/src/store.rs": 9,
+    "vault-relay/src/tokens.rs": 26
   },
   "gaps": [
     "vault-desktop/src-tauri/src/audio.rs",
@@ -205,7 +205,6 @@
     "vault-desktop/src-tauri/src/channel_signing.rs",
     "vault-desktop/src-tauri/src/channels.rs",
     "vault-desktop/src-tauri/src/credential_store.rs",
-    "vault-desktop/src-tauri/src/crypto.rs",
     "vault-desktop/src-tauri/src/duress.rs",
     "vault-desktop/src-tauri/src/email.rs",
     "vault-desktop/src-tauri/src/file_lock.rs",
@@ -217,11 +216,6 @@
     "vault-desktop/src-tauri/src/service_monitor.rs",
     "vault-desktop/src-tauri/src/video.rs",
     "vault-relay/src/channel_keys.rs",
-    "vault-relay/src/fcm.rs",
-    "vault-relay/src/payments.rs",
-    "vault-relay/src/persist.rs",
-    "vault-relay/src/rate.rs",
-    "vault-relay/src/store.rs",
-    "vault-relay/src/tokens.rs"
+    "vault-relay/src/fcm.rs"
   ]
 }
