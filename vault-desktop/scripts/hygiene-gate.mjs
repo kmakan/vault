@@ -79,11 +79,29 @@ function classify(line) {
 function isAllowedFile(rel) {
   return /(^|\/)src\/locales\/zh\.js$/.test(rel) || /(^|\/)locales\/zh\.js$/.test(rel);
 }
+// Файлы ДАННЫХ не сканируются вообще — причина не в тексте, а в выводе: находка
+// печатает строку, а в журнале лежат резервные копии телефона (ключи и адреса),
+// выписки из почты и список секретов. Напечатать их строку — значит выдать
+// личные данные в терминал и в лог прогона. К выписке из ящика правило «буква не
+// той раскладки» отношения не имеет: это не проза, а данные.
+const DATA_FILE = [
+  /(^|\/)phone-backup/,
+  /(^|\/)diagnostics\//,
+  /(^|\/)blocks\//,
+  /(^|\/)mails\.md$/,
+  /(^|\/)secrets\.md$/,
+  /(^|\/)google-services/,
+  /(^|\/)vault-state-/,
+  /(^|\/)feedback-triage-state\.json$/,
+  /-identity\.json$/,
+];
+const isDataFile = (rel) => DATA_FILE.some((re) => re.test(rel));
 function isAllowedLine(rel, line) {
   if (!/(^|\/)locales\/(en|ru|zh)\.js$/.test(rel)) return false;
   return /language_zh\s*:/.test(line);
 }
 
+let skippedData = 0;
 function scanTree(root, label, findings) {
   if (!existsSync(root)) return 0;
   let scanned = 0;
@@ -113,6 +131,7 @@ function scanTree(root, label, findings) {
       try { txt = buf.toString('utf8'); } catch { continue; }
       scanned++;
       const rel = path.relative(root, full);
+      if (isDataFile(rel)) { skippedData++; continue; }
       if (isAllowedFile(rel)) continue;
       const lines = txt.split('\n');
       for (let i = 0; i < lines.length; i++) {
@@ -141,7 +160,8 @@ if (findings.length) {
     console.error(`      ${f.text}`);
   }
   console.error(`\n  Найдено: ${findings.length} (проверено файлов: ${scannedRepo}` +
-    (scannedNotes ? ` + ${scannedNotes} из журнала` : '') + ').');
+    (scannedNotes ? ` + ${scannedNotes} из журнала` : '') +
+    `; файлов данных исключено из скана: ${skippedData}).`);
   console.error('  Что делать: заменить иероглифы русскими словами, восстановить битые');
   console.error('  байты из исходника (U+FFFD означает ПОТЕРЮ текста — не «заменить»,');
   console.error('  а взять правильную строку), в слове-склейке набрать латинскую');
@@ -151,4 +171,5 @@ if (findings.length) {
 }
 
 console.log(`✓ hygiene-gate: иероглифов, битых байтов и склейки алфавитов нет (проверено файлов: ${scannedRepo}` +
-  (scannedNotes ? ` + ${scannedNotes} из журнала` : '') + ').');
+  (scannedNotes ? ` + ${scannedNotes} из журнала` : '') +
+  `; файлов данных исключено из скана: ${skippedData}).`);

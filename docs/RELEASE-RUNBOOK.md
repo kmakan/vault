@@ -165,6 +165,52 @@ ssh server 'echo "VAULT_RELAY_PAYMENTS=test" >> ~/vault-relay/env
 ssh server 'grep VAULT_RELAY_PAYMENTS ~/vault-relay/env || echo "провайдер выключен — верно"'
 ```
 
+## 5б. Подача в магазины (RuStore и Google Play)
+
+**Правило:** в сторы идёт только версия, принятая пунктом 5, и оба артефакта
+обязаны быть ИЗ ОДНОГО ДЕРЕВА. Если после приёмки в производство вошла хоть одна
+правка — версия для подачи следующая, а не та, что уже принята (так случилось с
+0.1.271: APK собран утром, правки были вечером).
+
+```bash
+# после успешной приёмки, не меняя дерево:
+vault-desktop/scripts/build-android-apk.sh aab   # бандл для Play
+mkdir -p /home/maksim/vault-releases/<версия>
+cp vault-desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+   /home/maksim/vault-releases/<версия>/vault-<версия>-universal.apk
+cp vault-desktop/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab \
+   /home/maksim/vault-releases/<версия>/vault-<версия>.aab
+cd /home/maksim/vault-releases/<версия> && sha256sum *.apk *.aab > SHA256SUMS.txt
+```
+
+Подпись — релизный keystore (`~/.local/share/vault/`), MD5 сертификата сверяется
+шагом 2 приёмки. Менять ключ нельзя: апдейты у существующих установок сломаются.
+Пароль и сам ключ не попадают ни в чат, ни в репозиторий, ни в анкеты сторов.
+
+| | RuStore | Google Play |
+|---|---|---|
+| Файл | universal APK | AAB (APK не примет) |
+| Иконка | 512×512, `vault-desktop/src-tauri/icons/512x512.png` | там же + feature graphic 1024×500 |
+| Скриншоты | ≥3, 1080×2400, реальный UI | ≥2, те же |
+| Тексты | `vault-site/store/LISTING.md` + `~/Notes/Projects/mailcipher/store-listing-2026-10-06.md` | те же, EN-колонка |
+| Политики | https://vault-msg.ru/privacy.html, /terms.html | https://vault-msg.tech/privacy.html, /terms.html |
+| Анкеты | возрастной рейтинг, доступ к данным, тест-аккаунт модераторов | Data Safety («не собираем и не делимся»), целевая аудитория, декларация разрешений |
+| Платный экран | есть (ЮKassa/Pay SDK) | **нет** — флаг сборки; внешняя оплата цифровых товаров в этой конфигурации запрещена политикой Play |
+
+Перед `submit`, живьем:
+
+```bash
+curl -sI https://vault-msg.ru/privacy.html?cb=$(date +%s) | head -1
+curl -sI https://vault-msg.tech/terms.html?cb=$(date +%s) | head -1
+sha256sum -c /home/maksim/vault-releases/<версия>/SHA256SUMS.txt
+```
+
+Скриншоты снимаются только с демо-ящика модераторов и с синтетическими
+контактами: на личном аккаунте в кадр попадают реальные адреса собеседников.
+Логин и пароль тестового аккаунта передаются в защищённом канале, не в тексте
+заявки. Сам факт подачи (и тем более публикация релиза) — только по команде
+владельца.
+
 ## 6. Сборка десктопа
 
 ```bash
