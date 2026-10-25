@@ -37,6 +37,16 @@ export VAULT_KEYSTORE_PASS="$(tr -d '\n' < "$HOME/.local/share/vault/keystore-pa
 echo "=== 1. артефакт ==="
 ls -la "$APK" || { echo "НЕТ APK — собери: scripts/build-android-apk.sh"; exit 1; }
 "$AAPT" dump badging "$APK" | grep -E "^package:|versionCode|native-code" | head -5
+# Артефакт обязан соответствовать дереву: подаём ту версию, что объявлена в
+# tauri.conf.json, а не ту, что осталась лежать в outputs. Так 0.1.271 утром
+# дал APK старше вечерних правок, и приёмка проверяла бы не тот билд.
+APK_VER=$("$AAPT" dump badging "$APK" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+TREE_VER=$(node -e 'process.stdout.write(require("./src-tauri/tauri.conf.json").version)')
+echo "версия: APK=$APK_VER, дерево=$TREE_VER"
+if [ "$APK_VER" != "$TREE_VER" ]; then
+  echo "✗ APK не из этого дерева — пересобери (scripts/build-android-apk.sh), приёмку не продолжать"
+  exit 1
+fi
 
 echo "=== 2. подпись: APK vs keystore (md5) ==="
 APK_MD5=$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -i "md5" | head -1)

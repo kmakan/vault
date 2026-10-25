@@ -57,8 +57,18 @@ echo
 echo "$MODE: $OUT"
 ls -la "$OUT"
 sha256sum "$OUT"
+TREE_VER=$(node -e 'process.stdout.write(require("./src-tauri/tauri.conf.json").version)')
 if [ "$MODE" = apk ]; then
   "$AAPT" dump badging "$OUT" | grep -E "^package:|native-code"
+  ART_VER=$("$AAPT" dump badging "$OUT" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
 else
-  echo "бандл проверяет Play Console при загрузке; локально остаётся SHA256 выше"
+  # В бандле версия лежит в ассете tauri.conf.json — тем же файлом, что задаёт
+  # и versionCode. Play Console сам не скажет, из какого дерева собран файл.
+  ART_VER=$(unzip -p "$OUT" base/assets/tauri.conf.json | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+  echo "бандл проверяет Play Console при загрузке; локально — SHA256 выше и версия внутри"
+fi
+echo "версия: дерево=$TREE_VER, артефакт=$ART_VER"
+if [ "$ART_VER" != "$TREE_VER" ]; then
+  echo "✗ артефакт не из этого дерева ($MODE): собрать заново, в релиз его не класть" >&2
+  exit 1
 fi

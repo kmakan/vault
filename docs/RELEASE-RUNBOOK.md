@@ -172,6 +172,12 @@ ssh server 'grep VAULT_RELAY_PAYMENTS ~/vault-relay/env || echo "провайд�
 правка — версия для подачи следующая, а не та, что уже принята (так случилось с
 0.1.271: APK собран утром, правки были вечером).
 
+Правило больше не держится на памяти: `build-android-apk.sh` сравнивает версию
+внутри артефакта (APK — `versionName`, бандл — `base/assets/tauri.conf.json`) с
+`src-tauri/tauri.conf.json` и падает на расхождении; `device-accept-apk.sh`
+делает то же перед установкой. Проверить артефакт на соответствие дереву можно
+и без пересборки: `unzip -p <aab> base/assets/tauri.conf.json | grep version`.
+
 ```bash
 # после успешной приёмки, не меняя дерево:
 vault-desktop/scripts/build-android-apk.sh aab   # бандл для Play
