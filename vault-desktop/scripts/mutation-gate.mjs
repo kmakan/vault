@@ -23,12 +23,66 @@
 //   node scripts/mutation-gate.mjs             # все наборы
 //   node scripts/mutation-gate.mjs --set keys  # один набор (быстрый цикл)
 //   node scripts/mutation-gate.mjs --list      # что есть
+//   node scripts/mutation-gate.mjs --check-patterns  # наборы ещё находят свой код
 import { runSet, recoverJournal } from './mutations/engine.mjs';
 import { loadAllSets, loadSets } from './mutations/index.mjs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 
 const args = process.argv.slice(2);
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : null;
 const listOnly = args.includes('--list');
+
+// «Набор ещё меряет?» без смоуков — секунды. Паттерн мутации это контракт с
+// ФОРМОЙ кода: рефакторинг или переезд решения между функциями обрывают его
+// молча, набор теряет проверки и остаётся зелёным на том, что ещё находит
+// (25.10 — rust-relay-limit: 7 из 16 мутаций не применялись после d12853f).
+// Отдельный режим потому, что чинить тут надо набор, а не код и не тест.
+if (args.includes('--check-patterns')) {
+  const root = path.resolve(import.meta.dirname, '..');
+  const journalDir = '/tmp/vault-mutation-journal';
+  const busy = existsSync(journalDir)
+    ? readdirSync(journalDir).filter((x) => x.endsWith('.bak'))
+    : [];
+  if (busy.length) {
+    console.error('✗ mutation-gate: идёт прогон гейта (журнал не пуст) — по мутанту паттерны не сверяют');
+    process.exit(1);
+  }
+  const sets = await loadAllSets();
+  let checked = 0;
+  const missing = [];
+  const ambiguous = [];
+  const cache = new Map();
+  for (const s of sets) {
+    for (const m of s.mutations) {
+      checked++;
+      const rel = m.file || s.file;
+      const abs = path.join(root, rel);
+      if (!existsSync(abs)) {
+        missing.push(`${s.id}: нет файла ${rel} → весь набор ничего не меряет`);
+        continue;
+      }
+      if (!cache.has(abs)) cache.set(abs, readFileSync(abs, 'utf8'));
+      const hits = cache.get(abs).split(m.pattern).length - 1;
+      if (!hits) {
+        missing.push(`${s.id}: паттерн не найден → «${m.name}» ничего не меряет`);
+      } else if (hits > 1) {
+        ambiguous.push(`${s.id}: ${hits} совпадения → «${m.name}» сядет на первое`);
+      }
+    }
+  }
+  if (missing.length) {
+    console.error(`✗ mutation-gate --check-patterns: ${missing.length}/${checked} мутаций вне игры`);
+    for (const x of missing) console.error('  • ' + x);
+    process.exit(1);
+  }
+  if (ambiguous.length) {
+    console.log(`⚠ ${ambiguous.length}/${checked} паттернов встречаются в файле больше одного раза:`);
+    for (const x of ambiguous) console.log('  • ' + x);
+  }
+  console.log(`✓ mutation-gate --check-patterns: ${checked} мутаций в ${sets.length} наборах находят свой код`);
+  process.exit(0);
+}
 
 // Убитый прогон (SIGTERM/SIGKILL) не исполняет finally и оставляет в коде
 // СТРОКУ МУТАЦИИ. Поднимаем это до первого смоука: иначе следующий запуск

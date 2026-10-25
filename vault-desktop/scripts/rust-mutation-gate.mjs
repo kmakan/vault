@@ -34,6 +34,7 @@
 //   node scripts/rust-mutation-gate.mjs                    # все наборы
 //   node scripts/rust-mutation-gate.mjs --set ephemeral    # один набор
 //   node scripts/rust-mutation-gate.mjs --list             # список наборов
+//   node scripts/rust-mutation-gate.mjs --check-patterns   # наборы ещё находят свой код
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -191,16 +192,74 @@ export function runSet(set, opts = {}) {
 
 // ── main ────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
+const sets = await loadSets();
+if (args.includes('--list')) {
+  for (const s of sets) console.log(`${s.id.padEnd(22)} ${s.crate ? `[${s.crate}] ` : ''}${s.file}  (${s.mutations.length} мутаций, kind=${s.kind || 'lib'})`);
+  process.exit(0);
+}
+
+// «Набор ещё меряет?» — БЕЗ cargo, секунды на весь список. PATTERNS — ЭТО
+// КОНТРАКТ С ФОРМОЙ КОДА: переезд решения между функциями (25.10: квоты из
+// relay_pub в publisher_key/daily_limit_for_token) или правка формата обрывают
+// его МОЛЧА. Такой набор не становится красным целиком — он теряет проверки и
+// продолжает ловить оставшиеся, поэтому цвет прогона скрывает дыру. Режим стоит в
+// `npm run quality` ПЕРЕД долгим прогоном именно потому, что ловит это за
+// секунды, а не через полчаса.
+if (args.includes('--check-patterns')) {
+  const JOURNAL_DIR = '/tmp/vault-mutation-journal';
+  const busy = existsSync(JOURNAL_DIR)
+    ? readdirSync(JOURNAL_DIR).filter((x) => x.endsWith('.bak'))
+    : [];
+  if (busy.length) {
+    console.error('✗ идёт прогон гейта (журнал не пуст) — проверка паттернов по мутанту бессмысленна');
+    process.exit(1);
+  }
+  let checked = 0;
+  const missing = [];
+  const ambiguous = [];
+  const cache = new Map();
+  for (const s of sets) {
+    for (const m of s.mutations) {
+      checked++;
+      const rel = m.file || s.file;
+      const abs = path.join(REPO, rel);
+      if (!existsSync(abs)) {
+        missing.push(`${s.id}: нет файла ${rel} → весь набор ничего не меряет`);
+        continue;
+      }
+      if (!cache.has(abs)) cache.set(abs, readFileSync(abs, 'utf8'));
+      const src = cache.get(abs);
+      const hits = src.split(m.pattern).length - 1;
+      if (!hits) {
+        missing.push(`${s.id}: паттерн не найден → «${m.name}» ничего не меряет`);
+      } else if (hits > 1) {
+        // Мутация садится на ПЕРВОЕ совпадение. Если строка встречается дважды
+        // (например, ключ издателя и в гейте лимита, и в раздаче остатка),
+        // проверка может бить не по тому решению — это видно только вручную.
+        ambiguous.push(`${s.id}: ${hits} совпадения → «${m.name}» сядет на первое`);
+      }
+    }
+  }
+  if (missing.length) {
+    console.error(`✗ rust-mutation-gate --check-patterns: ${missing.length}/${checked} мутаций вне игры`);
+    for (const x of missing) console.error('  • ' + x);
+    console.error('\n  Паттерн заново закрепляют за ТЕКУЩЕЙ формой кода; набор, который');
+    console.error('  перестал находить строку, проверяет меньше, чем показывает его размер.');
+    process.exit(1);
+  }
+  if (ambiguous.length) {
+    console.log(`⚠ ${ambiguous.length}/${checked} паттернов встречаются в файле больше одного раза:`);
+    for (const x of ambiguous) console.log('  • ' + x);
+  }
+  console.log(`✓ rust-mutation-gate --check-patterns: ${checked} мутаций в ${sets.length} наборах находят свой код`);
+  process.exit(0);
+}
+
 {
   const restored = recoverJournal();
   if (restored.length) {
     console.log(`  журнал: восстановлено после убитого прогона — ${restored.join(', ')}`);
   }
-}
-const sets = await loadSets();
-if (args.includes('--list')) {
-  for (const s of sets) console.log(`${s.id.padEnd(22)} ${s.crate ? `[${s.crate}] ` : ''}${s.file}  (${s.mutations.length} мутаций, kind=${s.kind || 'lib'})`);
-  process.exit(0);
 }
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : null;
 const chosen = only ? sets.filter((s) => s.id === only) : sets;

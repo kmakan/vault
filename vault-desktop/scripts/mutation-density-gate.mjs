@@ -56,6 +56,17 @@ const EXEMPT = new Map([
   ['vault-core/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
   ['vault-core/src/key_store_types.rs', 'типы хранения и serde-форма — данных и решений нет'],
   ['vault-core/src/group_types.rs', 'общая форма groups.json (поля + serde-умолчания) — решений нет; правило владения меряется в rust-identity'],
+  // Мост: привязки платформенных API и кодека. Решением тут является форма
+  // вызова чужой библиотеки (FFI), а не ветвление над нашими данными; проверяется
+  // звонком/записью на живом устройстве, куда мутационный гейт не дотягивается.
+  ['vault-desktop/src-tauri/src/android_save.rs', 'обёртка Android MediaStore (FFI) — форма платформенного вызова, меряется приёмкой на X50'],
+  ['vault-desktop/src-tauri/src/audio/audio_android.rs', 'привязки AAudio (FFI, unsafe) — устройства-зависимый код, меряется живым звонком'],
+  ['vault-desktop/src-tauri/src/vp8_decoder.rs', 'привязки libvpx (FFI) — декодер без решений о протоколе, меряется живым звонком'],
+  ['vault-desktop/src-tauri/src/vp8_encoder.rs', 'привязки libvpx (FFI) — энкодер без решений о протоколе, меряется живым звонком'],
+  ['vault-desktop/src-tauri/src/peer_index.rs', 'индекс peer по публичному ключу — чистый делегат ядру (очередь t_61bd5090: не кандидат)'],
+  ['vault-desktop/src-tauri/src/voicenote.rs', '56 строк, одно ветвление — тонкая обвязка сохранения, решений нет'],
+  ['vault-relay/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
+  ['vault-relay/src/bin/gen_token.rs', 'CLI-генератор токенов, не путь обслуживания; форма токена меряется в tokens.rs (в очереди)'],
 ]);
 
 const MIN_LOC = 40;   // модули короче — не сигнал (обычно это константы/структуры)
@@ -92,6 +103,9 @@ function moduleFiles() {
   const walk = (root, rel) => {
     for (const e of readdirSync(root, { withFileTypes: true })) {
       if (e.name === 'node_modules' || e.name === 'target') continue;
+      // Тестовый файл САМ является проверкой; требовать у него набор мутаций
+      // значит требовать набора на набор (и плодить ложные дыры).
+      if (/(^|_)(tests?|smoke)\.rs$/.test(e.name)) continue;
       const full = path.join(root, e.name);
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) { walk(full, r); continue; }
@@ -108,6 +122,15 @@ function moduleFiles() {
   // Общий слой хранилищ: сюда переехала форма адреса, и мутация без набора
   // больше не должна становиться слепой зоной только из-за другого крейта.
   walk(path.join(REPO, 'vault-core', 'src'), 'vault-core/src');
+  // Мост (Tauri-команды). С 25.10 он измерим мутациями (первые наборы), но до
+  // этого хода ратчет его вообще НЕ ВИДЕЛ: счётчик «0 дыр» молчал про 30
+  // файлов с решениями, и это ровно та же слепая зона, из которой вырос класс
+  // «тест измерял свою копию правила».
+  walk(path.join(DESKTOP, 'src-tauri', 'src'), 'vault-desktop/src-tauri/src');
+  // Релей — серверная половина монетизации и троттлинга. Пока он не в обходе,
+  // счётчик «где дыры» молчит про новый файл с решением на пути, где 429
+  // стоит денег (25.10: набор лимита ослеп, и плотность этого не увидела).
+  walk(path.join(REPO, 'vault-relay', 'src'), 'vault-relay/src');
   return out;
 }
 
