@@ -725,6 +725,53 @@ mod tests {
         cleanup(&path);
     }
 
+    /// ПРОВЕРКА ФОРМЫ — НЕ «ДЛИНА 64», А ИМЕННО hex.
+    ///
+    /// Тема = hex(mac), ключ издателя = `t:` + тот же hex. Строка той же
+    /// длины, но не из hex-алфавита — мусор повреждённого/подправленного
+    /// файла: push уйдёт в несуществующий адрес, а чужой «publisher»
+    /// обнулит чужую суточную квоту.
+    #[test]
+    fn sixty_four_chars_but_not_hex_is_dropped_on_load() {
+        let path = tmp_path("nothex");
+        let hex_topic = topic('a');
+        let junk_topic = topic('g'); // 64 символа, но не hex
+        let today = now_unix() / 86_400;
+        let raw = format!(
+            r#"{{"v":1,"topic_fcm":{{"{hex_topic}":"tok","{junk_topic}":"tok2"}},"daily_pub":{{"t:{hex_topic}":[{today},1],"t:{junk_topic}":[{today},1],"{hex_topic}":[{today},1]}}}}"#
+        );
+        std::fs::write(&path, raw.as_bytes()).expect("write");
+        let st = PersistedState::load(&path);
+        assert_eq!(
+            st.topic_fcm.len(),
+            1,
+            "не-hex тема того же размера выжила: {:?}",
+            st.topic_fcm
+        );
+        assert_eq!(
+            st.daily_pub.len(),
+            1,
+            "мусорный ключ издателя выжил: {:?}",
+            st.daily_pub
+        );
+        assert_eq!(st.daily_pub.get(&format!("t:{hex_topic}")), Some(&(today, 1)));
+        cleanup(&path);
+    }
+
+    /// ПРАВА 0600. В state.json лежат reg_token'ы — адреса доставки устройств.
+    #[test]
+    fn state_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = tmp_path("mode");
+        PersistedState::default().save_atomic(&path).expect("save");
+        let mode = std::fs::metadata(&path)
+            .expect("meta")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "права файла состояния: {:o}", mode & 0o777);
+        cleanup(&path);
+    }
+
     #[test]
     fn state_path_from_raw_rules() {
         // Явный путь — как есть; off/none — персист выключен; пусто/unset —

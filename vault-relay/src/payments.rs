@@ -665,6 +665,13 @@ mod tests {
         let body = body.as_ref().expect("тело POST /payments");
         assert_eq!(body["amount"]["value"], "149", "Pro/мес — 149 ₽");
         assert_eq!(body["amount"]["currency"], "RUB");
+        // Немедленный захват: без capture провайдер только авторизует деньги,
+        // а статус никогда не дойдёт до succeeded — подписка не выдаётся.
+        assert_eq!(body["capture"], serde_json::json!(true), "capture должен быть true");
+        // Срок чекаута: 30 минут от создания (иначе «оплачу завтра» / «истёк сразу»).
+        assert!(c.expires_at > c.created_at, "чекаут протух в момент создания");
+        assert_eq!(c.expires_at - c.created_at, 1800);
+        assert_eq!(c.expires_in, 1800);
         assert_eq!(
             body["confirmation"]["return_url"]
                 .as_str()
@@ -682,6 +689,10 @@ mod tests {
         assert_eq!(YkProvider::amount_kopecks(Plan::Pro, 12), 149_000);
         assert_eq!(YkProvider::amount_kopecks(Plan::Business, 1), 49_900);
         assert_eq!(YkProvider::amount_kopecks(Plan::Business, 12), 499_000);
+        // Непродаваемые тарифы не должны становиться «бесплатными»: маршрут
+        // их отсекает, а нулевая цена в теле платежа — это проданная подписка за 0.
+        assert_eq!(YkProvider::amount_kopecks(Plan::Free, 1), 14_900);
+        assert_eq!(YkProvider::amount_kopecks(Plan::Trial, 1), 14_900);
     }
 
     fn checkout_with_ref(ref_: &str) -> Checkout {
@@ -784,6 +795,49 @@ mod tests {
             p.create_checkout(&req(Plan::Pro, 1)).await,
             Err(PaymentError::Rejected(s)) if s.contains("confirmation")
         ));
+    }
+
+    #[tokio::test]
+    async fn yk_status_codes_and_provider_statuses_are_not_confused() {
+        // 429 на create — «повтори позже» как отклонение с текстом, а не
+        // недоступность: по Unavailable клиент гасит релей, а тут достаточно
+        // просто повторить запрос.
+        let (p, _c) = yk(vec![(429, serde_json::json!({}))]);
+        assert!(matches!(
+            p.create_checkout(&req(Plan::Pro, 1)).await,
+            Err(PaymentError::Rejected(s)) if s.contains("many")
+        ));
+        // 200 со ссылкой подтверждения, но БЕЗ id платежа: спрашивать провайдера
+        // потом не о чём — это отказ, а не чекаут.
+        let (p, _c) = yk(vec![(
+            200,
+            serde_json::json!({ "confirmation": { "confirmation_url": "https://ym/pay/1" } }),
+        )]);
+        assert!(matches!(
+            p.create_checkout(&req(Plan::Pro, 1)).await,
+            Err(PaymentError::Rejected(_))
+        ));
+        // pending/in_progress у провайдера — ещё не оплата (токен не выдаётся).
+        for s in ["pending", "in_progress"] {
+            let (p, _c) = yk(vec![
+                (200, serde_json::json!({})),
+                (200, serde_json::json!({ "id": "pay_001", "status": s })),
+            ]);
+            assert_eq!(
+                p.verify(&checkout_with_ref("pay_001")).await.unwrap(),
+                PaymentStatus::Pending,
+                "статус провайдера {s} не считается оплатой"
+            );
+        }
+        // 401/404 на verify — недоступность, а не «платёж идёт».
+        for code in [401u16, 404] {
+            let (p, _c) = yk(vec![(200, serde_json::json!({})), (code, serde_json::json!({}))]);
+            assert_eq!(
+                p.verify(&checkout_with_ref("pay_001")).await,
+                Err(PaymentError::Unavailable),
+                "HTTP {code} на verify не должен выглядеть как ожидание оплаты"
+            );
+        }
     }
 
     #[test]
