@@ -29,7 +29,7 @@
     <string name="lock_pin_hint">PIN or password</string>
     <string name="lock_unlock">Unlock</string>
     <string name="lock_wrong_code">Wrong code</string>
-    <string name="lock_bio_button">👆 Use fingerprint</string>
+    <string name="lock_bio_button">👆 Unlock with fingerprint</string>
     <string name="bio_title">Vault is locked</string>
     <string name="bio_subtitle">Touch the sensor or enter your code</string>
     <string name="bio_negative">Enter code</string>
