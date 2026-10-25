@@ -73,12 +73,13 @@ JS-гейты **входят в `npm run build`**: `smoke:m0-wire`, `smoke:incom
 |---|---|---|
 | ядро CLI | `vault-client/src/crypto.rs` (`clean_base64_body` + `repair_base64_padding`) | набор `crypto` (4 мутации по правилу), unit-проба на инвариант кратности 4, `tests/qp_transport.rs` |
 | мост десктопа/телефона | `vault-desktop/src-tauri/src/crypto.rs` (`b64_decode_mail`) | набор `rust-bridge-crypto-mail` (19/19), `vault_1on1_folded_and_unpadded_body_decrypts` |
-| JS (приглашения групп, base64url) | `vault-desktop/src/api.js:2217` (`urlSafeB64Decode`), соседи `relay-client.js:721`, `message-format.js:156` | **не меряется**: в JS-наборах по `src/api.js` нет мутаций на срез пробелов и на дописывание padding |
+| JS (приглашения групп, base64url) | `vault-desktop/src/api.js:2217` (`urlSafeB64Decode` + `urlSafeB64`), соседи `relay-client.js:721`, `message-format.js:156` | набор `urlsafe-body` (10/10, 25.10) — алфавит `-`/`_`, число доклеенных `=`, UTF-8-раундtrip, no-pad на записи и «чужое тело не роняет скан». Срез пробелов и починка padding мутациям НЕ поддаются: `atob` по WHATWG «forgiving-base64» сам выкидывает ASCII-пробелы и терпит недобор `=` (проверено 25.10: `atob('QU\r\nJD')` = `ABC`), поэтому они остаются страховкой, а не проверенным правилом. Соседи (`relay-client.js`, `message-format.js`) по-прежнему не меряются |
 
 Расхождение ядро↔мост поймано и закрыто 25.10 (`b5f99bb`): ядро восстанавливало
-padding только на выходе QP-декодера, а мост — всегда. Третья копия (JS) живёт по сей день — заведена отдельной задачей
-`t_7d2c1bb1` (перенос правила в Rust, общая
-фикстура тел, мутации на мостовую команду).
+padding только на выходе QP-декодера, а мост — всегда. Третья копия (JS) разобрана
+25.10: она меряется набором `urlsafe-body` (10/10), а перенос правила в мостовую
+команду, чтобы копий стало две вместо трёх, остаётся задачей `t_7d2c1bb1` вместе с
+соседними декодерами (`relay-client.js`, `message-format.js`).
 
 ## 4. Что этим гейтом НЕ покрыто
 
