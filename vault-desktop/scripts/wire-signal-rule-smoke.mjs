@@ -52,6 +52,8 @@ const argsOf = () => lastCall()[1] || {};
   // call_parse_signal живёт в lib.rs (медиа-мост звонков), а не в vault_bridge.rs.
   ok('команда call_parse_signal объявлена и зарегистрирована',
     lib.includes('fn call_parse_signal(') && lib.includes('call_parse_signal,'), 'lib.rs');
+  ok('команда call_build_signal объявлена в мосте и зарегистрирована',
+    bridge.includes('pub fn call_build_signal(') && lib.includes('vault_bridge::call_build_signal,'), 'vault_bridge.rs');
 }
 
 // ── Сигнал звонка ───────────────────────────────────────────────────────
@@ -74,6 +76,38 @@ const argsOf = () => lastCall()[1] || {};
   state.fail = true;
   ok('parseCallSignal: отказ моста → null (не «null» строкой)',
     (await R.parseCallSignal('{"vault":1}')) === null);
+}
+
+// ── Сборка сигнала звонка ───────────────────────────────────────────────
+{
+  reset();
+  state.answer = '{"vault":1,"id":"i1","type":"call_request","call_id":"c1","ts":7}';
+  const wire = await R.buildCallSignal({
+    id: 'i1', type: 'call_request', call_id: 'c1', ts: 7,
+    sdp: 'S', role: 'caller', kemct: 'K', sender_ek: 'E', tok: 'T',
+  });
+  ok('buildCallSignal зовёт call_build_signal', cmdOf() === 'call_build_signal', lastCall());
+  ok('buildCallSignal передаёт поля в camelCase (как ждёт Tauri)',
+    argsOf().id === 'i1' && argsOf().callType === 'call_request' && argsOf().callId === 'c1'
+      && argsOf().ts === 7 && argsOf().sdp === 'S' && argsOf().role === 'caller'
+      && argsOf().kemct === 'K' && argsOf().senderEk === 'E' && argsOf().tok === 'T',
+    argsOf());
+  ok('buildCallSignal возвращает собранный плейнтекст', wire === state.answer, wire);
+}
+{
+  reset();
+  state.answer = '{}';
+  await R.buildCallSignal({ id: 'i2', type: 'call_end', call_id: 'c2', ts: 1 });
+  ok('buildCallSignal: отсутствующие поля → null (в Rust None, а не "undefined")',
+    argsOf().sdp === null && argsOf().role === null && argsOf().kemct === null
+      && argsOf().senderEk === null && argsOf().tok === null,
+    argsOf());
+}
+{
+  reset();
+  state.fail = true;
+  ok('buildCallSignal: отказ моста → null (не «null» строкой)',
+    (await R.buildCallSignal({ id: 'i', type: 'call_request', call_id: 'c', ts: 1 })) === null);
 }
 
 // ── Канальный конверт ───────────────────────────────────────────────────

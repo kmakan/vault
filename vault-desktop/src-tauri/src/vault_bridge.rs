@@ -131,6 +131,39 @@ pub fn vault_call_next_state(current: String, event: String) -> String {
     }
 }
 
+/// Собрать конверт сигнала звонка — обратная сторона `call_parse_signal`.
+///
+/// ФОРМАТ — В ЯДРЕ: `vault::call::build_call_signal` решает маркер `vault:1`,
+/// имена и порядок ключей и «отсутствующее поле не пишется». Мост только
+/// передаёт поля. Пока сборка жила в JS, формат существовал в двух копиях, и
+/// они разошлись ровно на `tok` (relay-адрес отправителя терялся у собеседника).
+///
+/// `Option<String>`: отсутствующее поле приходит из JS как `null` (None).
+#[tauri::command]
+pub fn call_build_signal(
+    id: String,
+    call_type: String,
+    call_id: String,
+    ts: i64,
+    sdp: Option<String>,
+    role: Option<String>,
+    kemct: Option<String>,
+    sender_ek: Option<String>,
+    tok: Option<String>,
+) -> String {
+    vault_client::vault::build_call_signal(&vault_client::vault::CallSignal {
+        id,
+        call_type,
+        call_id,
+        ts,
+        sdp,
+        role,
+        kemct,
+        sender_ek,
+        tok,
+    })
+}
+
 /// Разобрать data-письмо (download-on-demand) — ADR-005 R1 / W4.
 ///
 /// ФОРМАТ — В ЯДРЕ: «что считается data-письмом» (`vault_dod_data` строго 1 и
@@ -686,5 +719,53 @@ mod tests {
         assert!(!dir.parent().unwrap().join("escaped.bin").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Мост только передаёт поля: перепутанное имя аргумента (role ↔ kemct,
+    /// sender_ek ↔ tok) не поймает ни одна сторона по отдельности — ядро
+    /// соберёт валидный конверт, а собеседник не соберёт media_key.
+    #[test]
+    fn call_build_signal_maps_every_field() {
+        let json = call_build_signal(
+            "i1".to_string(),
+            "call_request".to_string(),
+            "c1".to_string(),
+            7,
+            Some("S".to_string()),
+            Some("caller".to_string()),
+            Some("K".to_string()),
+            Some("E".to_string()),
+            Some("T".to_string()),
+        );
+        let sig = vault_client::vault::parse_call_signal(&json).expect("конверт разбирается");
+        assert_eq!(sig.id, "i1");
+        assert_eq!(sig.call_type, "call_request");
+        assert_eq!(sig.call_id, "c1");
+        assert_eq!(sig.ts, 7);
+        assert_eq!(sig.sdp.as_deref(), Some("S"));
+        assert_eq!(sig.role.as_deref(), Some("caller"));
+        assert_eq!(sig.kemct.as_deref(), Some("K"));
+        assert_eq!(sig.sender_ek.as_deref(), Some("E"));
+        assert_eq!(sig.tok.as_deref(), Some("T"));
+    }
+
+    /// Отсутствующие поля — None, а не пустые строки: получатель отличает
+    /// «поля нет» от «поле есть и пустое» (то же правило у конверта сообщения).
+    #[test]
+    fn call_build_signal_keeps_absent_fields_absent() {
+        let json = call_build_signal(
+            "i2".to_string(),
+            "call_end".to_string(),
+            "c2".to_string(),
+            1,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        for field in ["sdp", "role", "kemct", "sender_ek", "tok"] {
+            assert!(!json.contains(&format!("\"{field}\"")), "{field} не должен уехать: {json}");
+        }
     }
 }

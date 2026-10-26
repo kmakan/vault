@@ -1,8 +1,8 @@
 // Тестовый двойник сервисных wire-форматов (Rust) для node-смоуков.
 //
-// Правила живут в Rust (ADR-005 R1 / W4): vault::call::parse_call_signal,
-// vault::signals::parse_dod_data / build_dod_data, vault::envelope::raw_object.
-// В node-смоуках моста нет — нужен двойник.
+// Правила живут в Rust (ADR-005 R1 / W4): vault::call::parse_call_signal /
+// build_call_signal, vault::signals::parse_dod_data / build_dod_data,
+// vault::envelope::raw_object. В node-смоуках моста нет — нужен двойник.
 //
 // ТАБЛИЦА ДОЛЖНА СОВПАДАТЬ с Rust. Расхождение здесь не сломает прод (прод
 // зовёт Rust), но сделает смоук слепым к правке правил: при правке Rust нужно
@@ -32,6 +32,25 @@ export function callSignalParse(decrypted) {
     if (typeof obj[k] === 'string') sig[k] = obj[k];
   }
   return sig;
+}
+
+// ── Сигнал звонка (vault::call::build_call_signal) ───────────────────────
+// Порядок ключей и «отсутствующее поле не пишется» — как в Rust Wire-структуре.
+// Пустая строка — это Some(""), а не «поля нет»: двойник не должен быть
+// добрее правила.
+export function callSignalBuild(id, callType, callId, ts, sdp, role, kemct, senderEk, tok) {
+  const out = {
+    vault: 1,
+    id: String(id == null ? '' : id),
+    type: String(callType == null ? '' : callType),
+    call_id: String(callId == null ? '' : callId),
+    ts: Number(ts) || 0,
+  };
+  const optional = { sdp, role, kemct, sender_ek: senderEk, tok };
+  for (const [k, v] of Object.entries(optional)) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return JSON.stringify(out);
 }
 
 // ── Data-письмо (vault::signals::parse_dod_data) ─────────────────────────
@@ -153,6 +172,9 @@ export function envelopeIdOf(text) {
 export function wireSignalHandler(cmd, args) {
   const a = args || {};
   if (cmd === 'call_parse_signal') return callSignalParse(a.decrypted);
+  if (cmd === 'call_build_signal') {
+    return callSignalBuild(a.id, a.callType, a.callId, a.ts, a.sdp, a.role, a.kemct, a.senderEk, a.tok);
+  }
   if (cmd === 'vault_parse_signal') return signalParse(a.plain);
   if (cmd === 'vault_envelope_id') return envelopeIdOf(a.text);
   if (cmd === 'vault_parse_channel_envelope') return channelParse(a.plain);

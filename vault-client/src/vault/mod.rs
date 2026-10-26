@@ -62,6 +62,6 @@ pub use messages::{VaultMessage, MessageStore};
 pub use incoming::{ClassifyKind, ClassifyResult, classify};
 /// M2.3: Call signal core (parity JS parseCallSignal + CallSignal).
 #[allow(unused_imports)]
-pub use call::{CallSignal, parse_call_signal};
+pub use call::{build_call_signal, CallSignal, parse_call_signal};
 pub use read_receipts::ReadReceiptStore;
 pub use search::{IndexEntry, MessageIndex};

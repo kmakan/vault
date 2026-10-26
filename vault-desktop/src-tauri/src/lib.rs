@@ -2482,6 +2482,8 @@ pub fn run() {
             presence_last_seen,
             // M2.3: call-signal parsing bridge.
             call_parse_signal,
+            // ADR-005 R1: сборка call-конверта — тоже правило ядра.
+            vault_bridge::call_build_signal,
             // M2.8: group-call roster state bridge.
             media::media_call_state,
             // M2.10 (ADR-002): group call fan-out bridge cmd.

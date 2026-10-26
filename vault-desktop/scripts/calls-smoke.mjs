@@ -77,6 +77,9 @@ const dbMock = {
 const relayMock = {
   pubs: [],
   result: { ok: true }, // что «вернёт» relayPublish; тест может подменить
+  // Адрес НАШЕЙ очереди: сигнал обязан уносить его собеседнику, иначе тот
+  // не сможет слать мгновенные сигналы (и мы не узнаем его адрес).
+  getSettings: async () => ({ relays: [{ url: 'https://relay.test', myToken: 'MY-QUEUE' }], active: 0, peers: {} }),
   relayPublish: (from, to, id, content, opts) => {
     relayMock.pubs.push({ from, to, id, content, opts });
     return Promise.resolve(relayMock.result);
@@ -104,7 +107,7 @@ const histMock = {
 writeFileSync(MOCKS + '/api.js', 'const api = globalThis.__apiMock; export default api; export const db = globalThis.__dbMock; export const accountNamespace = (email) => globalThis.__accountNamespaceMock(email);');
 // fingerprintOf возвращает САМ ключ: иначе «релей опубликовал с отпечатком
 // чужого ключа» неотличимо от «с правильным» (мутация ключа была невидима).
-writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => "fp:" + k; export const hasPeerToken = async () => false;');
+writeFileSync(MOCKS + '/relay-client.js', 'export const relayPublish = (...a) => globalThis.__relayMock.relayPublish(...a); export const fingerprintOf = async (k) => "fp:" + k; export const hasPeerToken = async () => false; export const getSettings = (...a) => globalThis.__relayMock.getSettings(...a);');
 writeFileSync(MOCKS + '/crypto.js', 'const crypto = globalThis.__cryptoMock; export default crypto;');
 writeFileSync(MOCKS + '/tauri-core.js', 'export const invoke = (...a) => globalThis.__invokeMock(...a);');
 // Адаптер правила — настоящий файл src/call-state-rule.js, меняется только
@@ -333,16 +336,35 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   // отбрасывает конверт (AAD auth failed) и вызова нет ни по релею, ни по почте.
   cryptoMock.peerPublicKey = 'STALE_OTHER_PEER';
   cryptoMock.peerKeyUsed = null;
-  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c1', sdp: 'SDP1', kemct: 'K', sender_ek: 'E' });
+  // Что именно JS передал ядру: ключи обязаны быть в camelCase (Tauri v2
+  // переводит их сам, snake_case ключ молча роняет команду).
+  let buildArgs = null;
+  const wireInvoke = globalThis.__wireSignalInvoke;
+  globalThis.__wireSignalInvoke = async (cmd, args) => {
+    if (cmd === 'call_build_signal') buildArgs = args;
+    return wireInvoke(cmd, args);
+  };
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c1', sdp: 'SDP1', role: 'caller', kemct: 'K', sender_ek: 'E' });
+  globalThis.__wireSignalInvoke = wireInvoke;
   await new Promise(r => process.nextTick(r));
   check('сигнал зашифрован ключом АДРЕСАТА, а не последним выставлявшимся',
     cryptoMock.peerKeyUsed === 'PUB', cryptoMock.peerKeyUsed);
   check('релей-копия ушла (wake=true для call_request)', relayMock.pubs.length === 1 && relayMock.pubs[0].opts.wake === true);
   check('релей ушёл с отпечатком КЛЮЧА ПИРА (не пустым/чужим)',
     relayMock.pubs.length === 1 && relayMock.pubs[0].opts.peerFp === 'fp:PUB', relayMock.pubs[0] && relayMock.pubs[0].opts);
+  check('поля конверта уходят в ядро (camelCase, как ждёт Tauri)',
+    buildArgs && buildArgs.callType === 'call_request' && buildArgs.callId === 'c1'
+      && buildArgs.senderEk === 'E' && buildArgs.tok === 'MY-QUEUE',
+    buildArgs);
   const body = JSON.parse(cryptoMock.encVault[0]);
-  check('тело: vault:1 + id + type + call_id + ts + sdp + kemct + sender_ek',
-    body.vault === 1 && body.id && body.type === 'call_request' && body.call_id === 'c1' && typeof body.ts === 'number' && body.sdp === 'SDP1' && body.kemct === 'K' && body.sender_ek === 'E');
+  check('тело: vault:1 + id + type + call_id + ts + sdp + role + kemct + sender_ek',
+    body.vault === 1 && body.id && body.type === 'call_request' && body.call_id === 'c1' && body.ts > 0
+      && body.sdp === 'SDP1' && body.role === 'caller' && body.kemct === 'K' && body.sender_ek === 'E');
+  check('relay-токен отправителя едет в конверте (собеседник узнаёт наш адрес)',
+    body.tok === 'MY-QUEUE', body.tok);
+  check('релей публикует с ТЕМ ЖЕ id, что в конверте (дедуп сходится)',
+    relayMock.pubs.length === 1 && relayMock.pubs[0].id && relayMock.pubs[0].id.id === body.id,
+    relayMock.pubs[0] && relayMock.pubs[0].id);
   check('SMTP-письмо ушло (stealth sendReadReceipt)', apiMock.calls.some(c => c[0] === 'sendReadReceipt'));
   // relayDelivered: успешная релей-публикация помечает ЗВОНЯЩИЙ вызов —
   // после этого баунс почтовой копии его НЕ гасит (см. §9, живой звонок
@@ -361,6 +383,18 @@ console.log('3. sendCallEnvelope (релей + SMTP-фон)');
   await new Promise(r => process.nextTick(r));
   check('провал релей → relayDelivered не выставлен', !ctxFailed.session.currentCall.relayDelivered);
   relayMock.result = { ok: true };
+  // Отказ ядра: конверта нет — не шлём НИ релей, НИ почту. Локальная сборка
+  // тела вернула бы ровно ту вторую копию формата, которую убрали.
+  relayMock.pubs.length = 0;
+  apiMock.calls.length = 0;
+  const wireFail = globalThis.__wireSignalInvoke;
+  globalThis.__wireSignalInvoke = async () => null;
+  await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_request', call_id: 'c-none' });
+  globalThis.__wireSignalInvoke = wireFail;
+  await new Promise(r => process.nextTick(r));
+  check('ядро не собрало конверт → ни релея, ни письма',
+    relayMock.pubs.length === 0 && apiMock.calls.length === 0,
+    { pubs: relayMock.pubs.length, calls: apiMock.calls.map(c => c[0]) });
   // viaRelay=false → только почта
   relayMock.pubs.length = 0;
   await C.sendCallEnvelope(ctx.deps, 'peer@x.ru', { type: 'call_end', call_id: 'c1' }, { viaRelay: false });
@@ -484,7 +518,14 @@ console.log('5. lifecycle');
   const cid = ctx.session.currentCall && ctx.session.currentCall.call_id;
   check('startCall → outgoing_ringing + hasLocalOffer', ctx.session.callState === 'outgoing_ringing' && ctx.session.currentCall.hasLocalOffer === true);
   check('call_request ушел с offer+kemct', cryptoMock.encVault.some(p => { try { const b = JSON.parse(p); return b.type === 'call_request' && b.sdp === 'OFFER_SDP' && b.kemct === 'KEMCT'; } catch (e) { return false; } }));
-  check('ринг-таймер 300с + 1-й повтор через 5с (затухание, не 15с-лавина)', timers.get(ctx.session.callRingTimer).ms === 300000 && timers.get(callRequestResender.timer).ms === 5000);
+  // Гудок ставится в два шага: сразу гарантированный фолбэк 300с, затем
+  // настройка пользователя + запас на доставку ответа (исходящий: +60с).
+  // Дожидаемся фонового чтения настройки: иначе проверка ловит промежуточное
+  // состояние и зависит от числа await в отправке сигнала.
+  await flush();
+  const ringMs = (timers.get(ctx.session.callRingTimer) || {}).ms;
+  check('ринг-таймер: настройка (180с по умолчанию) + запас 60с, 1-й повтор через 5с',
+    ringMs === 240000 && timers.get(callRequestResender.timer).ms === 5000, { ring: ringMs });
   // ретрансляция тикает (viaRelay=false)
   relayMock.pubs.length = 0;
   await fireTimer(callRequestResender.timer);

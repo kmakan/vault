@@ -7,6 +7,8 @@
 // Что здесь:
 //   * parseCallSignal — разбор сигнала звонка (мост call_parse_signal existed
 //     в Rust с M2.3, но JS продолжал разбирать сам: дубль правила);
+//   * buildCallSignal — сборка сигнала звонка (обратная сторона разбора:
+//     мост call_build_signal, правило в vault::call::build_call_signal);
 //   * parseDodData / buildDodData — data-письмо (download-on-demand);
 //   * envelopeObject — объект конверта для релей-дубля отправки.
 //
@@ -29,6 +31,37 @@ export async function parseCallSignal(decrypted) {
     return await invoke('call_parse_signal', { decrypted });
   } catch (e) {
     console.error('[signal] Rust-разбор call-сигнала недоступен:', e && e.message || e);
+    return null;
+  }
+}
+
+// ── Сборка сигнала звонка ───────────────────────────────────────────────
+// Возвращает готовый плейнтекст или null — мост недоступен. Вызывающий
+// обязан НЕ отправлять письмо при null: конверт, собранный не по правилу,
+// получатель не разберёт (тише отказ, чем мусор в канале).
+//
+// Правило формата — в ядре (vault::call::build_call_signal): маркер `vault:1`,
+// имена ключей и «отсутствующее поле не пишется» живут там же, где разбор.
+// Пока сборка была в JS, формат существовал в двух копиях, и они разошлись
+// ровно на поле tok — собеседник терял адрес relay-очереди отправителя.
+//
+// Пустые/отсутствующие необязательные поля уходят как null (в Rust — None).
+export async function buildCallSignal(sig) {
+  const opt = (v) => (v ? String(v) : null);
+  try {
+    return await invoke('call_build_signal', {
+      id: String(sig.id == null ? '' : sig.id),
+      callType: String(sig.type == null ? '' : sig.type),
+      callId: String(sig.call_id == null ? '' : sig.call_id),
+      ts: Number(sig.ts) || 0,
+      sdp: opt(sig.sdp),
+      role: opt(sig.role),
+      kemct: opt(sig.kemct),
+      senderEk: opt(sig.sender_ek),
+      tok: opt(sig.tok),
+    });
+  } catch (e) {
+    console.error('[signal] Rust-сборка call-сигнала недоступна:', e && e.message || e);
     return null;
   }
 }

@@ -204,20 +204,6 @@ export async function mediaCallJoinBridge(callId, participantKeys) {
 
 // Отправка сигнала звонка (stealth-письмо с пустой темой — как квитанции).
 export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
-  const body = {
-    vault: 1,
-    id: payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
-    type: payload.type,
-    call_id: payload.call_id,
-    ts: Date.now(),
-    ...(payload.sdp ? { sdp: payload.sdp } : {}),
-    ...(payload.role ? { role: payload.role } : {}),
-    // PQ: kemct звонящего едет в call_request; принимающий
-    // собирает гибридный media_key декапсуляцией. sender_ek — чтобы
-    // contact сохранялся и для ответного гибрида.
-    ...(payload.kemct ? { kemct: payload.kemct } : {}),
-    ...(payload.sender_ek ? { sender_ek: payload.sender_ek } : {}),
-  };
   // M2.4: call-конверт несёт tok отправителя (адрес его relay-очереди) —
   // получатель auto-learned при приходе (incoming.js call-ветка).
   // Почта=гарант, релей=ускорение: без peer-tokens call-сигналы
@@ -226,11 +212,37 @@ export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
   // независимо от того, сами мы шлём через релей или нет. Иначе
   // выключенный релей у одного из собеседников навсегда ломает
   // обмен токенами (он не узнает наш адрес → мы не узнаём его).
+  let myTok = '';
   try {
     const { relays, active } = await relay.getSettings(sessionStore.getCurrentEmail());
-    const myTok = ((relays[active] || relays[0]) || {}).myToken || '';
-    if (myTok) body.tok = myTok;
+    myTok = ((relays[active] || relays[0]) || {}).myToken || '';
   } catch (e) { /* релей опционален */ }
+  // ФОРМАТ КОНВЕРТА — ПРАВИЛО ЯДРА (ADR-005 R1 / W4). JS передаёт поля,
+  // ядро решает, что попадёт в письмо и под какими именами; получатель
+  // разбирает тем же правилом (call_parse_signal). Пока сборка была здесь,
+  // формат жил в двух копиях, и они разошлись на поле tok: собеседник
+  // терял адрес очереди отправителя и сигналы падали на почтовый поллинг.
+  const id = payload.id || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+  const wire = await WireSignalRule.buildCallSignal({
+    id,
+    type: payload.type,
+    call_id: payload.call_id,
+    ts: Date.now(),
+    // PQ: kemct звонящего едет в call_request; принимающий
+    // собирает гибридный media_key декапсуляцией. sender_ek — чтобы
+    // contact сохранялся и для ответного гибрида.
+    sdp: payload.sdp,
+    role: payload.role,
+    kemct: payload.kemct,
+    sender_ek: payload.sender_ek,
+    tok: myTok,
+  });
+  if (!wire) {
+    // Конверта от ядра нет — отправлять нечего. Локальная сборка вернула бы
+    // ровно ту вторую копию формата, которую мы убрали.
+    console.error('[call] сигнал не собран ядром — ни релей, ни почта не шлются');
+    return;
+  }
   // КЛЮЧ АДРЕСАТА — ЯВНО. crypto.encryptVault шифрует ГЛОБАЛЬНЫМ
   // peerPublicKey, который выставляют открытие чата и каждый расшифрованный
   // конверт поллинга. Между открытием чата и нажатием «позвонить» поллинг
@@ -241,7 +253,7 @@ export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
   if (peerKey) {
     crypto.setPeerPublicKey(peerKey, identityStore.getPeerPqKey(peer) || null);
   }
-  const content = await crypto.encryptVault(JSON.stringify(body));
+  const content = await crypto.encryptVault(wire);
   // M2.2: дублируем сигнал звонка на релей (критично для скорости
   // установления: email-сигнал идёт 20-60с, релей ~1с). Получатель
   // заберёт его relayConsume'ом (parseCallSignal работает и на
@@ -284,7 +296,7 @@ export async function sendCallEnvelope(deps, peer, payload, opts = {}) {
       // urgent для call_request: сервер обходит last_seen-гейт, чтобы
       // будить только что закрытое приложение (гейт 90с не знал, что
       // «поллил 5с назад» = его убили). Дедуп на клиенте по env.id.
-      relay.relayPublish(sessionStore.getCurrentEmail(), peer, { id: body.id }, content, { wake, urgent: wake, peerFp })
+      relay.relayPublish(sessionStore.getCurrentEmail(), peer, { id }, content, { wake, urgent: wake, peerFp })
         .then(r => {
           // Причина пропуска публикации ВИДНА в логе: relayPublish возвращает
           // {ok:false, why}, но вызывающий код его игнорировал — на стенде
