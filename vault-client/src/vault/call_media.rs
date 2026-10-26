@@ -20,6 +20,34 @@ pub const ICE_DISCONNECTED_SECS: u64 = 60;
 pub const ICE_FAILED_SECS: u64 = 120;
 /// Opus dynamic payload type (both ends are our app).
 pub const OPUS_PAYLOAD_TYPE: u8 = 120;
+/// Частота клока Opus — ОДНО число для SDP, энкодера, декодера и ресэмплеров.
+///
+/// Разъезд выглядит на телефоне как «собеседник говорит ускоренно» или «голоса
+/// нет», а в логе пусто: RTP-таймстампы остаются валидными, порт не жалуется,
+/// декодер молча резэмплит не туда. Поэтому число здесь, а не в двух крейтах.
+pub const OPUS_CLOCK_RATE: u32 = 48_000;
+/// Каналов в Opus-потоке: моно. Энкодер строится `OpusChannels::Mono`, значит
+/// и в SDP обязано быть столько же — иначе приёмная сторона ждёт стерео.
+pub const OPUS_CHANNELS: u8 = 1;
+/// Длительность кадра, который мы кодием end-to-end.
+pub const OPUS_FRAME_MS: u32 = 20;
+/// Битрейт энкодера, бит/с. Численно равен клоку — поэтому назван ОТДЕЛЬНО:
+/// перепутать их местами можно только молча, без ошибки компиляции.
+pub const OPUS_BITRATE_BPS: u32 = 48_000;
+/// Кусок, которым APM (AEC/NS/AGC) жрёт фрейм: 10 мс.
+pub const APM_FRAME_MS: u32 = 10;
+/// Сколько миллисекунд речи помещается в буфер декодера (anti-jitter запас).
+pub const DECODE_BUF_MS: u32 = 120;
+
+/// Сколько сэмплов Opus-потока содержится в `ms` миллисекунд.
+///
+/// `const fn` и ОДНА копия: `FRAME_SAMPLES`, кусок APM и буфер декодера — все
+/// три выводятся отсюда, так что правка клока в ядре перекраивает телефонный
+/// путь целиком, а не два из трёх чисел.
+pub const fn opus_samples_in(ms: u32) -> usize {
+    (OPUS_CLOCK_RATE as usize * ms as usize) / 1000
+}
+
 /// VP8 dynamic payload type (video; both ends are our app). 96 — первый
 /// динамический PT, отдельный от [`OPUS_PAYLOAD_TYPE`].
 pub const VP8_PAYLOAD_TYPE: u8 = 96;
@@ -79,6 +107,35 @@ mod tests {
         assert_eq!(VP8_CLOCK_RATE, 90_000);
         assert_eq!(VIDEO_FPS, 30);
         assert_eq!(FRAME_TS_INCREMENT, 3_000);
+        assert_eq!(OPUS_CLOCK_RATE, 48_000);
+        assert_eq!(OPUS_CHANNELS, 1);
+        assert_eq!(OPUS_FRAME_MS, 20);
+        assert_eq!(OPUS_BITRATE_BPS, 48_000);
+        assert_eq!(APM_FRAME_MS, 10);
+        assert_eq!(DECODE_BUF_MS, 120);
+    }
+
+    #[test]
+    fn opus_frame_sizes_derive_from_the_clock() {
+        // 20 мс @ 48 кГц = 960, 10 мс = 480, 120 мс = 5760. Проверка держит
+        // СВЯЗЬ: если клок поедет, все три числа обязаны поехать за ним.
+        assert_eq!(opus_samples_in(OPUS_FRAME_MS), 960);
+        assert_eq!(opus_samples_in(APM_FRAME_MS), 480);
+        assert_eq!(opus_samples_in(DECODE_BUF_MS), 5760);
+        // Фрейм APM — ровно половина Opus-фрейма: один фрейм = два куска.
+        assert_eq!(opus_samples_in(OPUS_FRAME_MS), 2 * opus_samples_in(APM_FRAME_MS));
+        // Целое число фреймов в буфере — иначе `chunks_exact` терял бы остаток.
+        assert_eq!(opus_samples_in(DECODE_BUF_MS) % opus_samples_in(OPUS_FRAME_MS), 0);
+    }
+
+    #[test]
+    fn bitrate_and_clock_are_not_the_same_knob() {
+        // Числа совпадают (48 000 бит/с и 48 000 Гц), поэтому «перепутали
+        // местами» в коде не видно. Раздельные константы и этот assert
+        // держат смысл: битрейт — не клок, и клок Opus — не клок VP8.
+        assert_eq!(OPUS_BITRATE_BPS, 48_000);
+        assert_ne!(OPUS_CLOCK_RATE, VP8_CLOCK_RATE);
+        assert_ne!(opus_samples_in(APM_FRAME_MS), OPUS_BITRATE_BPS as usize);
     }
 
     #[test]

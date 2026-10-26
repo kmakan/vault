@@ -66,7 +66,8 @@ use rtc::rtp_transceiver::rtp_sender::{
 // Payload-типы кодеков и ICE-таймауты — протокол соединения: числа живут в
 // ядре (ADR-005 §W4, `t_502b6c90`), здесь только реэкспорт и обёртка Duration.
 use vault_client::vault::call_media::{
-    ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS, VP8_CLOCK_RATE,
+    ICE_DISCONNECTED_SECS, ICE_FAILED_SECS, ICE_GATHER_TIMEOUT_SECS, OPUS_CHANNELS,
+    OPUS_CLOCK_RATE, VP8_CLOCK_RATE,
 };
 pub(crate) use vault_client::vault::call_media::{OPUS_PAYLOAD_TYPE, VP8_PAYLOAD_TYPE};
 
@@ -200,15 +201,15 @@ impl PeerConnectionEventHandler for CallHandler {
 // Codecs / local tracks (audio always; video only in video calls)
 // ---------------------------------------------------------------------------
 
-/// Opus (mono, 48 kHz) — must stay identical to the params owned by the prod
-/// audio path (audiopus uses `OpusChannels::Mono`, 48 kHz; SDP обязан совпадать).
+/// Opus (mono, 48 kHz). Числа — ядровые (`call_media::OPUS_*`): их видит и
+/// SDP, и прод-путь аудио (`audio.rs` строит энкодер/декодер с теми же
+/// клоком и каналами). Разъезд был бы молчаливым: валидные таймстампы,
+/// никакой ошибки в логе, на телефоне — «говорит ускоренно» или тишина.
 fn opus_codec() -> RTCRtpCodec {
     RTCRtpCodec {
         mime_type: MIME_TYPE_OPUS.to_owned(),
-        clock_rate: 48000,
-        // MONO: энкодер/декодер audiopus используют OpusChannels::Mono
-        // (audio.rs) — SDP обязан совпадать, иначе рассинхрон каналов.
-        channels: 1,
+        clock_rate: OPUS_CLOCK_RATE,
+        channels: u16::from(OPUS_CHANNELS),
         sdp_fmtp_line: String::new(),
         rtcp_feedback: vec![],
     }
@@ -1591,11 +1592,11 @@ mod tests {
             "video SSRC must differ from audio SSRC"
         );
 
-        // Codec params: Opus stays mono/48k, VP8 is video/90000 on PT 96.
+        // Codec params: Opus — ядровые клок и каналы, VP8 — видео/90000 на PT 96.
         let opus = opus_codec();
         assert_eq!(opus.mime_type, MIME_TYPE_OPUS);
-        assert_eq!(opus.clock_rate, 48000);
-        assert_eq!(opus.channels, 1);
+        assert_eq!(opus.clock_rate, OPUS_CLOCK_RATE);
+        assert_eq!(opus.channels, u16::from(OPUS_CHANNELS));
         let vp8 = vp8_codec();
         assert_eq!(vp8.mime_type, MIME_TYPE_VP8);
         assert_eq!(vp8.clock_rate, 90000);
@@ -1620,6 +1621,37 @@ mod tests {
             MIME_TYPE_VP8
         );
         assert!(video_mst.codec(audio_ssrc).is_none());
+    }
+
+    /// SDP и прод-путь аудио обязаны описывать ОДНУ и ту же речь.
+    ///
+    /// Класс дефекта (очередь моста #14, `t_72d494c1`): клок 48000 и каналы 1
+    /// были вписаны вторым литералом в `media.rs` рядом с такими же числами в
+    /// `audio.rs` и в ядре. Совпадающие числа — самая коварная форма дубля:
+    /// правка одного места не даёт ни ошибки компиляции, ни ошибки в логе, а
+    /// на телефоне это «собеседник говорит ускоренно» или тишина.
+    #[test]
+    fn sdp_opus_params_and_the_audio_path_share_one_clock() {
+        use vault_client::vault::call_media::{opus_samples_in, OPUS_FRAME_MS};
+
+        let opus = opus_codec();
+        assert_eq!(opus.clock_rate, OPUS_CLOCK_RATE);
+        assert_eq!(u32::from(opus.channels), u32::from(OPUS_CHANNELS));
+        // Размер кадра аудио-пути обязан следовать за КЛОКОМ ИЗ SDP:
+        // 20 мс речи при 48 кГц — это 960 отсчётов, а не «960, потому что».
+        assert_eq!(
+            crate::audio::FRAME_SAMPLES,
+            opus_samples_in(OPUS_FRAME_MS)
+        );
+        assert_eq!(
+            opus.clock_rate as usize * OPUS_FRAME_MS as usize / 1000,
+            crate::audio::FRAME_SAMPLES
+        );
+        // Энкодер/декодер собираются из тех же ядровых чисел: здесь мерится
+        // ПРОВОДКА (откуда берётся число), а не совпадение значений.
+        let (rate, channels) = crate::audio::opus_codec_params().expect("числа применимы к Opus");
+        assert_eq!(rate as i32, opus.clock_rate as i32);
+        assert_eq!(channels as i32, opus.channels as i32);
     }
 
     /// Offer SDP is built from the MediaEngine: with video the offer carries a

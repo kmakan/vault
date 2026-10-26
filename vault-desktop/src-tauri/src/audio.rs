@@ -44,6 +44,15 @@ use tokio::sync::watch;
 // длительность одноразового звука. Плеер остаётся здесь (ADR-005 §W4).
 #[cfg(not(target_os = "android"))]
 use vault_client::vault::audio_wav::{parse_wav, sound_duration_ms};
+// Числа протокола Opus — ядро (ADR-005 §W4, очередь моста #14 `t_72d494c1`).
+// SDP в `media.rs` и этот путь обязаны читать ОДНО число: размер фрейма,
+// кусок APM и буфер декодера выводятся из клока, поэтому правка клока в ядре
+// перекраивает весь путь, а не два из трёх чисел.
+use vault_client::vault::call_media::{
+    opus_samples_in, OPUS_CHANNELS, OPUS_CLOCK_RATE, DECODE_BUF_MS, OPUS_FRAME_MS,
+};
+#[cfg(not(target_os = "android"))]
+use vault_client::vault::call_media::{APM_FRAME_MS, OPUS_BITRATE_BPS};
 
 use rtc::media::Sample;
 use rtc::shared::time::SystemInstant;
@@ -72,13 +81,13 @@ pub(crate) type Apm = ();
 /// 10мс-фрейм APM @ 48kHz. 20мс Opus-фрейм (960)
 /// обрабатывается двумя такими кусками.
 #[cfg(not(target_os = "android"))]
-const APM_FRAME: usize = 480;
+const APM_FRAME: usize = opus_samples_in(APM_FRAME_MS);
 
 /// Создать APM: AEC3 (полный) + шумодав High + AGC (AdaptiveDigital, без
 /// аналогового гейта — мы не управляем OS-миксером) + high-pass.
 #[cfg(not(target_os = "android"))]
 fn create_apm() -> Result<Arc<Processor>, String> {
-    let ap = Processor::new(48000).map_err(|e| format!("APM new: {e}"))?;
+    let ap = Processor::new(OPUS_CLOCK_RATE).map_err(|e| format!("APM new: {e}"))?;
     let config = ApmConfig {
         echo_canceller: Some(EchoCanceller::Full {
             stream_delay_ms: None,
@@ -128,29 +137,49 @@ fn apm_render(apm: &Apm, frame: &[f32]) {
 fn apm_render(_apm: &Apm, _frame: &[f32]) {}
 
 /// 20ms frame @ 48kHz mono — the Opus frame size we use end-to-end.
-pub(crate) const FRAME_SAMPLES: usize = 960;
-const FRAME_DURATION: Duration = Duration::from_millis(20);
+/// Размер ВЫВЕДЕН из ядрового клока (`t_72d494c1`): SDP (`media.rs`) и этот
+/// путь обязаны меняться вместе, иначе таймстампы и речь разъедутся молча.
+pub(crate) const FRAME_SAMPLES: usize = opus_samples_in(OPUS_FRAME_MS);
+const FRAME_DURATION: Duration = Duration::from_millis(OPUS_FRAME_MS as u64);
 /// Max opus frame buffer (120ms @48k mono = 5760 samples).
-const DECODE_BUF: usize = 5760;
+const DECODE_BUF: usize = opus_samples_in(DECODE_BUF_MS);
+
+/// Параметры энкодера/декодера — из ядровых чисел, а не вторым литералом.
+///
+/// `SampleRate` и `Channels` в audiopus — `#[repr(i32)]` с дискриминантами
+/// «герцы» и «число каналов», поэтому превращение проверяемо: ядровый клок
+/// 16 000 даст `Hz16000`, а не `Hz48000`, и SDP поедет за ним вместе с этим
+/// путём. Раньше оба числа были записаны в мосте заново.
+///
+/// Вызов полностью квалифицирован: у audiopus 0.2 СВОЙ трейт `TryFrom`
+/// (наследие «`TryFrom` ещё ночной»), а импорт std-версии даёт два кандидата.
+pub(crate) fn opus_codec_params() -> Result<(SampleRate, OpusChannels), String> {
+    let rate = <SampleRate as audiopus::TryFrom<i32>>::try_from(OPUS_CLOCK_RATE as i32)
+        .map_err(|e| e.to_string())?;
+    let channels = <OpusChannels as audiopus::TryFrom<i32>>::try_from(OPUS_CHANNELS as i32)
+        .map_err(|e| e.to_string())?;
+    Ok((rate, channels))
+}
 
 /// Mic stream for a concrete sample format: device samples → mono f32 →
 /// resample → 20ms frames → Opus encode (float) → channel to the writer.
 #[cfg(not(target_os = "android"))]
 macro_rules! build_mic {
     ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $opus_tx:expr, $muted:expr, $apm:expr, $fmt:ty) => {{
+        let (opus_rate, opus_channels) = opus_codec_params()?;
         let mut encoder =
-            Encoder::new(SampleRate::Hz48000, OpusChannels::Mono, Application::Voip)
+            Encoder::new(opus_rate, opus_channels, Application::Voip)
                 .map_err(|e| e.to_string())?;
         // Тюнинг Opus: дефолтный Auto-битрейт даёт
         // ~12-16 кбит/с на тихой речи — «каша» и шум квантования. 48 кбит/с
         // + FEC (восстановление потерянных пакетов) + PLC-готовность 10% +
         // Voice-сигнал + максимальная complexity.
-        encoder.set_bitrate(audiopus::Bitrate::BitsPerSecond(48000)).ok();
+        encoder.set_bitrate(audiopus::Bitrate::BitsPerSecond(OPUS_BITRATE_BPS as i32)).ok();
         encoder.set_inband_fec(true).ok();
         encoder.set_packet_loss_perc(10).ok();
         encoder.set_complexity(10).ok();
         encoder.set_signal(audiopus::Signal::Voice).ok();
-        let mut resampler = ResamplerIn::new($device_rate, 48000);
+        let mut resampler = ResamplerIn::new($device_rate, OPUS_CLOCK_RATE);
         let mut buf: Vec<f32> = Vec::with_capacity(FRAME_SAMPLES);
         let stream = $device
             .build_input_stream(
@@ -203,7 +232,7 @@ macro_rules! build_mic {
 macro_rules! build_speaker {
     ($device:expr, $cfg:expr, $device_rate:expr, $ch:expr, $pcm_rx:expr, $fmt:ty) => {{
         let mut pending: Vec<f32> = Vec::new();
-        let mut resampler = ResamplerOut::new(48000, $device_rate);
+        let mut resampler = ResamplerOut::new(OPUS_CLOCK_RATE, $device_rate);
         let mut last: f32 = 0.0;
         let mut slot: usize = 0;
         let stream = $device
@@ -554,7 +583,14 @@ async fn read_remote_loop(
     media_key: Option<[u8; 32]>,
     apm: Apm,
 ) {
-    let mut decoder = match Decoder::new(SampleRate::Hz48000, OpusChannels::Mono) {
+    let (opus_rate, opus_channels) = match opus_codec_params() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[audio] opus decoder: {e}");
+            return;
+        }
+    };
+    let mut decoder = match Decoder::new(opus_rate, opus_channels) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("[audio] opus decoder: {e}");
@@ -841,3 +877,43 @@ pub fn ringtone_start() -> Result<(), String> {
 }
 #[cfg(target_os = "android")]
 pub fn ringtone_stop() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vault_client::vault::call_media::{OPUS_CHANNELS, OPUS_CLOCK_RATE, OPUS_FRAME_MS};
+
+    #[test]
+    fn encoder_params_come_from_the_core_clock() {
+        // Класс дефекта (очередь моста #14): клок и каналы были записаны в
+        // мосте ВТОРЫМ литералом рядом с ядровым. Числа совпадали, поэтому
+        // правка одного места расходилась молча, а на телефоне это
+        // «собеседник говорит ускоренно» или тишина — без единой ошибки в логе.
+        // Проба мерит именно ПРОВОДКУ: вариант кодируется ядровым числом.
+        let (rate, channels) = opus_codec_params().expect("ядровые числа применимы к Opus");
+        assert_eq!(rate as i32, OPUS_CLOCK_RATE as i32);
+        assert_eq!(channels as i32, OPUS_CHANNELS as i32);
+        // Если бы это был застывший `Hz48000`, второй assert не различал бы
+        // «число из ядра» и «число, вписанное руками» — здесь он различает.
+        assert_eq!(
+            <SampleRate as audiopus::TryFrom<i32>>::try_from(16_000)
+                .expect("16 кГц — валидный клок Opus") as i32,
+            16_000
+        );
+    }
+
+    #[test]
+    fn frame_sizes_follow_the_clock() {
+        // 960/480/5760 больше не самопроверяющиеся литералы: они выведены, и
+        // связь обязана держаться на любых ядровых числах.
+        assert_eq!(FRAME_SAMPLES, opus_samples_in(OPUS_FRAME_MS));
+        assert_eq!(DECODE_BUF, 6 * FRAME_SAMPLES);
+        assert_eq!(
+            FRAME_DURATION,
+            Duration::from_millis(OPUS_FRAME_MS as u64)
+        );
+        // Фрейм APM — ровно половина Opus-фрейма (20мс = два куска по 10мс).
+        assert_eq!(FRAME_SAMPLES, 2 * opus_samples_in(APM_FRAME_MS));
+    }
+}
+

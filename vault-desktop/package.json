@@ -62,9 +62,10 @@
     "gate:rust-mutations": "node scripts/rust-mutation-gate.mjs",
     "gate:rust-smokes": "node scripts/rust-smoke-list-check.mjs",
     "gate:mutation-density": "node scripts/mutation-density-gate.mjs",
+    "gate:opus-numbers": "node scripts/opus-numbers-gate.mjs",
     "gate:delegate-wiring": "node scripts/delegate-wiring-gate.mjs",
     "gate:mutations": "node scripts/mutation-gate.mjs",
-    "quality": "npm run gate:parse && npm run gate:mutation-patterns && npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:delegate-wiring && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
+    "quality": "npm run gate:parse && npm run gate:mutation-patterns && npm run gate:opus-numbers && npm run build && npm run gate:mutations && npm run gate:feature-coverage && npm run gate:service-boundary && npm run gate:tauri-args && npm run gate:call-wire-names && npm run gate:delegate-wiring && npm run gate:hygiene && npm run gate:rust-mutations && npm run gate:mutation-density",
     "smoke:attachments": "node scripts/attachments-smoke.mjs",
     "smoke:send": "node scripts/send-smoke.mjs",
     "smoke:messages": "node scripts/messages-smoke.mjs"

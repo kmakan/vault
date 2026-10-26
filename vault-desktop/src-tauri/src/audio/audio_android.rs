@@ -11,7 +11,13 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use audiopus::coder::Encoder;
-use audiopus::{Application, Channels as OpusChannels, SampleRate as OpusRate};
+use audiopus::Application;
+// Числа протокола Opus — ядро (очередь моста #14, `t_72d494c1`): клок и
+// битрейт этого пути приходят оттуда же, откуда и SDP в `media.rs`. Число
+// каналов здесь задаёт НЕ аргумент, а тип стрима (`.set_mono()` → `Mono`),
+// поэтому с ядром его сверяет не компилятор, а `OPUS_CHANNELS == 1` в тестах
+// ядра: менять `.set_mono()`/`.set_stereo()` можно только вместе с ядром.
+use vault_client::vault::call_media::{OPUS_BITRATE_BPS, OPUS_CLOCK_RATE};
 // ВАЖНО: НЕ `use oboe::*` — oboe экспортирует свой `Result` (type alias
 // `Result<T> = Result<T, Error>`), который затенял бы std::result::Result
 // и ломал сигнатуры с `Result<_, String>`.
@@ -119,11 +125,12 @@ pub(crate) fn start_mic_capture_oboe(
     opus_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     muted: Arc<AtomicBool>,
 ) -> Result<MicStream, String> {
-    let mut encoder = Encoder::new(OpusRate::Hz48000, OpusChannels::Mono, Application::Voip)
+    let (opus_rate, opus_channels) = crate::audio::opus_codec_params()?;
+    let mut encoder = Encoder::new(opus_rate, opus_channels, Application::Voip)
         .map_err(|e| format!("opus encoder: {e}"))?;
     // 48 кбит/с + FEC + PLC-готовность + Voice + complexity 10.
     encoder
-        .set_bitrate(audiopus::Bitrate::BitsPerSecond(48000))
+        .set_bitrate(audiopus::Bitrate::BitsPerSecond(OPUS_BITRATE_BPS as i32))
         .ok();
     encoder.set_inband_fec(true).ok();
     encoder.set_packet_loss_perc(10).ok();
@@ -134,14 +141,14 @@ pub(crate) fn start_mic_capture_oboe(
         muted,
         encoder,
         buf: Vec::with_capacity(FRAME_SAMPLES * 2),
-        resampler: ResamplerIn::new(48000, 48000),
+        resampler: ResamplerIn::new(OPUS_CLOCK_RATE, OPUS_CLOCK_RATE),
         frame_cnt: 0,
     };
     let mut stream = AudioStreamBuilder::default()
         .set_input()
         .set_mono()
         .set_f32()
-        .set_sample_rate(48000)
+        .set_sample_rate(OPUS_CLOCK_RATE as i32)
         .set_performance_mode(PerformanceMode::LowLatency)
         .set_input_preset(InputPreset::VoiceCommunication)
         .set_callback(cb)
@@ -161,14 +168,14 @@ pub(crate) fn start_speaker_oboe(pcm_rx: Receiver<Vec<f32>>) -> Result<SpeakerSt
     let cb = SpeakerCallback {
         pcm_rx,
         pending: Vec::new(),
-        resampler: ResamplerOut::new(48000, 48000),
+        resampler: ResamplerOut::new(OPUS_CLOCK_RATE, OPUS_CLOCK_RATE),
         last: 0.0,
     };
     let mut stream = AudioStreamBuilder::default()
         .set_output()
         .set_mono()
         .set_f32()
-        .set_sample_rate(48000)
+        .set_sample_rate(OPUS_CLOCK_RATE as i32)
         .set_performance_mode(PerformanceMode::LowLatency)
         .set_usage(Usage::VoiceCommunication)
         .set_callback(cb)
