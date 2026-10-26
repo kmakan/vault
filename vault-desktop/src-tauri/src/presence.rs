@@ -183,4 +183,102 @@ mod tests {
             assert_eq!(load_presence().unwrap().len(), 1);
         });
     }
+
+    /// Форма пути без редиректа сверяется с ЛИТЕРАЛОМ: проба, берущая путь из
+    /// тех же констант, не отличит «путь собран правильно» от «константы
+    /// переименованы».
+    #[test]
+    fn path_without_redirect_is_the_vault_layer_file() {
+        let _guard = crate::env_test_guard();
+        let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
+        std::env::remove_var("VAULT_PRESENCE_FILE");
+        let home = dirs::home_dir().expect("дом определён");
+        let expected = home.join(".vault").join("presence.json");
+        let got = get_path();
+        match prev {
+            Some(v) => crate::set_env_safe("VAULT_PRESENCE_FILE", &v),
+            None => std::env::remove_var("VAULT_PRESENCE_FILE"),
+        }
+        assert_eq!(got.unwrap(), expected, "реестр лежит не в слое .vault");
+    }
+
+    #[test]
+    fn redirect_points_the_ledger_at_the_exact_file() {
+        let _guard = crate::env_test_guard();
+        let path = std::env::temp_dir().join(format!("m22_presence-redirect-{}.json", std::process::id()));
+        let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
+        crate::set_env_safe("VAULT_PRESENCE_FILE", &path);
+        let got = get_path();
+        match prev {
+            Some(v) => crate::set_env_safe("VAULT_PRESENCE_FILE", &v),
+            None => std::env::remove_var("VAULT_PRESENCE_FILE"),
+        }
+        assert_eq!(got.unwrap(), path, "редирект проигнорирован");
+    }
+
+    #[test]
+    fn absent_ledger_is_an_empty_store_not_an_error() {
+        with_tmp(|| {
+            let store = load_presence().expect("файла ещё нет — это пустой реестр, не ошибка");
+            assert!(store.is_empty());
+        });
+    }
+
+    #[test]
+    fn broken_ledger_reads_as_an_empty_store() {
+        with_tmp(|| {
+            // Fail-open зафиксирован как контракт: реестр присутствия расходный,
+            // а ошибка здесь означала бы сбой синхронизации из-за оборванной
+            // записи. Мутация «ожидаем валидный JSON» ловится этой пробой.
+            fs::write(get_path().unwrap(), "это не json").unwrap();
+            assert!(load_presence().unwrap().is_empty());
+            ingest_heartbeat("bob@x", 1000, "uid1").unwrap();
+            assert_eq!(last_seen("bob@x").unwrap(), Some(1000));
+        });
+    }
+
+    #[test]
+    fn nested_ledger_directory_is_created() {
+        let _guard = crate::env_test_guard();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("m22_presence-deep-{}-{}", std::process::id(), stamp));
+        let path = root.join("nest").join("presence.json");
+        let prev = std::env::var("VAULT_PRESENCE_FILE").ok();
+        crate::set_env_safe("VAULT_PRESENCE_FILE", &path);
+        let ingested = ingest_heartbeat("bob@x", 1000, "uid1");
+        let written = path.is_file();
+        let _ = fs::remove_dir_all(&root);
+        match prev {
+            Some(v) => crate::set_env_safe("VAULT_PRESENCE_FILE", &v),
+            None => std::env::remove_var("VAULT_PRESENCE_FILE"),
+        }
+        assert!(ingested.is_ok(), "heartbeat в новый каталог не принят: {ingested:?}");
+        assert!(written, "реестр не записан по указанному пути");
+    }
+
+    #[test]
+    fn stored_record_keeps_the_normalized_address() {
+        with_tmp(|| {
+            ingest_heartbeat("Bob@X ", 1000, "uid1").unwrap();
+            let store = load_presence().unwrap();
+            let entry = store.get("bob@x").expect("ключ реестра нормализован");
+            assert_eq!(entry[0].email, "bob@x", "в записи остался сырой адрес");
+        });
+    }
+
+    #[test]
+    fn same_letter_at_a_later_clock_is_a_new_sighting() {
+        with_tmp(|| {
+            // Одно письмо может нести два heartbeat с разными часами
+            // (ретрансляция). Дедуп по одному лишь источнику съедает
+            // «был онлайн позже» и реестр встаёт на первую метку.
+            ingest_heartbeat("bob@x", 1000, "uid1").unwrap();
+            ingest_heartbeat("bob@x", 2100, "uid1").unwrap();
+            assert_eq!(load_presence().unwrap().get("bob@x").unwrap().len(), 2);
+            assert_eq!(last_seen("bob@x").unwrap(), Some(2100));
+        });
+    }
 }

@@ -63,7 +63,7 @@
     "vault-desktop/src-tauri/src/lib.rs": 12,
     "vault-desktop/src-tauri/src/media.rs": 3,
     "vault-desktop/src-tauri/src/monitor_state.rs": 32,
-    "vault-desktop/src-tauri/src/presence.rs": 0,
+    "vault-desktop/src-tauri/src/presence.rs": 12,
     "vault-desktop/src-tauri/src/service_monitor.rs": 0,
     "vault-desktop/src-tauri/src/storage/sqlite.rs": 9,
     "vault-desktop/src-tauri/src/vault_bridge.rs": 4,
@@ -200,7 +200,6 @@
   },
   "gaps": [
     "vault-desktop/src-tauri/src/file_lock.rs",
-    "vault-desktop/src-tauri/src/presence.rs",
     "vault-desktop/src-tauri/src/service_monitor.rs",
     "vault-desktop/src-tauri/src/video.rs"
   ]
