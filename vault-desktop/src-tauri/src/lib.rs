@@ -69,6 +69,11 @@ mod vp8_encoder;
 // activity (свайп из recents). Android-only: JNI-входы из VaultForegroundService.
 #[cfg(target_os = "android")]
 mod service_monitor;
+// Его состояние (pending-очередь, seen-дедуп, машина состояний звонка,
+// классификация письма) — БЕЗ cfg: то же самое, но проверяемое с хоста.
+// Под cfg(android) модуль не компилируется на хосте, и `rust-mutation-gate`
+// его не видит — 1509 строк поведения без единой проверки (очередь моста #13).
+mod monitor_state;
 
 // Таймауты/пороги монитора и сравнение версий — в ядре (`vault-client`:
 // `vault::timings`, `vault::semver`), потому что мост не покрывается

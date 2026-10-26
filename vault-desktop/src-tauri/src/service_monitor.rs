@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::crypto::decrypt_vault_cmd;
-use crate::email::{EmailClient, EmailConfig, EmailMessage, IdleOutcome};
+use crate::email::{EmailClient, EmailConfig, IdleOutcome};
 use crate::key_store;
 
 // ───────────── Логи в logcat (headless-процесс не имеет stderr) ─────────────
@@ -54,7 +54,15 @@ fn init_logcat() {
 }
 
 const IDLE_TICK: Duration = Duration::from_secs(7);
-const MAX_TRIES: u32 = 3; // попыток доставки письма до отриц. дедупа
+
+// Состояние монитора (pending-очередь, seen-дедуп, машина состояний звонка,
+// пре-фильтр и классификация письма) живёт в `crate::monitor_state` — там же
+// его пробы, которые с хоста не видны, если всё осталось под `cfg(android)`.
+// Здесь остаются только JNI, IMAP-цикл и показ уведомлений.
+use crate::monitor_state::{
+    call_get_state, call_set_state, calls_load, calls_save, ingest, is_group_invite, pending_list,
+    pending_save, remove_pending, seen_push, PendingEntry, MAX_TRIES,
+};
 
 // Таймауты, лимиты и предикат свежести — в ядре (`vault::timings`): это числа
 // протокола, и, пока они лежали во мосту, их не мерил ни один гейт
@@ -62,9 +70,7 @@ const MAX_TRIES: u32 = 3; // попыток доставки письма до �
 // и переходы журнала звонков — там же (ADR-005 §W4, партии 2-3).
 use vault_client::vault::call_record::{self, Incoming, RecordState};
 use vault_client::vault::identity;
-use vault_client::vault::timings::{
-    date_fresh, dedup_cut, now_ms, CALL_STALE_MS, CALL_TOMBSTONE_MS, RING_TIMEOUT_MS, SEEN_CAP,
-};
+use vault_client::vault::timings::{now_ms, CALL_STALE_MS, RING_TIMEOUT_MS};
 
 // ───────────── Адрес контакта: решение в ядре, обход — в peer_index ─────────────
 // Поиск ключа собеседника (сигнал звонка, письмо-отказ, SOS) и карта контактов
@@ -658,7 +664,7 @@ async fn run_loop(stop: Arc<AtomicBool>) {
                         if stop.load(Ordering::SeqCst) {
                             break;
                         }
-                        ingest_message(&ctx, m).await;
+                        ingest(ctx.db, ctx.account, m);
                     }
                     // Свежедобавленные обрабатываем сразу же этим тиком.
                     drain_pending(&ctx, stop.clone()).await;
@@ -674,16 +680,8 @@ async fn run_loop(stop: Arc<AtomicBool>) {
 }
 
 // ─────────────────── Транзакционная доставка (pending) ───────────────────
-
-/// Запись pending-очереди: письмо, КОТОРОЕ ЕЩЁ НЕ ДОСТАВЛЕНО.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct PendingEntry {
-    mid: String,  // Message-ID (или from|folder|uid для писем без него)
-    from: String, // отправитель (lowercase)
-    folder: String,
-    uid: String,
-    tries: u32,
-}
+// Очередь и её персистентность — в `crate::monitor_state` (там и пробы); здесь
+// только контекст цикла и решение, что с записью делать после попытки.
 
 struct Ctx<'a> {
     db: &'a Arc<Mutex<crate::storage::sqlite::Storage>>,
@@ -701,160 +699,6 @@ enum Outcome {
     Dead,
     /// Activity открылась: JS доставляет сам — удалить из pending БЕЗ seen.
     HandledByJs,
-}
-
-fn kv_json<T: serde::Serialize + serde::de::DeserializeOwned>(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    key: &str,
-) -> T
-where
-    T: Default,
-{
-    db.lock()
-        .ok()
-        .and_then(|g| g.kv_get(account, key).ok().flatten())
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn kv_save<T: serde::Serialize>(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    key: &str,
-    val: &T,
-) {
-    if let Ok(json) = serde_json::to_string(val) {
-        if let Ok(g) = db.lock() {
-            let _ = g.kv_set(account, key, &json);
-        }
-    }
-}
-
-fn seen_key() -> String {
-    "notify_seen".to_string()
-}
-
-fn pending_key() -> String {
-    "notify_pending".to_string()
-}
-
-/// seen-дедуп: только ДОСТАВЛЕННЫЕ/окончательно отброшенные Message-ID.
-fn seen_contains(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    mid: &str,
-) -> bool {
-    let list: Vec<String> = kv_json(db, account, &seen_key());
-    list.iter().any(|x| x == mid)
-}
-
-fn seen_push(db: &Arc<Mutex<crate::storage::sqlite::Storage>>, account: &str, mid: &str) {
-    let mut list: Vec<String> = kv_json(db, account, &seen_key());
-    if list.iter().any(|x| x == mid) {
-        return;
-    }
-    list.push(mid.to_string());
-    let cut = dedup_cut(list.len(), SEEN_CAP);
-    let list = list.split_off(cut);
-    kv_save(db, account, &seen_key(), &list);
-}
-
-fn pending_list(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-) -> Vec<PendingEntry> {
-    kv_json(db, account, &pending_key())
-}
-
-fn pending_save(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    list: &[PendingEntry],
-) {
-    kv_save(db, account, &pending_key(), &list);
-}
-
-/// ─────────── Машина состояний входящего звонка ───────────
-/// Владелец состояния — монитор (call_state в kv monitor.db). call_id —
-/// первичный ключ. Инварианты: один call_id = один рингтон за всё время;
-/// решение (accepted/rejected) необратимо до ended; ретрансляции call_request
-/// того же call_id НЕ перезапускают рингтон и НЕ создают «новых звонков»
-/// (корень «телефон звонит заново после отклонения»).
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-struct CallEntry {
-    state: String,   // ringing | accepted | rejected | missed | ended
-    caller: String,  // имя звонящего (для уведомления)
-    email: String,   // адрес звонящего (для call_accept/reject письма)
-    updated_at: i64, // ms, для TTL-чистки
-}
-
-// CALL_TOMBSTONE_MS (надгробие 10 мин) — в ядре (`vault::timings`).
-
-fn call_state_key() -> String {
-    "call_state".to_string()
-}
-
-/// Загрузить всю таблицу call_state (kv JSON: call_id → CallEntry).
-fn calls_load(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-) -> std::collections::HashMap<String, CallEntry> {
-    let raw: std::collections::HashMap<String, CallEntry> = kv_json(db, account, &call_state_key());
-    raw
-}
-
-/// Сохранить таблицу call_state c TTL-чисткой надгробий.
-fn calls_save(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    calls: &std::collections::HashMap<String, CallEntry>,
-) {
-    let now = now_ms();
-    let live: std::collections::HashMap<String, CallEntry> = calls
-        .iter()
-        .filter(|(_, c)| {
-            call_record::record_survives(&c.state, c.updated_at, now, CALL_TOMBSTONE_MS)
-        })
-        .map(|(k, c)| (k.clone(), c.clone()))
-        .collect();
-    kv_save(db, account, &call_state_key(), &live);
-}
-
-/// Установить состояние звонка (безусловно — владелец здесь).
-fn call_set_state(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    call_id: &str,
-    state: &str,
-    caller: &str,
-) {
-    if call_id.is_empty() {
-        return;
-    }
-    let mut calls = calls_load(db, account);
-    let entry = calls
-        .entry(call_id.to_string())
-        .or_insert_with(|| CallEntry {
-            state: state.to_string(),
-            caller: caller.to_string(),
-            email: String::new(),
-            updated_at: now_ms(),
-        });
-    entry.state = state.to_string();
-    entry.updated_at = now_ms();
-    if !caller.is_empty() {
-        entry.caller = caller.to_string();
-    }
-    calls_save(db, account, &calls);
-}
-
-fn call_get_state(
-    db: &Arc<Mutex<crate::storage::sqlite::Storage>>,
-    account: &str,
-    call_id: &str,
-) -> Option<CallEntry> {
-    calls_load(db, account).get(call_id).cloned()
 }
 
 // Таймаут звонка без решения (фаза 1): 45 с — в ядре (`vault::timings`,
@@ -892,44 +736,10 @@ fn check_ring_timeouts(ctx: &Ctx<'_>) {
     }
 }
 
-// ─────────────────────── Классификация письма ───────────────────────
-
-// Свежесть по заголовку Date — в ядре (`vault::timings::date_fresh`): и
-// число, и предикат должны быть у гейта, а не у приёмки на телефоне.
-
-/// Новое письмо из fetch_newer: пре-фильтры → pending-очередь.
-/// Сообщения от ОДНОГО отправителя при включённом ephemeral не сливаются:
-/// Message-ID уникален у каждого письма.
-async fn ingest_message(ctx: &Ctx<'_>, m: &EmailMessage) {
-    // Дешёвый пре-фильтр по Date: старьё не трогаем вовсе.
-    if !date_fresh(&m.date) {
-        return;
-    }
-    let message_id = if m.message_id.is_empty() {
-        format!("{}|{}|{}", m.from, m.folder, m.id)
-    } else {
-        m.message_id.clone()
-    };
-    // Уже доставляли (или окончательно сдались) — мимо.
-    if seen_contains(ctx.db, ctx.account, &message_id) {
-        return;
-    }
-    let mut list = pending_list(ctx.db, ctx.account);
-    if list.iter().any(|e| e.mid == message_id) {
-        return; // уже в очереди
-    }
-    list.push(PendingEntry {
-        mid: message_id,
-        // Форма адреса — из ядра: очередь расшифровки и карта контактов
-        // должны ключеваться одинаково, иначе письмо от контакта с
-        // обрамляющим пробелом («не тот регистр») не находит свой ключ.
-        from: identity::normalize(&m.from),
-        folder: m.folder.clone(),
-        uid: m.id.clone(),
-        tries: 0,
-    });
-    pending_save(ctx.db, ctx.account, &list);
-}
+// ─────────────────────── Пре-фильтр и дедуп ───────────────────────
+// Классификация входящего (свежесть по Date, Message-ID, форма адреса,
+// распознавание приглашений) — в `crate::monitor_state`: там же пробы,
+// которые не могут жить под `cfg(target_os = "android")`.
 
 /// Обработать pending-очередь до конца (или до stop).
 async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
@@ -949,14 +759,14 @@ async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
                     &entry.mid[..entry.mid.len().min(24)]
                 );
                 seen_push(ctx.db, ctx.account, &entry.mid);
-                remove_pending(ctx, &entry.mid);
+                remove_pending(ctx.db, ctx.account, &entry.mid);
             }
             Outcome::HandledByJs => {
                 log::info!(
                     "[svc-monitor] handled by JS (activity alive): {}",
                     entry.from
                 );
-                remove_pending(ctx, &entry.mid);
+                remove_pending(ctx.db, ctx.account, &entry.mid);
             }
             Outcome::Dead => {
                 log::warn!(
@@ -966,7 +776,7 @@ async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
                     &entry.mid[..entry.mid.len().min(24)]
                 );
                 seen_push(ctx.db, ctx.account, &entry.mid);
-                remove_pending(ctx, &entry.mid);
+                remove_pending(ctx.db, ctx.account, &entry.mid);
             }
             Outcome::Retry => {
                 // tries+1, запись назад (первая в очереди — сохраняем порядок).
@@ -987,19 +797,11 @@ async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
                     }
                 }
                 // исчерпано: убрать из pending (seen уже записан)
-                let mid = entry.mid.clone();
-                let kept: Vec<PendingEntry> = list.into_iter().filter(|e| e.mid != mid).collect();
-                pending_save(ctx.db, ctx.account, &kept);
+                remove_pending(ctx.db, ctx.account, &entry.mid);
                 return;
             }
         }
     }
-}
-
-fn remove_pending(ctx: &Ctx<'_>, mid: &str) {
-    let list = pending_list(ctx.db, ctx.account);
-    let kept: Vec<PendingEntry> = list.into_iter().filter(|e| e.mid != mid).collect();
-    pending_save(ctx.db, ctx.account, &kept);
 }
 
 /// Одна попытка доставки записи: фетч тела → расшифровка → классификация
@@ -1027,39 +829,19 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     // 8088 → len%4=1 → «decrypt failed» → звонок/уведомление молча гибли).
     let body_clean = body;
 
-    // ── Групп-приглашения: тело = НЕзашифрованный urlSafeB64-JSON
-    // {kind:'group-invite', group_name, sender_name...}. Конвертом не является,
-    // decrypt ниже его не берёт и письмо молча умирало (Outcome::Dead) — ни
-    // уведомления при смахнутом приложении, ни явного следа. Детектим ДО
-    // расшифровки: декод b64 (с очисткой whitespace — письмо фолдится по 76),
-    // при kind=group-invite — системный пуш, письмо остаётся в ящике для JS.
-    {
-        let compact: String = body_clean.chars().filter(|c| !c.is_whitespace()).collect();
-        let normalized = compact.replace(['-', '_'], "+/");
-        let padded_len = normalized.len().div_ceil(4) * 4;
-        let mut padded = normalized;
-        while padded.len() < padded_len {
-            padded.push('=');
-        }
-        use base64::Engine as _;
-        let is_invite = base64::engine::general_purpose::STANDARD
-            .decode(padded.as_bytes())
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
-            .map(|v| v.get("kind").and_then(|k| k.as_str()) == Some("group-invite"))
-            .unwrap_or(false);
-        if is_invite {
-            return if notify(
-                &e.from,
-                "приглашение в группу — откройте Vault, чтобы принять",
-            ) {
-                log::info!("[svc-monitor] group invite notified from {}", e.from);
-                Outcome::Delivered
-            } else {
-                Outcome::Retry
-            };
-        }
+    // Групп-приглашение: распознавание тела — в `monitor_state::is_group_invite`
+    // (там и его пробы). Здесь только реакция: системный пуш, письмо остаётся в
+    // ящике для JS.
+    if is_group_invite(&body_clean) {
+        return if notify(
+            &e.from,
+            "приглашение в группу — откройте Vault, чтобы принять",
+        ) {
+            log::info!("[svc-monitor] group invite notified from {}", e.from);
+            Outcome::Delivered
+        } else {
+            Outcome::Retry
+        };
     }
 
     // Расшифровка: ключ отправителя → self-ключ (письма себе шифруются своим
