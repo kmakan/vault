@@ -88,6 +88,8 @@ writeFileSync(MOCKS + '/identity.js', `
 export const accountNamespace = async () => 'fp:testnamespace';
 export const ensureAccountNamespace = async () => 'fp:testnamespace';
 export const resetAccountNamespaceCache = () => {};
+export const resolveAlias = async (a) => a;
+export const rememberAlias = async () => {};
 `);
 writeFileSync(MOCKS + '/recovery-session.js', `
 export const isRecoveryPending = () => false;

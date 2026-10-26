@@ -2324,6 +2324,8 @@ JS. Android сохраняет WebCodecs-путь: там `MediaStreamTrackProce
 | Решение | Куда легло | Команда моста | JS-адаптер |
 |---|---|---|---|
 | «какими формами адреса это один пир» (сам адрес → конец цепочки `old→new` → адреса, которые резолвятся в него; цикл `A→B→A` обрывается) | `vault_core::identity::address_variants` | `identity_address_variants` (читает `email-aliases` из kv, мусор = пустой словарь) | `identity.js::addressVariants`, fail-open: `[bare]` |
+| «какой адрес у пира сейчас» (тот же обход цепочки, ответ — один адрес) | `vault_core::identity::resolve_alias` + `alias_resolutions` (словарь уже разрешённых строк) | `identity_alias_resolutions` (один ответ на весь словарь аккаунта) | `identity.js::resolveAlias` на кэше, fail-open: адрес как есть |
+| «как запомнить смену почты» (заменить запись старого ключа, убрать обратную `A→B→A`, нормализовать словарь) | `vault_core::identity::alias_pairs_after_remember` | `identity_alias_remember` (читает словарь аккаунта, пишет новый, отвечает разрешённым) | `api.js::rememberAlias` → `identity.js::rememberAlias`, кэш обновляется ответом |
 | «есть ли у этого адреса ключ» | — | — | `identity.js::peerContactFor` = варианты × нормализованный `peer_keys` |
 | «эта запись — мы?» | `vault_core::identity::peer_is_self` (адрес ∪ публичный ключ) | `contacts_drop_own` | `identity.js::dropOwnEntries`, fail-open: прежнее сравнение строк |
 | «не клади НАШ ключ как пирский» | `key_store::add_peer_key_at` (SELF-KEY GUARD, мера — `same_public_key`) | — | — |

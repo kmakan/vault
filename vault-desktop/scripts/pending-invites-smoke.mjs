@@ -43,6 +43,8 @@ writeFileSync(MOCKS + '/identity.mjs', [
   'export const accountNamespace = async (e) => "fp:" + String(e || "").toLowerCase();',
   'export const ensureAccountNamespace = async () => "ns:me";',
   'export const resetAccountNamespaceCache = () => {};',
+  'export const resolveAlias = async (a) => a;',
+  'export const rememberAlias = async () => {};',
   '',
 ].join('\n'));
 writeFileSync(MOCKS + '/recovery-session.mjs',

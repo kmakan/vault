@@ -36,6 +36,12 @@ const state = {
   variantCalls: [],
   variantFails: false,
   variantAnswer: (a) => [a],
+  aliasCalls: [],
+  aliasFails: false,
+  aliasAnswer: [],
+  rememberCalls: [],
+  rememberFails: false,
+  rememberAnswer: null,
 };
 globalThis.__state = state;
 
@@ -82,6 +88,19 @@ globalThis.__invoke = async (cmd, args) => {
     if (state.variantFails) throw new Error('команда недоступна');
     return state.variantAnswer(args.address);
   }
+  // Смена почты собеседника: ответ ядра — уже разрешённый словарь
+  // (строка → свежий адрес); здесь проверяется адаптер — кэш, форма
+  // вопроса и fail-open, а не обход цепочки (он измерен в Rust).
+  if (cmd === 'identity_alias_resolutions') {
+    state.aliasCalls.push(args);
+    if (state.aliasFails) throw new Error('команда недоступна');
+    return state.aliasAnswer;
+  }
+  if (cmd === 'identity_alias_remember') {
+    state.rememberCalls.push(args);
+    if (state.rememberFails) throw new Error('словарь недоступен');
+    return state.rememberAnswer;
+  }
   return null;
 };
 
@@ -106,6 +125,12 @@ function reset() {
   state.variantCalls = [];
   state.variantFails = false;
   state.variantAnswer = (a) => [a];
+  state.aliasCalls = [];
+  state.aliasFails = false;
+  state.aliasAnswer = [];
+  state.rememberCalls = [];
+  state.rememberFails = false;
+  state.rememberAnswer = null;
   I.resetAccountNamespaceCache();
 }
 
@@ -280,6 +305,84 @@ function reset() {
   ok('пустой адрес не резолвится и не дёргает мост',
     empty.key === '' && empty.address === '' && state.variantCalls.length === 0,
     { empty, calls: state.variantCalls });
+}
+
+// ── Смена почты собеседника: кэш разрешённого словаря и запись ──────────
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru'], ['older@bk.ru', 'new@bk.ru']];
+  const fresh = await I.resolveAlias('OLD@bk.ru', 'me@bk.ru');
+  ok('резолв берёт свежий адрес из ответа ядра', fresh === 'new@bk.ru', fresh);
+  ok('словарь спрошен по namespace аккаунта',
+    state.aliasCalls.length === 1 && state.aliasCalls[0].account === 'fp:aa:bb:cc:dd:ee:ff', state.aliasCalls);
+}
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru']];
+  const untouched = await I.resolveAlias('Anna@X.ru', 'me@bk.ru');
+  ok('без смены — исходный адрес как есть (регистр не переписываем)',
+    untouched === 'Anna@X.ru', untouched);
+}
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru']];
+  await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  ok('кэш разрешённого словаря: второй резолв не дёргает мост',
+    state.aliasCalls.length === 1, state.aliasCalls.length);
+}
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru']];
+  const empty = await I.resolveAlias('', 'me@bk.ru');
+  ok('пустой адрес не резолвится и не дёргает мост',
+    empty === '' && state.aliasCalls.length === 0, { empty, calls: state.aliasCalls.length });
+}
+{
+  reset();
+  state.aliasFails = true;
+  const raw = await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  ok('мост молчит — fail-open: адрес отдан как есть, переписка не теряется',
+    raw === 'old@bk.ru', raw);
+}
+{
+  reset();
+  state.rememberAnswer = [['old@bk.ru', 'new@bk.ru']];
+  await I.rememberAlias(' Old@BK.ru ', 'NEW@bk.ru', 'me@bk.ru');
+  ok('смена ушла в ядро нормализованной и по namespace',
+    state.rememberCalls.length === 1
+      && state.rememberCalls[0].account === 'fp:aa:bb:cc:dd:ee:ff'
+      && state.rememberCalls[0].oldEmail === 'old@bk.ru'
+      && state.rememberCalls[0].newEmail === 'new@bk.ru', state.rememberCalls);
+  const fresh = await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  ok('ответ записи обновил кэш резолва (без перечитывания словаря)',
+    fresh === 'new@bk.ru' && state.aliasCalls.length === 0, { fresh, calls: state.aliasCalls.length });
+}
+{
+  reset();
+  await I.rememberAlias('a@bk.ru', 'a@bk.ru', 'me@bk.ru');
+  await I.rememberAlias('', 'b@bk.ru', 'me@bk.ru');
+  ok('смена на себя и пустая смена не дёргают мост',
+    state.rememberCalls.length === 0, state.rememberCalls);
+}
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru']];
+  await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  state.rememberFails = true;
+  await I.rememberAlias('x@bk.ru', 'y@bk.ru', 'me@bk.ru');
+  const fresh = await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  ok('сбой записи не стирает кэш (прежние смены продолжают работать)',
+    fresh === 'new@bk.ru' && state.aliasCalls.length === 1, { fresh, calls: state.aliasCalls.length });
+}
+{
+  reset();
+  state.aliasAnswer = [['old@bk.ru', 'new@bk.ru']];
+  await I.resolveAlias('old@bk.ru', 'me@bk.ru');
+  state.ns = 'fp:11:22:33:44:55:66';
+  await I.resolveAlias('old@bk.ru', 'other@bk.ru');
+  ok('смена аккаунта перечитывает словарь (кэш привязан к namespace)',
+    state.aliasCalls.length === 2, state.aliasCalls.length);
 }
 
 console.log('\n=== ИТОГ: ' + pass + ' pass, ' + fail + ' fail ===');

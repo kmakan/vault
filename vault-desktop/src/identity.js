@@ -26,6 +26,8 @@ let _accountNsFor = null;   // email, для которого он вычисл�
 let _cachedFp = null;       // fingerprint публичного ключа (или '' если нет ключа)
 let _cachedFpKey = null;    // public_key, для которого закэширован _cachedFp
 let _nsMigrated = false;    // миграция namespace уже выполнялась в этой сессии
+let _aliasLookup = null;    // словарь смен почты, уже разрешённый ядром
+let _aliasLookupNs = null;  // namespace, для которого он вычислен
 
 // Fingerprint нашего публичного ключа. Пустая строка = ключ ещё не загружен
 // (или ошибка) → вызывающий код работает на legacy-емейле, вход не блокируем.
@@ -79,6 +81,8 @@ export function resetAccountNamespaceCache() {
   _cachedFp = null;
   _cachedFpKey = null;
   _nsMigrated = false;
+  _aliasLookup = null;
+  _aliasLookupNs = null;
 }
 
 // ── «Это я?» и «какими формами адреса это один и тот же пир» ──────────
@@ -151,6 +155,68 @@ export async function peerContactFor(address, peerKeys, email) {
     if (k) return { address: v, key: k };
   }
   return { address: bare, key: '' };
+}
+
+// ── Смена почты собеседника: какой адрес у пира сейчас ──────────────────
+// Письма в ящике навсегда остаются со старым sender. КАКОЙ адрес свежий —
+// решает ядро (`vault_core::identity`: цепочка old→new, цикл A→B→A
+// обрывается): сюда приходит уже разрешённый словарь «строка → свежий адрес»,
+// а не пары, которые надо обходить в JS. Кэш — на namespace аккаунта;
+// fail-open: мост молчит → адрес отдаём как есть, переписка не теряется.
+function aliasLookupFrom(pairs) {
+  const map = new Map();
+  if (!Array.isArray(pairs)) return map;
+  for (const p of pairs) {
+    if (!Array.isArray(p) || p.length !== 2) continue;
+    const k = String(p[0] || '');
+    if (k) map.set(k, String(p[1] || ''));
+  }
+  return map;
+}
+
+async function cachedAliasLookup(email) {
+  const ns = await accountNamespace(email);
+  if (_aliasLookup && _aliasLookupNs === ns) return _aliasLookup;
+  try {
+    const pairs = await invoke('identity_alias_resolutions', { account: ns });
+    _aliasLookup = aliasLookupFrom(pairs);
+  } catch (e) {
+    // Сбой моста кэшируем пустым словарём: резолв идёт по голому адресу, как
+    // до переноса правила, и не дёргает мост на каждое письмо.
+    _aliasLookup = new Map();
+  }
+  _aliasLookupNs = ns;
+  return _aliasLookup;
+}
+
+// Свежий адрес для строки из письма/списка. Без смены — исходный адрес как
+// есть (вызывающий сравнивает его с тем, что показывал).
+export async function resolveAlias(address, email) {
+  const key = String(address || '').trim().toLowerCase();
+  if (!key) return address;
+  const map = await cachedAliasLookup(email);
+  return map.get(key) || address;
+}
+
+// Запомнить смену: правило записи (замена старой пары и анти-цикл A→B→A) —
+// в ядре, ответ — новый разрешённый словарь, им же обновляем кэш. Ошибка
+// чтения/записи не стирает кэш: показывать «смен не было» из-за сбоя хуже,
+// чем продолжить с прежним словарём.
+export async function rememberAlias(oldEmail, newEmail, email) {
+  const o = String(oldEmail || '').trim().toLowerCase();
+  const n = String(newEmail || '').trim().toLowerCase();
+  if (!o || !n || o === n) return;
+  try {
+    const ns = await accountNamespace(email);
+    const pairs = await invoke('identity_alias_remember', {
+      account: ns,
+      oldEmail: o,
+      newEmail: n,
+    });
+    _aliasLookup = aliasLookupFrom(pairs);
+    _aliasLookupNs = ns;
+    console.log('[identity] alias remembered:', o, '→', n);
+  } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }
 }
 
 // Резолв + одноразовый перенос legacy-строк (старый емейл → fp-namespace).

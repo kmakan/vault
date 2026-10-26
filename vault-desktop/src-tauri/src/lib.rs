@@ -1310,14 +1310,41 @@ fn contacts_drop_own(
 /// зная словаря: после ренейма тап по известному адресу открывал попап
 /// «Добавить контакт» вместо чата (живые данные телефона, 24.10).
 #[tauri::command]
-fn identity_address_variants(
+fn identity_address_variants(account: String, address: String) -> Result<Vec<String>, String> {
+    let db = open_db()?;
+    let aliases = alias_dictionary(&db, &account)?;
+    Ok(vault_core::identity::address_variants(&aliases, &address))
+}
+
+/// Строки словаря смены почты, уже разрешённые ядром в свежий адрес:
+/// `(строка, которой адрес был, → адрес, которым он стал)`. Фронт держит ответ
+/// как кэш и резолвит строку из письма одним поиском, а не обходом цепочки
+/// в JS (вторая копия обхода расходилась с ядром молча).
+#[tauri::command]
+fn identity_alias_resolutions(account: String) -> Result<Vec<(String, String)>, String> {
+    let db = open_db()?;
+    let aliases = alias_dictionary(&db, &account)?;
+    Ok(vault_core::identity::alias_resolutions(&aliases))
+}
+
+/// Запомнить смену почты собеседника в словаре `email-aliases` аккаунта.
+///
+/// Правило записи (замена старой пары и анти-цикл `A→B→A`) — в ядре
+/// (`alias_pairs_after_remember`): цепочка `{A:B, B:A}` зацикливала резолв,
+/// и победитель зависел от порядка перечитывания писем. Ошибку чтения не
+/// подменяем пустым словарём: иначе один сбой чтения затёр бы все прежние
+/// смены единственной новой парой.
+#[tauri::command]
+fn identity_alias_remember(
     account: String,
-    address: String,
-) -> Result<Vec<String>, String> {
-    let raw = open_db()?
-        .kv_get(&account, "email-aliases")
-        .map_err(|e| e.to_string())?;
-    Ok(vault_core::identity::address_variants(&alias_pairs(raw), &address))
+    old_email: String,
+    new_email: String,
+) -> Result<Vec<(String, String)>, String> {
+    let db = open_db()?;
+    let aliases = alias_dictionary(&db, &account)?;
+    let next = vault_core::identity::alias_pairs_after_remember(&aliases, &old_email, &new_email);
+    write_alias_dictionary(&db, &account, &next)?;
+    Ok(vault_core::identity::alias_resolutions(&next))
 }
 
 /// Словарь `email-aliases` (kv, JSON-объект `{старый: новый}`) в пары ядра.
@@ -1335,6 +1362,37 @@ fn alias_pairs(raw: Option<String>) -> Vec<(String, String)> {
             .collect(),
         None => Vec::new(),
     }
+}
+
+/// Чтение словаря аккаунта — единственная строка kv, из которой живут все три
+/// команды (`address_variants`, `alias_resolutions`, `alias_remember`).
+/// Ошибку чтения отдаём ошибкой, а не пустым словарём (тот же контракт, что у
+/// `settings_flag`): соврать «алиасов нет» хуже, чем вернуть ошибку.
+fn alias_dictionary(db: &Storage, account: &str) -> Result<Vec<(String, String)>, String> {
+    let raw = db
+        .kv_get(account, "email-aliases")
+        .map_err(|e| e.to_string())?;
+    Ok(alias_pairs(raw))
+}
+
+/// Запись словаря в kv аккаунта: JSON-объект с нормальными ключами ядра.
+/// Порядок пар не значим — читатель ищет по ключу; ключ и значение уже
+/// нормализованы правилом `alias_pairs_after_remember`.
+fn write_alias_dictionary(
+    db: &Storage,
+    account: &str,
+    aliases: &[(String, String)],
+) -> Result<(), String> {
+    let obj: serde_json::Map<String, serde_json::Value> = aliases
+        .iter()
+        .map(|(from, to)| (from.clone(), serde_json::Value::String(to.clone())))
+        .collect();
+    db.kv_set(
+        account,
+        "email-aliases",
+        &serde_json::Value::Object(obj).to_string(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Эффективное значение тумблера возможности: чтение kv + правило дефолта.
@@ -2419,6 +2477,8 @@ pub fn run() {
             groups_contacts_to_pad,
             contacts_drop_own,
             identity_address_variants,
+            identity_alias_resolutions,
+            identity_alias_remember,
             groups_access,
             groups_has_member,
             groups_rename_address,
@@ -2690,7 +2750,7 @@ mod identity_alias_tests {
     /// Паника внутри пробы — ПРОВАЛ, а не «тест упал»: команда обязана отвечать
     /// ошибкой, а не ронять мост (на устройстве это выглядит как «тап по
     // контакту не отвечает»).
-    fn with_alias_db<T>(setup: impl FnOnce(&Path), f: impl FnOnce() -> T) -> T {
+    fn with_alias_db<T>(setup: impl FnOnce(&Path), f: impl FnOnce(&Path) -> T) -> T {
         let _guard = crate::env_test_guard();
         let seq = TMP_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("alias_{}-{}", std::process::id(), seq));
@@ -2699,7 +2759,7 @@ mod identity_alias_tests {
         crate::set_env_safe("VAULT_TEST_DB_FILE", &db);
         crate::set_env_safe("VAULT_TEST_KEYS_DIR", &dir);
         setup(&db);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&db)));
         for suffix in ["", "-wal", "-shm", "-journal"] {
             let _ = std::fs::remove_file(format!("{}{}", db.display(), suffix));
         }
@@ -2729,9 +2789,24 @@ mod identity_alias_tests {
         identity_address_variants(account.to_string(), address.to_string())
     }
 
+    fn resolutions(account: &str) -> Result<Vec<(String, String)>, String> {
+        identity_alias_resolutions(account.to_string())
+    }
+
+    fn remember(account: &str, old: &str, new: &str) -> Result<Vec<(String, String)>, String> {
+        identity_alias_remember(account.to_string(), old.to_string(), new.to_string())
+    }
+
+    fn stored(db: &Path, account: &str) -> String {
+        open_at(db)
+            .kv_get(account, DICT_KEY)
+            .expect("словарь читается")
+            .unwrap_or_default()
+    }
+
     #[test]
     fn alias_dictionary_absent_reads_as_no_variants() {
-        let got = with_alias_db(|_| {}, || variants(ME, "Petr@Post.RU"));
+        let got = with_alias_db(|_| {}, |_| variants(ME, "Petr@Post.RU"));
         assert_eq!(
             got,
             Ok(vec!["petr@post.ru".to_string()]),
@@ -2745,7 +2820,7 @@ mod identity_alias_tests {
         // могла прерваться. Ответ — голый адрес, И НЕ паника.
         let got = with_alias_db(
             dict(&[(ME, r#"{"a@x":"b@x"#)]),
-            || variants(ME, "a@x"),
+            |_| variants(ME, "a@x"),
         );
         assert_eq!(got, Ok(vec!["a@x".to_string()]));
     }
@@ -2757,7 +2832,7 @@ mod identity_alias_tests {
         // (эквивалентный класс — см. заголовок набора).
         let got = with_alias_db(
             dict(&[(ME, r#"["a@x","b@x"]"#)]),
-            || variants(ME, "a@x"),
+            |_| variants(ME, "a@x"),
         );
         assert_eq!(got, Ok(vec!["a@x".to_string()]));
     }
@@ -2768,7 +2843,7 @@ mod identity_alias_tests {
         // вариантов решает быстрый путь фронта.
         let got = with_alias_db(
             dict(&[(ME, r#"{"a@x":"b@x","b@x":"c@x"}"#)]),
-            || variants(ME, "a@x"),
+            |_| variants(ME, "a@x"),
         );
         assert_eq!(
             got,
@@ -2783,12 +2858,12 @@ mod identity_alias_tests {
         // СТАРОЙ, ключ переехал. Тап по старому адресу обязан найти ключ.
         let by_new = with_alias_db(
             dict(&[(ME, r#"{"old@x":"new@x"}"#)]),
-            || variants(ME, "new@x"),
+            |_| variants(ME, "new@x"),
         );
         assert_eq!(by_new, Ok(vec!["new@x".to_string(), "old@x".to_string()]));
         let by_old = with_alias_db(
             dict(&[(ME, r#"{"old@x":"new@x"}"#)]),
-            || variants(ME, " OLD@X "),
+            |_| variants(ME, " OLD@X "),
         );
         assert_eq!(by_old, Ok(vec!["old@x".to_string(), "new@x".to_string()]));
     }
@@ -2799,9 +2874,9 @@ mod identity_alias_tests {
         // типизированный разбор (HashMap<String,String>) потерял бы и живые
         // пары тоже.
         let d = vec![(ME, r#"{"a@x":5,"b@x":"c@x"}"#)];
-        let good = with_alias_db(dict(&d), || variants(ME, "b@x"));
+        let good = with_alias_db(dict(&d), |_| variants(ME, "b@x"));
         assert_eq!(good, Ok(vec!["b@x".to_string(), "c@x".to_string()]));
-        let dirty = with_alias_db(dict(&d), || variants(ME, "a@x"));
+        let dirty = with_alias_db(dict(&d), |_| variants(ME, "a@x"));
         assert_eq!(dirty, Ok(vec!["a@x".to_string()]));
     }
 
@@ -2813,11 +2888,11 @@ mod identity_alias_tests {
             (ME, r#"{"a@x":"b@x"}"#),
             (OTHER, r#"{"c@x":"d@x"}"#),
         ];
-        let mine = with_alias_db(dict(&rows), || variants(ME, "a@x"));
+        let mine = with_alias_db(dict(&rows), |_| variants(ME, "a@x"));
         assert_eq!(mine, Ok(vec!["a@x".to_string(), "b@x".to_string()]));
-        let theirs = with_alias_db(dict(&rows), || variants(OTHER, "c@x"));
+        let theirs = with_alias_db(dict(&rows), |_| variants(OTHER, "c@x"));
         assert_eq!(theirs, Ok(vec!["c@x".to_string(), "d@x".to_string()]));
-        let cross = with_alias_db(dict(&rows), || variants(ME, "c@x"));
+        let cross = with_alias_db(dict(&rows), |_| variants(ME, "c@x"));
         assert_eq!(cross, Ok(vec!["c@x".to_string()]), "чужой словарь не подмешивается");
     }
 
@@ -2841,11 +2916,151 @@ mod identity_alias_tests {
                 )
                 .expect("нечитаемое значение записано");
             },
-            || variants(ME, "petr@post.ru"),
+            |_| variants(ME, "petr@post.ru"),
         );
         assert!(
             got.is_err(),
             "нечитаемая строка kv должна отдаваться ошибкой, получено {got:?}"
         );
+    }
+
+    // ── словарь, разрешённый ядром (для кэша фронта): резолв строки одним
+    // поиском вместо обхода цепочки в JS ──
+    #[test]
+    fn alias_resolutions_absent_read_as_empty() {
+        let got = with_alias_db(|_| {}, |_| resolutions(ME));
+        assert_eq!(got, Ok(Vec::new()));
+    }
+
+    #[test]
+    fn alias_resolutions_walk_the_chain_to_the_fresh_address() {
+        let got = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x","b@x":"c@x"}"#)]),
+            |_| resolutions(ME),
+        );
+        assert_eq!(
+            got,
+            Ok(vec![
+                ("a@x".to_string(), "c@x".to_string()),
+                ("b@x".to_string(), "c@x".to_string()),
+            ]),
+            "обе старые строки разрешаются в конец цепочки"
+        );
+    }
+
+    #[test]
+    fn alias_resolutions_are_read_for_this_account_only() {
+        let rows = vec![(ME, r#"{"a@x":"b@x"}"#), (OTHER, r#"{"c@x":"d@x"}"#)];
+        let mine = with_alias_db(dict(&rows), |_| resolutions(ME));
+        assert_eq!(mine, Ok(vec![("a@x".to_string(), "b@x".to_string())]));
+        let theirs = with_alias_db(dict(&rows), |_| resolutions(OTHER));
+        assert_eq!(theirs, Ok(vec![("c@x".to_string(), "d@x".to_string())]));
+    }
+
+    // ── запись смены почты: правило ядра + проводка kv ──
+    #[test]
+    fn alias_remember_writes_the_dictionary_and_returns_resolutions() {
+        let (answer, json) = with_alias_db(
+            dict(&[(ME, r#"{"x@x":"y@x"}"#)]),
+            |db| (remember(ME, " Old@X ", "New@X"), stored(db, ME)),
+        );
+        assert_eq!(
+            answer,
+            Ok(vec![
+                ("x@x".to_string(), "y@x".to_string()),
+                ("old@x".to_string(), "new@x".to_string()),
+            ]),
+            "ответ — уже разрешённые строки для кэша фронта"
+        );
+        let saved: serde_json::Value = serde_json::from_str(&json).expect("словарь — JSON");
+        assert_eq!(saved["old@x"], "new@x", "ключ и значение нормализованы");
+        assert_eq!(saved["x@x"], "y@x", "прежняя пара сохранена");
+    }
+
+    #[test]
+    fn alias_remember_drops_the_stale_reverse_entry() {
+        // Смена B→A, затем A→B: словарь не должен остаться с {A:B, B:A} —
+        // такой цикл зацикливал резолв (живые данные 08.10).
+        let (answer, json) = with_alias_db(
+            dict(&[(ME, r#"{"b@x":"a@x"}"#)]),
+            |db| (remember(ME, "a@x", "b@x"), stored(db, ME)),
+        );
+        assert_eq!(answer, Ok(vec![("a@x".to_string(), "b@x".to_string())]));
+        let saved: serde_json::Value = serde_json::from_str(&json).expect("словарь — JSON");
+        assert_eq!(saved.as_object().map(|m| m.len()), Some(1));
+        assert_eq!(saved["a@x"], "b@x", "направление — только свежее");
+    }
+
+    #[test]
+    fn alias_remember_is_idempotent() {
+        let (first, second, json) = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x"}"#)]),
+            |db| {
+                let first = remember(ME, "a@x", "b@x");
+                let second = remember(ME, "a@x", "b@x");
+                (first, second, stored(db, ME))
+            },
+        );
+        assert_eq!(first, second, "повторная смена даёт тот же ответ");
+        let saved: serde_json::Value = serde_json::from_str(&json).expect("словарь — JSON");
+        assert_eq!(saved.as_object().map(|m| m.len()), Some(1), "и не плодит записей");
+    }
+
+    #[test]
+    fn alias_remember_writes_to_this_account_only() {
+        let (answer, mine, theirs) = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x"}"#), (OTHER, r#"{"c@x":"d@x"}"#)]),
+            |db| (remember(ME, "e@x", "f@x"), stored(db, ME), stored(db, OTHER)),
+        );
+        assert!(answer.is_ok(), "ответ получен");
+        let mine: serde_json::Value = serde_json::from_str(&mine).expect("словарь — JSON");
+        let theirs: serde_json::Value = serde_json::from_str(&theirs).expect("словарь — JSON");
+        assert_eq!(mine["e@x"], "f@x");
+        assert_eq!(theirs["c@x"], "d@x", "чужой словарь не тронут");
+        assert!(theirs.get("e@x").is_none());
+    }
+
+    #[test]
+    fn alias_remember_repairs_a_broken_dictionary() {
+        // Оборванный JSON читается как пустой словарь (контракт чтения), а
+        // запись чинит строку: живых смен в ней уже не было.
+        let (answer, json) = with_alias_db(
+            dict(&[(ME, r#"{"a@x":"b@x"#)]),
+            |db| (remember(ME, "a@x", "b@x"), stored(db, ME)),
+        );
+        assert_eq!(answer, Ok(vec![("a@x".to_string(), "b@x".to_string())]));
+        let saved: serde_json::Value = serde_json::from_str(&json).expect("теперь JSON валиден");
+        assert_eq!(saved["a@x"], "b@x");
+    }
+
+    #[test]
+    fn alias_remember_read_error_does_not_wipe_the_dictionary() {
+        // Один сбой чтения не имеет права затереть все прежние смены одной
+        // новой парой: словарь остаётся как был, наверх — ошибка.
+        let (answer, raw) = with_alias_db(
+            |db| {
+                drop(open_at(db));
+                let s = rusqlite::Connection::open(db).expect("база открыта напрямую");
+                s.execute(
+                    "INSERT INTO kv_store(account, key, value) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![ME, DICT_KEY, &[0xffu8, 0xfeu8][..]],
+                )
+                .expect("нечитаемое значение записано");
+            },
+            |db| {
+                let answer = remember(ME, "a@x", "b@x");
+                let s = rusqlite::Connection::open(db).expect("база открыта напрямую");
+                let raw: Vec<u8> = s
+                    .query_row(
+                        "SELECT value FROM kv_store WHERE account=?1 AND key=?2",
+                        rusqlite::params![ME, DICT_KEY],
+                        |row| row.get(0),
+                    )
+                    .expect("строка на месте");
+                (answer, raw)
+            },
+        );
+        assert!(answer.is_err(), "ошибка чтения — ошибка, а не пустой словарь");
+        assert_eq!(raw, vec![0xffu8, 0xfeu8], "прежний словарь не затёрт");
     }
 }

@@ -153,17 +153,33 @@ export default {
     { name: 'любая hex-строка считается полным ключом (префикс или урезанный отпечаток)',
       pattern: '    if v.len() != 64 || !v.chars().all(|c| c.is_ascii_hexdigit()) {',
       replacement: '    if !v.chars().all(|c| c.is_ascii_hexdigit()) && !v.contains(\':\') {' },
-    // ── address_variants: КАКИМИ формами адреса это один пир (смена почты,
-    // живой случай X50: тап по известному адресу открывал попап «Добавить
-    // контакт», потому что гейт спрашивал голоую строку, не зная словаря
-    // `email-aliases`). Словарь приходит из kv как его записали, поэтому
-    // нормализация — обязанность правила, а не вызывающего.
-    { name: 'адрес не нормализуется (тап по «Petr@Post.RU» не находит ключ)',
-      pattern: '    let start = normalize(address);',
-      replacement: '    let start = address.to_string();' },
+    // ── address_variants / resolve_alias: КАКИМИ формами адреса это один пир
+    // (смена почты, живой случай X50: тап по известному адресу открывал попап
+    // «Добавить контакт», потому что гейт спрашивал голую строку, не зная
+    // словаря `email-aliases`) и КАКОЙ адрес у пира сейчас (тем же словарём
+    // резолвилась каждая строка письма — цепочка обходилась второй раз уже в
+    // JS). Словарь приходит из kv как его записали, поэтому нормализация —
+    // обязанность правила, а не вызывающего. Оба вопроса идут ОДНИМ обходом
+    // (`alias_chain`), поэтому мутации цепочки бьют по обоим ответам.
+    { name: 'адрес не нормализуется в формах адреса (тап по «Petr@Post.RU» не находит ключ)',
+      pattern: `pub fn address_variants(aliases: &[(String, String)], address: &str) -> Vec<String> {
+    let start = normalize(address);`,
+      replacement: `pub fn address_variants(aliases: &[(String, String)], address: &str) -> Vec<String> {
+    let start = address.to_string();` },
+    { name: 'резолв адреса не нормализует вход (строка из письма «Petr@Post.RU» не находит смену)',
+      pattern: `pub fn resolve_alias(aliases: &[(String, String)], address: &str) -> String {
+    let start = normalize(address);`,
+      replacement: `pub fn resolve_alias(aliases: &[(String, String)], address: &str) -> String {
+    let start = address.to_string();` },
     { name: 'пустой адрес всё-таки резолвится (первая попавшаяся запись выдаётся за ключ пира)',
       pattern: '    if start.is_empty() {\n        return Vec::new();\n    }',
       replacement: '    if false {\n        return Vec::new();\n    }' },
+    { name: 'пустой адрес резолвится записью с пустым ключом (письмо без From «переименовывается»)',
+      pattern: '    if start.is_empty() {\n        return String::new();\n    }',
+      replacement: '    if false {\n        return String::new();\n    }' },
+    { name: 'резолв обходит цепочку, но отвечает исходным адресом (смена почты не видна)',
+      pattern: '    alias_chain(aliases, &start).pop().unwrap_or(start)',
+      replacement: '    start' },
     { name: 'ключ словаря сравнивается сырой строкой (пара « Old@X → New@X» не находится)',
       pattern: '        let next = match aliases.iter().find(|(from, _)| normalize(from) == cur) {',
       replacement: '        let next = match aliases.iter().find(|(from, _)| *from == cur) {' },
@@ -171,14 +187,77 @@ export default {
       pattern: '            Some((_, to)) => normalize(to),',
       replacement: '            Some((_, to)) => to.clone(),' },
     { name: 'обратный ход сравнивает сырые пары (старый адрес пира не догоняется)',
-      pattern: '        let (f, t) = (normalize(from), normalize(to));',
-      replacement: '        let (f, t) = (from.clone(), to.clone());' },
+      pattern: `    for (from, to) in aliases {
+        let (f, t) = (normalize(from), normalize(to));
+        if f.is_empty() || t != start {`,
+      replacement: `    for (from, to) in aliases {
+        let (f, t) = (from.clone(), to.clone());
+        if f.is_empty() || t != start {` },
     { name: 'обратный ход берёт ВСЕ пары словаря (чужие алиасы лезут в варианты и подставляют чужой ключ)',
       pattern: '        if f.is_empty() || t != start {',
       replacement: '        if f.is_empty() {' },
     { name: 'вариант добавляется без проверки повтора (цикл A→B→A плодит дубль в списке форм)',
       pattern: '        if !v.is_empty() && !out.contains(&v) {',
       replacement: '        if !v.is_empty() {' },
+    // ── alias_resolutions: словарь для кэша фронта (строка → свежий адрес).
+    // Обход — тот же `resolve_alias`; здесь меряется выборка строк и ключи.
+    { name: 'ключ разрешённого словаря не нормализуется (кэш фронта ищет « Old@X » и промахивается)',
+      pattern: '        let key = normalize(from);',
+      replacement: '        let key = from.clone();' },
+    { name: 'разрешённый словарь не резолвит строки (кэш пуст, старые письма снова «воскрешают» адрес)',
+      pattern: '        let fresh = resolve_alias(aliases, &key);',
+      replacement: '        let fresh = key.clone();' },
+    { name: 'в разрешённый словарь попадают пары без смены (лишние строки кэша)',
+      pattern: '        if fresh != key {',
+      replacement: '        if true {' },
+    { name: 'повтор ключа в словаре плодит строки кэша (победитель зависит от порядка)',
+      pattern: '        if key.is_empty() || out.iter().any(|(seen, _)| *seen == key) {',
+      replacement: '        if key.is_empty() {' },
+    // ── alias_pairs_after_remember: правило ЗАПИСИ словаря (анти-цикл
+    // A→B→A и нормализация). До переноса жило только в JS; ошибка здесь
+    // зацикливает резолв и откатывает ренеймы при перечитывании писем.
+    { name: 'старый адрес пишется без нормализации (грязная строка не находится резолвом)',
+      pattern: '    let old = normalize(old_email);\n    let new = normalize(new_email);',
+      replacement: '    let old = old_email.to_string();\n    let new = normalize(new_email);' },
+    { name: 'новый адрес пишется без нормализации (ключ ищется по сырому адресу)',
+      pattern: '    let old = normalize(old_email);\n    let new = normalize(new_email);',
+      replacement: '    let old = normalize(old_email);\n    let new = new_email.to_string();' },
+    { name: 'пустой старый адрес считается сменой (в словарь попадает пустой ключ)',
+      pattern: '    let real = !old.is_empty() && !new.is_empty() && old != new;',
+      replacement: '    let real = !new.is_empty() && old != new;' },
+    { name: 'пустой новый адрес затирает старую пару (смена «никуда» удаляет живой резолв)',
+      pattern: '    let real = !old.is_empty() && !new.is_empty() && old != new;',
+      replacement: '    let real = !old.is_empty() && old != new;' },
+    { name: 'смена адреса на себя пишется как настоящая (словарь пухнет самоссылками)',
+      pattern: '    let real = !old.is_empty() && !new.is_empty() && old != new;',
+      replacement: '    let real = !old.is_empty() && !new.is_empty();' },
+    { name: 'анти-цикл потерян: запись со свежим адресом в ключе остаётся ({A:B, B:A})',
+      pattern: '        if real && (f == old || f == new) {',
+      replacement: '        if real && f == old {' },
+    { name: 'прежняя запись не заменяется (по старому ключу две смены сразу)',
+      pattern: '        if real && (f == old || f == new) {',
+      replacement: '        if real && f == new {' },
+    { name: 'существующие пары не нормализуются (грязный словарь переносится в свежую запись)',
+      pattern: `    for (from, to) in aliases {
+        let (f, t) = (normalize(from), normalize(to));
+        if real && (f == old || f == new) {`,
+      replacement: `    for (from, to) in aliases {
+        let (f, t) = (from.clone(), to.clone());
+        if real && (f == old || f == new) {` },
+    { name: 'чужие пары теряются при записи (смена одного пира стирает словарь)',
+      pattern: `        if real && (f == old || f == new) {
+            continue;
+        }
+        out.push((f, t));`,
+      replacement: `        if real && (f == old || f == new) {
+            continue;
+        }` },
+    { name: 'направление смены перевёрнуто (резолв уводит адрес назад)',
+      pattern: '        out.push((old, new));',
+      replacement: '        out.push((new, old));' },
+    { name: 'пара пишется при пустой/равной смене (словарь получает мусорную запись)',
+      pattern: '    if real {\n        out.push((old, new));\n    }',
+      replacement: '    if !old.is_empty() {\n        out.push((old, new));\n    }' },
     // ── peer_is_self: «эта запись — мы» для чтения списка, добивки и
     // broadcast профиля. Два независимых пути; каждый снимается своим
     // утверждением теста.

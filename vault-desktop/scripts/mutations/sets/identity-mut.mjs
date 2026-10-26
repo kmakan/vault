@@ -49,6 +49,34 @@ export default {
     { name: "пустой адрес всё-таки резолвится (мост дёргается впустую)",
       pattern: "  if (!bare) return [];",
       replacement: "  if (bare === '\u0000') return [];" },
+    // Смена почты собеседника: здесь только кэш и транспорт. Само правило
+    // (цепочка, анти-цикл) — в ядре и меряется наборами rust-identity /
+    // rust-bridge-identity-alias; эти мутации проверяют, что смоук видит
+    // адаптер, а не только ответ мока.
+    { name: "резолв не нормализует искомый адрес (смена находится только при точном регистре)",
+      pattern: "  const key = String(address || '').trim().toLowerCase();\n  if (!key) return address;",
+      replacement: "  const key = String(address || '').trim();\n  if (!key) return address;" },
+    { name: "пустой адрес всё-таки дёргает мост (резолв на каждую пустую строку)",
+      pattern: "  if (!key) return address;",
+      replacement: "  if (key === '\u0000') return address;" },
+    { name: "кэш не привязан к namespace (смена аккаунта показывает чужие смены)",
+      pattern: "  if (_aliasLookup && _aliasLookupNs === ns) return _aliasLookup;",
+      replacement: "  if (_aliasLookup) return _aliasLookup;" },
+    { name: "неизвестный адрес возвращается пустым (письмо теряет отправителя)",
+      pattern: "  return map.get(key) || address;",
+      replacement: "  return map.get(key);" },
+    { name: "нормализация старого адреса потеряна (ядро получает сырую строку)",
+      pattern: "  const o = String(oldEmail || '').trim().toLowerCase();",
+      replacement: "  const o = String(oldEmail || '').trim();" },
+    { name: "смена на себя и пустой новый адрес уходят в ядро (лишняя запись)",
+      pattern: "  if (!o || !n || o === n) return;",
+      replacement: "  if (!o) return;" },
+    { name: "ответ записи не обновляет кэш (фронт не видит только что записанную смену)",
+      pattern: "    _aliasLookup = aliasLookupFrom(pairs);\n    _aliasLookupNs = ns;\n    console.log('[identity] alias remembered:'",
+      replacement: "    _aliasLookup = new Map();\n    _aliasLookupNs = ns;\n    console.log('[identity] alias remembered:'" },
+    { name: "сбой записи стирает кэш (прежние смены перестают работать)",
+      pattern: "  } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }",
+      replacement: "  } catch (e) { _aliasLookup = null; _aliasLookupNs = null; }" },
 
   ],
 };

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import cryptoClient from './crypto.js';
-import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache } from './identity.js';
+import { accountNamespace, ensureAccountNamespace, resetAccountNamespaceCache,
+  resolveAlias as resolveAliasInCore, rememberAlias as rememberAliasInCore } from './identity.js';
 import { isRecoveryPending as recoveryIsPending, clearRecoveryPending as recoveryClearPending } from './features/recovery-session.js';
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -122,8 +123,6 @@ export class ApiClient {
     // Источник метаданных для handshake (это this.emails из loadEmails:
     // sqlite + инкремент). Без полного IMAP-скана в каждом тике.
     this._emailsSource = null;
-    // Кэш словаря alias (старый → новый адрес собеседника), см. loadAliasMap.
-    this._aliasMap = null;
   }
 
   // --- internal: connect the mailbox over IMAP/SMTP ---
@@ -741,44 +740,13 @@ export class ApiClient {
   // Без этого каждый поллинг «воскрешал» старый адрес: попап приглашения
   // не матчился с пометкой `${new}|${uid}`, профиль и участник группы
   // перезаписывались старым адресом из старых писем (живые данные 06.10).
-  async loadAliasMap() {
-    if (this._aliasMap) return this._aliasMap;
-    try {
-      const ns = await accountNamespace(this.email);
-      this._aliasMap = JSON.parse((await db.kvGet(ns, 'email-aliases')) || '{}');
-    } catch (e) {
-      this._aliasMap = {};
-    }
-    return this._aliasMap;
-  }
+  // Цепочка old→new и анти-цикл записи — правило ядра; здесь делегат,
+  // кэш разрешённого словаря живёт в identity.js.
   async resolvePeerAlias(email) {
-    const e = String(email || '').trim().toLowerCase();
-    if (!e) return email;
-    const map = await this.loadAliasMap();
-    if (!map[e]) return email;
-    // Цепочки A→B→C (две смены подряд) — идём до конца с защитой от цикла.
-    let cur = e; const seen = new Set([e]);
-    while (map[cur] && !seen.has(map[cur])) { seen.add(map[cur]); cur = map[cur]; }
-    return cur;
+    return resolveAliasInCore(email, this.email);
   }
   async rememberAlias(oldEmail, newEmail) {
-    const o = String(oldEmail || '').trim().toLowerCase();
-    const n = String(newEmail || '').trim().toLowerCase();
-    if (!o || !n || o === n) return;
-    try {
-      const map = await this.loadAliasMap();
-      if (map[o] === n) return;
-      // АНТИ-ЦИКЛ: смена A→B→A оставляла карту {A:B, B:A} — резолв зацикливался,
-      // а «победитель» зависел от порядка перечитывания писем (живые данные
-      // 08.10: имя/почта расходились, группы откатывались). Текущий адрес (n)
-      // не может сам быть алиасом — удаляем устаревшую запись, где он ключ.
-      delete map[n];
-      map[o] = n;
-      this._aliasMap = map;
-      const ns = await accountNamespace(this.email);
-      await db.kvSet(ns, 'email-aliases', JSON.stringify(map));
-      console.log('[identity] alias remembered:', o, '→', n);
-    } catch (e) { /* словарь недоступен — ренейм основными путями работает */ }
+    await rememberAliasInCore(oldEmail, newEmail, this.email);
   }
   // ── ANTI-PING-PONG: порог «новизны» письма для ренейма идентичности ──
   // Старые письма с прежним адресом пира навсегда остаются в ящике. При

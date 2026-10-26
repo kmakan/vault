@@ -155,19 +155,8 @@ pub fn address_variants(aliases: &[(String, String)], address: &str) -> Vec<Stri
         }
     };
 
-    let mut seen: HashSet<String> = HashSet::new();
-    seen.insert(start.clone());
-    let mut cur = start.clone();
-    loop {
-        let next = match aliases.iter().find(|(from, _)| normalize(from) == cur) {
-            Some((_, to)) => normalize(to),
-            None => break,
-        };
-        if next.is_empty() || !seen.insert(next.clone()) {
-            break;
-        }
-        push(&mut out, next.clone());
-        cur = next;
+    for next in alias_chain(aliases, &start) {
+        push(&mut out, next);
     }
 
     for (from, to) in aliases {
@@ -176,6 +165,96 @@ pub fn address_variants(aliases: &[(String, String)], address: &str) -> Vec<Stri
             continue;
         }
         push(&mut out, f);
+    }
+    out
+}
+
+/// Звенья цепочки `old→new` после `start`, в порядке обхода. Цикл `A→B→A`
+/// обрывается на первом повторе: иначе резолв ходит по кругу, а «победитель»
+/// зависит от порядка перечитывания писем (живые данные 08.10.2026).
+///
+/// ОДНА ЦЕПОЧКА НА ДВА ВОПРОСА. «Какими формами адреса это один пир» и «какой
+/// адрес у него сейчас» — один обход, заданный с двух сторон; вторая копия
+/// обхода (раньше жила во фронте) расходилась с ядром молча.
+fn alias_chain(aliases: &[(String, String)], start: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(start.to_string());
+    let mut cur = start.to_string();
+    loop {
+        let next = match aliases.iter().find(|(from, _)| normalize(from) == cur) {
+            Some((_, to)) => normalize(to),
+            None => break,
+        };
+        if next.is_empty() || !seen.insert(next.clone()) {
+            break;
+        }
+        out.push(next.clone());
+        cur = next;
+    }
+    out
+}
+
+/// Свежий адрес пира для строки из письма или списка: конец цепочки
+/// `old→new`, а без смены — нормальная форма самого адреса. Пустой адрес
+/// остаётся пустым (резолвить нечего). Вопрос тот же, что у
+/// `address_variants`, но ответ — один адрес, а не все формы.
+pub fn resolve_alias(aliases: &[(String, String)], address: &str) -> String {
+    let start = normalize(address);
+    if start.is_empty() {
+        return String::new();
+    }
+    alias_chain(aliases, &start).pop().unwrap_or(start)
+}
+
+/// Словарь смен, сведённый к свежим адресам: `(строка, которой адрес был,
+/// → адрес, которым он стал)`. Нужен кэшу фронта, чтобы резолв строки был
+/// одним поиском, а не обходом цепочки в JS. Цепочка `A→B→C` даёт две строки
+/// с одним концом, цикл разрешается звеньями (как `resolve_alias`); пары без
+/// смены (пустые, ведущие в пустоту, сам в себя) не выдаются.
+pub fn alias_resolutions(aliases: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (from, _) in aliases {
+        let key = normalize(from);
+        if key.is_empty() || out.iter().any(|(seen, _)| *seen == key) {
+            continue;
+        }
+        let fresh = resolve_alias(aliases, &key);
+        if fresh != key {
+            out.push((key, fresh));
+        }
+    }
+    out
+}
+
+/// Словарь `email-aliases` после запоминания смены `old → new`.
+///
+/// ДВА ПРАВИЛА, ОБА ИЗ ЖИВЫХ ДАННЫХ (08.10.2026):
+///  * запись со старым ключом заменяется, а запись, где ключ — НОВЫЙ адрес,
+///    убирается: после смены A→B→A карта {A:B, B:A} зацикливала резолв, и
+///    «победитель» зависел от порядка перечитывания писем;
+///  * словарь нормализуется целиком: ключи приходят из kv как их записал
+///    фронт, а искать по ним будет `resolve_alias`.
+///
+/// Пустая смена и `old == new` новых пар не добавляют.
+pub fn alias_pairs_after_remember(
+    aliases: &[(String, String)],
+    old_email: &str,
+    new_email: &str,
+) -> Vec<(String, String)> {
+    let old = normalize(old_email);
+    let new = normalize(new_email);
+    let real = !old.is_empty() && !new.is_empty() && old != new;
+    let mut out: Vec<(String, String)> = Vec::with_capacity(aliases.len() + 1);
+    for (from, to) in aliases {
+        let (f, t) = (normalize(from), normalize(to));
+        if real && (f == old || f == new) {
+            continue;
+        }
+        out.push((f, t));
+    }
+    if real {
+        out.push((old, new));
     }
     out
 }
@@ -955,5 +1034,145 @@ mod tests {
             vec!["new@x", "old@x"],
             "обратный ход ищет по нормализованному значению, а не по сырому"
         );
+    }
+
+    #[test]
+    fn resolve_alias_returns_the_fresh_address_or_the_normal_form() {
+        let d = dict(&[("a@x", "b@x"), ("b@x", "c@x")]);
+        assert_eq!(resolve_alias(&d, "a@x"), "c@x", "две смены подряд — конец цепочки");
+        assert_eq!(resolve_alias(&d, "c@x"), "c@x", "свежий адрес резолвится в себя");
+        assert_eq!(resolve_alias(&[], "Petr@Post.RU"), "petr@post.ru");
+        assert_eq!(resolve_alias(&[], ""), "", "пустой адрес — не адрес");
+        assert_eq!(resolve_alias(&[], "   "), "");
+        let empty_key = dict(&[("", "x@x")]);
+        assert_eq!(
+            resolve_alias(&empty_key, ""),
+            "",
+            "пустой адрес не резолвится даже при записи с пустым ключом"
+        );
+    }
+
+    #[test]
+    fn resolve_alias_reads_a_dirty_dictionary() {
+        // Та же обязанность, что у `address_variants`: смена почты пишется из
+        // письма, где адрес мог прийти с обрамлением и в верхнем регистре.
+        let d = dict(&[(" Old@X ", "New@X")]);
+        assert_eq!(resolve_alias(&d, "OLD@x"), "new@x");
+        assert_eq!(resolve_alias(&d, " new@x "), "new@x");
+    }
+
+    #[test]
+    fn resolve_alias_stops_on_a_cycle_like_the_variants() {
+        // Смена A→B→A: обе строки словаря разрешаются в соседа, а не в
+        // бесконечность; ответ совпадает с обходом `address_variants`.
+        let d = dict(&[("a@x", "b@x"), ("b@x", "a@x")]);
+        assert_eq!(resolve_alias(&d, "a@x"), "b@x");
+        assert_eq!(resolve_alias(&d, "b@x"), "a@x");
+        let empty_new = dict(&[("a@x", "")]);
+        assert_eq!(
+            resolve_alias(&empty_new, "a@x"),
+            "a@x",
+            "пустой новый адрес не резолвит никуда"
+        );
+    }
+
+    #[test]
+    fn alias_resolutions_precompute_the_chain_end_for_every_stale_address() {
+        let d = dict(&[(" A@X ", "B@X"), ("b@x", "c@x")]);
+        assert_eq!(
+            alias_resolutions(&d),
+            vec![
+                ("a@x".to_string(), "c@x".to_string()),
+                ("b@x".to_string(), "c@x".to_string()),
+            ],
+            "обе старые строки ведут к одному свежему адресу, ключи нормализованы"
+        );
+    }
+
+    #[test]
+    fn alias_resolutions_skips_pairs_that_change_nothing() {
+        let d = dict(&[("a@x", ""), ("b@x", "b@x"), ("c@x", "d@x"), (" c@x ", "d@x")]);
+        assert_eq!(
+            alias_resolutions(&d),
+            vec![("c@x".to_string(), "d@x".to_string())],
+            "пустые цели и самоссылки не резолвят, повтор ключа не плодит строк"
+        );
+        assert!(alias_resolutions(&[]).is_empty());
+    }
+
+    #[test]
+    fn alias_resolutions_follows_a_cycle_without_looping() {
+        let d = dict(&[("a@x", "b@x"), ("b@x", "a@x")]);
+        assert_eq!(
+            alias_resolutions(&d),
+            vec![
+                ("a@x".to_string(), "b@x".to_string()),
+                ("b@x".to_string(), "a@x".to_string()),
+            ],
+            "цикл остаётся виден разрешением на соседа, как у resolve_alias"
+        );
+    }
+
+    #[test]
+    fn alias_pairs_after_remember_adds_the_normalized_pair() {
+        let d = dict(&[(" X@X ", "Y@X")]);
+        assert_eq!(
+            alias_pairs_after_remember(&d, " Old@X ", "New@X"),
+            dict(&[("x@x", "y@x"), ("old@x", "new@x")]),
+            "новая пара дописана, чужие записи нормализованы, а не тронуты"
+        );
+    }
+
+    #[test]
+    fn alias_pairs_after_remember_overwrites_the_old_key() {
+        let d = dict(&[("a@x", "b@x"), ("a@x", "c@x")]);
+        assert_eq!(
+            alias_pairs_after_remember(&d, "a@x", "d@x"),
+            vec![("a@x".to_string(), "d@x".to_string())],
+            "по одному ключу остаётся одно направление смены"
+        );
+    }
+
+    #[test]
+    fn alias_pairs_after_remember_drops_the_stale_reverse_entry() {
+        // Смена B→A, потом A→B: запись {B:A} сделала бы карту {A:B, B:A} и
+        // зациклила резолв. Текущий адрес не может сам быть алиасом.
+        let d = dict(&[("b@x", "a@x"), ("x@x", "y@x")]);
+        assert_eq!(
+            alias_pairs_after_remember(&d, "a@x", "b@x"),
+            dict(&[("x@x", "y@x"), ("a@x", "b@x")]),
+            "запись, где ключ — свежий адрес, убрана; чужая пара осталась"
+        );
+    }
+
+    #[test]
+    fn alias_pairs_after_remember_is_idempotent() {
+        let d = dict(&[("a@x", "b@x")]);
+        let once = alias_pairs_after_remember(&d, "a@x", "b@x");
+        let twice = alias_pairs_after_remember(&once, "a@x", "b@x");
+        assert_eq!(once, twice, "повторная смена не плодит записей");
+    }
+
+    #[test]
+    fn alias_pairs_after_remember_ignores_empty_and_equal_changes() {
+        let d = dict(&[("a@x", "b@x")]);
+        assert_eq!(alias_pairs_after_remember(&d, "", "b@x"), d);
+        assert_eq!(alias_pairs_after_remember(&d, "a@x", ""), d);
+        assert_eq!(
+            alias_pairs_after_remember(&d, " A@X ", "a@x"),
+            d,
+            "смена на тот же адрес ничего не добавляет"
+        );
+    }
+
+    #[test]
+    fn remember_then_resolve_reads_the_same_dictionary() {
+        // Запись и чтение — одно правило: после `alias_pairs_after_remember`
+        // `resolve_alias` обязан вести по свежему адресу, включая цепочку из
+        // двух смен подряд.
+        let first = alias_pairs_after_remember(&[], "a@x", "b@x");
+        let second = alias_pairs_after_remember(&first, "b@x", "c@x");
+        assert_eq!(resolve_alias(&second, "a@x"), "c@x");
+        assert_eq!(second.len(), 2);
     }
 }
