@@ -186,6 +186,29 @@ ssh server 'grep VAULT_RELAY_PAYMENTS ~/vault-relay/env || echo "провайд�
 в промо-ключ, а в сборке с покупками они есть. Принятый APK не перекрывает
 непринятый бандл, и наоборот.
 
+Бандл принимается тем же прогоном, а не на веру по логам сборки — adb файл
+`.aab` не ставит, поэтому из НЕГО (именно из того файла, что пойдёт в Play)
+собирают установочный APK:
+
+```bash
+JAR=$HOME/.local/share/vault/tools/bundletool-all-1.18.3.jar   # sha256 a099cfa1…
+mkdir -p /tmp/play-accept
+tr -d '\n' < ~/.local/share/vault/keystore-pass.txt > /tmp/.ks && chmod 600 /tmp/.ks
+java -jar "$JAR" build-apks --bundle=/home/maksim/vault-releases/<версия>/vault-<версия>.aab \
+  --mode=universal --output=/tmp/play-accept/universal.apks \
+  --ks=~/.local/share/vault/vault-release.keystore --ks-key-alias=vault \
+  --ks-pass=file:/tmp/.ks --key-pass=file:/tmp/.ks
+rm -f /tmp/.ks && cd /tmp/play-accept && unzip -o -q universal.apks
+VAULT_APK=/tmp/play-accept/universal.apk ./scripts/device-accept-apk.sh
+```
+
+Ловушка, из-за которой проверка подписи обязательна: без `--ks` bundletool
+молча берёт **отладочный** ключ из `~/.android/debug.keystore`. Подпись шага 2
+приёмки тогда не сходится, а поставить такой APK поверх рабочего нельзя без
+удаления приложения — то есть без потери данных на тест-устройстве. Пароль не
+перечисляется в аргументах (`--ks-pass` не принимает `env:`), поэтому он
+временный файл `0600`, который удаляется в той же команде.
+
 ```bash
 # после успешной приёмки, не меняя дерево:
 vault-desktop/scripts/build-android-apk.sh aab   # бандл для Play

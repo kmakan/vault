@@ -27,7 +27,11 @@ if [ -z "$SER" ]; then
 fi
 echo "Устройство: $SER"
 
-APK="src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
+# По умолчанию — APK из outputs. Артефакт другого канала принимается тем же
+# путём, а не на веру: Google Play принимает только .aab, adb такой файл не
+# ставит, поэтому из принятого бандла собирают установочный APK (bundletool
+# --mode=universal, подпись — релизным ключом) и указывают его здесь.
+APK="${VAULT_APK:-src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk}"
 BUILD_TOOLS="$HOME/Android/Sdk/build-tools/$(ls "$HOME/Android/Sdk/build-tools" | sort -V | tail -1)"
 AAPT="$BUILD_TOOLS/aapt"
 APKSIGNER="$BUILD_TOOLS/apksigner"
