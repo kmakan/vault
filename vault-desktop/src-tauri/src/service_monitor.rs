@@ -60,14 +60,17 @@ const IDLE_TICK: Duration = Duration::from_secs(7);
 // его пробы, которые с хоста не видны, если всё осталось под `cfg(android)`.
 // Здесь остаются только JNI, IMAP-цикл и показ уведомлений.
 use crate::monitor_state::{
-    call_get_state, call_set_state, calls_load, calls_save, ingest, is_group_invite, pending_list,
-    pending_save, remove_pending, seen_push, PendingEntry, MAX_TRIES,
+    call_get_state, call_set_state, calls_load, calls_save, decrypt_order, derived_public_hex,
+    group_invite_notice, ingest, is_group_invite, is_vault_envelope, key_fingerprint_prefix,
+    missed_call_notice, monitor_db_path, notice_for, pending_list, pending_save, remove_pending,
+    retry_effect, seen_push, unknown_sender, PendingEntry, RetryEffect,
 };
 
 // Таймауты, лимиты и предикат свежести — в ядре (`vault::timings`): это числа
 // протокола, и, пока они лежали во мосту, их не мерил ни один гейт
 // (`rust-mutation-gate` считает наборы по крейту `vault-client`). Форма адреса
 // и переходы журнала звонков — там же (ADR-005 §W4, партии 2-3).
+use vault_client::vault::call;
 use vault_client::vault::call_record::{self, Incoming, RecordState};
 use vault_client::vault::identity;
 use vault_client::vault::timings::{now_ms, CALL_STALE_MS, RING_TIMEOUT_MS};
@@ -244,18 +247,7 @@ pub unsafe extern "C" fn Java_com_vault_vault_VaultForegroundService_nativeSendC
                 return;
             }
         };
-        let envelope = serde_json::json!({
-            "vault": 1,
-            "id": format!("{}{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis().to_string())
-                .unwrap_or_default(),
-                "na"),
-            "type": sig,
-            "call_id": cid,
-            "ts": now_ms(),
-        });
-        let plain = envelope.to_string();
+        let plain = call::build_service_call_signal(&sig, &cid, now_ms());
         let cipher = match crate::crypto::encrypt_vault_cmd(&plain, &priv_key, Some(&peer_key)) {
             Ok(c) => c,
             Err(e) => {
@@ -356,13 +348,10 @@ pub unsafe extern "C" fn Java_com_vault_vault_CallActionReceiver_nativeCallDecis
         log::warn!("[svc-monitor] decision: пустой адрес аккаунта — записи звонка не найдём");
         return;
     };
-    let db_path = match dirs::data_local_dir() {
-        Some(d) => d.join("com.vault.vault").join("monitor.db"),
-        None => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            std::path::PathBuf::from(home).join("monitor.db")
-        }
-    };
+    let db_path = monitor_db_path(
+        dirs::data_local_dir(),
+        &std::env::var("HOME").unwrap_or_else(|_| ".".into()),
+    );
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -462,15 +451,9 @@ fn spawn_call_signal_email(email: String, call_id: String, signal: &'static str)
             Ok(Some(k)) => k.private_key,
             _ => return,
         };
-        let envelope = serde_json::json!({
-            "vault": 1,
-            "id": format!("{}{}", now_ms(), "na"),
-            "type": signal,
-            "call_id": call_id,
-            "ts": now_ms(),
-        });
+        let plain = call::build_service_call_signal(signal, &call_id, now_ms());
         let cipher = match crate::crypto::encrypt_vault_cmd(
-            &envelope.to_string(),
+            &plain,
             &priv_key,
             Some(&peer_key),
         ) {
@@ -536,32 +519,20 @@ async fn run_loop(stop: Arc<AtomicBool>) {
     // (не тот HOME / не тот каталог) — корень «письмо не расшифровывается
     // монитором, но расшифровывается открытым приложением».
     {
-        use x25519_dalek::{PublicKey, StaticSecret};
-        if let Ok(pb) = hex::decode(&keypair.private_key) {
-            if let Ok(arr) = <[u8; 32]>::try_from(pb) {
-                let derived = PublicKey::from(&StaticSecret::from(arr));
-                let dhex: String = derived
-                    .as_bytes()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                log::info!(
-                    "[svc-monitor] keypair derived pub={}… (priv={}…)",
-                    &dhex[..16.min(dhex.len())],
-                    &keypair.private_key[..16.min(keypair.private_key.len())]
-                );
-            }
+        if let Some(dhex) = derived_public_hex(&keypair.private_key) {
+            log::info!(
+                "[svc-monitor] keypair derived pub={}… (priv={}…)",
+                key_fingerprint_prefix(&dhex),
+                key_fingerprint_prefix(&keypair.private_key)
+            );
         }
     }
 
     // 4) Своя sqlite-база: независимые курсоры + дедуп/pending-очередь.
-    let db_path = match dirs::data_local_dir() {
-        Some(d) => d.join("com.vault.vault").join("monitor.db"),
-        None => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            std::path::PathBuf::from(home).join("monitor.db")
-        }
-    };
+    let db_path = monitor_db_path(
+        dirs::data_local_dir(),
+        &std::env::var("HOME").unwrap_or_else(|_| ".".into()),
+    );
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -725,7 +696,8 @@ fn check_ring_timeouts(ctx: &Ctx<'_>) {
             // Снять уведомление звонка (рингтон+вибро) — если висит.
             crate::audio::audio_android::dismiss_incoming_call_notification();
             // Пуш-резюме: юзер должен узнать о пропущенном.
-            let _ = notify(&c.caller, "Пропущенный звонок Vault");
+            let notice = missed_call_notice(&c.caller);
+            let _ = notify(&notice.title, &notice.text);
             changed = true;
         }
     }
@@ -783,7 +755,7 @@ async fn drain_pending(ctx: &Ctx<'_>, stop: Arc<AtomicBool>) {
                 let mut list = pending_list(ctx.db, ctx.account);
                 if let Some(e) = list.iter_mut().find(|e| e.mid == entry.mid) {
                     e.tries += 1;
-                    if e.tries >= MAX_TRIES {
+                    if retry_effect(e.tries) == RetryEffect::GiveUp {
                         log::warn!(
                             "[svc-monitor] give up after {} tries: {} mid={}…",
                             e.tries,
@@ -833,10 +805,8 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
     // (там и его пробы). Здесь только реакция: системный пуш, письмо остаётся в
     // ящике для JS.
     if is_group_invite(&body_clean) {
-        return if notify(
-            &e.from,
-            "приглашение в группу — откройте Vault, чтобы принять",
-        ) {
+        let notice = group_invite_notice(&e.from);
+        return if notify(&notice.title, &notice.text) {
             log::info!("[svc-monitor] group invite notified from {}", e.from);
             Outcome::Delivered
         } else {
@@ -844,29 +814,16 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         };
     }
 
-    // Расшифровка: ключ отправителя → self-ключ (письма себе шифруются своим
-    // ключом) → перебор контактов (страховка для нестандартных сценариев).
+    // Расшифровка: порядок перебора — в `monitor_state::decrypt_order`
+    // (ключ отправителя → self-ключ → остальные контакты). Правило живёт не
+    // здесь, потому что этот модуль с хоста не компилируется и проверить его
+    // мутациями нельзя; здесь только исполнение.
     let from_lc = e.from.clone();
     let mut plain: Option<String> = None;
-    if let Some(pk) = ctx.peers.get(&from_lc) {
-        if let Ok(p) = decrypt_vault_cmd(&body_clean, ctx.private_key, Some(pk)) {
+    for candidate in decrypt_order(&ctx.peers, &from_lc) {
+        if let Ok(p) = decrypt_vault_cmd(&body_clean, ctx.private_key, candidate) {
             plain = Some(p);
-        }
-    }
-    if plain.is_none() {
-        if let Ok(p) = decrypt_vault_cmd(&body_clean, ctx.private_key, None) {
-            plain = Some(p);
-        }
-    }
-    if plain.is_none() {
-        for (email, pk) in ctx.peers.iter() {
-            if *email == from_lc {
-                continue;
-            }
-            if let Ok(p) = decrypt_vault_cmd(&body_clean, ctx.private_key, Some(pk)) {
-                plain = Some(p);
-                break;
-            }
+            break;
         }
     }
     let plain = match plain {
@@ -874,7 +831,7 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
         None => {
             // base64 шифротекста, секрета не содержит. Бывает разово-битый
             // фетч: ретрай на следующем тике.
-            if ctx.peers.is_empty() || !ctx.peers.contains_key(&from_lc) {
+            if unknown_sender(&ctx.peers, &from_lc) {
                 log::info!("[svc-monitor] skip (sender not in peers): {from_lc}");
                 // Отправитель не из контактов — ретраи бессмысленны.
                 return Outcome::Dead;
@@ -906,25 +863,17 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             };
         }
     };
-    if env_json.get("vault").and_then(|v| v.as_i64()) != Some(1) {
+    if !is_vault_envelope(&env_json) {
         return Outcome::Delivered;
     }
     // ЭХО-ЗАЩИТА: конверт с МОИМ публичным
     // ключом — это письмо себе (profile-broadcast / копия в свой ящик) —
-    // НЕ уведомляем. Без неё self-письмо давало ложный пуш «от себя».
+    // НЕ уведомляем. Без неё self-письмо давало бы ложный пуш «от себя».
     if let Some(env_key) = env_json.get("key").and_then(|v| v.as_str()) {
-        if let Ok(pb) = hex::decode(ctx.private_key) {
-            if let Ok(arr) = <[u8; 32]>::try_from(pb.as_slice()) {
-                let my_pub = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(arr));
-                let my_pub_hex: String = my_pub
-                    .as_bytes()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                if is_own_public_key(env_key, &my_pub_hex) {
-                    log::info!("[svc-monitor] echo-guard: letter with my own key, skip");
-                    return Outcome::Delivered;
-                }
+        if let Some(my_pub_hex) = derived_public_hex(ctx.private_key) {
+            if is_own_public_key(env_key, &my_pub_hex) {
+                log::info!("[svc-monitor] echo-guard: letter with my own key, skip");
+                return Outcome::Delivered;
             }
         }
     }
@@ -1016,7 +965,8 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
                         RecordState::Missed.as_str(),
                         &caller,
                     );
-                    if notify(&from_lc, "Пропущенный звонок Vault") {
+                    let notice = missed_call_notice(&from_lc);
+                    if notify(&notice.title, &notice.text) {
                         Outcome::Delivered
                     } else {
                         Outcome::Retry
@@ -1030,41 +980,18 @@ async fn deliver_entry(ctx: &Ctx<'_>, e: &mut PendingEntry) -> Outcome {
             }
         };
     }
-    // SOS: критичное письмо «телефон не у меня» — пуш с
-    // высоким приоритетом, в чат НЕ пишется (JS тоже фильтрует type:sos).
-    if typ == "sos" {
-        let who = env_json
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&from_lc);
-        let sos_text = env_json
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Телефон не у меня");
-        let title = format!("🚨 SOS: {who}");
-        return if notify(&title, sos_text) {
-            log::info!("[svc-monitor] SOS delivered from {from_lc}");
-            Outcome::Delivered
-        } else {
-            Outcome::Retry
-        };
+    // SOS («телефон не у меня») и обычный конверт: что показать — правило
+    // `monitor_state::notice_for` (там и его пробы). Профиль-конверты и
+    // квитанции возвращают None: текста нет, уведомлять нечем.
+    let notice = match notice_for(&env_json, &typ, &from_lc) {
+        Some(n) => n,
+        None => return Outcome::Delivered,
+    };
+    let delivered = notify(&notice.title, &notice.text);
+    if delivered && typ == "sos" {
+        log::info!("[svc-monitor] SOS delivered from {from_lc}");
     }
-    // Профиль-конверты/квитанции: текста нет — не уведомляем.
-    let text = env_json
-        .get("text")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    if typ == "profile" || text.is_empty() {
-        return Outcome::Delivered;
-    }
-    let name = env_json
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let title = if name.is_empty() { from_lc } else { name };
-    if notify(&title, &text) {
+    if delivered {
         Outcome::Delivered
     } else {
         Outcome::Retry
@@ -1166,13 +1093,10 @@ pub fn call_report_state(call_id: String, state: String) -> Result<(), String> {
         return Err("empty call_id".into());
     }
     // monitor.db — тот же путь, что использует headless-монитор.
-    let db_path = match dirs::data_local_dir() {
-        Some(d) => d.join("com.vault.vault").join("monitor.db"),
-        None => {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            std::path::PathBuf::from(home).join("monitor.db")
-        }
-    };
+    let db_path = monitor_db_path(
+        dirs::data_local_dir(),
+        &std::env::var("HOME").unwrap_or_else(|_| ".".into()),
+    );
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1241,15 +1165,9 @@ pub fn send_sos_mails(recipients: &[String], text: &str) -> Result<(), String> {
         let mut failures: Vec<String> = Vec::new();
         for rcpt in &recipients {
             let peer_key = peer_key_for(&peers, rcpt);
-            let envelope = serde_json::json!({
-                "vault": 1,
-                "id": format!("{}sos", now_ms()),
-                "type": "sos",
-                "text": text,
-                "ts": now_ms(),
-            });
+            let plain = vault_client::vault::duress::build_sos_envelope(&text, now_ms());
             let cipher = match crate::crypto::encrypt_vault_cmd(
-                &envelope.to_string(),
+                &plain,
                 &priv_key,
                 peer_key.as_deref(),
             ) {

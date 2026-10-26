@@ -64,6 +64,11 @@ const EXEMPT = new Map([
   ['vault-desktop/src-tauri/src/vp8_decoder.rs', 'привязки libvpx (FFI) — декодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/vp8_encoder.rs', 'привязки libvpx (FFI) — энкодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/peer_index.rs', 'индекс peer по публичному ключу — чистый делегат ядру (очередь t_61bd5090: не кандидат)'],
+  // Единственная дыра моста, закрытая 26.10 не «причиной», а выносом: всё, что
+  // работает без JNI, живёт в measure-ном monitor_state (62 мутации) и ядре, а
+  // здесь осталось ровно то, что с хоста НЕ КОМПИЛИРУЕТСЯ (модуль целиком под
+  // #[cfg(target_os = "android")], jni — зависимость android-цели).
+  ['vault-desktop/src-tauri/src/service_monitor.rs', 'ОСТАТОК (перечислено, а не «логика без мер»): 5 JNI-входов из Kotlin (nativeStartMonitor / nativeStopMonitor / nativePauseMonitor / nativeSendCallSignal / nativeCallDecision), 2 прямых вызова в Kotlin (VaultForegroundService.showMessage, MainActivity.dispatchCallAction) и показ/снятие уведомления звонка через audio_android; IMAP-цикл с его pacing (IDLE_TICK 7s, backoff 2s/5s, опрос 60×200ms — числа сознательно НЕ перенесены в vault::timings); SMTP-отправка call_accept/reject и SOS; запись курсора и логи в logcat. Модуль под cfg(target_os = "android"): с хоста не компилируется, jni — зависимость android-цели, поэтому мутационный гейт до него не дотягивается; единственная мера — cargo check --target aarch64 + приёмка на устройстве. Решающие правила (очередь, дедуп, надгробия, порядок ключей, лимит попыток, путь к БД, тексты уведомлений, формат сигналов звонка и SOS) вынесены в monitor_state/call/duress и измерены там.'],
   ['vault-desktop/src-tauri/src/key_escrow.rs', 'реэкспорт ядрового формата восстановления (vault::key_escrow) — решений нет, мера у ядра: набор rust-key-escrow'],
   ['vault-desktop/src-tauri/src/voicenote.rs', '56 строк, одно ветвление — тонкая обвязка сохранения, решений нет'],
   ['vault-relay/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],

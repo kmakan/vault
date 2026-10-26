@@ -10,10 +10,10 @@
     "vault-client/src/vault/call_media.rs": 17,
     "vault-client/src/vault/call_record.rs": 19,
     "vault-client/src/vault/call_state.rs": 21,
-    "vault-client/src/vault/call.rs": 5,
+    "vault-client/src/vault/call.rs": 12,
     "vault-client/src/vault/channels.rs": 12,
     "vault-client/src/vault/contacts.rs": 7,
-    "vault-client/src/vault/duress.rs": 9,
+    "vault-client/src/vault/duress.rs": 14,
     "vault-client/src/vault/edit.rs": 5,
     "vault-client/src/vault/envelope.rs": 20,
     "vault-client/src/vault/ephemeral.rs": 6,
@@ -62,9 +62,8 @@
     "vault-desktop/src-tauri/src/key_store.rs": 14,
     "vault-desktop/src-tauri/src/lib.rs": 12,
     "vault-desktop/src-tauri/src/media.rs": 3,
-    "vault-desktop/src-tauri/src/monitor_state.rs": 32,
+    "vault-desktop/src-tauri/src/monitor_state.rs": 62,
     "vault-desktop/src-tauri/src/presence.rs": 12,
-    "vault-desktop/src-tauri/src/service_monitor.rs": 0,
     "vault-desktop/src-tauri/src/storage/sqlite.rs": 9,
     "vault-desktop/src-tauri/src/vault_bridge.rs": 4,
     "vault-desktop/src-tauri/src/video.rs": 13,
@@ -198,7 +197,5 @@
     "vault-relay/src/store.rs": 9,
     "vault-relay/src/tokens.rs": 26
   },
-  "gaps": [
-    "vault-desktop/src-tauri/src/service_monitor.rs"
-  ]
+  "gaps": []
 }

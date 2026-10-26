@@ -38,5 +38,24 @@ export default {
     { name: 'секрет не участвует в выводе (разные коды дают один хэш)',
       pattern: '    pbkdf2_hmac_sha256(secret.as_bytes(), &salt, ITERATIONS, &mut out);',
       replacement: '    pbkdf2_hmac_sha256(b"", &salt, ITERATIONS, &mut out);' },
+    // ── Конверт SOS (26.10): сборка переехала из `service_monitor.rs`, где её
+    // не мерил никто — модуль компилируется только под Android и с хоста в
+    // прогоне не участвует. Ошибка в этом формате — письмо беды, которое
+    // получатель показывает как обычное сообщение.
+    { name: 'маркер формата SOS уезжает (получатель не признаёт письмо своим)',
+      pattern: '        vault: 1,',
+      replacement: '        vault: 2,' },
+    { name: 'метка sos в идентификаторе теряется',
+      pattern: '        id: format!("{ts_ms}sos"),',
+      replacement: '        id: format!("{ts_ms}"),' },
+    { name: 'тип собирается под другим именем (разбор на том конце не видит sos)',
+      pattern: '        #[serde(rename = "type")]\n        msg_type: &\'a str,',
+      replacement: '        #[serde(rename = "typ")]\n        msg_type: &\'a str,' },
+    { name: 'тип сигнала беды подменяется обычным сообщением (SOS молчит)',
+      pattern: '        msg_type: "sos",',
+      replacement: '        msg_type: "text",' },
+    { name: 'текст беды не попадает в конверт (получатель видит пустое письмо)',
+      pattern: '        text,',
+      replacement: '        text: "",' },
   ],
 };

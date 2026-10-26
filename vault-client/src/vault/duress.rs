@@ -12,6 +12,7 @@
 
 use hmac::{Hmac, Mac};
 use rand::RngCore;
+use serde::Serialize;
 use sha2::Sha256;
 
 /// Итерации PBKDF2. Меняется ТОЛЬКО вместе с миграцией сохранённых хэшей:
@@ -91,6 +92,39 @@ pub fn verify_secret(secret: &str, stored: &str) -> bool {
     diff == 0
 }
 
+/// Конверт duress-SOS: `{vault:1, id:"{ts}sos", type:"sos", text, ts}`.
+///
+/// Правило формата переехало из `service_monitor.rs` (headless-отправка): там
+/// оно компилировалось только под `cfg(target_os = "android")` и не измерялось
+/// с хоста ничем. Ошибиться в метке `type` — получить письмо, которое
+/// получатель покажет как обычное сообщение, а не как сигнал беды; узнать об
+/// этом можно только тогда, когда помощи не дождались.
+///
+/// Процесс с activity (JS `sendDuressSos`) собирает SOS полным
+/// сообщенийным конвертом (`envelope::build` с `type:"sos"`) — с именем и
+/// ключом отправителя. Headless-конверт остаётся минимальным: смена его
+/// байтовой формы — это изменение протокола на живой аварии, оно требует
+/// приёмки на устройстве, а не «улучшения по дороге».
+pub fn build_sos_envelope(text: &str, ts_ms: i64) -> String {
+    #[derive(Serialize)]
+    struct Sos<'a> {
+        vault: u8,
+        id: String,
+        #[serde(rename = "type")]
+        msg_type: &'a str,
+        text: &'a str,
+        ts: i64,
+    }
+    let env = Sos {
+        vault: 1,
+        id: format!("{ts_ms}sos"),
+        msg_type: "sos",
+        text,
+        ts: ts_ms,
+    };
+    serde_json::to_string(&env).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +165,32 @@ mod tests {
             hex::encode(out),
             "91ea059bae0333a2969fc8ccd7c77851dda43f5adb96baeea246a624cdf489ec"
         );
+    }
+
+    /// Конверт SOS (26.10): сборка переехала из `service_monitor.rs`, где её
+    /// не измеряло ничего — модуль компилируется только под
+    /// `cfg(target_os = "android")`. Проверка литералами: сверять собранное
+    /// с той же константой, из которой оно собрано, значит измерять себя.
+    #[test]
+    fn sos_envelope_is_a_vault_signal_of_type_sos() {
+        let json = build_sos_envelope("Телефон не у меня 55.75,37.61", 1_700_000_000_000);
+        let obj: serde_json::Value = serde_json::from_str(&json).expect("конверт — JSON");
+        assert_eq!(obj["vault"], 1, "маркер формата: {json}");
+        assert_eq!(obj["type"], "sos", "получатель узнаёт SOS по полю type: {json}");
+        assert_eq!(obj["id"], "1700000000000sos", "метка sos в идентификаторе");
+        assert_eq!(obj["ts"].as_i64(), Some(1_700_000_000_000));
+        assert_eq!(obj["text"], "Телефон не у меня 55.75,37.61", "текст беды доезжает");
+    }
+
+    /// Пустой текст — не основание молчать: получатель обязан получить
+    /// сигнал беды и тогда, когда текст не подставился. Проверяется наличие
+    /// поля `text` в конверте, а не его содержательность.
+    #[test]
+    fn sos_envelope_keeps_the_type_with_empty_text() {
+        let json = build_sos_envelope("", 7);
+        let obj: serde_json::Value = serde_json::from_str(&json).expect("конверт — JSON");
+        assert_eq!(obj["type"], "sos");
+        assert_eq!(obj["text"], "");
     }
 
     #[test]

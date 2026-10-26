@@ -235,6 +235,184 @@ pub(crate) fn is_group_invite(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Публичный ключ, выведенный из приватного (оба — hex). `None`, если приват
+/// не читается как 32 байта: монитор тогда не может отличить «письмо от себя»
+/// и не обязан угадывать.
+///
+/// Вывод живёт здесь, потому что он нужен и эхо-защите (не уведомлять о
+/// письмах, которые я отправил сам), и диагностике в логе («монитор читает
+/// чужой keypair.json»). Две копии этой формулы внутри
+/// `#[cfg(target_os = "android")]` модуля не измерялись с хоста ничем.
+pub(crate) fn derived_public_hex(private_key_hex: &str) -> Option<String> {
+    use x25519_dalek::{PublicKey, StaticSecret};
+    let bytes = hex::decode(private_key_hex).ok()?;
+    let arr = <[u8; 32]>::try_from(bytes.as_slice()).ok()?;
+    Some(
+        PublicKey::from(&StaticSecret::from(arr))
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
+/// Префикс ключа для лога: 16 hex-символов. Целый ключ в logcat не печатаем,
+/// а обрезок по неправильной границе ломал бы строку (здесь hex — ASCII).
+pub(crate) fn key_fingerprint_prefix(hex_key: &str) -> &str {
+    &hex_key[..16.min(hex_key.len())]
+}
+
+/// Маркер «нашего» конверта: `vault` строго 1. Не-1 — письмо не наше:
+/// показывать его как сообщение Vault нельзя, но и тревожить повторной
+/// попыткой незачем (оно доставлено «в никуда»).
+pub(crate) fn is_vault_envelope(env: &serde_json::Value) -> bool {
+    env.get("vault").and_then(|v| v.as_i64()) == Some(1)
+}
+
+/// Порядок перебора ключей при расшифровке входящего письма:
+/// ключ отправителя → свой ключ (письма себе шифруются своим) → остальные
+/// контакты, кроме уже пробованного отправителя. Страховой перебор —
+/// подстраховка для нестандартных сценариев (смена ключа у контакта).
+///
+/// Порядок был написан прямо в monitors-цикле; здесь он измеряется, потому что
+/// ошибка в нём — «письмо не расшифровывается, хотя ключ есть», то есть
+/// молчаливо пропавшее уведомление.
+pub(crate) fn decrypt_order<'a>(
+    peers: &'a std::collections::HashMap<String, String>,
+    from: &str,
+) -> Vec<Option<&'a str>> {
+    let mut order: Vec<Option<&'a str>> = Vec::with_capacity(peers.len() + 1);
+    if let Some(key) = peers.get(from) {
+        order.push(Some(key.as_str()));
+    }
+    order.push(None);
+    for (email, key) in peers {
+        if email == from {
+            continue;
+        }
+        order.push(Some(key.as_str()));
+    }
+    order
+}
+
+/// Отправителя нет среди контактов: расшифровка ему недоступна ни при какой
+/// удаче, и ретраи только крутят очередь.
+pub(crate) fn unknown_sender(
+    peers: &std::collections::HashMap<String, String>,
+    from: &str,
+) -> bool {
+    !peers.contains_key(from)
+}
+
+/// ─────────────── Что делать с записью после неудачной попытки ───────────────
+///
+/// Политика «сколько раз пробовать и когда сдаться» жила прямо в
+/// `service_monitor.rs`, где с хоста она не компилируется. Цена ошибки на
+/// телефоне: сдался раньше — письмо никогда не будет показано; не сдаётся
+/// никогда — очередь крутится бесконечно и греет батарею.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryEffect {
+    /// Ещё одна попытка на следующем тике.
+    Again,
+    /// Попытки исчерпаны: письмо уходит в seen и исчезает из pending.
+    GiveUp,
+}
+
+/// `tries` — счётчик ПОСЛЕ увеличения (так его ведёт очередь).
+pub(crate) fn retry_effect(tries: u32) -> RetryEffect {
+    if tries >= MAX_TRIES {
+        RetryEffect::GiveUp
+    } else {
+        RetryEffect::Again
+    }
+}
+
+/// Файл базы монитора. Правило лежит здесь, потому что в мониторе оно
+/// повторялось трижды (старт, цикл, отправка SOS), а расхождение в имени
+/// каталога означало бы «две разные базы» — курсоры и дедуп живут в одной.
+///
+/// `data_local` — `dirs::data_local_dir()` (на Android это каталог приложения,
+/// HOME в сервис-процессе недостоверен); если каталога нет — прежний
+/// фолбэк `$HOME/monitor.db`.
+pub(crate) fn monitor_db_path(
+    data_local: Option<std::path::PathBuf>,
+    home: &str,
+) -> std::path::PathBuf {
+    match data_local {
+        Some(dir) => dir.join("com.vault.vault").join("monitor.db"),
+        None => std::path::Path::new(home).join("monitor.db"),
+    }
+}
+
+/// Что показать системным уведомлением по разобранному конверту.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Notice {
+    pub title: String,
+    pub text: String,
+}
+
+/// Текст уведомления о групповом приглашении (тело письма не расшифровано,
+/// показывать нечего — только объяснение, что открыть).
+pub(crate) fn group_invite_notice(from: &str) -> Notice {
+    Notice {
+        title: from.to_string(),
+        text: "приглашение в группу — откройте Vault, чтобы принять".to_string(),
+    }
+}
+
+/// Текст уведомления о пропущенном звонке. Правило было продублировано в
+/// двух местах монитора (таймаут ринга и несостоявшийся показ через JNI), и
+/// каждое из них могло разъехаться с другим.
+pub(crate) fn missed_call_notice(who: &str) -> Notice {
+    Notice {
+        title: who.to_string(),
+        text: "Пропущенный звонок Vault".to_string(),
+    }
+}
+
+/// Правило «что именно показать» для доставленного конверта. Жило внутри
+/// `service_monitor.rs` — то есть не измерялось ничем, а ошибка в нём
+/// выглядит на телефоне как «уведомление пришло пустое» или «SOS пришёл
+/// обычным сообщением».
+///
+/// * `type: "sos"` — заголовок `🚨 SOS: <имя, а если его нет — адрес>`,
+///   текст из конверта, а если поля нет — «Телефон не у меня»;
+/// * `type: "profile"` или пустой `text` — `None`: уведомление НЕ показываем
+///   (квитанции и рассылки профиля доставляются «в никуда»);
+/// * остальное — заголовок: имя отправителя, если оно непустое, иначе адрес.
+///
+/// Две правки поведения относительно прежнего кода (обе — «раньше было
+/// пусто»): у SOS с пустым именем (`name: ""` — так шлёт JS) в заголовке
+/// теперь адрес отправителя, а не пустое место; у SOS с пустым текстом
+/// показывается дефолтная фраза, а не пустое уведомление.
+pub(crate) fn notice_for(env: &serde_json::Value, typ: &str, from: &str) -> Option<Notice> {
+    let name = env.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let text = env.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    if typ == "sos" {
+        let who = if name.is_empty() { from } else { name };
+        let body = if text.is_empty() {
+            "Телефон не у меня"
+        } else {
+            text
+        };
+        return Some(Notice {
+            title: format!("🚨 SOS: {who}"),
+            text: body.to_string(),
+        });
+    }
+    if typ == "profile" || text.is_empty() {
+        return None;
+    }
+    Some(Notice {
+        title: if name.is_empty() {
+            from.to_string()
+        } else {
+            name.to_string()
+        },
+        text: text.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,6 +784,248 @@ mod tests {
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"kind":123}"#)
             ),
             "kind не строка — не приглашение"
+        );
+    }
+
+    /// Приватный ключ из другого набора проб (channel_signing) — синтетический,
+    /// публичная часть замерена один раз и записана литералом.
+    const KAT_PRIV: &str =
+        "0101010101010101010101010101010101010101010101010101010101010101";
+    const KAT_PUB: &str =
+        "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209";
+    const PEER_PRIV: &str =
+        "aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55";
+    const PEER: &str = "petya@post.ru";
+
+    #[test]
+    fn public_key_is_derived_by_the_formula_the_echo_guard_relies_on() {
+        // Литерал, а не «сравни с самим собой»: эхо-защита сравнивает выведенный
+        // публичный ключ с ключом в конверте. Ошибка в выводе (байты наоборот,
+        // base16 вместо hex, молчаливый 0-ключ) на телефоне выглядит так: либо
+        // «моё письмо показалось чужим» (ложный пуш от себя), либо «чужое
+        // письмо показалось своим» (уведомление пропало).
+        assert_eq!(derived_public_hex(KAT_PRIV).as_deref(), Some(KAT_PUB));
+        let other = derived_public_hex(PEER_PRIV).expect("второй ключ выведен");
+        assert_ne!(other, KAT_PUB, "разные приваты дают разные публичные");
+        assert_eq!(other.len(), 64, "публичный ключ — 32 байта в hex");
+        // Ключ из другой формы (верхний регистр) выводится тем же значением:
+        // конверт может прислать hex в любом регистре.
+        assert_eq!(
+            derived_public_hex(&KAT_PRIV.to_uppercase()).as_deref(),
+            Some(KAT_PUB)
+        );
+    }
+
+    #[test]
+    fn unreadable_private_key_derives_nothing() {
+        // None, а не паника и не нулевой ключ: монитор без вывода не может
+        // отличить письмо от себя и не обязан угадывать.
+        assert_eq!(derived_public_hex(""), None);
+        assert_eq!(derived_public_hex("не hex!!"), None);
+        assert_eq!(
+            derived_public_hex(&KAT_PRIV[..62]),
+            None,
+            "31 байт — не ключ, вывод не должен состояться"
+        );
+        assert_eq!(
+            derived_public_hex(&format!("{KAT_PRIV}00")),
+            None,
+            "33 байта — тоже не ключ"
+        );
+    }
+
+    #[test]
+    fn log_fingerprint_is_sixteen_chars_and_never_panics_on_short_input() {
+        // Логи уходят в logcat: целый ключ печатать нельзя, а обрезок по
+        // негранице ломал бы строку. Длина отпечатка — правило, а не косметика.
+        assert_eq!(key_fingerprint_prefix(KAT_PUB), &KAT_PUB[..16]);
+        assert_eq!(key_fingerprint_prefix(KAT_PUB).len(), 16);
+        assert_eq!(key_fingerprint_prefix("abc"), "abc", "короткий вход целым");
+        assert_eq!(key_fingerprint_prefix(""), "");
+    }
+
+    #[test]
+    fn envelope_marker_is_the_integer_one_and_nothing_else() {
+        let yes = serde_json::json!({"vault": 1, "text": "привет"});
+        let no = serde_json::json!({"vault": 2, "text": "привет"});
+        assert!(is_vault_envelope(&yes));
+        assert!(!is_vault_envelope(&no), "другой маркер — не наше письмо");
+        assert!(
+            !is_vault_envelope(&serde_json::json!({"text": "привет"})),
+            "без маркера — не наше"
+        );
+        assert!(
+            !is_vault_envelope(&serde_json::json!({"vault": "1"})),
+            "строка «1» — не маркер"
+        );
+        assert!(
+            !is_vault_envelope(&serde_json::json!({"vault": 1.0})),
+            "вещественный 1.0 не принимаем вслепую"
+        );
+    }
+
+    #[test]
+    fn decrypt_order_tries_sender_then_self_then_the_rest_without_the_sender() {
+        // Ошибка в порядке = «письмо не расшифровывается, хотя ключ есть»:
+        // уведомление молча пропадает, и на телефоне это не отличить от
+        // недоставленного письма.
+        let mut peers = std::collections::HashMap::new();
+        peers.insert(PEER.to_string(), "pk-peer".to_string());
+        peers.insert(OTHER.to_string(), "pk-other".to_string());
+        let order = decrypt_order(&peers, PEER);
+        assert_eq!(order.len(), 3, "ключ отправителя + свой + один остаток");
+        assert_eq!(order[0], Some("pk-peer"), "сначала ключ отправителя");
+        assert_eq!(order[1], None, "письма себе шифруются своим ключом");
+        assert_eq!(order[2], Some("pk-other"), "остаток — чужой ключ");
+        // Отправителя нет среди контактов: первым всё равно идёт свой ключ, но
+        // страховой перебор обязан попробовать ВСЕХ контактов — так ведёт себя
+        // письмо от контакта, у которого ключ сменился.
+        let stranger = decrypt_order(&peers, "guest@post.ru");
+        assert_eq!(stranger.len(), 3, "self-ключ плюс оба контакта");
+        assert_eq!(stranger[0], None, "незнакомцу первым идёт self-ключ");
+        let mut rest: Vec<&str> = stranger[1..].iter().map(|k| k.unwrap()).collect();
+        rest.sort_unstable();
+        assert_eq!(
+            rest,
+            vec!["pk-other", "pk-peer"],
+            "перебор покрывает оба известных ключа"
+        );
+        // Пустая карта контактов — тоже ровно одна попытка (self).
+        assert_eq!(
+            decrypt_order(&std::collections::HashMap::new(), PEER),
+            vec![None]
+        );
+    }
+
+    #[test]
+    fn sender_absent_from_contacts_never_retries() {
+        let mut peers = std::collections::HashMap::new();
+        peers.insert(PEER.to_string(), "pk-peer".to_string());
+        assert!(
+            !unknown_sender(&peers, PEER),
+            "контакт не считается незнакомым"
+        );
+        assert!(
+            unknown_sender(&peers, OTHER),
+            "нет в контактах = незнакомый отправитель"
+        );
+        assert!(
+            unknown_sender(&std::collections::HashMap::new(), PEER),
+            "пустая карта контактов — отправитель неизвестен"
+        );
+    }
+
+    #[test]
+    fn three_failed_attempts_and_the_letter_is_dropped_for_good() {
+        // Литералы, а не MAX_TRIES: «сдался раньше» = письмо никогда не
+        // покажем, «не сдаётся никогда» = очередь крутится и греет батарею.
+        assert_eq!(MAX_TRIES, 3);
+        assert_eq!(retry_effect(1), RetryEffect::Again);
+        assert_eq!(retry_effect(2), RetryEffect::Again);
+        assert_eq!(retry_effect(3), RetryEffect::GiveUp, "третья — последняя");
+        assert_eq!(retry_effect(4), RetryEffect::GiveUp);
+    }
+
+    #[test]
+    fn monitor_database_is_the_one_file_the_cursor_lives_in() {
+        // Три места монитора открывали базу по своей формуле пути. Расхождение в
+        // имени каталога = «две разные базы»: курсор IMAP и seen-дедуп живут в
+        // одной, и на телефоне это либо повторные уведомления, либо молчание.
+        let dir = std::path::PathBuf::from("/data/user/0/com.vault.vault/files");
+        assert_eq!(
+            monitor_db_path(Some(dir.clone()), "/unused"),
+            dir.join("com.vault.vault").join("monitor.db")
+        );
+        assert_eq!(
+            monitor_db_path(None, "/home/anna"),
+            std::path::Path::new("/home/anna/monitor.db"),
+            "без каталога данных — прежний фолбэк по HOME"
+        );
+    }
+
+    #[test]
+    fn group_invite_notice_names_the_sender_and_the_action() {
+        let n = group_invite_notice("petya@post.ru");
+        assert_eq!(n.title, "petya@post.ru");
+        assert_eq!(
+            n.text, "приглашение в группу — откройте Vault, чтобы принять",
+            "текст — единственный намёк пользователю, тело не расшифровано"
+        );
+    }
+
+    #[test]
+    fn missed_call_notice_is_one_phrase_for_both_sites() {
+        // Правило было продублировано в двух местах монитора; теперь одна
+        // функция, и её текст — литерал в пробе.
+        let n = missed_call_notice("Вася");
+        assert_eq!(n.title, "Вася");
+        assert_eq!(n.text, "Пропущенный звонок Vault");
+    }
+
+    #[test]
+    fn notice_for_an_ordinary_message_prefers_the_name_and_never_shows_empty() {
+        let n = notice_for(
+            &serde_json::json!({"name": "Петя", "text": "привет"}),
+            "",
+            "petya@post.ru",
+        )
+        .expect("письмо с текстом показывается");
+        assert_eq!(n.title, "Петя");
+        assert_eq!(n.text, "привет");
+
+        let anon = notice_for(
+            &serde_json::json!({"name": "", "text": "привет"}),
+            "",
+            "petya@post.ru",
+        )
+        .expect("без имени тоже показываем");
+        assert_eq!(anon.title, "petya@post.ru", "без имени — адрес");
+
+        assert!(
+            notice_for(&serde_json::json!({"text": ""}), "", "petya@post.ru").is_none(),
+            "пустое письмо не должно рождать пустое уведомление"
+        );
+        assert!(
+            notice_for(&serde_json::json!({"text": "привет"}), "profile", "a@b.c").is_none(),
+            "рассылка профиля — не уведомление"
+        );
+        assert!(
+            notice_for(&serde_json::json!({}), "", "petya@post.ru").is_none(),
+            "в конверте ничего нет — молчим"
+        );
+    }
+
+    #[test]
+    fn sos_notice_is_marked_up_even_when_the_sender_sent_holes() {
+        let full = notice_for(
+            &serde_json::json!({"name": "Мама", "text": "я в порядке, просто проверяю"}),
+            "sos",
+            "mama@post.ru",
+        )
+        .expect("SOS показывается всегда");
+        assert_eq!(full.title, "🚨 SOS: Мама");
+        assert_eq!(full.text, "я в порядке, просто проверяю");
+
+        // Так шлёт JS: name пустое. Раньше в заголовке была пустота.
+        let nameless = notice_for(
+            &serde_json::json!({"name": "", "text": "помощь"}),
+            "sos",
+            "mama@post.ru",
+        )
+        .unwrap();
+        assert_eq!(nameless.title, "🚨 SOS: mama@post.ru");
+        assert_eq!(nameless.text, "помощь");
+
+        // Пустой текст SOS — не «пустое уведомление», а дефолтная фраза:
+        // сам SOS-сигнал терять нельзя, он и есть смысл сигнала.
+        let bodiless = notice_for(&serde_json::json!({"name": "Мама"}), "sos", "m@b.c").unwrap();
+        assert_eq!(bodiless.title, "🚨 SOS: Мама");
+        assert_eq!(bodiless.text, "Телефон не у меня");
+
+        assert_eq!(
+            notice_for(&serde_json::json!({}), "sos", "m@b.c").unwrap().title,
+            "🚨 SOS: m@b.c",
+            "SOS без имени и без текста всё равно виден"
         );
     }
 
