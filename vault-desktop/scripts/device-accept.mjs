@@ -63,6 +63,21 @@ async function cdpEvaluate(expression) {
   }
 }
 
+// Метки кнопок тарифа проба берёт ИЗ СЛОВАРЯ, а не переписывает их у себя.
+// Своя копия подписи расходится с приложением молча: закреплённый regex либо
+// краснеет на правильной сборке (ложный провал), либо не находит кнопку НИКОГДА
+// — и тогда проверка «в сборке без покупок кнопки нет» зелёная при любом DOM.
+// Ключи берутся из всех трёх локалей: телефон может быть не на русском.
+const localeModules = await Promise.all(
+  ['ru', 'en', 'zh'].map(async (l) => (await import(`../src/locales/${l}.js`)).default));
+const labelsOf = (key) => {
+  const list = [...new Set(localeModules.map((m) => (m || {})[key]).filter(Boolean))];
+  if (!list.length) throw new Error('в словаре нет метки ' + key + ' — проба не знает, что искать');
+  return JSON.stringify(list);
+};
+const BUY_LABELS = labelsOf('pro_action_buy');
+const EXTEND_LABELS = labelsOf('pro_action_extend');
+
 // Проба — код, исполняемый В СТРАНИЦЕ приложения. Возвращает отчёт.
 const PROBES = {
   // Проба экрана платного тарифа (ADR-005 W5/монетизация). Отдельная от
@@ -130,10 +145,16 @@ const PROBES = {
     // тариф free — покупку не совершаем (чекаут = реальная платёжная сессия),
     // а мягко пропускаем шаги, которые без покупки не проверить.
     const alreadyPro = /Pro активен|Pro is active/i.test(content());
-    const btnTexts = () => Array.from(document.querySelectorAll('.settings-content button'))
-      .map((b) => (b.innerText || '').trim());
-    const buyBtn = Array.from(document.querySelectorAll('.settings-content button'))
-      .find((b) => /Купить Pro|Buy Pro/i.test(b.innerText || ''));
+    const btnNodes = Array.from(document.querySelectorAll('.settings-content button'));
+    const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const btnTexts = () => btnNodes.map((b) => norm(b.innerText));
+    // Поиск по ПОЛНОЙ подписи, а не по вхождению: в этом же разделе стоит
+    // «Продлить/обновить токен» (релей) — подстрока «Продлить» ловила её, и
+    // проба краснела на сборке, где кнопки тарифа нет.
+    const BUY_LABELS = ${BUY_LABELS};
+    const EXTEND_LABELS = ${EXTEND_LABELS};
+    const hasExtendBtn = () => btnTexts().some((x) => EXTEND_LABELS.includes(x));
+    const buyBtn = btnNodes.find((b) => BUY_LABELS.includes(norm(b.innerText)));
     // Есть ли в ЭТОЙ сборке покупка — берём у самого приложения (компонент
     // держит правило флага сборки), а не у оператора: проба меряет проводку
     // «флаг сборки → computed → v-if», а не веру в запускающего. Сборки без
@@ -175,14 +196,13 @@ const PROBES = {
         !!dnums && Number(dnums[0]) === view.devices && Number(dnums[1]) === view.maxDevices,
         { напечатано: dnums, сервер: [view.devices, view.maxDevices] });
       if (allowPurchases) {
-        step('кнопка — «Продлить» (не покупка)', /Продлить|Extend/i.test(
-          Array.from(document.querySelectorAll('.settings-content button')).map((b) => b.innerText || '').join(' | ')
-        ), { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok' });
+        step('кнопка — «Продлить» (не покупка)', hasExtendBtn(),
+          { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok', buttons: btnTexts().map((e) => e.slice(0, 24)) });
       } else {
         // В сборке без покупок продлить подписку нельзя даже руками —
         // проверка, что «Продлить» тоже исчезла вместе с покупкой.
-        step('сборка без покупок: кнопки «Продлить» тоже нет',
-          !/Продлить|Extend/i.test(btnTexts().join(' | ')), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+        step('сборка без покупок: кнопки «Продлить» тоже нет', !hasExtendBtn(),
+          { buttons: btnTexts().map((e) => e.slice(0, 24)) });
       }
     } else if (!alreadyPro) {
       soft('квота и статус после покупки не проверены: тариф free',
@@ -662,9 +682,12 @@ try {
   process.exit(1);
 }
 
+// Мягкий пропуск печатается так же подробно, как провал: иначе объект в
+// extra уходит в консоль как [object Object] и приёмка теряет подсказку.
+const fmtExtra = (x) => (x === undefined || x === null ? '' : (typeof x === 'string' ? x : JSON.stringify(x)));
 let failed = 0;
 for (const s of (report && report.steps) || []) {
-  if (s.pass === null) { console.log('  ~ ' + s.name + ' — ' + (s.extra || '')); continue; }
+  if (s.pass === null) { console.log('  ~ ' + s.name + ' — ' + fmtExtra(s.extra)); continue; }
   if (s.pass) { console.log('  ✓ ' + s.name); continue; }
   failed++;
   console.log('  ✗ ' + s.name + (s.extra !== undefined ? ' — ' + JSON.stringify(s.extra) : ''));
