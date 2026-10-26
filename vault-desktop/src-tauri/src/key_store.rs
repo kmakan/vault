@@ -774,4 +774,178 @@ mod channel_signing_wipe_tests {
             assert_eq!(load_peer_keys().unwrap().len(), 1);
         });
     }
+
+    /// Права доступа хранилища ключей. `write_file_0600`, `ensure_keys_dir_at`
+    /// и установка прав на файле блокировки — это обещание модуля, но до 26.10
+    /// его не проверяла ни одна проба: 12 тестов модуля читают и пишут файлы
+    /// СВОИМ процессом, поэтому 0644 («читается группой и всеми») для них
+    /// неотличим от 0600, а пропавший chmod вообще незаметен.
+    #[cfg(unix)]
+    #[test]
+    fn key_store_keeps_files_and_directory_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        with_tmp_keys(|| {
+            save_channel_signing_key(&StoredChannelSigningKey {
+                public_key: "pub".into(),
+                private_key: "priv".into(),
+                created_at: "2026-10-26T00:00:00Z".into(),
+            })
+            .expect("save");
+            let dir = PathBuf::from(std::env::var("VAULT_KEYS_DIR").expect("редирект каталога"));
+            let mode = |p: &std::path::Path| {
+                fs::metadata(p).expect("файл создан").permissions().mode() & 0o777
+            };
+            assert_eq!(mode(&dir), 0o700, "каталог ключей");
+            assert_eq!(mode(&dir.join(CHANNEL_SIGNING_FILE)), 0o600, "ключ подписи канала");
+            assert_eq!(
+                mode(&dir.join(crate::backup_import::LOCK_FILE)),
+                0o600,
+                "файл блокировки"
+            );
+        });
+    }
+
+    /// ДВА контракта резолва каталога ключей, до 26.10 — только комментарии:
+    ///  1. `VAULT_TEST_KEYS_DIR` проверяется ПЕРВЫМ. Иначе параллельный тест,
+    ///     выставивший `VAULT_KEYS_DIR`, уводит запись в чужой каталог (гонка
+    ///     env была реальной — 25.10, из-за неё и появился единый замок крейта);
+    ///  2. живая форма пути — `~/.vault/keys`. Переименование каталога для кода
+    ///     безразлично, для существующей установки означает «ключей нет»: ни
+    ///     ошибок, ни предупреждения, пустое хранилище.
+    /// Проверяются ОБА резолва (guard-путь и RAW): это две копии одного
+    /// правила, и расходится именно такая пара.
+    #[test]
+    fn directory_redirect_prefers_the_test_variable_and_keeps_the_vault_layer() {
+        let _guard = crate::env_test_guard();
+        let a = std::env::temp_dir().join(format!("ks_both_a_{}", std::process::id()));
+        let b = std::env::temp_dir().join(format!("ks_both_b_{}", std::process::id()));
+        crate::set_env_safe("VAULT_KEYS_DIR", &a);
+        crate::set_env_safe("VAULT_TEST_KEYS_DIR", &b);
+        let guarded = get_keys_dir().expect("резолв под guard");
+        let raw = get_keys_dir_raw();
+        std::env::remove_var("VAULT_KEYS_DIR");
+        std::env::remove_var("VAULT_TEST_KEYS_DIR");
+        assert_eq!(guarded, b, "тестовый редирект обязан проверяться первым");
+        assert_eq!(raw, b, "RAW-резолв обязан думать так же");
+
+        let tail = Path::new(".vault").join("keys");
+        assert!(get_keys_dir_raw().ends_with(&tail), "форма RAW-пути: {raw:?}");
+        if let Ok(p) = get_keys_dir() {
+            assert!(p.ends_with(&tail), "форма guard-пути: {p:?}");
+        }
+        let _ = fs::remove_dir_all(&a);
+        let _ = fs::remove_dir_all(&b);
+    }
+
+    /// Fail-closed при захвате guard'а: повреждённый журнал восстановления
+    /// обязан ЗАБЛОКИРОВАТЬ запись ключей, а не «продолжить под guard'ом».
+    /// Иначе keypair пишется поверх незавершённого импорта, и состояние
+    /// хранилища становится неопределимым (тот же принцип, из-за которого
+    /// `apply_under_guard` ведёт журнал и commit-маркер).
+    #[test]
+    fn guard_refuses_to_write_over_a_broken_journal() {
+        with_tmp_keys(|| {
+            let dir = PathBuf::from(std::env::var("VAULT_KEYS_DIR").expect("редирект каталога"));
+            let journal = dir
+                .join(crate::backup_import::RECOVERY_DIR)
+                .join("0123456789abcdef0123456789abcdef");
+            fs::create_dir_all(&journal).expect("журнал создан");
+            fs::write(journal.join(crate::backup_import::MANIFEST_FILE), "это не json")
+                .expect("манифест записан");
+
+            let err = save_keypair(&StoredKeyPair {
+                public_key: "abcd1234".to_string(),
+                private_key: "ef567890".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
+            })
+            .expect_err("запись под битым журналом обязана отвергаться");
+            assert!(
+                err.to_string()
+                    .contains(crate::backup_import::ERR_MALFORMED_JOURNAL),
+                "не та ошибка: {err}"
+            );
+            assert!(
+                load_keypair().map(|k| k.is_none()).unwrap_or(true),
+                "ключевая пара записана поверх повреждённого журнала"
+            );
+        });
+    }
+
+    /// OWN-ADDRESS GUARD по АЛИАСУ собственной сессии. Страж собирает алиасы
+    /// как адреса записей, где лежит НАШ публичный ключ (`same_public_key`), а
+    /// `own_email` знает только фронт. Мутация «алиасы собраны по адресу вместо
+    /// ключа» убивает ровно эту ветку и не убивается тестами с `own_email`:
+    /// проверка обязана отличать источник признака, а не только значение.
+    #[test]
+    fn own_session_alias_blocks_a_foreign_key_without_own_email() {
+        with_tmp_keys(|| {
+            let own_pub = "abcd1234".to_string();
+            save_keypair(&StoredKeyPair {
+                public_key: own_pub.clone(),
+                private_key: "ef567890".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                pq_private_key: None,
+                pq_public_key: None,
+            })
+            .unwrap();
+            let dir = PathBuf::from(std::env::var("VAULT_KEYS_DIR").expect("редирект каталога"));
+            // Запись «наш ключ под нашим адресом» легла в хранилище ДО стража
+            // SELF-KEY (старый бекап, живые данные телефона 24.10) — пишем её
+            // ядром напрямую, через guarded-запись она уже не пройдёт.
+            vault_core::key_store::save_peer_keys_at(
+                &dir,
+                &[StoredPeerKey {
+                    email: "me@ya.ru".to_string(),
+                    public_key: own_pub.clone(),
+                    label: None,
+                    added_at: "2024-01-01T00:00:00Z".to_string(),
+                    pq_public_key: None,
+                }],
+            )
+            .unwrap();
+
+            let err = add_peer_key_as(
+                StoredPeerKey {
+                    email: "ME@YA.RU".to_string(),
+                    public_key: "ffff0000".to_string(),
+                    label: None,
+                    added_at: "2024-01-02T00:00:00Z".to_string(),
+                    pq_public_key: None,
+                },
+                None,
+            )
+            .expect_err("адрес, под которым лежит наш собственный ключ, не собеседник");
+            assert!(
+                err.to_string().contains("own address"),
+                "не та ошибка стража: {err}"
+            );
+            assert_eq!(
+                load_peer_keys().unwrap().len(),
+                1,
+                "чужой ключ не должен перезаписать алиас своей сессии"
+            );
+            assert_eq!(load_peer_keys().unwrap()[0].public_key, own_pub);
+        });
+    }
+
+    /// Имя файла ключа подписи канала — контракт установки, а не деталь
+    /// реализации: существующий владелец держит ключ под этим именем.
+    #[test]
+    fn channel_signing_key_keeps_its_installed_file_name() {
+        with_tmp_keys(|| {
+            save_channel_signing_key(&StoredChannelSigningKey {
+                public_key: "pub".into(),
+                private_key: "priv".into(),
+                created_at: "2026-10-26T00:00:00Z".into(),
+            })
+            .expect("save");
+            let dir = PathBuf::from(std::env::var("VAULT_KEYS_DIR").expect("редирект каталога"));
+            assert!(
+                dir.join("channel_signing.json").is_file(),
+                "ключа подписи нет по тому пути, где его ждёт установка"
+            );
+        });
+    }
 }

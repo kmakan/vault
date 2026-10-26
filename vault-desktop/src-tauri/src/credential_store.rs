@@ -235,4 +235,60 @@ mod tests {
             assert!(load_credentials().is_err());
         });
     }
+
+    /// Права доступа к паролю ящика. Модуль обещает 0600 на файле ключа и на
+    /// шифретексте и 0700 на каталоге (`device_key`, `save_credentials`), но до
+    /// 26.10 это проверялось только глазами: мутация `0o600 → 0o644` и мутация
+    /// «chmod не выполнен» проходили весь прогон, потому что roundtrip-тесты
+    /// читают файл СВОИМ процессом и на режим не смотрят.
+    #[cfg(unix)]
+    #[test]
+    fn credentials_and_device_key_are_owner_readable_only() {
+        use std::os::unix::fs::PermissionsExt;
+        with_temp_dir(|dir| {
+            save_credentials(&sample()).unwrap();
+            let mode = |name: &std::path::Path| {
+                fs::metadata(name).expect("файл создан").permissions().mode() & 0o777
+            };
+            assert_eq!(mode(&dir), 0o700, "каталог credentials");
+            assert_eq!(mode(&dir.join(DEVICE_KEY_FILE)), 0o600, "ключ устройства");
+            assert_eq!(mode(&dir.join(CRED_FILE)), 0o600, "шифртекст пароля");
+        });
+    }
+
+    /// Каждый снимок пароля обязан получать СВОЙ nonce. Без этого два
+    /// сохранения одного и того же пароля дают идентичный шифртекст: файл
+    /// перестаёт быть «просто зашифрован», зато становится сравнимым — по
+    /// совпадению байтов видно, что пароль не менялся, а повтор nonce при том
+    /// же ключе снимает маски с обоих снимков. Проверка существовала как
+    /// ожидание к коду, но не как проверка: roundtrip работает и с нулевым
+    /// nonce.
+    #[test]
+    fn each_save_uses_a_fresh_nonce() {
+        with_temp_dir(|dir| {
+            save_credentials(&sample()).unwrap();
+            let first = fs::read_to_string(dir.join(CRED_FILE)).unwrap();
+            save_credentials(&sample()).unwrap();
+            let second = fs::read_to_string(dir.join(CRED_FILE)).unwrap();
+            assert_ne!(first, second, "nonce повторен: два снимка сравнимы");
+            // Совпадение — только по длине: префикс nonce тот же, тело разное.
+            assert_eq!(load_credentials().unwrap().unwrap().password, "app-password-secret");
+        });
+    }
+
+    /// Ключ устройства неверной длины — ОШИБКА, а не паника: файл может быть
+    /// обрезан при сбое записи, и `copy_from_slice` на 16 байтах роняет
+    /// приложение на старте вместо читаемой ошибки.
+    #[test]
+    fn truncated_device_key_is_an_error_not_a_panic() {
+        with_temp_dir(|dir| {
+            save_credentials(&sample()).unwrap();
+            fs::write(dir.join(DEVICE_KEY_FILE), "0011223344556677").unwrap();
+            let err = load_credentials().expect_err("обрезанный ключ обязан отвергаться");
+            assert!(
+                err.to_string().contains("wrong length"),
+                "не та ошибка: {err}"
+            );
+        });
+    }
 }

@@ -64,6 +64,7 @@ const EXEMPT = new Map([
   ['vault-desktop/src-tauri/src/vp8_decoder.rs', 'привязки libvpx (FFI) — декодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/vp8_encoder.rs', 'привязки libvpx (FFI) — энкодер без решений о протоколе, меряется живым звонком'],
   ['vault-desktop/src-tauri/src/peer_index.rs', 'индекс peer по публичному ключу — чистый делегат ядру (очередь t_61bd5090: не кандидат)'],
+  ['vault-desktop/src-tauri/src/key_escrow.rs', 'реэкспорт ядрового формата восстановления (vault::key_escrow) — решений нет, мера у ядра: набор rust-key-escrow'],
   ['vault-desktop/src-tauri/src/voicenote.rs', '56 строк, одно ветвление — тонкая обвязка сохранения, решений нет'],
   ['vault-relay/src/lib.rs', 'объявления модулей и реэкспорты — без логики'],
   ['vault-relay/src/bin/gen_token.rs', 'CLI-генератор токенов, не путь обслуживания; форма токена меряется в tokens.rs (в очереди)'],
