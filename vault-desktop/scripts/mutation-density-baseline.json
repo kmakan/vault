@@ -67,7 +67,7 @@
     "vault-desktop/src-tauri/src/service_monitor.rs": 0,
     "vault-desktop/src-tauri/src/storage/sqlite.rs": 9,
     "vault-desktop/src-tauri/src/vault_bridge.rs": 4,
-    "vault-desktop/src-tauri/src/video.rs": 0,
+    "vault-desktop/src-tauri/src/video.rs": 13,
     "vault-desktop/src/api.js": 29,
     "vault-desktop/src/avatar-image.js": 6,
     "vault-desktop/src/call-state-rule.js": 10,
@@ -199,7 +199,6 @@
     "vault-relay/src/tokens.rs": 26
   },
   "gaps": [
-    "vault-desktop/src-tauri/src/service_monitor.rs",
-    "vault-desktop/src-tauri/src/video.rs"
+    "vault-desktop/src-tauri/src/service_monitor.rs"
   ]
 }

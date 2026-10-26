@@ -667,13 +667,99 @@ mod tests {
         drop(tx);
     }
 
+    /// Очередь кадров короткая НАМЕРЕННО: при отставании writer'а лучше
+    /// потерять кадр, чем копить задержку. Отсюда два разных ответа:
+    /// переполнение — не ошибка звонка, закрытый writer — ошибка.
+    #[test]
+    fn frame_queue_holds_four_and_overflow_is_not_a_call_error() {
+        let (tx, mut rx) = mpsc::channel::<CameraFrame>(FRAME_CHANNEL_DEPTH);
+        let handle = CameraHandle {
+            call_id: "queue".to_owned(),
+            frames_tx: tx,
+        };
+        for _ in 0..(FRAME_CHANNEL_DEPTH + 2) {
+            handle
+                .accept_frame(vec![0x10; 8])
+                .expect("перегрузка очереди — не ошибка звонка");
+        }
+        let mut held = 0usize;
+        while rx.try_recv().is_ok() {
+            held += 1;
+        }
+        assert_eq!(held, 4, "в очереди обязано лежать ровно четыре кадра");
+        drop(handle);
+
+        let (tx2, rx2) = mpsc::channel::<CameraFrame>(FRAME_CHANNEL_DEPTH);
+        drop(rx2);
+        let orphan = CameraHandle {
+            call_id: "orphan".to_owned(),
+            frames_tx: tx2,
+        };
+        let err = orphan
+            .accept_frame(vec![0x10; 8])
+            .expect_err("писать в закрытый writer — ошибка, а не «кадр принят»");
+        assert!(err.contains("closed"), "текст ошибки: {err}");
+    }
+
+    /// Маркер захвата один на процесс, поэтому освобождение обязано быть
+    /// адресным: drop чужого handle'а не гасит чужой захват, а `stop_camera`
+    /// обязан снять маркер — иначе следующий звонок камеру не получит.
+    #[test]
+    fn capture_bookkeeping_releases_only_its_own_call() {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        *capturing() = Some("другой-звонок".to_owned());
+        release_capture("наш-звонок");
+        assert_eq!(
+            capturing().as_deref(),
+            Some("другой-звонок"),
+            "drop чужого handle'а погасил чужой захват"
+        );
+        release_capture("другой-звонок");
+        assert!(capturing().is_none(), "свой захват обязан быть отпущен");
+
+        *capturing() = Some("звоним".to_owned());
+        stop_camera();
+        assert!(capturing().is_none(), "stop_camera не освободил маркер");
+        stop_camera();
+        assert!(capturing().is_none(), "повторный стоп не должен ничего вернуть");
+    }
+
     /// Стоп камеры идемпотентен и не требует железа (раньше тест «стартовал
     /// заглушку»; теперь на Linux старт реально открывает /dev/videoN, поэтому
     /// в тестах камеру не трогаем — иначе CI без камеры краснеет).
     #[test]
     fn stop_camera_is_idempotent() {
+        // Тот же процесс-глобалный маркер, что у пробы выше.
+        static SERIAL: Mutex<()> = Mutex::new(());
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         stop_camera();
         stop_camera(); // повторный стоп не паникует
+    }
+
+    /// Драйвер отдаёт строку с padding'ом (stride больше 2·ширины), а U/V
+    /// берутся только из чётных строк и по одной паре на два пикселя. Проба
+    /// именно с stride 12 при ширине 4: без неё подстановка `row * w * 2`
+    /// (игнор stride) неотличима от правильного кода.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn yuyv_honors_driver_stride_and_even_rows() {
+        let src: Vec<u8> = vec![
+            10, 100, 20, 200, 11, 101, 21, 201, 0xFF, 0xFF, 0xFF, 0xFF, 30, 110, 40, 111, 31,
+            112, 41, 113, 0xFF, 0xFF, 0xFF, 0xFF,
+        ];
+        let mut out = Vec::new();
+        capture::yuyv_to_i420(&src, 4, 2, 12, &mut out);
+        assert_eq!(out.len(), 8 + 2 * 2, "Y(8) + U(2) + V(2)");
+        assert_eq!(&out[0..4], &[10, 20, 11, 21], "Y первой строки");
+        assert_eq!(
+            &out[4..8],
+            &[30, 40, 31, 41],
+            "вторая строка читается со stride, а не с 2·ширины"
+        );
+        assert_eq!(&out[8..10], &[100, 101], "U — из чётной строки, по паре пикселей");
+        assert_eq!(&out[10..12], &[200, 201], "V — из чётной строки, по паре пикселей");
     }
 
     /// ЖИВОЙ прогон камеры (не для CI — нужен /dev/video0):
