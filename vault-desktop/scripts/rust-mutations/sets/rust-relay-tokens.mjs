@@ -37,7 +37,7 @@ export default {
     { name: 'оплаченный тариф считается безлимитным видом (Pro/Business → Test)',
       pattern: "            Plan::Pro | Plan::Business => Kind::Paid,",
       replacement: "            Plan::Pro | Plan::Business => Kind::Test," },
-    { name: 'пробный тариф считается установочным (безлимитный ключ получает квоту Free)',
+    { name: 'тестовый токен (план trial) считается установочным — безлимитный ключ получает квоту Free',
       pattern: "            Plan::Trial => Kind::Test,",
       replacement: "            Plan::Trial => Kind::Install," },
     { name: 'безлимит выдаётся любому виду токена (квоты умерли)',
