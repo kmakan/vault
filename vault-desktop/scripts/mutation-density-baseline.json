@@ -57,7 +57,7 @@
     "vault-desktop/src-tauri/src/crypto.rs": 19,
     "vault-desktop/src-tauri/src/duress.rs": 14,
     "vault-desktop/src-tauri/src/email.rs": 36,
-    "vault-desktop/src-tauri/src/file_lock.rs": 0,
+    "vault-desktop/src-tauri/src/file_lock.rs": 5,
     "vault-desktop/src-tauri/src/groups.rs": 25,
     "vault-desktop/src-tauri/src/key_store.rs": 14,
     "vault-desktop/src-tauri/src/lib.rs": 12,
@@ -199,7 +199,6 @@
     "vault-relay/src/tokens.rs": 26
   },
   "gaps": [
-    "vault-desktop/src-tauri/src/file_lock.rs",
     "vault-desktop/src-tauri/src/service_monitor.rs",
     "vault-desktop/src-tauri/src/video.rs"
   ]
