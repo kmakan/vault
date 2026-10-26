@@ -662,6 +662,7 @@ export default {
 
   pro_status_free: '免费套餐：每天 {limit} 封信封',
   pro_status_trial: '试用期：还剩 {days} 天',
+  pro_status_test: '测试令牌：每日信封数不设上限',
   pro_status_active: 'Pro 已激活',
   pro_status_expired: '⚠ Pro 已到期 — 中继以免费模式运行',
   pro_until: '至 {date}',

@@ -670,6 +670,7 @@ export default {
 
   pro_status_free: 'Бесплатный тариф: {limit} конвертов/день',
   pro_status_trial: 'Тестовый период: осталось {days} дн.',
+  pro_status_test: 'Тестовый токен: без суточного лимита',
   pro_status_active: 'Pro активен',
   pro_status_expired: '⚠ Pro закончился — релей работает в режиме Free',
   pro_until: 'до {date}',

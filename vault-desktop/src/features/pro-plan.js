@@ -23,7 +23,10 @@
 //   refresh()        — перечитать состояние подписки;
 //   toast(msg) / tr(key, params) — обратная связь;
 //   now()            — unix-секунды (в тестах — фиксированные);
-//   locale           — код языка для даты.
+//   locale           — код языка для даты;
+//   env              — окружение сборки (по умолчанию import.meta.env; в
+//                      тестах подставляется руками, чтобы проверить
+//                      сборку без покупок).
 
 export const PRO_KIND = {
   FREE: 'free',
@@ -35,6 +38,35 @@ export const PRO_KIND = {
 export const PRO_PLAN = 'pro';
 export const PRO_MONTHS = 12;
 export const FREE_DAILY_LIMIT = 100;
+
+// Три вида токена, которые различает СЕРВЕР (vault-relay tokens.rs: Kind), и
+// экран обязан показывать их разными словами:
+//   установочный (plan free)  — 100 конвертов/сутки, живёт 10 лет;
+//   тестовый     (plan trial) — без суточного лимита; выдаётся промо-ключом
+//                               или нами (gen_token --plan trial) тестировщикам
+//                               и модераторам сторов;
+//   платный      (plan pro/business) — квота тарифа (1000/10000), срок =
+//                               оплаченный период.
+// Слово «trial» в плане — историческое: это тестовый токен, а не пробный
+// период подписки. Отсюда правило ниже: безлимит показывают словами про
+// лимит, а не обратным отсчётом дней.
+
+// ── Канал поставки: есть ли в сборке покупка ────────────────────────────
+//
+// Флаг сборки VITE_NO_PURCHASES=1. Play не платит разработчику с расчётным
+// счётом в РФ и не позволяет покупать цифровые товары мимо своей биллинговой
+// системы — в play-сборке не должно быть ни кнопки покупки, ни промо-ключа
+// (ключ даёт безлимит бесплатно, то есть платную возможность мимо стора).
+// Статус уже действующей подписки остаётся: показать то, что подтвердил
+// сервер, — не предложение покупки.
+//
+// Почему правило в JS, а не в Rust (ADR-005): это упаковка фронта, а не
+// протокол — значение знает только сборщик (vite подставляет import.meta.env
+// на этапе сборки), и в мосте проверять нечего.
+export function purchasesAllowed(env) {
+  const e = env || (typeof import.meta !== 'undefined' ? import.meta.env : null) || {};
+  return String(e.VITE_NO_PURCHASES || '').trim() !== '1';
+}
 
 // ── Состояние экрана ────────────────────────────────────────────────────
 //
@@ -89,7 +121,14 @@ export function proStatusText(view, t) {
   if (!view) return '';
   switch (view.kind) {
     case PRO_KIND.TRIAL:
-      return t('pro_status_trial', { days: view.daysLeft });
+      // Тестовый токен безлимитен: сервер отдаёт daily_limit = 0. Его ценность
+      // — «нет суточного лимита», а не обратный отсчёт: срок тестового токена
+      // технический (10 лет), и «осталось 3650 дн.» читалось бы как тариф.
+      // Отсчёт дней остаётся для пробного периода с реальной квотой — если
+      // сервер когда-нибудь выдаст trial с лимитом, экран скажет правду.
+      return view.dailyLimit === 0
+        ? t('pro_status_test')
+        : t('pro_status_trial', { days: view.daysLeft });
     case PRO_KIND.ACTIVE:
       // Дату выносим в отдельную строку (proDetailsText): в строке статуса
       // она превращалась бы в многострочный текст.
@@ -119,8 +158,12 @@ export function proDetailsText(view, t, locale) {
   // путать их нельзя. Число устройств у бесплатного тоже бессмысленно
   // (лимит устройств — свойство платной подписки).
   if (view.kind === PRO_KIND.FREE) return '';
+  // У тестового токена срок ТЕХНИЧЕСКИЙ (10 лет), а не оплаченный период:
+  // «до 26.10.2036» читалось бы как обещание тарифа. Признак тестового —
+  // daily_limit = 0, который сервер отдаёт именно как «лимита нет».
+  const testUnlimited = view.kind === PRO_KIND.TRIAL && view.dailyLimit === 0;
   const parts = [];
-  if (view.paidUntil) {
+  if (view.paidUntil && !testUnlimited) {
     parts.push(t('pro_until', { date: proUntilText(view, locale) }));
   }
   if (view.maxDevices) {
@@ -181,6 +224,7 @@ export async function loadProState(deps) {
 // пользователю показывать нельзя: они ничего не объясняют.
 const ERROR_TEXTS = {
   checkout_disabled: 'pro_err_disabled',
+  purchases_disabled: 'pro_err_disabled',
   already_active: 'pro_err_active',
   rate_limited: 'pro_err_rate',
   bad_plan_months: 'pro_err_plan',
@@ -199,6 +243,11 @@ export function proErrorText(error, t) {
 // Купить/продлить Pro: чекаут → подтверждение оплаты → (сервер сам
 // активирует токен на устройстве). Возвращает { ok, error }.
 export async function buyPro(deps) {
+  // Покупка закрыта и здесь, не только на экране: сборка без покупок не
+  // должна уметь создать чекаут, даже если вызов пришёл не с кнопки.
+  if (!purchasesAllowed(deps.env)) {
+    return { ok: false, error: 'purchases_disabled' };
+  }
   const res = await deps.checkout(PRO_PLAN, PRO_MONTHS);
   if (!res || res.error) {
     const why = (res && res.error) || 'network';

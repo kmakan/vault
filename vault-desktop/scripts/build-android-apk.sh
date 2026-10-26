@@ -17,6 +17,14 @@
 # device-приёмка; `aab` — Google Play, который принимает только бандлы.
 # Один и тот же ключ подписи в обоих режимах: смена keystore ломает апдейты
 # у существующих установок.
+#
+# ПОКУПКИ В СБОРКЕ (VAULT_NO_PURCHASES): Play не выплачивает разработчику с
+# расчётным счётом в РФ и не позволяет покупать цифровые товары мимо своего
+# биллинга, поэтому в бандл покупки не входят — скрипт включает флаг сборки
+# VITE_NO_PURCHASES=1 сам (кнопки покупки и поля промо-ключа не будет).
+# Для apk флаг по умолчанию выключен; включить — `VAULT_NO_PURCHASES=1
+# scripts/build-android-apk.sh apk`. Какому каналу что подаётся — решать не
+# скрипту: он ПЕЧАТАЕТ значение флага, чтобы артефакт нельзя было перепутать.
 set -euo pipefail
 MODE="${1:-apk}"
 
@@ -37,6 +45,15 @@ export VAULT_KEYSTORE_PASS="$(tr -d '\n' < "$HOME/.local/share/vault/keystore-pa
 
 cd "$(dirname "$0")/.."
 AAPT="$HOME/Android/Sdk/build-tools/$(ls "$HOME/Android/Sdk/build-tools" | sort -V | tail -1)/aapt"
+
+# Флаг покупок: apk — как сказал оператор (по умолчанию покупки есть), aab —
+# всегда без покупок. Экспортируется до сборки фронта: vite подшивает
+# import.meta.env.VITE_NO_PURCHASES именно из окружения процесса.
+if [ "$MODE" = aab ]; then
+  export VAULT_NO_PURCHASES=1
+fi
+export VITE_NO_PURCHASES="$([ "${VAULT_NO_PURCHASES:-0}" = 1 ] && echo 1 || echo 0)"
+echo "покупки в сборке: $([ "$VITE_NO_PURCHASES" = 1 ] && echo "НЕТ (play-канал)" || echo "есть") (режим $MODE, VITE_NO_PURCHASES=$VITE_NO_PURCHASES)"
 
 case "$MODE" in
   apk)

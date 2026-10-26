@@ -136,6 +136,28 @@ console.log('2. тексты');
   // Пробный период безлимитен: сервер отдаёт daily_limit = 0 — строки нет.
   check('trial безлимитный: строки pro_daily нет',
     !P.proDetailsText(trial, t, 'ru').includes('pro_daily'), P.proDetailsText(trial, t, 'ru'));
+
+  // ТЕСТОВЫЙ токен (plan=trial в смысле «выдан тестировщику», 10 лет, без
+  // лимита) обязан называться тестовым токеном, а не обратным отсчётом:
+  // «осталось 3650 дн.» читалось бы как тариф, а «до 2036» — как обещание.
+  const test = P.proView({ plan: 'trial', paid_until: NOW + 3650 * DAY, daily_limit: 0 }, NOW);
+  check('тестовый без лимита: статус — words про отсутствие лимита',
+    P.proStatusText(test, t) === 'pro_status_test', P.proStatusText(test, t));
+  check('тестовый без лимита: срок токена не печатается',
+    !P.proDetailsText(test, t, 'ru').includes('pro_until'), P.proDetailsText(test, t, 'ru'));
+  // Если сервер когда-нибудь отдаст пробному периоду реальную квоту, экран
+  // должен вернуться к отсчёту дней, а не врать про безлимит.
+  const trialQuota = P.proView({ plan: 'trial', paid_until: NOW + 12 * DAY, daily_limit: 100 }, NOW);
+  check('пробный период с квотой: статус — отсчёт дней',
+    P.proStatusText(trialQuota, t) === 'pro_status_trial', P.proStatusText(trialQuota, t));
+  check('пробный период с квотой: срок печатается',
+    P.proDetailsText(trialQuota, t, 'ru').includes('pro_until'), P.proDetailsText(trialQuota, t, 'ru'));
+  // Установочный токен (free) от тестового отличается словами и квотой —
+  // три вида токена сервера (install/test/paid) обязаны сходиться с экраном.
+  const install = P.proView({ plan: 'free', paid_until: NOW + 3650 * DAY, daily_limit: 100 }, NOW);
+  check('установочный: статус — бесплатный тариф, не тестовый',
+    P.proStatusText(install, t) === 'pro_status_free', P.proStatusText(install, t));
+  check('установочный: деталей нет', P.proDetailsText(install, t, 'ru') === '');
 }
 
 // ── 3. Человеческие тексты ошибок ───────────────────────────────────────
@@ -263,6 +285,42 @@ console.log('6. loadProState');
   t = mk(null, null);
   st = await P.loadProState(t.deps);
   check('пустое состояние не ломает экран', st === null || st === undefined, st);
+}
+
+// ── 7. Канал поставки: сборка без покупок ───────────────────────────────
+console.log('7. purchasesAllowed');
+{
+  // Play не платит разработчику с расчётного счёта в РФ и не терпит покупку
+  // цифрового товара мимо своего биллинга, поэтому в play-сборке покупки нет.
+  check('флаг VITE_NO_PURCHASES=1 закрывает покупку',
+    P.purchasesAllowed({ VITE_NO_PURCHASES: '1' }) === false);
+  check('без флага покупка открыта', P.purchasesAllowed({}) === true);
+  check('пустое окружение — покупка открыта (дефолт не должен молча калечить релиз)',
+    P.purchasesAllowed(undefined) === true);
+  // «0» и пробелы — не «закрыто»: иначе опечатка в конфиге сборки убрала бы
+  // монетизацию из сторовой сборки, а гейт бы об этом промолчал.
+  check('VITE_NO_PURCHASES=0 — покупка открыта',
+    P.purchasesAllowed({ VITE_NO_PURCHASES: '0' }) === true);
+  check('VITE_NO_PURCHASES с пробелами вокруг 1 — покупка закрыта',
+    P.purchasesAllowed({ VITE_NO_PURCHASES: ' 1 ' }) === false);
+
+  // Страж — не только экран: вызов, пришедший не с кнопки, тоже обязан
+  // отказать и НЕ создать платёжную сессию (реальный чекаут = деньги).
+  const calls = [];
+  const res = await P.buyPro({
+    env: { VITE_NO_PURCHASES: '1' },
+    checkout: async () => { calls.push('checkout'); return { checkout_id: 'co_x' }; },
+    verify: async () => { calls.push('verify'); return { token: 'v2' }; },
+    refresh: async () => { calls.push('refresh'); },
+    toast: () => {},
+    tr: tl,
+  });
+  check('сборка без покупок: ok=false', res.ok === false, res);
+  check('сборка без покупок: причина — покупки отключены',
+    res.error === 'purchases_disabled', res);
+  check('сборка без покупок: ошибка имеет человеческий текст',
+    P.proErrorText(res.error, t) === 'pro_err_disabled', P.proErrorText(res.error, t));
+  check('сборка без покупок: платёжная сессия НЕ создана', calls.length === 0, calls);
 }
 
 console.log('');

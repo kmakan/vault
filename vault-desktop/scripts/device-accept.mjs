@@ -102,17 +102,6 @@ const PROBES = {
 
     step('секция «Тариф Pro» видна', /Тариф Pro|Pro plan/i.test(content()), { text: content().slice(0, 300) });
 
-    // Проба ИДЕМПОТЕНТНА и БЕСПЛАТНА: активный тариф только проверяем. Если
-    // тариф free — покупку не совершаем (чекаут = реальная платёжная сессия),
-    // а мягко пропускаем шаги, которые без покупки не проверить.
-    const alreadyPro = /Pro активен|Pro is active/i.test(content());
-    const buyBtn = Array.from(document.querySelectorAll('.settings-content button'))
-      .find((b) => /Купить Pro|Buy Pro/i.test(b.innerText || ''));
-    step('кнопка «Купить Pro» есть (или тариф уже активен)', !!buyBtn || alreadyPro, {
-      alreadyPro,
-      buttons: Array.from(document.querySelectorAll('.settings-content button')).map((e) => (e.innerText || '').trim().slice(0, 24)),
-    });
-
     // Состояние тарифа живёт в компоненте настроек (экран читает его, а не
     // свою копию) — достаем из дерева Vue, включая Teleport-ветки.
     const seen = new Set();
@@ -136,6 +125,34 @@ const PROBES = {
       };
       pushVNodes(comp.subTree);
     }
+
+    // Проба ИДЕМПОТЕНТНА и БЕСПЛАТНА: активный тариф только проверяем. Если
+    // тариф free — покупку не совершаем (чекаут = реальная платёжная сессия),
+    // а мягко пропускаем шаги, которые без покупки не проверить.
+    const alreadyPro = /Pro активен|Pro is active/i.test(content());
+    const btnTexts = () => Array.from(document.querySelectorAll('.settings-content button'))
+      .map((b) => (b.innerText || '').trim());
+    const buyBtn = Array.from(document.querySelectorAll('.settings-content button'))
+      .find((b) => /Купить Pro|Buy Pro/i.test(b.innerText || ''));
+    // Есть ли в ЭТОЙ сборке покупка — берём у самого приложения (компонент
+    // держит правило флага сборки), а не у оператора: проба меряет проводку
+    // «флаг сборки → computed → v-if», а не веру в запускающего. Сборки без
+    // этого computed (до флага) считаются сборками с покупкой.
+    const allowPurchases = !(pro && pro.purchasesAllowed === false);
+    if (allowPurchases) {
+      step('кнопка «Купить Pro» есть (или тариф уже активен)', !!buyBtn || alreadyPro, {
+        alreadyPro,
+        buttons: btnTexts().map((e) => e.slice(0, 24)),
+      });
+      step('сборка с покупками: вход в промо-ключ есть',
+        btnTexts().some((x) => /промо|promo/i.test(x)), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+    } else {
+      step('сборка без покупок: кнопки покупки нет', !buyBtn, { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+      // Промо-ключ = безлимитный тестовый токен бесплатно, то есть платная
+      // возможность мимо стора: в такой сборке его входа нет.
+      step('сборка без покупок: входа в промо-ключ нет',
+        !btnTexts().some((x) => /промо|promo/i.test(x)), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+    }
     step('состояние тарифа читается компонентом настроек', !!pro && !!pro.proView, {
       kind: pro && pro.proView ? pro.proView.kind : null,
     });
@@ -157,12 +174,36 @@ const PROBES = {
       step('число устройств напечатано и совпадает с серверным',
         !!dnums && Number(dnums[0]) === view.devices && Number(dnums[1]) === view.maxDevices,
         { напечатано: dnums, сервер: [view.devices, view.maxDevices] });
-      step('кнопка — «Продлить» (не покупка)', /Продлить|Extend/i.test(
-        Array.from(document.querySelectorAll('.settings-content button')).map((b) => b.innerText || '').join(' | ')
-      ), { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok' });
+      if (allowPurchases) {
+        step('кнопка — «Продлить» (не покупка)', /Продлить|Extend/i.test(
+          Array.from(document.querySelectorAll('.settings-content button')).map((b) => b.innerText || '').join(' | ')
+        ), { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok' });
+      } else {
+        // В сборке без покупок продлить подписку нельзя даже руками —
+        // проверка, что «Продлить» тоже исчезла вместе с покупкой.
+        step('сборка без покупок: кнопки «Продлить» тоже нет',
+          !/Продлить|Extend/i.test(btnTexts().join(' | ')), { buttons: btnTexts().map((e) => e.slice(0, 24)) });
+      }
     } else if (!alreadyPro) {
       soft('квота и статус после покупки не проверены: тариф free',
         'чекаут = реальная платёжная сессия, проба её не создаёт; покупка — вручную и с ведома владельца');
+    }
+
+    // Три вида токена различает СЕРВЕР (установочный / тестовый / платный) и
+    // экран обязан называть их разными словами. Тестовый (plan=trial) —
+    // безлимитный: печатать «осталось 3650 дн.» или «до 2036» нельзя, это
+    // срок технического токена, а не обещание тарифа. На платном тарифе
+    // шаг мягко пропускается: подменить состояние проба не вправе.
+    if (view && view.kind === 'trial') {
+      step('тестовый токен назван тестовым, а не обратным отсчётом',
+        /Тестовый токен|Test token/i.test(content()), { text: content().slice(0, 300) });
+      step('отсчёт дней срока токена не печатается («осталось 3650 дн.»)',
+        !/осталось \d+ дн|days left/i.test(content()), { text: content().slice(0, 300) });
+      step('безлимитный токен не вводит счётчиком «сегодня»',
+        !/конвертов сегодня|envelopes today/i.test(content()), { text: content().slice(0, 300) });
+    } else {
+      soft('слова тестового токена не проверены: выдан не тестовый',
+        { kind: view ? view.kind : null });
     }
 
     // Закрыть настройки: бейдж PRO — в шапке чата. В чате ЗАМЕТОК бейджа нет

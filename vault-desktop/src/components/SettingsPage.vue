@@ -287,7 +287,7 @@
           {{ proStatusText }}
         </div>
         <div v-if="proDetailsText" style="font-size:12px;opacity:.7">{{ proDetailsText }}</div>
-        <button class="btn-primary" style="padding:9px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start"
+        <button v-if="purchasesAllowed" class="btn-primary" style="padding:9px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start"
                 :disabled="proBusy" @click="proBuy">
           {{ proBusy ? t('pro_buy_busy') : proActionLabel }}
         </button>
@@ -314,9 +314,15 @@
           <button class="btn-primary" style="padding:10px 16px;border-radius:8px;border:none;cursor:pointer;align-self:flex-start" @click="relayAutoRegister">
             {{ relayList.some(r => r.myToken) ? (t('relay_renew') || 'Продлить/обновить токен') : (t('relay_auto') || 'Подключить наш релей') }}
           </button>
-          <input v-if="relayPromoOpen" v-model="relayPromoKey" class="duress-input" :placeholder="t('relay_promo_ph') || 'промо-ключ безлимита (для тестеров)'" />
-          <button v-if="!relayPromoOpen" style="background:none;border:none;color:#8b8b9e;cursor:pointer;padding:0;font-size:12px;align-self:flex-start;text-decoration:underline" @click="relayPromoOpen = true">
-            {{ t('relay_have_promo') || 'У меня есть промо-ключ безлимита' }}
+          <!-- Промо-ключ выдаёт ТЕСТОВЫЙ токен (без суточного лимита) — это
+               платная возможность мимо стора, поэтому в play-сборке поля нет.
+               Сам тестовый токен никуда не девается: его выдаёт сервер (промо-
+               ключ в прямой/RuStore-сборке или наша выдача по fp), а в play-
+               сборке тестировщику передают готовый токен в обычное поле
+               «токен релея» — это не предложение покупки. -->
+          <input v-if="relayPromoOpen && purchasesAllowed" v-model="relayPromoKey" class="duress-input" :placeholder="t('relay_promo_ph')" />
+          <button v-if="purchasesAllowed && !relayPromoOpen" style="background:none;border:none;color:#8b8b9e;cursor:pointer;padding:0;font-size:12px;align-self:flex-start;text-decoration:underline" @click="relayPromoOpen = true">
+            {{ t('relay_have_promo') }}
           </button>
         </div>
 
@@ -626,6 +632,10 @@ export default {
     },
     proStatusText() { return ProPlan.proStatusText(this.proView, this.t); },
     proActionLabel() { return ProPlan.proActionLabel(this.proView, this.t); },
+    // Покупка и промо-ключ — только в сборке, где канал это разрешает
+    // (Play-сборка: флаг VITE_NO_PURCHASES=1). Статус подписки показываем
+    // всегда: это то, что подтвердил сервер, а не предложение покупки.
+    purchasesAllowed() { return ProPlan.purchasesAllowed(); },
     proDetailsText() {
       return ProPlan.proDetailsText(this.proView, this.t, this.currentLocale);
     },

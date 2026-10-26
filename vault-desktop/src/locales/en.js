@@ -668,6 +668,7 @@ export default {
 
   pro_status_free: 'Free plan: {limit} envelopes per day',
   pro_status_trial: 'Trial period: {days} days left',
+  pro_status_test: 'Test token: no daily envelope limit',
   pro_status_active: 'Pro is active',
   pro_status_expired: '⚠ Pro has expired — the relay runs in Free mode',
   pro_until: 'until {date}',
