@@ -66,9 +66,11 @@ async function cdpEvaluate(expression) {
 // Проба — код, исполняемый В СТРАНИЦЕ приложения. Возвращает отчёт.
 const PROBES = {
   // Проба экрана платного тарифа (ADR-005 W5/монетизация). Отдельная от
-  // общей UI-пробы: покупка — единственное место, где нужно нажать кнопку и
-  // дождаться ответа сервера, и единственное, где ошибка «тихая» (экран
-  // покажет «оплачено», а токена нет).
+  // общей UI-пробы: тариф — единственное место, где фронт печатает то, что
+  // сказал сервер, и где ошибка «тихая» (экран покажет «оплачено», а токена
+  // нет). ПОКУПКУ ПРОБА НЕ НАЖИМАЕТ: чекаут — реальная платёжная сессия на
+  // проде, её запускают руками и с ведома владельца. Тариф free — шаг
+  // мягко пропускается («~»), а не покупается.
   pro: `(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const app = document.querySelector('#app').__vue_app__;
@@ -77,6 +79,7 @@ const PROBES = {
     const step = (name, cond, extra) => {
       report.steps.push({ name, pass: !!cond, extra: extra === undefined ? undefined : extra });
     };
+    const soft = (name, why) => { report.steps.push({ name, pass: null, extra: why }); };
     const text = (el) => (el && el.innerText || '').replace(/\\n+/g, ' | ').trim();
     const content = () => text(document.querySelector('.settings-content'));
 
@@ -99,8 +102,9 @@ const PROBES = {
 
     step('секция «Тариф Pro» видна', /Тариф Pro|Pro plan/i.test(content()), { text: content().slice(0, 300) });
 
-    // Проба ИДЕМПОТЕНТНА: если тариф уже активен (аккаунт покупал раньше),
-    // покупку не повторяем — проверяем состояние. Иначе — покупаем.
+    // Проба ИДЕМПОТЕНТНА и БЕСПЛАТНА: активный тариф только проверяем. Если
+    // тариф free — покупку не совершаем (чекаут = реальная платёжная сессия),
+    // а мягко пропускаем шаги, которые без покупки не проверить.
     const alreadyPro = /Pro активен|Pro is active/i.test(content());
     const buyBtn = Array.from(document.querySelectorAll('.settings-content button'))
       .find((b) => /Купить Pro|Buy Pro/i.test(b.innerText || ''));
@@ -109,16 +113,56 @@ const PROBES = {
       buttons: Array.from(document.querySelectorAll('.settings-content button')).map((e) => (e.innerText || '').trim().slice(0, 24)),
     });
 
-    if (buyBtn && !alreadyPro) {
-      buyBtn.click();
-      let bought = false;
-      for (let i = 0; i < 40; i++) {
-        await sleep(500);
-        if (/Pro активен|Pro is active/i.test(content())) { bought = true; break; }
-      }
-      step('после оплаты статус «Pro активен»', bought, { text: content().slice(0, 300) });
-      step('число устройств показано', /устройств|devices/i.test(content()), { text: content().slice(0, 300) });
-      step('кнопка стала «Продлить»', /Продлить|Extend/i.test(content()), { text: content().slice(0, 300) });
+    // Состояние тарифа живёт в компоненте настроек (экран читает его, а не
+    // свою копию) — достаем из дерева Vue, включая Teleport-ветки.
+    const seen = new Set();
+    const queue = [app._container._vnode.component];
+    let pro = null;
+    while (queue.length && !pro) {
+      const comp = queue.shift();
+      if (!comp || seen.has(comp)) continue;
+      seen.add(comp);
+      const c = comp.proxy || {};
+      if (c.proView !== undefined || c.proState !== undefined) { pro = c; break; }
+      const pushVNodes = (vnode) => {
+        if (!vnode) return;
+        const list = Array.isArray(vnode) ? vnode : [vnode];
+        for (const v of list) {
+          if (!v) continue;
+          if (v.component) queue.push(v.component);
+          pushVNodes(v.children && Array.isArray(v.children) ? v.children : null);
+          pushVNodes(v.suspense ? v.suspense.default && v.suspense.default.subTree : null);
+        }
+      };
+      pushVNodes(comp.subTree);
+    }
+    step('состояние тарифа читается компонентом настроек', !!pro && !!pro.proView, {
+      kind: pro && pro.proView ? pro.proView.kind : null,
+    });
+    const view = pro && pro.proView ? pro.proView : null;
+
+    // Квота: сервер считает суточный счётчик (vault-relay main.rs), экран
+    // обязан печатать ЕГО числа. Разрыв «модуль ↔ компонент» здесь и ловится:
+    // подменённое поле, своя копия лимита, потерянная строка.
+    if (alreadyPro && view) {
+      const q = /(?:конвертов сегодня|envelopes today)\\s*([\\d/]+)/i.exec(content());
+      const nums = q ? q[1].split('/') : null;
+      step('строка суточной квоты напечатана', !!nums && nums.length === 2, { квота: q ? q[0] : null });
+      step('напечатанный лимит = серверный daily_limit',
+        !!nums && Number(nums[1]) === view.dailyLimit, { напечатано: nums && nums[1], сервер: view.dailyLimit });
+      step('напечатанное «сегодня» = серверный daily_used',
+        !!nums && Number(nums[0]) === view.dailyUsed, { напечатано: nums && nums[0], сервер: view.dailyUsed });
+      const d = /(?:устройств|devices)\\s*([\\d/]+)/i.exec(content());
+      const dnums = d ? d[1].split('/') : null;
+      step('число устройств напечатано и совпадает с серверным',
+        !!dnums && Number(dnums[0]) === view.devices && Number(dnums[1]) === view.maxDevices,
+        { напечатано: dnums, сервер: [view.devices, view.maxDevices] });
+      step('кнопка — «Продлить» (не покупка)', /Продлить|Extend/i.test(
+        Array.from(document.querySelectorAll('.settings-content button')).map((b) => b.innerText || '').join(' | ')
+      ), { label: buyBtn ? 'есть «Купить Pro» при активном тарифе' : 'ok' });
+    } else if (!alreadyPro) {
+      soft('квота и статус после покупки не проверены: тариф free',
+        'чекаут = реальная платёжная сессия, проба её не создаёт; покупка — вручную и с ведома владельца');
     }
 
     // Закрыть настройки: бейдж PRO — в шапке чата. В чате ЗАМЕТОК бейджа нет
@@ -131,10 +175,14 @@ const PROBES = {
     }
     step('открыт обычный чат (не заметки)', p.activeChat !== '__notes__', { activeChat: p.activeChat });
     const badge = document.querySelector('.pro-badge');
-    step('бейдж PRO в шапке чата', !!badge, {
-      badge: badge ? text(badge) : null,
-      header: text(document.querySelector('.chat-header')).slice(0, 200),
-    });
+    if (alreadyPro) {
+      step('бейдж PRO в шапке чата', !!badge, {
+        badge: badge ? text(badge) : null,
+        header: text(document.querySelector('.chat-header')).slice(0, 200),
+      });
+    } else {
+      soft('бейдж PRO в шапке чата', 'тариф free — бейджа и не должно быть');
+    }
     return report;
   })()`,
   ui: `(async () => {
@@ -530,13 +578,13 @@ const PROBES = {
     await inv('transport_preference_set', { account, preference: start });
 
     // 5. Проводка интерфейса: чип показывает текущий выбор (тот же класс,
-    // что и значение из моста). Без открытого чата рядку фич нет — не проваливаем.
+    // что и значение из моста). Без открытого чата строки фич нет — не проваливаем.
     if (p.activeChat) {
       const chip = document.querySelector('.feature-row .transport-' + start);
-      step('чип транспорта в рядку фич подписан текущим выбором', !!chip,
+      step('чип транспорта в строке фич подписан текущим выбором', !!chip,
         { pref: start, found: !!chip });
     } else {
-      step('чип транспорта', null, 'нет открытого чата — рядок фич не отрендерен');
+      step('чип транспорта', null, 'нет открытого чата — строка фич не отрендерена');
     }
     // 6. Разбор 429 живёт в мосте, а не в строке сравнения фронта. имена
     // веток — провод: фронт сравнивает 'daily'/'rate', и расхождение имён
